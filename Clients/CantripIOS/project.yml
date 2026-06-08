@@ -24,13 +24,16 @@ targets:
         CFBundleDisplayName: AgentGateway   # App Store / TestFlight name (project stays "Hermes" internally)
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleIconName: AppIcon
         ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
         UIBackgroundModes:
           - audio
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSMicrophoneUsageDescription: "Hermes uses the microphone for voice conversations with your agent."
@@ -41,3 +44,4 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.hermbot
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
