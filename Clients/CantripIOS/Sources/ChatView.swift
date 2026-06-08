@@ -149,7 +149,7 @@ struct ChatView: View {
             }
             .sheet(isPresented: $showSettings) { SettingsView(env: env, voice: voice) }
             .sheet(isPresented: $showSkills) {
-                SkillsView(skills: commands.filter { $0.kind == .skill }) { skill in
+                SkillsView(client: env.client) { skill in
                     showSkills = false
                     vm.send(skill.command)        // run it → returns to chat showing the interaction
                 }

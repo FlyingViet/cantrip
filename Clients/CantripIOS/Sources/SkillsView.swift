@@ -1,11 +1,14 @@
 import SwiftUI
 
 /// Browse all of the gateway's skills and run one — tapping sends it as a turn
-/// and returns to the chat, where the interaction streams in.
+/// and returns to the chat, where the interaction streams in. Fetches its own
+/// list on open (with a loading state) so it never races the chat's preload.
 struct SkillsView: View {
-    let skills: [HermesCommand]
+    let client: HermesClient?
     let onRun: (HermesCommand) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var skills: [HermesCommand] = []
+    @State private var loading = true
     @State private var query = ""
 
     private var filtered: [HermesCommand] {
@@ -40,11 +43,18 @@ struct SkillsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .overlay {
-                if skills.isEmpty {
+                if loading {
+                    ProgressView()
+                } else if skills.isEmpty {
                     ContentUnavailableView("No skills", systemImage: "wand.and.stars",
-                        description: Text("Your gateway didn't report any skills."))
+                        description: Text("Your gateway didn't report any skills, or it's unreachable. Check Settings."))
                 }
             }
+        }
+        .task {
+            let all = await client?.commands() ?? []
+            skills = all.filter { $0.kind == .skill }
+            loading = false
         }
     }
 }
