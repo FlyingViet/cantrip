@@ -282,10 +282,10 @@ struct ChatView: View {
                 Spacer(minLength: 0)
                 Button { voice.stopSpeaking() } label: { Image(systemName: "stop.circle").font(.title3) }
             }
-        } else if vm.sending && voice.handsFree {
+        } else if vm.sending {
             HStack(spacing: 10) {
-                WaveformView(active: true, color: .accentColor)
-                Text("Hermes is replying…").font(.callout).foregroundStyle(.secondary)
+                ThinkingView(size: 22, color: .accentColor)
+                Text("Hermes is thinking…").font(.callout).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
         }
@@ -295,6 +295,21 @@ struct ChatView: View {
         let text = input
         input = ""
         vm.send(text)
+    }
+}
+
+/// A pulsing brain for the "thinking" state (the agent is working) — used instead
+/// of the waveform, which is for listening/speaking (audio).
+struct ThinkingView: View {
+    var size: CGFloat = 28
+    var color: Color = .accentColor
+
+    var body: some View {
+        Image(systemName: "brain")
+            .font(.system(size: size))
+            .foregroundStyle(color)
+            .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
+            .symbolEffect(.pulse, options: .repeating)
     }
 }
 
@@ -366,7 +381,7 @@ private struct TurnView: View {
                     .padding(.top, 4)
                 }
                 if turn.streaming && turn.text.isEmpty && turn.tools.isEmpty {
-                    ProgressView().controlSize(.small)
+                    ThinkingView(size: 22, color: .gray)
                 }
                 if let err = turn.error {
                     Label(err, systemImage: "exclamationmark.triangle")

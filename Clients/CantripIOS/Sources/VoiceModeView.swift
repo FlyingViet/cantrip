@@ -48,10 +48,16 @@ struct VoiceModeView: View {
                     .font(.title3.weight(.medium)).foregroundStyle(.white.opacity(0.85))
                     .animation(.default, value: statusText)
 
-                WaveformView(active: isActive, color: stateColor, barCount: 7,
-                             barWidth: 10, spacing: 9, minHeight: 18, maxHeight: 150)
-                    .frame(height: 160)
-                    .shadow(color: stateColor.opacity(0.45), radius: 28)
+                Group {
+                    if vm.sending, !voice.isSpeaking, !voice.isListening {
+                        ThinkingView(size: 96, color: .accentColor)        // brain while thinking
+                    } else {
+                        WaveformView(active: voice.isListening || voice.isSpeaking, color: stateColor,
+                                     barCount: 7, barWidth: 10, spacing: 9, minHeight: 18, maxHeight: 150)
+                    }
+                }
+                .frame(height: 160)
+                .shadow(color: stateColor.opacity(0.45), radius: 28)
 
                 if !caption.isEmpty {
                     ScrollView {
