@@ -21,6 +21,9 @@ final class ChatViewModel: ObservableObject {
 
     func send(_ raw: String, spoken: Bool = false) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Paused → drop every send (text, voice, skill, button) so we never fire
+        // an unintentional request at the agent.
+        guard !UserDefaults.standard.bool(forKey: "hermes.paused") else { return }
         guard !text.isEmpty, let client = env.client, !sending else { return }
 
         turns.append(ChatTurn(role: .user, text: text))
@@ -111,6 +114,9 @@ struct ChatView: View {
     @State private var showVoiceMode = false
     @State private var showSkills = false
     @State private var commands: [HermesCommand] = []
+    /// When paused, the app sends nothing — guards against unintentional requests
+    /// (stray taps, ambient voice) that would otherwise burn the agent's budget.
+    @AppStorage("hermes.paused") private var paused = false
 
     /// Filtered "/" suggestions: shown while the user is typing a command name
     /// (starts with "/", no space yet).
@@ -138,14 +144,24 @@ struct ChatView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
+                        Button { paused.toggle() } label: {
+                            Label(paused ? "Resume agent" : "Pause agent",
+                                  systemImage: paused ? "play.circle" : "pause.circle")
+                        }
+                        Divider()
                         Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
+                            .disabled(paused)
                         Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
+                            .disabled(paused)
                         Divider()
                         Button(role: .destructive) { vm.newConversation() } label: {
                             Label("New conversation", systemImage: "square.and.pencil")
                         }
                         .disabled(vm.turns.isEmpty)
-                    } label: { Image(systemName: "line.3.horizontal") }
+                    } label: {
+                        Image(systemName: paused ? "pause.circle.fill" : "line.3.horizontal")
+                            .foregroundStyle(paused ? Color.orange : Color.accentColor)
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
@@ -169,6 +185,13 @@ struct ChatView: View {
         }
         .onChange(of: input) { _, v in
             if v.hasPrefix("/"), commands.isEmpty { reloadCommands() }   // retry if the first load failed (e.g. key set late)
+        }
+        .onChange(of: paused) { _, isPaused in
+            if isPaused {                              // halt anything that could fire a request
+                voice.stopListening(finalize: false)
+                voice.stopSpeaking()
+                showVoiceMode = false
+            }
         }
         .task { reloadCommands() }
     }
@@ -217,6 +240,9 @@ struct ChatView: View {
 
     private var inputBar: some View {
         VStack(spacing: 8) {
+            if paused {
+                pausedBar
+            } else {
             if !suggestions.isEmpty { suggestionList }
             voiceStatus
             HStack(spacing: 10) {
@@ -241,9 +267,25 @@ struct ChatView: View {
                     Button(action: sendText) { Image(systemName: "arrow.up.circle.fill").font(.title2) }
                 }
             }
+            }
         }
         .padding(.horizontal).padding(.vertical, 8)
         .background(.bar)
+    }
+
+    /// Shown in place of the composer when paused — a clear "you're sending nothing"
+    /// state with a one-tap resume.
+    private var pausedBar: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "pause.circle.fill").font(.title2).foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Agent paused").font(.callout.weight(.semibold))
+                Text("No requests will be sent.").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button("Resume") { paused = false }.buttonStyle(.borderedProminent)
+        }
+        .padding(.vertical, 4)
     }
 
     /// "/" autocomplete — the command/skill menu, like Telegram/Discord.
