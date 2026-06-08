@@ -6,7 +6,10 @@ import SwiftUI
 /// point it at the Cloudflare tunnel hostname to use Hermes away from home.
 @MainActor
 final class HermesEnv: ObservableObject {
-    @AppStorage("hermes.baseURL") var baseURL: String = "http://192.168.0.94:8642"
+    // Cloudflare tunnel → the gateway api_server. Works at home AND away (HTTPS,
+    // key-gated). Swap to the LAN address (http://192.168.0.94:8642) for a
+    // lower-latency local-only connection.
+    @AppStorage("hermes.baseURL") var baseURL: String = "https://agent.example-home.com"
     @AppStorage("hermes.model") var model: String = "hermes-agent"
     /// Stable per-install id so the gateway can scope long-term memory to this app
     /// (the `X-Hermes-Session-Key` header). Generated once, kept in UserDefaults.
