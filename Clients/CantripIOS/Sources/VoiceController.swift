@@ -114,7 +114,7 @@ final class VoiceController: NSObject, ObservableObject {
         } catch {}
         isSpeaking = true
         let utt = AVSpeechUtterance(string: clean)
-        utt.voice = AVSpeechSynthesisVoice(language: "en-US")
+        utt.voice = Self.selectedVoice()
         utt.rate = AVSpeechUtteranceDefaultSpeechRate
         synth.speak(utt)
     }
@@ -122,6 +122,31 @@ final class VoiceController: NSObject, ObservableObject {
     func stopSpeaking() {
         synth.stopSpeaking(at: .immediate)
         isSpeaking = false
+    }
+
+    /// Speak a short sample with a given voice (used by the Settings preview).
+    func preview(voiceId: String) {
+        if isListening { stopListening(finalize: false) }
+        let utt = AVSpeechUtterance(string: "Hey, this is how I'll sound.")
+        utt.voice = AVSpeechSynthesisVoice(identifier: voiceId) ?? AVSpeechSynthesisVoice(language: "en-US")
+        isSpeaking = true
+        synth.speak(utt)
+    }
+
+    /// English-language voices installed on the device, best quality first.
+    static func voices() -> [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language.hasPrefix("en") }
+            .sorted { a, b in
+                a.quality.rawValue != b.quality.rawValue ? a.quality.rawValue > b.quality.rawValue : a.name < b.name
+            }
+    }
+
+    /// The user's chosen voice (UserDefaults `hermes.voiceId`) or the system default.
+    static func selectedVoice() -> AVSpeechSynthesisVoice? {
+        if let id = UserDefaults.standard.string(forKey: "hermes.voiceId"), !id.isEmpty,
+           let v = AVSpeechSynthesisVoice(identifier: id) { return v }
+        return AVSpeechSynthesisVoice(language: "en-US")
     }
 
     private func resumeIfHandsFree() {

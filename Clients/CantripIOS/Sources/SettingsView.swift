@@ -1,7 +1,9 @@
 import SwiftUI
+import AVFoundation
 
 struct SettingsView: View {
     @ObservedObject var env: HermesEnv
+    let voice: VoiceController
     @Environment(\.dismiss) private var dismiss
     @State private var key = ""
     @State private var testing = false
@@ -11,7 +13,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("https://agent.example-home.com", text: $env.baseURL)
+                    TextField("https://your-gateway.example.com", text: $env.baseURL)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                     SecureField("API key (API_SERVER_KEY)", text: $key)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -19,6 +21,18 @@ struct SettingsView: View {
                     TextField("Model", text: $env.model).textInputAutocapitalization(.never).autocorrectionDisabled()
                 } header: { Text("Hermes Gateway") }
                 footer: { Text("The gateway's OpenAI-compatible API server (/v1/responses). Use the LAN address at home or the Cloudflare tunnel hostname anywhere.") }
+
+                Section("Voice") {
+                    NavigationLink {
+                        VoiceListView(env: env, voice: voice)
+                    } label: {
+                        HStack {
+                            Label("Reply voice", systemImage: "speaker.wave.2")
+                            Spacer()
+                            Text(currentVoiceName).foregroundStyle(.secondary)
+                        }
+                    }
+                }
 
                 Section {
                     Button { Task { await test() } } label: {
@@ -45,5 +59,53 @@ struct SettingsView: View {
         testing = true; testResult = nil
         testResult = await env.client?.health() ?? false
         testing = false
+    }
+
+    private var currentVoiceName: String {
+        guard !env.voiceId.isEmpty, let v = AVSpeechSynthesisVoice(identifier: env.voiceId) else { return "Default" }
+        return v.name
+    }
+}
+
+struct VoiceListView: View {
+    @ObservedObject var env: HermesEnv
+    let voice: VoiceController
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(VoiceController.voices(), id: \.identifier) { v in
+                    Button {
+                        env.voiceId = v.identifier
+                        voice.preview(voiceId: v.identifier)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: env.voiceId == v.identifier ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(env.voiceId == v.identifier ? Color.accentColor : .secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(v.name)
+                                Text("\(v.language) · \(qualityLabel(v.quality))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "play.circle").foregroundStyle(.secondary)
+                        }
+                    }
+                    .tint(.primary)
+                }
+            } footer: {
+                Text("Tap a voice to select it and hear a sample. Download richer voices in iOS Settings → Accessibility → Spoken Content → Voices.")
+            }
+        }
+        .navigationTitle("Reply Voice")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func qualityLabel(_ q: AVSpeechSynthesisVoiceQuality) -> String {
+        switch q {
+        case .premium: return "Premium"
+        case .enhanced: return "Enhanced"
+        default: return "Default"
+        }
     }
 }

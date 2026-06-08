@@ -6,11 +6,13 @@ import SwiftUI
 /// point it at the Cloudflare tunnel hostname to use Hermes away from home.
 @MainActor
 final class HermesEnv: ObservableObject {
-    // Cloudflare tunnel → the gateway api_server. Works at home AND away (HTTPS,
-    // key-gated). Swap to the LAN address (http://192.168.0.94:8642) for a
-    // lower-latency local-only connection.
-    @AppStorage("hermes.baseURL") var baseURL: String = "https://agent.example-home.com"
+    // Each user points this at THEIR OWN Hermes gateway api_server (LAN address
+    // or a Cloudflare tunnel). No default server — set it in Settings on first run.
+    @AppStorage("hermes.baseURL") var baseURL: String = ""
     @AppStorage("hermes.model") var model: String = "hermes-agent"
+    /// Selected TTS voice identifier (empty = system default). `VoiceController`
+    /// reads this key directly from UserDefaults at speak time.
+    @AppStorage("hermes.voiceId") var voiceId: String = ""
     /// Stable per-install id so the gateway can scope long-term memory to this app
     /// (the `X-Hermes-Session-Key` header). Generated once, kept in UserDefaults.
     @AppStorage("hermes.sessionKey") private var storedSessionKey: String = ""
@@ -22,7 +24,7 @@ final class HermesEnv: ObservableObject {
         return storedSessionKey
     }
 
-    var isConfigured: Bool { URL(string: trimmed(baseURL)) != nil }
+    var isConfigured: Bool { !trimmed(baseURL).isEmpty && URL(string: trimmed(baseURL)) != nil }
 
     var client: HermesClient? {
         guard let url = URL(string: trimmed(baseURL)) else { return nil }

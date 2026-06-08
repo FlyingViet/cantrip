@@ -30,6 +30,21 @@ struct HermesClient {
         return (200..<500).contains(http.statusCode)   // any HTTP answer = reachable
     }
 
+    /// Fetch the slash-command + skill menu for "/" autocomplete suggestions.
+    func commands() async -> [HermesCommand] {
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/commands"))
+        req.timeoutInterval = 12
+        if !apiKey.isEmpty { req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let arr = obj["commands"] as? [[String: Any]] else { return [] }
+        return arr.compactMap { d in
+            guard let cmd = d["command"] as? String else { return nil }
+            return HermesCommand(command: cmd, description: d["description"] as? String ?? "")
+        }
+    }
+
     /// Stream a user turn. `previousResponseId` chains server-side history. Yields
     /// decoded events; keep the `responseCreated` id for the next turn.
     func stream(input: String, previousResponseId: String?) -> AsyncThrowingStream<HermesStreamEvent, Error> {

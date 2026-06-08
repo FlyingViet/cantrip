@@ -13,6 +13,9 @@ final class ChatViewModel: ObservableObject {
     init(env: HermesEnv, voice: VoiceController) {
         self.env = env
         self.voice = voice
+        let snap = ChatStore.load()           // restore the prior transcript
+        self.turns = snap.turns
+        self.previousResponseId = snap.previousResponseId
         voice.onFinalTranscript = { [weak self] text in self?.send(text, spoken: true) }
     }
 
@@ -41,6 +44,7 @@ final class ChatViewModel: ObservableObject {
             if turns[idx].text.isEmpty, turns[idx].tools.isEmpty, turns[idx].error == nil {
                 turns[idx].error = "No response received (the gateway answered but sent no text)."
             }
+            ChatStore.save(turns: turns, previousResponseId: previousResponseId)   // persist the transcript
             if (spoken || voice.handsFree), turns[idx].error == nil { voice.speak(turns[idx].text) }
         }
     }
@@ -55,6 +59,7 @@ final class ChatViewModel: ObservableObject {
         stop()
         turns.removeAll()
         previousResponseId = nil
+        ChatStore.clear()
     }
 
     private func apply(_ ev: HermesStreamEvent, at idx: Int) {
@@ -99,6 +104,15 @@ struct ChatView: View {
     @StateObject private var vm: ChatViewModel
     @State private var input = ""
     @State private var showSettings = false
+    @State private var commands: [HermesCommand] = []
+
+    /// Filtered "/" suggestions: shown while the user is typing a command name
+    /// (starts with "/", no space yet).
+    private var suggestions: [HermesCommand] {
+        guard input.hasPrefix("/"), !input.contains(" ") else { return [] }
+        let q = input.lowercased()
+        return Array(commands.filter { $0.command.lowercased().hasPrefix(q) }.prefix(6))
+    }
 
     init(env: HermesEnv) {
         self.env = env
@@ -124,9 +138,10 @@ struct ChatView: View {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 }
             }
-            .sheet(isPresented: $showSettings) { SettingsView(env: env) }
+            .sheet(isPresented: $showSettings) { SettingsView(env: env, voice: voice) }
         }
         .onAppear { voice.requestAuth() }
+        .task { commands = await env.client?.commands() ?? [] }
     }
 
     private var transcriptList: some View {
@@ -144,26 +159,28 @@ struct ChatView: View {
         }
     }
 
-    private var emptyState: some View {
+    @ViewBuilder private var emptyState: some View {
         VStack(spacing: 10) {
-            Image(systemName: "waveform.circle.fill").font(.system(size: 56)).foregroundStyle(.tint)
-            Text("Talk to Hermes").font(.title3.weight(.semibold))
-            Text("Type, or tap the mic to start a voice conversation. Toggle hands-free to keep the loop going.")
-                .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Image(systemName: env.isConfigured ? "waveform.circle.fill" : "gearshape.circle.fill")
+                .font(.system(size: 56)).foregroundStyle(.tint)
+            if env.isConfigured {
+                Text("Talk to Hermes").font(.title3.weight(.semibold))
+                Text("Type, or tap the mic to start a voice conversation. Toggle hands-free to keep the loop going.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            } else {
+                Text("Connect your gateway").font(.title3.weight(.semibold))
+                Text("Open Settings and enter your Hermes gateway URL + API key to start.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("Open Settings") { showSettings = true }.buttonStyle(.borderedProminent).padding(.top, 4)
+            }
         }
-        .frame(maxWidth: .infinity).padding(.top, 80)
+        .frame(maxWidth: .infinity).padding(.top, 80).padding(.horizontal, 30)
     }
 
     private var inputBar: some View {
         VStack(spacing: 8) {
-            if voice.isListening {
-                Label(voice.partial.isEmpty ? "Listening…" : voice.partial, systemImage: "waveform")
-                    .font(.callout).foregroundStyle(.tint).lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else if voice.isSpeaking {
-                Button { voice.stopSpeaking() } label: { Label("Speaking — tap to stop", systemImage: "stop.circle") }
-                    .font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-            }
+            if !suggestions.isEmpty { suggestionList }
+            voiceStatus
             HStack(spacing: 10) {
                 Toggle(isOn: $voice.handsFree) { Image(systemName: "infinity") }
                     .toggleStyle(.button).help("Hands-free loop")
@@ -191,10 +208,75 @@ struct ChatView: View {
         .background(.bar)
     }
 
+    /// "/" autocomplete — the command/skill menu, like Telegram/Discord.
+    private var suggestionList: some View {
+        VStack(spacing: 0) {
+            ForEach(suggestions) { cmd in
+                Button { input = cmd.command + " " } label: {
+                    HStack(spacing: 8) {
+                        Text(cmd.command).font(.callout.monospaced().weight(.semibold)).foregroundStyle(.tint)
+                        Text(cmd.description).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                    .padding(.vertical, 7).padding(.horizontal, 10)
+                }
+                .buttonStyle(.plain)
+                if cmd.id != suggestions.last?.id { Divider() }
+            }
+        }
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// Animated waveform status — "talking back" while listening, replying, or speaking.
+    @ViewBuilder private var voiceStatus: some View {
+        if voice.isListening {
+            HStack(spacing: 10) {
+                WaveformView(active: true, color: .red)
+                Text(voice.partial.isEmpty ? "Listening…" : voice.partial)
+                    .font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                Spacer(minLength: 0)
+            }
+        } else if voice.isSpeaking {
+            HStack(spacing: 10) {
+                WaveformView(active: true, color: .accentColor)
+                Text("Hermes is speaking").font(.callout).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button { voice.stopSpeaking() } label: { Image(systemName: "stop.circle").font(.title3) }
+            }
+        } else if vm.sending && voice.handsFree {
+            HStack(spacing: 10) {
+                WaveformView(active: true, color: .accentColor)
+                Text("Hermes is replying…").font(.callout).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
     private func sendText() {
         let text = input
         input = ""
         vm.send(text)
+    }
+}
+
+/// A row of bars that wave while `active` (voice "talking back"); flat otherwise.
+private struct WaveformView: View {
+    var active: Bool
+    var color: Color = .accentColor
+    var barCount = 5
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !active)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 3) {
+                ForEach(0..<barCount, id: \.self) { i in
+                    let amp = active ? (sin(t * 7 + Double(i) * 0.9) * 0.5 + 0.5) : 0.18
+                    Capsule().fill(color).frame(width: 3.5, height: 6 + amp * 18)
+                }
+            }
+        }
+        .frame(width: CGFloat(barCount) * 6.5, height: 24)
     }
 }
 
