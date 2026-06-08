@@ -53,26 +53,29 @@ struct HermesClient {
 
                     var eventType = ""
                     var dataBuffer = ""
-                    for try await rawLine in bytes.lines {
-                        // Tolerate CRLF: strip a trailing \r so the blank-line
-                        // boundary and the event-type token aren't polluted (the
-                        // cause of "200 received but nothing renders").
-                        let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
-                        if line.isEmpty {
-                            if !dataBuffer.isEmpty {
-                                for ev in Self.decode(eventType: eventType, data: dataBuffer) { continuation.yield(ev) }
-                            }
-                            eventType = ""; dataBuffer = ""
-                            continue
+                    func flush() {
+                        if !dataBuffer.isEmpty {
+                            for ev in Self.decode(eventType: eventType, data: dataBuffer) { continuation.yield(ev) }
                         }
+                        eventType = ""; dataBuffer = ""
+                    }
+                    for try await rawLine in bytes.lines {
+                        // Tolerate CRLF: strip a trailing \r so the event-type token
+                        // and boundaries aren't polluted.
+                        let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
+                        if line.isEmpty { flush(); continue }
                         if line.hasPrefix("event:") {
+                            // A new event begins — dispatch the previous one even if
+                            // the blank separator line wasn't surfaced by `.lines`.
+                            flush()
                             eventType = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
                         } else if line.hasPrefix("data:") {
-                            let chunk = String(line.dropFirst(5)).drop(while: { $0 == " " })
-                            if chunk == "[DONE]" { continuation.yield(.completed); continuation.finish(); return }
+                            let chunk = String(String(line.dropFirst(5)).drop(while: { $0 == " " }))
+                            if chunk == "[DONE]" { flush(); continuation.yield(.completed); continuation.finish(); return }
                             dataBuffer += (dataBuffer.isEmpty ? "" : "\n") + chunk
                         }
                     }
+                    flush()   // dispatch the final event (e.g. response.completed) at stream end
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
