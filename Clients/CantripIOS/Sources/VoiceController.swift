@@ -142,11 +142,13 @@ final class VoiceController: NSObject, ObservableObject {
             }
     }
 
-    /// The user's chosen voice (UserDefaults `hermes.voiceId`) or the system default.
+    /// The user's chosen voice (UserDefaults `hermes.voiceId`), else the highest-
+    /// quality installed English voice (a downloaded Premium/Enhanced voice sounds
+    /// close to Siri — far less robotic than the basic default).
     static func selectedVoice() -> AVSpeechSynthesisVoice? {
         if let id = UserDefaults.standard.string(forKey: "hermes.voiceId"), !id.isEmpty,
            let v = AVSpeechSynthesisVoice(identifier: id) { return v }
-        return AVSpeechSynthesisVoice(language: "en-US")
+        return voices().first ?? AVSpeechSynthesisVoice(language: "en-US")
     }
 
     private func resumeIfHandsFree() {

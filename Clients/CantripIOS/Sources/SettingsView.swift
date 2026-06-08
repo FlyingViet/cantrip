@@ -93,8 +93,11 @@ struct VoiceListView: View {
                     }
                     .tint(.primary)
                 }
+            } header: {
+                Text("Premium / Enhanced voices sound close to Siri — Default ones are robotic.")
+                    .textCase(nil)
             } footer: {
-                Text("Tap a voice to select it and hear a sample. Download richer voices in iOS Settings → Accessibility → Spoken Content → Voices.")
+                Text("Tap a voice to select it and hear a sample. Don't see a Premium voice? Download one in iOS Settings → Accessibility → Spoken Content → Voices → English.")
             }
         }
         .navigationTitle("Reply Voice")
