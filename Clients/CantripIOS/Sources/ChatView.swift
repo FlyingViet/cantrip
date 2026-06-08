@@ -149,7 +149,7 @@ struct ChatView: View {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 }
             }
-            .sheet(isPresented: $showSettings) { SettingsView(env: env, voice: voice) }
+            .sheet(isPresented: $showSettings, onDismiss: reloadCommands) { SettingsView(env: env, voice: voice) }
             .sheet(isPresented: $showSkills) {
                 SkillsView(client: env.client) { skill in
                     showSkills = false
@@ -165,7 +165,17 @@ struct ChatView: View {
         .onChange(of: router.startVoiceMode) { _, start in
             if start { showVoiceMode = true; router.startVoiceMode = false }                    // foreground launch from the intent
         }
-        .task { commands = await env.client?.commands() ?? [] }
+        .onChange(of: input) { _, v in
+            if v.hasPrefix("/"), commands.isEmpty { reloadCommands() }   // retry if the first load failed (e.g. key set late)
+        }
+        .task { reloadCommands() }
+    }
+
+    /// Load the command/skill menu for "/" suggestions. Only overwrites on a
+    /// non-empty result, so a transient failure (e.g. a 401 before the key is
+    /// entered) doesn't wipe a good list — and it can be retried safely.
+    private func reloadCommands() {
+        Task { if let c = await env.client?.commands(), !c.isEmpty { commands = c } }
     }
 
     private var transcriptList: some View {
