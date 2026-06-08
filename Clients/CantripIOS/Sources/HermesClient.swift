@@ -59,23 +59,32 @@ struct HermesClient {
                         }
                         eventType = ""; dataBuffer = ""
                     }
-                    for try await rawLine in bytes.lines {
-                        // Tolerate CRLF: strip a trailing \r so the event-type token
-                        // and boundaries aren't polluted.
-                        let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
-                        if line.isEmpty { flush(); continue }
+                    func process(_ raw: String) {
+                        let line = raw.hasSuffix("\r") ? String(raw.dropLast()) : raw   // tolerate CRLF
+                        if line.isEmpty { flush(); return }
                         if line.hasPrefix("event:") {
-                            // A new event begins — dispatch the previous one even if
-                            // the blank separator line wasn't surfaced by `.lines`.
-                            flush()
+                            flush()   // a new event begins — dispatch the previous
                             eventType = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
                         } else if line.hasPrefix("data:") {
                             let chunk = String(String(line.dropFirst(5)).drop(while: { $0 == " " }))
-                            if chunk == "[DONE]" { flush(); continuation.yield(.completed); continuation.finish(); return }
+                            if chunk == "[DONE]" { flush(); continuation.yield(.completed); return }
                             dataBuffer += (dataBuffer.isEmpty ? "" : "\n") + chunk
                         }
                     }
-                    flush()   // dispatch the final event (e.g. response.completed) at stream end
+                    // Read raw bytes and split on \n ourselves. `URLSession.bytes.lines`
+                    // did NOT reliably surface SSE lines / blank separators here, which
+                    // dropped every event → empty replies. This is byte-exact.
+                    var lineBytes = [UInt8]()
+                    for try await byte in bytes {
+                        if byte == 0x0A {
+                            process(String(decoding: lineBytes, as: UTF8.self))
+                            lineBytes.removeAll(keepingCapacity: true)
+                        } else {
+                            lineBytes.append(byte)
+                        }
+                    }
+                    if !lineBytes.isEmpty { process(String(decoding: lineBytes, as: UTF8.self)) }
+                    flush()   // dispatch the final event (response.completed) at stream end
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
