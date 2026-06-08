@@ -8,7 +8,7 @@ as an alternative to talking to Hermes through Telegram/Discord. Sibling of
 ## Build / run
 - `xcodegen generate` then `xcodebuild -scheme Hermes -sdk iphonesimulator build CODE_SIGNING_ALLOWED=NO`.
 - The `.xcodeproj` is generated (git-ignored); regenerate after editing `project.yml`.
-- iOS 26+, universal (`TARGETED_DEVICE_FAMILY "1,2"`), bundle `com.itzhoang.hermes`.
+- iOS 26+, universal (`TARGETED_DEVICE_FAMILY "1,2"`), bundle `com.itzhoang.hermbot`.
 
 ## How it connects
 - Talks to the Hermes gateway's **OpenAI-compatible API server** adapter

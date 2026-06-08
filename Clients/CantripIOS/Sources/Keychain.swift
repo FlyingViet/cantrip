@@ -4,7 +4,7 @@ import Security
 /// Tiny Keychain wrapper for the gateway API key — never store secrets in
 /// UserDefaults or the repo.
 enum Keychain {
-    private static let service = "com.itzhoang.hermes"
+    private static let service = "com.itzhoang.hermbot"
 
     static func set(_ value: String, for account: String) {
         let data = Data(value.utf8)

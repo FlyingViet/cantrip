@@ -21,7 +21,7 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: Hermes
+        CFBundleDisplayName: AgentGateway   # App Store / TestFlight name (project stays "Hermes" internally)
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         ITSAppUsesNonExemptEncryption: false
@@ -40,4 +40,4 @@ targets:
           NSAllowsLocalNetworking: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.hermes
+        PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.hermbot

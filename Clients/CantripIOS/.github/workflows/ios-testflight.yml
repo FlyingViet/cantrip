@@ -1,5 +1,5 @@
 name: iOS · TestFlight
-# Hermes (com.itzhoang.hermes) → App Store Connect / TestFlight.
+# Hermes (com.itzhoang.hermbot) → App Store Connect / TestFlight.
 
 # Manual only. Builds Hermes (native Xcode archive) and uploads it to TestFlight
 # via the App Store Connect API. Nothing runs on push.
@@ -7,7 +7,7 @@ name: iOS · TestFlight
 # Run it:  gh workflow run ios-testflight.yml -R FlyingViet/Hermes --ref master
 #
 # One-time setup this depends on: the 4 secrets below + an App Store Connect app
-# record for com.itzhoang.hermes + a self-hosted runner registered to this repo.
+# record for com.itzhoang.hermbot + a self-hosted runner registered to this repo.
 
 on:
   workflow_dispatch:
