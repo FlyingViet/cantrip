@@ -36,6 +36,8 @@ final class ChatViewModel: ObservableObject {
             } catch is CancellationError {
             } catch {
                 turns[idx].error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                // A 404 means a stale server-side chain — drop it so the next turn starts fresh.
+                if let he = error as? HermesError, case .http(404) = he { previousResponseId = nil }
             }
             turns[idx].streaming = false
             sending = false
