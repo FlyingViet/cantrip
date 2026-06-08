@@ -53,7 +53,11 @@ struct HermesClient {
 
                     var eventType = ""
                     var dataBuffer = ""
-                    for try await line in bytes.lines {
+                    for try await rawLine in bytes.lines {
+                        // Tolerate CRLF: strip a trailing \r so the blank-line
+                        // boundary and the event-type token aren't polluted (the
+                        // cause of "200 received but nothing renders").
+                        let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
                         if line.isEmpty {
                             if !dataBuffer.isEmpty {
                                 for ev in Self.decode(eventType: eventType, data: dataBuffer) { continuation.yield(ev) }
@@ -113,6 +117,16 @@ struct HermesClient {
                 }
             }
         case "response.completed":
+            // Pull the finalized assistant text as a fallback (fills the bubble
+            // if streamed deltas were somehow missed).
+            if let resp = obj["response"] as? [String: Any], let out = resp["output"] as? [[String: Any]] {
+                let text = out.compactMap { item -> String? in
+                    guard (item["type"] as? String) == "message",
+                          let content = item["content"] as? [[String: Any]] else { return nil }
+                    return content.compactMap { $0["text"] as? String }.joined()
+                }.joined()
+                if !text.isEmpty { return [.finalText(text), .completed] }
+            }
             return [.completed]
         case "response.failed", "error", "response.error":
             let msg = ((obj["response"] as? [String: Any])?["error"] as? [String: Any])?["message"] as? String

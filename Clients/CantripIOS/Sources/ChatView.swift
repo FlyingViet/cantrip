@@ -36,6 +36,11 @@ final class ChatViewModel: ObservableObject {
             }
             turns[idx].streaming = false
             sending = false
+            // Never leave a silently-empty bubble — surface that the turn produced
+            // nothing so it's debuggable instead of looking like a hang.
+            if turns[idx].text.isEmpty, turns[idx].tools.isEmpty, turns[idx].error == nil {
+                turns[idx].error = "No response received (the gateway answered but sent no text)."
+            }
             if (spoken || voice.handsFree), turns[idx].error == nil { voice.speak(turns[idx].text) }
         }
     }
@@ -59,6 +64,8 @@ final class ChatViewModel: ObservableObject {
             previousResponseId = id
         case .textDelta(let t):
             turns[idx].text += t
+        case .finalText(let t):
+            if turns[idx].text.isEmpty { turns[idx].text = t }   // fallback if deltas were missed
         case .toolStarted(let id, let name):
             turns[idx].tools.append(ToolActivity(id: id, name: name))
         case .toolArgumentsDelta(let id, let delta):

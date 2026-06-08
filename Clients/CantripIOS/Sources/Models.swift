@@ -34,6 +34,9 @@ struct ToolActivity: Identifiable {
 enum HermesStreamEvent {
     case responseCreated(id: String)
     case textDelta(String)
+    /// The complete assistant text from the terminal `response.completed` event —
+    /// used to fill the bubble if streamed deltas were missed (CRLF / shape drift).
+    case finalText(String)
     case toolStarted(id: String, name: String)
     case toolArgumentsDelta(id: String, delta: String)
     case toolCompleted(id: String)
