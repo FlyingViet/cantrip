@@ -102,6 +102,7 @@ struct ChatView: View {
     private let env: HermesEnv
     @StateObject private var voice: VoiceController
     @StateObject private var vm: ChatViewModel
+    @ObservedObject private var router = AppRouter.shared
     @State private var input = ""
     @State private var showSettings = false
     @State private var showVoiceMode = false
@@ -156,7 +157,13 @@ struct ChatView: View {
             }
             .fullScreenCover(isPresented: $showVoiceMode) { VoiceModeView(voice: voice, vm: vm) }
         }
-        .onAppear { voice.requestAuth() }
+        .onAppear {
+            voice.requestAuth()
+            if router.startVoiceMode { showVoiceMode = true; router.startVoiceMode = false }   // cold launch from the Action Button
+        }
+        .onChange(of: router.startVoiceMode) { _, start in
+            if start { showVoiceMode = true; router.startVoiceMode = false }                    // foreground launch from the intent
+        }
         .task { commands = await env.client?.commands() ?? [] }
     }
 
