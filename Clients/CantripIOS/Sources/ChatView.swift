@@ -44,6 +44,7 @@ final class ChatViewModel: ObservableObject {
             if turns[idx].text.isEmpty, turns[idx].tools.isEmpty, turns[idx].error == nil {
                 turns[idx].error = "No response received (the gateway answered but sent no text)."
             }
+            turns[idx].actions = ChatTurn.parseActions(turns[idx].text)            // confirmation buttons
             ChatStore.save(turns: turns, previousResponseId: previousResponseId)   // persist the transcript
             if (spoken || voice.handsFree), turns[idx].error == nil { voice.speak(turns[idx].text) }
         }
@@ -172,7 +173,9 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     if vm.turns.isEmpty { emptyState }
-                    ForEach(vm.turns) { turn in TurnView(turn: turn).id(turn.id) }
+                    ForEach(vm.turns) { turn in
+                        TurnView(turn: turn) { vm.send($0.command) }.id(turn.id)
+                    }
                 }
                 .padding()
             }
@@ -310,6 +313,7 @@ struct WaveformView: View {
 
 private struct TurnView: View {
     let turn: ChatTurn
+    var onAction: (ChatAction) -> Void = { _ in }
 
     /// Parse inline markdown (bold/italic/code/links) while preserving the
     /// newlines streamed from the agent; falls back to plain text on a partial
@@ -317,6 +321,11 @@ private struct TurnView: View {
     static func markdown(_ s: String) -> AttributedString {
         (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(s)
+    }
+
+    /// Dimmer tint for the decline-ish choice.
+    private func isCancel(_ command: String) -> Bool {
+        ["/cancel", "/deny", "/no", "/nevermind"].contains(command.lowercased())
     }
 
     var body: some View {
@@ -333,6 +342,16 @@ private struct TurnView: View {
                 ForEach(turn.tools) { ToolRow(tool: $0) }
                 if !turn.text.isEmpty {
                     Text(Self.markdown(turn.text)).textSelection(.enabled)
+                }
+                if !turn.actions.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(turn.actions) { a in
+                            Button { onAction(a) } label: { Text(a.label).font(.callout.weight(.medium)) }
+                                .buttonStyle(.borderedProminent)
+                                .tint(isCancel(a.command) ? Color.secondary : Color.accentColor)
+                        }
+                    }
+                    .padding(.top, 4)
                 }
                 if turn.streaming && turn.text.isEmpty && turn.tools.isEmpty {
                     ProgressView().controlSize(.small)

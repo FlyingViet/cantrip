@@ -8,12 +8,50 @@ struct ChatTurn: Identifiable, Codable {
     let role: Role
     var text: String = ""
     var tools: [ToolActivity] = []
+    var actions: [ChatAction] = []
     var streaming = false
     var error: String?
 
     enum Role: String, Codable { case user, assistant }
 
+    /// Parse a confirmation prompt's choices into tappable actions. Gated on the
+    /// "fallback: reply `/x`, …" marker Hermes emits, so normal replies (and the
+    /// /help command list) don't sprout buttons.
+    static func parseActions(_ text: String) -> [ChatAction] {
+        let lines = text.components(separatedBy: .newlines)
+        guard let fallback = lines.first(where: {
+            $0.range(of: "fallback: reply", options: .caseInsensitive) != nil
+        }) else { return [] }
+        let cmds = matches(in: fallback, pattern: "/[a-zA-Z_][a-zA-Z0-9_-]*")
+        guard !cmds.isEmpty else { return [] }
+        // Pair each command with the bullet label above it (• **Label**), else
+        // a capitalized command name.
+        let labels = matches(in: text, pattern: "[•\\-\\*]\\s*\\*\\*([^*]+)\\*\\*", group: 1)
+        return cmds.enumerated().map { i, cmd in
+            let label = i < labels.count ? labels[i].trimmingCharacters(in: .whitespaces)
+                                         : cmd.dropFirst().capitalized
+            return ChatAction(label: String(label), command: cmd)
+        }
+    }
+
+    private static func matches(in text: String, pattern: String, group: Int = 0) -> [String] {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = text as NSString
+        return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { m in
+            let r = m.range(at: group)
+            return r.location != NSNotFound ? ns.substring(with: r) : nil
+        }
+    }
+
     var isEmpty: Bool { text.isEmpty && tools.isEmpty && error == nil }
+}
+
+/// A tappable choice parsed from a confirmation prompt (e.g. /new's "Approve
+/// Once / Always Approve / Cancel"). Tapping sends `command` as the next turn.
+struct ChatAction: Identifiable, Codable, Hashable {
+    let label: String
+    let command: String
+    var id: String { command }
 }
 
 /// A single tool/skill the agent invoked during an assistant turn. `output` fills
