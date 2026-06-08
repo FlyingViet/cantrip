@@ -41,7 +41,8 @@ struct HermesClient {
               let arr = obj["commands"] as? [[String: Any]] else { return [] }
         return arr.compactMap { d in
             guard let cmd = d["command"] as? String else { return nil }
-            return HermesCommand(command: cmd, description: d["description"] as? String ?? "")
+            let kind = HermesCommand.Kind(rawValue: d["kind"] as? String ?? "command") ?? .command
+            return HermesCommand(command: cmd, description: d["description"] as? String ?? "", kind: kind)
         }
     }
 

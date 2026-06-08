@@ -104,6 +104,8 @@ struct ChatView: View {
     @StateObject private var vm: ChatViewModel
     @State private var input = ""
     @State private var showSettings = false
+    @State private var showVoiceMode = false
+    @State private var showSkills = false
     @State private var commands: [HermesCommand] = []
 
     /// Filtered "/" suggestions: shown while the user is typing a command name
@@ -131,14 +133,28 @@ struct ChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { vm.newConversation() } label: { Image(systemName: "square.and.pencil") }
+                    Menu {
+                        Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
+                        Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
+                        Divider()
+                        Button(role: .destructive) { vm.newConversation() } label: {
+                            Label("New conversation", systemImage: "square.and.pencil")
+                        }
                         .disabled(vm.turns.isEmpty)
+                    } label: { Image(systemName: "line.3.horizontal") }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView(env: env, voice: voice) }
+            .sheet(isPresented: $showSkills) {
+                SkillsView(skills: commands.filter { $0.kind == .skill }) { skill in
+                    showSkills = false
+                    vm.send(skill.command)        // run it → returns to chat showing the interaction
+                }
+            }
+            .fullScreenCover(isPresented: $showVoiceMode) { VoiceModeView(voice: voice, vm: vm) }
         }
         .onAppear { voice.requestAuth() }
         .task { commands = await env.client?.commands() ?? [] }
@@ -182,8 +198,8 @@ struct ChatView: View {
             if !suggestions.isEmpty { suggestionList }
             voiceStatus
             HStack(spacing: 10) {
-                Toggle(isOn: $voice.handsFree) { Image(systemName: "infinity") }
-                    .toggleStyle(.button).help("Hands-free loop")
+                Button { showVoiceMode = true } label: { Image(systemName: "infinity") }
+                    .buttonStyle(.bordered).help("Voice mode")
 
                 TextField("Message Hermes…", text: $input, axis: .vertical)
                     .textFieldStyle(.plain).lineLimit(1...5)
@@ -261,22 +277,27 @@ struct ChatView: View {
 }
 
 /// A row of bars that wave while `active` (voice "talking back"); flat otherwise.
-private struct WaveformView: View {
+/// Parameterized so it works both small (input bar) and large (voice mode).
+struct WaveformView: View {
     var active: Bool
     var color: Color = .accentColor
     var barCount = 5
+    var barWidth: CGFloat = 3.5
+    var spacing: CGFloat = 3
+    var minHeight: CGFloat = 6
+    var maxHeight: CGFloat = 24
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !active)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 3) {
+            HStack(spacing: spacing) {
                 ForEach(0..<barCount, id: \.self) { i in
                     let amp = active ? (sin(t * 7 + Double(i) * 0.9) * 0.5 + 0.5) : 0.18
-                    Capsule().fill(color).frame(width: 3.5, height: 6 + amp * 18)
+                    Capsule().fill(color)
+                        .frame(width: barWidth, height: minHeight + amp * (maxHeight - minHeight))
                 }
             }
         }
-        .frame(width: CGFloat(barCount) * 6.5, height: 24)
     }
 }
 

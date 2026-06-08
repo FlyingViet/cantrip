@@ -37,6 +37,8 @@ struct ToolActivity: Identifiable, Codable {
 struct HermesCommand: Identifiable, Hashable {
     let command: String       // e.g. "/help", "/sonarr"
     let description: String
+    var kind: Kind = .command
+    enum Kind: String { case command, skill }
     var id: String { command }
 }
 
