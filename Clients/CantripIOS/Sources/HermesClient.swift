@@ -48,7 +48,7 @@ struct HermesClient {
 
     /// Stream a user turn. `previousResponseId` chains server-side history. Yields
     /// decoded events; keep the `responseCreated` id for the next turn.
-    func stream(input: String, previousResponseId: String?) -> AsyncThrowingStream<HermesStreamEvent, Error> {
+    func stream(input: String, previousResponseId: String?, showSteps: Bool = false) -> AsyncThrowingStream<HermesStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -60,6 +60,11 @@ struct HermesClient {
                     if !apiKey.isEmpty { req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
                     req.setValue(sessionKey, forHTTPHeaderField: "X-Hermes-Session-Key")
                     var body: [String: Any] = ["model": model, "input": input, "stream": true, "store": true]
+                    // Answer-only by default — suppress the agent's step-by-step narration.
+                    // "Show steps" sends an empty instruction to clear it (instructions carry
+                    // forward across the chain on the gateway otherwise).
+                    body["instructions"] = showSteps ? "" :
+                        "Respond with only your final answer. Do not narrate your process, your steps, or what you're about to do — no running commentary, no 'Let me…' / 'Got it…' lines. Just the result."
                     if let prev = previousResponseId { body["previous_response_id"] = prev }
                     req.httpBody = try JSONSerialization.data(withJSONObject: body)
 

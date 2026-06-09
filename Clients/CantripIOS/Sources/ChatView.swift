@@ -35,12 +35,13 @@ final class ChatViewModel: ObservableObject {
         // Speak the reply aloud sentence-by-sentence as it streams when this turn
         // was voice-initiated or we're in hands-free voice mode.
         let speakReply = spoken || voice.handsFree
+        let showSteps = UserDefaults.standard.bool(forKey: "hermes.showSteps")
         spokenCount = 0
         if speakReply { voice.beginReply() }
 
         streamTask = Task {
             do {
-                for try await ev in client.stream(input: text, previousResponseId: previousResponseId) {
+                for try await ev in client.stream(input: text, previousResponseId: previousResponseId, showSteps: showSteps) {
                     apply(ev, at: idx)
                     if speakReply { speakReady(at: idx) }   // speak each completed sentence as it lands
                 }

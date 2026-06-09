@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var testing = false
     @State private var testResult: Bool?
     @AppStorage("hermes.voicePause") private var voicePause = 2.5
+    @AppStorage("hermes.showSteps") private var showSteps = false
 
     var body: some View {
         NavigationStack {
@@ -43,6 +44,13 @@ struct SettingsView: View {
                     }
                 } header: { Text("Voice") }
                 footer: { Text("How long to wait after you stop talking before sending. Raise it if a thinking or breathing pause sends your prompt too early.") }
+
+                Section {
+                    Toggle(isOn: $showSteps) {
+                        Label("Show reasoning steps", systemImage: "list.bullet.indent")
+                    }
+                } header: { Text("Replies") }
+                footer: { Text("Off: just the final answer. On: stream the agent's step-by-step narration as it works. Tool activity still shows either way.") }
 
                 Section {
                     Button { Task { await test() } } label: {
