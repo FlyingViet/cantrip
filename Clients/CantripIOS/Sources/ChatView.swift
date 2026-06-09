@@ -274,6 +274,7 @@ struct ChatView: View {
                 }
                 .padding()
             }
+            .defaultScrollAnchor(.bottom)   // open at the most recent message + stay pinned to newest
             .onChange(of: vm.turns.last?.text) { _, _ in
                 if let id = vm.turns.last?.id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
             }
