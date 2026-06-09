@@ -12,6 +12,10 @@ settings:
     DEVELOPMENT_TEAM: "9M3XNFG4J7"
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1,2"
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: "2.0.0"
 targets:
   Hermes:
     type: application
@@ -41,6 +45,8 @@ targets:
         # The gateway may be reached over the LAN (plain HTTP) as well as the Cloudflare tunnel (HTTPS).
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+    dependencies:
+      - package: MarkdownUI
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.hermbot

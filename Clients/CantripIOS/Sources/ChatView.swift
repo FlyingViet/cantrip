@@ -1,4 +1,5 @@
 import SwiftUI
+import MarkdownUI
 
 @MainActor
 final class ChatViewModel: ObservableObject {
@@ -473,7 +474,8 @@ private struct TurnView: View {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(turn.tools) { ToolRow(tool: $0) }
                 if !turn.text.isEmpty {
-                    Text(Self.markdown(turn.text)).textSelection(.enabled)
+                    Markdown(turn.text)            // full GFM: tables, lists, code blocks, headings
+                        .textSelection(.enabled)
                 }
                 if !turn.actions.isEmpty {
                     HStack(spacing: 8) {
