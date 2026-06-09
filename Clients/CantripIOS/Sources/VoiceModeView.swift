@@ -54,14 +54,16 @@ struct VoiceModeView: View {
                     Spacer()
                 }
 
-                // ── Middle: rendered reply (markdown + tables) on a readable card ──
+                // ── Middle: rendered reply (markdown + tables), themed dark ──
                 if !replyText.isEmpty {
                     ScrollView {
                         Markdown(replyText)
+                            .markdownTextStyle { ForegroundColor(.white.opacity(0.92)) }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(14)
                     }
-                    .background(Color.white.opacity(0.96), in: RoundedRectangle(cornerRadius: 16))
+                    .environment(\.colorScheme, .dark)   // light text for headings/tables too
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
                     .frame(maxHeight: .infinity)
                 } else {
                     Spacer()
