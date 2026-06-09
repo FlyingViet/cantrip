@@ -63,7 +63,7 @@ struct HermesClient {
                     // App-only formatting + verbosity directives (sent as Responses-API
                     // `instructions` → gateway ephemeral system prompt; doesn't affect
                     // Telegram/Discord, which can't render tables).
-                    let format = "Format replies in Markdown. Present structured, comparative, or numeric data as Markdown tables; use bullet lists and short headings where they aid scanning."
+                    let format = "Format replies in Markdown: tables for structured/comparative/numeric data, bullet lists and short headings where they aid scanning. When an image genuinely helps (a poster, cover/album art, chart, map, or icon), include it with Markdown image syntax using a real public image URL; otherwise omit images."
                     let answerOnly = "Respond with only your final answer. Do not narrate your process, your steps, or what you're about to do — no running commentary, no 'Let me…' / 'Got it…' lines. Just the result."
                     body["instructions"] = showSteps ? format : "\(format) \(answerOnly)"
                     if let prev = previousResponseId { body["previous_response_id"] = prev }

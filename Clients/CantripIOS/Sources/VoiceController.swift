@@ -119,19 +119,8 @@ final class VoiceController: NSObject, ObservableObject {
     private var pendingUtterances = 0
     private var replyStreamDone = true
 
-    // Karaoke state for voice mode: the cleaned chunks being spoken, which one is
-    // active, and the word range within it (from willSpeakRange) — lets the UI bold
-    // the current word and auto-scroll the follow-along transcript.
-    @Published var spokenChunks: [String] = []
-    @Published var currentChunk = 0
-    @Published var currentWordRange: NSRange?
-    private var utteranceChunk: [ObjectIdentifier: Int] = [:]
-
     /// Begin a streamed spoken reply: chunks arrive via `enqueue`, end with `finishReply`.
-    func beginReply() {
-        replyStreamDone = false
-        spokenChunks = []; currentChunk = 0; currentWordRange = nil; utteranceChunk = [:]
-    }
+    func beginReply() { replyStreamDone = false }
 
     /// Speak the next chunk of a streamed reply (queued behind any in-flight chunk).
     func enqueue(_ text: String) {
@@ -143,8 +132,6 @@ final class VoiceController: NSObject, ObservableObject {
         let utt = AVSpeechUtterance(string: clean)
         utt.voice = Self.selectedVoice()
         utt.rate = AVSpeechUtteranceDefaultSpeechRate
-        spokenChunks.append(clean)
-        utteranceChunk[ObjectIdentifier(utt)] = spokenChunks.count - 1
         synth.speak(utt)
     }
 
@@ -156,7 +143,6 @@ final class VoiceController: NSObject, ObservableObject {
 
     /// One-shot speak of a complete string (used outside the streaming path).
     func speak(_ text: String) {
-        spokenChunks = []; currentChunk = 0; currentWordRange = nil; utteranceChunk = [:]
         replyStreamDone = true
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { resumeIfHandsFree(); return }
@@ -169,7 +155,6 @@ final class VoiceController: NSObject, ObservableObject {
         pendingUtterances = 0
         replyStreamDone = true
         isSpeaking = false
-        currentWordRange = nil
     }
 
     private func prepareForSpeech() {
@@ -226,15 +211,5 @@ extension VoiceController: AVSpeechSynthesizerDelegate {
     }
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         Task { @MainActor in pendingUtterances = max(0, pendingUtterances - 1) }
-    }
-    /// Fired just before each word is spoken — drives the karaoke highlight.
-    nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, willSpeakRangeOfSpeechString characterRange: NSRange, utterance: AVSpeechUtterance) {
-        let oid = ObjectIdentifier(utterance)
-        Task { @MainActor in
-            if let idx = self.utteranceChunk[oid] {
-                self.currentChunk = idx
-                self.currentWordRange = characterRange
-            }
-        }
     }
 }

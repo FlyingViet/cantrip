@@ -1,9 +1,9 @@
 import SwiftUI
 import MarkdownUI
 
-/// Full-screen voice conversation mode. Compact animation + status at the top,
-/// the rendered reply (markdown/tables) in the middle, and a karaoke follow-along
-/// transcript at the bottom that auto-scrolls and bolds the word being spoken.
+/// Full-screen voice conversation mode. Compact animation + status at the top, a
+/// single nicely-formatted reply card in the middle (markdown — tables, lists,
+/// images), and the mic below. Talk, listen, read along.
 struct VoiceModeView: View {
     @ObservedObject var voice: VoiceController
     @ObservedObject var vm: ChatViewModel
@@ -30,7 +30,7 @@ struct VoiceModeView: View {
                 startPoint: .top, endPoint: .bottom
             ).ignoresSafeArea()
 
-            VStack(spacing: 14) {
+            VStack(spacing: 16) {
                 // ── Top: close + compact animation + status ──
                 HStack {
                     Spacer()
@@ -54,31 +54,29 @@ struct VoiceModeView: View {
                     Spacer()
                 }
 
-                // ── Middle: rendered reply (markdown + tables), themed dark ──
+                // ── Middle: the single, nicely-formatted reply (markdown + images) ──
                 if !replyText.isEmpty {
                     ScrollView {
                         Markdown(replyText)
                             .markdownTextStyle { ForegroundColor(.white.opacity(0.92)) }
+                            .markdownTextStyle(\.link) { ForegroundColor(.cyan) }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
+                            .padding(18)
                     }
-                    .environment(\.colorScheme, .dark)   // light text for headings/tables too
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .defaultScrollAnchor(.bottom)            // follow along as it streams in
+                    .environment(\.colorScheme, .dark)        // light text for headings/tables too
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
                     .frame(maxHeight: .infinity)
+                } else if voice.isListening {
+                    VStack {
+                        Spacer()
+                        Text(voice.partial.isEmpty ? "Listening…" : voice.partial)
+                            .font(.title3).foregroundStyle(.white.opacity(0.75))
+                            .multilineTextAlignment(.center).padding()
+                        Spacer()
+                    }
                 } else {
                     Spacer()
-                }
-
-                // ── Bottom: karaoke follow-along transcript ──
-                if !voice.spokenChunks.isEmpty {
-                    KaraokeView(chunks: voice.spokenChunks,
-                                currentChunk: voice.currentChunk,
-                                wordRange: voice.currentWordRange)
-                        .frame(height: 150)
-                } else if voice.isListening {
-                    Text(voice.partial.isEmpty ? "Listening…" : voice.partial)
-                        .font(.title3).foregroundStyle(.white.opacity(0.7))
-                        .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
                 }
 
                 // ── Mic (tap to talk, or barge-in while speaking/thinking) ──
@@ -104,54 +102,5 @@ struct VoiceModeView: View {
             voice.stopListening(finalize: false)
             voice.stopSpeaking()
         }
-    }
-}
-
-/// Follow-along transcript: shows the spoken chunks, bolds the word being read,
-/// dims already-spoken lines, and auto-scrolls to keep the current line centred.
-private struct KaraokeView: View {
-    let chunks: [String]
-    let currentChunk: Int
-    let wordRange: NSRange?
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(chunks.indices, id: \.self) { i in
-                        line(i).id(i).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .padding(.horizontal, 4)
-            }
-            .onChange(of: currentChunk) { _, i in
-                withAnimation { proxy.scrollTo(i, anchor: .center) }
-            }
-            .onChange(of: wordRange?.location) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(currentChunk, anchor: .center) }
-            }
-        }
-    }
-
-    @ViewBuilder private func line(_ i: Int) -> some View {
-        if i == currentChunk, let r = wordRange {
-            Text(highlighted(chunks[i], r)).font(.title3)
-        } else {
-            Text(chunks[i]).font(.title3)
-                .foregroundStyle(.white.opacity(i < currentChunk ? 0.35 : 0.6))
-        }
-    }
-
-    /// AttributedString of the chunk with the current word bold + bright.
-    private func highlighted(_ s: String, _ r: NSRange) -> AttributedString {
-        var attr = AttributedString(s)
-        attr.foregroundColor = .white.opacity(0.55)
-        if let sr = Range(r, in: s),
-           let lo = AttributedString.Index(sr.lowerBound, within: attr),
-           let hi = AttributedString.Index(sr.upperBound, within: attr) {
-            attr[lo..<hi].font = .title3.weight(.bold)
-            attr[lo..<hi].foregroundColor = .white
-        }
-        return attr
     }
 }
