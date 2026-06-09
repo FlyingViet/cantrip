@@ -60,11 +60,12 @@ struct HermesClient {
                     if !apiKey.isEmpty { req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
                     req.setValue(sessionKey, forHTTPHeaderField: "X-Hermes-Session-Key")
                     var body: [String: Any] = ["model": model, "input": input, "stream": true, "store": true]
-                    // Answer-only by default — suppress the agent's step-by-step narration.
-                    // "Show steps" sends an empty instruction to clear it (instructions carry
-                    // forward across the chain on the gateway otherwise).
-                    body["instructions"] = showSteps ? "" :
-                        "Respond with only your final answer. Do not narrate your process, your steps, or what you're about to do — no running commentary, no 'Let me…' / 'Got it…' lines. Just the result."
+                    // App-only formatting + verbosity directives (sent as Responses-API
+                    // `instructions` → gateway ephemeral system prompt; doesn't affect
+                    // Telegram/Discord, which can't render tables).
+                    let format = "Format replies in Markdown. Present structured, comparative, or numeric data as Markdown tables; use bullet lists and short headings where they aid scanning."
+                    let answerOnly = "Respond with only your final answer. Do not narrate your process, your steps, or what you're about to do — no running commentary, no 'Let me…' / 'Got it…' lines. Just the result."
+                    body["instructions"] = showSteps ? format : "\(format) \(answerOnly)"
                     if let prev = previousResponseId { body["previous_response_id"] = prev }
                     req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
