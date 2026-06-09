@@ -11,8 +11,8 @@ struct VoiceModeView: View {
     private var isActive: Bool { voice.isListening || voice.isSpeaking || vm.sending }
 
     private var statusText: String {
-        if voice.isSpeaking { return "Hermes is speaking" }
-        if vm.sending { return "Thinking…" }
+        if voice.isSpeaking { return "Speaking — tap to interrupt" }
+        if vm.sending { return "Thinking — tap to interrupt" }
         if voice.isListening { return "Listening" }
         return "Tap the mic to talk"
     }
@@ -71,7 +71,13 @@ struct VoiceModeView: View {
 
                 Spacer()
 
-                Button { voice.toggleListening() } label: {
+                Button {
+                    if voice.isSpeaking || vm.sending {
+                        vm.interruptAndListen()                       // barge-in: talk over the reply
+                    } else {
+                        voice.toggleListening()
+                    }
+                } label: {
                     Image(systemName: voice.isListening ? "mic.fill" : "mic")
                         .font(.system(size: 30)).foregroundStyle(.white)
                         .frame(width: 84, height: 84)

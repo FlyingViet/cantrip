@@ -31,10 +31,17 @@ final class ChatViewModel: ObservableObject {
         let idx = turns.count - 1
         sending = true
 
+        // Speak the reply aloud sentence-by-sentence as it streams when this turn
+        // was voice-initiated or we're in hands-free voice mode.
+        let speakReply = spoken || voice.handsFree
+        spokenCount = 0
+        if speakReply { voice.beginReply() }
+
         streamTask = Task {
             do {
                 for try await ev in client.stream(input: text, previousResponseId: previousResponseId) {
                     apply(ev, at: idx)
+                    if speakReply { speakReady(at: idx) }   // speak each completed sentence as it lands
                 }
             } catch is CancellationError {
             } catch {
@@ -42,6 +49,8 @@ final class ChatViewModel: ObservableObject {
                 // A 404 means a stale server-side chain — drop it so the next turn starts fresh.
                 if let he = error as? HermesError, case .http(404) = he { previousResponseId = nil }
             }
+            // Interrupted (barge-in) — the caller already stopped speech + is listening.
+            if Task.isCancelled { return }
             turns[idx].streaming = false
             sending = false
             // Never leave a silently-empty bubble — surface that the turn produced
@@ -51,8 +60,59 @@ final class ChatViewModel: ObservableObject {
             }
             turns[idx].actions = ChatTurn.parseActions(turns[idx].text)            // confirmation buttons
             ChatStore.save(turns: turns, previousResponseId: previousResponseId)   // persist the transcript
-            if (spoken || voice.handsFree), turns[idx].error == nil { voice.speak(turns[idx].text) }
+            if speakReply {
+                if turns[idx].error == nil { speakReady(at: idx, force: true) }     // flush the final tail
+                voice.finishReply()
+            }
         }
+    }
+
+    /// Barge-in: stop the in-flight reply + its speech and start listening for a
+    /// new prompt — for talking over a long answer you've already read.
+    func interruptAndListen() {
+        stop()
+        voice.stopSpeaking()
+        voice.startListening()
+    }
+
+    // How many characters of the current reply have already been queued for
+    // speech, so we only speak each new sentence once.
+    private var spokenCount = 0
+
+    /// Enqueue any newly-completed sentences/paragraphs of the streaming reply for
+    /// speech. `force` flushes whatever remains (called once the reply ends).
+    private func speakReady(at idx: Int, force: Bool = false) {
+        guard turns.indices.contains(idx) else { return }
+        let full = Array(turns[idx].text)
+        guard full.count > spokenCount else { return }
+        let tail = Array(full[spokenCount...])
+        let cut = force ? tail.count : (Self.lastSpeakableCut(tail) ?? 0)
+        guard cut > 0 else { return }
+        let chunk = Self.cleanForSpeech(String(tail[0..<cut]))
+        if !chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { voice.enqueue(chunk) }
+        spokenCount += cut
+    }
+
+    /// Offset just past the last sentence (`. ! ?`) or paragraph (newline) break.
+    private static func lastSpeakableCut(_ chars: [Character]) -> Int? {
+        var cut: Int? = nil
+        for i in chars.indices {
+            let c = chars[i]
+            if c == "\n" {
+                cut = i + 1                                   // paragraph / "thinking break"
+            } else if c == "." || c == "!" || c == "?" {
+                if i + 1 >= chars.count || chars[i + 1] == " " || chars[i + 1] == "\n" { cut = i + 1 }
+            }
+        }
+        return cut
+    }
+
+    /// Strip markdown so TTS doesn't read "asterisk asterisk".
+    private static func cleanForSpeech(_ s: String) -> String {
+        var t = s
+        for tok in ["**", "__", "*", "`", "#", ">"] { t = t.replacingOccurrences(of: tok, with: "") }
+        t = t.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
+        return t
     }
 
     func stop() {
@@ -258,7 +318,9 @@ struct ChatView: View {
                 if vm.sending {
                     Button { vm.stop() } label: { Image(systemName: "stop.circle.fill").font(.title2) }
                 } else if input.isEmpty {
-                    Button { voice.toggleListening() } label: {
+                    Button {
+                        if voice.isSpeaking { vm.interruptAndListen() } else { voice.toggleListening() }
+                    } label: {
                         Image(systemName: voice.isListening ? "mic.fill" : "mic")
                             .font(.title2).foregroundStyle(voice.isListening ? Color.red : Color.accentColor)
                     }

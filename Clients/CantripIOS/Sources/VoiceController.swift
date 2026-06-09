@@ -104,14 +104,23 @@ final class VoiceController: NSObject, ObservableObject {
 
     // MARK: Speaking
 
-    func speak(_ text: String) {
+    // Streamed replies are spoken chunk-by-chunk (a sentence/paragraph as soon
+    // as it arrives) by enqueuing utterances — AVSpeechSynthesizer plays a queue
+    // in order. `pendingUtterances` is the queue depth so hands-free only resumes
+    // listening once the WHOLE reply is spoken (not after each chunk), and
+    // `replyStreamDone` bridges the gap between chunks while text is still streaming.
+    private var pendingUtterances = 0
+    private var replyStreamDone = true
+
+    /// Begin a streamed spoken reply: chunks arrive via `enqueue`, end with `finishReply`.
+    func beginReply() { replyStreamDone = false }
+
+    /// Speak the next chunk of a streamed reply (queued behind any in-flight chunk).
+    func enqueue(_ text: String) {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty else { resumeIfHandsFree(); return }
-        if isListening { stopListening(finalize: false) }
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {}
+        guard !clean.isEmpty else { return }
+        if pendingUtterances == 0 { prepareForSpeech() }
+        pendingUtterances += 1
         isSpeaking = true
         let utt = AVSpeechUtterance(string: clean)
         utt.voice = Self.selectedVoice()
@@ -119,9 +128,34 @@ final class VoiceController: NSObject, ObservableObject {
         synth.speak(utt)
     }
 
+    /// Mark the streamed reply finished; resume listening once the queue drains.
+    func finishReply() {
+        replyStreamDone = true
+        if pendingUtterances == 0 { isSpeaking = false; resumeIfHandsFree() }
+    }
+
+    /// One-shot speak of a complete string (used outside the streaming path).
+    func speak(_ text: String) {
+        replyStreamDone = true
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { resumeIfHandsFree(); return }
+        enqueue(clean)
+    }
+
+    /// Stop all speech immediately and clear the queue (used by barge-in).
     func stopSpeaking() {
         synth.stopSpeaking(at: .immediate)
+        pendingUtterances = 0
+        replyStreamDone = true
         isSpeaking = false
+    }
+
+    private func prepareForSpeech() {
+        if isListening { stopListening(finalize: false) }
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {}
     }
 
     /// Speak a short sample with a given voice (used by the Settings preview).
@@ -159,11 +193,16 @@ final class VoiceController: NSObject, ObservableObject {
 extension VoiceController: AVSpeechSynthesizerDelegate {
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in
-            isSpeaking = false
-            resumeIfHandsFree()
+            pendingUtterances = max(0, pendingUtterances - 1)
+            // Only resume listening once the queue is empty AND the reply has
+            // fully streamed — otherwise we'd cut off later queued chunks.
+            if pendingUtterances == 0, replyStreamDone {
+                isSpeaking = false
+                resumeIfHandsFree()
+            }
         }
     }
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in isSpeaking = false }
+        Task { @MainActor in pendingUtterances = max(0, pendingUtterances - 1) }
     }
 }
