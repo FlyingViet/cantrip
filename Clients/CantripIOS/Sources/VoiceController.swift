@@ -23,7 +23,14 @@ final class VoiceController: NSObject, ObservableObject {
     private var task: SFSpeechRecognitionTask?
     private let synth = AVSpeechSynthesizer()
     private var silenceTimer: Timer?
-    private let silenceSeconds: TimeInterval = 1.6
+    /// How long a pause must last before the utterance is treated as finished
+    /// (and sent). Read live from UserDefaults so the Settings slider applies
+    /// immediately; default is generous so catching your breath / thinking
+    /// mid-sentence doesn't fire the prompt early.
+    private var silenceSeconds: TimeInterval {
+        let v = UserDefaults.standard.double(forKey: "hermes.voicePause")
+        return v > 0 ? v : 2.5
+    }
 
     override init() {
         super.init()

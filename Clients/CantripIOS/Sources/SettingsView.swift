@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var key = ""
     @State private var testing = false
     @State private var testResult: Bool?
+    @AppStorage("hermes.voicePause") private var voicePause = 2.5
 
     var body: some View {
         NavigationStack {
@@ -22,7 +23,7 @@ struct SettingsView: View {
                 } header: { Text("Hermes Gateway") }
                 footer: { Text("The gateway's OpenAI-compatible API server (/v1/responses). Use the LAN address at home or the Cloudflare tunnel hostname anywhere.") }
 
-                Section("Voice") {
+                Section {
                     NavigationLink {
                         VoiceListView(env: env, voice: voice)
                     } label: {
@@ -32,7 +33,16 @@ struct SettingsView: View {
                             Text(currentVoiceName).foregroundStyle(.secondary)
                         }
                     }
-                }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Label("Pause before sending", systemImage: "timer")
+                            Spacer()
+                            Text(String(format: "%.1fs", voicePause)).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                        Slider(value: $voicePause, in: 1.5...5.0, step: 0.5)
+                    }
+                } header: { Text("Voice") }
+                footer: { Text("How long to wait after you stop talking before sending. Raise it if a thinking or breathing pause sends your prompt too early.") }
 
                 Section {
                     Button { Task { await test() } } label: {
