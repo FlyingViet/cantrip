@@ -1,14 +1,13 @@
 import SwiftUI
+import MarkdownUI
 
-/// Full-screen voice conversation mode (opened by the ∞ button) — a large
-/// centered waveform that "talks back" through the listen → reply → speak loop,
-/// like a hands-free call. Dismiss to return to the chat transcript.
+/// Full-screen voice conversation mode. Compact animation + status at the top,
+/// the rendered reply (markdown/tables) in the middle, and a karaoke follow-along
+/// transcript at the bottom that auto-scrolls and bolds the word being spoken.
 struct VoiceModeView: View {
     @ObservedObject var voice: VoiceController
     @ObservedObject var vm: ChatViewModel
     @Environment(\.dismiss) private var dismiss
-
-    private var isActive: Bool { voice.isListening || voice.isSpeaking || vm.sending }
 
     private var statusText: String {
         if voice.isSpeaking { return "Speaking — tap to interrupt" }
@@ -19,11 +18,9 @@ struct VoiceModeView: View {
 
     private var stateColor: Color { voice.isListening ? .red : .accentColor }
 
-    /// Live partial while listening, otherwise the latest assistant reply.
-    private var caption: String {
-        if voice.isListening, !voice.partial.isEmpty { return voice.partial }
-        if let last = vm.turns.last, last.role == .assistant, !last.text.isEmpty { return last.text }
-        return ""
+    /// Latest assistant reply — rendered as markdown in the middle.
+    private var replyText: String {
+        vm.turns.last(where: { $0.role == .assistant })?.text ?? ""
     }
 
     var body: some View {
@@ -33,58 +30,66 @@ struct VoiceModeView: View {
                 startPoint: .top, endPoint: .bottom
             ).ignoresSafeArea()
 
-            VStack(spacing: 28) {
+            VStack(spacing: 14) {
+                // ── Top: close + compact animation + status ──
                 HStack {
                     Spacer()
                     Button { dismiss() } label: {
-                        Image(systemName: "xmark").font(.headline).foregroundStyle(.white)
-                            .padding(12).background(.ultraThinMaterial, in: Circle())
+                        Image(systemName: "xmark").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                            .padding(10).background(.ultraThinMaterial, in: Circle())
                     }
                 }
-
-                Spacer()
-
-                Text(statusText)
-                    .font(.title3.weight(.medium)).foregroundStyle(.white.opacity(0.85))
-                    .animation(.default, value: statusText)
-
-                Group {
-                    if vm.sending, !voice.isSpeaking, !voice.isListening {
-                        ThinkingView(size: 96, color: .accentColor)        // brain while thinking
-                    } else {
-                        WaveformView(active: voice.isListening || voice.isSpeaking, color: stateColor,
-                                     barCount: 7, barWidth: 10, spacing: 9, minHeight: 18, maxHeight: 150)
+                HStack(spacing: 12) {
+                    Group {
+                        if vm.sending, !voice.isSpeaking, !voice.isListening {
+                            ThinkingView(size: 28, color: .accentColor)
+                        } else {
+                            WaveformView(active: voice.isListening || voice.isSpeaking, color: stateColor,
+                                         barCount: 5, barWidth: 5, spacing: 4, minHeight: 8, maxHeight: 32)
+                        }
                     }
+                    .frame(width: 56, height: 36)
+                    Text(statusText).font(.callout.weight(.medium)).foregroundStyle(.white.opacity(0.85))
+                        .animation(.default, value: statusText)
+                    Spacer()
                 }
-                .frame(height: 160)
-                .shadow(color: stateColor.opacity(0.45), radius: 28)
 
-                if !caption.isEmpty {
+                // ── Middle: rendered reply (markdown + tables) on a readable card ──
+                if !replyText.isEmpty {
                     ScrollView {
-                        Text(caption)
-                            .font(.title3).foregroundStyle(.white.opacity(0.72))
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity)
+                        Markdown(replyText)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
                     }
-                    .frame(maxHeight: 170)
+                    .background(Color.white.opacity(0.96), in: RoundedRectangle(cornerRadius: 16))
+                    .frame(maxHeight: .infinity)
+                } else {
+                    Spacer()
                 }
 
-                Spacer()
+                // ── Bottom: karaoke follow-along transcript ──
+                if !voice.spokenChunks.isEmpty {
+                    KaraokeView(chunks: voice.spokenChunks,
+                                currentChunk: voice.currentChunk,
+                                wordRange: voice.currentWordRange)
+                        .frame(height: 150)
+                } else if voice.isListening {
+                    Text(voice.partial.isEmpty ? "Listening…" : voice.partial)
+                        .font(.title3).foregroundStyle(.white.opacity(0.7))
+                        .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+                }
 
+                // ── Mic (tap to talk, or barge-in while speaking/thinking) ──
                 Button {
-                    if voice.isSpeaking || vm.sending {
-                        vm.interruptAndListen()                       // barge-in: talk over the reply
-                    } else {
-                        voice.toggleListening()
-                    }
+                    if voice.isSpeaking || vm.sending { vm.interruptAndListen() }
+                    else { voice.toggleListening() }
                 } label: {
                     Image(systemName: voice.isListening ? "mic.fill" : "mic")
-                        .font(.system(size: 30)).foregroundStyle(.white)
-                        .frame(width: 84, height: 84)
+                        .font(.system(size: 28)).foregroundStyle(.white)
+                        .frame(width: 76, height: 76)
                         .background(voice.isListening ? Color.red : Color.white.opacity(0.16), in: Circle())
                 }
                 .disabled(!voice.authorized)
-                .padding(.bottom, 24)
             }
             .padding()
         }
@@ -97,5 +102,54 @@ struct VoiceModeView: View {
             voice.stopListening(finalize: false)
             voice.stopSpeaking()
         }
+    }
+}
+
+/// Follow-along transcript: shows the spoken chunks, bolds the word being read,
+/// dims already-spoken lines, and auto-scrolls to keep the current line centred.
+private struct KaraokeView: View {
+    let chunks: [String]
+    let currentChunk: Int
+    let wordRange: NSRange?
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(chunks.indices, id: \.self) { i in
+                        line(i).id(i).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+            .onChange(of: currentChunk) { _, i in
+                withAnimation { proxy.scrollTo(i, anchor: .center) }
+            }
+            .onChange(of: wordRange?.location) { _, _ in
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(currentChunk, anchor: .center) }
+            }
+        }
+    }
+
+    @ViewBuilder private func line(_ i: Int) -> some View {
+        if i == currentChunk, let r = wordRange {
+            Text(highlighted(chunks[i], r)).font(.title3)
+        } else {
+            Text(chunks[i]).font(.title3)
+                .foregroundStyle(.white.opacity(i < currentChunk ? 0.35 : 0.6))
+        }
+    }
+
+    /// AttributedString of the chunk with the current word bold + bright.
+    private func highlighted(_ s: String, _ r: NSRange) -> AttributedString {
+        var attr = AttributedString(s)
+        attr.foregroundColor = .white.opacity(0.55)
+        if let sr = Range(r, in: s),
+           let lo = AttributedString.Index(sr.lowerBound, within: attr),
+           let hi = AttributedString.Index(sr.upperBound, within: attr) {
+            attr[lo..<hi].font = .title3.weight(.bold)
+            attr[lo..<hi].foregroundColor = .white
+        }
+        return attr
     }
 }
