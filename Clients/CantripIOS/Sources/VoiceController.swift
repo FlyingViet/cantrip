@@ -19,10 +19,17 @@ final class VoiceController: NSObject, ObservableObject {
     var onFinalTranscript: ((String) -> Void)?
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-    private let engine = AVAudioEngine()
+    // lazy: ChatView's init eagerly builds throwaway VoiceControllers on every
+    // parent re-render — allocating an AVAudioEngine + synthesizer per render
+    // is wasted work that shows up as jank. Real instances pay on first use.
+    private lazy var engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
-    private let synth = AVSpeechSynthesizer()
+    private lazy var synth: AVSpeechSynthesizer = {
+        let s = AVSpeechSynthesizer()
+        s.delegate = self
+        return s
+    }()
     private var silenceTimer: Timer?
     /// How long a pause must last before the utterance is treated as finished
     /// (and sent). Read live from UserDefaults so the Settings slider applies
@@ -37,7 +44,6 @@ final class VoiceController: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        synth.delegate = self
         // The Qwen engine's "everything spoken" moment — same hands-free resume
         // as the AVSpeech delegate's queue-drained path below. This must be an
         // OBSERVATION of the singleton, not a callback handed to it: ChatView's
@@ -95,8 +101,16 @@ final class VoiceController: NSObject, ObservableObject {
                 guard let self else { return }
                 Task { @MainActor in
                     if let result {
-                        self.partial = result.bestTranscription.formattedString
-                        self.bumpSilenceTimer()
+                        // The recognizer streams duplicate (often empty) partials
+                        // while waiting for speech — publishing each one is a
+                        // re-render storm (visible flicker) and bumping the
+                        // silence timer on them could time the mic out before a
+                        // word was said. Only react to actual transcript changes.
+                        let text = result.bestTranscription.formattedString
+                        if text != self.partial {
+                            self.partial = text
+                            self.bumpSilenceTimer()
+                        }
                     }
                     if error != nil || (result?.isFinal ?? false) {
                         self.stopListening(finalize: error == nil)

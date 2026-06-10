@@ -155,6 +155,9 @@ final class QwenVoiceEngine: ObservableObject {
               || s.value == 0xFE0F || s.value == 0x200D) // variation selector, ZWJ
         })
         t = t.replacingOccurrences(of: "|", with: " ")   // stray table/inline pipes
+        // Divider/spacer runs ("---", "***", "===") — unpronounceable, and the
+        // model can emit ZERO audio tokens for them, which crashes the decode.
+        t = t.replacingOccurrences(of: #"[-_*=~·•]{3,}"#, with: " ", options: .regularExpression)
         t = t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.rangeOfCharacter(from: .alphanumerics) != nil else { return "" }

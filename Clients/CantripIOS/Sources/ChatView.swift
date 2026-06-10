@@ -109,16 +109,20 @@ final class ChatViewModel: ObservableObject {
         return cut
     }
 
-    /// Strip markdown so TTS doesn't read "asterisk asterisk". Table rows are
-    /// dropped whole: a table is for the screen — spoken cell-by-cell it's noise
-    /// ("pipe, Santa Clara, pipe…") that garbles the voice until the table ends.
-    /// The prose around the table still reads normally.
+    /// Strip markdown so TTS doesn't read "asterisk asterisk". Table rows and
+    /// horizontal rules are dropped whole (screen-only constructs — and a
+    /// punctuation-only chunk can crash the neural decode); bullet/numbered
+    /// items keep their text but lose the marker; markdown links keep their
+    /// title; bare URLs vanish. The on-screen reply is untouched.
     private static func cleanForSpeech(_ s: String) -> String {
         var t = s.split(separator: "\n", omittingEmptySubsequences: false)
             .filter { line in line.lazy.filter { $0 == "|" }.count < 2 }
             .joined(separator: "\n")
+        t = t.replacingOccurrences(of: #"(?m)^\s*[-_*=·•~\s]{2,}$"#, with: "", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"(?m)^\s*(?:[-*+•·‣◦]|\d{1,3}[.)])\s+"#, with: "", options: .regularExpression)
         for tok in ["**", "__", "*", "`", "#", ">"] { t = t.replacingOccurrences(of: tok, with: "") }
         t = t.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"https?://\S+"#, with: "", options: .regularExpression)
         return t
     }
 
