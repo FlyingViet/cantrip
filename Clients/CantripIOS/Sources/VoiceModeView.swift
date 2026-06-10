@@ -23,6 +23,13 @@ struct VoiceModeView: View {
         vm.turns.last(where: { $0.role == .assistant })?.text ?? ""
     }
 
+    /// What YOU said — live partial while dictating, then the sent question
+    /// while Hermes thinks/speaks, so your ask stays visible the whole turn.
+    private var transcriptText: String {
+        if voice.isListening { return voice.partial }
+        return vm.turns.last(where: { $0.role == .user })?.text ?? ""
+    }
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -54,6 +61,21 @@ struct VoiceModeView: View {
                     Spacer()
                 }
 
+                // ── Your words: live while dictating, pinned while it answers ──
+                if !transcriptText.isEmpty {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "quote.opening")
+                            .font(.caption).foregroundStyle(.white.opacity(0.45))
+                            .padding(.top, 3)
+                        Text(transcriptText)
+                            .font(.callout)
+                            .foregroundStyle(.white.opacity(voice.isListening ? 0.9 : 0.6))
+                            .lineLimit(3)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .animation(.default, value: transcriptText)
+                }
+
                 // ── Middle: the single, nicely-formatted reply (markdown + images) ──
                 if !replyText.isEmpty {
                     ScrollView {
@@ -67,16 +89,8 @@ struct VoiceModeView: View {
                     .environment(\.colorScheme, .dark)        // light text for headings/tables too
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
                     .frame(maxHeight: .infinity)
-                } else if voice.isListening {
-                    VStack {
-                        Spacer()
-                        Text(voice.partial.isEmpty ? "Listening…" : voice.partial)
-                            .font(.title3).foregroundStyle(.white.opacity(0.75))
-                            .multilineTextAlignment(.center).padding()
-                        Spacer()
-                    }
                 } else {
-                    Spacer()
+                    Spacer()    // your words show in the transcript line up top
                 }
 
                 // ── Mic (tap to talk, or barge-in while speaking/thinking) ──
