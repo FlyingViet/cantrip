@@ -37,6 +37,7 @@ final class ChatViewModel: ObservableObject {
         let speakReply = spoken || voice.handsFree
         let showSteps = UserDefaults.standard.bool(forKey: "hermes.showSteps")
         spokenCount = 0
+        speechTableHeader = nil
         if speakReply { voice.beginReply() }
 
         streamTask = Task {
@@ -90,7 +91,7 @@ final class ChatViewModel: ObservableObject {
         let tail = Array(full[spokenCount...])
         let cut = force ? tail.count : (Self.lastSpeakableCut(tail) ?? 0)
         guard cut > 0 else { return }
-        let chunk = Self.cleanForSpeech(String(tail[0..<cut]))
+        let chunk = cleanForSpeech(String(tail[0..<cut]))
         if !chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { voice.enqueue(chunk) }
         spokenCount += cut
     }
@@ -109,21 +110,74 @@ final class ChatViewModel: ObservableObject {
         return cut
     }
 
-    /// Strip markdown so TTS doesn't read "asterisk asterisk". Table rows and
-    /// horizontal rules are dropped whole (screen-only constructs — and a
-    /// punctuation-only chunk can crash the neural decode); bullet/numbered
-    /// items keep their text but lose the marker; markdown links keep their
-    /// title; bare URLs vanish. The on-screen reply is untouched.
-    private static func cleanForSpeech(_ s: String) -> String {
-        var t = s.split(separator: "\n", omittingEmptySubsequences: false)
-            .filter { line in line.lazy.filter { $0 == "|" }.count < 2 }
-            .joined(separator: "\n")
+    /// The first table row of the reply being spoken — column names used to
+    /// label later cells. Per-reply state because table rows stream in across
+    /// separate speech chunks. nil = not currently inside a table.
+    private var speechTableHeader: [String]? = nil
+
+    /// Rewrite markdown for the EAR (on-screen reply untouched): table rows
+    /// become labeled sentences via `tableRowToSpeech` (the symbols vanish,
+    /// the content reads); horizontal rules are dropped whole (nothing to say,
+    /// and a punctuation-only chunk can crash the neural decode); bullet/
+    /// numbered items keep their text but lose the marker; markdown links keep
+    /// their title; bare URLs vanish; →/~/digit-ranges become words.
+    private func cleanForSpeech(_ s: String) -> String {
+        var out: [String] = []
+        for rawLine in s.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            if line.lazy.filter({ $0 == "|" }).count >= 2 {
+                if let spoken = tableRowToSpeech(line) { out.append(spoken) }
+            } else {
+                if !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    speechTableHeader = nil          // left the table block
+                }
+                out.append(line)
+            }
+        }
+        var t = out.joined(separator: "\n")
         t = t.replacingOccurrences(of: #"(?m)^\s*[-_*=·•~\s]{2,}$"#, with: "", options: .regularExpression)
         t = t.replacingOccurrences(of: #"(?m)^\s*(?:[-*+•·‣◦]|\d{1,3}[.)])\s+"#, with: "", options: .regularExpression)
         for tok in ["**", "__", "*", "`", "#", ">"] { t = t.replacingOccurrences(of: tok, with: "") }
         t = t.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
         t = t.replacingOccurrences(of: #"https?://\S+"#, with: "", options: .regularExpression)
+        // Symbols → words, so the voice says what the symbols mean instead of
+        // skipping (or worse, vocalizing) them.
+        t = t.replacingOccurrences(of: "→", with: " to ")
+        t = t.replacingOccurrences(of: "~", with: "about ")
+        // En-dash ranges only ("10–20 mph") — a plain hyphen would also catch
+        // ISO dates (2026-06-10 → "2026 to 06 to 10").
+        t = t.replacingOccurrences(of: #"(?<=\d)\s*–\s*(?=\d)"#, with: " to ", options: .regularExpression)
         return t
+    }
+
+    /// One markdown table row → one spoken sentence. The first content row is
+    /// remembered as the header; later rows pair each cell with its column:
+    /// "| High | ~75°F | ~79°F |" → "High: Santa Clara ~75°F, Mountain View ~79°F."
+    /// Separator rows (|---|---|) say nothing. Falls back to comma-joined
+    /// cells when the shape doesn't line up.
+    private func tableRowToSpeech(_ line: String) -> String? {
+        var parts = line.components(separatedBy: "|")
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("|"), !parts.isEmpty { parts.removeFirst() }
+        if trimmed.hasSuffix("|"), !parts.isEmpty { parts.removeLast() }
+        let cells = parts.map { $0.trimmingCharacters(in: .whitespaces) }
+        guard !cells.isEmpty else { return nil }
+        if cells.allSatisfy({ $0.isEmpty || $0.allSatisfy { "-: ".contains($0) } }) {
+            return nil                                   // |---|---| separator
+        }
+        guard let header = speechTableHeader else {
+            speechTableHeader = cells
+            let named = cells.filter { !$0.isEmpty }
+            return named.isEmpty ? nil : named.joined(separator: ", ") + "."
+        }
+        let label = cells[0]
+        var pieces: [String] = []
+        for i in 1..<cells.count where !cells[i].isEmpty {
+            let h = i < header.count ? header[i] : ""
+            pieces.append(h.isEmpty ? cells[i] : "\(h) \(cells[i])")
+        }
+        if pieces.isEmpty { return label.isEmpty ? nil : label + "." }
+        return (label.isEmpty ? "" : label + ": ") + pieces.joined(separator: ", ") + "."
     }
 
     func stop() {
