@@ -13,6 +13,16 @@ import MLX
 /// buffers queue onto an `AVAudioPlayerNode`, so sentence N plays while
 /// sentence N+1 is still generating.
 ///
+/// A named voice: a model speaker plus an optional style `instruct` shaping
+/// tone and articulation per generation.
+struct QwenPreset: Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let blurb: String
+    let speaker: String
+    let instruct: String?
+}
+
 /// MLX needs real Apple Silicon — on the simulator the engine reports
 /// unavailable and `VoiceController` keeps using the system voice.
 @MainActor
@@ -23,6 +33,43 @@ final class QwenVoiceEngine: ObservableObject {
     /// near-identical quality). Includes the nested speech_tokenizer/ dir.
     static let repo = "AtomGradient/Qwen3-TTS-0.6B-CustomVoice-4bit-pruned-vocab-lite"
     static let speakers = ["Serena", "Vivian", "Aiden", "Ryan", "Eric", "Dylan", "Sohee", "Ono_anna", "Uncle_fu"]
+
+    /// Curated presets: a speaker plus a per-generation `instruct` shaping tone
+    /// and articulation. Clarity comes from the instruct + cooler sampling;
+    /// reading SPEED comes from the time-pitch playback stage (`hermes.qwenRate`)
+    /// — asking the model itself to rush makes it slur.
+    static let gentlePresets: [QwenPreset] = [
+        QwenPreset(id: "serena-gentle", name: "Serena · Gentle", blurb: "Warm and soft, crisp diction",
+                   speaker: "Serena",
+                   instruct: "A gentle, warm female voice with a soft tone and crisp, clear articulation."),
+        QwenPreset(id: "vivian-bright", name: "Vivian · Bright", blurb: "Light and friendly, very clear",
+                   speaker: "Vivian",
+                   instruct: "A bright, friendly female voice, light and gentle, enunciating every word clearly."),
+        QwenPreset(id: "sohee-soothing", name: "Sohee · Soothing", blurb: "Calm and soft-spoken, precise",
+                   speaker: "Sohee",
+                   instruct: "A soothing, calm female voice, soft-spoken but precisely articulated."),
+        QwenPreset(id: "anna-light", name: "Anna · Light", blurb: "Airy and pleasant, clean delivery",
+                   speaker: "Ono_anna",
+                   instruct: "A light, airy female voice, gentle and pleasant, with clean, precise delivery."),
+    ]
+    /// The raw speakers, no styling — same voices the model ships with.
+    static let plainPresets: [QwenPreset] = speakers.map {
+        QwenPreset(id: "speaker-\($0)", name: $0.replacingOccurrences(of: "_", with: " ").capitalized,
+                   blurb: "Speaker default", speaker: $0, instruct: nil)
+    }
+    static var allPresets: [QwenPreset] { gentlePresets + plainPresets }
+
+    static var selectedPreset: QwenPreset {
+        let id = UserDefaults.standard.string(forKey: "hermes.qwenPreset") ?? ""
+        return allPresets.first { $0.id == id } ?? gentlePresets[0]
+    }
+
+    /// Playback speed (time-stretch, pitch preserved). >1 reads faster without
+    /// touching how the model speaks — the reliable "read quickly" knob.
+    static var playbackRate: Float {
+        let v = UserDefaults.standard.float(forKey: "hermes.qwenRate")
+        return v > 0 ? min(max(v, 0.8), 1.6) : 1.15
+    }
 
     enum DownloadState: Equatable {
         case idle
@@ -44,9 +91,6 @@ final class QwenVoiceEngine: ObservableObject {
         #endif
     }
 
-    static var selectedSpeaker: String {
-        UserDefaults.standard.string(forKey: "hermes.qwenSpeaker") ?? "Serena"
-    }
 
     private let synth = QwenSynth()
     private var pendingTexts: [String] = []
@@ -59,6 +103,7 @@ final class QwenVoiceEngine: ObservableObject {
     private var downloadTask: Task<Void, Never>?
 
     private let player = AVAudioPlayerNode()
+    private let timePitch = AVAudioUnitTimePitch()   // speed without chipmunking
     private let audioEngine = AVAudioEngine()
     private var engineWired = false
     private static let pcmFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
@@ -136,7 +181,9 @@ final class QwenVoiceEngine: ObservableObject {
             while gen == self.generation, !self.pendingTexts.isEmpty {
                 let text = self.pendingTexts.removeFirst()
                 do {
-                    let samples = try await self.synth.synthesize(text, speaker: Self.selectedSpeaker,
+                    let preset = Self.selectedPreset
+                    let samples = try await self.synth.synthesize(text, speaker: preset.speaker,
+                                                                  instruct: preset.instruct,
                                                                   modelDir: Self.modelDir)
                     if gen == self.generation { self.schedule(samples, gen: gen) }
                 } catch {
@@ -178,10 +225,14 @@ final class QwenVoiceEngine: ObservableObject {
     private func startAudioEngine() throws {
         if !engineWired {
             audioEngine.attach(player)
-            // The mixer resamples 24 kHz mono up to the session rate for us.
-            audioEngine.connect(player, to: audioEngine.mainMixerNode, format: Self.pcmFormat)
+            audioEngine.attach(timePitch)
+            // player → timePitch (reading-speed control) → mixer, which also
+            // resamples 24 kHz mono up to the session rate for us.
+            audioEngine.connect(player, to: timePitch, format: Self.pcmFormat)
+            audioEngine.connect(timePitch, to: audioEngine.mainMixerNode, format: Self.pcmFormat)
             engineWired = true
         }
+        timePitch.rate = Self.playbackRate    // re-read so the slider applies live
         if !audioEngine.isRunning { try audioEngine.start() }
     }
 
@@ -318,7 +369,7 @@ private actor QwenSynth {
 
     private var model: Qwen3TTSModel?
 
-    func synthesize(_ text: String, speaker: String, modelDir: URL) async throws -> [Float] {
+    func synthesize(_ text: String, speaker: String, instruct: String?, modelDir: URL) async throws -> [Float] {
         if model == nil {
             // Cap MLX's Metal buffer cache: left unbounded it grows with every
             // synthesis until iOS jetsams the app (crashes "after speaking").
@@ -329,8 +380,12 @@ private actor QwenSynth {
         // The sync CustomVoice entry point (not async `generate`) keeps the
         // compute on this actor's dedicated thread — a non-isolated async func
         // would hop back onto the cooperative pool.
+        // temperature 0.7 (package default 0.9): hot sampling is what makes
+        // autoregressive TTS mumble/slur; cooler is stabler with no flatness yet.
         let audio = try model.generateCustomVoice(text: text, speaker: speaker,
-                                                  language: "english")
+                                                  language: "english",
+                                                  instruct: instruct,
+                                                  temperature: 0.7)
         return audio.asType(.float32).asArray(Float.self)
     }
 

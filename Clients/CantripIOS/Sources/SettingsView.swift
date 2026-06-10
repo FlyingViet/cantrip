@@ -146,7 +146,8 @@ struct VoiceListView: View {
 struct QwenVoiceSettingsView: View {
     @ObservedObject private var engine = QwenVoiceEngine.shared
     @AppStorage("hermes.voiceEngine") private var voiceEngine = "system"
-    @AppStorage("hermes.qwenSpeaker") private var speaker = "Serena"
+    @AppStorage("hermes.qwenPreset") private var presetId = "serena-gentle"
+    @AppStorage("hermes.qwenRate") private var rate = 1.15
 
     var body: some View {
         Form {
@@ -194,30 +195,53 @@ struct QwenVoiceSettingsView: View {
                 }
 
                 Section {
-                    ForEach(QwenVoiceEngine.speakers, id: \.self) { s in
-                        Button {
-                            speaker = s
-                            if engine.download == .ready { engine.preview() }
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: speaker == s ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(speaker == s ? Color.accentColor : .secondary)
-                                Text(s.replacingOccurrences(of: "_", with: " ").capitalized)
-                                Spacer()
-                                Image(systemName: "play.circle").foregroundStyle(.secondary)
-                            }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Label("Reading speed", systemImage: "gauge.with.needle")
+                            Spacer()
+                            Text(String(format: "%.2f×", rate)).foregroundStyle(.secondary).monospacedDigit()
                         }
-                        .tint(.primary)
+                        Slider(value: $rate, in: 1.0...1.5, step: 0.05)
                     }
-                } header: {
-                    Text("Speaker")
                 } footer: {
-                    Text("Tap a speaker to select it and hear a sample (once the model is downloaded). Download on Wi-Fi — it's a one-time ~800 MB fetch from Hugging Face.")
+                    Text("Speeds up playback without changing pitch — more reliable than making the voice itself talk faster.")
                 }
+
+                presetSection(QwenVoiceEngine.gentlePresets, header: "Gentle presets",
+                              footer: "Female voices tuned for a soft tone with crisp articulation. Tap to select and hear a sample (once the model is downloaded).")
+                presetSection(QwenVoiceEngine.plainPresets, header: "All speakers",
+                              footer: "The model's built-in speakers, unstyled. Download on Wi-Fi — it's a one-time ~800 MB fetch from Hugging Face.")
             }
         }
         .navigationTitle("Voice Engine")
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear { QwenVoiceEngine.shared.stop() }
+    }
+
+    @ViewBuilder private func presetSection(_ presets: [QwenPreset], header: String, footer: String) -> some View {
+        Section {
+            ForEach(presets) { p in
+                Button {
+                    presetId = p.id
+                    if engine.download == .ready { engine.preview() }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: presetId == p.id ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(presetId == p.id ? Color.accentColor : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(p.name)
+                            Text(p.blurb).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "play.circle").foregroundStyle(.secondary)
+                    }
+                }
+                .tint(.primary)
+            }
+        } header: {
+            Text(header)
+        } footer: {
+            Text(footer)
+        }
     }
 }
