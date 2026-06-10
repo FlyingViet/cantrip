@@ -1,6 +1,7 @@
 import Foundation
 import Speech
 import AVFoundation
+import Combine
 
 /// On-device speech: `SFSpeechRecognizer` for transcription + `AVSpeechSynthesizer`
 /// for replies. Drives a hands-free loop — listen → (silence) → hand the final
@@ -32,16 +33,28 @@ final class VoiceController: NSObject, ObservableObject {
         return v > 0 ? v : 2.5
     }
 
+    private var cancellables = Set<AnyCancellable>()
+
     override init() {
         super.init()
         synth.delegate = self
         // The Qwen engine's "everything spoken" moment — same hands-free resume
-        // as the AVSpeech delegate's queue-drained path below.
-        QwenVoiceEngine.shared.onIdle = { [weak self] in
-            guard let self else { return }
-            self.isSpeaking = false
-            self.resumeIfHandsFree()
-        }
+        // as the AVSpeech delegate's queue-drained path below. This must be an
+        // OBSERVATION of the singleton, not a callback handed to it: ChatView's
+        // init eagerly builds throwaway VoiceControllers (StateObject wrappedValue
+        // on every parent re-render), and a callback installed by the latest
+        // throwaway dies with it — stranding the live controller's isSpeaking at
+        // true ("Hermes is speaking" forever). Each instance subscribing
+        // independently is immune to that churn.
+        QwenVoiceEngine.shared.$speaking
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] engineSpeaking in
+                guard let self, !engineSpeaking, self.isSpeaking else { return }
+                self.isSpeaking = false
+                self.resumeIfHandsFree()
+            }
+            .store(in: &cancellables)
     }
 
     func requestAuth() {

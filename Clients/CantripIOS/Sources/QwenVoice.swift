@@ -48,10 +48,6 @@ final class QwenVoiceEngine: ObservableObject {
         UserDefaults.standard.string(forKey: "hermes.qwenSpeaker") ?? "Serena"
     }
 
-    /// Fires (on main) when the reply has fully streamed AND every queued chunk
-    /// has played — the hands-free "resume listening" moment.
-    var onIdle: (() -> Void)?
-
     private let synth = QwenSynth()
     private var pendingTexts: [String] = []
     private var processing = false
@@ -189,14 +185,17 @@ final class QwenVoiceEngine: ObservableObject {
         if !audioEngine.isRunning { try audioEngine.start() }
     }
 
+    /// Reply fully streamed AND every queued chunk played → flip `speaking`
+    /// false. VoiceController observes `$speaking` (NOT a callback — a callback
+    /// installed on this singleton gets stolen by SwiftUI's transient
+    /// VoiceController instances) and handles the hands-free resume.
     private func checkIdle() {
         guard replyDone, pendingTexts.isEmpty, !processing, scheduledBuffers == 0, speaking else { return }
-        speaking = false
-        // Release the audio engine BEFORE onIdle flips the session back to the
+        // Release the audio engine BEFORE observers flip the session back to the
         // mic — a still-running playback engine during that flip is what used to
         // strand the player node on a dead engine (and crash the next touch).
         stopPlayback()
-        onIdle?()
+        speaking = false
     }
 
     // MARK: - Model on disk
