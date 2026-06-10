@@ -109,9 +109,14 @@ final class ChatViewModel: ObservableObject {
         return cut
     }
 
-    /// Strip markdown so TTS doesn't read "asterisk asterisk".
+    /// Strip markdown so TTS doesn't read "asterisk asterisk". Table rows are
+    /// dropped whole: a table is for the screen — spoken cell-by-cell it's noise
+    /// ("pipe, Santa Clara, pipe…") that garbles the voice until the table ends.
+    /// The prose around the table still reads normally.
     private static func cleanForSpeech(_ s: String) -> String {
-        var t = s
+        var t = s.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { line in line.lazy.filter { $0 == "|" }.count < 2 }
+            .joined(separator: "\n")
         for tok in ["**", "__", "*", "`", "#", ">"] { t = t.replacingOccurrences(of: tok, with: "") }
         t = t.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
         return t

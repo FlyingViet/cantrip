@@ -154,6 +154,7 @@ final class QwenVoiceEngine: ObservableObject {
               || (0x2190...0x2BFF).contains(s.value)     // arrows, dingbats, misc symbols
               || s.value == 0xFE0F || s.value == 0x200D) // variation selector, ZWJ
         })
+        t = t.replacingOccurrences(of: "|", with: " ")   // stray table/inline pipes
         t = t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.rangeOfCharacter(from: .alphanumerics) != nil else { return "" }
