@@ -70,6 +70,18 @@ final class QwenVoiceEngine: ObservableObject {
 
     init() {
         download = Self.modelOnDisk ? .ready : .idle
+        // The mic engine re-taking the audio session (hands-free resume) stops
+        // this engine out from under us, silently dropping scheduled buffers and
+        // their completion callbacks. Reconcile the counter or the reply flow
+        // hangs waiting for callbacks that will never fire.
+        NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
+                                               object: audioEngine, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.scheduledBuffers > 0 else { return }
+                self.scheduledBuffers = 0
+                self.checkIdle()
+            }
+        }
     }
 
     // MARK: - Streamed-reply queue (same shape as VoiceController's)
@@ -93,11 +105,21 @@ final class QwenVoiceEngine: ObservableObject {
     func stop() {
         generation += 1
         pendingTexts.removeAll()
-        if engineWired { player.stop() }
+        stopPlayback()
         scheduledBuffers = 0
         processing = false
         replyDone = true
         speaking = false
+    }
+
+    /// AVAudioPlayerNode raises an UNCATCHABLE NSException (`required condition
+    /// is false: _engine->IsRunning()`) if touched while its engine is stopped —
+    /// and the engine stops itself whenever the mic flips the audio session.
+    /// Every player.play()/stop() must come through here or schedule().
+    private func stopPlayback() {
+        guard engineWired, audioEngine.isRunning else { return }
+        player.stop()
+        audioEngine.stop()
     }
 
     /// Short sample with the (newly) selected speaker — Settings preview.
@@ -127,8 +149,12 @@ final class QwenVoiceEngine: ObservableObject {
                     print("[QwenTTS] synthesis failed: \(error)")
                 }
             }
-            self.processing = false
-            self.checkIdle()
+            // A barge-in (gen bumped) already reset `processing` for the NEXT
+            // reply's pump — only clear it if this loop is still the live one.
+            if gen == self.generation {
+                self.processing = false
+                self.checkIdle()
+            }
         }
     }
 
@@ -141,6 +167,7 @@ final class QwenVoiceEngine: ObservableObject {
             buf.floatChannelData![0].update(from: src.baseAddress!, count: samples.count)
         }
         do { try startAudioEngine() } catch { return }
+        guard audioEngine.isRunning else { return }   // see stopPlayback() — play() on a dead engine is fatal
         scheduledBuffers += 1
         player.scheduleBuffer(buf, completionCallbackType: .dataPlayedBack) { _ in
             Task { @MainActor in
@@ -165,6 +192,10 @@ final class QwenVoiceEngine: ObservableObject {
     private func checkIdle() {
         guard replyDone, pendingTexts.isEmpty, !processing, scheduledBuffers == 0, speaking else { return }
         speaking = false
+        // Release the audio engine BEFORE onIdle flips the session back to the
+        // mic — a still-running playback engine during that flip is what used to
+        // strand the player node on a dead engine (and crash the next touch).
+        stopPlayback()
         onIdle?()
     }
 
@@ -279,16 +310,33 @@ final class QwenVoiceEngine: ObservableObject {
 /// serialized by actor isolation; the model loads lazily on first use and
 /// stays resident so later sentences skip the multi-second load.
 private actor QwenSynth {
+    /// MLX synthesis is seconds of SYNCHRONOUS compute. On the default actor
+    /// executor that pins a shared cooperative-pool thread, starving the rest of
+    /// the app's async work (visible as scroll hitches while speaking) — so this
+    /// actor runs on its own dispatch queue/thread instead.
+    private let queue = DispatchSerialQueue(label: "hermes.qwen.tts", qos: .userInitiated)
+    nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
+
     private var model: Qwen3TTSModel?
 
     func synthesize(_ text: String, speaker: String, modelDir: URL) async throws -> [Float] {
         if model == nil {
+            // Cap MLX's Metal buffer cache: left unbounded it grows with every
+            // synthesis until iOS jetsams the app (crashes "after speaking").
+            MLX.GPU.set(cacheLimit: 32 * 1024 * 1024)
             model = try await Qwen3TTSModel.fromPretrained(modelDir.path)
         }
         guard let model else { return [] }
-        let audio = try await model.generate(text: text, speaker: speaker, language: "english")
-        return audio.asArray(Float.self)
+        // The sync CustomVoice entry point (not async `generate`) keeps the
+        // compute on this actor's dedicated thread — a non-isolated async func
+        // would hop back onto the cooperative pool.
+        let audio = try model.generateCustomVoice(text: text, speaker: speaker,
+                                                  language: "english")
+        return audio.asType(.float32).asArray(Float.self)
     }
 
-    func unload() { model = nil }
+    func unload() {
+        model = nil
+        MLX.GPU.clearCache()
+    }
 }
