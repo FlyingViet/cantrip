@@ -38,19 +38,22 @@ final class QwenVoiceEngine: ObservableObject {
     /// and articulation. Clarity comes from the instruct + cooler sampling;
     /// reading SPEED comes from the time-pitch playback stage (`hermes.qwenRate`)
     /// — asking the model itself to rush makes it slur.
+    /// Every instruct pins the SAME three things: a British accent (the model
+    /// re-rolls accent per generation otherwise), steady/even intonation, and
+    /// calm delivery with no exaggerated emotion (it over-acts by default).
     static let gentlePresets: [QwenPreset] = [
-        QwenPreset(id: "serena-gentle", name: "Serena · Gentle", blurb: "Warm and soft, crisp diction",
+        QwenPreset(id: "serena-gentle", name: "Serena · Gentle", blurb: "Warm and soft, British, crisp diction",
                    speaker: "Serena",
-                   instruct: "A gentle, warm female voice with a soft tone and crisp, clear articulation."),
-        QwenPreset(id: "vivian-bright", name: "Vivian · Bright", blurb: "Light and friendly, very clear",
+                   instruct: "A gentle, warm female voice with a refined British accent, soft tone and crisp, clear articulation. Steady, even intonation; calm, measured delivery; no exaggerated emotion."),
+        QwenPreset(id: "vivian-bright", name: "Vivian · Bright", blurb: "Light and friendly, British, very clear",
                    speaker: "Vivian",
-                   instruct: "A bright, friendly female voice, light and gentle, enunciating every word clearly."),
-        QwenPreset(id: "sohee-soothing", name: "Sohee · Soothing", blurb: "Calm and soft-spoken, precise",
+                   instruct: "A bright, friendly female voice with a light British accent, gentle and clear, enunciating every word precisely. Even intonation, composed delivery, never over-excited."),
+        QwenPreset(id: "sohee-soothing", name: "Sohee · Soothing", blurb: "Calm and soft-spoken, British, precise",
                    speaker: "Sohee",
-                   instruct: "A soothing, calm female voice, soft-spoken but precisely articulated."),
-        QwenPreset(id: "anna-light", name: "Anna · Light", blurb: "Airy and pleasant, clean delivery",
+                   instruct: "A soothing, calm female voice with a soft British accent, soft-spoken but precisely articulated. Level, steady intonation; relaxed, measured pace; no dramatic emphasis."),
+        QwenPreset(id: "anna-light", name: "Anna · Light", blurb: "Airy and pleasant, British, clean delivery",
                    speaker: "Ono_anna",
-                   instruct: "A light, airy female voice, gentle and pleasant, with clean, precise delivery."),
+                   instruct: "A light, airy female voice with a delicate British accent, gentle and pleasant, with clean, precise delivery. Smooth, even intonation; composed and unhurried; no exaggerated emotion."),
     ]
     /// The raw speakers, no styling — same voices the model ships with.
     static let plainPresets: [QwenPreset] = speakers.map {
@@ -130,11 +133,31 @@ final class QwenVoiceEngine: ObservableObject {
     func beginReply() { replyDone = false }
 
     func enqueue(_ text: String) {
-        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clean = Self.sanitizeForSpeech(text)
         guard !clean.isEmpty else { return }
         speaking = true
         pendingTexts.append(clean)
         pump()
+    }
+
+    /// Qwen3-TTS dramatizes what it reads: "!" triggers over-excited delivery,
+    /// emoji/pictographs get vocalized as noises (the "moaning"), and a chunk
+    /// with nothing pronounceable generates pure garbage. Flatten to calm,
+    /// speakable text — the on-screen reply keeps the original; only the audio
+    /// path is toned down. (The system-voice path is untouched.)
+    static func sanitizeForSpeech(_ text: String) -> String {
+        var t = text
+        t = t.replacingOccurrences(of: #"\?[!?]+"#, with: "?", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"!+"#, with: ".", options: .regularExpression)
+        t = String(t.unicodeScalars.filter { s in
+            !((0x1F000...0x1FFFF).contains(s.value)      // emoji & pictograph planes
+              || (0x2190...0x2BFF).contains(s.value)     // arrows, dingbats, misc symbols
+              || s.value == 0xFE0F || s.value == 0x200D) // variation selector, ZWJ
+        })
+        t = t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.rangeOfCharacter(from: .alphanumerics) != nil else { return "" }
+        return t
     }
 
     func finishReply() {
@@ -179,7 +202,15 @@ final class QwenVoiceEngine: ObservableObject {
         let gen = generation
         Task {
             while gen == self.generation, !self.pendingTexts.isEmpty {
-                let text = self.pendingTexts.removeFirst()
+                // Merge everything queued into ONE generation (sentences pile up
+                // while the previous chunk synthesizes). Every generation samples
+                // its own prosody, so each seam is a chance for the accent and
+                // intonation to wander — fewer, larger chunks = a steadier voice.
+                var text = self.pendingTexts.removeFirst()
+                while let next = self.pendingTexts.first, text.count + next.count < 400 {
+                    self.pendingTexts.removeFirst()
+                    text += " " + next
+                }
                 do {
                     let preset = Self.selectedPreset
                     let samples = try await self.synth.synthesize(text, speaker: preset.speaker,
@@ -380,12 +411,25 @@ private actor QwenSynth {
         // The sync CustomVoice entry point (not async `generate`) keeps the
         // compute on this actor's dedicated thread — a non-isolated async func
         // would hop back onto the cooperative pool.
-        // temperature 0.7 (package default 0.9): hot sampling is what makes
-        // autoregressive TTS mumble/slur; cooler is stabler with no flatness yet.
+        //
+        // Sampling tuned for stability over expressiveness (user-reported
+        // stretched words, random intonation, over-excitement, stray noises):
+        //  - temperature 0.6 / topK 20 / topP 0.9: trim the wild tail that
+        //    produces the random prosody swings.
+        //  - repetitionPenalty 1.1: codec-token loops are exactly what a
+        //    stretched/elongated word is.
+        //  - maxTokens scaled to the text (~2.5x the tokens normal speech
+        //    needs at the 12Hz codec): a runaway can't drone for 170 seconds,
+        //    which is what the 2048 default allows.
+        let cap = max(64, min(1024, text.count * 2))
         let audio = try model.generateCustomVoice(text: text, speaker: speaker,
                                                   language: "english",
                                                   instruct: instruct,
-                                                  temperature: 0.7)
+                                                  temperature: 0.6,
+                                                  topK: 20,
+                                                  topP: 0.9,
+                                                  repetitionPenalty: 1.1,
+                                                  maxTokens: cap)
         return audio.asType(.float32).asArray(Float.self)
     }
 
