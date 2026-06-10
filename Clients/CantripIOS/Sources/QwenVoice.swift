@@ -412,29 +412,54 @@ private actor QwenSynth {
             model = try await Qwen3TTSModel.fromPretrained(modelDir.path)
         }
         guard let model else { return [] }
-        // The sync CustomVoice entry point (not async `generate`) keeps the
-        // compute on this actor's dedicated thread — a non-isolated async func
-        // would hop back onto the cooperative pool.
-        //
-        // Sampling tuned for stability over expressiveness (user-reported
-        // stretched words, random intonation, over-excitement, stray noises):
-        //  - temperature 0.6 / topK 20 / topP 0.9: trim the wild tail that
-        //    produces the random prosody swings.
-        //  - repetitionPenalty 1.1: codec-token loops are exactly what a
-        //    stretched/elongated word is.
-        //  - maxTokens scaled to the text (~2.5x the tokens normal speech
-        //    needs at the 12Hz codec): a runaway can't drone for 170 seconds,
-        //    which is what the 2048 default allows.
+        let first = try generate(model, text: text, speaker: speaker, instruct: instruct, temperature: 0.6)
+        guard Self.looksDegenerate(first, chars: text.count) else { return first }
+        // Bad prosody roll: every chunk is an independent sample, and a slurred
+        // /dragged generation is literally too many seconds of audio per
+        // character. Re-roll ONCE at a calmer temperature and keep whichever
+        // result is paced like real speech — this converts the occasional
+        // slurred chunk into ~1-2s of extra latency instead.
+        print("[QwenTTS] degenerate pace (\(String(format: "%.0f", Double(first.count) / 24_000.0 / Double(text.count) * 1000))ms/char) — re-rolling")
+        let retry = (try? generate(model, text: text, speaker: speaker, instruct: instruct, temperature: 0.45)) ?? first
+        return Self.closerToNormalPace(first, retry, chars: text.count)
+    }
+
+    /// One synthesis pass. Sampling tuned for stability over expressiveness:
+    ///  - topK 20 / topP 0.9: trim the wild tail that produces random prosody.
+    ///  - repetitionPenalty 1.1: codec-token loops ARE stretched words.
+    ///  - maxTokens scaled to the text (~2.5x what normal speech needs at the
+    ///    12Hz codec) so a runaway can't drone for 170 seconds.
+    /// Sync CustomVoice entry point (not async `generate`) so the compute stays
+    /// on this actor's dedicated thread instead of the cooperative pool.
+    private func generate(_ model: Qwen3TTSModel, text: String, speaker: String,
+                          instruct: String?, temperature: Float) throws -> [Float] {
         let cap = max(64, min(1024, text.count * 2))
         let audio = try model.generateCustomVoice(text: text, speaker: speaker,
                                                   language: "english",
                                                   instruct: instruct,
-                                                  temperature: 0.6,
+                                                  temperature: temperature,
                                                   topK: 20,
                                                   topP: 0.9,
                                                   repetitionPenalty: 1.1,
                                                   maxTokens: cap)
         return audio.asType(.float32).asArray(Float.self)
+    }
+
+    /// Normal English TTS paces ~65-85ms of audio per character. A slurred or
+    /// elongated roll drags well past that; a truncated/garbage one falls way
+    /// under. Short chunks are exempt — their timing is pause-dominated.
+    private static func looksDegenerate(_ samples: [Float], chars: Int) -> Bool {
+        guard chars >= 40, !samples.isEmpty else { return false }
+        let secPerChar = Double(samples.count) / 24_000.0 / Double(chars)
+        return secPerChar > 0.14 || secPerChar < 0.025
+    }
+
+    private static func closerToNormalPace(_ a: [Float], _ b: [Float], chars: Int) -> [Float] {
+        func dist(_ s: [Float]) -> Double {
+            guard !s.isEmpty else { return .infinity }
+            return abs(Double(s.count) / 24_000.0 / Double(chars) - 0.075)
+        }
+        return dist(b) < dist(a) ? b : a
     }
 
     func unload() {
