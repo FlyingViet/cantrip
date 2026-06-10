@@ -16,6 +16,11 @@ packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     from: "2.0.0"
+  # On-device neural TTS (Qwen3-TTS on MLX). Device-only at runtime — MLX needs
+  # real Apple Silicon; the Qwen engine is hidden behind the system-voice default.
+  Qwen3TTS:
+    url: https://github.com/AtomGradient/swift-qwen3-tts
+    branch: main
 targets:
   Hermes:
     type: application
@@ -47,6 +52,7 @@ targets:
           NSAllowsLocalNetworking: true
     dependencies:
       - package: MarkdownUI
+      - package: Qwen3TTS
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.hermbot

@@ -35,6 +35,13 @@ final class VoiceController: NSObject, ObservableObject {
     override init() {
         super.init()
         synth.delegate = self
+        // The Qwen engine's "everything spoken" moment — same hands-free resume
+        // as the AVSpeech delegate's queue-drained path below.
+        QwenVoiceEngine.shared.onIdle = { [weak self] in
+            guard let self else { return }
+            self.isSpeaking = false
+            self.resumeIfHandsFree()
+        }
     }
 
     func requestAuth() {
@@ -120,12 +127,21 @@ final class VoiceController: NSObject, ObservableObject {
     private var replyStreamDone = true
 
     /// Begin a streamed spoken reply: chunks arrive via `enqueue`, end with `finishReply`.
-    func beginReply() { replyStreamDone = false }
+    func beginReply() {
+        replyStreamDone = false
+        if QwenVoiceEngine.routeActive { QwenVoiceEngine.shared.beginReply() }
+    }
 
     /// Speak the next chunk of a streamed reply (queued behind any in-flight chunk).
     func enqueue(_ text: String) {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
+        if QwenVoiceEngine.routeActive {
+            if !isSpeaking { prepareForSpeech() }
+            isSpeaking = true
+            QwenVoiceEngine.shared.enqueue(clean)
+            return
+        }
         if pendingUtterances == 0 { prepareForSpeech() }
         pendingUtterances += 1
         isSpeaking = true
@@ -138,19 +154,27 @@ final class VoiceController: NSObject, ObservableObject {
     /// Mark the streamed reply finished; resume listening once the queue drains.
     func finishReply() {
         replyStreamDone = true
+        if QwenVoiceEngine.routeActive {
+            if !isSpeaking { resumeIfHandsFree(); return }   // nothing was enqueued
+            QwenVoiceEngine.shared.finishReply()             // onIdle drives the resume
+            return
+        }
         if pendingUtterances == 0 { isSpeaking = false; resumeIfHandsFree() }
     }
 
     /// One-shot speak of a complete string (used outside the streaming path).
+    /// Routed through begin/enqueue/finish so both engines behave the same.
     func speak(_ text: String) {
-        replyStreamDone = true
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty else { resumeIfHandsFree(); return }
+        guard !clean.isEmpty else { replyStreamDone = true; resumeIfHandsFree(); return }
+        beginReply()
         enqueue(clean)
+        finishReply()
     }
 
     /// Stop all speech immediately and clear the queue (used by barge-in).
     func stopSpeaking() {
+        QwenVoiceEngine.shared.stop()
         synth.stopSpeaking(at: .immediate)
         pendingUtterances = 0
         replyStreamDone = true

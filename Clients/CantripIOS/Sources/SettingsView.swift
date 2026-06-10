@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var testResult: Bool?
     @AppStorage("hermes.voicePause") private var voicePause = 2.5
     @AppStorage("hermes.showSteps") private var showSteps = false
+    @AppStorage("hermes.voiceEngine") private var voiceEngine = "system"
 
     var body: some View {
         NavigationStack {
@@ -26,6 +27,15 @@ struct SettingsView: View {
 
                 Section {
                     NavigationLink {
+                        QwenVoiceSettingsView()
+                    } label: {
+                        HStack {
+                            Label("Voice engine", systemImage: "waveform")
+                            Spacer()
+                            Text(voiceEngine == "qwen" ? "Qwen3 (Neural)" : "System").foregroundStyle(.secondary)
+                        }
+                    }
+                    NavigationLink {
                         VoiceListView(env: env, voice: voice)
                     } label: {
                         HStack {
@@ -34,6 +44,7 @@ struct SettingsView: View {
                             Text(currentVoiceName).foregroundStyle(.secondary)
                         }
                     }
+                    .disabled(voiceEngine == "qwen")
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Label("Pause before sending", systemImage: "timer")
@@ -128,5 +139,85 @@ struct VoiceListView: View {
         case .enhanced: return "Enhanced"
         default: return "Default"
         }
+    }
+}
+
+/// Voice-engine picker + Qwen3-TTS model management (download / speaker / delete).
+struct QwenVoiceSettingsView: View {
+    @ObservedObject private var engine = QwenVoiceEngine.shared
+    @AppStorage("hermes.voiceEngine") private var voiceEngine = "system"
+    @AppStorage("hermes.qwenSpeaker") private var speaker = "Serena"
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Engine", selection: $voiceEngine) {
+                    Text("System").tag("system")
+                    Text("Qwen3 (Neural)").tag("qwen")
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text("Qwen3 runs a neural voice entirely on-device (MLX). Much more natural than the system voice; needs a one-time ~800 MB model download and uses the GPU while speaking. Replies fall back to the system voice until the model is ready.")
+            }
+
+            if voiceEngine == "qwen" {
+                Section("Model") {
+                    switch engine.download {
+                    case .idle:
+                        Button {
+                            engine.downloadModel()
+                        } label: {
+                            Label("Download model (~800 MB)", systemImage: "arrow.down.circle")
+                        }
+                    case .downloading(let p):
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Downloading…")
+                                Spacer()
+                                Text("\(Int(p * 100))%").foregroundStyle(.secondary).monospacedDigit()
+                            }
+                            ProgressView(value: p)
+                        }
+                        Button("Cancel", role: .destructive) { engine.cancelDownload() }
+                    case .ready:
+                        HStack {
+                            Label("Model ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                            Spacer()
+                            Text(ByteCountFormatter.string(fromByteCount: engine.modelSizeBytes, countStyle: .file))
+                                .foregroundStyle(.secondary)
+                        }
+                        Button("Delete model", role: .destructive) { engine.deleteModel() }
+                    case .failed(let msg):
+                        Label(msg, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+                        Button("Retry download") { engine.downloadModel() }
+                    }
+                }
+
+                Section {
+                    ForEach(QwenVoiceEngine.speakers, id: \.self) { s in
+                        Button {
+                            speaker = s
+                            if engine.download == .ready { engine.preview() }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: speaker == s ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(speaker == s ? Color.accentColor : .secondary)
+                                Text(s.replacingOccurrences(of: "_", with: " ").capitalized)
+                                Spacer()
+                                Image(systemName: "play.circle").foregroundStyle(.secondary)
+                            }
+                        }
+                        .tint(.primary)
+                    }
+                } header: {
+                    Text("Speaker")
+                } footer: {
+                    Text("Tap a speaker to select it and hear a sample (once the model is downloaded). Download on Wi-Fi — it's a one-time ~800 MB fetch from Hugging Face.")
+                }
+            }
+        }
+        .navigationTitle("Voice Engine")
+        .navigationBarTitleDisplayMode(.inline)
+        .onDisappear { QwenVoiceEngine.shared.stop() }
     }
 }
