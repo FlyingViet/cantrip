@@ -29,9 +29,16 @@ struct QwenPreset: Identifiable, Equatable, Sendable {
 final class QwenVoiceEngine: ObservableObject {
     static let shared = QwenVoiceEngine()
 
-    /// HF repo of the compressed model (808 MB; ~67% smaller than bf16 with
-    /// near-identical quality). Includes the nested speech_tokenizer/ dir.
-    static let repo = "AtomGradient/Qwen3-TTS-0.6B-CustomVoice-4bit-pruned-vocab-lite"
+    /// Model variants (both include the nested speech_tokenizer/ dir):
+    /// - Compact: 4-bit, 808 MB. A 0.6B model at 4-bit is right where
+    ///   quantization noise becomes audible — the occasional slurred phoneme
+    ///   regardless of preset.
+    /// - High: bf16 of the same pruned model, 1.5 GB, lossless quality.
+    static let repoCompact = "AtomGradient/Qwen3-TTS-0.6B-CustomVoice-4bit-pruned-vocab-lite"
+    static let repoHigh = "AtomGradient/Qwen3-TTS-0.6B-CustomVoice-bf16-pruned-vocab-lite"
+    static var repo: String {
+        UserDefaults.standard.string(forKey: "hermes.qwenModelQuality") == "high" ? repoHigh : repoCompact
+    }
     static let speakers = ["Serena", "Vivian", "Aiden", "Ryan", "Eric", "Dylan", "Sohee", "Ono_anna", "Uncle_fu"]
 
     /// Curated presets: a speaker plus a per-generation `instruct` shaping tone
@@ -286,16 +293,26 @@ final class QwenVoiceEngine: ObservableObject {
 
     // MARK: - Model on disk
 
-    private static let modelDir: URL = {
+    /// Per-variant directory — Compact and High each download into their own
+    /// folder, so switching quality in Settings flips between them without
+    /// invalidating the other.
+    private static var modelDir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("QwenTTS", isDirectory: true)
             .appendingPathComponent(repo.components(separatedBy: "/").last!, isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base
-    }()
+    }
     /// Written only after every file lands — a partial download never counts.
     private static var completeMarker: URL { modelDir.appendingPathComponent(".download-complete") }
     private static var modelOnDisk: Bool { FileManager.default.fileExists(atPath: completeMarker.path) }
+
+    /// Re-evaluate the download state after the model-quality toggle changes
+    /// which variant `repo`/`modelDir` point at.
+    func refreshModelState() {
+        if case .downloading = download { return }   // an active download keeps its state
+        download = Self.modelOnDisk ? .ready : .idle
+    }
 
     var modelSizeBytes: Int64 {
         guard let files = FileManager.default.enumerator(at: Self.modelDir, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
@@ -323,18 +340,22 @@ final class QwenVoiceEngine: ObservableObject {
 
     func downloadModel() {
         guard downloadTask == nil else { return }
+        // Pin the variant at dispatch time so flipping the quality toggle
+        // mid-download can't redirect files into the other variant's folder.
+        let repo = Self.repo
+        let dir = Self.modelDir
         download = .downloading(0)
         downloadTask = Task {
             do {
-                try await Self.fetchModel { [weak self] p in
+                try await Self.fetchModel(repo: repo, into: dir) { [weak self] p in
                     Task { @MainActor in
                         if case .downloading = self?.download { self?.download = .downloading(p) }
                     }
                 }
-                FileManager.default.createFile(atPath: Self.completeMarker.path, contents: Data())
-                self.download = .ready
+                FileManager.default.createFile(atPath: dir.appendingPathComponent(".download-complete").path, contents: Data())
+                self.refreshModelState()
             } catch is CancellationError {
-                self.download = .idle
+                self.refreshModelState()
             } catch {
                 self.download = .failed(error.localizedDescription)
             }
@@ -343,8 +364,9 @@ final class QwenVoiceEngine: ObservableObject {
     }
 
     /// Mirror the HF repo tree (recursive — the model has a nested
-    /// speech_tokenizer/ dir) into `modelDir`, streaming each file to disk.
-    private nonisolated static func fetchModel(progress: @escaping @Sendable (Double) -> Void) async throws {
+    /// speech_tokenizer/ dir) into `dir`, streaming each file to disk.
+    private nonisolated static func fetchModel(repo: String, into dir: URL,
+                                               progress: @escaping @Sendable (Double) -> Void) async throws {
         struct TreeEntry: Decodable { let type: String; let path: String; let size: Int64? }
         let treeURL = URL(string: "https://huggingface.co/api/models/\(repo)/tree/main?recursive=true")!
         let (treeData, treeResp) = try await URLSession.shared.data(from: treeURL)
@@ -357,7 +379,7 @@ final class QwenVoiceEngine: ObservableObject {
         var done: Int64 = 0
         for f in files {
             try Task.checkCancellation()
-            let dest = modelDir.appendingPathComponent(f.path)
+            let dest = dir.appendingPathComponent(f.path)
             try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
             // Resume across attempts: a file already fully present is skipped.
             if let attrs = try? FileManager.default.attributesOfItem(atPath: dest.path),
@@ -403,13 +425,17 @@ private actor QwenSynth {
     nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     private var model: Qwen3TTSModel?
+    private var loadedDir: String?
 
     func synthesize(_ text: String, speaker: String, instruct: String?, modelDir: URL) async throws -> [Float] {
-        if model == nil {
+        if model == nil || loadedDir != modelDir.path {   // first use, or quality variant switched
             // Cap MLX's Metal buffer cache: left unbounded it grows with every
             // synthesis until iOS jetsams the app (crashes "after speaking").
             MLX.GPU.set(cacheLimit: 32 * 1024 * 1024)
+            model = nil
+            MLX.GPU.clearCache()
             model = try await Qwen3TTSModel.fromPretrained(modelDir.path)
+            loadedDir = modelDir.path
         }
         guard let model else { return [] }
         let first = try generate(model, text: text, speaker: speaker, instruct: instruct, temperature: 0.6)
@@ -464,6 +490,7 @@ private actor QwenSynth {
 
     func unload() {
         model = nil
+        loadedDir = nil
         MLX.GPU.clearCache()
     }
 }

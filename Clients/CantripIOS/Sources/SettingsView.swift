@@ -148,6 +148,7 @@ struct QwenVoiceSettingsView: View {
     @AppStorage("hermes.voiceEngine") private var voiceEngine = "system"
     @AppStorage("hermes.qwenPreset") private var presetId = "serena-gentle"
     @AppStorage("hermes.qwenRate") private var rate = 1.15
+    @AppStorage("hermes.qwenModelQuality") private var modelQuality = "compact"
 
     var body: some View {
         Form {
@@ -162,6 +163,17 @@ struct QwenVoiceSettingsView: View {
             }
 
             if voiceEngine == "qwen" {
+                Section {
+                    Picker("Model quality", selection: $modelQuality) {
+                        Text("Compact · 808 MB").tag("compact")
+                        Text("High · 1.5 GB").tag("high")
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: modelQuality) { _, _ in engine.refreshModelState() }
+                } footer: {
+                    Text("Compact is 4-bit quantized — on a small voice model that can surface as occasional slurred words. High is the same voice at full precision (lossless), at the cost of a bigger download and more memory while speaking.")
+                }
+
                 Section("Model") {
                     switch engine.download {
                     case .idle:
