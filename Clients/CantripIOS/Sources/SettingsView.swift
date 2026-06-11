@@ -170,8 +170,12 @@ struct QwenVoiceSettingsView: View {
                     }
                     .pickerStyle(.menu)
                     .onChange(of: modelQuality) { _, _ in engine.refreshModelState() }
+                    if let err = engine.loadError {
+                        Label(err, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange).font(.footnote)
+                    }
                 } footer: {
-                    Text("Compact is 4-bit quantized — on a small voice model that can surface as occasional slurred words. High is the same voice at full precision (lossless), at the cost of a bigger download and more memory while speaking.")
+                    Text("Compact is 4-bit quantized — on a small voice model that can surface as occasional slurred words. High is the same voice at full precision (lossless), at the cost of a bigger download and noticeably more memory while speaking (not all devices have the headroom).")
                 }
 
                 Section("Model") {

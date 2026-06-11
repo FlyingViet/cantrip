@@ -13,6 +13,10 @@ import MLX
 /// buffers queue onto an `AVAudioPlayerNode`, so sentence N plays while
 /// sentence N+1 is still generating.
 ///
+enum QwenVoiceError: Error {
+    case insufficientMemory
+}
+
 /// A named voice: a model speaker plus an optional style `instruct` shaping
 /// tone and articulation per generation.
 struct QwenPreset: Identifiable, Equatable, Sendable {
@@ -89,6 +93,9 @@ final class QwenVoiceEngine: ObservableObject {
     }
     @Published private(set) var download: DownloadState = .idle
     @Published private(set) var speaking = false
+    /// Set when the selected model can't load (e.g. bf16 too big for this
+    /// device) — Settings shows it; cleared on a quality/preset change.
+    @Published var loadError: String?
 
     /// True when "Qwen3 (Neural)" is selected in Settings AND the model is on
     /// disk — the single routing switch `VoiceController` consults per chunk.
@@ -237,8 +244,15 @@ final class QwenVoiceEngine: ObservableObject {
                                                                   instruct: preset.instruct,
                                                                   modelDir: Self.modelDir)
                     if gen == self.generation { self.schedule(samples, gen: gen) }
+                } catch QwenVoiceError.insufficientMemory {
+                    // The selected (bf16) model won't fit on this device. Stop
+                    // the whole reply, surface it once, and let the user pick the
+                    // Compact model — every chunk would fail the same way.
+                    self.loadError = "Not enough free memory for the High-quality voice on this device. Switch Model quality to Compact in Settings."
+                    self.pendingTexts.removeAll()
+                    break
                 } catch {
-                    // Best-effort: skip the chunk (transient OOM/decode hiccup).
+                    // Best-effort: skip the chunk (transient decode hiccup).
                     // The reply text is still on screen, so nothing is lost.
                     print("[QwenTTS] synthesis failed: \(error)")
                 }
@@ -319,6 +333,7 @@ final class QwenVoiceEngine: ObservableObject {
     /// Re-evaluate the download state after the model-quality toggle changes
     /// which variant `repo`/`modelDir` point at.
     func refreshModelState() {
+        loadError = nil
         if case .downloading = download { return }   // an active download keeps its state
         download = Self.modelOnDisk ? .ready : .idle
     }
@@ -373,17 +388,27 @@ final class QwenVoiceEngine: ObservableObject {
     }
 
     /// Mirror the HF repo tree (recursive — the model has a nested
-    /// speech_tokenizer/ dir) into `dir`, streaming each file to disk.
+    /// speech_tokenizer/ dir) into `dir`.
+    ///
+    /// Each file goes through a system `URLSessionDownloadTask` that streams to
+    /// a temp file on disk. The previous byte-by-byte `AsyncBytes` consumer was
+    /// SLOWER than the network delivered, so URLSession's internal buffer grew
+    /// unbounded — fine for the 808 MB Compact model, an OOM jetsam crash for
+    /// the 1.5 GB bf16 one. A download task keeps memory bounded at any size.
     private nonisolated static func fetchModel(repo: String, into dir: URL,
                                                progress: @escaping @Sendable (Double) -> Void) async throws {
-        struct TreeEntry: Decodable { let type: String; let path: String; let size: Int64? }
+        // LFS files report their real size under `lfs.size`, not the top-level
+        // `size` (which is the pointer-file size) — read both.
+        struct LFS: Decodable { let size: Int64? }
+        struct TreeEntry: Decodable { let type: String; let path: String; let size: Int64?; let lfs: LFS? }
         let treeURL = URL(string: "https://huggingface.co/api/models/\(repo)/tree/main?recursive=true")!
         let (treeData, treeResp) = try await URLSession.shared.data(from: treeURL)
         guard (treeResp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
         let files = try JSONDecoder().decode([TreeEntry].self, from: treeData)
             .filter { $0.type == "file" }
             .filter { !$0.path.hasPrefix(".") && !$0.path.hasSuffix(".md") }
-        let total = max(1, files.reduce(Int64(0)) { $0 + ($1.size ?? 0) })
+        func size(_ f: TreeEntry) -> Int64 { f.lfs?.size ?? f.size ?? 0 }
+        let total = max(1, files.reduce(Int64(0)) { $0 + size($1) })
 
         var done: Int64 = 0
         for f in files {
@@ -392,33 +417,35 @@ final class QwenVoiceEngine: ObservableObject {
             try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
             // Resume across attempts: a file already fully present is skipped.
             if let attrs = try? FileManager.default.attributesOfItem(atPath: dest.path),
-               (attrs[.size] as? Int64) == f.size, f.size != nil {
-                done += f.size ?? 0
+               let onDisk = attrs[.size] as? Int64, onDisk == size(f), size(f) > 0 {
+                done += size(f)
                 progress(Double(done) / Double(total))
                 continue
             }
             let src = URL(string: "https://huggingface.co/\(repo)/resolve/main/\(f.path)")!
-            let (bytes, resp) = try await URLSession.shared.bytes(from: src)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-            FileManager.default.createFile(atPath: dest.path, contents: nil)
-            let handle = try FileHandle(forWritingTo: dest)
-            defer { try? handle.close() }
-            var buffer = Data(); buffer.reserveCapacity(1 << 20)
-            var written: Int64 = 0
-            for try await byte in bytes {
-                buffer.append(byte)
-                if buffer.count >= 1 << 20 {
-                    try Task.checkCancellation()
-                    try handle.write(contentsOf: buffer)
-                    written += Int64(buffer.count)
-                    buffer.removeAll(keepingCapacity: true)
-                    progress(Double(done + written) / Double(total))
-                }
+            let base = done
+            let delegate = DownloadProgress { written in
+                progress(Double(base + written) / Double(total))
             }
-            try handle.write(contentsOf: buffer)
-            done += written + Int64(buffer.count)
+            let (tmp, resp) = try await URLSession.shared.download(from: src, delegate: delegate)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.moveItem(at: tmp, to: dest)
+            done += size(f) > 0 ? size(f) : ((try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0)
             progress(Double(done) / Double(total))
         }
+    }
+}
+
+/// Reports byte progress for a single `URLSession.download` so the UI can show a
+/// bar without the app ever holding the file in memory.
+private final class DownloadProgress: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let onWritten: @Sendable (Int64) -> Void
+    init(_ onWritten: @escaping @Sendable (Int64) -> Void) { self.onWritten = onWritten }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        onWritten(totalBytesWritten)
     }
 }
 
@@ -441,8 +468,19 @@ private actor QwenSynth {
             // Cap MLX's Metal buffer cache: left unbounded it grows with every
             // synthesis until iOS jetsams the app (crashes "after speaking").
             MLX.GPU.set(cacheLimit: 32 * 1024 * 1024)
+            // Free the old variant FIRST so a Compact→High swap doesn't hold both
+            // resident (transient peak is what jetsams mid-swap).
             model = nil
+            loadedDir = nil
             MLX.GPU.clearCache()
+            // Preflight: the bf16 weights load ~their on-disk size into memory.
+            // If that won't fit under this process's jetsam limit with headroom,
+            // refuse with a clear error instead of crashing the whole app.
+            let weightBytes = Self.weightFootprint(modelDir)
+            let available = Int64(os_proc_available_memory())
+            if available > 0, weightBytes > 0, available < weightBytes + 350 * 1024 * 1024 {
+                throw QwenVoiceError.insufficientMemory
+            }
             model = try await Qwen3TTSModel.fromPretrained(modelDir.path)
             loadedDir = modelDir.path
         }
@@ -516,5 +554,16 @@ private actor QwenSynth {
         model = nil
         loadedDir = nil
         MLX.GPU.clearCache()
+    }
+
+    /// Total bytes of the `.safetensors` weight files in the model dir — the
+    /// dominant resident cost when the model loads.
+    private static func weightFootprint(_ dir: URL) -> Int64 {
+        guard let files = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var total: Int64 = 0
+        for case let f as URL in files where f.pathExtension == "safetensors" {
+            total += Int64((try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return total
     }
 }
