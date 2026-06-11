@@ -162,6 +162,12 @@ final class QwenVoiceEngine: ObservableObject {
               || s.value == 0xFE0F || s.value == 0x200D) // variation selector, ZWJ
         })
         t = t.replacingOccurrences(of: "|", with: " ")   // stray table/inline pipes
+        // Quote marks around dialogue ("Nothing," she said) destabilized
+        // alignment in the transcribed sample — drop the quote glyphs, keep the
+        // words. Curly + straight, plus stray backslashes.
+        for q in ["\u{201C}", "\u{201D}", "\u{2018}", "\u{2019}", "\"", "\\"] {
+            t = t.replacingOccurrences(of: q, with: "")
+        }
         // Divider/spacer runs ("---", "***", "===") — unpronounceable, and the
         // model can emit ZERO audio tokens for them, which crashes the decode.
         t = t.replacingOccurrences(of: #"[-_*=~·•]{3,}"#, with: " ", options: .regularExpression)
@@ -215,12 +221,13 @@ final class QwenVoiceEngine: ObservableObject {
             while gen == self.generation, !self.pendingTexts.isEmpty {
                 // Merge queued sentences into ONE generation (they pile up while
                 // the previous chunk synthesizes) — fewer seams = steadier accent
-                // and prosody. Cap at ~220 chars though: the 0.6B model's
-                // text-audio alignment drifts on long inputs, which is heard as
-                // skipped or doubled words mid-chunk. 1-3 sentences is the sweet
-                // spot between seam variance and alignment drift.
+                // and prosody. Cap at ~150 chars though: the 0.6B model's
+                // text-audio alignment drifts on longer inputs, heard as skipped
+                // or doubled words mid-chunk (the transcribed "…once asked what
+                // they all opened" → "one day long" garble was an over-long
+                // merge). 1-2 sentences is the intelligibility sweet spot.
                 var text = self.pendingTexts.removeFirst()
-                while let next = self.pendingTexts.first, text.count + next.count < 220 {
+                while let next = self.pendingTexts.first, text.count + next.count < 150 {
                     self.pendingTexts.removeFirst()
                     text += " " + next
                 }
@@ -440,16 +447,24 @@ private actor QwenSynth {
             loadedDir = modelDir.path
         }
         guard let model else { return [] }
-        let first = try generate(model, text: text, speaker: speaker, instruct: instruct, temperature: 0.6)
-        guard Self.looksDegenerate(first, chars: text.count) else { return first }
-        // Bad prosody roll: every chunk is an independent sample, and a slurred
-        // /dragged generation is literally too many seconds of audio per
-        // character. Re-roll ONCE at a calmer temperature and keep whichever
-        // result is paced like real speech — this converts the occasional
-        // slurred chunk into ~1-2s of extra latency instead.
-        print("[QwenTTS] degenerate pace (\(String(format: "%.0f", Double(first.count) / 24_000.0 / Double(text.count) * 1000))ms/char) — re-rolling")
-        let retry = (try? generate(model, text: text, speaker: speaker, instruct: instruct, temperature: 0.45)) ?? first
-        return Self.closerToNormalPace(first, retry, chars: text.count)
+        // Every chunk is an independent sample. The 4-bit model fails two ways:
+        // a DRAGGED roll (slur — too many seconds/char) or a TRUNCATED roll
+        // (dropped words — too few). Roll up to 3 times at cooling temperatures,
+        // stop early on the first healthy roll, else keep the BEST by
+        // `scorePace` (which treats truncation as worse than slowness, so we
+        // never pick a roll that dropped words just because it's faster).
+        let temps: [Float] = [0.6, 0.45, 0.35]
+        var best: [Float] = []
+        var bestScore = Double.infinity
+        for (i, t) in temps.enumerated() {
+            let roll = (i == 0) ? try generate(model, text: text, speaker: speaker, instruct: instruct, temperature: t)
+                                : ((try? generate(model, text: text, speaker: speaker, instruct: instruct, temperature: t)) ?? [])
+            let score = Self.scorePace(roll, chars: text.count)
+            if score < bestScore { best = roll; bestScore = score }
+            if score == 0 { break }                         // healthy — no need to re-roll
+            print("[QwenTTS] re-roll \(i) (\(Self.paceMs(roll, chars: text.count))ms/char, score \(String(format: "%.2f", score)))")
+        }
+        return best
     }
 
     /// One synthesis pass. Sampling tuned for stability over expressiveness:
@@ -475,21 +490,26 @@ private actor QwenSynth {
         return audio.asType(.float32).asArray(Float.self)
     }
 
-    /// Normal English TTS paces ~65-85ms of audio per character. A slurred or
-    /// elongated roll drags well past that; a truncated/garbage one falls way
-    /// under. Short chunks are exempt — their timing is pause-dominated.
-    private static func looksDegenerate(_ samples: [Float], chars: Int) -> Bool {
-        guard chars >= 40, !samples.isEmpty else { return false }
-        let secPerChar = Double(samples.count) / 24_000.0 / Double(chars)
-        return secPerChar > 0.14 || secPerChar < 0.025
+    private static func paceMs(_ samples: [Float], chars: Int) -> Int {
+        guard chars > 0 else { return 0 }
+        return Int(Double(samples.count) / 24_000.0 / Double(chars) * 1000)
     }
 
-    private static func closerToNormalPace(_ a: [Float], _ b: [Float], chars: Int) -> [Float] {
-        func dist(_ s: [Float]) -> Double {
-            guard !s.isEmpty else { return .infinity }
-            return abs(Double(s.count) / 24_000.0 / Double(chars) - 0.075)
-        }
-        return dist(b) < dist(a) ? b : a
+    /// Score a roll's pacing — 0 == healthy, higher == worse. Normal English TTS
+    /// runs ~65–85ms of audio per character; the band [50,120]ms/char is treated
+    /// as healthy. Outside it, TRUNCATION (too few ms/char = dropped words, the
+    /// "A woman spent forty…" cutoff) is weighted 2x heavier than DRAG (slur),
+    /// because a dropped clause is far worse to hear than a slow one — so when
+    /// two rolls are both imperfect we keep the more COMPLETE one, never the
+    /// faster-but-truncated one. Short chunks (<40 chars) are pace-exempt
+    /// (timing is pause-dominated) but an empty roll is always worst.
+    private static func scorePace(_ samples: [Float], chars: Int) -> Double {
+        if samples.isEmpty { return .infinity }
+        guard chars >= 40 else { return 0 }
+        let msPerChar = Double(samples.count) / 24_000.0 / Double(chars) * 1000
+        if msPerChar < 50 { return (50 - msPerChar) * 2 }    // truncated — penalize hard
+        if msPerChar > 120 { return msPerChar - 120 }        // dragged/slurred
+        return 0
     }
 
     func unload() {
