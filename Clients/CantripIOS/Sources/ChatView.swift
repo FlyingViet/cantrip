@@ -97,14 +97,22 @@ final class ChatViewModel: ObservableObject {
     }
 
     /// Offset just past the last sentence (`. ! ?`) or paragraph (newline) break.
+    /// Sentence breaks inside a table row are NOT cuts: a "." inside a cell
+    /// ("Morning clouds. Sunny after.") would otherwise split the row into two
+    /// fragments that each look like (misaligned) table rows to
+    /// tableRowToSpeech — heard as skipped/doubled words. A row only ships
+    /// once its newline arrives.
     private static func lastSpeakableCut(_ chars: [Character]) -> Int? {
         var cut: Int? = nil
+        var lineHasPipe = false
         for i in chars.indices {
             let c = chars[i]
+            if c == "|" { lineHasPipe = true }
             if c == "\n" {
                 cut = i + 1                                   // paragraph / "thinking break"
+                lineHasPipe = false
             } else if c == "." || c == "!" || c == "?" {
-                if i + 1 >= chars.count || chars[i + 1] == " " || chars[i + 1] == "\n" { cut = i + 1 }
+                if !lineHasPipe, i + 1 >= chars.count || chars[i + 1] == " " || chars[i + 1] == "\n" { cut = i + 1 }
             }
         }
         return cut

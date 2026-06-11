@@ -213,12 +213,14 @@ final class QwenVoiceEngine: ObservableObject {
         let gen = generation
         Task {
             while gen == self.generation, !self.pendingTexts.isEmpty {
-                // Merge everything queued into ONE generation (sentences pile up
-                // while the previous chunk synthesizes). Every generation samples
-                // its own prosody, so each seam is a chance for the accent and
-                // intonation to wander — fewer, larger chunks = a steadier voice.
+                // Merge queued sentences into ONE generation (they pile up while
+                // the previous chunk synthesizes) — fewer seams = steadier accent
+                // and prosody. Cap at ~220 chars though: the 0.6B model's
+                // text-audio alignment drifts on long inputs, which is heard as
+                // skipped or doubled words mid-chunk. 1-3 sentences is the sweet
+                // spot between seam variance and alignment drift.
                 var text = self.pendingTexts.removeFirst()
-                while let next = self.pendingTexts.first, text.count + next.count < 400 {
+                while let next = self.pendingTexts.first, text.count + next.count < 220 {
                     self.pendingTexts.removeFirst()
                     text += " " + next
                 }
@@ -452,7 +454,9 @@ private actor QwenSynth {
 
     /// One synthesis pass. Sampling tuned for stability over expressiveness:
     ///  - topK 20 / topP 0.9: trim the wild tail that produces random prosody.
-    ///  - repetitionPenalty 1.1: codec-token loops ARE stretched words.
+    ///  - repetitionPenalty 1.05 (was 1.1): 1.1 over-penalized legitimately
+    ///    repeated codec tokens, which clips/skips words. The pace gate above
+    ///    now owns the elongation problem, so this can stay gentle.
     ///  - maxTokens scaled to the text (~2.5x what normal speech needs at the
     ///    12Hz codec) so a runaway can't drone for 170 seconds.
     /// Sync CustomVoice entry point (not async `generate`) so the compute stays
@@ -466,7 +470,7 @@ private actor QwenSynth {
                                                   temperature: temperature,
                                                   topK: 20,
                                                   topP: 0.9,
-                                                  repetitionPenalty: 1.1,
+                                                  repetitionPenalty: 1.05,
                                                   maxTokens: cap)
         return audio.asType(.float32).asArray(Float.self)
     }
