@@ -22,10 +22,11 @@ Press **⌥Space** and type. Instant, local, no AI round-trip:
 
 Ask anything more and it goes to an AI agent that can genuinely act:
 
-- **Three swappable backends** — Claude Code (full agentic harness), GitHub
-  Copilot CLI, or any OpenAI-compatible local model (vLLM / Ollama /
-  llama.cpp — e.g. Hermes), with per-backend model pickers. Local models get
-  a tool-calling loop (`run_shell` + your MCP servers), so even they can act.
+- **Four swappable backends** — Claude Code (full agentic harness), GitHub
+  Copilot CLI, OpenAI Codex CLI, or any OpenAI-compatible local model
+  (vLLM / Ollama / llama.cpp — e.g. Hermes), with per-backend model pickers.
+  Local models get a tool-calling loop (`run_shell` + your MCP servers), so
+  even they can act.
 - **Context, automatically** — your location, next 48h of calendar, a
   screenshot of what you were just doing (opt-in), text you selected in any
   app (⌥⇧Space), pasted or dropped files, and content excerpts from your
@@ -74,6 +75,8 @@ bar; press **⌥Space**.
   (`sonnet`, `opus`, `haiku`, `fable`…) and a permission level.
 - **Copilot**: `npm install -g @github/copilot`, run `copilot` once to
   authenticate. The model dropdown self-populates from `copilot help`.
+- **Codex**: `npm install -g @openai/codex`, run `codex` once to sign in.
+  Optional model override (e.g. `gpt-5-codex`) in the gear.
 - **Local model**: point the gear's Base URL at any `/v1` endpoint
   (e.g. `http://hermes.local:8000/v1`), set the model name.
 

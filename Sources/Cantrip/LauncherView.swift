@@ -265,6 +265,7 @@ struct LauncherView: View {
         switch settings.backend {
         case .claudeCode: return "terminal"
         case .copilot: return "airplane"
+        case .codex: return "chevron.left.forwardslash.chevron.right"
         case .localModel: return "cpu"
         }
     }
@@ -499,6 +500,9 @@ struct LauncherView: View {
                 return "Copilot · \(model)"
             }
             return "Copilot"
+        case .codex:
+            let model = settings.codexModel.trimmingCharacters(in: .whitespaces)
+            return model.isEmpty ? "Codex" : "Codex · \(model)"
         case .localModel:
             return "Local · \(settings.localModel)"
         }
@@ -515,6 +519,9 @@ struct LauncherView: View {
                 return "Copilot · \(model)"
             }
             return "Copilot"
+        case .codex:
+            let model = settings.codexModel.trimmingCharacters(in: .whitespaces)
+            return model.isEmpty ? "Codex" : "Codex · \(model)"
         case .localModel: return settings.localModel
         }
     }
@@ -1203,6 +1210,12 @@ struct SettingsView: View {
                 Toggle("Allow all tools (--allow-all-tools) — lets Copilot run commands unprompted", isOn: $settings.copilotAllowTools)
                     .font(.caption)
                     .toggleStyle(.checkbox)
+            case .codex:
+                labeledField("codex path (blank = auto)", text: $settings.codexPath, prompt: "/opt/homebrew/bin/codex")
+                labeledField("Model (blank = default, e.g. gpt-5-codex)", text: $settings.codexModel, prompt: "")
+                Text("Requires the OpenAI Codex CLI: npm install -g @openai/codex, then run `codex` once to sign in. \"Act on my behalf\" maps to --dangerously-bypass-approvals-and-sandbox.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             case .localModel:
                 labeledField("Base URL", text: $settings.localBaseURL, prompt: "http://hermes.local:8000/v1")
                 labeledField("Model", text: $settings.localModel, prompt: "hermes")
