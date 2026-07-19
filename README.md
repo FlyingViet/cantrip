@@ -114,10 +114,10 @@ mic, voice mode, history browser, settings gear.
 ## Configuration
 
 - **Settings**: gear icon in the panel; export/import as
-  `~/.agentspotlightrc` JSON via the menu bar icon (dotfiles-friendly).
-- **Memory vault**: `~/AgentSpotlight Memory` by default (configurable) —
+  `~/.cantriprc` JSON via the menu bar icon (dotfiles-friendly).
+- **Memory vault**: `~/Cantrip Memory` by default (configurable) —
   open it in Obsidian; edit `USER.md` to tell it about yourself.
-- **MCP servers**: `~/.config/agentspotlight/mcp.json`, standard
+- **MCP servers**: `~/.config/cantrip/mcp.json`, standard
   `{"mcpServers": {…}}` format; their tools go to the local-model backend.
 - **Logs**: `~/Library/Logs/Cantrip.log`.
 
