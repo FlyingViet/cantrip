@@ -122,16 +122,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             Consolidator.runIfDue()
         }
 
-        // ⌘V with an image on the clipboard → attach it to the next query.
-        // Text pastes fall through to the text field untouched.
+        // Local key monitor: ⌘V image-paste, and ⌘←/⌘→ cursor jumps
+        // (borderless panels don't always deliver ⌘-arrows to the editor).
         pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self,
                   self.panel.isKeyWindow,
-                  event.modifierFlags.contains(.command),
-                  event.charactersIgnoringModifiers?.lowercased() == "v",
-                  let path = ImagePasteboard.capture() else { return event }
-            self.manager.active.attachments.append(path)
-            return nil // consumed
+                  event.modifierFlags.contains(.command) else { return event }
+
+            // ⌘← / ⌘→ (⇧ extends selection): jump to start/end of text.
+            if event.keyCode == 123 || event.keyCode == 124,
+               let editor = self.panel.firstResponder as? NSTextView {
+                let shift = event.modifierFlags.contains(.shift)
+                switch (event.keyCode, shift) {
+                case (123, false): editor.moveToBeginningOfDocument(nil)
+                case (123, true): editor.moveToBeginningOfDocumentAndModifySelection(nil)
+                case (124, false): editor.moveToEndOfDocument(nil)
+                default: editor.moveToEndOfDocumentAndModifySelection(nil)
+                }
+                return nil // consumed
+            }
+
+            // ⌘V with an image on the clipboard → attach it.
+            if event.charactersIgnoringModifiers?.lowercased() == "v",
+               let path = ImagePasteboard.capture() {
+                self.manager.active.attachments.append(path)
+                return nil // consumed
+            }
+            return event
         }
     }
 
