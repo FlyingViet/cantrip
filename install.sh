@@ -31,6 +31,11 @@ if command -v copilot > /dev/null 2>&1; then
 else
     echo "  ✗ Copilot CLI not found → npm install -g @github/copilot (optional)"
 fi
+if command -v codex > /dev/null 2>&1; then
+    echo "  ✓ OpenAI Codex CLI found"
+else
+    echo "  ✗ Codex CLI not found → npm install -g @openai/codex (optional)"
+fi
 echo "  · Local models: any OpenAI-compatible server works (configure in-app)"
 
 # 3. Build: creates the signing cert (one password dialog possible),

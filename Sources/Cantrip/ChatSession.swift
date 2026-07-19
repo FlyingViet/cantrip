@@ -45,6 +45,7 @@ final class ChatSession: ObservableObject {
     private var watchdog: Timer?
     private let claudeCode: ClaudeCodeBackend
     private let copilot = CopilotBackend()
+    private let codex: CodexBackend
     private let localModel = OpenAICompatibleBackend()
 
     var currentActivity: ToolActivity? {
@@ -60,6 +61,7 @@ final class ChatSession: ObservableObject {
         switch settings.backend {
         case .claudeCode: return claudeCode
         case .copilot: return copilot
+        case .codex: return codex
         case .localModel: return localModel
         }
     }
@@ -69,6 +71,7 @@ final class ChatSession: ObservableObject {
         self.workdir = UserDefaults.standard.string(forKey: "workdir-\(id.uuidString)")
             ?? AppSettings.shared.claudeWorkdir
         self.claudeCode = ClaudeCodeBackend(persistKey: "claudeSessionID-\(id.uuidString)")
+        self.codex = CodexBackend(persistKey: "codexSessionID-\(id.uuidString)")
         loadTranscript()
     }
 
@@ -81,6 +84,7 @@ final class ChatSession: ObservableObject {
     func deleteTranscript() {
         try? FileManager.default.removeItem(at: transcriptURL)
         UserDefaults.standard.removeObject(forKey: "claudeSessionID-\(id.uuidString)")
+        UserDefaults.standard.removeObject(forKey: "codexSessionID-\(id.uuidString)")
         UserDefaults.standard.removeObject(forKey: "workdir-\(id.uuidString)")
     }
 
@@ -434,6 +438,7 @@ final class ChatSession: ObservableObject {
         }
         claudeCode.reset()
         copilot.reset()
+        codex.reset()
         localModel.reset()
         messages.removeAll()
         isStreaming = false

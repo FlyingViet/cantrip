@@ -4,6 +4,7 @@ import ServiceManagement
 enum BackendKind: String, CaseIterable, Identifiable {
     case claudeCode = "Claude Code"
     case copilot = "Copilot"
+    case codex = "Codex"
     case localModel = "Local Model"
     var id: String { rawValue }
 }
@@ -55,6 +56,14 @@ final class AppSettings: ObservableObject {
     /// Cached model list discovered from `copilot help`.
     @Published var copilotAvailableModels: [String] {
         didSet { d.set(copilotAvailableModels, forKey: "copilotAvailableModels") }
+    }
+    /// Path to the `codex` binary. Empty = login-shell lookup.
+    @Published var codexPath: String {
+        didSet { d.set(codexPath, forKey: "codexPath") }
+    }
+    /// Optional model override passed as -m (e.g. gpt-5-codex).
+    @Published var codexModel: String {
+        didSet { d.set(codexModel, forKey: "codexModel") }
     }
     /// OpenAI-compatible base URL, e.g. http://hermes.local:8000/v1
     @Published var localBaseURL: String {
@@ -187,6 +196,7 @@ final class AppSettings: ObservableObject {
             "claudeModel": claudeModel, "claudePermissionMode": claudePermissionMode,
             "copilotPath": copilotPath, "copilotModel": copilotModel,
             "copilotAllowTools": copilotAllowTools,
+            "codexPath": codexPath, "codexModel": codexModel,
             "localBaseURL": localBaseURL, "localModel": localModel,
             "localSystemPrompt": localSystemPrompt,
             "allowActions": allowActions, "shareLocation": shareLocation,
@@ -222,6 +232,8 @@ final class AppSettings: ObservableObject {
         str("copilotPath") { self.copilotPath = $0 }
         str("copilotModel") { self.copilotModel = $0 }
         bool("copilotAllowTools") { self.copilotAllowTools = $0 }
+        str("codexPath") { self.codexPath = $0 }
+        str("codexModel") { self.codexModel = $0 }
         str("localBaseURL") { self.localBaseURL = $0 }
         str("localModel") { self.localModel = $0 }
         str("localSystemPrompt") { self.localSystemPrompt = $0 }
@@ -264,6 +276,8 @@ final class AppSettings: ObservableObject {
         copilotModel = d.string(forKey: "copilotModel") ?? ""
         copilotAllowTools = d.bool(forKey: "copilotAllowTools")
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
+        codexPath = d.string(forKey: "codexPath") ?? ""
+        codexModel = d.string(forKey: "codexModel") ?? ""
         localBaseURL = d.string(forKey: "localBaseURL") ?? "http://localhost:8000/v1"
         localModel = d.string(forKey: "localModel") ?? "hermes"
         localAPIKey = d.string(forKey: "localAPIKey") ?? ""
