@@ -1,0 +1,237 @@
+#!/bin/zsh
+set -euo pipefail
+
+usage() {
+    print -u2 "Usage: messages-send [--detect] RECIPIENT [MESSAGE]"
+    exit 64
+}
+
+mode="send"
+if (( $# > 0 )) && [[ "$1" == "--detect" ]]; then
+    mode="detect"
+    shift
+    (( $# == 1 )) || usage
+    recipient="$1"
+    message=""
+else
+    (( $# == 2 )) || usage
+    recipient="$1"
+    message="$2"
+fi
+
+[[ -n "$recipient" ]] || usage
+[[ "$mode" == "detect" || -n "$message" ]] || usage
+
+exec /usr/bin/osascript -l JavaScript - "$mode" "$recipient" "$message" <<'JXA'
+ObjC.import('AppKit');
+
+function run(argv) {
+    const mode = argv[0];
+    const recipient = argv[1];
+    const message = argv[2];
+    const systemEvents = Application('System Events');
+    const messages = Application('Messages');
+    const previousBundleID = ObjC.unwrap(
+        $.NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier
+    );
+    let completed = false;
+
+    function stringValue(read) {
+        try {
+            const value = read();
+            return value == null ? '' : String(value);
+        } catch (_) {
+            return '';
+        }
+    }
+
+    function identifier(element) {
+        return stringValue(
+            () => element.attributes.byName('AXIdentifier').value()
+        );
+    }
+
+    function findByIdentifier(element, target, depth) {
+        if (depth > 18) return null;
+        if (identifier(element) === target) return element;
+
+        let children = [];
+        try {
+            children = element.uiElements();
+        } catch (_) {
+            return null;
+        }
+        for (const child of children) {
+            const match = findByIdentifier(child, target, depth + 1);
+            if (match) return match;
+        }
+        return null;
+    }
+
+    function frontWindow(process) {
+        const windows = process.windows();
+        if (windows.length === 0) throw new Error('Messages has no window');
+        return windows[0];
+    }
+
+    function waitForIdentifier(process, target, attempts) {
+        for (let attempt = 0; attempt < attempts; attempt++) {
+            try {
+                const match = findByIdentifier(
+                    frontWindow(process), target, 0
+                );
+                if (match) return match;
+            } catch (_) {}
+            delay(0.25);
+        }
+        throw new Error(`Messages did not expose ${target}`);
+    }
+
+    function snapshotClipboard() {
+        const pasteboard = $.NSPasteboard.generalPasteboard;
+        const snapshots = [];
+        const items = pasteboard.pasteboardItems;
+        for (let itemIndex = 0; itemIndex < items.count; itemIndex++) {
+            const source = items.objectAtIndex(itemIndex);
+            const pairs = [];
+            const types = source.types;
+            for (let typeIndex = 0; typeIndex < types.count; typeIndex++) {
+                const type = types.objectAtIndex(typeIndex);
+                const data = source.dataForType(type);
+                if (data) pairs.push([type, data.copy]);
+            }
+            snapshots.push(pairs);
+        }
+        return snapshots;
+    }
+
+    function restoreClipboard(snapshots) {
+        const pasteboard = $.NSPasteboard.generalPasteboard;
+        pasteboard.clearContents;
+        const restored = $.NSMutableArray.alloc.init;
+        for (const pairs of snapshots) {
+            const item = $.NSPasteboardItem.alloc.init;
+            for (const [type, data] of pairs) {
+                item.setDataForType(data, type);
+            }
+            restored.addObject(item);
+        }
+        if (restored.count > 0) pasteboard.writeObjects(restored);
+    }
+
+    function pasteText(text) {
+        const snapshots = snapshotClipboard();
+        const pasteboard = $.NSPasteboard.generalPasteboard;
+        try {
+            pasteboard.clearContents;
+            pasteboard.setStringForType($(text), $.NSPasteboardTypeString);
+            systemEvents.keystroke('v', {using: ['command down']});
+            delay(0.35);
+        } finally {
+            restoreClipboard(snapshots);
+        }
+    }
+
+    function transportForLabel(label) {
+        const normalized = label.trim().toLowerCase();
+        if (normalized === 'imessage') return 'iMessage';
+        if (normalized.includes('rcs')) return 'RCS';
+        if (normalized.includes('sms')) return 'SMS';
+        if (normalized.includes('text message')) return 'SMS';
+        return null;
+    }
+
+    function waitForTransport(process) {
+        let previousLabel = '';
+        let stableReads = 0;
+        for (let attempt = 0; attempt < 48; attempt++) {
+            const body = findByIdentifier(
+                frontWindow(process), 'messageBodyField', 0
+            );
+            if (body) {
+                const label = stringValue(
+                    () => body.attributes.byName('AXPlaceholderValue').value()
+                );
+                const transport = transportForLabel(label);
+                if (transport && label === previousLabel) {
+                    stableReads++;
+                } else {
+                    previousLabel = label;
+                    stableReads = transport ? 1 : 0;
+                }
+                if (transport && stableReads >= 3) {
+                    return {body, label, transport};
+                }
+            }
+            delay(0.25);
+        }
+        throw new Error(
+            'Messages did not resolve the recipient to iMessage, RCS, or SMS'
+        );
+    }
+
+    function focus(element, process, expectedIdentifier) {
+        element.actions.byName('AXPress').perform();
+        delay(0.15);
+        const focused = process.attributes
+            .byName('AXFocusedUIElement').value();
+        if (identifier(focused) !== expectedIdentifier) {
+            throw new Error(`Could not focus ${expectedIdentifier}`);
+        }
+    }
+
+    try {
+        messages.activate();
+        delay(0.5);
+        const process = systemEvents.processes.byName('Messages');
+        process.frontmost = true;
+        systemEvents.keystroke('n', {using: ['command down']});
+
+        const recipientField = waitForIdentifier(process, 'To:', 24);
+        focus(recipientField, process, 'To:');
+        pasteText(recipient);
+        systemEvents.keyCode(36);
+
+        const resolved = waitForTransport(process);
+        if (mode === 'detect') {
+            completed = true;
+            return `Detected ${resolved.transport} (${resolved.label})`;
+        }
+
+        let body = waitForIdentifier(process, 'messageBodyField', 8);
+        focus(body, process, 'messageBodyField');
+        pasteText(message);
+
+        body = waitForIdentifier(process, 'messageBodyField', 8);
+        if (stringValue(() => body.value()) !== message) {
+            throw new Error('Messages did not accept the complete message');
+        }
+        const finalLabel = stringValue(
+            () => body.attributes.byName('AXPlaceholderValue').value()
+        );
+        if (transportForLabel(finalLabel) !== resolved.transport) {
+            throw new Error('Recipient transport changed before send');
+        }
+
+        focus(body, process, 'messageBodyField');
+        systemEvents.keyCode(36);
+        for (let attempt = 0; attempt < 20; attempt++) {
+            delay(0.25);
+            body = findByIdentifier(
+                frontWindow(process), 'messageBodyField', 0
+            );
+            if (body && stringValue(() => body.value()) === '') {
+                completed = true;
+                return `Sent via ${resolved.transport}`;
+            }
+        }
+        throw new Error('Messages left the text in the draft; nothing was retried');
+    } finally {
+        if (completed && previousBundleID && previousBundleID !== 'com.apple.MobileSMS') {
+            try {
+                Application(previousBundleID).activate();
+            } catch (_) {}
+        }
+    }
+}
+JXA
