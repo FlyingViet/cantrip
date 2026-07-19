@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Cantrip</string>
+    <key>CFBundleDisplayName</key>
+    <string>Cantrip</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.brian.agentspotlight</string>
+    <key>CFBundleExecutable</key>
+    <string>Cantrip</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Cantrip uses the microphone for voice queries.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Cantrip transcribes your voice into text queries.</string>
+    <key>NSLocationUsageDescription</key>
+    <string>Cantrip can share your approximate location with the assistant so queries like "what's the weather" work.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Cantrip can share your approximate location with the assistant so queries like "what's the weather" work.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+</dict>
+</plist>
