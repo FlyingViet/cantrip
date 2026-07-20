@@ -15,7 +15,8 @@ and can even upgrade its own code.
 
 Press **⌥Space** and type. Instant, local, no AI round-trip:
 
-- **App launching** — type `saf`, get Safari with its icon, Enter opens it
+- **App launching** — type `saf`, get Safari with its icon; running apps rank
+  first and Enter switches to them instead of launching another instance
 - **File search** — filename fragments search the Spotlight index; click to open
 - **Math & conversions** — `142*8.5`, `10 km to miles`, `72 f to c`
 - **Raw shell** — `!git status` streams command output right into the panel
