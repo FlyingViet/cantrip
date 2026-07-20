@@ -570,21 +570,21 @@ struct LauncherView: View {
     // MARK: - App typeahead
 
     /// Top app hit for the current query (Spotlight-style).
-    private var appSuggestion: (name: String, url: URL)? {
+    private var appSuggestion: AppMatch? {
         guard !showHistory, !session.isStreaming else { return nil }
         return AppCatalog.shared.match(prefix: query)
     }
 
-    private func appSuggestionRow(_ suggestion: (name: String, url: URL)) -> some View {
+    private func appSuggestionRow(_ suggestion: AppMatch) -> some View {
         Button(action: { launchApp(suggestion) }) {
             HStack(spacing: 10) {
                 Image(nsImage: AppCatalog.shared.icon(for: suggestion.url))
                     .resizable()
                     .frame(width: 24, height: 24)
-                Text("Open \(suggestion.name)")
+                Text("\(suggestion.isRunning ? "Switch to" : "Open") \(suggestion.name)")
                     .font(.system(size: 14))
                 Spacer()
-                keycap("↩", "open")
+                keycap("↩", suggestion.isRunning ? "switch" : "open")
                 keycap("⌘↩", "ask AI instead")
             }
             .padding(.horizontal, 16)
@@ -594,8 +594,8 @@ struct LauncherView: View {
         .buttonStyle(.plain)
     }
 
-    private func launchApp(_ suggestion: (name: String, url: URL)) {
-        AppCatalog.shared.launch(suggestion.url)
+    private func launchApp(_ suggestion: AppMatch) {
+        AppCatalog.shared.launch(suggestion)
         query = ""
         fileSearch.clear()
         onDismiss()

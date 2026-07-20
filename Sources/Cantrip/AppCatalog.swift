@@ -1,6 +1,12 @@
 import AppKit
 import Foundation
 
+struct AppMatch {
+    let name: String
+    let url: URL
+    let isRunning: Bool
+}
+
 /// Installed-application index for Spotlight-style typeahead.
 final class AppCatalog {
     static let shared = AppCatalog()
@@ -31,12 +37,23 @@ final class AppCatalog {
 
     /// Top hit: the whole query must be a prefix of the app name, so
     /// "saf" matches Safari but "safari tips" matches nothing.
-    func match(prefix raw: String) -> (name: String, url: URL)? {
+    func match(prefix raw: String) -> AppMatch? {
         let q = raw.trimmingCharacters(in: .whitespaces).lowercased()
         guard q.count >= 2, !q.isEmpty else { return nil }
+        let running = runningApps()
         scan() // cheap refresh at most every 5 min
-        if let exact = apps.first(where: { $0.name.lowercased() == q }) { return exact }
-        return apps.first(where: { $0.name.lowercased().hasPrefix(q) })
+
+        var seen = Set<String>()
+        let candidates = (running + apps.map {
+            AppMatch(name: $0.name, url: $0.url, isRunning: false)
+        }).filter {
+            seen.insert($0.name.lowercased()).inserted
+        }
+
+        if let exact = candidates.first(where: { $0.name.lowercased() == q }) {
+            return exact
+        }
+        return candidates.first(where: { $0.name.lowercased().hasPrefix(q) })
     }
 
     func icon(for url: URL) -> NSImage {
@@ -45,8 +62,37 @@ final class AppCatalog {
         return icon
     }
 
-    func launch(_ url: URL) {
-        NSWorkspace.shared.openApplication(at: url,
+    func launch(_ app: AppMatch) {
+        if app.isRunning,
+           let running = runningApplication(at: app.url),
+           running.activate(options: [.activateAllWindows]) {
+            return
+        }
+        NSWorkspace.shared.openApplication(at: app.url,
                                            configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    private func runningApps() -> [AppMatch] {
+        NSWorkspace.shared.runningApplications
+            .filter {
+                $0.activationPolicy == .regular &&
+                    !$0.isTerminated &&
+                    $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+            }
+            .compactMap { app in
+                guard let name = app.localizedName,
+                      let url = app.bundleURL else { return nil }
+                return AppMatch(name: name, url: url, isRunning: true)
+            }
+            .sorted {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+    }
+
+    private func runningApplication(at url: URL) -> NSRunningApplication? {
+        let targetPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        return NSWorkspace.shared.runningApplications.first {
+            $0.bundleURL?.resolvingSymlinksInPath().standardizedFileURL.path == targetPath
+        }
     }
 }
