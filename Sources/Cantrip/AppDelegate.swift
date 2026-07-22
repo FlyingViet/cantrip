@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "New Conversation", action: #selector(newConversation), keyEquivalent: "n")
         appMenu.addItem(withTitle: "New Session", action: #selector(newSessionAction), keyEquivalent: "t")
+        appMenu.addItem(withTitle: "Reset Panel Size", action: #selector(resetPanelSize), keyEquivalent: "")
         appMenu.addItem(withTitle: "Close Tab", action: #selector(closeCurrentSession), keyEquivalent: "w")
         appMenu.addItem(withTitle: "Previous Tab",
                         action: #selector(selectPreviousSession),
@@ -172,6 +173,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc func importSettings() {
         AppSettings.shared.importDotfile()
+    }
+
+    @objc func resetPanelSize() {
+        PanelMetrics.shared.clearUserSize()
+        panel.center(onActiveScreen: true)
     }
 
     @objc func newSessionAction() {
