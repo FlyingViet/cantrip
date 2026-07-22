@@ -7,13 +7,28 @@ import SwiftUI
 /// SwiftUI content grows/shrinks — see `resizeContent(to:)`.
 final class LauncherPanel: NSPanel {
     static let panelWidth: CGFloat = 680
+    static let userResizedNotification = Notification.Name("CantripPanelUserResized")
     static let maxPanelHeight: CGFloat = 880
 
     init() {
         super.init(contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 90),
-                   styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
+                   styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel,
+                               .resizable],
                    backing: .buffered,
                    defer: false)
+        minSize = NSSize(width: 600, height: 120)
+
+        // After a user drag-resize, tell the layout to adopt the new size.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didEndLiveResizeNotification,
+            object: self,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            NotificationCenter.default.post(name: Self.userResizedNotification,
+                                            object: nil,
+                                            userInfo: ["size": self.frame.size])
+        }
 
         isFloatingPanel = true
         level = .floating
@@ -71,6 +86,8 @@ final class LauncherPanel: NSPanel {
     /// Resize to fit content, keeping the top edge and horizontal center
     /// fixed and never extending past the edges of the screen.
     func resizeContent(to size: CGSize) {
+        // Never fight the user's drag mid-resize.
+        guard !inLiveResize else { return }
         let screenFrame = targetScreen?.visibleFrame
         let maxHeight = min(Self.maxPanelHeight,
                             (screenFrame?.height ?? Self.maxPanelHeight) * 0.9)

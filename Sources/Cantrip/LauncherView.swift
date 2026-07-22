@@ -97,6 +97,15 @@ struct LauncherView: View {
             }
             return true
         }
+        // User drag-resized the panel: adopt and remember the size.
+        .onReceive(NotificationCenter.default.publisher(
+            for: LauncherPanel.userResizedNotification)) { note in
+            guard let size = note.userInfo?["size"] as? CGSize else { return }
+            let sidebarExtra: CGFloat = (showSettings ? 331 : 0) + (showSteps ? 281 : 0)
+            metrics.setUserSize(totalWidth: size.width,
+                                totalHeight: size.height,
+                                sidebarExtra: sidebarExtra)
+        }
         // Voice mode loop: reply spoken → resume listening → dictation
         // ends → auto-submit.
         .onReceive(NotificationCenter.default.publisher(for: SpeechSynth.didFinish)) { _ in
