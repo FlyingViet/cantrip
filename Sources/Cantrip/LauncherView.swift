@@ -1668,6 +1668,15 @@ struct SettingsView: View {
                     }
                     .labelsHidden()
                 }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Context window").font(.caption).foregroundStyle(.secondary)
+                    Picker("", selection: $settings.copilotContextTier) {
+                        Text("Default (\(settings.copilotFileContextTier ?? "standard"))").tag("")
+                        Text("Standard").tag("default")
+                        Text("Long · up to 1M").tag("long_context")
+                    }
+                    .labelsHidden()
+                }
                 labeledField("Working directory", text: $settings.claudeWorkdir, prompt: NSHomeDirectory())
                 Toggle("Allow all tools (--allow-all-tools) — lets Copilot run commands unprompted", isOn: $settings.copilotAllowTools)
                     .font(.caption)
@@ -1752,6 +1761,8 @@ struct SettingsView: View {
     private func contextHint(for model: String) -> String? {
         let m = model.lowercased()
         if m == "auto" { return nil }
+        if m == "gpt-5.6-sol",
+           settings.effectiveCopilotContextTier == "long_context" { return "~1M" }
         if m.contains("haiku") { return "~200k" }
         if m.contains("claude") || m.contains("gemini") { return "~1M" }
         if m.contains("gpt") { return "~400k" }
