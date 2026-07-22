@@ -28,6 +28,9 @@ struct LauncherView: View {
     @State private var archivedSessions: [SessionManager.ArchivedSession] = []
     /// Instant caption for whichever toolbar icon is hovered.
     @State private var toolbarHint: String?
+    @StateObject private var shell = PersistentShell.shared
+    @State private var showTerminal = false
+    @State private var terminalCommand = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -45,16 +48,8 @@ struct LauncherView: View {
         .padding(.bottom, 6)
         .fixedSize(horizontal: false, vertical: true)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-        // Private mode wears purple so there's never doubt about which
-        // mode you're typing in.
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.purple.opacity(session.isPrivate ? 0.08 : 0))
-                .allowsHitTesting(false)
-        )
-        .overlay(RoundedRectangle(cornerRadius: 16)
-            .strokeBorder(session.isPrivate ? Color.purple.opacity(0.55)
-                                            : Color.white.opacity(0.15)))
+        .overlay(privateTintOverlay)
+        .overlay(panelBorder)
         .background(GeometryReader { geo in
             Color.clear
                 .preference(key: ContentSizeKey.self, value: geo.size)
@@ -107,6 +102,20 @@ struct LauncherView: View {
         }
     }
 
+    /// Private mode wears purple so there's never doubt which mode
+    /// you're typing in.
+    private var privateTintOverlay: some View {
+        RoundedRectangle(cornerRadius: 16)
+            .fill(Color.purple.opacity(session.isPrivate ? 0.08 : 0))
+            .allowsHitTesting(false)
+    }
+
+    private var panelBorder: some View {
+        RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(session.isPrivate ? Color.purple.opacity(0.55)
+                                            : Color.white.opacity(0.15))
+    }
+
     private var mainColumn: some View {
         VStack(spacing: 0) {
             if manager.sessions.count > 1 {
@@ -146,7 +155,10 @@ struct LauncherView: View {
             if !session.queued.isEmpty || session.isStreaming {
                 queueView
             }
-            if showUsage {
+            if showTerminal {
+                Divider().opacity(0.3)
+                terminalView
+            } else if showUsage {
                 Divider().opacity(0.3)
                 usageView
             } else if showHistory {
@@ -270,6 +282,15 @@ struct LauncherView: View {
                   ? "Private mode ON — this session isn't saved to transcripts, history, or memory"
                   : "Private mode — don't save this session anywhere")
             .hoverHint("Private mode — session saved nowhere", $toolbarHint)
+
+            Button(action: toggleTerminal) {
+                Image(systemName: "greaterthan.square")
+                    .font(.system(size: 15))
+                    .foregroundStyle(showTerminal ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Terminal — persistent shell inside the panel")
+            .hoverHint("Terminal — shell with persistent state (cd, env)", $toolbarHint)
 
             Button(action: toggleHistory) {
                 Image(systemName: "clock.arrow.circlepath")
@@ -815,7 +836,7 @@ struct LauncherView: View {
     private func toggleHistory() {
         withAnimation(.easeOut(duration: 0.15)) {
             showHistory.toggle()
-            if showHistory { showUsage = false }
+            if showHistory { showUsage = false; showTerminal = false }
         }
         if showHistory {
             historyEntries = HistoryStore.load()
@@ -826,9 +847,66 @@ struct LauncherView: View {
     private func toggleUsage() {
         withAnimation(.easeOut(duration: 0.15)) {
             showUsage.toggle()
-            if showUsage { showHistory = false }
+            if showUsage { showHistory = false; showTerminal = false }
         }
         if showUsage { usage.refreshQuotas() }
+    }
+
+    private func toggleTerminal() {
+        withAnimation(.easeOut(duration: 0.15)) {
+            showTerminal.toggle()
+            if showTerminal { showHistory = false; showUsage = false }
+        }
+    }
+
+    // MARK: - Terminal mode
+
+    private var terminalView: some View {
+        VStack(spacing: 6) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(shell.output.isEmpty
+                         ? "Persistent shell — cd, exports, and variables carry between commands.\nFull-screen programs (vim, top) need a real terminal."
+                         : shell.output)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(shell.output.isEmpty ? .secondary : .primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Color.clear.frame(height: 1).id("term-end")
+                }
+                .frame(maxHeight: metrics.transcriptMaxHeight)
+                .onChange(of: shell.output) {
+                    proxy.scrollTo("term-end", anchor: .bottom)
+                }
+            }
+            HStack(spacing: 6) {
+                Text("$")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.accentColor)
+                TextField("command", text: $terminalCommand)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, design: .monospaced))
+                    .onSubmit {
+                        let command = terminalCommand.trimmingCharacters(in: .whitespaces)
+                        guard !command.isEmpty else { return }
+                        shell.run(command, workdir: session.workdir)
+                        terminalCommand = ""
+                    }
+                if shell.isRunning {
+                    ProgressView().controlSize(.mini)
+                }
+                Button("Clear") { shell.clear() }
+                    .font(.caption)
+                Button(action: { shell.restart() }) {
+                    Image(systemName: "arrow.counterclockwise.circle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Restart the shell (kills any running command)")
+            }
+        }
+        .padding(12)
     }
 
     // MARK: - Usage dashboard
@@ -1120,6 +1198,20 @@ private struct HistoryRow: View {
                 Text(entry.backend)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+            }
+        }
+    }
+}
+
+/// Instant hover caption: shows `text` in the toolbar's hint slot while
+/// the mouse is over the view (complements the delayed .help tooltips).
+private extension View {
+    func hoverHint(_ text: String, _ hint: Binding<String?>) -> some View {
+        onHover { hovering in
+            if hovering {
+                hint.wrappedValue = text
+            } else if hint.wrappedValue == text {
+                hint.wrappedValue = nil
             }
         }
     }
