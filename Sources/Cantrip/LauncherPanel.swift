@@ -7,7 +7,7 @@ import SwiftUI
 /// SwiftUI content grows/shrinks — see `resizeContent(to:)`.
 final class LauncherPanel: NSPanel {
     static let panelWidth: CGFloat = 680
-    static let maxPanelHeight: CGFloat = 760
+    static let maxPanelHeight: CGFloat = 880
 
     init() {
         super.init(contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 90),
@@ -102,6 +102,7 @@ final class LauncherPanel: NSPanel {
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
             ?? NSScreen.main ?? NSScreen.screens.first
         guard let screen else { return }
+        PanelMetrics.shared.update(for: screen)
         let sf = screen.visibleFrame
         let x = sf.midX - frame.width / 2
         let top = sf.minY + sf.height * 0.72

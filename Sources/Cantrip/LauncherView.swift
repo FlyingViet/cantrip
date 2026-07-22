@@ -20,6 +20,7 @@ struct LauncherView: View {
     @StateObject private var fileSearch = FileSearch.shared
     @ObservedObject private var usage = UsageTracker.shared
     @ObservedObject private var updater = UpdateChecker.shared
+    @ObservedObject private var metrics = PanelMetrics.shared
     @State private var showUsage = false
     @State private var showHistory = false
     @State private var historySearch = ""
@@ -28,7 +29,7 @@ struct LauncherView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             mainColumn
-                .frame(width: 680)
+                .frame(width: metrics.contentWidth)
             if showSteps {
                 Divider().opacity(0.3)
                 stepsSidebar
@@ -871,7 +872,7 @@ struct LauncherView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 320)
+                .frame(maxHeight: metrics.transcriptMaxHeight)
             }
         }
         .padding(12)
@@ -925,7 +926,7 @@ struct LauncherView: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: 340)
+            .frame(maxHeight: metrics.transcriptMaxHeight)
             // Fresh scroll-view identity per session: prevents stale layout
             // state from the previous tab leaving a blank transcript.
             .id(session.id)
