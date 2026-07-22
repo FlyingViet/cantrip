@@ -53,6 +53,14 @@ protocol Backend {
     func cancel()
     /// Start a fresh conversation.
     func reset()
+    /// Add a user message into the CURRENTLY RUNNING turn's context
+    /// without interrupting. Returns false if unsupported/no live turn
+    /// (caller should queue instead).
+    func injectMidTurn(_ text: String) -> Bool
+}
+
+extension Backend {
+    func injectMidTurn(_ text: String) -> Bool { false }
 }
 
 enum ToolActivityFactory {

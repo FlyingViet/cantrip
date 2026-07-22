@@ -118,6 +118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self?.notifyIfHidden(for: finished)
         }
 
+        // Unix-socket server for the `cantrip` CLI.
+        CLIServer.shared.start()
+
         // Daily memory consolidation, off the launch path.
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
             Consolidator.runIfDue()
@@ -244,7 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         ScreenCapture.shared.captureNow()  // before the panel covers the screen
         LocationProvider.shared.refresh()  // no-op unless enabled in settings
         CalendarProvider.shared.refresh()  // cached 15 min; no-op if disabled
-        UpdateChecker.shared.checkIfDue()  // throttled to every 6 hours
+        UpdateChecker.shared.checkIfDue()
         NSApp.activate(ignoringOtherApps: true)
         panel.center(onActiveScreen: true)
         panel.orderFrontRegardless()

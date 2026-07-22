@@ -120,12 +120,23 @@ final class ChatSession: ObservableObject {
         Log.write("transcript: restored \(messages.count) messages (\(id.uuidString.prefix(8)))")
     }
 
-    /// UI entry point. While streaming: queues by default, or interrupts
-    /// the in-flight run and redirects when `interrupt` is true.
-    func submit(_ text: String, interrupt: Bool = false) {
+    /// UI entry point. While streaming: queues by default; `interrupt`
+    /// kills and redirects; `inject` adds to the running turn's context
+    /// (Claude backend) without interrupting.
+    func submit(_ text: String, interrupt: Bool = false, inject: Bool = false) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         guard isStreaming else { send(prompt); return }
+        if inject, !interrupt {
+            if activeBackend.injectMidTurn(prompt) {
+                messages.append(ChatMessage(role: .user, text: prompt))
+                messages.append(ChatMessage(role: .assistant, text: ""))
+                persistTranscript()
+            } else {
+                queued.append(prompt) // backend can't inject — queue it
+            }
+            return
+        }
         if interrupt {
             Log.write("interrupt: redirecting in-flight request")
             streamGeneration += 1          // orphan the old stream's events
@@ -147,6 +158,19 @@ final class ChatSession: ObservableObject {
         if prompt.hasPrefix("!"), prompt.count > 1 {
             runShellCommand(String(prompt.dropFirst()).trimmingCharacters(in: .whitespaces))
             return
+        }
+
+        // "/" prefix: user-defined script command (skill), no LLM.
+        if prompt.hasPrefix("/"), prompt.count > 1 {
+            let parts = String(prompt.dropFirst())
+                .split(separator: " ", maxSplits: 1)
+            if let first = parts.first,
+               let command = CommandRegistry.shared.command(named: String(first)) {
+                runScriptCommand(command,
+                                 args: parts.count > 1 ? String(parts[1]) : "")
+                return
+            }
+            // Unknown /command falls through to the LLM.
         }
 
         // Instant answers: math, unit conversion, app launch — no LLM.
@@ -352,6 +376,71 @@ final class ChatSession: ObservableObject {
             messages.append(ChatMessage(role: .error,
                                         text: "Failed to run: \(error.localizedDescription)"))
             shellProcess = nil
+            finishStream(dequeue: false)
+        }
+    }
+
+    /// `/name args` — run a skill script, streaming stdout into the
+    /// transcript as markdown (skills are expected to emit markdown).
+    private func runScriptCommand(_ command: ScriptCommand, args: String) {
+        guard !isStreaming else { return }
+        Log.write("skill: /\(command.name) \(args.prefix(60))")
+        if title == "New chat" { title = "/" + command.name }
+        messages.append(ChatMessage(role: .user, text: "/\(command.name)\(args.isEmpty ? "" : " \(args)")"))
+        messages.append(ChatMessage(role: .assistant, text: ""))
+        isStreaming = true
+        statusText = "Running /\(command.name)…"
+        armWatchdog()
+        streamGeneration += 1
+        let generation = streamGeneration
+
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: command.path)
+        p.arguments = args.isEmpty ? [] : args.components(separatedBy: " ")
+        p.currentDirectoryURL = URL(fileURLWithPath: workdir)
+        p.standardInput = FileHandle.nullDevice
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+        env["CANTRIP_WORKDIR"] = workdir
+        p.environment = env
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
+            DispatchQueue.main.async {
+                guard let self, self.streamGeneration == generation else { return }
+                self.armWatchdog()
+                if let idx = self.messages.lastIndex(where: { $0.role == .assistant }),
+                   self.messages[idx].text.count < 30_000 {
+                    self.messages[idx].text += chunk
+                }
+            }
+        }
+        p.terminationHandler = { [weak self] proc in
+            pipe.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async {
+                guard let self, self.streamGeneration == generation else { return }
+                if let idx = self.messages.lastIndex(where: { $0.role == .assistant }) {
+                    if self.messages[idx].text.isEmpty {
+                        self.messages[idx].text = "*(no output)*"
+                    }
+                    if proc.terminationStatus != 0 {
+                        self.messages[idx].text += "\n\n`exit \(proc.terminationStatus)`"
+                    }
+                }
+                self.shellProcess = nil
+                self.finishStream()
+            }
+        }
+        do {
+            try p.run()
+            shellProcess = p
+        } catch {
+            messages.append(ChatMessage(role: .error,
+                                        text: "Failed to run /\(command.name): \(error.localizedDescription)"))
             finishStream(dequeue: false)
         }
     }

@@ -26,6 +26,8 @@ struct LauncherView: View {
     @State private var historySearch = ""
     @State private var historyEntries: [HistoryEntry] = []
     @State private var archivedSessions: [SessionManager.ArchivedSession] = []
+    /// Instant caption for whichever toolbar icon is hovered.
+    @State private var toolbarHint: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -43,7 +45,16 @@ struct LauncherView: View {
         .padding(.bottom, 6)
         .fixedSize(horizontal: false, vertical: true)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.15)))
+        // Private mode wears purple so there's never doubt about which
+        // mode you're typing in.
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.purple.opacity(session.isPrivate ? 0.08 : 0))
+                .allowsHitTesting(false)
+        )
+        .overlay(RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(session.isPrivate ? Color.purple.opacity(0.55)
+                                            : Color.white.opacity(0.15)))
         .background(GeometryReader { geo in
             Color.clear
                 .preference(key: ContentSizeKey.self, value: geo.size)
@@ -106,15 +117,22 @@ struct LauncherView: View {
                 .background(
                     // ⌘↩ never reaches TextField.onSubmit (the modifier
                     // suppresses it), so register it as a real shortcut.
-                    Button(action: { submit(interrupt: true) }) { EmptyView() }
-                        .keyboardShortcut(.return, modifiers: .command)
-                        .buttonStyle(.plain)
-                        .frame(width: 0, height: 0)
-                        .opacity(0)
+                    Group {
+                        Button(action: { submit(interrupt: true) }) { EmptyView() }
+                            .keyboardShortcut(.return, modifiers: .command)
+                        Button(action: { submit(inject: true) }) { EmptyView() }
+                            .keyboardShortcut(.return, modifiers: .option)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
                 )
                 .background(sessionShortcuts)
             if let suggestion = appSuggestion {
                 appSuggestionRow(suggestion)
+            }
+            if query.hasPrefix("/") {
+                commandSuggestionRows
             }
             if !fileSearch.results.isEmpty && !showHistory {
                 fileResultsRows
@@ -207,9 +225,19 @@ struct LauncherView: View {
             }
             .buttonStyle(.plain)
             .help("Session working directory: \(session.workdir) — click to change")
+            .hoverHint("Working directory — where commands & agents run", $toolbarHint)
 
             if isGitRepo {
                 gitMenu
+                    .hoverHint("Git quick actions for this repo", $toolbarHint)
+            }
+
+            if let hint = toolbarHint {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .transition(.opacity)
             }
 
             if updater.commitsBehind > 0 {
@@ -241,6 +269,7 @@ struct LauncherView: View {
             .help(session.isPrivate
                   ? "Private mode ON — this session isn't saved to transcripts, history, or memory"
                   : "Private mode — don't save this session anywhere")
+            .hoverHint("Private mode — session saved nowhere", $toolbarHint)
 
             Button(action: toggleHistory) {
                 Image(systemName: "clock.arrow.circlepath")
@@ -249,6 +278,7 @@ struct LauncherView: View {
             }
             .buttonStyle(.plain)
             .help("Browse past conversations")
+            .hoverHint("History — past sessions & conversations", $toolbarHint)
 
             Button(action: toggleUsage) {
                 Image(systemName: "chart.bar.xaxis")
@@ -257,6 +287,7 @@ struct LauncherView: View {
             }
             .buttonStyle(.plain)
             .help("Usage & spending")
+            .hoverHint("Usage — quotas & spending per backend", $toolbarHint)
 
             Button(action: { withAnimation(.easeOut(duration: 0.15)) { showSteps.toggle() } }) {
                 Image(systemName: "sidebar.trailing")
@@ -265,6 +296,7 @@ struct LauncherView: View {
             }
             .buttonStyle(.plain)
             .help(showSteps ? "Hide progress sidebar" : "Show progress sidebar (tool steps)")
+            .hoverHint("Progress — live tool steps & diffs", $toolbarHint)
 
             Button(action: { pinned.toggle() }) {
                 Image(systemName: pinned ? "pin.fill" : "pin")
@@ -274,6 +306,7 @@ struct LauncherView: View {
             .buttonStyle(.plain)
             .help(pinned ? "Unpin — panel hides when you click away"
                          : "Pin — panel stays visible while you work in other apps")
+            .hoverHint("Pin — keep panel visible over other apps", $toolbarHint)
 
             Button(action: toggleScreenSharing) {
                 Image(systemName: settings.attachScreen ? "macwindow.badge.plus" : "macwindow")
@@ -284,6 +317,7 @@ struct LauncherView: View {
             .help(settings.attachScreen
                   ? "Screen context on — queries include a screenshot taken when the panel opened"
                   : "Attach a screenshot of your screen to queries")
+            .hoverHint("Screen context — let queries see your displays", $toolbarHint)
 
             Picker("", selection: $settings.backend) {
                 ForEach(BackendKind.allCases) { kind in
@@ -492,6 +526,9 @@ struct LauncherView: View {
                         .lineLimit(1)
                     Spacer()
                     keycap("↩", "queue")
+                    if settings.backend == .claudeCode {
+                        keycap("⌥↩", "add context")
+                    }
                     keycap("⌘↩", "interrupt")
                 }
             }
@@ -648,6 +685,45 @@ struct LauncherView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Git quick actions (\((session.workdir as NSString).lastPathComponent))")
+    }
+
+    // MARK: - Command (skill) typeahead
+
+    private var commandSuggestionRows: some View {
+        let matches = CommandRegistry.shared.matches(for: query)
+        return VStack(alignment: .leading, spacing: 0) {
+            if matches.isEmpty {
+                Text("No matching skills — add executables to ~/.config/cantrip/commands")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+            }
+            ForEach(matches.prefix(6)) { command in
+                Button(action: { query = "/\(command.name) " }) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "puzzlepiece.extension")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.accentColor)
+                        Text("/\(command.name)")
+                            .font(.system(size: 13, design: .monospaced))
+                        if !command.description.isEmpty {
+                            Text(command.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        keycap("↩", "run")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 5)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.bottom, 4)
     }
 
     // MARK: - App typeahead
@@ -953,17 +1029,17 @@ struct LauncherView: View {
         }
     }
 
-    private func submit(interrupt: Bool = false) {
+    private func submit(interrupt: Bool = false, inject: Bool = false) {
         // Enter with an app suggestion showing launches the app;
         // ⌘↩ bypasses the suggestion and asks the AI.
-        if !interrupt, let suggestion = appSuggestion {
+        if !interrupt, !inject, let suggestion = appSuggestion {
             launchApp(suggestion)
             return
         }
         if speech.isRecording { speech.stop() }
         let text = query
         query = ""
-        session.submit(text, interrupt: interrupt)
+        session.submit(text, interrupt: interrupt, inject: inject)
     }
 
     // MARK: - Conversation

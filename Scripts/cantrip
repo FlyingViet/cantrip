@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""cantrip — command-line client for the Cantrip app.
+
+Usage:
+  cantrip "why is the sky blue"
+  cat build.log | cantrip "why did this fail?"
+  cantrip --backend claude "review this diff" < changes.diff
+
+The Cantrip app must be running (it hosts the socket).
+"""
+import json
+import os
+import socket
+import sys
+
+SOCKET = os.path.expanduser("~/.cache/Cantrip/cantrip.sock")
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    backend = None
+    if "--backend" in args:
+        i = args.index("--backend")
+        try:
+            backend = args[i + 1]
+        except IndexError:
+            print("cantrip: --backend needs a value", file=sys.stderr)
+            return 2
+        del args[i:i + 2]
+    if args and args[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+
+    text = " ".join(args)
+    if not sys.stdin.isatty():
+        piped = sys.stdin.read().strip()
+        if piped:
+            text = (text + "\n\n" + piped) if text else piped
+    if not text.strip():
+        print("cantrip: nothing to ask (args or stdin)", file=sys.stderr)
+        return 2
+
+    request = {"text": text, "cwd": os.getcwd()}
+    if backend:
+        request["backend"] = backend
+
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(SOCKET)
+    except OSError:
+        print("cantrip: app not running (no socket at ~/.cache/Cantrip). "
+              "Launch Cantrip first.", file=sys.stderr)
+        return 1
+
+    sock.sendall((json.dumps(request) + "\n").encode())
+    buffer = b""
+    while True:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        buffer += chunk
+        while b"\n" in buffer:
+            line, buffer = buffer.split(b"\n", 1)
+            if not line.strip():
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "delta" in msg:
+                sys.stdout.write(msg["delta"])
+                sys.stdout.flush()
+            elif "status" in msg:
+                print(f"· {msg['status']}", file=sys.stderr)
+            elif "error" in msg:
+                print(f"\ncantrip: {msg['error']}", file=sys.stderr)
+                return 1
+            elif msg.get("done"):
+                print()
+                return 0
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

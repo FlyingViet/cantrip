@@ -44,11 +44,22 @@ echo ""
 bold "Building…"
 make app
 
-# 4. Shell alias for rebuilds.
-ALIAS_LINE="alias cantrip='make -C $(pwd) run'"
-if ! grep -qs "alias cantrip=" "$HOME/.zshrc"; then
-    echo "$ALIAS_LINE" >> "$HOME/.zshrc"
-    echo "Added \`cantrip\` alias to ~/.zshrc (rebuild + relaunch anytime)."
+# 4. CLI client on PATH + rebuild alias.
+mkdir -p "$HOME/.local/bin"
+ln -sf "$(pwd)/Scripts/cantrip" "$HOME/.local/bin/cantrip"
+chmod +x "$(pwd)/Scripts/cantrip"
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc" ;;
+esac
+echo "Installed the \`cantrip\` CLI (pipe anything: cat log | cantrip \"why?\")."
+if grep -qs "alias cantrip=" "$HOME/.zshrc"; then
+    echo "NOTE: you have an old 'alias cantrip=' in ~/.zshrc that will shadow"
+    echo "the CLI — rename it, e.g.: alias cantrip-rebuild='make -C $(pwd) run'"
+fi
+if ! grep -qs "alias cantrip-rebuild=" "$HOME/.zshrc"; then
+    echo "alias cantrip-rebuild='make -C $(pwd) run'" >> "$HOME/.zshrc"
+    echo "Added \`cantrip-rebuild\` alias (rebuild + relaunch)."
 fi
 
 # 5. Launch.
