@@ -112,7 +112,8 @@ A sparkle appears in your menu bar; press **⌥Space**.
 - **Copilot**: `npm install -g @github/copilot`, run `copilot` once to
   authenticate. The model dropdown tries your account's entitlement (via
   the Copilot API when a token is available) and falls back to a curated
-  current-models list.
+  current-models list. The context picker can opt supported models such as
+  GPT-5.6 Sol into Copilot's `long_context` tier (up to 1M tokens).
 - **Codex**: `npm install -g @openai/codex`, run `codex` once to sign in.
   Optional model override (e.g. `gpt-5-codex`) in the gear.
 - **Local model**: point the gear's Base URL at any `/v1` endpoint

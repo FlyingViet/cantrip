@@ -2,7 +2,7 @@ import Foundation
 
 /// Runs queries through GitHub Copilot CLI in programmatic mode:
 ///   copilot -p "<prompt>" -s --output-format json --stream on
-///     [--allow-all-tools] [--model M]
+///     [--allow-all-tools] [--model M] [--context TIER]
 /// Copilot's headless mode has no session resume, so conversation
 /// continuity uses a bounded window of raw recent and related turns.
 final class CopilotBackend: Backend {
@@ -71,6 +71,8 @@ final class CopilotBackend: Backend {
         if !model.isEmpty { copilotArgs += ["--model", model] }
         let effort = settings.copilotEffort.trimmingCharacters(in: .whitespaces)
         if !effort.isEmpty { copilotArgs += ["--reasoning-effort", effort] }
+        let contextTier = settings.copilotContextTier.trimmingCharacters(in: .whitespaces)
+        if !contextTier.isEmpty { copilotArgs += ["--context", contextTier] }
 
         Log.write("launching \(command) via login shell, workdir=\(workdir)")
 

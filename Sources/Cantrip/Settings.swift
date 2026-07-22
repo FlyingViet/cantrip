@@ -75,6 +75,10 @@ final class AppSettings: ObservableObject {
         ("high", "High — deeper reasoning"),
         ("xhigh", "XHigh — hardest (supported models)"),
     ]
+    /// Context tier passed as --context. Empty = ~/.copilot/settings.json default.
+    @Published var copilotContextTier: String {
+        didSet { d.set(copilotContextTier, forKey: "copilotContextTier") }
+    }
     /// Ask Copilot to work inline instead of delegating to (slow,
     /// server-side) subagents.
     @Published var copilotDiscourageSubagents: Bool {
@@ -141,11 +145,20 @@ final class AppSettings: ObservableObject {
 
     /// Default model from ~/.copilot/settings.json, if set.
     var copilotFileDefaultModel: String? {
+        copilotFileSetting("model")
+    }
+
+    /// Default context tier from ~/.copilot/settings.json, if set.
+    var copilotFileContextTier: String? {
+        copilotFileSetting("contextTier")
+    }
+
+    private func copilotFileSetting(_ key: String) -> String? {
         let url = URL(fileURLWithPath: NSHomeDirectory() + "/.copilot/settings.json")
         guard let data = try? Data(contentsOf: url),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let model = obj["model"] as? String, !model.isEmpty else { return nil }
-        return model
+              let value = obj[key] as? String, !value.isEmpty else { return nil }
+        return value
     }
 
     /// The model Copilot will actually use: the override if set,
@@ -153,6 +166,11 @@ final class AppSettings: ObservableObject {
     var effectiveCopilotModel: String? {
         let override = copilotModel.trimmingCharacters(in: .whitespaces)
         return override.isEmpty ? copilotFileDefaultModel : override
+    }
+
+    var effectiveCopilotContextTier: String? {
+        let override = copilotContextTier.trimmingCharacters(in: .whitespaces)
+        return override.isEmpty ? copilotFileContextTier : override
     }
 
     /// Discover valid --model values by parsing `copilot help`
@@ -326,6 +344,7 @@ final class AppSettings: ObservableObject {
             "claudeEffort": claudeEffort,
             "copilotPath": copilotPath, "copilotModel": copilotModel,
             "copilotAllowTools": copilotAllowTools, "copilotEffort": copilotEffort,
+            "copilotContextTier": copilotContextTier,
             "codexPath": codexPath, "codexModel": codexModel,
             "localBaseURL": localBaseURL, "localModel": localModel,
             "localSystemPrompt": localSystemPrompt,
@@ -364,6 +383,7 @@ final class AppSettings: ObservableObject {
         str("copilotModel") { self.copilotModel = $0 }
         bool("copilotAllowTools") { self.copilotAllowTools = $0 }
         str("copilotEffort") { self.copilotEffort = $0 }
+        str("copilotContextTier") { self.copilotContextTier = $0 }
         str("codexPath") { self.codexPath = $0 }
         str("codexModel") { self.codexModel = $0 }
         str("localBaseURL") { self.localBaseURL = $0 }
@@ -409,6 +429,7 @@ final class AppSettings: ObservableObject {
         copilotModel = d.string(forKey: "copilotModel") ?? ""
         copilotAllowTools = d.bool(forKey: "copilotAllowTools")
         copilotEffort = d.string(forKey: "copilotEffort") ?? ""
+        copilotContextTier = d.string(forKey: "copilotContextTier") ?? ""
         copilotDiscourageSubagents = d.object(forKey: "copilotDiscourageSubagents") == nil
             ? true : d.bool(forKey: "copilotDiscourageSubagents")
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
