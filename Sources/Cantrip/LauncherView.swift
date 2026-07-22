@@ -31,6 +31,9 @@ struct LauncherView: View {
     @StateObject private var shell = PersistentShell.shared
     @State private var showTerminal = false
     @State private var terminalCommand = ""
+    @State private var terminalHistory: [String] = []
+    @State private var terminalHistoryIndex: Int?
+    @State private var terminalHistoryDraft = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -901,12 +904,28 @@ struct LauncherView: View {
                 TextField("command", text: $terminalCommand)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, design: .monospaced))
-                    .onSubmit {
-                        let command = terminalCommand.trimmingCharacters(in: .whitespaces)
-                        guard !command.isEmpty else { return }
-                        shell.run(command, workdir: session.workdir)
-                        terminalCommand = ""
+                    .onKeyPress(phases: [.down, .repeat]) { press in
+                        if press.key == .upArrow {
+                            navigateTerminalHistory(backward: true)
+                            return .handled
+                        }
+                        if press.key == .downArrow {
+                            navigateTerminalHistory(backward: false)
+                            return .handled
+                        }
+                        if press.key == KeyEquivalent("c"),
+                           press.modifiers.contains(.control) {
+                            if shell.isRunning {
+                                shell.interrupt()
+                            } else {
+                                terminalCommand = ""
+                                resetTerminalHistoryNavigation()
+                            }
+                            return .handled
+                        }
+                        return .ignored
                     }
+                    .onSubmit(submitTerminalCommand)
                 if shell.isRunning {
                     ProgressView().controlSize(.mini)
                 }
@@ -922,6 +941,50 @@ struct LauncherView: View {
             }
         }
         .padding(12)
+    }
+
+    private func submitTerminalCommand() {
+        let command = terminalCommand.trimmingCharacters(in: .whitespaces)
+        guard !command.isEmpty else { return }
+        terminalHistory.append(command)
+        if terminalHistory.count > 200 {
+            terminalHistory.removeFirst(terminalHistory.count - 200)
+        }
+        shell.run(command, workdir: session.workdir)
+        terminalCommand = ""
+        resetTerminalHistoryNavigation()
+    }
+
+    private func navigateTerminalHistory(backward: Bool) {
+        guard !terminalHistory.isEmpty else { return }
+
+        if backward {
+            if let index = terminalHistoryIndex {
+                terminalHistoryIndex = max(0, index - 1)
+            } else {
+                terminalHistoryDraft = terminalCommand
+                terminalHistoryIndex = terminalHistory.count - 1
+            }
+        } else if let index = terminalHistoryIndex {
+            if index < terminalHistory.count - 1 {
+                terminalHistoryIndex = index + 1
+            } else {
+                terminalHistoryIndex = nil
+                terminalCommand = terminalHistoryDraft
+                return
+            }
+        } else {
+            return
+        }
+
+        if let index = terminalHistoryIndex {
+            terminalCommand = terminalHistory[index]
+        }
+    }
+
+    private func resetTerminalHistoryNavigation() {
+        terminalHistoryIndex = nil
+        terminalHistoryDraft = ""
     }
 
     // MARK: - Usage dashboard
