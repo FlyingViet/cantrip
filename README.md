@@ -5,9 +5,9 @@
 **TL;DR: Spotlight, but it's an AI agent.** ⌥Space opens a bar that launches
 apps, finds files, and does math like Spotlight — but you can also tell it to
 *do things* ("text Dan I'm late", "what am I working on?", "record this
-stream") and it acts on your Mac using Claude, Copilot, or your own local
-model. It sees your screen, remembers what works, runs jobs in parallel tabs,
-and can even upgrade its own code.
+stream") and it acts on your Mac using Claude, Copilot, Codex, or your own
+local model. It sees your screens, remembers what works, runs jobs in
+parallel tabs, and can even upgrade its own code.
 
 ![Cantrip icon](Resources/AppIcon.png)
 
@@ -15,8 +15,9 @@ and can even upgrade its own code.
 
 Press **⌥Space** and type. Instant, local, no AI round-trip:
 
-- **App launching** — type `saf`, get Safari with its icon; running apps rank
-  first and Enter switches to them instead of launching another instance
+- **App launching** — type `saf` or `open chrome`, get the matching app with its
+  icon; running apps rank first and Enter switches to them instead of launching
+  another instance
 - **File search** — filename fragments search the Spotlight index; click to open
 - **Math & conversions** — `142*8.5`, `10 km to miles`, `72 f to c`
 - **Raw shell** — `!git status` streams command output right into the panel
@@ -48,6 +49,19 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   for follow-ups.
 - **On-screen tutorials** — ask how to do something in a visible app and it
   draws numbered tooltips directly on your screen pointing at the controls.
+  Multi-display aware: all monitors are captured for context, and tooltips
+  can point at any of them.
+- **Progress you can audit** — a sidebar shows every tool step live, grouped
+  by kind; Claude Code subagents appear nested inside their parent task.
+  File edits render as colored diffs with one-click revert.
+- **Usage dashboard** — per-platform quota overview: Claude's rate-limit
+  window and 30-day spend (from the CLI's own figures), Copilot AI credits
+  via GitHub's billing API, honest placeholders where platforms expose
+  nothing.
+- **Private mode** — per-session incognito (eye-slash button): no
+  transcript, no history, no memory writes, nothing on disk from Cantrip's
+  side. (Backend CLIs and providers keep their own records — only a local
+  model is end-to-end local.)
 - **Developer extras** — per-session repo workdirs, git quick actions
   (commit message from staged diff, branch review), colored diffs of every
   file the agent touched with one-click revert, MCP server integration,
@@ -113,12 +127,15 @@ off by default; treat it like handing over a terminal, because it is one.
 | ⌘↩ | interrupt the current run and redirect it |
 | `!cmd` | run a raw shell command |
 | ⌘T · ⌘1–9 · ⌘⇧[ ] | new / jump / cycle sessions |
+| ⌘← ⌘→ | with text: jump cursor to start/end (⇧ selects) · empty field: switch tabs |
 | ⌘N | new conversation (current session) |
+| ⌘V | paste text — or attach an image/file from the clipboard |
 | Esc | dismiss panel & overlays |
 
-Panel buttons: model dropdown, working-directory picker, git actions (in
-repos), progress sidebar (tool steps live there), pin, screen context,
-mic, voice mode, history browser, settings gear.
+The bar is two rows: input + mic on top; below it the toolbar — working
+directory, git actions (in repos), then private mode, history, usage
+dashboard, progress sidebar, pin, screen context, backend picker, gear,
+and new conversation/session. Drag any file onto the panel to attach it.
 
 ## Configuration
 
@@ -138,4 +155,7 @@ mic, voice mode, history browser, settings gear.
   `make cert`, and if needed set the cert to Always Trust in Keychain Access.
 - **Stuck request**: red stop button, or menu bar → Stop Current Request /
   Hide Panel & Overlays. Silent streams auto-cancel after 15 minutes.
+- **Copilot quota "unavailable"**: GitHub's billing API needs the `user`
+  scope — run `gh auth refresh -h github.com -s user`, then ↻ in the
+  usage dashboard.
 - **Weird behavior after self-modification**: `git diff`, laugh, revert.
