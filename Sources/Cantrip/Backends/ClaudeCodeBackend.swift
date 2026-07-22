@@ -11,6 +11,8 @@ final class ClaudeCodeBackend: Backend {
         didSet { UserDefaults.standard.set(sessionID, forKey: persistKey) }
     }
     private var activities: [String: ToolActivity] = [:]
+    /// child tool_use id → parent Task activity id (subagent steps).
+    private var childIndex: [String: String] = [:]
     /// Whether any text has streamed this run (for block separation).
     private var hasEmittedText = false
     private let settings = AppSettings.shared
@@ -35,6 +37,7 @@ final class ClaudeCodeBackend: Backend {
         guard let p = process else { return }
         process = nil
         activities.removeAll()
+        childIndex.removeAll()
         p.terminate()
         // Escalate to SIGKILL if it ignores SIGTERM.
         DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
@@ -197,6 +200,7 @@ final class ClaudeCodeBackend: Backend {
         case "assistant":
             guard let message = obj["message"] as? [String: Any],
                   let content = message["content"] as? [[String: Any]] else { return }
+            let parentID = obj["parent_tool_use_id"] as? String
             for block in content {
                 switch block["type"] as? String {
                 case "text":
@@ -211,8 +215,16 @@ final class ClaudeCodeBackend: Backend {
                         toolName: name,
                         arguments: block["input"]
                     )
-                    activities[id] = activity
-                    onEvent(.activity(activity))
+                    if let parentID, var parent = activities[parentID] {
+                        // Subagent step: nest under its Task activity.
+                        parent.children.append(activity)
+                        activities[parentID] = parent
+                        childIndex[id] = parentID
+                        onEvent(.activity(parent))
+                    } else {
+                        activities[id] = activity
+                        onEvent(.activity(activity))
+                    }
                 default:
                     break
                 }
@@ -224,6 +236,18 @@ final class ClaudeCodeBackend: Backend {
                 guard let id = block["tool_use_id"] as? String else { continue }
                 let isError = block["is_error"] as? Bool ?? false
                 let output = block["content"] ?? obj["tool_use_result"]
+                if let parentID = childIndex.removeValue(forKey: id),
+                   var parent = activities[parentID] {
+                    // Complete the nested subagent step; re-emit the parent.
+                    if let childIdx = parent.children.firstIndex(where: { $0.id == id }) {
+                        parent.children[childIdx] = ToolActivityFactory.complete(
+                            parent.children[childIdx], id: id,
+                            success: !isError, output: output)
+                    }
+                    activities[parentID] = parent
+                    onEvent(.activity(parent))
+                    continue
+                }
                 let completed = ToolActivityFactory.complete(
                     activities.removeValue(forKey: id),
                     id: id,
@@ -233,9 +257,32 @@ final class ClaudeCodeBackend: Backend {
                 onEvent(.activity(completed))
             }
         case "result":
+            if let cost = obj["total_cost_usd"] as? Double {
+                let usage = obj["usage"] as? [String: Any]
+                UsageTracker.shared.recordCost(
+                    backend: .claudeCode, costUSD: cost,
+                    inputTokens: (usage?["input_tokens"] as? Int ?? 0)
+                        + (usage?["cache_creation_input_tokens"] as? Int ?? 0)
+                        + (usage?["cache_read_input_tokens"] as? Int ?? 0),
+                    outputTokens: usage?["output_tokens"] as? Int ?? 0)
+            }
             if let isError = obj["is_error"] as? Bool, isError,
                let result = obj["result"] as? String {
                 onEvent(.failure(result))
+            }
+        case "rate_limit_event":
+            if let info = obj["rate_limit_info"] as? [String: Any],
+               let resets = info["resetsAt"] as? TimeInterval {
+                // Utilization appears only in some CLI versions/situations;
+                // grab it under any of its known names when present.
+                let rawUtil = (info["utilization"] ?? info["used_percentage"]
+                    ?? info["percentUsed"] ?? info["percent_used"]) as? Double
+                let percent = rawUtil.map { $0 <= 1.0 ? $0 * 100 : $0 }
+                UsageTracker.shared.updateRateLimit(
+                    type: info["rateLimitType"] as? String ?? "window",
+                    resetsAtEpoch: resets,
+                    status: info["status"] as? String ?? "unknown",
+                    percentUsed: percent)
             }
         case "system":
             if obj["subtype"] as? String == "init" {

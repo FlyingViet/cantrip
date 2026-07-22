@@ -236,6 +236,7 @@ final class ChatSession: ObservableObject {
             }
         }
 
+        UsageTracker.shared.recordQuery(backend: settings.backend)
         armWatchdog()
         streamGeneration += 1
         let generation = streamGeneration
