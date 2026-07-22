@@ -21,14 +21,26 @@ Press **⌥Space** and type. Instant, local, no AI round-trip:
 - **File search** — filename fragments search the Spotlight index; click to open
 - **Math & conversions** — `142*8.5`, `10 km to miles`, `72 f to c`
 - **Raw shell** — `!git status` streams command output right into the panel
+- **Terminal mode** — the `>` toolbar icon opens a persistent shell inside
+  the panel: `cd`, exports, and state carry between commands
+- **Skills** — `/name args` runs your own scripts from
+  `~/.config/cantrip/commands` (typeahead shows each skill's description);
+  stdout renders as markdown in the panel
 
 Ask anything more and it goes to an AI agent that can genuinely act:
 
 - **Four swappable backends** — Claude Code (full agentic harness), GitHub
   Copilot CLI, OpenAI Codex CLI, or any OpenAI-compatible local model
-  (vLLM / Ollama / llama.cpp — e.g. Hermes), with per-backend model pickers.
-  Local models get a tool-calling loop (`run_shell` + your MCP servers), so
-  even they can act.
+  (vLLM / Ollama / llama.cpp — e.g. Hermes), with per-backend model *and*
+  reasoning-effort pickers (context-window hints included). Local models get
+  a tool-calling loop (`run_shell` + your MCP servers), so even they can act.
+- **Steerable mid-flight** — while a response runs: ↩ queues your next
+  message, ⌘↩ interrupts and redirects, and on Claude ⌥↩ injects your
+  message into the *current* turn's context without interrupting (the same
+  streaming-input mechanism Claude Code itself uses).
+- **A real CLI** — `cat build.log | cantrip "why did this fail?"` streams
+  answers to stdout through the running app, with `--backend`, your cwd as
+  the working directory, and its own conversation continuity.
 - **Context, automatically** — your location, next 48h of calendar, a
   screenshot of what you were just doing (opt-in), text you selected in any
   app (⌥⇧Space), pasted or dropped files, and content excerpts from your
@@ -44,7 +56,11 @@ Ask anything more and it goes to an AI agent that can genuinely act:
 - **Parallel sessions** — tabs (⌘T, ⌘1–9), each with its own conversation,
   working directory, and backend processes. A 90-minute download babysits
   itself in one tab while you work in another; finished background sessions
-  notify you.
+  notify you. Closed sessions archive: reopen any of them (titles, dates,
+  full context) from the history view.
+- **Self-updating** — when the GitHub repo is ahead, an "Update available"
+  chip appears; one click streams the pull + rebuild into the transcript
+  and relaunches the new build.
 - **Voice** — dictate queries; voice mode speaks replies and auto-listens
   for follow-ups.
 - **On-screen tutorials** — ask how to do something in a visible app and it
@@ -58,10 +74,10 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   window and 30-day spend (from the CLI's own figures), Copilot AI credits
   via GitHub's billing API, honest placeholders where platforms expose
   nothing.
-- **Private mode** — per-session incognito (eye-slash button): no
-  transcript, no history, no memory writes, nothing on disk from Cantrip's
-  side. (Backend CLIs and providers keep their own records — only a local
-  model is end-to-end local.)
+- **Private mode** — per-session incognito (eye-slash button, panel turns
+  purple): no transcript, no history, no memory writes, nothing on disk
+  from Cantrip's side. (Backend CLIs and providers keep their own records —
+  only a local model is end-to-end local.)
 - **Developer extras** — per-session repo workdirs, git quick actions
   (commit message from staged diff, branch review), colored diffs of every
   file the agent touched with one-click revert, MCP server integration,
@@ -84,9 +100,9 @@ cd ~/Coding/Cantrip
 
 The installer checks prerequisites, creates a self-signed code-signing
 certificate (so macOS permission grants survive rebuilds — expect one
-password dialog), renders the app icon, builds, adds a `cantrip` shell
-alias for rebuilds, and launches the app. A sparkle appears in your menu
-bar; press **⌥Space**.
+password dialog), renders the app icon, builds, installs the `cantrip`
+CLI on your PATH, adds a `cantrip-rebuild` alias, and launches the app.
+A sparkle appears in your menu bar; press **⌥Space**.
 
 ### Backends
 
@@ -94,7 +110,9 @@ bar; press **⌥Space**.
   `claude` once to authenticate. In Cantrip's gear menu, pick a model
   (`sonnet`, `opus`, `haiku`, `fable`…) and a permission level.
 - **Copilot**: `npm install -g @github/copilot`, run `copilot` once to
-  authenticate. The model dropdown self-populates from `copilot help`.
+  authenticate. The model dropdown tries your account's entitlement (via
+  the Copilot API when a token is available) and falls back to a curated
+  current-models list.
 - **Codex**: `npm install -g @openai/codex`, run `codex` once to sign in.
   Optional model override (e.g. `gpt-5-codex`) in the gear.
 - **Local model**: point the gear's Base URL at any `/v1` endpoint
@@ -125,7 +143,9 @@ off by default; treat it like handing over a terminal, because it is one.
 | ⌥⇧Space | grab selected text from the frontmost app, then summon |
 | ↩ | send (or launch the suggested app) · while busy: queue |
 | ⌘↩ | interrupt the current run and redirect it |
+| ⌥↩ | inject into the current turn without interrupting (Claude) |
 | `!cmd` | run a raw shell command |
+| `/skill args` | run a script from ~/.config/cantrip/commands |
 | ⌘T · ⌘1–9 · ⌘⇧[ ] | new / jump / cycle sessions |
 | ⌘← ⌘→ | with text: jump cursor to start/end (⇧ selects) · empty field: switch tabs |
 | ⌘N | new conversation (current session) |
@@ -133,9 +153,11 @@ off by default; treat it like handing over a terminal, because it is one.
 | Esc | dismiss panel & overlays |
 
 The bar is two rows: input + mic on top; below it the toolbar — working
-directory, git actions (in repos), then private mode, history, usage
-dashboard, progress sidebar, pin, screen context, backend picker, gear,
-and new conversation/session. Drag any file onto the panel to attach it.
+directory, git actions (in repos), then terminal, private mode, history,
+usage dashboard, progress sidebar, pin, screen context, backend picker,
+gear, and new conversation/session. Hover any icon for an instant caption.
+Drag any file onto the panel to attach it. Settings open as a right-hand
+sidebar so you can tweak models mid-conversation.
 
 ## Configuration
 
@@ -145,6 +167,11 @@ and new conversation/session. Drag any file onto the panel to attach it.
   open it in Obsidian; edit `USER.md` to tell it about yourself.
 - **MCP servers**: `~/.config/cantrip/mcp.json`, standard
   `{"mcpServers": {…}}` format; their tools go to the local-model backend.
+- **Skills**: executables in `~/.config/cantrip/commands/` — a
+  `# description: …` header line feeds the typeahead; args arrive as `$@`,
+  the session workdir as `$CANTRIP_WORKDIR`; emit markdown.
+- **CLI**: `cantrip "question"`, `--backend claude|copilot|codex|local`,
+  stdin is appended to the prompt. Requires the app running.
 - **Logs**: `~/Library/Logs/Cantrip.log`.
 
 ## Troubleshooting
