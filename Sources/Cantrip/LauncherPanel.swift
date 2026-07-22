@@ -58,10 +58,20 @@ final class LauncherPanel: NSPanel {
         orderOut(nil) // Esc closes
     }
 
+    /// The screen the panel should live on: the one it's already on, else
+    /// the one containing the mouse. Never NSScreen.main, which follows
+    /// keyboard focus and made the panel wander between displays.
+    private var targetScreen: NSScreen? {
+        if let current = screen { return current }
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
+            ?? NSScreen.screens.first
+    }
+
     /// Resize to fit content, keeping the top edge and horizontal center
     /// fixed and never extending past the edges of the screen.
     func resizeContent(to size: CGSize) {
-        let screenFrame = NSScreen.main?.visibleFrame
+        let screenFrame = targetScreen?.visibleFrame
         let maxHeight = min(Self.maxPanelHeight,
                             (screenFrame?.height ?? Self.maxPanelHeight) * 0.9)
         let newHeight = max(60, min(size.height, maxHeight))
@@ -84,9 +94,14 @@ final class LauncherPanel: NSPanel {
     }
 
     /// Position like Spotlight: horizontally centered, top edge in the
-    /// upper third of the screen.
+    /// upper third of the screen the mouse is on.
     func center(onActiveScreen: Bool) {
-        guard let screen = NSScreen.main else { return }
+        // Deliberately mouse-based (not the panel's last screen): summoning
+        // should appear where you're working right now.
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
+            ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screen else { return }
         let sf = screen.visibleFrame
         let x = sf.midX - frame.width / 2
         let top = sf.minY + sf.height * 0.72

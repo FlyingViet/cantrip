@@ -31,7 +31,10 @@ Ask anything more and it goes to an AI agent that can genuinely act:
 - **Context, automatically** — your location, next 48h of calendar, a
   screenshot of what you were just doing (opt-in), text you selected in any
   app (⌥⇧Space), pasted or dropped files, and content excerpts from your
-  own documents matching the query (via the Spotlight index).
+  own documents matching the query (via the Spotlight index). Stateless
+  backends keep three recent raw turns, retrieve up to two related older turns
+  with local semantic matching, and send a compact topic summary instead of
+  repeatedly reinjecting the full transcript.
 - **Hermes-style memory** — a folder of plain markdown (Obsidian-compatible):
   always-loaded core files with hard caps that force consolidation, procedure
   notes the agents write after figuring things out, searchable session logs,

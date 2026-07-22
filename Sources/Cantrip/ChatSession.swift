@@ -13,6 +13,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
 
 /// Drives the conversation: routes queries to the selected backend,
 /// accumulates streamed output, and exposes state to the UI.
+@MainActor
 final class ChatSession: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var isStreaming = false
@@ -145,6 +146,7 @@ final class ChatSession: ObservableObject {
 
         Log.write("send: \"\(prompt.prefix(80))\" via \(settings.backend.rawValue)")
         let isFirstOfConversation = messages.isEmpty
+        let previousTurns = completedConversationTurns()
         if title == "New chat" { title = String(prompt.prefix(34)) }
         messages.append(ChatMessage(role: .user, text: prompt))
         messages.append(ChatMessage(role: .assistant, text: ""))
@@ -190,19 +192,23 @@ final class ChatSession: ObservableObject {
         }
         attachments.removeAll()
         if settings.attachScreen, settings.backend != .localModel,
-           let screenshot = ScreenCapture.shared.lastCapturePath {
+           !ScreenCapture.shared.lastCaptures.isEmpty {
+            let captures = ScreenCapture.shared.lastCaptures
+            let list = captures.map { capture in
+                "display \(capture.index)\(capture.isMain ? " (main)" : "") — \(capture.path)"
+            }.joined(separator: "; ")
             backendPrompt += """
 
 
-            (Context: a screenshot of my screen, taken just before I asked this, is saved at \(screenshot). View that image if it helps answer my request — e.g. questions about what I'm working on or what's on my screen.
+            (Context: screenshots of \(captures.count == 1 ? "my screen" : "ALL my displays"), taken just before I asked this: \(list). View whichever image(s) help answer my request — e.g. questions about what I'm working on or what's on my screen. If I have multiple displays, check the others too before saying something isn't visible.
 
             IMPORTANT — on-screen tooltips: if you are teaching me where to click or look in the UI visible in that screenshot, you MUST first view the screenshot image, then end your reply with a fenced code block whose language tag is exactly `overlay`, like this:
 
             ```overlay
-            [{"x":0.42,"y":0.13,"label":"Crossfader"},{"x":0.66,"y":0.31,"label":"LOOP button"}]
+            [{"x":0.42,"y":0.13,"label":"Crossfader"},{"x":0.66,"y":0.31,"label":"LOOP button","display":2}]
             ```
 
-            x/y are fractions 0–1 of the screenshot's width/height (origin top-left), centered on the exact UI element; up to 5 entries; labels under 8 words. My launcher renders this block as numbered tooltips floating directly on my real screen, so refer to them by number (1, 2, …) in your text. NEVER describe tooltips in prose or write "Tooltip:" text — the block is the only way they appear. If the relevant app isn't visible in the screenshot, say so instead of guessing coordinates.)
+            x/y are fractions 0–1 of that screenshot's width/height (origin top-left), centered on the exact UI element; "display" is the screenshot's display number (omit for display 1); up to 5 entries; labels under 8 words. My launcher renders this block as numbered tooltips floating directly on my real screen, so refer to them by number (1, 2, …) in your text. NEVER describe tooltips in prose or write "Tooltip:" text — the block is the only way they appear. If the relevant app isn't visible in the screenshot, say so instead of guessing coordinates.)
             """
         }
         if settings.memoryEnabled {
@@ -233,12 +239,35 @@ final class ChatSession: ObservableObject {
         armWatchdog()
         streamGeneration += 1
         let generation = streamGeneration
-        activeBackend.send(backendPrompt, workdir: workdir) { [weak self] event in
+        let request = BackendRequest(
+            prompt: backendPrompt,
+            userMessage: prompt,
+            previousTurns: previousTurns
+        )
+        activeBackend.send(request, workdir: workdir) { [weak self] event in
             DispatchQueue.main.async {
                 guard let self, self.streamGeneration == generation else { return }
                 self.handle(event)
             }
         }
+    }
+
+    private func completedConversationTurns() -> [ConversationTurn] {
+        var turns: [ConversationTurn] = []
+        var pendingUser: String?
+        for message in messages {
+            switch message.role {
+            case .user:
+                pendingUser = message.text
+            case .assistant:
+                guard let user = pendingUser, !message.text.isEmpty else { continue }
+                turns.append(ConversationTurn(user: user, assistant: message.text))
+                pendingUser = nil
+            case .error:
+                pendingUser = nil
+            }
+        }
+        return turns
     }
 
     private var shellProcess: Process?
@@ -316,14 +345,16 @@ final class ChatSession: ObservableObject {
         watchdog?.invalidate()
         watchdog = Timer.scheduledTimer(withTimeInterval: inactivityLimit,
                                         repeats: false) { [weak self] _ in
-            guard let self, self.isStreaming else { return }
-            Log.write("watchdog: no backend activity for \(Int(self.inactivityLimit))s — force-cancelling")
-            self.activeBackend.cancel()
-            self.finalizeRunningActivities(as: .failed)
-            self.messages.append(ChatMessage(
-                role: .error,
-                text: "No response for \(Int(self.inactivityLimit / 60)) minutes — request cancelled."))
-            self.finishStream()
+            Task { @MainActor [weak self] in
+                guard let self, self.isStreaming else { return }
+                Log.write("watchdog: no backend activity for \(Int(self.inactivityLimit))s — force-cancelling")
+                self.activeBackend.cancel()
+                self.finalizeRunningActivities(as: .failed)
+                self.messages.append(ChatMessage(
+                    role: .error,
+                    text: "No response for \(Int(self.inactivityLimit / 60)) minutes — request cancelled."))
+                self.finishStream()
+            }
         }
     }
 

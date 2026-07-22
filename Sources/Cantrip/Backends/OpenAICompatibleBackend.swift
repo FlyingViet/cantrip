@@ -27,12 +27,22 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate {
 
     private var currentWorkdir = NSHomeDirectory()
 
-    func send(_ prompt: String, workdir: String, onEvent: @escaping (BackendEvent) -> Void) {
+    func send(
+        _ request: BackendRequest,
+        workdir: String,
+        onEvent: @escaping (BackendEvent) -> Void
+    ) {
         cancel()
         self.onEvent = onEvent
         self.currentWorkdir = workdir
         iterations = 0
-        history.append(["role": "user", "content": prompt])
+        history = ConversationContextBuilder.chatMessages(
+            for: request.userMessage,
+            turns: request.previousTurns
+        ).map {
+            ["role": $0.role, "content": $0.content]
+        }
+        history.append(["role": "user", "content": request.prompt])
         onEvent(.status("Thinking…"))
         startRequest()
     }

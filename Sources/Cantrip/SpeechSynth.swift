@@ -3,9 +3,10 @@ import Foundation
 
 /// Speaks assistant replies aloud (voice mode). Posts `didFinish` when an
 /// utterance completes so the UI can resume listening.
+@MainActor
 final class SpeechSynth: NSObject, AVSpeechSynthesizerDelegate {
     static let shared = SpeechSynth()
-    static let didFinish = Notification.Name("SpeechSynthDidFinish")
+    nonisolated static let didFinish = Notification.Name("SpeechSynthDidFinish")
 
     private let synthesizer = AVSpeechSynthesizer()
 
@@ -29,9 +30,11 @@ final class SpeechSynth: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
-                           didFinish utterance: AVSpeechUtterance) {
-        NotificationCenter.default.post(name: Self.didFinish, object: nil)
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
+                                      didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            NotificationCenter.default.post(name: Self.didFinish, object: nil)
+        }
     }
 
     /// Markdown reads terribly aloud; strip structure, skip code blocks.

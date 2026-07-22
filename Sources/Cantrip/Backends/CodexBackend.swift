@@ -22,9 +22,13 @@ final class CodexBackend: Backend {
         sessionID = UserDefaults.standard.string(forKey: persistKey)
     }
 
-    func send(_ prompt: String, workdir: String, onEvent: @escaping (BackendEvent) -> Void) {
+    func send(
+        _ request: BackendRequest,
+        workdir: String,
+        onEvent: @escaping (BackendEvent) -> Void
+    ) {
         queue.async { [weak self] in
-            self?.run(prompt: prompt, workdir: workdir, onEvent: onEvent)
+            self?.run(prompt: request.prompt, workdir: workdir, onEvent: onEvent)
         }
     }
 

@@ -117,23 +117,11 @@ enum InstantAnswers {
         let name = q.drop(while: { $0 != " " }).trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty, name.count < 40, !name.contains("/") else { return nil }
 
-        let dirs = ["/Applications", "/System/Applications", "/System/Applications/Utilities"]
-        for dir in dirs {
-            let contents = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
-            if let appFile = contents.first(where: {
-                $0.hasSuffix(".app") &&
-                $0.dropLast(4).lowercased() == name.lowercased()
-            }) ?? contents.first(where: {
-                $0.hasSuffix(".app") &&
-                $0.lowercased().hasPrefix(name.lowercased())
-            }) {
-                let url = URL(fileURLWithPath: "\(dir)/\(appFile)")
-                NSWorkspace.shared.openApplication(at: url,
-                                                   configuration: NSWorkspace.OpenConfiguration())
-                return "Opening **\(appFile.replacingOccurrences(of: ".app", with: ""))**…"
-            }
+        guard let app = AppCatalog.shared.match(query: String(name)) else {
+            return nil // unknown app — let the LLM figure out what was meant
         }
-        return nil // unknown app — let the LLM figure out what was meant
+        AppCatalog.shared.launch(app)
+        return "Opening **\(app.name)**…"
     }
 
     private static func format(_ value: Double) -> String {

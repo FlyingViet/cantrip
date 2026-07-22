@@ -32,10 +32,20 @@ enum BackendEvent {
     case failure(String)           // error message
 }
 
+struct BackendRequest {
+    let prompt: String
+    let userMessage: String
+    let previousTurns: [ConversationTurn]
+}
+
 protocol Backend {
     /// Send a query, executing in `workdir`. Events arrive on an arbitrary
     /// queue; the caller hops to main. Continuity is the backend's job.
-    func send(_ prompt: String, workdir: String, onEvent: @escaping (BackendEvent) -> Void)
+    func send(
+        _ request: BackendRequest,
+        workdir: String,
+        onEvent: @escaping (BackendEvent) -> Void
+    )
     /// Cancel any in-flight request.
     func cancel()
     /// Start a fresh conversation.

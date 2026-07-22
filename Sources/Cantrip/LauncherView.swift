@@ -572,7 +572,7 @@ struct LauncherView: View {
     /// Top app hit for the current query (Spotlight-style).
     private var appSuggestion: AppMatch? {
         guard !showHistory, !session.isStreaming else { return nil }
-        return AppCatalog.shared.match(prefix: query)
+        return AppCatalog.shared.match(query: query)
     }
 
     private func appSuggestionRow(_ suggestion: AppMatch) -> some View {
@@ -742,7 +742,10 @@ struct LauncherView: View {
     private var conversationView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                // VStack, not LazyVStack: lazy layout sometimes renders
+                // nothing after a tab switch until scrolled. The transcript
+                // is capped at ~30 messages, so laziness buys nothing.
+                VStack(alignment: .leading, spacing: 12) {
                     ForEach(session.messages) { message in
                         MessageRow(message: message)
                             .id(message.id)
@@ -762,6 +765,9 @@ struct LauncherView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: 340)
+            // Fresh scroll-view identity per session: prevents stale layout
+            // state from the previous tab leaving a blank transcript.
+            .id(session.id)
             .onAppear {
                 scrollConversationToBottom(proxy)
             }

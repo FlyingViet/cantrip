@@ -35,9 +35,8 @@ final class AppCatalog {
             .sorted { $0.0.lowercased() < $1.0.lowercased() }
     }
 
-    /// Top hit: the whole query must be a prefix of the app name, so
-    /// "saf" matches Safari but "safari tips" matches nothing.
-    func match(prefix raw: String) -> AppMatch? {
+    /// Top hit across exact, word, prefix, substring, and bounded fuzzy matches.
+    func match(query raw: String) -> AppMatch? {
         let q = raw.trimmingCharacters(in: .whitespaces).lowercased()
         guard q.count >= 2, !q.isEmpty else { return nil }
         let running = runningApps()
@@ -50,10 +49,11 @@ final class AppCatalog {
             seen.insert($0.name.lowercased()).inserted
         }
 
-        if let exact = candidates.first(where: { $0.name.lowercased() == q }) {
-            return exact
-        }
-        return candidates.first(where: { $0.name.lowercased().hasPrefix(q) })
+        guard let index = AppSearchMatcher.bestMatchIndex(
+            query: q,
+            candidates: candidates.map { ($0.name, $0.isRunning) }
+        ) else { return nil }
+        return candidates[index]
     }
 
     func icon(for url: URL) -> NSImage {
