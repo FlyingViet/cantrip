@@ -17,6 +17,11 @@ final class ClaudeCodeBackend: Backend {
     private var hasEmittedText = false
     private let settings = AppSettings.shared
     private let queue = DispatchQueue(label: "claude-code-backend")
+    /// Persistent-process plumbing: stdin stays open so new user messages
+    /// (including mid-turn injections) stream into the running session.
+    private var stdinHandle: FileHandle?
+    private var processWorkdir = ""
+    private var currentOnEvent: ((BackendEvent) -> Void)?
 
     init(persistKey: String = "claudeSessionID") {
         self.persistKey = persistKey
@@ -29,13 +34,45 @@ final class ClaudeCodeBackend: Backend {
         onEvent: @escaping (BackendEvent) -> Void
     ) {
         queue.async { [weak self] in
-            self?.run(prompt: request.prompt, workdir: workdir, onEvent: onEvent)
+            guard let self else { return }
+            self.currentOnEvent = onEvent
+            self.hasEmittedText = false
+            if self.process?.isRunning != true || self.processWorkdir != workdir {
+                self.process?.terminate()
+                self.startProcess(workdir: workdir)
+            }
+            self.writeUserMessage(request.prompt)
         }
+    }
+
+    /// Claude-style mid-turn injection: append a user message into the
+    /// RUNNING turn's context without interrupting it. Returns false when
+    /// no live process exists (caller should queue instead).
+    func injectMidTurn(_ text: String) -> Bool {
+        guard process?.isRunning == true, stdinHandle != nil else { return false }
+        queue.async { [weak self] in self?.writeUserMessage(text) }
+        Log.write("inject: mid-turn message (\(text.count) chars)")
+        return true
+    }
+
+    private func writeUserMessage(_ text: String) {
+        let message: [String: Any] = [
+            "type": "user",
+            "message": ["role": "user", "content": text],
+        ]
+        guard let handle = stdinHandle,
+              var data = try? JSONSerialization.data(withJSONObject: message) else {
+            currentOnEvent?(.failure("Claude process has no input channel."))
+            return
+        }
+        data.append(0x0A)
+        handle.write(data)
     }
 
     func cancel() {
         guard let p = process else { return }
         process = nil
+        stdinHandle = nil
         activities.removeAll()
         childIndex.removeAll()
         p.terminate()
@@ -85,16 +122,16 @@ final class ClaudeCodeBackend: Backend {
         return out.isEmpty ? nil : out
     }
 
-    private func run(prompt: String, workdir: String, onEvent: @escaping (BackendEvent) -> Void) {
+    private func startProcess(workdir: String) {
         guard let claudePath = resolveClaudePath() else {
             Log.write("claude CLI not found")
-            onEvent(.failure("Couldn't find the `claude` CLI. Set its path in Settings."))
+            currentOnEvent?(.failure("Couldn't find the `claude` CLI. Set its path in Settings."))
             return
         }
-        Log.write("launching \(claudePath), workdir=\(workdir)")
+        Log.write("launching \(claudePath) (streaming input), workdir=\(workdir)")
 
-        hasEmittedText = false
-        var args = ["-p", prompt, "--output-format", "stream-json", "--verbose",
+        var args = ["-p", "--input-format", "stream-json",
+                    "--output-format", "stream-json", "--verbose",
                     "--include-partial-messages"]
         let model = settings.claudeModel.trimmingCharacters(in: .whitespaces)
         if !model.isEmpty { args += ["--model", model] }
@@ -121,7 +158,9 @@ final class ClaudeCodeBackend: Backend {
         p.standardOutput = stdout
         p.standardError = stderr
         // Critical: claude -p waits for stdin EOF when spawned from a GUI app.
-        p.standardInput = FileHandle.nullDevice
+        // Keep stdin open: this is the channel for follow-ups & injections.
+        let stdinPipe = Pipe()
+        p.standardInput = stdinPipe
 
         // Drain stderr continuously so the pipe never fills and blocks the process.
         var errData = Data()
@@ -138,7 +177,7 @@ final class ClaudeCodeBackend: Backend {
             while let nl = buffer.firstIndex(of: 0x0A) {
                 let lineData = buffer.subdata(in: buffer.startIndex..<nl)
                 buffer.removeSubrange(buffer.startIndex...nl)
-                self?.handleLine(lineData, onEvent: onEvent)
+                self?.handleLine(lineData)
             }
         }
 
@@ -146,32 +185,37 @@ final class ClaudeCodeBackend: Backend {
             Log.write("claude exited, status=\(proc.terminationStatus), reason=\(proc.terminationReason.rawValue)")
             stdout.fileHandleForReading.readabilityHandler = nil
             stderr.fileHandleForReading.readabilityHandler = nil
+            let onEvent = self?.currentOnEvent
             if proc.terminationStatus != 0 {
                 errData.append(stderr.fileHandleForReading.readDataToEndOfFile())
                 let errText = String(data: errData, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if proc.terminationReason == .uncaughtSignal {
-                    onEvent(.done) // cancelled by user
+                    onEvent?(.done) // cancelled by user
                 } else {
-                    onEvent(.failure(errText.isEmpty ? "claude exited with status \(proc.terminationStatus)" : errText))
+                    onEvent?(.failure(errText.isEmpty ? "claude exited with status \(proc.terminationStatus)" : errText))
                 }
             } else {
-                onEvent(.done)
+                onEvent?(.done)
             }
             self?.process = nil
+            self?.stdinHandle = nil
         }
 
         do {
             try p.run()
             process = p
+            stdinHandle = stdinPipe.fileHandleForWriting
+            processWorkdir = workdir
             Log.write("claude started, pid=\(p.processIdentifier)")
         } catch {
             Log.write("launch failed: \(error.localizedDescription)")
-            onEvent(.failure("Failed to launch claude: \(error.localizedDescription)"))
+            currentOnEvent?(.failure("Failed to launch claude: \(error.localizedDescription)"))
         }
     }
 
-    private func handleLine(_ data: Data, onEvent: @escaping (BackendEvent) -> Void) {
+    private func handleLine(_ data: Data) {
+        guard let onEvent = currentOnEvent else { return }
         guard !data.isEmpty,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = obj["type"] as? String else {
@@ -271,6 +315,10 @@ final class ClaudeCodeBackend: Backend {
             if let isError = obj["is_error"] as? Bool, isError,
                let result = obj["result"] as? String {
                 onEvent(.failure(result))
+            } else {
+                // Turn complete — the process stays alive for the next
+                // message, so "result" is now the end-of-turn signal.
+                onEvent(.done)
             }
         case "rate_limit_event":
             if let info = obj["rate_limit_info"] as? [String: Any],
