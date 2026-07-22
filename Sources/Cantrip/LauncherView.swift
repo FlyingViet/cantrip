@@ -177,10 +177,13 @@ struct LauncherView: View {
         VStack(spacing: 4) {
             // Row 1: the essentials — clean, Spotlight-like.
             HStack(spacing: 10) {
-                Image(systemName: backendIcon)
-                    .font(.system(size: 18))
-                    .foregroundStyle(.secondary)
-                    .help(backendBadge)
+                Button(action: { withAnimation(.easeOut(duration: 0.15)) { showSettings.toggle() } }) {
+                    Image(systemName: backendIcon)
+                        .font(.system(size: 18))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("\(backendBadge) — click for backend & settings")
 
                 TextField(placeholder, text: $query)
                     .textFieldStyle(.plain)
@@ -341,14 +344,6 @@ struct LauncherView: View {
                   ? "Screen context on — queries include a screenshot taken when the panel opened"
                   : "Attach a screenshot of your screen to queries")
             .hoverHint("Screen context — let queries see your displays", $toolbarHint)
-
-            Picker("", selection: $settings.backend) {
-                ForEach(BackendKind.allCases) { kind in
-                    Text(pickerLabel(for: kind)).tag(kind)
-                }
-            }
-            .pickerStyle(.menu)
-            .fixedSize()
 
             Button(action: { withAnimation(.easeOut(duration: 0.15)) { showSettings.toggle() } }) {
                 Image(systemName: "gearshape")
@@ -1628,6 +1623,16 @@ struct SettingsView: View {
 
     private var settingsContent: some View {
         VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Backend").font(.caption).foregroundStyle(.secondary)
+                Picker("", selection: $settings.backend) {
+                    ForEach(BackendKind.allCases) { kind in
+                        Text(settings.backendLabel(kind)).tag(kind)
+                    }
+                }
+                .labelsHidden()
+            }
+            Divider().opacity(0.3)
             switch settings.backend {
             case .claudeCode:
                 labeledField("claude path (blank = auto)", text: $settings.claudePath, prompt: "/usr/local/bin/claude")
@@ -1665,6 +1670,9 @@ struct SettingsView: View {
                 }
                 labeledField("Working directory", text: $settings.claudeWorkdir, prompt: NSHomeDirectory())
                 Toggle("Allow all tools (--allow-all-tools) — lets Copilot run commands unprompted", isOn: $settings.copilotAllowTools)
+                    .font(.caption)
+                    .toggleStyle(.checkbox)
+                Toggle("Discourage subagents (they're slow server-side) — work inline instead", isOn: $settings.copilotDiscourageSubagents)
                     .font(.caption)
                     .toggleStyle(.checkbox)
             case .codex:

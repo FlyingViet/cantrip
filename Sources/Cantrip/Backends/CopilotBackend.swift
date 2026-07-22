@@ -50,12 +50,16 @@ final class CopilotBackend: Backend {
         let configured = settings.copilotPath.trimmingCharacters(in: .whitespaces)
         let command = configured.isEmpty ? "copilot" : configured
 
+        var composed = ConversationContextBuilder.composePrompt(
+            currentPrompt: request.prompt,
+            query: request.userMessage,
+            turns: request.previousTurns
+        )
+        if settings.copilotDiscourageSubagents {
+            composed += "\n\n(Work directly in this session; avoid spawning subagents or delegating tasks unless strictly necessary — delegation is slow in this environment.)"
+        }
         var copilotArgs = [
-            "-p", ConversationContextBuilder.composePrompt(
-                currentPrompt: request.prompt,
-                query: request.userMessage,
-                turns: request.previousTurns
-            ),
+            "-p", composed,
             "-s",
             "--output-format", "json",
             "--stream", "on"
