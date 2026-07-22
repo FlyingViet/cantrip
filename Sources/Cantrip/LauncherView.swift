@@ -18,6 +18,8 @@ struct LauncherView: View {
     @State private var pinned = false
     @State private var showSteps = false
     @StateObject private var fileSearch = FileSearch.shared
+    @ObservedObject private var usage = UsageTracker.shared
+    @State private var showUsage = false
     @State private var showHistory = false
     @State private var historySearch = ""
     @State private var historyEntries: [HistoryEntry] = []
@@ -119,7 +121,10 @@ struct LauncherView: View {
             if !session.queued.isEmpty || session.isStreaming {
                 queueView
             }
-            if showHistory {
+            if showUsage {
+                Divider().opacity(0.3)
+                usageView
+            } else if showHistory {
                 Divider().opacity(0.3)
                 historyView
             } else if !session.messages.isEmpty || session.statusText != nil {
@@ -198,6 +203,14 @@ struct LauncherView: View {
             }
             .buttonStyle(.plain)
             .help("Browse past conversations")
+
+            Button(action: toggleUsage) {
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.system(size: 14))
+                    .foregroundStyle(showUsage ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Usage & spending")
 
             Button(action: { withAnimation(.easeOut(duration: 0.15)) { showSteps.toggle() } }) {
                 Image(systemName: "sidebar.trailing")
@@ -654,8 +667,112 @@ struct LauncherView: View {
     }
 
     private func toggleHistory() {
-        withAnimation(.easeOut(duration: 0.15)) { showHistory.toggle() }
+        withAnimation(.easeOut(duration: 0.15)) {
+            showHistory.toggle()
+            if showHistory { showUsage = false }
+        }
         if showHistory { historyEntries = HistoryStore.load() }
+    }
+
+    private func toggleUsage() {
+        withAnimation(.easeOut(duration: 0.15)) {
+            showUsage.toggle()
+            if showUsage { showHistory = false }
+        }
+        if showUsage { usage.refreshQuotas() }
+    }
+
+    // MARK: - Usage dashboard
+
+    private func money(_ value: Double) -> String {
+        value < 0.1 ? String(format: "$%.3f", value) : String(format: "$%.2f", value)
+    }
+
+    private var claudeMonthSpend: Double {
+        usage.summary(days: 30)[BackendKind.claudeCode.rawValue]?.costUSD ?? 0
+    }
+
+    private var usageView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let limit = usage.rateLimit {
+                HStack(spacing: 6) {
+                    Image(systemName: limit.status == "allowed"
+                          ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(limit.status == "allowed" ? .green : .orange)
+                    if let percent = limit.percentUsed {
+                        Text("Claude: \(Int(percent))% of \(limit.type.replacingOccurrences(of: "_", with: " ")) limit used · resets \(limit.resetsAt.formatted(date: .omitted, time: .shortened))")
+                            .font(.callout)
+                    } else {
+                        Text("Claude \(limit.type.replacingOccurrences(of: "_", with: " ")) window: \(limit.status) · resets \(limit.resetsAt.formatted(date: .omitted, time: .shortened))")
+                            .font(.callout)
+                    }
+                }
+                if limit.percentUsed == nil {
+                    Text("(exact % isn't exposed by the claude CLI in headless mode yet — shown when available)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Text("Claude: no window data yet — send a Claude query first")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "airplane")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                if let quota = usage.copilotQuota {
+                    Text("Copilot: \(quota)").font(.callout)
+                } else {
+                    Text("Copilot: quota unavailable — needs an authenticated `gh` CLI")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                }
+                Button(action: { usage.refreshQuotas(force: true) }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Refresh plan quotas")
+            }
+            if claudeMonthSpend > 0 {
+                HStack(spacing: 6) {
+                    Image(systemName: "dollarsign.circle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    Text("Claude spend: \(money(claudeMonthSpend)) in the last 30 days")
+                        .font(.callout)
+                }
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Text("Codex: plan-based (ChatGPT subscription) — limits not exposed by the CLI")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Text("Local (\(settings.localModel)): free — runs on your hardware")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Text("Claude figures come from the CLI itself; Copilot from GitHub's billing API. Neither exposes plan allotments per-user yet, so percentages appear when the platforms provide them.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func selectionChip(_ selection: SelectionContext) -> some View {
@@ -1019,6 +1136,22 @@ private struct ToolActivityDetails: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
+            if !activity.children.isEmpty {
+                Text("Subagent · \(activity.children.count) steps")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(activity.children) { child in
+                        ToolActivityRow(activity: child)
+                    }
+                }
+                .padding(.leading, 8)
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(Color.accentColor.opacity(0.3))
+                        .frame(width: 2)
+                }
+            }
             if !activity.fileChanges.isEmpty {
                 Text(activity.fileChanges.count == 1 ? "File edited" : "Files edited")
                     .font(.caption.weight(.semibold))
