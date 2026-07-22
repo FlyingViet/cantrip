@@ -8,6 +8,7 @@ import SwiftUI
 final class LauncherPanel: NSPanel {
     static let panelWidth: CGFloat = 680
     static let userResizedNotification = Notification.Name("CantripPanelUserResized")
+    static let userResizingNotification = Notification.Name("CantripPanelUserResizing")
     static let maxPanelHeight: CGFloat = 880
 
     init() {
@@ -18,7 +19,18 @@ final class LauncherPanel: NSPanel {
                    defer: false)
         minSize = NSSize(width: 600, height: 120)
 
-        // After a user drag-resize, tell the layout to adopt the new size.
+        // Stream drag-resize ticks so the layout follows the mouse live…
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: self,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.inLiveResize else { return }
+            NotificationCenter.default.post(name: Self.userResizingNotification,
+                                            object: nil,
+                                            userInfo: ["size": self.frame.size])
+        }
+        // …and persist when the drag ends.
         NotificationCenter.default.addObserver(
             forName: NSWindow.didEndLiveResizeNotification,
             object: self,

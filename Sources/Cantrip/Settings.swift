@@ -135,6 +135,10 @@ final class AppSettings: ObservableObject {
     @Published var voiceMode: Bool {
         didSet { d.set(voiceMode, forKey: "voiceMode") }
     }
+    /// Whole-panel opacity (0.5–1.0).
+    @Published var panelOpacity: Double {
+        didSet { d.set(panelOpacity, forKey: "panelOpacity") }
+    }
     /// Memory vault: folder of markdown notes backends read & maintain.
     @Published var memoryEnabled: Bool {
         didSet { d.set(memoryEnabled, forKey: "memoryEnabled") }
@@ -352,6 +356,7 @@ final class AppSettings: ObservableObject {
             "shareCalendar": shareCalendar, "attachScreen": attachScreen,
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
             "memoryPath": memoryPath, "fileRAGEnabled": fileRAGEnabled,
+            "panelOpacity": panelOpacity,
         ]
         if let data = try? JSONSerialization.data(
             withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]) {
@@ -397,6 +402,9 @@ final class AppSettings: ObservableObject {
         bool("memoryEnabled") { self.memoryEnabled = $0 }
         str("memoryPath") { self.memoryPath = $0 }
         bool("fileRAGEnabled") { self.fileRAGEnabled = $0 }
+        if let opacity = dict["panelOpacity"] as? Double {
+            panelOpacity = min(max(opacity, 0.5), 1.0)
+        }
         Log.write("dotfile: imported from \(rcURL.path)")
     }
 
@@ -447,6 +455,8 @@ final class AppSettings: ObservableObject {
         fileRAGEnabled = d.object(forKey: "fileRAGEnabled") == nil ? true : d.bool(forKey: "fileRAGEnabled")
         // Default ON — first use triggers the Calendar Automation prompt.
         shareCalendar = d.object(forKey: "shareCalendar") == nil ? true : d.bool(forKey: "shareCalendar")
+        let storedOpacity = d.double(forKey: "panelOpacity")
+        panelOpacity = storedOpacity == 0 ? 1.0 : min(max(storedOpacity, 0.5), 1.0)
         memoryEnabled = d.object(forKey: "memoryEnabled") == nil ? true : d.bool(forKey: "memoryEnabled")
         memoryPath = d.string(forKey: "memoryPath") ?? "\(NSHomeDirectory())/Cantrip Memory"
     }

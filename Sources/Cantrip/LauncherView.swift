@@ -97,11 +97,18 @@ struct LauncherView: View {
             }
             return true
         }
-        // User drag-resized the panel: adopt and remember the size.
+        // Live drag: layout follows the mouse.
+        .onReceive(NotificationCenter.default.publisher(
+            for: LauncherPanel.userResizingNotification)) { note in
+            guard let size = note.userInfo?["size"] as? CGSize else { return }
+            metrics.setLiveSize(totalWidth: size.width,
+                                totalHeight: size.height,
+                                sidebarExtra: sidebarExtra)
+        }
+        // Drag ended: adopt and remember the size.
         .onReceive(NotificationCenter.default.publisher(
             for: LauncherPanel.userResizedNotification)) { note in
             guard let size = note.userInfo?["size"] as? CGSize else { return }
-            let sidebarExtra: CGFloat = (showSettings ? 331 : 0) + (showSteps ? 281 : 0)
             metrics.setUserSize(totalWidth: size.width,
                                 totalHeight: size.height,
                                 sidebarExtra: sidebarExtra)
@@ -896,6 +903,11 @@ struct LauncherView: View {
             if showUsage { showHistory = false; showTerminal = false }
         }
         if showUsage { usage.refreshQuotas() }
+    }
+
+    /// Width consumed by open sidebars (for resize math).
+    private var sidebarExtra: CGFloat {
+        (showSettings ? 331 : 0) + (showSteps ? 281 : 0)
     }
 
     /// A command (yours or the agent's) is running in the shell.
@@ -1800,6 +1812,12 @@ struct SettingsView: View {
                 .toggleStyle(.checkbox)
             if settings.memoryEnabled {
                 labeledField("Memory vault folder", text: $settings.memoryPath, prompt: "\(NSHomeDirectory())/Cantrip Memory")
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Panel opacity — \(Int(settings.panelOpacity * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Slider(value: $settings.panelOpacity, in: 0.5...1.0, step: 0.05)
             }
             Toggle("Launch at login", isOn: Binding(
                 get: { settings.launchAtLogin },
