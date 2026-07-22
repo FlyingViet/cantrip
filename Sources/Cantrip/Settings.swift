@@ -75,6 +75,11 @@ final class AppSettings: ObservableObject {
         ("high", "High — deeper reasoning"),
         ("xhigh", "XHigh — hardest (supported models)"),
     ]
+    /// Ask Copilot to work inline instead of delegating to (slow,
+    /// server-side) subagents.
+    @Published var copilotDiscourageSubagents: Bool {
+        didSet { d.set(copilotDiscourageSubagents, forKey: "copilotDiscourageSubagents") }
+    }
     /// Cached model list discovered from `copilot help`.
     @Published var copilotAvailableModels: [String] {
         didSet { d.set(copilotAvailableModels, forKey: "copilotAvailableModels") }
@@ -289,6 +294,23 @@ final class AppSettings: ObservableObject {
         return models
     }
 
+    /// Backend + current model, for pickers and badges.
+    func backendLabel(_ kind: BackendKind) -> String {
+        switch kind {
+        case .claudeCode:
+            let model = claudeModel.trimmingCharacters(in: .whitespaces)
+            return model.isEmpty ? "Claude Code" : "Claude Code · \(model)"
+        case .copilot:
+            if let model = effectiveCopilotModel { return "Copilot · \(model)" }
+            return "Copilot"
+        case .codex:
+            let model = codexModel.trimmingCharacters(in: .whitespaces)
+            return model.isEmpty ? "Codex" : "Codex · \(model)"
+        case .localModel:
+            return "Local · \(localModel)"
+        }
+    }
+
     // MARK: - Dotfile config (~/.cantriprc)
 
     private var rcURL: URL {
@@ -387,6 +409,8 @@ final class AppSettings: ObservableObject {
         copilotModel = d.string(forKey: "copilotModel") ?? ""
         copilotAllowTools = d.bool(forKey: "copilotAllowTools")
         copilotEffort = d.string(forKey: "copilotEffort") ?? ""
+        copilotDiscourageSubagents = d.object(forKey: "copilotDiscourageSubagents") == nil
+            ? true : d.bool(forKey: "copilotDiscourageSubagents")
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
