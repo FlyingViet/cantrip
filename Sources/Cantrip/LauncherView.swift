@@ -70,13 +70,8 @@ struct LauncherView: View {
             terminalCommand = ""
             resetTerminalHistoryNavigation()
         }
-        .onChange(of: session.shell.agentCommandVersion) {
-            withAnimation(.easeOut(duration: 0.15)) {
-                showTerminal = true
-                showHistory = false
-                showUsage = false
-            }
-        }
+        // Agent commands mirror into the terminal silently (background);
+        // the toolbar icon signals activity — open it when you want to look.
         .onChange(of: session.focusRequested) { _, requested in
             if requested {
                 inputFocused = true
@@ -302,13 +297,27 @@ struct LauncherView: View {
             .hoverHint("Private mode — session saved nowhere", $toolbarHint)
 
             Button(action: toggleTerminal) {
-                Image(systemName: "greaterthan.square")
-                    .font(.system(size: 15))
-                    .foregroundStyle(showTerminal ? Color.accentColor : Color.secondary)
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "greaterthan.square")
+                        .font(.system(size: 15))
+                        .foregroundStyle(showTerminal ? Color.accentColor
+                            : terminalBusy ? Color.orange : Color.secondary)
+                        .symbolEffect(.pulse, isActive: terminalBusy && !showTerminal)
+                    if terminalBusy && !showTerminal {
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 5, height: 5)
+                            .offset(x: 3, y: -3)
+                    }
+                }
             }
             .buttonStyle(.plain)
-            .help("Terminal — persistent shell inside the panel")
-            .hoverHint("Terminal — shell with persistent state (cd, env)", $toolbarHint)
+            .help(terminalBusy
+                  ? "Terminal — a command is running in the background; click to watch"
+                  : "Terminal — persistent shell inside the panel")
+            .hoverHint(terminalBusy ? "Terminal — command running in background"
+                                    : "Terminal — shell with persistent state (cd, env)",
+                       $toolbarHint)
 
             Button(action: toggleHistory) {
                 Image(systemName: "clock.arrow.circlepath")
@@ -878,6 +887,11 @@ struct LauncherView: View {
             if showUsage { showHistory = false; showTerminal = false }
         }
         if showUsage { usage.refreshQuotas() }
+    }
+
+    /// A command (yours or the agent's) is running in the shell.
+    private var terminalBusy: Bool {
+        session.shell.isRunning || session.shell.hasAgentCommandRunning
     }
 
     private func toggleTerminal() {
