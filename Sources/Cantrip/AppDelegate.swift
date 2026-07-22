@@ -103,6 +103,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if !self.panel.isVisible { self.togglePanel() }
         }
 
+        // Panel opacity follows the settings slider, live.
+        panel.alphaValue = AppSettings.shared.panelOpacity
+        AppSettings.shared.$panelOpacity
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] opacity in
+                self?.panel.animator().alphaValue = opacity
+            }
+            .store(in: &cancellables)
+
         // Menu bar icon reflects streaming state.
         UNUserNotificationCenter.current().delegate = self
         manager.$anyStreaming

@@ -34,16 +34,26 @@ final class PanelMetrics: ObservableObject {
         if abs(height - transcriptMaxHeight) > 0.5 { transcriptMaxHeight = height }
     }
 
-    /// Called after the user drag-resizes the panel. `sidebarExtra` is the
-    /// width consumed by open sidebars, so we store main-column width.
+    /// Live drag tick: track the mouse, don't persist yet.
+    func setLiveSize(totalWidth: CGFloat, totalHeight: CGFloat, sidebarExtra: CGFloat) {
+        apply(totalWidth: totalWidth, totalHeight: totalHeight,
+              sidebarExtra: sidebarExtra)
+    }
+
+    /// Drag ended: adopt and remember.
     func setUserSize(totalWidth: CGFloat, totalHeight: CGFloat, sidebarExtra: CGFloat) {
+        apply(totalWidth: totalWidth, totalHeight: totalHeight,
+              sidebarExtra: sidebarExtra)
+        userWidth = contentWidth
+        userHeight = transcriptMaxHeight
+        Log.write("panel: user size saved \(Int(contentWidth))×\(Int(transcriptMaxHeight))")
+    }
+
+    private func apply(totalWidth: CGFloat, totalHeight: CGFloat, sidebarExtra: CGFloat) {
         let width = min(max(560, totalWidth - sidebarExtra), 1400)
         let height = min(max(220, totalHeight - 170), 900)
-        userWidth = width
-        userHeight = height
-        contentWidth = width
-        transcriptMaxHeight = height
-        Log.write("panel: user size saved \(Int(width))×\(Int(height))")
+        if abs(width - contentWidth) > 0.5 { contentWidth = width }
+        if abs(height - transcriptMaxHeight) > 0.5 { transcriptMaxHeight = height }
     }
 
     func clearUserSize() {
