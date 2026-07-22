@@ -25,6 +25,7 @@ struct LauncherView: View {
     @State private var showHistory = false
     @State private var historySearch = ""
     @State private var historyEntries: [HistoryEntry] = []
+    @State private var archivedSessions: [SessionManager.ArchivedSession] = []
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -716,7 +717,10 @@ struct LauncherView: View {
             showHistory.toggle()
             if showHistory { showUsage = false }
         }
-        if showHistory { historyEntries = HistoryStore.load() }
+        if showHistory {
+            historyEntries = HistoryStore.load()
+            archivedSessions = manager.archivedSessions()
+        }
     }
 
     private func toggleUsage() {
@@ -848,6 +852,45 @@ struct LauncherView: View {
 
     private var historyView: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !archivedSessions.isEmpty {
+                Text("Past sessions")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(archivedSessions.prefix(8)) { archived in
+                        HStack(spacing: 8) {
+                            Image(systemName: "bubble.left.and.bubble.right")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.tertiary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(archived.title)
+                                    .font(.callout)
+                                    .lineLimit(1)
+                                Text("\(archived.date.formatted(date: .abbreviated, time: .shortened)) · \(archived.messageCount) messages")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Spacer()
+                            Button("Open") {
+                                manager.restore(archived.id)
+                                withAnimation { showHistory = false }
+                            }
+                            .font(.caption)
+                            Button(action: {
+                                manager.deleteArchived(archived.id)
+                                archivedSessions = manager.archivedSessions()
+                            }) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Delete this session permanently")
+                        }
+                    }
+                }
+                Divider().opacity(0.3)
+            }
             TextField("Search past conversations…", text: $historySearch)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 12))

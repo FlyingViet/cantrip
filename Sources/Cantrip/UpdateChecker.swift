@@ -15,9 +15,10 @@ final class UpdateChecker: ObservableObject {
         (Bundle.main.bundlePath as NSString).deletingLastPathComponent
     }
 
-    /// Throttled to every 6 hours; safe to call on every panel show.
+    /// Checks on every panel show (lightly debounced so rapid
+    /// summon/dismiss cycles don't spam git fetch).
     func checkIfDue() {
-        guard Date().timeIntervalSince(lastCheck) > 6 * 3600, !checking else { return }
+        guard Date().timeIntervalSince(lastCheck) > 30, !checking else { return }
         guard FileManager.default.fileExists(atPath: repoPath + "/.git") else { return }
         lastCheck = Date()
         checking = true
