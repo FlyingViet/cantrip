@@ -31,6 +31,17 @@ final class AppSettings: ObservableObject {
         didSet { d.set(claudeModel, forKey: "claudeModel") }
     }
     static let claudeModelAliases = ["sonnet", "opus", "haiku", "fable", "opusplan", "sonnet[1m]"]
+    /// Reasoning effort passed as --effort. Empty = CLI default.
+    @Published var claudeEffort: String {
+        didSet { d.set(claudeEffort, forKey: "claudeEffort") }
+    }
+    static let claudeEffortLevels: [(value: String, label: String)] = [
+        ("", "Default"),
+        ("low", "Low — fast & cheap"),
+        ("medium", "Medium"),
+        ("high", "High — deeper reasoning"),
+        ("max", "Max — thinks hardest (supported models)"),
+    ]
     /// Claude Code --permission-mode. In headless runs nobody can approve
     /// prompts, so tools are denied unless this loosens the policy.
     @Published var claudePermissionMode: String {
@@ -53,6 +64,17 @@ final class AppSettings: ObservableObject {
     @Published var copilotAllowTools: Bool {
         didSet { d.set(copilotAllowTools, forKey: "copilotAllowTools") }
     }
+    /// Reasoning effort passed as --reasoning-effort. Empty = default.
+    @Published var copilotEffort: String {
+        didSet { d.set(copilotEffort, forKey: "copilotEffort") }
+    }
+    static let copilotEffortLevels: [(value: String, label: String)] = [
+        ("", "Default"),
+        ("low", "Low — fast & cheap"),
+        ("medium", "Medium"),
+        ("high", "High — deeper reasoning"),
+        ("xhigh", "XHigh — hardest (supported models)"),
+    ]
     /// Cached model list discovered from `copilot help`.
     @Published var copilotAvailableModels: [String] {
         didSet { d.set(copilotAvailableModels, forKey: "copilotAvailableModels") }
@@ -194,8 +216,9 @@ final class AppSettings: ObservableObject {
             "backend": backend.rawValue,
             "claudePath": claudePath, "claudeWorkdir": claudeWorkdir,
             "claudeModel": claudeModel, "claudePermissionMode": claudePermissionMode,
+            "claudeEffort": claudeEffort,
             "copilotPath": copilotPath, "copilotModel": copilotModel,
-            "copilotAllowTools": copilotAllowTools,
+            "copilotAllowTools": copilotAllowTools, "copilotEffort": copilotEffort,
             "codexPath": codexPath, "codexModel": codexModel,
             "localBaseURL": localBaseURL, "localModel": localModel,
             "localSystemPrompt": localSystemPrompt,
@@ -229,9 +252,11 @@ final class AppSettings: ObservableObject {
         str("claudeWorkdir") { self.claudeWorkdir = $0 }
         str("claudeModel") { self.claudeModel = $0 }
         str("claudePermissionMode") { self.claudePermissionMode = $0 }
+        str("claudeEffort") { self.claudeEffort = $0 }
         str("copilotPath") { self.copilotPath = $0 }
         str("copilotModel") { self.copilotModel = $0 }
         bool("copilotAllowTools") { self.copilotAllowTools = $0 }
+        str("copilotEffort") { self.copilotEffort = $0 }
         str("codexPath") { self.codexPath = $0 }
         str("codexModel") { self.codexModel = $0 }
         str("localBaseURL") { self.localBaseURL = $0 }
@@ -272,9 +297,11 @@ final class AppSettings: ObservableObject {
         claudeWorkdir = d.string(forKey: "claudeWorkdir") ?? NSHomeDirectory()
         claudeModel = d.string(forKey: "claudeModel") ?? ""
         claudePermissionMode = d.string(forKey: "claudePermissionMode") ?? "default"
+        claudeEffort = d.string(forKey: "claudeEffort") ?? ""
         copilotPath = d.string(forKey: "copilotPath") ?? ""
         copilotModel = d.string(forKey: "copilotModel") ?? ""
         copilotAllowTools = d.bool(forKey: "copilotAllowTools")
+        copilotEffort = d.string(forKey: "copilotEffort") ?? ""
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""

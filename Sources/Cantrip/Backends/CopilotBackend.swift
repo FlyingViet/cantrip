@@ -65,6 +65,8 @@ final class CopilotBackend: Backend {
         }
         let model = settings.copilotModel.trimmingCharacters(in: .whitespaces)
         if !model.isEmpty { copilotArgs += ["--model", model] }
+        let effort = settings.copilotEffort.trimmingCharacters(in: .whitespaces)
+        if !effort.isEmpty { copilotArgs += ["--reasoning-effort", effort] }
 
         Log.write("launching \(command) via login shell, workdir=\(workdir)")
 
