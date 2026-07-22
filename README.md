@@ -55,6 +55,8 @@ Ask anything more and it goes to an AI agent that can genuinely act:
 - **Self-healing** — it knows its own source location, log file, and rebuild
   command; ask it to fix or extend itself and it will.
 
+<img width="692" height="236" alt="image" src="https://github.com/user-attachments/assets/ee8f9398-b48d-4455-b30b-77193cc05275" />
+
 ## Install
 
 Requirements: macOS 14+, Xcode Command Line Tools, and at least one backend
