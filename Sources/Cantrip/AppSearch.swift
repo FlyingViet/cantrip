@@ -40,7 +40,7 @@ enum AppSearchMatcher {
     }
 
     static func score(query rawQuery: String, appName rawName: String) -> AppSearchScore? {
-        let query = normalize(rawQuery).trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = searchableQuery(from: rawQuery)
         let name = normalize(rawName)
         guard query.count >= 2, !name.isEmpty else { return nil }
 
@@ -94,6 +94,15 @@ enum AppSearchMatcher {
         }
 
         return AppSearchScore(tier: 5, gaps: gaps, start: first, nameLength: nameLength)
+    }
+
+    private static func searchableQuery(from rawQuery: String) -> String {
+        let query = normalize(rawQuery)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let openPrefix = "open "
+        guard query.hasPrefix(openPrefix) else { return query }
+        return String(query.dropFirst(openPrefix.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func normalize(_ value: String) -> String {

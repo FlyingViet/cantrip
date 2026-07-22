@@ -141,12 +141,54 @@ struct LauncherView: View {
     // MARK: - Input bar
 
     private var inputBar: some View {
-        HStack(spacing: 10) {
-            Image(systemName: backendIcon)
-                .font(.system(size: 18))
-                .foregroundStyle(.secondary)
-                .help(backendBadge)
+        VStack(spacing: 4) {
+            // Row 1: the essentials — clean, Spotlight-like.
+            HStack(spacing: 10) {
+                Image(systemName: backendIcon)
+                    .font(.system(size: 18))
+                    .foregroundStyle(.secondary)
+                    .help(backendBadge)
 
+                TextField(placeholder, text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 20, weight: .light))
+                    .focused($inputFocused)
+                    .onSubmit { submit() }
+
+                if session.isStreaming {
+                    Button(action: session.cancel) {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(.red.opacity(0.8))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop")
+                }
+
+                Button(action: toggleVoiceMode) {
+                    Image(systemName: settings.voiceMode ? "mic.fill" : "mic")
+                        .font(.system(size: 16))
+                        .foregroundStyle(speech.isRecording
+                                         ? Color.red
+                                         : settings.voiceMode ? Color.accentColor : Color.secondary)
+                        .symbolEffect(.pulse, isActive: speech.isRecording)
+                }
+                .buttonStyle(.plain)
+                .help(settings.voiceMode
+                      ? "Stop voice conversation"
+                      : "Start voice conversation — listens, sends, and speaks replies")
+            }
+
+            // Row 2: tools & toggles.
+            toolbarRow
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 8)
+    }
+
+    private var toolbarRow: some View {
+        HStack(spacing: 12) {
             Button(action: pickWorkdir) {
                 HStack(spacing: 3) {
                     Image(systemName: "folder")
@@ -167,34 +209,17 @@ struct LauncherView: View {
                 gitMenu
             }
 
-            TextField(placeholder, text: $query)
-                .textFieldStyle(.plain)
-                .font(.system(size: 20, weight: .light))
-                .focused($inputFocused)
-                .onSubmit { submit() }
+            Spacer()
 
-            if session.isStreaming {
-                Button(action: session.cancel) {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundStyle(.red.opacity(0.8))
-                }
-                .buttonStyle(.plain)
-                .help("Stop")
-            }
-
-            Button(action: toggleVoiceMode) {
-                Image(systemName: settings.voiceMode ? "mic.fill" : "mic")
-                    .font(.system(size: 16))
-                    .foregroundStyle(speech.isRecording
-                                     ? Color.red
-                                     : settings.voiceMode ? Color.accentColor : Color.secondary)
-                    .symbolEffect(.pulse, isActive: speech.isRecording)
+            Button(action: { session.isPrivate.toggle() }) {
+                Image(systemName: session.isPrivate ? "eye.slash.fill" : "eye.slash")
+                    .font(.system(size: 14))
+                    .foregroundStyle(session.isPrivate ? Color.purple : Color.secondary)
             }
             .buttonStyle(.plain)
-            .help(settings.voiceMode
-                  ? "Stop voice conversation"
-                  : "Start voice conversation — listens, sends, and speaks replies")
+            .help(session.isPrivate
+                  ? "Private mode ON — this session isn't saved to transcripts, history, or memory"
+                  : "Private mode — don't save this session anywhere")
 
             Button(action: toggleHistory) {
                 Image(systemName: "clock.arrow.circlepath")
@@ -270,8 +295,6 @@ struct LauncherView: View {
             .buttonStyle(.plain)
             .help("New parallel session — current one keeps running (⌘T)")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
     }
 
     private var backendIcon: String {
@@ -500,7 +523,9 @@ struct LauncherView: View {
         .padding(.bottom, 10)
     }
 
-    private var placeholder: String { "How can I help you?" }
+    private var placeholder: String {
+        session.isPrivate ? "Private — nothing is saved" : "How can I help you?"
+    }
 
     /// Dropdown row labels: backend + its currently selected model.
     private func pickerLabel(for kind: BackendKind) -> String {

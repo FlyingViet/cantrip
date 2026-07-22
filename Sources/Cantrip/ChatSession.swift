@@ -40,6 +40,19 @@ final class ChatSession: ObservableObject {
     @Published var workdir: String {
         didSet { UserDefaults.standard.set(workdir, forKey: "workdir-\(id.uuidString)") }
     }
+    /// Private mode: nothing this session touches disk on our side — no
+    /// transcript, no session log, no continuity digest, and the memory
+    /// vault becomes read-only for the agent.
+    @Published var isPrivate = false {
+        didSet {
+            if isPrivate {
+                deleteTranscript()   // scrub anything already written
+                Log.write("session \(id.uuidString.prefix(8)): private mode ON")
+            } else {
+                persistTranscript()
+            }
+        }
+    }
     /// Auto-cancel if the backend goes silent for this long. Generous so
     /// long downloads/builds under a tool call aren't killed.
     private let inactivityLimit: TimeInterval = 900
@@ -90,6 +103,7 @@ final class ChatSession: ObservableObject {
     }
 
     private func persistTranscript() {
+        guard !isPrivate else { return }
         if let data = try? JSONEncoder().encode(messages) {
             try? data.write(to: transcriptURL)
         }
@@ -231,7 +245,9 @@ final class ChatSession: ObservableObject {
 
                 SESSIONS — past conversations logged in \(settings.memoryPath)/sessions/ as daily markdown; grep them when I reference something from before.\(retrieved)
 
-                Maintain memory silently as you work: new environment facts/conventions → edit MEMORY.md; new facts or preferences about me → edit USER.md; both must stay under their caps, so consolidate rather than append. After a task that took trial-and-error, write/update a concise procedure note. Don't mention the vault unless asked.)
+                \(isPrivate
+                    ? "PRIVATE MODE: treat the memory vault as READ-ONLY this conversation. Do NOT create, update, or delete any notes, core memory files, or session logs, and don't record anything about this conversation anywhere."
+                    : "Maintain memory silently as you work: new environment facts/conventions → edit MEMORY.md; new facts or preferences about me → edit USER.md; both must stay under their caps, so consolidate rather than append. After a task that took trial-and-error, write/update a concise procedure note. Don't mention the vault unless asked."))
                 """
             }
         }
@@ -414,7 +430,7 @@ final class ChatSession: ObservableObject {
         isStreaming = false
         statusText = nil
         // Session layer: log the completed exchange for future grep.
-        if settings.memoryEnabled,
+        if settings.memoryEnabled, !isPrivate,
            let userIdx = messages.lastIndex(where: { $0.role == .user }),
            let assistantIdx = messages.lastIndex(where: { $0.role == .assistant }),
            assistantIdx > userIdx, !messages[assistantIdx].text.isEmpty {
@@ -458,7 +474,7 @@ final class ChatSession: ObservableObject {
 
     func newConversation() {
         // Continuity: stash a digest of this conversation for the next one.
-        if messages.count >= 2 {
+        if messages.count >= 2, !isPrivate {
             let topics = messages.filter { $0.role == .user }.suffix(3)
                 .map { String($0.text.prefix(100)) }
                 .joined(separator: " | ")
