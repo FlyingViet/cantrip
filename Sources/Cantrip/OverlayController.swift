@@ -7,34 +7,58 @@ struct OverlayHint: Decodable {
     let x: Double
     let y: Double
     let label: String
+    /// 1-based display number matching the captured screenshots (1 = main).
+    let display: Int?
 }
 
 /// Full-screen, click-through window that renders the assistant's
 /// tutorial callouts on top of whatever the user is doing.
 final class OverlayController {
     static let shared = OverlayController()
-    private var window: NSWindow?
+    private var windows: [NSWindow] = []
     private init() {}
+
+    /// Find the NSScreen for a capture's display number (main = 1).
+    private func screen(forDisplayIndex index: Int) -> NSScreen? {
+        let captures = ScreenCapture.shared.lastCaptures
+        if let capture = captures.first(where: { $0.index == index }) {
+            return NSScreen.screens.first {
+                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+                    as? CGDirectDisplayID) == capture.displayID
+            }
+        }
+        return index == 1 ? NSScreen.main : nil
+    }
 
     func show(_ hints: [OverlayHint]) {
         DispatchQueue.main.async {
             self.clearNow()
-            guard !hints.isEmpty, let screen = NSScreen.main else { return }
-            let w = NSWindow(contentRect: screen.frame,
-                             styleMask: .borderless,
-                             backing: .buffered,
-                             defer: false)
-            w.isOpaque = false
-            w.backgroundColor = .clear
-            w.hasShadow = false
-            w.level = .floating
-            w.ignoresMouseEvents = true // clicks pass through to the real UI
-            w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            w.contentView = NSHostingView(
-                rootView: OverlayView(hints: hints, size: screen.frame.size))
-            w.orderFrontRegardless()
-            self.window = w
-            Log.write("overlay: showing \(hints.count) hints")
+            guard !hints.isEmpty else { return }
+            // One overlay window per referenced display; numbering stays
+            // global so the response text's ①②③ references hold.
+            let numbered = hints.enumerated().map { (number: $0.offset + 1, hint: $0.element) }
+            let grouped = Dictionary(grouping: numbered) { $0.hint.display ?? 1 }
+            for (displayIndex, displayHints) in grouped {
+                guard let screen = self.screen(forDisplayIndex: displayIndex)
+                    ?? NSScreen.main else { continue }
+                let w = NSWindow(contentRect: screen.frame,
+                                 styleMask: .borderless,
+                                 backing: .buffered,
+                                 defer: false)
+                w.isOpaque = false
+                w.backgroundColor = .clear
+                w.hasShadow = false
+                w.level = .floating
+                w.ignoresMouseEvents = true // clicks pass through
+                w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+                w.contentView = NSHostingView(
+                    rootView: OverlayView(hints: displayHints,
+                                          size: screen.frame.size))
+                w.setFrame(screen.frame, display: true)
+                w.orderFrontRegardless()
+                self.windows.append(w)
+            }
+            Log.write("overlay: showing \(hints.count) hints on \(grouped.count) display(s)")
         }
     }
 
@@ -43,22 +67,22 @@ final class OverlayController {
     }
 
     private func clearNow() {
-        window?.orderOut(nil)
-        window = nil
+        windows.forEach { $0.orderOut(nil) }
+        windows.removeAll()
     }
 }
 
 private struct OverlayView: View {
-    let hints: [OverlayHint]
+    let hints: [(number: Int, hint: OverlayHint)]
     let size: CGSize
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.clear
-            ForEach(Array(hints.enumerated()), id: \.offset) { index, hint in
-                HintBubble(number: index + 1, label: hint.label)
-                    .position(x: min(max(hint.x, 0), 1) * size.width,
-                              y: min(max(hint.y, 0), 1) * size.height)
+            ForEach(hints, id: \.number) { entry in
+                HintBubble(number: entry.number, label: entry.hint.label)
+                    .position(x: min(max(entry.hint.x, 0), 1) * size.width,
+                              y: min(max(entry.hint.y, 0), 1) * size.height)
             }
         }
         .frame(width: size.width, height: size.height)

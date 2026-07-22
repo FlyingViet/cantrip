@@ -4,6 +4,7 @@ import Carbon.HIToolbox
 import Combine
 import UserNotifications
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
     private var panel: LauncherPanel!
@@ -129,15 +130,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                   self.panel.isKeyWindow,
                   event.modifierFlags.contains(.command) else { return event }
 
-            // ⌘← / ⌘→ (⇧ extends selection): jump to start/end of text.
-            if event.keyCode == 123 || event.keyCode == 124,
-               let editor = self.panel.firstResponder as? NSTextView {
-                let shift = event.modifierFlags.contains(.shift)
-                switch (event.keyCode, shift) {
-                case (123, false): editor.moveToBeginningOfDocument(nil)
-                case (123, true): editor.moveToBeginningOfDocumentAndModifySelection(nil)
-                case (124, false): editor.moveToEndOfDocument(nil)
-                default: editor.moveToEndOfDocumentAndModifySelection(nil)
+            // ⌘← / ⌘→: with text in the field → jump cursor to start/end
+            // (⇧ extends selection); with an empty field → switch tabs.
+            if event.keyCode == 123 || event.keyCode == 124 {
+                let editor = self.panel.firstResponder as? NSTextView
+                if let editor, !editor.string.isEmpty {
+                    let shift = event.modifierFlags.contains(.shift)
+                    switch (event.keyCode, shift) {
+                    case (123, false): editor.moveToBeginningOfDocument(nil)
+                    case (123, true): editor.moveToBeginningOfDocumentAndModifySelection(nil)
+                    case (124, false): editor.moveToEndOfDocument(nil)
+                    default: editor.moveToEndOfDocumentAndModifySelection(nil)
+                    }
+                } else {
+                    event.keyCode == 123 ? self.manager.selectPrevious()
+                                         : self.manager.selectNext()
                 }
                 return nil // consumed
             }
@@ -188,22 +195,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let preview = finished.messages.last(where: { $0.role == .assistant && !$0.text.isEmpty })?.text
             ?? finished.messages.last(where: { $0.role == .error })?.text
             ?? "Response ready"
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+        let title = finished.title
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
             guard granted else { return }
             let content = UNMutableNotificationContent()
-            content.title = "Cantrip — \(finished.title)"
+            content.title = "Cantrip — \(title)"
             content.body = String(preview.prefix(160))
-            center.add(UNNotificationRequest(identifier: UUID().uuidString,
-                                             content: content, trigger: nil))
+            UNUserNotificationCenter.current().add(UNNotificationRequest(
+                identifier: UUID().uuidString,
+                content: content,
+                trigger: nil
+            ))
         }
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                didReceive response: UNNotificationResponse,
-                                withCompletionHandler completionHandler: @escaping () -> Void) {
-        // Clicking the notification reopens the panel.
-        if !panel.isVisible { togglePanel() }
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if !panel.isVisible { togglePanel() }
+        }
         completionHandler()
     }
 

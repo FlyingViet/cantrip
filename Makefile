@@ -4,12 +4,26 @@ APP_BUNDLE = $(APP_NAME).app
 # Historical cert name kept stable so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build cert icon app run clean
+.PHONY: all build test test-context test-features cert icon app run clean
 
 all: app
 
 build:
 	swift build -c release
+
+test: test-context test-features
+
+test-context:
+	@BIN="/tmp/cantrip-context-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/ConversationContext.swift Tests/ContextTests/main.swift -o "$$BIN"; \
+	"$$BIN"
+
+test-features:
+	@BIN="/tmp/cantrip-feature-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/AppSearch.swift Tests/FeatureTests/main.swift -o "$$BIN"; \
+	"$$BIN"
 
 # Auto-create the signing certificate if it's missing (first install).
 cert:

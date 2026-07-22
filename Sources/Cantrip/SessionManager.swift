@@ -4,6 +4,7 @@ import Combine
 /// Multiple independent chat sessions: each has its own backends and
 /// message list, so long-running work continues in one while you use
 /// another. Persisted per-session; restored on launch.
+@MainActor
 final class SessionManager: ObservableObject {
     @Published var sessions: [ChatSession] = []
     @Published var activeIndex = 0

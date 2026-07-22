@@ -4,17 +4,19 @@ import Foundation
 ///   copilot -p "<prompt>" -s --output-format json --stream on
 ///     [--allow-all-tools] [--model M]
 /// Copilot's headless mode has no session resume, so conversation
-/// continuity is emulated by prepending recent turns to the prompt.
+/// continuity uses a bounded window of raw recent and related turns.
 final class CopilotBackend: Backend {
     private var process: Process?
-    private var history: [(user: String, assistant: String)] = []
     private let settings = AppSettings.shared
     private let queue = DispatchQueue(label: "copilot-backend")
-    private let maxHistoryTurns = 6
 
-    func send(_ prompt: String, workdir: String, onEvent: @escaping (BackendEvent) -> Void) {
+    func send(
+        _ request: BackendRequest,
+        workdir: String,
+        onEvent: @escaping (BackendEvent) -> Void
+    ) {
         queue.async { [weak self] in
-            self?.run(prompt: prompt, workdir: workdir, onEvent: onEvent)
+            self?.run(request: request, workdir: workdir, onEvent: onEvent)
         }
     }
 
@@ -33,24 +35,15 @@ final class CopilotBackend: Backend {
 
     func reset() {
         cancel()
-        history.removeAll()
     }
 
     // MARK: - Internals
 
-    private func composePrompt(_ prompt: String) -> String {
-        guard !history.isEmpty else { return prompt }
-        var lines = ["Context — earlier turns of this conversation:"]
-        for turn in history.suffix(maxHistoryTurns) {
-            lines.append("User: \(turn.user)")
-            lines.append("Assistant: \(turn.assistant)")
-        }
-        lines.append("")
-        lines.append("New message: \(prompt)")
-        return lines.joined(separator: "\n")
-    }
-
-    private func run(prompt: String, workdir: String, onEvent: @escaping (BackendEvent) -> Void) {
+    private func run(
+        request: BackendRequest,
+        workdir: String,
+        onEvent: @escaping (BackendEvent) -> Void
+    ) {
         // Run through the user's login shell so copilot resolves with the
         // exact same PATH / node environment as their terminal. Arguments
         // are passed positionally ("$@") so no shell-quoting issues.
@@ -58,7 +51,11 @@ final class CopilotBackend: Backend {
         let command = configured.isEmpty ? "copilot" : configured
 
         var copilotArgs = [
-            "-p", composePrompt(prompt),
+            "-p", ConversationContextBuilder.composePrompt(
+                currentPrompt: request.prompt,
+                query: request.userMessage,
+                turns: request.previousTurns
+            ),
             "-s",
             "--output-format", "json",
             "--stream", "on"
@@ -119,7 +116,6 @@ final class CopilotBackend: Backend {
                     onEvent(event)
                 }
             }
-            let answer = output.answer.trimmingCharacters(in: .whitespacesAndNewlines)
             if let parseError = output.errorDescription {
                 onEvent(.failure(parseError))
             } else if proc.terminationStatus != 0 {
@@ -132,9 +128,6 @@ final class CopilotBackend: Backend {
                     onEvent(.failure(errText.isEmpty ? "copilot exited with status \(proc.terminationStatus)" : errText))
                 }
             } else {
-                if !answer.isEmpty {
-                    self?.history.append((user: prompt, assistant: answer))
-                }
                 onEvent(.done)
             }
             self?.process = nil
@@ -155,10 +148,6 @@ private final class CopilotJSONOutputCollector {
     private let lock = NSLock()
     private var parser = CopilotJSONStreamParser()
     private var parsingError: Error?
-
-    var answer: String {
-        lock.withLock { parser.answer }
-    }
 
     var errorDescription: String? {
         lock.withLock {

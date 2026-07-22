@@ -124,18 +124,8 @@ final class MemoryStore {
 
     // MARK: - Retrieval (keyword-based, app-side)
 
-    private static let stopwords: Set<String> = [
-        "the", "and", "for", "that", "this", "with", "what", "when", "where",
-        "how", "can", "you", "your", "not", "are", "was", "were", "have",
-        "has", "had", "from", "about", "into", "did", "does", "its", "get",
-        "make", "just", "like", "them", "then", "than", "will", "would",
-        "should", "could", "our", "out", "all", "any", "some", "please",
-    ]
-
     static func terms(from query: String) -> [String] {
-        query.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count >= 3 && !stopwords.contains($0) }
+        ConversationContextBuilder.terms(from: query)
     }
 
     static func score(_ text: String, terms: [String]) -> Int {
