@@ -22,7 +22,8 @@ Press **⌥Space** and type. Instant, local, no AI round-trip:
 - **Math & conversions** — `142*8.5`, `10 km to miles`, `72 f to c`
 - **Raw shell** — `!git status` streams command output right into the panel
 - **Terminal mode** — the `>` toolbar icon opens a persistent shell inside
-  the panel: `cd`, exports, and state carry between commands
+  the panel: `cd`, exports, and state carry between commands; ↑/↓ navigate
+  command history and Control-C interrupts the running process
 - **Skills** — `/name args` runs your own scripts from
   `~/.config/cantrip/commands` (typeahead shows each skill's description);
   stdout renders as markdown in the panel
@@ -147,6 +148,7 @@ off by default; treat it like handing over a terminal, because it is one.
 | ⌥↩ | inject into the current turn without interrupting (Claude) |
 | `!cmd` | run a raw shell command |
 | `/skill args` | run a script from ~/.config/cantrip/commands |
+| Terminal ↑ / ↓ · Control-C | previous / next command · interrupt process |
 | ⌘T · ⌘1–9 · ⌘⇧[ ] | new / jump / cycle sessions |
 | ⌘← ⌘→ | with text: jump cursor to start/end (⇧ selects) · empty field: switch tabs |
 | ⌘N | new conversation (current session) |
