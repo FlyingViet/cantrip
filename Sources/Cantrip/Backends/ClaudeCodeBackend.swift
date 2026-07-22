@@ -98,6 +98,8 @@ final class ClaudeCodeBackend: Backend {
                     "--include-partial-messages"]
         let model = settings.claudeModel.trimmingCharacters(in: .whitespaces)
         if !model.isEmpty { args += ["--model", model] }
+        let effort = settings.claudeEffort.trimmingCharacters(in: .whitespaces)
+        if !effort.isEmpty { args += ["--effort", effort] }
         if settings.allowActions {
             args += ["--permission-mode", "bypassPermissions"]
         } else if settings.claudePermissionMode != "default" {

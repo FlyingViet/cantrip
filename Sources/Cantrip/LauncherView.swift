@@ -31,6 +31,10 @@ struct LauncherView: View {
         HStack(alignment: .top, spacing: 0) {
             mainColumn
                 .frame(width: metrics.contentWidth)
+            if showSettings {
+                Divider().opacity(0.3)
+                settingsSidebar
+            }
             if showSteps {
                 Divider().opacity(0.3)
                 stepsSidebar
@@ -133,10 +137,6 @@ struct LauncherView: View {
             } else if !session.messages.isEmpty || session.statusText != nil {
                 Divider().opacity(0.3)
                 conversationView
-            }
-            if showSettings {
-                Divider().opacity(0.3)
-                SettingsView()
             }
         }
     }
@@ -394,6 +394,30 @@ struct LauncherView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
         }
+    }
+
+    // MARK: - Settings sidebar
+
+    private var settingsSidebar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Settings")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: { withAnimation(.easeOut(duration: 0.15)) { showSettings = false } }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            SettingsView()
+            Spacer(minLength: 0)
+        }
+        .frame(width: 330, alignment: .topLeading)
     }
 
     // MARK: - Progress sidebar
@@ -1411,7 +1435,7 @@ struct SettingsView: View {
         ScrollView(.vertical) {
             settingsContent
         }
-        .frame(maxHeight: 280)
+        .frame(maxHeight: 500)
     }
 
     private var settingsContent: some View {
@@ -1420,6 +1444,15 @@ struct SettingsView: View {
             case .claudeCode:
                 labeledField("claude path (blank = auto)", text: $settings.claudePath, prompt: "/usr/local/bin/claude")
                 claudeModelPicker
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Effort").font(.caption).foregroundStyle(.secondary)
+                    Picker("", selection: $settings.claudeEffort) {
+                        ForEach(AppSettings.claudeEffortLevels, id: \.value) { level in
+                            Text(level.label).tag(level.value)
+                        }
+                    }
+                    .labelsHidden()
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Permissions").font(.caption).foregroundStyle(.secondary)
                     Picker("", selection: $settings.claudePermissionMode) {
@@ -1433,6 +1466,15 @@ struct SettingsView: View {
             case .copilot:
                 labeledField("copilot path (blank = auto)", text: $settings.copilotPath, prompt: "/opt/homebrew/bin/copilot")
                 copilotModelPicker
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Effort").font(.caption).foregroundStyle(.secondary)
+                    Picker("", selection: $settings.copilotEffort) {
+                        ForEach(AppSettings.copilotEffortLevels, id: \.value) { level in
+                            Text(level.label).tag(level.value)
+                        }
+                    }
+                    .labelsHidden()
+                }
                 labeledField("Working directory", text: $settings.claudeWorkdir, prompt: NSHomeDirectory())
                 Toggle("Allow all tools (--allow-all-tools) — lets Copilot run commands unprompted", isOn: $settings.copilotAllowTools)
                     .font(.caption)
