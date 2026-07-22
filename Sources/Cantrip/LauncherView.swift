@@ -1536,7 +1536,8 @@ struct SettingsView: View {
             Picker("", selection: $settings.claudeModel) {
                 Text("Default (account setting)").tag("")
                 ForEach(claudeModelOptions, id: \.self) { model in
-                    Text(model).tag(model)
+                    Text(model == "sonnet[1m]" ? "sonnet[1m] · 1M context" : model)
+                        .tag(model)
                 }
             }
             .labelsHidden()
@@ -1548,6 +1549,22 @@ struct SettingsView: View {
         let current = settings.claudeModel.trimmingCharacters(in: .whitespaces)
         if !current.isEmpty && !options.contains(current) { options.append(current) }
         return options
+    }
+
+    /// Approximate native context window per model family — Copilot may
+    /// cap lower; shown as guidance, not a promise.
+    private func contextHint(for model: String) -> String? {
+        let m = model.lowercased()
+        if m == "auto" { return nil }
+        if m.contains("haiku") { return "~200k" }
+        if m.contains("claude") || m.contains("gemini") { return "~1M" }
+        if m.contains("gpt") { return "~400k" }
+        return nil
+    }
+
+    private func copilotModelLabel(_ model: String) -> String {
+        if let hint = contextHint(for: model) { return "\(model) · \(hint)" }
+        return model
     }
 
     private var copilotModelOptions: [String] {
@@ -1565,7 +1582,7 @@ struct SettingsView: View {
                 Picker("", selection: $settings.copilotModel) {
                     Text("Default (\(settings.copilotFileDefaultModel ?? "auto"))").tag("")
                     ForEach(copilotModelOptions, id: \.self) { model in
-                        Text(model).tag(model)
+                        Text(copilotModelLabel(model)).tag(model)
                     }
                 }
                 .labelsHidden()

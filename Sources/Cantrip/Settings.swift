@@ -177,10 +177,12 @@ final class AppSettings: ObservableObject {
             // list anywhere scrapable. Kept current in the repo; a model
             // your plan lacks simply errors visibly in the panel.
             if models.count < 2 {
-                models = ["auto", "gpt-5.6-sol", "gpt-5.4", "gpt-5-mini",
-                          "gpt-4.1", "gpt-5.3-codex", "claude-sonnet-4.6",
-                          "claude-sonnet-4.5", "claude-haiku-4.5",
-                          "claude-fable-5", "gemini-2.5-pro"]
+                // Top/current models only — one per family tier.
+                models = ["auto",
+                          "gpt-5.6-sol", "gpt-5.6-luna",
+                          "claude-opus-4.8", "claude-sonnet-4.6",
+                          "claude-haiku-4.5",
+                          "gemini-2.5-pro"]
                 source = "curated list"
             }
             Log.write("model discovery: found \(models.count) models via \(source)")
