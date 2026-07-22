@@ -4,9 +4,11 @@ import Foundation
 /// provides normal signal handling while commands still arrive by line,
 /// so shell state persists but full-screen programs remain unsupported.
 final class PersistentShell: ObservableObject {
-    static let shared = PersistentShell()
     @Published private(set) var output = ""
     @Published private(set) var isRunning = false
+    @Published private(set) var hasAgentCommandRunning = false
+    @Published private(set) var agentCommandVersion = 0
+    private(set) var commandHistory: [String] = []
 
     private var process: Process?
     private var stdinHandle: FileHandle?
@@ -14,12 +16,18 @@ final class PersistentShell: ObservableObject {
     private var isReady = false
     private var pendingInterrupt = false
     private var suppressNextInterruptEcho = false
+    private var mirroredCommands: [String: MirroredCommand] = [:]
     private let maxOutput = 60_000
-    private init() {}
+
+    private struct MirroredCommand {
+        var output = ""
+        var state = ToolActivityState.running
+    }
 
     func run(_ command: String, workdir: String) {
         ensureStarted(workdir: workdir)
         append((output.isEmpty ? "" : "\n") + "$ \(command)\n")
+        remember(command)
         isRunning = true
         // Sentinel line reports the exit status and marks completion.
         let line = command + "\nprintf '__CANTRIP_EXIT_%d__\\n' $?\n"
@@ -28,6 +36,17 @@ final class PersistentShell: ObservableObject {
 
     func clear() {
         output = ""
+    }
+
+    /// Reflect commands that the agent CLI executes itself. They are not
+    /// re-run here; matching tool IDs let streaming updates append once.
+    func mirror(_ activity: ToolActivity) {
+        if activity.terminalCommand != nil {
+            mirrorCommand(activity)
+        }
+        for child in activity.children {
+            mirror(child)
+        }
     }
 
     /// Send SIGINT to the running command while keeping the persistent shell alive.
@@ -157,6 +176,56 @@ final class PersistentShell: ObservableObject {
         output += text
         if output.count > maxOutput {
             output = String(output.suffix(maxOutput / 2))
+        }
+    }
+
+    private func mirrorCommand(_ activity: ToolActivity) {
+        guard let command = activity.terminalCommand else { return }
+        var mirrored = mirroredCommands[activity.id]
+        if mirrored == nil {
+            append((output.isEmpty ? "" : "\n") + "agent $ \(command)\n")
+            remember(command)
+            agentCommandVersion &+= 1
+            mirrored = MirroredCommand()
+        }
+        guard var mirrored else { return }
+
+        if let newOutput = activity.output, newOutput != mirrored.output {
+            let delta: String
+            if newOutput.hasPrefix(mirrored.output) {
+                delta = String(newOutput.dropFirst(mirrored.output.count))
+            } else {
+                delta = (mirrored.output.isEmpty ? "" : "\n") + newOutput
+            }
+            if !delta.isEmpty {
+                append(delta + (delta.hasSuffix("\n") ? "" : "\n"))
+            }
+            mirrored.output = newOutput
+        }
+
+        if mirrored.state == .running, activity.state != .running {
+            switch activity.state {
+            case .succeeded:
+                append("[agent command completed]\n")
+            case .failed:
+                append("[agent command failed]\n")
+            case .cancelled:
+                append("[agent command cancelled]\n")
+            case .running:
+                break
+            }
+        }
+        mirrored.state = activity.state
+        mirroredCommands[activity.id] = mirrored
+        hasAgentCommandRunning = mirroredCommands.values.contains {
+            $0.state == .running
+        }
+    }
+
+    private func remember(_ command: String) {
+        commandHistory.append(command)
+        if commandHistory.count > 200 {
+            commandHistory.removeFirst(commandHistory.count - 200)
         }
     }
 

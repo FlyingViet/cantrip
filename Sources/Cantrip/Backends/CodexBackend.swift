@@ -154,11 +154,44 @@ final class CodexBackend: Backend {
             if !streamedDeltas, let text = obj["message"] as? String, !text.isEmpty {
                 onEvent(.textDelta(text))
             }
+        case type == "item.started":
+            guard let item = raw["item"] as? [String: Any],
+                  item["type"] as? String == "command_execution",
+                  let command = command(from: item) else { return }
+            let id = (item["id"] ?? item["call_id"]) as? String ?? UUID().uuidString
+            let activity = ToolActivityFactory.start(
+                id: id, toolName: "command_execution",
+                arguments: ["command": command])
+            activities[id] = activity
+            onEvent(.activity(activity))
+        case type == "item.updated":
+            guard let item = raw["item"] as? [String: Any],
+                  item["type"] as? String == "command_execution",
+                  let id = (item["id"] ?? item["call_id"]) as? String,
+                  var activity = activities[id],
+                  let output = commandOutput(from: item),
+                  output != activity.output else { return }
+            activity.output = output
+            activities[id] = activity
+            onEvent(.activity(activity))
         case type == "item.completed":
-            if let item = raw["item"] as? [String: Any],
-               item["type"] as? String == "agent_message",
-               !streamedDeltas,
-               let text = (item["text"] ?? item["message"]) as? String {
+            guard let item = raw["item"] as? [String: Any] else { return }
+            if item["type"] as? String == "command_execution" {
+                let id = (item["id"] ?? item["call_id"]) as? String
+                    ?? UUID().uuidString
+                let started = activities.removeValue(forKey: id)
+                    ?? ToolActivityFactory.start(
+                        id: id, toolName: "command_execution",
+                        arguments: ["command": command(from: item) ?? "command"])
+                let exitCode = item["exit_code"] as? Int
+                let success = exitCode.map { $0 == 0 }
+                    ?? (item["status"] as? String != "failed")
+                onEvent(.activity(ToolActivityFactory.complete(
+                    started, id: id, success: success,
+                    output: commandOutput(from: item))))
+            } else if item["type"] as? String == "agent_message",
+                      !streamedDeltas,
+                      let text = (item["text"] ?? item["message"]) as? String {
                 onEvent(.textDelta(text))
             }
         case type.contains("exec_command_begin"):
@@ -176,6 +209,14 @@ final class CodexBackend: Backend {
             onEvent(.activity(ToolActivityFactory.complete(
                 activities.removeValue(forKey: id), id: id,
                 success: exitCode == 0, output: output)))
+        case type.contains("exec_command_output"):
+            guard let id = obj["call_id"] as? String,
+                  var activity = activities[id],
+                  let chunk = (obj["delta"] ?? obj["chunk"] ?? obj["stdout"]) as? String
+            else { return }
+            activity.output = (activity.output ?? "") + chunk
+            activities[id] = activity
+            onEvent(.activity(activity))
         case type.contains("task_started"), type.contains("turn.started"):
             onEvent(.status("Thinking…"))
         case type.contains("error"):
@@ -185,5 +226,19 @@ final class CodexBackend: Backend {
         default:
             break
         }
+    }
+
+    private func command(from item: [String: Any]) -> String? {
+        if let command = item["command"] as? String {
+            return command
+        }
+        if let command = item["command"] as? [String] {
+            return command.joined(separator: " ")
+        }
+        return nil
+    }
+
+    private func commandOutput(from item: [String: Any]) -> String? {
+        (item["aggregated_output"] ?? item["output"] ?? item["stdout"]) as? String
     }
 }
