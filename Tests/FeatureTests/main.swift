@@ -68,6 +68,17 @@ private func testAppSearchRanking() {
         best("CHROME", from: [("Google Chrome", false)]) == "Google Chrome",
         "matching should be case-insensitive"
     )
+    expect(
+        best("open chrome", from: [
+            ("Chromium", false),
+            ("Google Chrome", false),
+        ]) == "Google Chrome",
+        "an explicit open command should use the same app ranking"
+    )
+    expect(
+        best("OPEN   chrome", from: [("Google Chrome", false)]) == "Google Chrome",
+        "open commands should tolerate case and extra spacing"
+    )
 }
 
 testAppSearchRanking()
@@ -76,4 +87,4 @@ if failures > 0 {
     fputs("\(failures) feature test(s) failed\n", stderr)
     exit(1)
 }
-print("All 8 feature tests passed")
+print("All 10 feature tests passed")

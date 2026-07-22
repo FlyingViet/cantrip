@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import ScreenCaptureKit
 
 /// Captures the main display to a JPEG (downscaled to keep token cost sane)
 /// so CLI backends can view it with their file/image tools.
@@ -38,41 +39,57 @@ final class ScreenCapture {
     }
 
     /// Capture ALL active displays (called right before the panel appears,
-    /// so the shots show what the user was actually working on).
+    /// so the shots show what the user was actually working on). Uses
+    /// ScreenCaptureKit — the CGDisplay capture APIs are deprecated on
+    /// modern macOS.
     func captureNow() {
         guard AppSettings.shared.attachScreen else { return }
         guard hasAccess else {
             Log.write("screen: no access — enable in System Settings → Privacy → Screen Recording, then relaunch")
             return
         }
-        var ids = [CGDirectDisplayID](repeating: 0, count: 8)
-        var count: UInt32 = 0
-        CGGetActiveDisplayList(8, &ids, &count)
-        guard count > 0 else { return }
-        // Main display first, so "display 1" is always the primary.
-        let ordered = ids.prefix(Int(count)).sorted {
-            (CGDisplayIsMain($0) != 0 ? 0 : 1) < (CGDisplayIsMain($1) != 0 ? 0 : 1)
+        Task.detached(priority: .userInitiated) { [weak self] in
+            await self?.captureAllDisplays()
         }
+    }
 
-        pruneOldCaptures()
-        let stamp = Int(Date().timeIntervalSince1970)
-        var captures: [DisplayCapture] = []
-        for (i, id) in ordered.enumerated() {
-            guard let image = CGDisplayCreateImage(id),
-                  let jpeg = Self.scaledJPEG(image) else { continue }
-            let path = dir.appendingPathComponent("screen-\(stamp)-d\(i + 1).jpg")
-            do {
+    private func captureAllDisplays() async {
+        do {
+            let content = try await SCShareableContent
+                .excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            // Main display first, so "display 1" is always the primary.
+            let ordered = content.displays.sorted {
+                (CGDisplayIsMain($0.displayID) != 0 ? 0 : 1)
+                    < (CGDisplayIsMain($1.displayID) != 0 ? 0 : 1)
+            }
+            guard !ordered.isEmpty else { return }
+
+            pruneOldCaptures()
+            let stamp = Int(Date().timeIntervalSince1970)
+            var captures: [DisplayCapture] = []
+            for (i, display) in ordered.enumerated() {
+                let filter = SCContentFilter(display: display, excludingWindows: [])
+                let config = SCStreamConfiguration()
+                let scale = min(1.0, 1680.0 / Double(max(display.width, 1)))
+                config.width = max(1, Int(Double(display.width) * scale))
+                config.height = max(1, Int(Double(display.height) * scale))
+                config.showsCursor = false
+                let image = try await SCScreenshotManager.captureImage(
+                    contentFilter: filter, configuration: config)
+                guard let jpeg = Self.scaledJPEG(image) else { continue }
+                let path = dir.appendingPathComponent("screen-\(stamp)-d\(i + 1).jpg")
                 try jpeg.write(to: path)
                 captures.append(DisplayCapture(
-                    path: path.path, displayID: id,
-                    isMain: CGDisplayIsMain(id) != 0, index: i + 1,
+                    path: path.path, displayID: display.displayID,
+                    isMain: CGDisplayIsMain(display.displayID) != 0, index: i + 1,
                     width: image.width, height: image.height))
-            } catch {
-                Log.write("screen: write failed: \(error.localizedDescription)")
             }
+            let finished = captures
+            await MainActor.run { self.lastCaptures = finished }
+            Log.write("screen: captured \(finished.count) display(s) via ScreenCaptureKit")
+        } catch {
+            Log.write("screen: capture failed: \(error.localizedDescription)")
         }
-        lastCaptures = captures
-        Log.write("screen: captured \(captures.count) display(s)")
     }
 
     private static func scaledJPEG(_ cg: CGImage, maxWidth: CGFloat = 1680,

@@ -19,6 +19,7 @@ struct LauncherView: View {
     @State private var showSteps = false
     @StateObject private var fileSearch = FileSearch.shared
     @ObservedObject private var usage = UsageTracker.shared
+    @ObservedObject private var updater = UpdateChecker.shared
     @State private var showUsage = false
     @State private var showHistory = false
     @State private var historySearch = ""
@@ -207,6 +208,24 @@ struct LauncherView: View {
 
             if isGitRepo {
                 gitMenu
+            }
+
+            if updater.commitsBehind > 0 {
+                Button(action: {
+                    // Stream the update through the transcript like a
+                    // ! command, so pull/build progress is visible.
+                    session.submit("!" + UpdateChecker.shared.updateCommand)
+                }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 11))
+                        Text("Update available")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.plain)
+                .help("\(updater.commitsBehind) new commit\(updater.commitsBehind == 1 ? "" : "s") on GitHub — click to pull, rebuild, and relaunch (app restarts)")
             }
 
             Spacer()
