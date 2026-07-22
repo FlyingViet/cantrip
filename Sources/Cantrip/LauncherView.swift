@@ -261,9 +261,11 @@ struct LauncherView: View {
                     HStack(spacing: 3) {
                         Image(systemName: "arrow.down.circle.fill")
                             .font(.system(size: 11))
-                        Text("Update available")
+                        Text("New update")
                             .font(.caption)
+                            .lineLimit(1)
                     }
+                    .fixedSize()
                     .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(.plain)
@@ -363,13 +365,31 @@ struct LauncherView: View {
             .buttonStyle(.plain)
             .help("New conversation (this session)")
 
-            Button(action: { manager.newSession() }) {
+            Menu {
+                let archived = manager.archivedSessions()
+                if archived.isEmpty {
+                    Text("No archived sessions")
+                } else {
+                    Text("Reopen session")
+                    ForEach(archived.prefix(8)) { entry in
+                        Button("\(entry.title) — \(entry.date.formatted(date: .abbreviated, time: .shortened))") {
+                            manager.restore(entry.id)
+                        }
+                    }
+                }
+                Divider()
+                Button("Browse all in History…") { toggleHistory() }
+            } label: {
                 Image(systemName: "rectangle.stack.badge.plus")
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
+            } primaryAction: {
+                manager.newSession()
             }
-            .buttonStyle(.plain)
-            .help("New parallel session — current one keeps running (⌘T)")
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Click: new session (⌘T) · menu: reopen a past session")
+            .hoverHint("Sessions — click for new, open menu to restore", $toolbarHint)
         }
     }
 
