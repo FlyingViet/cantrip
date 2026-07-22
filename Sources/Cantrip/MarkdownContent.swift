@@ -64,11 +64,7 @@ struct MarkdownContent: View {
                 }
             }
         case .code(let code):
-            Text(code)
-                .font(.system(size: 12, design: .monospaced))
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+            CodeBlockView(code: code)
         case .quote(let text):
             HStack(alignment: .top, spacing: 8) {
                 RoundedRectangle(cornerRadius: 1.5)
@@ -314,6 +310,41 @@ struct MarkdownContent: View {
             for path in found.prefix(4) { blocks.append(.image(path)) }
         }
         return blocks
+    }
+}
+
+/// Monospaced code box with a copy button (checkmark feedback on click).
+private struct CodeBlockView: View {
+    let code: String
+    @State private var copied = false
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Text(code)
+                .font(.system(size: 12, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(8)
+                .padding(.trailing, 26) // room for the button
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary.opacity(0.5),
+                            in: RoundedRectangle(cornerRadius: 6))
+            Button(action: copy) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11))
+                    .foregroundStyle(copied ? Color.green : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(6)
+            .help("Copy")
+        }
+    }
+
+    private func copy() {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(code, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
     }
 }
 
