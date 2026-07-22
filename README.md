@@ -21,9 +21,11 @@ Press **⌥Space** and type. Instant, local, no AI round-trip:
 - **File search** — filename fragments search the Spotlight index; click to open
 - **Math & conversions** — `142*8.5`, `10 km to miles`, `72 f to c`
 - **Raw shell** — `!git status` streams command output right into the panel
-- **Terminal mode** — the `>` toolbar icon opens a persistent shell inside
-  the panel: `cd`, exports, and state carry between commands; ↑/↓ navigate
-  command history and Control-C interrupts the running process
+- **Unified session terminal** — the `>` toolbar icon opens a persistent shell
+  for that tab. Agent-run commands and their output appear there automatically,
+  then you can keep working in the same view; `cd`, exports, and manual shell
+  state persist, ↑/↓ navigate all session commands, and Control-C interrupts
+  the active manual command or agent run
 - **Skills** — `/name args` runs your own scripts from
   `~/.config/cantrip/commands` (typeahead shows each skill's description);
   stdout renders as markdown in the panel
@@ -55,10 +57,10 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   and a nightly background consolidation pass. It gets better with use, and
   you can read everything it knows.
 - **Parallel sessions** — tabs (⌘T, ⌘1–9), each with its own conversation,
-  working directory, and backend processes. A 90-minute download babysits
-  itself in one tab while you work in another; finished background sessions
-  notify you. Closed sessions archive: reopen any of them (titles, dates,
-  full context) from the history view.
+  working directory, terminal, and backend processes. A 90-minute download
+  babysits itself in one tab while you work in another; finished background
+  sessions notify you. Closed sessions archive: reopen any of them (titles,
+  dates, full context) from the history view.
 - **Self-updating** — when the GitHub repo is ahead, an "Update available"
   chip appears; one click streams the pull + rebuild into the transcript
   and relaunches the new build.

@@ -21,6 +21,7 @@ struct ToolActivity: Identifiable, Equatable {
     var input: String?
     var output: String?
     var fileChanges: [ToolFileChange]
+    var terminalCommand: String?
     /// Steps run inside this activity by a subagent (Claude Code Task
     /// tool events carry parent_tool_use_id; Copilot doesn't expose this).
     var children: [ToolActivity] = []
@@ -76,6 +77,7 @@ enum ToolActivityFactory {
             keys: ["subject", "title", "description", "summary"]
         )
         let changes = fileChanges(toolName: toolName, arguments: arguments)
+        let terminalCommand = terminalCommand(toolName: toolName, arguments: args)
         let title = firstNonEmpty(intentionSummary, description)
             ?? fallbackTitle(
                 toolName: toolName,
@@ -90,7 +92,8 @@ enum ToolActivityFactory {
             state: .running,
             input: detailText(arguments),
             output: nil,
-            fileChanges: changes
+            fileChanges: changes,
+            terminalCommand: terminalCommand
         )
     }
 
@@ -254,7 +257,7 @@ enum ToolActivityFactory {
     private static func displayName(_ toolName: String) -> String {
         let shortName = toolName.split(separator: ".").last.map(String.init) ?? toolName
         switch shortName.lowercased() {
-        case "bash", "shell":
+        case "bash", "shell", "run_shell", "exec_command", "command_execution":
             return "Shell"
         case "apply_patch", "edit", "write":
             return "Edit"
@@ -263,6 +266,19 @@ enum ToolActivityFactory {
         default:
             return shortName
         }
+    }
+
+    private static func terminalCommand(
+        toolName: String,
+        arguments: [String: Any]?
+    ) -> String? {
+        let name = toolName.split(separator: ".").last.map(String.init)?
+            .lowercased() ?? toolName.lowercased()
+        guard name == "bash" || name == "shell" || name == "run_shell"
+                || name == "exec_command" || name == "command_execution" else {
+            return nil
+        }
+        return string(in: arguments, keys: ["command", "cmd", "script"])
     }
 
     private static func string(

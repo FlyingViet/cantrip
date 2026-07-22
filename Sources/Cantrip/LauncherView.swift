@@ -7,6 +7,7 @@ struct LauncherView: View {
     /// Active session — manager forwards child objectWillChange, so
     /// observing the manager is sufficient for re-rendering.
     private var session: ChatSession { manager.active }
+    private var shell: PersistentShell { session.shell }
     @ObservedObject var settings = AppSettings.shared
     @StateObject private var speech = SpeechRecognizer()
     @State private var query = ""
@@ -28,10 +29,8 @@ struct LauncherView: View {
     @State private var archivedSessions: [SessionManager.ArchivedSession] = []
     /// Instant caption for whichever toolbar icon is hovered.
     @State private var toolbarHint: String?
-    @StateObject private var shell = PersistentShell.shared
     @State private var showTerminal = false
     @State private var terminalCommand = ""
-    @State private var terminalHistory: [String] = []
     @State private var terminalHistoryIndex: Int?
     @State private var terminalHistoryDraft = ""
 
@@ -66,6 +65,17 @@ struct LauncherView: View {
         }
         .onChange(of: session.isStreaming) {
             onKeepVisibleChange(pinned || session.isStreaming)
+        }
+        .onChange(of: manager.activeIndex) {
+            terminalCommand = ""
+            resetTerminalHistoryNavigation()
+        }
+        .onChange(of: session.shell.agentCommandVersion) {
+            withAnimation(.easeOut(duration: 0.15)) {
+                showTerminal = true
+                showHistory = false
+                showUsage = false
+            }
         }
         .onChange(of: session.focusRequested) { _, requested in
             if requested {
@@ -884,7 +894,7 @@ struct LauncherView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     Text(shell.output.isEmpty
-                         ? "Persistent shell — cd, exports, and variables carry between commands.\nFull-screen programs (vim, top) need a real terminal."
+                         ? "Session terminal — agent commands and output appear here automatically.\nRun your own commands below; cd, exports, and variables persist."
                          : shell.output)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(shell.output.isEmpty ? .secondary : .primary)
@@ -917,6 +927,8 @@ struct LauncherView: View {
                            press.modifiers.contains(.control) {
                             if shell.isRunning {
                                 shell.interrupt()
+                            } else if shell.hasAgentCommandRunning {
+                                session.cancel()
                             } else {
                                 terminalCommand = ""
                                 resetTerminalHistoryNavigation()
@@ -926,7 +938,7 @@ struct LauncherView: View {
                         return .ignored
                     }
                     .onSubmit(submitTerminalCommand)
-                if shell.isRunning {
+                if shell.isRunning || shell.hasAgentCommandRunning {
                     ProgressView().controlSize(.mini)
                 }
                 Button("Clear") { shell.clear() }
@@ -937,7 +949,7 @@ struct LauncherView: View {
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
-                .help("Restart the shell (kills any running command)")
+                .help("Restart the manual shell (kills its running command)")
             }
         }
         .padding(12)
@@ -946,27 +958,24 @@ struct LauncherView: View {
     private func submitTerminalCommand() {
         let command = terminalCommand.trimmingCharacters(in: .whitespaces)
         guard !command.isEmpty else { return }
-        terminalHistory.append(command)
-        if terminalHistory.count > 200 {
-            terminalHistory.removeFirst(terminalHistory.count - 200)
-        }
         shell.run(command, workdir: session.workdir)
         terminalCommand = ""
         resetTerminalHistoryNavigation()
     }
 
     private func navigateTerminalHistory(backward: Bool) {
-        guard !terminalHistory.isEmpty else { return }
+        let history = shell.commandHistory
+        guard !history.isEmpty else { return }
 
         if backward {
             if let index = terminalHistoryIndex {
                 terminalHistoryIndex = max(0, index - 1)
             } else {
                 terminalHistoryDraft = terminalCommand
-                terminalHistoryIndex = terminalHistory.count - 1
+                terminalHistoryIndex = history.count - 1
             }
         } else if let index = terminalHistoryIndex {
-            if index < terminalHistory.count - 1 {
+            if index < history.count - 1 {
                 terminalHistoryIndex = index + 1
             } else {
                 terminalHistoryIndex = nil
@@ -978,7 +987,7 @@ struct LauncherView: View {
         }
 
         if let index = terminalHistoryIndex {
-            terminalCommand = terminalHistory[index]
+            terminalCommand = history[index]
         }
     }
 

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 
 struct ChatMessage: Identifiable, Equatable, Codable {
     var id = UUID()
@@ -61,6 +62,8 @@ final class ChatSession: ObservableObject {
     private let copilot = CopilotBackend()
     private let codex: CodexBackend
     private let localModel = OpenAICompatibleBackend()
+    let shell = PersistentShell()
+    private var shellObservation: AnyCancellable?
 
     var currentActivity: ToolActivity? {
         for message in messages.reversed() {
@@ -86,6 +89,8 @@ final class ChatSession: ObservableObject {
             ?? AppSettings.shared.claudeWorkdir
         self.claudeCode = ClaudeCodeBackend(persistKey: "claudeSessionID-\(id.uuidString)")
         self.codex = CodexBackend(persistKey: "codexSessionID-\(id.uuidString)")
+        shellObservation = shell.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
         loadTranscript()
     }
 
@@ -477,6 +482,7 @@ final class ChatSession: ObservableObject {
             statusText = status
         case .activity(let activity):
             updateActivity(activity)
+            shell.mirror(activity)
             statusText = currentActivity?.title ?? "Thinking…"
         case .done:
             finalizeRunningActivities(as: .succeeded)
@@ -598,10 +604,26 @@ final class ChatSession: ObservableObject {
 
     private func finalizeRunningActivities(as state: ToolActivityState) {
         for messageIndex in messages.indices {
-            for activityIndex in messages[messageIndex].activities.indices
-                where messages[messageIndex].activities[activityIndex].state == .running {
-                messages[messageIndex].activities[activityIndex].state = state
+            for activityIndex in messages[messageIndex].activities.indices {
+                let finalized = finalize(
+                    messages[messageIndex].activities[activityIndex],
+                    as: state
+                )
+                messages[messageIndex].activities[activityIndex] = finalized
+                shell.mirror(finalized)
             }
         }
+    }
+
+    private func finalize(
+        _ activity: ToolActivity,
+        as state: ToolActivityState
+    ) -> ToolActivity {
+        var activity = activity
+        if activity.state == .running {
+            activity.state = state
+        }
+        activity.children = activity.children.map { finalize($0, as: state) }
+        return activity
     }
 }
