@@ -13,6 +13,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var pasteMonitor: Any?
     private var cancellables: Set<AnyCancellable> = []
     private let manager = SessionManager()
+    private let recoveryReport: CrashRecovery.Report?
+
+    init(recoveryReport: CrashRecovery.Report?) {
+        self.recoveryReport = recoveryReport
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Main menu: invisible for accessory apps, but REQUIRED for standard
@@ -170,6 +176,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
             return event
         }
+
+        AppSettings.shared.refreshLaunchAtLoginRegistrationIfNeeded()
+        if let recoveryReport {
+            manager.active.messages.append(ChatMessage(
+                role: .error,
+                text: CrashRecovery.message(for: recoveryReport)
+            ))
+            Log.write("recovery: surfaced crash \(recoveryReport.id.uuidString)")
+            DispatchQueue.main.async { [weak self] in self?.showPanel() }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        CrashRecovery.markCleanExit()
     }
 
     @objc func stopRequest() {
