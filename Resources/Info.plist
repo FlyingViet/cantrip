@@ -18,10 +18,16 @@
     <string>0.1.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
+    <key>CantripBuildIdentity</key>
+    <string>development</string>
+    <key>CantripBuildDate</key>
+    <string>unknown</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSSupportsSuddenTermination</key>
+    <false/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Cantrip uses the microphone for voice queries.</string>
     <key>NSSpeechRecognitionUsageDescription</key>

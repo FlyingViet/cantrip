@@ -33,7 +33,7 @@ openssl req -x509 -newkey rsa:2048 -days 3650 -nodes \
     -config "$TMP/cert.conf" 2>/dev/null
 
 openssl pkcs12 -export -inkey "$TMP/key.pem" -in "$TMP/cert.pem" \
-    -out "$TMP/cert.p12" -passout pass:cantrip-temp
+    -out "$TMP/cert.p12" -passout pass:cantrip-temp -legacy
 
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 # -T pre-authorizes codesign so it can use the key without prompting.

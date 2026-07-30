@@ -23,5 +23,12 @@ echo "— building…"
 make app
 
 echo "✦ Update built. Relaunching in 2 seconds — press ⌥Space when it's back."
-nohup zsh -c "sleep 2; pkill -x Cantrip; sleep 0.5; open '$PWD/Cantrip.app'" \
+APP_PATH="$PWD/Cantrip.app"
+nohup /bin/zsh -c '
+    sleep 2
+    /usr/bin/osascript -e '"'"'tell application id "com.brian.agentspotlight" to quit'"'"' \
+        >/dev/null 2>&1 || true
+    sleep 0.5
+    /usr/bin/open -n "$1"
+' _ "$APP_PATH" \
     > /tmp/cantrip-relaunch.log 2>&1 &

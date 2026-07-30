@@ -62,8 +62,13 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   sessions notify you. Closed sessions archive: reopen any of them (titles,
   dates, full context) from the history view.
 - **Self-updating** — when the GitHub repo is ahead, an "Update available"
-  chip appears; one click streams the pull + rebuild into the transcript
-  and relaunches the new build.
+  chip appears; one click streams the pull + rebuild into the transcript.
+  Bundle replacement is transactional, then Cantrip relaunches that exact
+  build instead of letting macOS choose among older app copies.
+- **Crash recovery** — every launch records its commit and bundle path. An
+  unexpected exit relaunches the same bundle and opens a visible recovery
+  message with the crashed and running build IDs. After three automatic
+  recoveries in a minute, the fourth crash pauses instead of looping.
 - **Voice** — dictate queries; voice mode speaks replies and auto-listens
   for follow-ups.
 - **On-screen tutorials** — ask how to do something in a visible app and it
@@ -187,6 +192,8 @@ sidebar so you can tweak models mid-conversation.
   `make cert`, and if needed set the cert to Always Trust in Keychain Access.
 - **Stuck request**: red stop button, or menu bar → Stop Current Request /
   Hide Panel & Overlays. Silent streams auto-cancel after 15 minutes.
+- **Recovered crash**: the panel identifies both builds and the exact bundle
+  path. Full details are appended to `~/Library/Logs/Cantrip.log`.
 - **Copilot quota "unavailable"**: GitHub's billing API needs the `user`
   scope — run `gh auth refresh -h github.com -s user`, then ↻ in the
   usage dashboard.
