@@ -6,6 +6,8 @@ struct CopilotJSONStreamParser {
     private var processedEventIDs: Set<String> = []
     private var activities: [String: ToolActivity] = [:]
     private(set) var answer = ""
+    /// Whether reasoning streamed as deltas (skip the aggregate block).
+    private var reasoningDeltaSeen = false
 
     mutating func consume(_ data: Data) throws -> [BackendEvent] {
         buffer.append(data)
@@ -77,6 +79,25 @@ struct CopilotJSONStreamParser {
             answer += delta
             lastMessageID = messageID
             return [.textDelta(delta)]
+
+        case "assistant.reasoning_delta", "assistant.reasoning":
+            // Reasoning-model thinking. Documented event types, but the
+            // data schema isn't formalized (github/copilot-cli#3551) and
+            // emission is provider-dependent — parse leniently and never
+            // throw; a missing event just means no reasoning display.
+            guard object["agentId"] as? String == nil,
+                  eventData?["parentToolCallId"] as? String == nil else {
+                return []
+            }
+            let text = (eventData?["deltaContent"] ?? eventData?["content"]
+                ?? eventData?["delta"] ?? eventData?["text"]) as? String ?? ""
+            guard !text.isEmpty else { return [] }
+            if type == "assistant.reasoning_delta" {
+                reasoningDeltaSeen = true
+                return [.thinkingDelta(text)]
+            }
+            // Aggregate block — only useful if deltas never streamed.
+            return reasoningDeltaSeen ? [] : [.thinkingDelta(text)]
 
         case "assistant.message":
             guard let requests = eventData?["toolRequests"] as? [[String: Any]] else {

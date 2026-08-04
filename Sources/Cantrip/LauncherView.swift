@@ -1374,12 +1374,19 @@ private struct MessageRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .assistant:
             // Tool steps render in the progress sidebar, not inline.
-            if message.text.isEmpty {
+            if message.text.isEmpty && message.thinking.isEmpty {
                 EmptyView()
             } else {
-                MarkdownContent(text: message.text)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 6) {
+                    if !message.thinking.isEmpty {
+                        ThinkingDisclosure(text: message.thinking)
+                    }
+                    if !message.text.isEmpty {
+                        MarkdownContent(text: message.text)
+                            .textSelection(.enabled)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         case .error:
             Label(message.text, systemImage: "exclamationmark.triangle")
@@ -1389,6 +1396,29 @@ private struct MessageRow: View {
         }
     }
 
+}
+
+/// Streamed extended-thinking text, collapsed by default so long silent
+/// stretches are legible without crowding the answer.
+private struct ThinkingDisclosure: View {
+    let text: String
+    @State private var isExpanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+                .padding(.leading, 14)
+        } label: {
+            Label("Reasoning", systemImage: "brain")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
 }
 
 private struct ToolProgressView: View {
@@ -1839,11 +1869,6 @@ struct SettingsView: View {
                 set: { settings.launchAtLogin = $0 }))
                 .font(.caption)
                 .toggleStyle(.checkbox)
-            if let error = settings.launchAtLoginError {
-                Text(error)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-            }
             Toggle("Search my documents' contents as context (Spotlight index)", isOn: $settings.fileRAGEnabled)
                 .font(.caption)
                 .toggleStyle(.checkbox)
