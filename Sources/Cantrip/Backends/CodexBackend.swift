@@ -118,7 +118,9 @@ final class CodexBackend: Backend {
             } else {
                 onEvent(.done)
             }
-            self?.process = nil
+            // Don't clobber a successor run's process handle when a
+            // cancelled process finally dies (SIGKILL escalation).
+            if self?.process === proc { self?.process = nil }
         }
 
         do {

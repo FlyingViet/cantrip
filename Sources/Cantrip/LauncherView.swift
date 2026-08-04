@@ -1262,6 +1262,18 @@ struct LauncherView: View {
                         }
                         .id("status")
                     }
+                    if session.canResume, !session.isStreaming {
+                        Button {
+                            session.resumeInterrupted()
+                        } label: {
+                            Label("Resume from where it left off",
+                                  systemImage: "arrow.uturn.forward")
+                                .font(.callout)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .id("resume-button")
+                    }
                     Color.clear
                         .frame(height: 1)
                         .id("conversation-bottom")
@@ -1280,6 +1292,9 @@ struct LauncherView: View {
                 scrollConversationToBottom(proxy)
             }
             .onChange(of: session.statusText) {
+                scrollConversationToBottom(proxy)
+            }
+            .onChange(of: session.canResume) {
                 scrollConversationToBottom(proxy)
             }
         }
