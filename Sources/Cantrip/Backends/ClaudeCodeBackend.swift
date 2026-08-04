@@ -15,6 +15,16 @@ final class ClaudeCodeBackend: Backend {
     private var childIndex: [String: String] = [:]
     /// Whether any text has streamed this run (for block separation).
     private var hasEmittedText = false
+    /// Same, for thinking blocks (separate consecutive reasoning blocks).
+    private var hasEmittedThinking = false
+    /// A turn is running and owes exactly one terminal `result` event.
+    private var turnInFlight = false
+    /// Set by a graceful interrupt while a turn is in flight: the aborted
+    /// turn's trailing events (stale tool_results, its error `result`)
+    /// arrive on the SAME live process and would otherwise leak into the
+    /// next turn's event sink — swallow everything up to and including
+    /// that terminal `result`.
+    private var suppressUntilResult = false
     private let settings = AppSettings.shared
     private let queue = DispatchQueue(label: "claude-code-backend")
     /// Persistent-process plumbing: stdin stays open so new user messages
@@ -37,6 +47,7 @@ final class ClaudeCodeBackend: Backend {
             guard let self else { return }
             self.currentOnEvent = onEvent
             self.hasEmittedText = false
+            self.hasEmittedThinking = false
             if self.process?.isRunning != true || self.processWorkdir != workdir {
                 self.process?.terminate()
                 self.startProcess(workdir: workdir)
@@ -55,6 +66,43 @@ final class ClaudeCodeBackend: Backend {
         return true
     }
 
+    /// Graceful in-band interrupt (same mechanism as Esc in Claude Code's
+    /// own UI): a control_request aborts the current turn, the CLI answers
+    /// with a control_response + an error_during_execution result, and the
+    /// process stays alive with the session intact for the next message.
+    /// Verified against CLI v2.1.221; unknown stdin lines are ignored by
+    /// the CLI, so this is safe to send even on older versions.
+    func interruptTurn() -> Bool {
+        guard process?.isRunning == true, stdinHandle != nil else { return false }
+        let message: [String: Any] = [
+            "type": "control_request",
+            "request_id": UUID().uuidString,
+            "request": ["subtype": "interrupt"],
+        ]
+        queue.async { [weak self] in
+            guard let self, let handle = self.stdinHandle,
+                  var data = try? JSONSerialization.data(withJSONObject: message) else { return }
+            // Only suppress if a turn is actually running — otherwise the
+            // next turn's result would be swallowed and the UI would hang.
+            // (Verified: an idle interrupt yields only a control_response,
+            // never a spurious result.)
+            if self.turnInFlight {
+                self.suppressUntilResult = true
+                // The aborted turn no longer counts as in-flight — a
+                // redirect's writeUserMessage may re-arm this for the
+                // NEXT turn before the aborted result arrives, and that
+                // state must survive the suppression branch.
+                self.turnInFlight = false
+                self.activities.removeAll()
+                self.childIndex.removeAll()
+            }
+            data.append(0x0A)
+            handle.write(data)
+        }
+        Log.write("interrupt: sent control_request (graceful)")
+        return true
+    }
+
     private func writeUserMessage(_ text: String) {
         let message: [String: Any] = [
             "type": "user",
@@ -67,6 +115,7 @@ final class ClaudeCodeBackend: Backend {
         }
         data.append(0x0A)
         handle.write(data)
+        turnInFlight = true
     }
 
     func cancel() {
@@ -79,6 +128,8 @@ final class ClaudeCodeBackend: Backend {
         currentOnEvent = nil
         activities.removeAll()
         childIndex.removeAll()
+        turnInFlight = false
+        suppressUntilResult = false
         p.terminate()
         // Escalate to SIGKILL if it ignores SIGTERM.
         DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
@@ -177,11 +228,13 @@ final class ClaudeCodeBackend: Backend {
             let data = handle.availableData
             if data.isEmpty { return }
             buffer.append(data)
-            // Process complete lines.
+            // Process complete lines — on the backend's serial queue, so
+            // handleLine's state (turn flags, activities, event sink)
+            // is synchronized with send/inject/interrupt.
             while let nl = buffer.firstIndex(of: 0x0A) {
                 let lineData = buffer.subdata(in: buffer.startIndex..<nl)
                 buffer.removeSubrange(buffer.startIndex...nl)
-                self?.handleLine(lineData)
+                self?.queue.async { self?.handleLine(lineData) }
             }
         }
 
@@ -215,6 +268,8 @@ final class ClaudeCodeBackend: Backend {
             process = p
             stdinHandle = stdinPipe.fileHandleForWriting
             processWorkdir = workdir
+            turnInFlight = false
+            suppressUntilResult = false
             Log.write("claude started, pid=\(p.processIdentifier)")
         } catch {
             Log.write("launch failed: \(error.localizedDescription)")
@@ -234,22 +289,52 @@ final class ClaudeCodeBackend: Backend {
 
         if let sid = obj["session_id"] as? String { sessionID = sid }
 
+        // Aborted-turn suppression (see interruptTurn): drop everything
+        // from the interrupted turn, up to and including its terminal
+        // `result`, so it can't leak into the next turn's event sink.
+        // (The interrupted turn's cost/usage is knowingly not recorded.)
+        // Deliberately does NOT touch turnInFlight — that may already
+        // describe a successor turn queued behind the interrupt.
+        if suppressUntilResult {
+            if type == "result" {
+                suppressUntilResult = false
+                Log.write("interrupt: aborted turn's result consumed")
+            }
+            return
+        }
+        if type == "result" { turnInFlight = false }
+
         switch type {
         case "stream_event":
             // Token-level streaming (--include-partial-messages).
             guard let event = obj["event"] as? [String: Any],
                   let eventType = event["type"] as? String else { return }
             if eventType == "content_block_start",
-               let block = event["content_block"] as? [String: Any],
-               block["type"] as? String == "text",
-               hasEmittedText {
-                onEvent(.textDelta("\n\n")) // separate consecutive text blocks
+               let block = event["content_block"] as? [String: Any] {
+                switch block["type"] as? String {
+                case "text" where hasEmittedText:
+                    onEvent(.textDelta("\n\n")) // separate consecutive blocks
+                case "thinking" where hasEmittedThinking:
+                    onEvent(.thinkingDelta("\n\n"))
+                default:
+                    break
+                }
             } else if eventType == "content_block_delta",
-                      let delta = event["delta"] as? [String: Any],
-                      delta["type"] as? String == "text_delta",
-                      let text = delta["text"] as? String, !text.isEmpty {
-                hasEmittedText = true
-                onEvent(.textDelta(text))
+                      let delta = event["delta"] as? [String: Any] {
+                switch delta["type"] as? String {
+                case "text_delta":
+                    if let text = delta["text"] as? String, !text.isEmpty {
+                        hasEmittedText = true
+                        onEvent(.textDelta(text))
+                    }
+                case "thinking_delta":
+                    if let text = delta["thinking"] as? String, !text.isEmpty {
+                        hasEmittedThinking = true
+                        onEvent(.thinkingDelta(text))
+                    }
+                default:
+                    break // signature_delta etc.
+                }
             }
         case "assistant":
             guard let message = obj["message"] as? [String: Any],

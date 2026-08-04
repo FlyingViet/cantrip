@@ -30,6 +30,7 @@ struct ToolActivity: Identifiable, Equatable {
 /// Events streamed from a backend while answering a query.
 enum BackendEvent {
     case textDelta(String)         // partial assistant text
+    case thinkingDelta(String)     // partial reasoning (extended thinking)
     case status(String)            // transient status, e.g. "Thinking"
     case activity(ToolActivity)    // tool lifecycle and file-change details
     case done                      // stream finished successfully
@@ -58,10 +59,16 @@ protocol Backend {
     /// without interrupting. Returns false if unsupported/no live turn
     /// (caller should queue instead).
     func injectMidTurn(_ text: String) -> Bool
+    /// Gracefully abort the CURRENT turn in-band, keeping the process and
+    /// session alive for the next message (Claude control protocol).
+    /// Returns false if unsupported/no live process (caller should
+    /// hard-cancel instead).
+    func interruptTurn() -> Bool
 }
 
 extension Backend {
     func injectMidTurn(_ text: String) -> Bool { false }
+    func interruptTurn() -> Bool { false }
 }
 
 enum ToolActivityFactory {

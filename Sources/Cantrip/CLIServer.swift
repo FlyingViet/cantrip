@@ -75,6 +75,8 @@ final class CLIServer {
                 switch event {
                 case .textDelta(let delta):
                     self?.send(["delta": delta], on: connection, close: false)
+                case .thinkingDelta:
+                    break // reasoning isn't part of the CLI's output contract
                 case .status(let status):
                     self?.send(["status": status], on: connection, close: false)
                 case .activity(let activity):

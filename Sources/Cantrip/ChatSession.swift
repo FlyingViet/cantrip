@@ -7,8 +7,10 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     let role: Role
     var text: String
     var activities: [ToolActivity] = []
+    /// Streamed reasoning (thinking deltas) — shown collapsed in the UI.
+    var thinking: String = ""
     enum Role: String, Codable { case user, assistant, error }
-    // Activities are runtime-only; persisted transcripts skip them.
+    // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey { case id, role, text }
 }
 
@@ -116,7 +118,12 @@ final class ChatSession: ObservableObject {
 
     private func persistTranscript() {
         guard !isPrivate else { return }
-        if let data = try? JSONEncoder().encode(messages) {
+        // Thinking/activities don't persist, so assistant messages whose
+        // only content was runtime-only would reload as invisible husks.
+        let persistable = messages.filter {
+            !($0.role == .assistant && $0.text.isEmpty)
+        }
+        if let data = try? JSONEncoder().encode(persistable) {
             try? data.write(to: transcriptURL)
         }
     }
@@ -152,18 +159,28 @@ final class ChatSession: ObservableObject {
         if interrupt {
             Log.write("interrupt: redirecting in-flight request")
             streamGeneration += 1          // orphan the old stream's events
-            activeBackend.cancel()
+            // Prefer a graceful in-band interrupt (keeps the process and
+            // session hot); fall back to killing the process.
+            if !activeBackend.interruptTurn() { activeBackend.cancel() }
             finalizeRunningActivities(as: .cancelled)
             statusText = nil
+            // Stateless backends (Copilot, local) get a fresh process with
+            // no session memory of the interrupted turn — carry its work
+            // log into the redirect so partial progress isn't lost.
+            // Compute BEFORE finishStream/send mutate the transcript.
+            var interruptContext: String?
+            if !backendKeepsSession, let steps = interruptedStepSummary() {
+                interruptContext = "(Context — steps my interrupted request had already taken:\n\(steps))"
+            }
             finishStream(dequeue: false)
-            send(prompt, interrupted: true)
+            send(prompt, interrupted: true, preamble: interruptContext)
         } else {
             queued.append(prompt)
         }
     }
 
     private func send(_ text: String, interrupted: Bool = false,
-                      resumePreamble: String? = nil) {
+                      preamble: String? = nil, isResume: Bool = false) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isStreaming else { return }
 
@@ -197,7 +214,7 @@ final class ChatSession: ObservableObject {
 
         Log.write("send: \"\(prompt.prefix(80))\" via \(settings.backend.rawValue)")
         canResume = false
-        if resumePreamble == nil {
+        if !isResume {
             // Fresh run: remember the prompt so an interrupted run can be
             // resumed, and re-arm the one free automatic resume.
             currentRunPrompt = prompt
@@ -213,8 +230,8 @@ final class ChatSession: ObservableObject {
 
         // Attach context (shown to the backend, not in the UI).
         var backendPrompt = prompt
-        if let resumePreamble {
-            backendPrompt = resumePreamble + "\n\n" + backendPrompt
+        if let preamble {
+            backendPrompt = preamble + "\n\n" + backendPrompt
         }
         if interrupted {
             backendPrompt = "(I interrupted your previous in-progress response — treat this message as a course correction or update to that task, not a brand-new topic.) " + backendPrompt
@@ -506,6 +523,15 @@ final class ChatSession: ObservableObject {
                 messages[idx].text += delta
             }
             statusText = currentActivity?.title
+        case .thinkingDelta(let delta):
+            if let idx = messages.lastIndex(where: { $0.role == .assistant }),
+               // Skip a block-separator landing at the top of a fresh
+               // bubble (e.g. right after a mid-turn injection).
+               !(messages[idx].thinking.isEmpty
+                 && delta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                messages[idx].thinking += delta
+            }
+            statusText = currentActivity?.title ?? "Thinking…"
         case .status(let status):
             statusText = status
         case .activity(let activity):
@@ -596,7 +622,17 @@ final class ChatSession: ObservableObject {
         }
         preamble += "\nResume that task from where it left off: verify which steps already completed, then continue — don't redo finished work or start over.)"
         Log.write("resume: \(auto ? "auto" : "manual") resume of interrupted run")
-        send("Continue from where you left off.", resumePreamble: preamble)
+        send("Continue from where you left off.", preamble: preamble, isResume: true)
+    }
+
+    /// Backends with native session state (--resume / exec resume) carry
+    /// interrupted-turn context themselves; stateless ones need the
+    /// harness to inject it.
+    private var backendKeepsSession: Bool {
+        switch settings.backend {
+        case .claudeCode, .codex: return true
+        case .copilot, .localModel: return false
+        }
     }
 
     /// Work log of the interrupted turn, for backends without native
@@ -664,7 +700,8 @@ final class ChatSession: ObservableObject {
         // Drop empty assistant placeholder if nothing arrived.
         if let idx = messages.lastIndex(where: { $0.role == .assistant }),
            messages[idx].text.isEmpty,
-           messages[idx].activities.isEmpty {
+           messages[idx].activities.isEmpty,
+           messages[idx].thinking.isEmpty {
             messages.remove(at: idx)
         }
         persistTranscript()
@@ -689,7 +726,13 @@ final class ChatSession: ObservableObject {
         SpeechSynth.shared.stop()
         shellProcess?.terminate()
         shellProcess = nil
-        activeBackend.cancel()
+        // Mid-run: graceful in-band interrupt when the backend supports it
+        // (the process and session stay alive). Otherwise — including idle
+        // teardown from tab close / force hide — kill the process so no
+        // orphaned backend lingers.
+        if !(isStreaming && activeBackend.interruptTurn()) {
+            activeBackend.cancel()
+        }
         queued.removeAll()           // manual stop aborts the whole queue
         finalizeRunningActivities(as: .cancelled)
         finishStream(dequeue: false)

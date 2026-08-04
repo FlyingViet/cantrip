@@ -139,6 +139,13 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate {
             assistantAccumulator += content
             onEvent?(.textDelta(content))
         }
+        // Reasoning-model thinking (DeepSeek-style `reasoning_content`,
+        // some servers use `reasoning`). Display-only; not fed back into
+        // history on tool loops.
+        if let reasoning = (delta["reasoning_content"] ?? delta["reasoning"]) as? String,
+           !reasoning.isEmpty {
+            onEvent?(.thinkingDelta(reasoning))
+        }
         if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
             for call in toolCalls {
                 let index = call["index"] as? Int ?? 0
