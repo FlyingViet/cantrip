@@ -73,6 +73,10 @@ final class ClaudeCodeBackend: Backend {
         guard let p = process else { return }
         process = nil
         stdinHandle = nil
+        // Detach the event sink so this process's termination handler
+        // can't emit into a stream started after the cancel (e.g. an
+        // auto-resume) — SIGTERM can take a moment to land.
+        currentOnEvent = nil
         activities.removeAll()
         childIndex.removeAll()
         p.terminate()
@@ -185,7 +189,11 @@ final class ClaudeCodeBackend: Backend {
             Log.write("claude exited, status=\(proc.terminationStatus), reason=\(proc.terminationReason.rawValue)")
             stdout.fileHandleForReading.readabilityHandler = nil
             stderr.fileHandleForReading.readabilityHandler = nil
-            let onEvent = self?.currentOnEvent
+            // A cancelled/superseded process (its slot was reassigned or
+            // cleared) must not emit events or clobber the current run's
+            // handles — SIGKILL escalation can land seconds after cancel().
+            guard let self, self.process === proc else { return }
+            let onEvent = self.currentOnEvent
             if proc.terminationStatus != 0 {
                 errData.append(stderr.fileHandleForReading.readDataToEndOfFile())
                 let errText = String(data: errData, encoding: .utf8)?
@@ -198,8 +206,8 @@ final class ClaudeCodeBackend: Backend {
             } else {
                 onEvent?(.done)
             }
-            self?.process = nil
-            self?.stdinHandle = nil
+            self.process = nil
+            self.stdinHandle = nil
         }
 
         do {

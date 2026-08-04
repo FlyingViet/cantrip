@@ -31,6 +31,13 @@ final class ChatSession: ObservableObject {
     var onRunFinished: (() -> Void)?
     /// Orphans events from cancelled/superseded backend runs.
     private var streamGeneration = 0
+    /// True when the last run died mid-task (timeout/failure) and can be
+    /// picked up from the steps already taken. Shows the Resume button.
+    @Published var canResume = false
+    /// The user prompt whose run was interrupted; resume re-anchors on it.
+    private var currentRunPrompt: String?
+    /// One free automatic resume per user-initiated run; manual after that.
+    private var autoResumeSpent = false
 
     let settings = AppSettings.shared
     let id: UUID
@@ -155,7 +162,8 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    private func send(_ text: String, interrupted: Bool = false) {
+    private func send(_ text: String, interrupted: Bool = false,
+                      resumePreamble: String? = nil) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isStreaming else { return }
 
@@ -188,6 +196,13 @@ final class ChatSession: ObservableObject {
         }
 
         Log.write("send: \"\(prompt.prefix(80))\" via \(settings.backend.rawValue)")
+        canResume = false
+        if resumePreamble == nil {
+            // Fresh run: remember the prompt so an interrupted run can be
+            // resumed, and re-arm the one free automatic resume.
+            currentRunPrompt = prompt
+            autoResumeSpent = false
+        }
         let isFirstOfConversation = messages.isEmpty
         let previousTurns = completedConversationTurns()
         if title == "New chat" { title = String(prompt.prefix(34)) }
@@ -198,6 +213,9 @@ final class ChatSession: ObservableObject {
 
         // Attach context (shown to the backend, not in the UI).
         var backendPrompt = prompt
+        if let resumePreamble {
+            backendPrompt = resumePreamble + "\n\n" + backendPrompt
+        }
         if interrupted {
             backendPrompt = "(I interrupted your previous in-progress response — treat this message as a course correction or update to that task, not a brand-new topic.) " + backendPrompt
         }
@@ -323,6 +341,8 @@ final class ChatSession: ObservableObject {
     private func runShellCommand(_ command: String) {
         guard !command.isEmpty, !isStreaming else { return }
         Log.write("shell: \(command.prefix(100))")
+        canResume = false
+        currentRunPrompt = nil // shell runs aren't LLM-resumable
         if title == "New chat" { title = "! " + String(command.prefix(30)) }
         messages.append(ChatMessage(role: .user, text: "! " + command))
         messages.append(ChatMessage(role: .assistant, text: "```\n"))
@@ -390,6 +410,8 @@ final class ChatSession: ObservableObject {
     private func runScriptCommand(_ command: ScriptCommand, args: String) {
         guard !isStreaming else { return }
         Log.write("skill: /\(command.name) \(args.prefix(60))")
+        canResume = false
+        currentRunPrompt = nil // script runs aren't LLM-resumable
         if title == "New chat" { title = "/" + command.name }
         messages.append(ChatMessage(role: .user, text: "/\(command.name)\(args.isEmpty ? "" : " \(args)")"))
         messages.append(ChatMessage(role: .assistant, text: ""))
@@ -459,12 +481,18 @@ final class ChatSession: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, self.isStreaming else { return }
                 Log.write("watchdog: no backend activity for \(Int(self.inactivityLimit))s — force-cancelling")
-                self.activeBackend.cancel()
-                self.finalizeRunningActivities(as: .failed)
-                self.messages.append(ChatMessage(
-                    role: .error,
-                    text: "No response for \(Int(self.inactivityLimit / 60)) minutes — request cancelled."))
-                self.finishStream()
+                if let shell = self.shellProcess { // hung !/command runs too
+                    shell.terminate()
+                    self.shellProcess = nil
+                    // Close the transcript's still-open ``` block, if any
+                    // (an odd number of fences means one is unclosed).
+                    if let idx = self.messages.lastIndex(where: { $0.role == .assistant }),
+                       self.messages[idx].text.components(separatedBy: "```").count.isMultiple(of: 2) {
+                        self.messages[idx].text += "\n```"
+                    }
+                }
+                self.handleRunInterruption(
+                    errorText: "No response for \(Int(self.inactivityLimit / 60)) minutes — request cancelled.")
             }
         }
     }
@@ -488,9 +516,109 @@ final class ChatSession: ObservableObject {
             finalizeRunningActivities(as: .succeeded)
             finishStream()
         case .failure(let message):
-            finalizeRunningActivities(as: .failed)
-            messages.append(ChatMessage(role: .error, text: message))
+            handleRunInterruption(errorText: message)
+        }
+    }
+
+    // MARK: - Resume after an interrupted run
+
+    /// A run died mid-flight (watchdog timeout or backend failure).
+    /// Record the error, then — if the run had actually started work —
+    /// auto-resume once, or surface the Resume button after that.
+    private func handleRunInterruption(errorText: String) {
+        // Orphan any late events from the dead run (a backend can emit a
+        // trailing .done/.failure after the first failure) and make sure
+        // its process is really gone before a resume relaunches it.
+        streamGeneration += 1
+        activeBackend.cancel()
+        finalizeRunningActivities(as: .failed)
+        let resumable = currentRunPrompt != nil && lastRunHadProgress
+        messages.append(ChatMessage(role: .error, text: errorText))
+        guard resumable else {
             finishStream()
+            return
+        }
+        if !autoResumeSpent {
+            autoResumeSpent = true
+            // Queue waits for the resumed run; no notification/speech for
+            // an interruption we're about to retry silently.
+            finishStream(dequeue: false, notify: false)
+            Log.write("resume: run interrupted — auto-resuming")
+            scheduleAutoResume()
+        } else {
+            finishStream(dequeue: false) // hold queue; notify — needs attention
+            // Surface the Resume button only after the SIGTERM → SIGKILL
+            // escalation window, so a fast click can't relaunch the CLI
+            // session while the hung process is still dying.
+            let generation = streamGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
+                guard let self, !self.isStreaming,
+                      self.streamGeneration == generation else { return }
+                self.canResume = true
+            }
+        }
+    }
+
+    /// Whether the interrupted run got anywhere (tool steps or partial
+    /// text). A run that died before doing anything isn't "resumable" —
+    /// there are no previous steps to pick up from.
+    private var lastRunHadProgress: Bool {
+        guard let message = messages.last(where: { $0.role == .assistant }) else {
+            return false
+        }
+        return !message.activities.isEmpty || !message.text.isEmpty
+    }
+
+    /// Delay so the killed backend process fully dies before the
+    /// replacement launches — must outlast the backends' 3s SIGTERM →
+    /// SIGKILL escalation so a hung process can't race the new stream.
+    private func scheduleAutoResume() {
+        let generation = streamGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
+            guard let self, !self.isStreaming,
+                  self.streamGeneration == generation else { return }
+            self.performResume(auto: true)
+        }
+    }
+
+    /// Manual entry point (Resume button).
+    func resumeInterrupted() {
+        performResume(auto: false)
+    }
+
+    private func performResume(auto: Bool) {
+        guard !isStreaming, let original = currentRunPrompt else { return }
+        canResume = false
+        var preamble = "(My previous request was interrupted mid-run and cancelled."
+            + " Original request: \"\(original.prefix(1000))\""
+        if let steps = interruptedStepSummary() {
+            preamble += "\nSteps already taken before the interruption:\n\(steps)"
+        }
+        preamble += "\nResume that task from where it left off: verify which steps already completed, then continue — don't redo finished work or start over.)"
+        Log.write("resume: \(auto ? "auto" : "manual") resume of interrupted run")
+        send("Continue from where you left off.", resumePreamble: preamble)
+    }
+
+    /// Work log of the interrupted turn, for backends without native
+    /// session resume (Copilot, local models). Claude Code and Codex
+    /// already recover full detail via --resume/exec resume.
+    private func interruptedStepSummary() -> String? {
+        // Only the interrupted turn itself — an earlier turn's steps
+        // would misrepresent what "was already done" for this task.
+        guard let message = messages.last(where: { $0.role == .assistant }),
+              !message.activities.isEmpty else { return nil }
+        let lines = message.activities.suffix(30).map { activity in
+            "- [\(stateLabel(activity.state))] \(activity.toolName): \(activity.title)"
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    private func stateLabel(_ state: ToolActivityState) -> String {
+        switch state {
+        case .succeeded: return "done"
+        case .running: return "in progress"
+        case .failed: return "interrupted"
+        case .cancelled: return "cancelled"
         }
     }
 
@@ -518,7 +646,7 @@ final class ChatSession: ObservableObject {
         if let hints { OverlayController.shared.show(hints) }
     }
 
-    private func finishStream(dequeue: Bool = true) {
+    private func finishStream(dequeue: Bool = true, notify: Bool = true) {
         watchdog?.invalidate()
         watchdog = nil
         processOverlayBlock()
@@ -546,7 +674,7 @@ final class ChatSession: ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 self?.send(next)
             }
-        } else {
+        } else if notify {
             // Whole run complete: speak the reply / notify if hidden.
             if settings.voiceMode,
                let reply = messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }) {
@@ -586,6 +714,9 @@ final class ChatSession: ObservableObject {
         messages.removeAll()
         isStreaming = false
         statusText = nil
+        canResume = false
+        currentRunPrompt = nil
+        autoResumeSpent = false
         persistTranscript()
     }
 
