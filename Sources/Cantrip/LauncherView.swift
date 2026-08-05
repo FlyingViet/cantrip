@@ -1826,8 +1826,9 @@ struct SettingsView: View {
                     Text("Context window").font(.caption).foregroundStyle(.secondary)
                     Picker("", selection: $settings.copilotContextTier) {
                         Text("Default (\(settings.copilotFileContextTier ?? "standard"))").tag("")
-                        Text("Standard").tag("default")
-                        Text("Long · up to 1M").tag("long_context")
+                        ForEach(copilotContextTierOptions, id: \.self) { tier in
+                            Text(contextTierLabel(tier)).tag(tier)
+                        }
                     }
                     .labelsHidden()
                 }
@@ -1939,24 +1940,52 @@ struct SettingsView: View {
         return nil
     }
 
-    /// Effort options for the SELECTED model: the catalog's list when the
-    /// API provided one, else the static defaults. Current selection is
-    /// preserved even if the model doesn't advertise it.
+    /// Effort options: the UNION of what the selected model advertises,
+    /// what `copilot help` says the flag accepts, and the static
+    /// defaults — options are never silently hidden, and the current
+    /// selection is always present.
     private var copilotEffortOptions: [(value: String, label: String)] {
-        var options = AppSettings.copilotEffortLevels
-        if let model = settings.effectiveCopilotModel,
-           let rawEfforts = settings.copilotModelInfo(model)?.reasoningEfforts {
-            var seen = Set<String>()
-            let efforts = rawEfforts.filter { !$0.isEmpty && seen.insert($0).inserted }
-            if !efforts.isEmpty {
-                options = [("", "Default")] + efforts.map { ($0, $0.capitalized) }
-            }
+        var seen = Set<String>()
+        var values: [String] = []
+        func add(_ value: String) {
+            guard !value.isEmpty, seen.insert(value).inserted else { return }
+            values.append(value)
         }
-        let current = settings.copilotEffort
-        if !current.isEmpty, !options.contains(where: { $0.value == current }) {
-            options.append((current, current.capitalized))
+        if let model = settings.effectiveCopilotModel {
+            settings.copilotModelInfo(model)?.reasoningEfforts?.forEach(add)
         }
-        return options
+        settings.copilotEffortChoices.forEach(add)
+        AppSettings.copilotEffortLevels.map(\.value).forEach(add)
+        add(settings.copilotEffort)
+        return [("", "Default")] + values.map { value in
+            (value,
+             AppSettings.copilotEffortLevels.first { $0.value == value }?.label
+                ?? value.capitalized)
+        }
+    }
+
+    /// Context-tier options: values discovered from `copilot help` plus
+    /// the known baseline, with the current selection always present.
+    private var copilotContextTierOptions: [String] {
+        var seen = Set<String>()
+        var tiers: [String] = []
+        func add(_ tier: String) {
+            guard !tier.isEmpty, seen.insert(tier).inserted else { return }
+            tiers.append(tier)
+        }
+        settings.copilotContextTierChoices.forEach(add)
+        ["default", "long_context"].forEach(add)
+        add(settings.copilotContextTier)
+        return tiers
+    }
+
+    private func contextTierLabel(_ tier: String) -> String {
+        switch tier {
+        case "default": return "Standard"
+        case "long_context": return "Long · up to 1M"
+        default:
+            return tier.replacingOccurrences(of: "_", with: " ").capitalized
+        }
     }
 
     private func copilotModelLabel(_ model: String) -> String {
