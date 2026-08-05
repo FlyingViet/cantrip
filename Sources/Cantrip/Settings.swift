@@ -9,12 +9,30 @@ enum BackendKind: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Per-model metadata for the Copilot pickers. Populated from the Copilot
+/// models API when reachable (accurate); discovery fallbacks fill only `id`.
+struct CopilotModelInfo: Codable, Equatable, Identifiable {
+    let id: String
+    var contextWindow: Int?
+    var maxOutputTokens: Int?
+    var reasoningEfforts: [String]?
+
+    /// "1M" / "264k" style label, nil when unknown.
+    var contextLabel: String? {
+        guard let contextWindow, contextWindow >= 1000 else { return nil }
+        if contextWindow >= 1_000_000 {
+            let millions = Double(contextWindow) / 1_000_000
+            return millions == millions.rounded()
+                ? "\(Int(millions))M" : String(format: "%.1fM", millions)
+        }
+        return "\(contextWindow / 1000)k"
+    }
+}
+
 /// UserDefaults-backed settings.
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
     private let d = UserDefaults.standard
-    private let launchAtLoginBundlePathKey = "launchAtLoginBundlePath"
-    @Published private(set) var launchAtLoginError: String?
 
     @Published var backend: BackendKind {
         didSet { d.set(backend.rawValue, forKey: "backend") }
@@ -89,6 +107,19 @@ final class AppSettings: ObservableObject {
     /// Cached model list discovered from `copilot help`.
     @Published var copilotAvailableModels: [String] {
         didSet { d.set(copilotAvailableModels, forKey: "copilotAvailableModels") }
+    }
+    /// Per-model metadata (context window, reasoning efforts) matching
+    /// copilotAvailableModels; entries may be id-only for fallback sources.
+    @Published var copilotModelCatalog: [CopilotModelInfo] {
+        didSet {
+            if let data = try? JSONEncoder().encode(copilotModelCatalog) {
+                d.set(data, forKey: "copilotModelCatalog")
+            }
+        }
+    }
+
+    func copilotModelInfo(_ id: String) -> CopilotModelInfo? {
+        copilotModelCatalog.first { $0.id == id }
     }
     /// Path to the `codex` binary. Empty = login-shell lookup.
     @Published var codexPath: String {
@@ -182,48 +213,72 @@ final class AppSettings: ObservableObject {
     /// Discover valid --model values by parsing `copilot help`
     /// (the official docs point to the --model description as the
     /// canonical list of model strings for your subscription).
+    /// True while a discovery pipeline is running (prevents overlapping
+    /// refreshes racing each other's results). Main-thread only.
+    private var copilotRefreshInFlight = false
+
     func refreshCopilotModels() {
+        guard !copilotRefreshInFlight else { return }
+        copilotRefreshInFlight = true
         let configured = copilotPath.trimmingCharacters(in: .whitespaces)
         let command = configured.isEmpty ? "copilot" : configured
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // A: Copilot's own models API — the source editors use; returns
-            // the account's actual entitled models. Internal but stable-ish.
-            var models = Self.copilotAPIModels()
+            // the account's actual entitled models WITH metadata (context
+            // windows, reasoning efforts). Internal but stable-ish.
+            var catalog = Self.copilotAPICatalog()
             var source = "copilot API"
-            // B: model lists cached in ~/.copilot JSON state.
-            if models.count < 2 {
-                models = Self.parseModelTokens(from: Self.shellOutput(
+            // B: model lists cached in ~/.copilot JSON state (ids only).
+            if catalog.count < 2 {
+                catalog = Self.parseModelTokens(from: Self.shellOutput(
                     "cat ~/.copilot/*.json 2>/dev/null", timeout: 5) ?? "")
+                    .map { CopilotModelInfo(id: $0) }
                 source = "state files"
             }
             // C: legacy help-text parse (older CLIs listed models there).
-            if models.count < 2 {
-                models = Self.parseModels(fromHelp: Self.shellOutput(
+            if catalog.count < 2 {
+                catalog = Self.parseModels(fromHelp: Self.shellOutput(
                     "\(command) help 2>&1", timeout: 15) ?? "")
+                    .map { CopilotModelInfo(id: $0) }
                 source = "help text"
             }
-            // D: curated baseline — the CLI stopped publishing its model
-            // list anywhere scrapable. Kept current in the repo; a model
+            // D: ask the CLI itself — one headless turn requesting strict
+            // JSON. It's an LLM's self-report, so ids are validated
+            // against known family prefixes; last resort before the
+            // hardcoded list because it can be slow and imperfect.
+            // Skipped when the binary is missing (would waste the timeout).
+            if catalog.count < 2,
+               Self.shellOutput("command -v \(command.shellQuoted)", timeout: 5)?
+                   .isEmpty == false {
+                catalog = Self.selfReportedCatalog(command: command)
+                source = "copilot self-report"
+            }
+            // E: curated baseline — kept current in the repo; a model
             // your plan lacks simply errors visibly in the panel.
-            if models.count < 2 {
+            if catalog.count < 2 {
                 // Top/current models only — one per family tier.
-                models = ["auto",
-                          "gpt-5.6-sol", "gpt-5.6-luna",
-                          "claude-opus-4.8", "claude-sonnet-4.6",
-                          "claude-haiku-4.5",
-                          "gemini-2.5-pro"]
+                catalog = ["auto",
+                           "gpt-5.6-sol", "gpt-5.6-luna",
+                           "claude-opus-4.8", "claude-sonnet-4.6",
+                           "claude-haiku-4.5",
+                           "gemini-2.5-pro"].map { CopilotModelInfo(id: $0) }
                 source = "curated list"
             }
-            Log.write("model discovery: found \(models.count) models via \(source)")
-            if !models.isEmpty {
-                DispatchQueue.main.async { self?.copilotAvailableModels = models }
+            Log.write("model discovery: found \(catalog.count) models via \(source)")
+            DispatchQueue.main.async {
+                self?.copilotRefreshInFlight = false
+                guard !catalog.isEmpty else { return }
+                self?.copilotModelCatalog = catalog
+                self?.copilotAvailableModels = catalog.map(\.id)
             }
         }
     }
 
     /// The account's entitled Copilot models, via the same internal API
     /// editor integrations use (gh token → Copilot session token → /models).
-    private static func copilotAPIModels() -> [String] {
+    /// Parses per-model metadata leniently — payload fields shift between
+    /// releases, so every lookup is optional.
+    private static func copilotAPICatalog() -> [CopilotModelInfo] {
         let cmd = """
         OAUTH=$(cat ~/.config/github-copilot/apps.json ~/.config/github-copilot/hosts.json ~/.copilot/*.json 2>/dev/null \
           | grep -o '"oauth_token"[^,}]*' | head -1 | grep -o '[A-Za-z0-9_]*$'); \
@@ -240,7 +295,7 @@ final class AppSettings: ObservableObject {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let list = obj["data"] as? [[String: Any]] else { return [] }
         var seen = Set<String>()
-        var models: [String] = []
+        var catalog: [CopilotModelInfo] = []
         for item in list {
             guard let id = item["id"] as? String, !id.isEmpty,
                   !seen.contains(id) else { continue }
@@ -248,9 +303,64 @@ final class AppSettings: ObservableObject {
             if let pickerEnabled = item["model_picker_enabled"] as? Bool,
                !pickerEnabled { continue }
             seen.insert(id)
-            models.append(id)
+            let capabilities = item["capabilities"] as? [String: Any]
+            let limits = capabilities?["limits"] as? [String: Any]
+            // Cast each candidate separately so a JSON null (NSNull) in
+            // the preferred key doesn't mask the fallback key.
+            let contextWindow = (limits?["max_context_window_tokens"] as? Int)
+                ?? (limits?["max_prompt_tokens"] as? Int)
+            let maxOutput = limits?["max_output_tokens"] as? Int
+            let supports = capabilities?["supports"] as? [String: Any]
+            let efforts = (item["supported_reasoning_efforts"]
+                ?? capabilities?["supported_reasoning_efforts"]
+                ?? supports?["reasoning_efforts"]) as? [String]
+            catalog.append(CopilotModelInfo(
+                id: id,
+                contextWindow: contextWindow,
+                maxOutputTokens: maxOutput,
+                reasoningEfforts: efforts))
         }
-        return models
+        return catalog
+    }
+
+    /// Ask the Copilot CLI itself for its model list — a single headless
+    /// `copilot -p` turn constrained to strict JSON. The answer comes from
+    /// a model, not an API, so ids are whitelisted by family prefix and
+    /// must contain a digit; metadata is taken as advisory.
+    private static func selfReportedCatalog(command: String) -> [CopilotModelInfo] {
+        let prompt = """
+        Reply with ONLY a JSON array, no prose and no code fences. List the \
+        model ids available to GitHub Copilot CLI on this account, one object \
+        per model: {"id":"<model-id>","context_window":<input context window \
+        in tokens, or null if unsure>,"reasoning_efforts":["low","medium",\
+        "high"] or null if the model has no effort setting}. Only include \
+        ids you are certain exist. Do not run any tools.
+        """
+        guard let out = shellOutput(
+            "\(command.shellQuoted) -p \(prompt.shellQuoted) 2>/dev/null",
+            timeout: 60),
+            let start = out.firstIndex(of: "["),
+            let end = out.lastIndex(of: "]"), start < end,
+            let data = String(out[start...end]).data(using: .utf8),
+            let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return [] }
+        let families = ["gpt-", "claude-", "gemini-", "o1-", "o3-", "o4-",
+                        "grok-", "llama-", "codex-"]
+        var seen = Set<String>()
+        var catalog: [CopilotModelInfo] = []
+        for item in list {
+            guard let id = (item["id"] as? String)?.lowercased(),
+                  id.rangeOfCharacter(from: .decimalDigits) != nil,
+                  families.contains(where: { id.hasPrefix($0) }),
+                  !seen.contains(id) else { continue }
+            seen.insert(id)
+            catalog.append(CopilotModelInfo(
+                id: id,
+                contextWindow: item["context_window"] as? Int,
+                maxOutputTokens: nil,
+                reasoningEfforts: item["reasoning_efforts"] as? [String]))
+        }
+        return catalog
     }
 
     /// Run a login-shell command and capture combined output.
@@ -417,59 +527,15 @@ final class AppSettings: ObservableObject {
             objectWillChange.send()
             do {
                 if newValue {
-                    if SMAppService.mainApp.status == .enabled,
-                       d.string(forKey: launchAtLoginBundlePathKey) != Bundle.main.bundlePath {
-                        try SMAppService.mainApp.unregister()
-                    }
-                    registerCurrentBundleForLogin(retryOnce: true)
+                    try SMAppService.mainApp.register()
                 } else {
                     try SMAppService.mainApp.unregister()
-                    d.removeObject(forKey: launchAtLoginBundlePathKey)
-                    launchAtLoginError = nil
-                    Log.write("launchAtLogin: unregistered")
                 }
+                Log.write("launchAtLogin: \(newValue ? "registered" : "unregistered")")
             } catch {
-                recordLaunchAtLoginFailure(error)
+                Log.write("launchAtLogin failed: \(error.localizedDescription)")
             }
         }
-    }
-
-    /// Existing registrations can retain the URL of an older checkout.
-    /// Refresh once per bundle path so login always opens this exact build.
-    func refreshLaunchAtLoginRegistrationIfNeeded() {
-        guard SMAppService.mainApp.status == .enabled else {
-            d.removeObject(forKey: launchAtLoginBundlePathKey)
-            return
-        }
-        let currentPath = Bundle.main.bundlePath
-        guard d.string(forKey: launchAtLoginBundlePathKey) != currentPath else { return }
-        do {
-            try SMAppService.mainApp.unregister()
-            registerCurrentBundleForLogin(retryOnce: true)
-        } catch {
-            recordLaunchAtLoginFailure(error)
-        }
-    }
-
-    private func registerCurrentBundleForLogin(retryOnce: Bool) {
-        do {
-            try SMAppService.mainApp.register()
-            d.set(Bundle.main.bundlePath, forKey: launchAtLoginBundlePathKey)
-            launchAtLoginError = nil
-            Log.write("launchAtLogin: registered \(Bundle.main.bundlePath)")
-        } catch {
-            recordLaunchAtLoginFailure(error)
-            guard retryOnce else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                self?.registerCurrentBundleForLogin(retryOnce: false)
-            }
-        }
-    }
-
-    private func recordLaunchAtLoginFailure(_ error: Error) {
-        let message = "Launch at login could not be updated: \(error.localizedDescription)"
-        launchAtLoginError = message
-        Log.write("launchAtLogin failed: \(error.localizedDescription)")
     }
 
     private init() {
@@ -487,6 +553,8 @@ final class AppSettings: ObservableObject {
         copilotDiscourageSubagents = d.object(forKey: "copilotDiscourageSubagents") == nil
             ? true : d.bool(forKey: "copilotDiscourageSubagents")
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
+        copilotModelCatalog = (d.data(forKey: "copilotModelCatalog")
+            .flatMap { try? JSONDecoder().decode([CopilotModelInfo].self, from: $0) }) ?? []
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
         localBaseURL = d.string(forKey: "localBaseURL") ?? "http://localhost:8000/v1"
@@ -505,5 +573,11 @@ final class AppSettings: ObservableObject {
         panelOpacity = storedOpacity == 0 ? 1.0 : min(max(storedOpacity, 0.5), 1.0)
         memoryEnabled = d.object(forKey: "memoryEnabled") == nil ? true : d.bool(forKey: "memoryEnabled")
         memoryPath = d.string(forKey: "memoryPath") ?? "\(NSHomeDirectory())/Cantrip Memory"
+    }
+}
+
+private extension String {
+    var shellQuoted: String {
+        "'" + replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
