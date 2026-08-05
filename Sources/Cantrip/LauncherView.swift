@@ -279,7 +279,7 @@ struct LauncherView: View {
                     .transition(.opacity)
             }
 
-            if updater.commitsBehind > 0 {
+            if updater.updateAvailable {
                 Button(action: {
                     // Stream the update through the transcript like a
                     // ! command, so pull/build progress is visible.
@@ -288,7 +288,7 @@ struct LauncherView: View {
                     HStack(spacing: 3) {
                         Image(systemName: "arrow.down.circle.fill")
                             .font(.system(size: 11))
-                        Text("New update")
+                        Text(updater.commitsBehind > 0 ? "New update" : "Rebuild needed")
                             .font(.caption)
                             .lineLimit(1)
                     }
@@ -296,7 +296,9 @@ struct LauncherView: View {
                     .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(.plain)
-                .help("\(updater.commitsBehind) new commit\(updater.commitsBehind == 1 ? "" : "s") on GitHub — click to pull, rebuild, and relaunch (app restarts)")
+                .help(updater.commitsBehind > 0
+                    ? "\(updater.commitsBehind) new commit\(updater.commitsBehind == 1 ? "" : "s") on GitHub — click to pull, rebuild, and relaunch (app restarts)"
+                    : "The running app was built from older source than this checkout — click to rebuild and relaunch (app restarts)")
             }
 
             Spacer()

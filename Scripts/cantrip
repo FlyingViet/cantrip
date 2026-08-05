@@ -6,14 +6,86 @@ Usage:
   cat build.log | cantrip "why did this fail?"
   cantrip --backend claude "review this diff" < changes.diff
 
-The Cantrip app must be running (it hosts the socket).
+If the app isn't running, the exact bundle next to this script's repo is
+launched (never LaunchServices' pick among stale copies), with a warning
+when that bundle was built from older source than the checkout.
 """
 import json
 import os
 import socket
+import subprocess
 import sys
+import time
 
 SOCKET = os.path.expanduser("~/.cache/Cantrip/cantrip.sock")
+
+
+def repo_dir():
+    return os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+
+
+def connect():
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(SOCKET)
+    return sock
+
+
+def quiet_output(args):
+    try:
+        return subprocess.run(args, capture_output=True, text=True,
+                              timeout=10).stdout.strip()
+    except Exception:
+        return ""
+
+
+def source_identity(repo):
+    """Matches the Makefile's CantripBuildIdentity format (dirty trees
+    get a diff checksum appended, so different edits read differently)."""
+    ident = quiet_output(["git", "-C", repo, "describe", "--always", "--dirty"])
+    if ident.endswith("-dirty"):
+        try:
+            digest = subprocess.run(
+                f"git -C '{repo}' diff HEAD | cksum | cut -d' ' -f1",
+                shell=True, capture_output=True, text=True, timeout=10,
+            ).stdout.strip()
+            if digest:
+                ident += "-" + digest
+        except Exception:
+            pass
+    return ident
+
+
+def launch_app():
+    """Launch the repo's own Cantrip.app by exact path; returns a
+    connected socket, or None."""
+    pids = quiet_output(["pgrep", "-x", "Cantrip"])
+    if pids:
+        pid = pids.split()[0]
+        print(f"cantrip: a Cantrip process is already running (pid {pid}) "
+              f"but its socket isn't answering — it may be hung. "
+              f"Try `kill {pid}` and re-run.", file=sys.stderr)
+        return None
+    repo = repo_dir()
+    app = os.path.join(repo, "Cantrip.app")
+    if not os.path.isdir(app):
+        return None
+    build = quiet_output(["defaults", "read",
+                          os.path.join(app, "Contents", "Info"),
+                          "CantripBuildIdentity"])
+    source = source_identity(repo)
+    if build and source and build != source:
+        print(f"cantrip: note — app built from {build}, source is at {source}."
+              f" Run `cantrip-rebuild` (or `make -C {repo} run`) to update.",
+              file=sys.stderr)
+    print(f"cantrip: app not running — launching {app}", file=sys.stderr)
+    subprocess.run(["open", "-g", app], check=False)
+    for _ in range(60):  # up to ~15s for the socket to appear
+        time.sleep(0.25)
+        try:
+            return connect()
+        except OSError:
+            continue
+    return None
 
 
 def main() -> int:
@@ -45,12 +117,14 @@ def main() -> int:
         request["backend"] = backend
 
     try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.connect(SOCKET)
+        sock = connect()
     except OSError:
-        print("cantrip: app not running (no socket at ~/.cache/Cantrip). "
-              "Launch Cantrip first.", file=sys.stderr)
-        return 1
+        sock = launch_app()
+        if sock is None:
+            print("cantrip: app not running (no socket at ~/.cache/Cantrip) "
+                  "and it couldn't be launched. Open Cantrip.app manually.",
+                  file=sys.stderr)
+            return 1
 
     sock.sendall((json.dumps(request) + "\n").encode())
     buffer = b""

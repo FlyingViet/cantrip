@@ -56,6 +56,9 @@ app: build cert icon
 	cp "$(BUILD_DIR)/$(APP_NAME)" "$$STAGING/Contents/MacOS/"; \
 	cp Resources/Info.plist "$$STAGING/Contents/"; \
 	BUILD_ID=$$(git describe --always --dirty 2>/dev/null || echo unknown); \
+	case "$$BUILD_ID" in *-dirty) \
+		BUILD_ID="$$BUILD_ID-$$(git diff HEAD 2>/dev/null | cksum | cut -d' ' -f1)";; \
+	esac; \
 	BUILD_DATE=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
 	plutil -replace CantripBuildIdentity -string "$$BUILD_ID" "$$STAGING/Contents/Info.plist"; \
 	plutil -replace CantripBuildDate -string "$$BUILD_DATE" "$$STAGING/Contents/Info.plist"; \
