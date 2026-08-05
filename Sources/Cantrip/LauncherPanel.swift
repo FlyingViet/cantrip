@@ -67,6 +67,19 @@ final class LauncherPanel: NSPanel {
     /// does NOT dismiss the panel — it persists as an overlay.
     var keepVisibleWhileUnfocused = false
 
+    // Oscillation damping: long content near a wrap boundary can make the
+    // reported content height alternate between two values on every layout
+    // pass (height → rewrap → height → …). Unchecked, that resizes the
+    // window hundreds of times per second and pegs the main thread until
+    // the app beachballs. Detect the A→B→A pattern and hold the taller
+    // height briefly to break the cycle.
+    private var recentHeights: [(height: CGFloat, at: Date)] = []
+    /// The two heights the layout is flapping between while a hold is
+    /// active (matched exactly, so any oscillation amplitude is covered).
+    private var oscillationLow: CGFloat = 0
+    private var oscillationHigh: CGFloat = 0
+    private var oscillationHoldUntil = Date.distantPast
+
     /// Install the SwiftUI root view. sizingOptions is emptied so the hosting
     /// view never fights our manual window sizing.
     func install<Content: View>(_ rootView: Content) {
@@ -103,11 +116,41 @@ final class LauncherPanel: NSPanel {
         let screenFrame = targetScreen?.visibleFrame
         let maxHeight = min(Self.maxPanelHeight,
                             (screenFrame?.height ?? Self.maxPanelHeight) * 0.9)
-        let newHeight = max(60, min(size.height, maxHeight))
+        var newHeight = max(60, min(size.height, maxHeight))
         let newWidth = max(Self.panelWidth,
                            min(size.width, (screenFrame?.width ?? size.width) * 0.95))
-        Log.write("resizeContent: requested=\(size), clamped=(\(newWidth), \(newHeight)), current=\(frame)")
+
+        let now = Date()
+        recentHeights.removeAll { now.timeIntervalSince($0.at) > 1.0 }
+        if now < oscillationHoldUntil {
+            if abs(newHeight - oscillationLow) < 0.5
+                || abs(newHeight - oscillationHigh) < 0.5 {
+                // Riding out the flip-flop. Never drop a width change,
+                // though — apply it at the held height.
+                guard abs(newWidth - frame.width) > 0.5 else { return }
+                newHeight = oscillationHigh
+            } else {
+                oscillationHoldUntil = .distantPast // genuinely new size
+            }
+        }
+        if now >= oscillationHoldUntil,
+           let last = recentHeights.last,
+           recentHeights.count >= 2,
+           abs(last.height - newHeight) > 0.5,
+           abs(recentHeights[recentHeights.count - 2].height - newHeight) < 0.5,
+           now.timeIntervalSince(last.at) < 0.5 {
+            // A→B→A within half a second: layout feedback loop.
+            oscillationLow = min(newHeight, last.height)
+            oscillationHigh = max(newHeight, last.height)
+            oscillationHoldUntil = now + 1.0
+            newHeight = oscillationHigh
+            Log.write("resizeContent: oscillation damped — holding height \(newHeight) for 1s")
+        }
+        recentHeights.append((newHeight, now))
+        if recentHeights.count > 6 { recentHeights.removeFirst() }
+
         guard abs(newHeight - frame.height) > 0.5 || abs(newWidth - frame.width) > 0.5 else { return }
+        Log.write("resizeContent: requested=\(size), clamped=(\(newWidth), \(newHeight)), current=\(frame)")
         var f = frame
         let top = f.maxY
         let midX = f.midX
