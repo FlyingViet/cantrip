@@ -1871,6 +1871,11 @@ struct SettingsView: View {
                 set: { settings.launchAtLogin = $0 }))
                 .font(.caption)
                 .toggleStyle(.checkbox)
+            if let error = settings.launchAtLoginError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
             Toggle("Search my documents' contents as context (Spotlight index)", isOn: $settings.fileRAGEnabled)
                 .font(.caption)
                 .toggleStyle(.checkbox)
