@@ -33,6 +33,8 @@ struct CopilotModelInfo: Codable, Equatable, Identifiable {
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
     private let d = UserDefaults.standard
+    private let launchAtLoginBundlePathKey = "launchAtLoginBundlePath"
+    @Published private(set) var launchAtLoginError: String?
 
     @Published var backend: BackendKind {
         didSet { d.set(backend.rawValue, forKey: "backend") }
@@ -249,6 +251,7 @@ final class AppSettings: ObservableObject {
             // Skipped when the binary is missing (would waste the timeout).
             if catalog.count < 2,
                Self.shellOutput("command -v \(command.shellQuoted)", timeout: 5)?
+                   .trimmingCharacters(in: .whitespacesAndNewlines)
                    .isEmpty == false {
                 catalog = Self.selfReportedCatalog(command: command)
                 source = "copilot self-report"
@@ -311,9 +314,9 @@ final class AppSettings: ObservableObject {
                 ?? (limits?["max_prompt_tokens"] as? Int)
             let maxOutput = limits?["max_output_tokens"] as? Int
             let supports = capabilities?["supports"] as? [String: Any]
-            let efforts = (item["supported_reasoning_efforts"]
-                ?? capabilities?["supported_reasoning_efforts"]
-                ?? supports?["reasoning_efforts"]) as? [String]
+            let efforts = (item["supported_reasoning_efforts"] as? [String])
+                ?? (capabilities?["supported_reasoning_efforts"] as? [String])
+                ?? (supports?["reasoning_efforts"] as? [String])
             catalog.append(CopilotModelInfo(
                 id: id,
                 contextWindow: contextWindow,
@@ -527,15 +530,59 @@ final class AppSettings: ObservableObject {
             objectWillChange.send()
             do {
                 if newValue {
-                    try SMAppService.mainApp.register()
+                    if SMAppService.mainApp.status == .enabled,
+                       d.string(forKey: launchAtLoginBundlePathKey) != Bundle.main.bundlePath {
+                        try SMAppService.mainApp.unregister()
+                    }
+                    registerCurrentBundleForLogin(retryOnce: true)
                 } else {
                     try SMAppService.mainApp.unregister()
+                    d.removeObject(forKey: launchAtLoginBundlePathKey)
+                    launchAtLoginError = nil
+                    Log.write("launchAtLogin: unregistered")
                 }
-                Log.write("launchAtLogin: \(newValue ? "registered" : "unregistered")")
             } catch {
-                Log.write("launchAtLogin failed: \(error.localizedDescription)")
+                recordLaunchAtLoginFailure(error)
             }
         }
+    }
+
+    /// Existing registrations can retain the URL of an older checkout.
+    /// Refresh once per bundle path so login always opens this exact build.
+    func refreshLaunchAtLoginRegistrationIfNeeded() {
+        guard SMAppService.mainApp.status == .enabled else {
+            d.removeObject(forKey: launchAtLoginBundlePathKey)
+            return
+        }
+        let currentPath = Bundle.main.bundlePath
+        guard d.string(forKey: launchAtLoginBundlePathKey) != currentPath else { return }
+        do {
+            try SMAppService.mainApp.unregister()
+            registerCurrentBundleForLogin(retryOnce: true)
+        } catch {
+            recordLaunchAtLoginFailure(error)
+        }
+    }
+
+    private func registerCurrentBundleForLogin(retryOnce: Bool) {
+        do {
+            try SMAppService.mainApp.register()
+            d.set(Bundle.main.bundlePath, forKey: launchAtLoginBundlePathKey)
+            launchAtLoginError = nil
+            Log.write("launchAtLogin: registered \(Bundle.main.bundlePath)")
+        } catch {
+            recordLaunchAtLoginFailure(error)
+            guard retryOnce else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.registerCurrentBundleForLogin(retryOnce: false)
+            }
+        }
+    }
+
+    private func recordLaunchAtLoginFailure(_ error: Error) {
+        let message = "Launch at login could not be updated: \(error.localizedDescription)"
+        launchAtLoginError = message
+        Log.write("launchAtLogin failed: \(error.localizedDescription)")
     }
 
     private init() {
