@@ -123,6 +123,14 @@ final class AppSettings: ObservableObject {
     func copilotModelInfo(_ id: String) -> CopilotModelInfo? {
         copilotModelCatalog.first { $0.id == id }
     }
+    /// Allowed --reasoning-effort values parsed from `copilot help`.
+    @Published var copilotEffortChoices: [String] {
+        didSet { d.set(copilotEffortChoices, forKey: "copilotEffortChoices") }
+    }
+    /// Allowed --context tier values parsed from `copilot help`.
+    @Published var copilotContextTierChoices: [String] {
+        didSet { d.set(copilotContextTierChoices, forKey: "copilotContextTierChoices") }
+    }
     /// Path to the `codex` binary. Empty = login-shell lookup.
     @Published var codexPath: String {
         didSet { d.set(codexPath, forKey: "codexPath") }
@@ -225,6 +233,19 @@ final class AppSettings: ObservableObject {
         let configured = copilotPath.trimmingCharacters(in: .whitespaces)
         let command = configured.isEmpty ? "copilot" : configured
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            // Help text serves two jobs: a model-list fallback, and the
+            // authoritative list of allowed --reasoning-effort/--context
+            // values for the pickers.
+            let helpText = Self.shellOutput("\(command.shellQuoted) help 2>&1",
+                                            timeout: 15) ?? ""
+            let effortChoices = Self.parseFlagChoices(
+                fromHelp: helpText, flag: "--reasoning-effort")
+                .filter { ["none", "minimal", "low", "medium", "high",
+                           "xhigh", "max"].contains($0) }
+            let tierChoices = Self.parseFlagChoices(
+                fromHelp: helpText, flag: "--context")
+                .filter { $0 == "default" || $0.contains("context") }
+
             // A: Copilot's own models API — the source editors use; returns
             // the account's actual entitled models WITH metadata (context
             // windows, reasoning efforts). Internal but stable-ish.
@@ -239,8 +260,7 @@ final class AppSettings: ObservableObject {
             }
             // C: legacy help-text parse (older CLIs listed models there).
             if catalog.count < 2 {
-                catalog = Self.parseModels(fromHelp: Self.shellOutput(
-                    "\(command) help 2>&1", timeout: 15) ?? "")
+                catalog = Self.parseModels(fromHelp: helpText)
                     .map { CopilotModelInfo(id: $0) }
                 source = "help text"
             }
@@ -267,14 +287,53 @@ final class AppSettings: ObservableObject {
                            "gemini-2.5-pro"].map { CopilotModelInfo(id: $0) }
                 source = "curated list"
             }
-            Log.write("model discovery: found \(catalog.count) models via \(source)")
+            Log.write("model discovery: found \(catalog.count) models via \(source)"
+                + (effortChoices.isEmpty ? "" : "; efforts: \(effortChoices.joined(separator: "/"))")
+                + (tierChoices.isEmpty ? "" : "; context tiers: \(tierChoices.joined(separator: "/"))"))
             DispatchQueue.main.async {
                 self?.copilotRefreshInFlight = false
+                if !effortChoices.isEmpty { self?.copilotEffortChoices = effortChoices }
+                if !tierChoices.isEmpty { self?.copilotContextTierChoices = tierChoices }
                 guard !catalog.isEmpty else { return }
                 self?.copilotModelCatalog = catalog
                 self?.copilotAvailableModels = catalog.map(\.id)
             }
         }
+    }
+
+    /// Allowed values for a CLI flag, parsed from help text: quoted
+    /// choices ("low", "medium", …) or <a|b|c>-style alternations near
+    /// the flag name. Lenient — returns [] when the format isn't found.
+    static func parseFlagChoices(fromHelp text: String, flag: String) -> [String] {
+        guard let range = text.range(of: flag) else { return [] }
+        let section = String(text[range.upperBound...].prefix(300))
+        var seen = Set<String>()
+        var choices: [String] = []
+        func add(_ token: String) {
+            let t = token.trimmingCharacters(in: .whitespaces).lowercased()
+            guard t.count >= 2, t.count <= 20,
+                  t.range(of: "^[a-z][a-z0-9_-]*$",
+                          options: .regularExpression) != nil,
+                  seen.insert(t).inserted else { return }
+            choices.append(t)
+        }
+        let ns = section as NSString
+        if let quoted = try? NSRegularExpression(pattern: "\"([a-z][a-z0-9_-]+)\"") {
+            for match in quoted.matches(
+                in: section, range: NSRange(location: 0, length: ns.length)) {
+                add(ns.substring(with: match.range(at: 1)))
+            }
+        }
+        if choices.count < 2,
+           let alternation = try? NSRegularExpression(
+               pattern: "[<(\\[]([a-z0-9_-]+(?:\\s*\\|\\s*[a-z0-9_-]+)+)[>)\\]]"),
+           let match = alternation.matches(
+               in: section, range: NSRange(location: 0, length: ns.length)).first {
+            ns.substring(with: match.range(at: 1))
+                .components(separatedBy: "|")
+                .forEach(add)
+        }
+        return choices
     }
 
     /// The account's entitled Copilot models, via the same internal API
@@ -602,6 +661,8 @@ final class AppSettings: ObservableObject {
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
         copilotModelCatalog = (d.data(forKey: "copilotModelCatalog")
             .flatMap { try? JSONDecoder().decode([CopilotModelInfo].self, from: $0) }) ?? []
+        copilotEffortChoices = d.stringArray(forKey: "copilotEffortChoices") ?? []
+        copilotContextTierChoices = d.stringArray(forKey: "copilotContextTierChoices") ?? []
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
         localBaseURL = d.string(forKey: "localBaseURL") ?? "http://localhost:8000/v1"
