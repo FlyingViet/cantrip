@@ -1816,7 +1816,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Effort").font(.caption).foregroundStyle(.secondary)
                     Picker("", selection: $settings.copilotEffort) {
-                        ForEach(AppSettings.copilotEffortLevels, id: \.value) { level in
+                        ForEach(copilotEffortOptions, id: \.value) { level in
                             Text(level.label).tag(level.value)
                         }
                     }
@@ -1916,17 +1916,42 @@ struct SettingsView: View {
         return options
     }
 
-    /// Approximate native context window per model family — Copilot may
-    /// cap lower; shown as guidance, not a promise.
+    /// Context window per model: exact figure from the discovered model
+    /// catalog when available, else an approximate per-family guess.
     private func contextHint(for model: String) -> String? {
         let m = model.lowercased()
         if m == "auto" { return nil }
+        // The CLI's long_context tier overrides the model's standard
+        // window, so it must win over the catalog figure.
         if m == "gpt-5.6-sol",
            settings.effectiveCopilotContextTier == "long_context" { return "~1M" }
+        if let label = settings.copilotModelInfo(model)?.contextLabel {
+            return label
+        }
         if m.contains("haiku") { return "~200k" }
         if m.contains("claude") || m.contains("gemini") { return "~1M" }
         if m.contains("gpt") { return "~400k" }
         return nil
+    }
+
+    /// Effort options for the SELECTED model: the catalog's list when the
+    /// API provided one, else the static defaults. Current selection is
+    /// preserved even if the model doesn't advertise it.
+    private var copilotEffortOptions: [(value: String, label: String)] {
+        var options = AppSettings.copilotEffortLevels
+        if let model = settings.effectiveCopilotModel,
+           let rawEfforts = settings.copilotModelInfo(model)?.reasoningEfforts {
+            var seen = Set<String>()
+            let efforts = rawEfforts.filter { !$0.isEmpty && seen.insert($0).inserted }
+            if !efforts.isEmpty {
+                options = [("", "Default")] + efforts.map { ($0, $0.capitalized) }
+            }
+        }
+        let current = settings.copilotEffort
+        if !current.isEmpty, !options.contains(where: { $0.value == current }) {
+            options.append((current, current.capitalized))
+        }
+        return options
     }
 
     private func copilotModelLabel(_ model: String) -> String {
@@ -1959,7 +1984,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Re-discover available models from `copilot help`")
+                .help("Re-discover available models and their context windows (Copilot API → CLI state → asking the CLI itself)")
             }
         }
         .onAppear {
