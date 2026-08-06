@@ -49,6 +49,21 @@ final class PanelMetrics: ObservableObject {
         Log.write("panel: user size saved \(Int(contentWidth))×\(Int(transcriptMaxHeight))")
     }
 
+    /// Inner-pane divider drag: move width between the transcript and a
+    /// side pane so the OUTER window stays constant. Returns the delta
+    /// actually applied (smaller than asked once the transcript hits its
+    /// 560...1400 clamp) so the caller gives the pane exactly what the
+    /// transcript gave up — neither side over- or undershoots.
+    @discardableResult
+    func adjustContentWidth(by delta: CGFloat) -> CGFloat {
+        let target = min(max(560, contentWidth + delta), 1400)
+        let applied = target - contentWidth
+        guard abs(applied) > 0.01 else { return 0 }
+        contentWidth = target
+        userWidth = target // persist: reopening keeps the chosen split
+        return applied
+    }
+
     private func apply(totalWidth: CGFloat, totalHeight: CGFloat, sidebarExtra: CGFloat) {
         let width = min(max(560, totalWidth - sidebarExtra), 1400)
         let height = min(max(220, totalHeight - 170), 900)

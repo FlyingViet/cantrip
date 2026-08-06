@@ -48,11 +48,13 @@ struct LauncherView: View {
                 // (kept in lockstep with sidebarExtra — see its comment).
                 .frame(width: metrics.contentWidth + councilPaneWidth)
             if showSettings {
-                PaneDivider(width: $settingsPaneUserWidth, range: 280...560)
+                PaneDivider(width: paneBinding($settingsPaneUserWidth, range: 280...560),
+                            range: 280...560)
                 settingsSidebar
             }
             if showSteps {
-                PaneDivider(width: $stepsPaneUserWidth, range: 220...480)
+                PaneDivider(width: paneBinding($stepsPaneUserWidth, range: 220...480),
+                            range: 220...480)
                 stepsSidebar
             }
         }
@@ -1021,6 +1023,27 @@ struct LauncherView: View {
         return showCouncilPanes ? CGFloat(councilPaneUserWidth) + 7 : 27
     }
 
+    /// Inner-pane resize: redistribute width between the transcript and
+    /// the dragged pane so the OUTER window never changes size. The setter
+    /// asks the transcript to give up (or take back) width first, then
+    /// applies to the pane only what the transcript actually yielded —
+    /// so when either side hits its clamp, both simply stop moving and
+    /// the window total stays exact.
+    private func paneBinding(_ storage: Binding<Double>,
+                             range: ClosedRange<Double>) -> Binding<Double> {
+        Binding(
+            get: { storage.wrappedValue },
+            set: { proposed in
+                let clamped = min(max(proposed, range.lowerBound), range.upperBound)
+                let requested = clamped - storage.wrappedValue
+                guard abs(requested) > 0.01 else { return }
+                let given = PanelMetrics.shared.adjustContentWidth(by: -CGFloat(requested))
+                guard given != 0 else { return } // transcript pinned at its clamp
+                storage.wrappedValue -= Double(given)
+            }
+        )
+    }
+
     /// A command (yours or the agent's) is running in the shell.
     private var terminalBusy: Bool {
         session.shell.isRunning || session.shell.hasAgentCommandRunning
@@ -1360,7 +1383,8 @@ struct LauncherView: View {
             mainTranscript
             if councilActive {
                 if showCouncilPanes {
-                    PaneDivider(width: $councilPaneUserWidth, range: 220...560)
+                    PaneDivider(width: paneBinding($councilPaneUserWidth, range: 220...560),
+                                range: 220...560)
                     councilSeatColumn
                         .frame(width: CGFloat(councilPaneUserWidth))
                         .frame(maxHeight: metrics.transcriptMaxHeight)
@@ -1512,9 +1536,10 @@ struct LauncherView: View {
 }
 
 /// A draggable divider between the main column and a side pane. The pane
-/// sits to the RIGHT, so dragging left grows it. Width changes flow into
-/// sidebarExtra/councilPaneWidth, keeping window sizing and drag-resize
-/// accounting consistent.
+/// sits to the RIGHT, so dragging left grows it. The binding it writes is
+/// wrapped by paneBinding, which trades the width against the transcript
+/// (metrics.contentWidth) — the outer window size never changes; the
+/// divider only redistributes space between the two inner columns.
 private struct PaneDivider: View {
     @Binding var width: Double
     let range: ClosedRange<Double>
