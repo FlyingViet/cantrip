@@ -594,13 +594,17 @@ final class ChatSession: ObservableObject {
         "\(prompt.prefix(2000))"
 
         \(answers.count) AI advisors answered independently. Produce the council's \
-        joint, conclusive answer: state points where the advisors agree as settled; \
-        where they disagree, adjudicate explicitly and justify the call; fold in the \
-        strongest unique contributions from each. Do NOT summarize each answer in \
-        turn — deliver one unified, decisive result, ending with a clear final \
-        recommendation. If one of the answers is your own, give it no special weight. \
-        Do NOT start implementing anything — deliver the verdict; implementation \
-        happens separately when the user says to proceed.
+        joint, conclusive answer, matched to the kind of task: for a decision, plan, \
+        or review — state points where the advisors agree as settled; where they \
+        disagree, adjudicate explicitly and justify the call; end with one clear \
+        recommendation. For research or investigation — merge the findings into one \
+        comprehensive picture: combine complementary discoveries, flag facts the \
+        advisors contradict each other on (say which said what), and preserve unique \
+        findings noting which advisor surfaced them. Either way, do NOT summarize \
+        each answer in turn — deliver one unified result. If one of the answers is \
+        your own, give it no special weight. Do NOT start implementing anything — \
+        deliver the verdict; implementation happens separately when the user says \
+        to proceed.
         """
         for answer in answers {
             synthesisPrompt += "\n\n=== ANSWER from \(answer.label) ===\n\(answer.text.prefix(8000))"
@@ -668,7 +672,12 @@ final class ChatSession: ObservableObject {
                             "what do you think", "opinion", "evaluate", "assess",
                             "critique", "pros and cons", "which approach",
                             "design", "how would", "what's the best", "discuss",
-                            "audit", "look over", "thoughts", "risk", "tradeoff"]
+                            "audit", "look over", "thoughts", "risk", "tradeoff",
+                            // Research is deliberation: parallel seats
+                            // surface different findings to compare.
+                            "research", "investigate", "explore", "look into",
+                            "dig into", "find out", "learn about", "read up",
+                            "summarize", "explain", "understand"]
         if deliberation.contains(where: hasWord) { return false }
         // Questions are deliberation by nature.
         if p.hasSuffix("?") { return false }
