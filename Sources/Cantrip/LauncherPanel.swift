@@ -61,11 +61,38 @@ final class LauncherPanel: NSPanel {
             guard let self, !self.keepVisibleWhileUnfocused else { return }
             self.orderOut(nil)
         }
+        installMoveObserver()
     }
 
     /// While true (pinned, or a response is streaming), losing focus
     /// does NOT dismiss the panel — it persists as an overlay.
     var keepVisibleWhileUnfocused = false
+
+    // Remember where the user drags the panel: the top edge persists as
+    // a fraction of the screen's visible height (maps across displays);
+    // X always re-centers on summon.
+    private static let topFractionKey = "panelUserTopFraction"
+    /// Suppresses the didMove observer during our own positioning.
+    private var isProgrammaticMove = false
+
+    static func clearUserPosition() {
+        UserDefaults.standard.removeObject(forKey: topFractionKey)
+    }
+
+    private func installMoveObserver() {
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification,
+            object: self,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, !self.isProgrammaticMove, !self.inLiveResize,
+                  self.isVisible,
+                  let sf = self.screen?.visibleFrame, sf.height > 0 else { return }
+            let fraction = (self.frame.maxY - sf.minY) / sf.height
+            UserDefaults.standard.set(min(max(fraction, 0.2), 0.98),
+                                      forKey: Self.topFractionKey)
+        }
+    }
 
     // Oscillation damping: long content near a wrap boundary can make the
     // reported content height alternate between two values on every layout
@@ -162,11 +189,14 @@ final class LauncherPanel: NSPanel {
             f.origin.x = min(max(f.origin.x, screenFrame.minX),
                              screenFrame.maxX - newWidth)
         }
+        isProgrammaticMove = true
         setFrame(f, display: true)
+        isProgrammaticMove = false
     }
 
-    /// Position like Spotlight: horizontally centered, top edge in the
-    /// upper third of the screen the mouse is on.
+    /// Position like Spotlight: horizontally centered; the top edge uses
+    /// the user's remembered drag height (fraction of screen height),
+    /// defaulting to the upper third of the screen the mouse is on.
     func center(onActiveScreen: Bool) {
         // Deliberately mouse-based (not the panel's last screen): summoning
         // should appear where you're working right now.
@@ -176,8 +206,13 @@ final class LauncherPanel: NSPanel {
         guard let screen else { return }
         PanelMetrics.shared.update(for: screen)
         let sf = screen.visibleFrame
+        let stored = UserDefaults.standard.double(forKey: Self.topFractionKey)
+        let topFraction = stored > 0 ? stored : 0.72
         let x = sf.midX - frame.width / 2
-        let top = sf.minY + sf.height * 0.72
-        setFrameOrigin(NSPoint(x: x, y: top - frame.height))
+        let top = sf.minY + sf.height * topFraction
+        let y = max(top - frame.height, sf.minY) // never below the screen
+        isProgrammaticMove = true
+        setFrameOrigin(NSPoint(x: x, y: y))
+        isProgrammaticMove = false
     }
 }
