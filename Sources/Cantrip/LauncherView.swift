@@ -29,8 +29,8 @@ struct LauncherView: View {
     @State private var archivedSessions: [SessionManager.ArchivedSession] = []
     /// Instant caption for whichever toolbar icon is hovered.
     @State private var toolbarHint: String?
-    /// Council seat panes the user pinned visible (max 2 shown).
-    @State private var pinnedSeats: [String] = []
+    /// Council seat column visibility (collapsible to a slim strip).
+    @State private var showCouncilPanes = true
     @State private var showTerminal = false
     @State private var terminalCommand = ""
     @State private var terminalHistoryIndex: Int?
@@ -39,12 +39,10 @@ struct LauncherView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             mainColumn
-                // Council seat panes get their own 300pt on top of the
-                // configured width, so the main transcript isn't squeezed.
-                .frame(width: metrics.contentWidth
-                    + (session.councilMode && settings.councilMembers.count >= 2
-                       && (!session.messages.isEmpty || session.statusText != nil)
-                       ? 300 : 0))
+                // Council seat panes get their own width on top of the
+                // configured width, so the main transcript isn't squeezed
+                // (kept in lockstep with sidebarExtra — see its comment).
+                .frame(width: metrics.contentWidth + councilPaneWidth)
             if showSettings {
                 Divider().opacity(0.3)
                 settingsSidebar
@@ -998,7 +996,23 @@ struct LauncherView: View {
 
     /// Width consumed by open sidebars (for resize math).
     private var sidebarExtra: CGFloat {
-        (showSettings ? 331 : 0) + (showSteps ? 281 : 0)
+        (showSettings ? 331 : 0) + (showSteps ? 281 : 0) + councilPaneWidth
+    }
+
+    /// The council seat column's contribution to the panel width. MUST be
+    /// counted here AND in mainColumn's frame with the same value — drag
+    /// resizing subtracts sidebarExtra before persisting contentWidth, so
+    /// an unaccounted column makes every drag re-add its width (the
+    /// resize feedback glitch).
+    private var councilActive: Bool {
+        session.councilMode && settings.councilMembers.count >= 2
+            && !showUsage && !showHistory
+            && (!session.messages.isEmpty || session.statusText != nil)
+    }
+
+    private var councilPaneWidth: CGFloat {
+        guard councilActive else { return 0 }
+        return showCouncilPanes ? 300 : 26
     }
 
     /// A command (yours or the agent's) is running in the shell.
@@ -1338,11 +1352,17 @@ struct LauncherView: View {
     private var conversationView: some View {
         HStack(alignment: .top, spacing: 0) {
             mainTranscript
-            if session.councilMode, settings.councilMembers.count >= 2 {
+            if councilActive {
                 Divider().opacity(0.3)
-                councilSeatColumn
-                    .frame(width: 300)
-                    .frame(maxHeight: metrics.transcriptMaxHeight)
+                if showCouncilPanes {
+                    councilSeatColumn
+                        .frame(width: 300)
+                        .frame(maxHeight: metrics.transcriptMaxHeight)
+                } else {
+                    councilReopenStrip
+                        .frame(width: 26)
+                        .frame(maxHeight: metrics.transcriptMaxHeight)
+                }
             }
         }
     }
@@ -1425,37 +1445,25 @@ struct LauncherView: View {
         settings.councilMembers.map(\.label)
     }
 
-    private var displayedSeats: [String] {
-        let labels = councilSeatLabels
-        let pinned = pinnedSeats.filter(labels.contains)
-        return pinned.isEmpty ? Array(labels.prefix(2)) : Array(pinned.prefix(2))
-    }
-
     private var councilSeatColumn: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Seat chips: tap to choose which two panes are visible.
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(councilSeatLabels, id: \.self) { label in
-                        Button(action: { toggleSeatPin(label) }) {
-                            Text(shortSeatName(label))
-                                .font(.caption2)
-                                .lineLimit(1)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(displayedSeats.contains(label)
-                                            ? Color.accentColor.opacity(0.25)
-                                            : Color.primary.opacity(0.06),
-                                            in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .help(label)
-                    }
+            HStack(spacing: 5) {
+                Image(systemName: "person.3")
+                    .font(.caption2)
+                Text("Council")
+                    .font(.caption2).bold()
+                Spacer()
+                Button(action: { withAnimation(.easeOut(duration: 0.15)) { showCouncilPanes = false } }) {
+                    Image(systemName: "chevron.right.2")
+                        .font(.caption2)
                 }
+                .buttonStyle(.plain)
+                .help("Hide the council seats")
             }
-            ScrollView { // panes can exceed short transcript heights
+            .foregroundStyle(.secondary)
+            ScrollView { // every seat, scrollable
                 VStack(spacing: 6) {
-                    ForEach(displayedSeats, id: \.self) { label in
+                    ForEach(councilSeatLabels, id: \.self) { label in
                         let message = latestSeatMessage(label)
                         SeatPane(label: label,
                                  message: message,
@@ -1469,24 +1477,30 @@ struct LauncherView: View {
         .padding(8)
     }
 
-    private func toggleSeatPin(_ label: String) {
-        var pinned = pinnedSeats.filter(councilSeatLabels.contains)
-        if pinned.isEmpty { pinned = displayedSeats } // adopt the defaults
-        if let idx = pinned.firstIndex(of: label) {
-            pinned.remove(at: idx)
-        } else {
-            pinned.append(label)
-            if pinned.count > 2 { pinned.removeFirst() } // max 2 panes
+    /// Slim strip shown while the seat column is hidden — click to reopen.
+    private var councilReopenStrip: some View {
+        Button(action: { withAnimation(.easeOut(duration: 0.15)) { showCouncilPanes = true } }) {
+            VStack(spacing: 6) {
+                Image(systemName: "chevron.left.2")
+                    .font(.caption2)
+                Image(systemName: "person.3")
+                    .font(.caption2)
+                if session.isStreaming {
+                    ProgressView().controlSize(.mini)
+                }
+                Spacer()
+            }
+            .padding(.top, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
         }
-        pinnedSeats = pinned
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Show the council seats")
     }
 
     private func latestSeatMessage(_ label: String) -> ChatMessage? {
         session.messages.last(where: { $0.author == label })
-    }
-
-    private func shortSeatName(_ label: String) -> String {
-        label.components(separatedBy: " · ").last ?? label
     }
 }
 
