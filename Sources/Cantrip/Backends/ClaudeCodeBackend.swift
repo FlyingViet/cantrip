@@ -28,6 +28,9 @@ final class ClaudeCodeBackend: Backend {
     /// Per-instance model override (council members run models different
     /// from the session's setting). Nil = use the configured model.
     var modelOverride: String?
+    /// Read-only instance (council advisors): plan mode — read/analyze
+    /// tools only, no edits, no commands, regardless of global autonomy.
+    var readOnly = false
     private let settings = AppSettings.shared
     private let queue = DispatchQueue(label: "claude-code-backend")
     /// Persistent-process plumbing: stdin stays open so new user messages
@@ -195,7 +198,9 @@ final class ClaudeCodeBackend: Backend {
         if !model.isEmpty { args += ["--model", model] }
         let effort = settings.claudeEffort.trimmingCharacters(in: .whitespaces)
         if !effort.isEmpty { args += ["--effort", effort] }
-        if settings.allowActions {
+        if readOnly {
+            args += ["--permission-mode", "plan"] // read-only tool set
+        } else if settings.allowActions {
             args += ["--permission-mode", "bypassPermissions"]
         } else if settings.claudePermissionMode != "default" {
             args += ["--permission-mode", settings.claudePermissionMode]

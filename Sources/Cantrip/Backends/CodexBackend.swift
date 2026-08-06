@@ -11,6 +11,9 @@ final class CodexBackend: Backend {
     /// Per-instance model override (council members run models different
     /// from the session's setting). Nil = use the configured model.
     var modelOverride: String?
+    /// Read-only instance (council advisors): never bypass the sandbox,
+    /// regardless of global autonomy.
+    var readOnly = false
     private let persistKey: String
     private var sessionID: String? {
         didSet { UserDefaults.standard.set(sessionID, forKey: persistKey) }
@@ -63,7 +66,7 @@ final class CodexBackend: Backend {
         codexArgs += ["--json", "--cd", workdir]
         let model = (modelOverride ?? settings.codexModel).trimmingCharacters(in: .whitespaces)
         if !model.isEmpty { codexArgs += ["-m", model] }
-        if settings.allowActions {
+        if settings.allowActions, !readOnly {
             codexArgs.append("--dangerously-bypass-approvals-and-sandbox")
         }
         codexArgs.append(prompt)

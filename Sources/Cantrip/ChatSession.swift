@@ -57,7 +57,8 @@ final class ChatSession: ObservableObject {
     private var councilAnswers: [(kind: BackendKind, messageID: UUID)] = []
     /// Seats whose terminal event arrived — a Set because backends can
     /// emit more than one terminal (Codex: stream error + process exit).
-    private var councilFinished: Set<UUID> = []
+    /// Published so seat panes can show per-seat progress.
+    @Published private(set) var councilFinished: Set<UUID> = []
     /// Once-latch: synthesis must start exactly once per round.
     private var councilSynthesizing = false
 
@@ -421,18 +422,22 @@ final class ChatSession: ObservableObject {
             // different model's scratch session.
             let b = ClaudeCodeBackend(persistKey: "councilClaude-\(id.uuidString)-\(index)-\(member.model)")
             b.modelOverride = member.model.isEmpty ? nil : member.model
+            b.readOnly = true   // advisors deliberate; only the worker executes
             fresh = b
         case .copilot:
             let b = CopilotBackend()
             b.modelOverride = member.model.isEmpty ? nil : member.model
+            b.readOnly = true
             fresh = b
         case .codex:
             let b = CodexBackend(persistKey: "councilCodex-\(id.uuidString)-\(index)-\(member.model)")
             b.modelOverride = member.model.isEmpty ? nil : member.model
+            b.readOnly = true
             fresh = b
         case .localModel:
             let b = OpenAICompatibleBackend()
             b.modelOverride = member.model.isEmpty ? nil : member.model
+            b.readOnly = true
             fresh = b
         }
         councilInstances[key] = fresh
@@ -449,6 +454,13 @@ final class ChatSession: ObservableObject {
         // Shell/skill/instant prompts don't need a council.
         if prompt.hasPrefix("!") || prompt.hasPrefix("/")
             || (selectionContext == nil && InstantAnswers.answer(for: prompt) != nil) {
+            send(prompt)
+            return
+        }
+        // Councils are for planning and review — implementation is one
+        // worker's job, and N models implementing in parallel is waste.
+        if settings.councilScope == "planReview", Self.looksLikeExecution(prompt) {
+            Log.write("council: execution prompt — routed to the worker (\(settings.backend.rawValue))")
             send(prompt)
             return
         }
@@ -484,9 +496,13 @@ final class ChatSession: ObservableObject {
 
 
         (You are one of \(members.count) AI advisors — \(members.map(\.label).joined(separator: ", ")) — \
-        each answering this same request independently and in parallel. Give your OWN \
-        best, complete answer; a chair will synthesize all answers afterwards, so be \
-        substantive and take positions rather than hedging.)
+        each answering this same request independently and in parallel. This is a \
+        READ-ONLY deliberation: analyze, plan, or review. If you have read-only \
+        tools, you may inspect files and state; if tools are unavailable, reason \
+        from the provided context without complaining about it. Do NOT modify \
+        anything or run commands with side effects; a single worker implements \
+        later, after the chair's verdict. Give your OWN best, complete answer; \
+        be substantive and take positions rather than hedging.)
         """
 
         armWatchdog()
@@ -582,7 +598,9 @@ final class ChatSession: ObservableObject {
         where they disagree, adjudicate explicitly and justify the call; fold in the \
         strongest unique contributions from each. Do NOT summarize each answer in \
         turn — deliver one unified, decisive result, ending with a clear final \
-        recommendation. If one of the answers is your own, give it no special weight.
+        recommendation. If one of the answers is your own, give it no special weight. \
+        Do NOT start implementing anything — deliver the verdict; implementation \
+        happens separately when the user says to proceed.
         """
         for answer in answers {
             synthesisPrompt += "\n\n=== ANSWER from \(answer.label) ===\n\(answer.text.prefix(8000))"
@@ -627,6 +645,51 @@ final class ChatSession: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Councils deliberate; workers execute. Route obvious execution
+    /// prompts straight to the worker so N advisors don't burn tokens
+    /// re-planning something already decided. Review/planning wording
+    /// wins over execution wording when both appear.
+    static func looksLikeExecution(_ prompt: String) -> Bool {
+        let p = prompt.lowercased()
+        // Whole-word matching — "commit" must not match "committee",
+        // "push" not "pushback", "go" not "good idea?".
+        func hasWord(_ needle: String) -> Bool {
+            p.range(of: "\\b" + NSRegularExpression.escapedPattern(for: needle) + "\\b",
+                    options: .regularExpression) != nil
+        }
+        // A prompt that OPENS with an execution verb is a go-signal even
+        // when it mentions "the plan" ("implement the plan").
+        let strongStarts = ["implement", "go ahead", "proceed", "apply ",
+                            "build ", "execute", "ship "]
+        if strongStarts.contains(where: p.hasPrefix) { return true }
+        let deliberation = ["review", "plan", "planning", "compare", "should",
+                            "what do you think", "opinion", "evaluate", "assess",
+                            "critique", "pros and cons", "which approach",
+                            "design", "how would", "what's the best", "discuss",
+                            "audit", "look over", "thoughts", "risk", "tradeoff"]
+        if deliberation.contains(where: hasWord) { return false }
+        // Questions are deliberation by nature.
+        if p.hasSuffix("?") { return false }
+        let execution = ["implement", "go ahead", "proceed", "do it", "apply",
+                         "make the change", "make those changes", "build it",
+                         "fix it", "ship it", "execute", "write the code",
+                         "commit", "push", "run it", "rebuild", "refactor",
+                         "add the", "create the", "update the", "delete the"]
+        if execution.contains(where: hasWord) { return true }
+        // Short whole-phrase affirmatives right after a verdict are
+        // go-signals ("yes", "ok do that", "sounds good").
+        if p.count < 25 {
+            let trimmed = p.trimmingCharacters(in: CharacterSet(charactersIn: " .!,"))
+            let affirmatives = ["yes", "ok", "okay", "sure", "sounds good",
+                                "lgtm", "approved", "go", "go for it", "do that"]
+            if affirmatives.contains(trimmed) { return true }
+            if affirmatives.contains(where: { trimmed.hasPrefix($0 + " ") || trimmed.hasPrefix($0 + ",") }) {
+                return true
+            }
+        }
+        return false
     }
 
     private func completedConversationTurns() -> [ConversationTurn] {
@@ -1001,9 +1064,20 @@ final class ChatSession: ObservableObject {
            let userIdx = messages.lastIndex(where: { $0.role == .user }),
            let assistantIdx = messages.lastIndex(where: { $0.role == .assistant }),
            assistantIdx > userIdx, !messages[assistantIdx].text.isEmpty {
+            // Council verdicts record WHO deliberated, not just the chair.
+            // (History's header parser splits on " · ", so labels drop it.)
+            let backendTag: String
+            if let author = messages[assistantIdx].author, author.hasPrefix("Verdict") {
+                let seats = settings.councilMembers
+                    .map { $0.label.replacingOccurrences(of: " · ", with: " ") }
+                    .joined(separator: " + ")
+                backendTag = "Council [\(seats)] chaired by \(settings.backend.rawValue)"
+            } else {
+                backendTag = settings.backend.rawValue
+            }
             MemoryStore.shared.logExchange(user: messages[userIdx].text,
                                            assistant: messages[assistantIdx].text,
-                                           backend: settings.backend.rawValue)
+                                           backend: backendTag)
         }
         // Drop empty assistant placeholder if nothing arrived.
         if let idx = messages.lastIndex(where: { $0.role == .assistant }),
