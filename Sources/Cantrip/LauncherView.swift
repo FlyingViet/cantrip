@@ -1540,32 +1540,76 @@ struct LauncherView: View {
 /// wrapped by paneBinding, which trades the width against the transcript
 /// (metrics.contentWidth) — the outer window size never changes; the
 /// divider only redistributes space between the two inner columns.
-private struct PaneDivider: View {
+///
+/// AppKit-backed on purpose: the panel is movable-by-window-background,
+/// and on a borderless NSPanel that window drag wins over a SwiftUI
+/// DragGesture — grabbing the divider moved the whole window instead of
+/// resizing the split. A real NSView that returns false from
+/// mouseDownCanMoveWindow keeps the mouse events for itself.
+private struct PaneDivider: NSViewRepresentable {
     @Binding var width: Double
     let range: ClosedRange<Double>
-    @State private var dragStartWidth: Double?
 
-    var body: some View {
-        Divider()
-            .opacity(0.3)
-            .padding(.horizontal, 3) // 7pt grab zone around the 1pt line
-            .contentShape(Rectangle())
-            .onHover { inside in
-                if inside {
-                    NSCursor.resizeLeftRight.push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                    .onChanged { value in
-                        if dragStartWidth == nil { dragStartWidth = width }
-                        let proposed = (dragStartWidth ?? width) - Double(value.translation.width)
-                        width = min(max(proposed, range.lowerBound), range.upperBound)
-                    }
-                    .onEnded { _ in dragStartWidth = nil }
-            )
+    func makeNSView(context: Context) -> HandleView {
+        let view = HandleView()
+        configure(view)
+        return view
+    }
+
+    func updateNSView(_ view: HandleView, context: Context) {
+        configure(view)
+    }
+
+    private func configure(_ view: HandleView) {
+        view.currentWidth = { width }
+        view.onDrag = { delta, startWidth in
+            // Pane sits to the RIGHT: dragging left (negative delta) grows it.
+            let proposed = startWidth - delta
+            width = min(max(proposed, range.lowerBound), range.upperBound)
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize,
+                      nsView: HandleView, context: Context) -> CGSize? {
+        // 7pt grab zone (1pt line + 3pt each side) — MUST stay 7 to match
+        // the +7 accounting in sidebarExtra/councilPaneWidth.
+        CGSize(width: 7, height: min(proposal.height ?? 10, 10_000))
+    }
+
+    final class HandleView: NSView {
+        var currentWidth: () -> Double = { 0 }
+        var onDrag: (Double, Double) -> Void = { _, _ in }
+        private var dragStartWidth = 0.0
+        private var dragStartX: CGFloat = 0
+
+        /// The whole point: keep AppKit from treating a divider drag as
+        /// "move the window by its background".
+        override var mouseDownCanMoveWindow: Bool { false }
+
+        /// Start the drag on the first click even if the panel wasn't key.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .resizeLeftRight)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            dragStartWidth = currentWidth()
+            // Screen coordinates: stable even as the layout shifts the
+            // divider mid-drag (view-local coords would feed back).
+            dragStartX = NSEvent.mouseLocation.x
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            NSCursor.resizeLeftRight.set() // hold the cursor through the drag
+            onDrag(Double(NSEvent.mouseLocation.x - dragStartX), dragStartWidth)
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            NSColor.separatorColor.withAlphaComponent(0.5).setFill()
+            NSRect(x: bounds.midX - 0.5, y: 0,
+                   width: 1, height: bounds.height).fill()
+        }
     }
 }
 
