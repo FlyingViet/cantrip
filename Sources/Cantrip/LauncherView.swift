@@ -31,6 +31,10 @@ struct LauncherView: View {
     @State private var toolbarHint: String?
     /// Council seat column visibility (collapsible to a slim strip).
     @State private var showCouncilPanes = true
+    // Inner-pane widths, user-draggable via PaneDivider (persisted).
+    @AppStorage("councilPaneUserWidth") private var councilPaneUserWidth = 300.0
+    @AppStorage("settingsPaneUserWidth") private var settingsPaneUserWidth = 330.0
+    @AppStorage("stepsPaneUserWidth") private var stepsPaneUserWidth = 280.0
     @State private var showTerminal = false
     @State private var terminalCommand = ""
     @State private var terminalHistoryIndex: Int?
@@ -44,11 +48,11 @@ struct LauncherView: View {
                 // (kept in lockstep with sidebarExtra — see its comment).
                 .frame(width: metrics.contentWidth + councilPaneWidth)
             if showSettings {
-                Divider().opacity(0.3)
+                PaneDivider(width: $settingsPaneUserWidth, range: 280...560)
                 settingsSidebar
             }
             if showSteps {
-                Divider().opacity(0.3)
+                PaneDivider(width: $stepsPaneUserWidth, range: 220...480)
                 stepsSidebar
             }
         }
@@ -530,7 +534,7 @@ struct LauncherView: View {
             SettingsView()
             Spacer(minLength: 0)
         }
-        .frame(width: 330, alignment: .topLeading)
+        .frame(width: CGFloat(settingsPaneUserWidth), alignment: .topLeading)
     }
 
     // MARK: - Progress sidebar
@@ -575,7 +579,7 @@ struct LauncherView: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .frame(width: 280, alignment: .topLeading)
+        .frame(width: CGFloat(stepsPaneUserWidth), alignment: .topLeading)
     }
 
     private func keycap(_ keys: String, _ label: String) -> some View {
@@ -996,7 +1000,9 @@ struct LauncherView: View {
 
     /// Width consumed by open sidebars (for resize math).
     private var sidebarExtra: CGFloat {
-        (showSettings ? 331 : 0) + (showSteps ? 281 : 0) + councilPaneWidth
+        (showSettings ? CGFloat(settingsPaneUserWidth) + 7 : 0)
+            + (showSteps ? CGFloat(stepsPaneUserWidth) + 7 : 0)
+            + councilPaneWidth
     }
 
     /// The council seat column's contribution to the panel width. MUST be
@@ -1012,7 +1018,7 @@ struct LauncherView: View {
 
     private var councilPaneWidth: CGFloat {
         guard councilActive else { return 0 }
-        return showCouncilPanes ? 300 : 26
+        return showCouncilPanes ? CGFloat(councilPaneUserWidth) + 7 : 27
     }
 
     /// A command (yours or the agent's) is running in the shell.
@@ -1353,12 +1359,13 @@ struct LauncherView: View {
         HStack(alignment: .top, spacing: 0) {
             mainTranscript
             if councilActive {
-                Divider().opacity(0.3)
                 if showCouncilPanes {
+                    PaneDivider(width: $councilPaneUserWidth, range: 220...560)
                     councilSeatColumn
-                        .frame(width: 300)
+                        .frame(width: CGFloat(councilPaneUserWidth))
                         .frame(maxHeight: metrics.transcriptMaxHeight)
                 } else {
+                    Divider().opacity(0.3)
                     councilReopenStrip
                         .frame(width: 26)
                         .frame(maxHeight: metrics.transcriptMaxHeight)
@@ -1501,6 +1508,39 @@ struct LauncherView: View {
 
     private func latestSeatMessage(_ label: String) -> ChatMessage? {
         session.messages.last(where: { $0.author == label })
+    }
+}
+
+/// A draggable divider between the main column and a side pane. The pane
+/// sits to the RIGHT, so dragging left grows it. Width changes flow into
+/// sidebarExtra/councilPaneWidth, keeping window sizing and drag-resize
+/// accounting consistent.
+private struct PaneDivider: View {
+    @Binding var width: Double
+    let range: ClosedRange<Double>
+    @State private var dragStartWidth: Double?
+
+    var body: some View {
+        Divider()
+            .opacity(0.3)
+            .padding(.horizontal, 3) // 7pt grab zone around the 1pt line
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside {
+                    NSCursor.resizeLeftRight.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { value in
+                        if dragStartWidth == nil { dragStartWidth = width }
+                        let proposed = (dragStartWidth ?? width) - Double(value.translation.width)
+                        width = min(max(proposed, range.lowerBound), range.upperBound)
+                    }
+                    .onEnded { _ in dragStartWidth = nil }
+            )
     }
 }
 
