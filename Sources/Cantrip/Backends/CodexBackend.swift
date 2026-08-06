@@ -8,6 +8,9 @@ import Foundation
 /// the user's terminal.
 final class CodexBackend: Backend {
     private var process: Process?
+    /// Per-instance model override (council members run models different
+    /// from the session's setting). Nil = use the configured model.
+    var modelOverride: String?
     private let persistKey: String
     private var sessionID: String? {
         didSet { UserDefaults.standard.set(sessionID, forKey: persistKey) }
@@ -58,7 +61,7 @@ final class CodexBackend: Backend {
         var codexArgs = ["exec"]
         if let sessionID { codexArgs += ["resume", sessionID] }
         codexArgs += ["--json", "--cd", workdir]
-        let model = settings.codexModel.trimmingCharacters(in: .whitespaces)
+        let model = (modelOverride ?? settings.codexModel).trimmingCharacters(in: .whitespaces)
         if !model.isEmpty { codexArgs += ["-m", model] }
         if settings.allowActions {
             codexArgs.append("--dangerously-bypass-approvals-and-sandbox")

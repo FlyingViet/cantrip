@@ -9,6 +9,21 @@ enum BackendKind: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// A council seat: a backend plus a model override, so the same backend
+/// can appear twice with different models (e.g. Copilot · gpt-5.6-sol AND
+/// Copilot · claude-opus-4.8).
+struct CouncilMember: Codable, Equatable, Identifiable {
+    var backend: String     // BackendKind rawValue
+    var model: String       // model override; empty = backend's configured model
+    var id: String { backend + "|" + model }
+    var kind: BackendKind? { BackendKind(rawValue: backend) }
+
+    var label: String {
+        let name = kind?.rawValue ?? backend
+        return model.isEmpty ? name : "\(name) · \(model)"
+    }
+}
+
 /// Per-model metadata for the Copilot pickers. Populated from the Copilot
 /// models API when reachable (accurate); discovery fallbacks fill only `id`.
 struct CopilotModelInfo: Codable, Equatable, Identifiable {
@@ -122,6 +137,14 @@ final class AppSettings: ObservableObject {
 
     func copilotModelInfo(_ id: String) -> CopilotModelInfo? {
         copilotModelCatalog.first { $0.id == id }
+    }
+    /// Council seats for multi-model runs (backend + model pairs).
+    @Published var councilMembers: [CouncilMember] {
+        didSet {
+            if let data = try? JSONEncoder().encode(councilMembers) {
+                d.set(data, forKey: "councilMembers")
+            }
+        }
     }
     /// Allowed --reasoning-effort values parsed from `copilot help`.
     @Published var copilotEffortChoices: [String] {
@@ -663,6 +686,8 @@ final class AppSettings: ObservableObject {
             .flatMap { try? JSONDecoder().decode([CopilotModelInfo].self, from: $0) }) ?? []
         copilotEffortChoices = d.stringArray(forKey: "copilotEffortChoices") ?? []
         copilotContextTierChoices = d.stringArray(forKey: "copilotContextTierChoices") ?? []
+        councilMembers = (d.data(forKey: "councilMembers")
+            .flatMap { try? JSONDecoder().decode([CouncilMember].self, from: $0) }) ?? []
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
         localBaseURL = d.string(forKey: "localBaseURL") ?? "http://localhost:8000/v1"
