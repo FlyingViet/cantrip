@@ -25,6 +25,9 @@ final class ClaudeCodeBackend: Backend {
     /// next turn's event sink — swallow everything up to and including
     /// that terminal `result`.
     private var suppressUntilResult = false
+    /// Per-instance model override (council members run models different
+    /// from the session's setting). Nil = use the configured model.
+    var modelOverride: String?
     private let settings = AppSettings.shared
     private let queue = DispatchQueue(label: "claude-code-backend")
     /// Persistent-process plumbing: stdin stays open so new user messages
@@ -188,7 +191,7 @@ final class ClaudeCodeBackend: Backend {
         var args = ["-p", "--input-format", "stream-json",
                     "--output-format", "stream-json", "--verbose",
                     "--include-partial-messages"]
-        let model = settings.claudeModel.trimmingCharacters(in: .whitespaces)
+        let model = (modelOverride ?? settings.claudeModel).trimmingCharacters(in: .whitespaces)
         if !model.isEmpty { args += ["--model", model] }
         let effort = settings.claudeEffort.trimmingCharacters(in: .whitespaces)
         if !effort.isEmpty { args += ["--effort", effort] }

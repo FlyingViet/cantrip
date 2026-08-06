@@ -9,9 +9,11 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var activities: [ToolActivity] = []
     /// Streamed reasoning (thinking deltas) — shown collapsed in the UI.
     var thinking: String = ""
+    /// Which model produced this (council mode) — shown as a caption.
+    var author: String?
     enum Role: String, Codable { case user, assistant, error }
     // Activities and thinking are runtime-only; transcripts skip them.
-    private enum CodingKeys: String, CodingKey { case id, role, text }
+    private enum CodingKeys: String, CodingKey { case id, role, text, author }
 }
 
 /// Drives the conversation: routes queries to the selected backend,
@@ -40,6 +42,24 @@ final class ChatSession: ObservableObject {
     private var currentRunPrompt: String?
     /// One free automatic resume per user-initiated run; manual after that.
     private var autoResumeSpent = false
+    /// Council mode: fan each prompt out to several backends in parallel,
+    /// then have a chair synthesize the joint answer.
+    @Published var councilMode = false {
+        didSet {
+            // Turning council off shouldn't leave seat processes idling.
+            if !councilMode, !councilRunning {
+                for backend in councilInstances.values { backend.cancel() }
+            }
+        }
+    }
+    private var councilRunning = false
+    /// (member, its answer-message id) for the in-flight council round.
+    private var councilAnswers: [(kind: BackendKind, messageID: UUID)] = []
+    /// Seats whose terminal event arrived — a Set because backends can
+    /// emit more than one terminal (Codex: stream error + process exit).
+    private var councilFinished: Set<UUID> = []
+    /// Once-latch: synthesis must start exactly once per round.
+    private var councilSynthesizing = false
 
     let settings = AppSettings.shared
     let id: UUID
@@ -84,7 +104,11 @@ final class ChatSession: ObservableObject {
     }
 
     private var activeBackend: Backend {
-        switch settings.backend {
+        backend(for: settings.backend)
+    }
+
+    private func backend(for kind: BackendKind) -> Backend {
+        switch kind {
         case .claudeCode: return claudeCode
         case .copilot: return copilot
         case .codex: return codex
@@ -114,6 +138,13 @@ final class ChatSession: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "claudeSessionID-\(id.uuidString)")
         UserDefaults.standard.removeObject(forKey: "codexSessionID-\(id.uuidString)")
         UserDefaults.standard.removeObject(forKey: "workdir-\(id.uuidString)")
+        // Council scratch sessions: scan for this session's keys so no
+        // seat count or key scheme can strand them.
+        for key in UserDefaults.standard.dictionaryRepresentation().keys
+        where key.hasPrefix("councilClaude-\(id.uuidString)")
+            || key.hasPrefix("councilCodex-\(id.uuidString)") {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 
     private func persistTranscript() {
@@ -145,7 +176,14 @@ final class ChatSession: ObservableObject {
     func submit(_ text: String, interrupt: Bool = false, inject: Bool = false) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
-        guard isStreaming else { send(prompt); return }
+        guard isStreaming else {
+            councilMode ? sendCouncil(prompt) : send(prompt)
+            return
+        }
+        if councilRunning, inject, !interrupt {
+            queued.append(prompt) // per-member injection would diverge the seats
+            return
+        }
         if inject, !interrupt {
             if activeBackend.injectMidTurn(prompt) {
                 messages.append(ChatMessage(role: .user, text: prompt))
@@ -154,6 +192,18 @@ final class ChatSession: ObservableObject {
             } else {
                 queued.append(prompt) // backend can't inject — queue it
             }
+            return
+        }
+        if interrupt, councilRunning {
+            Log.write("interrupt: redirecting in-flight council")
+            streamGeneration += 1
+            cancelCouncilBackends()
+            activeBackend.cancel()         // chair, if synthesis had started
+            councilRunning = false
+            finalizeRunningActivities(as: .cancelled)
+            statusText = nil
+            finishStream(dequeue: false)
+            councilMode ? sendCouncil(prompt) : send(prompt)
             return
         }
         if interrupt {
@@ -173,7 +223,11 @@ final class ChatSession: ObservableObject {
                 interruptContext = "(Context — steps my interrupted request had already taken:\n\(steps))"
             }
             finishStream(dequeue: false)
-            send(prompt, interrupted: true, preamble: interruptContext)
+            if councilMode {
+                sendCouncil(prompt)
+            } else {
+                send(prompt, interrupted: true, preamble: interruptContext)
+            }
         } else {
             queued.append(prompt)
         }
@@ -236,6 +290,36 @@ final class ChatSession: ObservableObject {
         if interrupted {
             backendPrompt = "(I interrupted your previous in-progress response — treat this message as a course correction or update to that task, not a brand-new topic.) " + backendPrompt
         }
+        backendPrompt = composeContext(onto: backendPrompt, query: prompt,
+                                       isFirstOfConversation: isFirstOfConversation,
+                                       backendKind: settings.backend)
+
+        UsageTracker.shared.recordQuery(backend: settings.backend)
+        armWatchdog()
+        streamGeneration += 1
+        let generation = streamGeneration
+        let request = BackendRequest(
+            prompt: backendPrompt,
+            userMessage: prompt,
+            previousTurns: previousTurns
+        )
+        activeBackend.send(request, workdir: workdir) { [weak self] event in
+            DispatchQueue.main.async {
+                guard let self, self.streamGeneration == generation else { return }
+                self.handle(event)
+            }
+        }
+    }
+
+    /// Everything Cantrip knows that the model should too: continuity
+    /// digest, location, file RAG, calendar, grabbed selection,
+    /// attachments, screenshots, and the memory-vault protocol. Consumes
+    /// per-turn state (selection, attachments) — call exactly once per
+    /// user turn, and share the result between council members.
+    private func composeContext(onto prompt: String, query: String,
+                                isFirstOfConversation: Bool,
+                                backendKind: BackendKind?) -> String {
+        var backendPrompt = prompt
         if isFirstOfConversation,
            let digest = UserDefaults.standard.string(forKey: "lastConversationDigest"),
            !digest.isEmpty {
@@ -256,7 +340,7 @@ final class ChatSession: ObservableObject {
         }
         SpeechSynth.shared.stop()
         OverlayController.shared.clear()
-        if !attachments.isEmpty, settings.backend != .localModel {
+        if !attachments.isEmpty, backendKind != .localModel {
             let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp",
                                           "heic", "tiff", "bmp", "svg"]
             for path in attachments {
@@ -269,7 +353,7 @@ final class ChatSession: ObservableObject {
             }
         }
         attachments.removeAll()
-        if settings.attachScreen, settings.backend != .localModel,
+        if settings.attachScreen, backendKind != .localModel,
            !ScreenCapture.shared.lastCaptures.isEmpty {
             let captures = ScreenCapture.shared.lastCaptures
             let list = captures.map { capture in
@@ -291,10 +375,10 @@ final class ChatSession: ObservableObject {
         }
         if settings.memoryEnabled {
             MemoryStore.shared.ensureVault()
-            let retrieved = MemoryStore.shared.retrieve(for: prompt).map {
+            let retrieved = MemoryStore.shared.retrieve(for: query).map {
                 "\n\nRETRIEVED — memory snippets auto-matched to this query (verify before relying on them):\n\($0)"
             } ?? ""
-            if settings.backend == .localModel {
+            if backendKind == .localModel {
                 backendPrompt += "\n\n(Memory from previous sessions:\n\(MemoryStore.shared.coreMemoryBlock())\(retrieved))"
             } else {
                 backendPrompt += """
@@ -315,20 +399,232 @@ final class ChatSession: ObservableObject {
                 """
             }
         }
+        return backendPrompt
+    }
 
-        UsageTracker.shared.recordQuery(backend: settings.backend)
+    // MARK: - Council mode (multi-model orchestration)
+
+    /// Fan the prompt out to every council seat in parallel — each seat
+    /// is its own backend instance with its own model and scratch session,
+    /// so the same backend can hold multiple seats (e.g. two Copilot
+    /// models). When every answer is in, the session's own backend chairs
+    /// a synthesis round and delivers the joint verdict.
+    private var councilInstances: [String: Backend] = [:]
+
+    private func councilBackend(index: Int, member: CouncilMember) -> Backend {
+        let key = "\(index)|\(member.id)"
+        if let existing = councilInstances[key] { return existing }
+        let fresh: Backend
+        switch member.kind ?? .claudeCode {
+        case .claudeCode:
+            // Key by seat AND model so replacing a seat never resumes a
+            // different model's scratch session.
+            let b = ClaudeCodeBackend(persistKey: "councilClaude-\(id.uuidString)-\(index)-\(member.model)")
+            b.modelOverride = member.model.isEmpty ? nil : member.model
+            fresh = b
+        case .copilot:
+            let b = CopilotBackend()
+            b.modelOverride = member.model.isEmpty ? nil : member.model
+            fresh = b
+        case .codex:
+            let b = CodexBackend(persistKey: "councilCodex-\(id.uuidString)-\(index)-\(member.model)")
+            b.modelOverride = member.model.isEmpty ? nil : member.model
+            fresh = b
+        case .localModel:
+            let b = OpenAICompatibleBackend()
+            b.modelOverride = member.model.isEmpty ? nil : member.model
+            fresh = b
+        }
+        councilInstances[key] = fresh
+        return fresh
+    }
+
+    private func cancelCouncilBackends() {
+        for backend in councilInstances.values { backend.cancel() }
+    }
+
+    private func sendCouncil(_ text: String) {
+        let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, !isStreaming else { return }
+        // Shell/skill/instant prompts don't need a council.
+        if prompt.hasPrefix("!") || prompt.hasPrefix("/")
+            || (selectionContext == nil && InstantAnswers.answer(for: prompt) != nil) {
+            send(prompt)
+            return
+        }
+        let members = settings.councilMembers.filter { $0.kind != nil }
+        guard members.count >= 2 else { send(prompt); return }
+
+        // Seats removed/reordered since the last round: kill their live
+        // backend processes so nothing leaks.
+        let activeKeys = Set(members.enumerated().map { "\($0.offset)|\($0.element.id)" })
+        for (key, backend) in councilInstances where !activeKeys.contains(key) {
+            backend.cancel()
+            councilInstances.removeValue(forKey: key)
+        }
+
+        Log.write("council: \(members.map(\.label).joined(separator: " + ")) → \"\(prompt.prefix(60))\"")
+        canResume = false
+        currentRunPrompt = nil   // council rounds aren't single-backend resumable
+        let isFirstOfConversation = messages.isEmpty
+        let previousTurns = completedConversationTurns()
+        if title == "New chat" { title = String(prompt.prefix(34)) }
+        messages.append(ChatMessage(role: .user, text: prompt))
+        isStreaming = true
+        councilRunning = true
+        councilAnswers = []
+        councilFinished = []
+        councilSynthesizing = false
+        statusText = "Council of \(members.count) deliberating…"
+
+        let composed = composeContext(onto: prompt, query: prompt,
+                                      isFirstOfConversation: isFirstOfConversation,
+                                      backendKind: nil)
+        let roundPrompt = composed + """
+
+
+        (You are one of \(members.count) AI advisors — \(members.map(\.label).joined(separator: ", ")) — \
+        each answering this same request independently and in parallel. Give your OWN \
+        best, complete answer; a chair will synthesize all answers afterwards, so be \
+        substantive and take positions rather than hedging.)
+        """
+
         armWatchdog()
         streamGeneration += 1
         let generation = streamGeneration
-        let request = BackendRequest(
-            prompt: backendPrompt,
-            userMessage: prompt,
-            previousTurns: previousTurns
-        )
+
+        for (index, member) in members.enumerated() {
+            let message = ChatMessage(role: .assistant, text: "", author: member.label)
+            let messageID = message.id
+            messages.append(message)
+            councilAnswers.append((kind: member.kind ?? .claudeCode, messageID: messageID))
+            if let kind = member.kind { UsageTracker.shared.recordQuery(backend: kind) }
+            let request = BackendRequest(prompt: roundPrompt, userMessage: prompt,
+                                         previousTurns: previousTurns)
+            councilBackend(index: index, member: member)
+                .send(request, workdir: workdir) { [weak self] event in
+                    DispatchQueue.main.async {
+                        guard let self, self.streamGeneration == generation else { return }
+                        self.handleCouncilEvent(event, messageID: messageID,
+                                                prompt: prompt, generation: generation)
+                    }
+                }
+        }
+    }
+
+    private func handleCouncilEvent(_ event: BackendEvent, messageID: UUID,
+                                    prompt: String, generation: Int) {
+        armWatchdog()
+        switch event {
+        case .textDelta(let delta):
+            appendCouncil(text: delta, to: messageID)
+        case .thinkingDelta(let delta):
+            appendCouncil(thinking: delta, to: messageID)
+        case .status:
+            break // council status is the X/N counter, not per-member
+        case .activity(let activity):
+            if let idx = messages.firstIndex(where: { $0.id == messageID }) {
+                if let aIdx = messages[idx].activities.firstIndex(where: { $0.id == activity.id }) {
+                    messages[idx].activities[aIdx] = activity
+                } else {
+                    messages[idx].activities.append(activity)
+                }
+                shell.mirror(activity)
+            }
+        case .done:
+            councilMemberFinished(messageID: messageID, prompt: prompt)
+        case .failure(let message):
+            appendCouncil(text: "\n\n_(this advisor failed: \(message.prefix(300)))_",
+                          to: messageID)
+            councilMemberFinished(messageID: messageID, prompt: prompt)
+        }
+    }
+
+    private func appendCouncil(text: String? = nil, thinking: String? = nil, to id: UUID) {
+        guard let idx = messages.firstIndex(where: { $0.id == id }) else { return }
+        if let text { messages[idx].text += text }
+        if let thinking { messages[idx].thinking += thinking }
+    }
+
+    private func councilMemberFinished(messageID: UUID, prompt: String) {
+        // Set-based dedup: a backend can emit several terminal events for
+        // one run (e.g. a stream error followed by process exit).
+        guard councilFinished.insert(messageID).inserted else { return }
+        let total = councilAnswers.count
+        statusText = "Council: \(councilFinished.count)/\(total) answered…"
+        guard councilFinished.count >= total, !councilSynthesizing else { return }
+        councilSynthesizing = true
+        startSynthesis(prompt: prompt)
+    }
+
+    private func startSynthesis(prompt: String) {
+        // New generation: orphans any straggler events from the member
+        // round (late duplicate terminals, lingering processes).
+        streamGeneration += 1
+        let generation = streamGeneration
+        let answers: [(label: String, text: String)] = councilAnswers.compactMap { entry in
+            guard let message = messages.first(where: { $0.id == entry.messageID }) else { return nil }
+            return (message.author ?? entry.kind.rawValue, message.text)
+        }
+        let chairLabel = settings.backendLabel(settings.backend)
+        statusText = "Chair (\(chairLabel)) synthesizing…"
+        var message = ChatMessage(role: .assistant, text: "")
+        message.author = "Verdict · \(chairLabel)"
+        let messageID = message.id
+        messages.append(message)
+
+        var synthesisPrompt = """
+        (COUNCIL SYNTHESIS — you are the chair. The user asked:
+        "\(prompt.prefix(2000))"
+
+        \(answers.count) AI advisors answered independently. Produce the council's \
+        joint, conclusive answer: state points where the advisors agree as settled; \
+        where they disagree, adjudicate explicitly and justify the call; fold in the \
+        strongest unique contributions from each. Do NOT summarize each answer in \
+        turn — deliver one unified, decisive result, ending with a clear final \
+        recommendation. If one of the answers is your own, give it no special weight.
+        """
+        for answer in answers {
+            synthesisPrompt += "\n\n=== ANSWER from \(answer.label) ===\n\(answer.text.prefix(8000))"
+        }
+        synthesisPrompt += "\n)"
+
+        UsageTracker.shared.recordQuery(backend: settings.backend)
+        let request = BackendRequest(prompt: synthesisPrompt, userMessage: prompt,
+                                     previousTurns: [])
         activeBackend.send(request, workdir: workdir) { [weak self] event in
             DispatchQueue.main.async {
                 guard let self, self.streamGeneration == generation else { return }
-                self.handle(event)
+                self.armWatchdog()
+                switch event {
+                case .textDelta(let delta):
+                    self.appendCouncil(text: delta, to: messageID)
+                case .thinkingDelta(let delta):
+                    self.appendCouncil(thinking: delta, to: messageID)
+                case .status:
+                    break
+                case .activity(let activity):
+                    if let idx = self.messages.firstIndex(where: { $0.id == messageID }) {
+                        if let aIdx = self.messages[idx].activities.firstIndex(
+                            where: { $0.id == activity.id }) {
+                            self.messages[idx].activities[aIdx] = activity
+                        } else {
+                            self.messages[idx].activities.append(activity)
+                        }
+                        self.shell.mirror(activity)
+                    }
+                case .done:
+                    self.streamGeneration += 1 // orphan chair double-terminals
+                    self.councilRunning = false
+                    self.finalizeRunningActivities(as: .succeeded)
+                    self.finishStream()
+                case .failure(let message):
+                    self.streamGeneration += 1
+                    self.councilRunning = false
+                    self.messages.append(ChatMessage(role: .error,
+                                                     text: "Synthesis failed: \(message)"))
+                    self.finishStream()
+                }
             }
         }
     }
@@ -342,6 +638,10 @@ final class ChatSession: ObservableObject {
                 pendingUser = message.text
             case .assistant:
                 guard let user = pendingUser, !message.text.isEmpty else { continue }
+                // Council rounds put several assistant messages after one
+                // user turn: individual seat answers (author set) stay out
+                // of history — the chair's Verdict IS the turn's answer.
+                if let author = message.author, !author.hasPrefix("Verdict") { continue }
                 turns.append(ConversationTurn(user: user, assistant: message.text))
                 pendingUser = nil
             case .error:
@@ -556,6 +856,10 @@ final class ChatSession: ObservableObject {
         // trailing .done/.failure after the first failure) and make sure
         // its process is really gone before a resume relaunches it.
         streamGeneration += 1
+        if councilRunning {
+            cancelCouncilBackends()
+            councilRunning = false
+        }
         activeBackend.cancel()
         finalizeRunningActivities(as: .failed)
         let resumable = currentRunPrompt != nil && lastRunHadProgress
@@ -685,6 +989,10 @@ final class ChatSession: ObservableObject {
     private func finishStream(dequeue: Bool = true, notify: Bool = true) {
         watchdog?.invalidate()
         watchdog = nil
+        councilRunning = false
+        councilAnswers = []
+        councilFinished = []
+        councilSynthesizing = false
         processOverlayBlock()
         isStreaming = false
         statusText = nil
@@ -705,11 +1013,12 @@ final class ChatSession: ObservableObject {
             messages.remove(at: idx)
         }
         persistTranscript()
-        // Auto-run the next queued message.
+        // Auto-run the next queued message (through the council when on).
         if dequeue, !queued.isEmpty {
             let next = queued.removeFirst()
             DispatchQueue.main.async { [weak self] in
-                self?.send(next)
+                guard let self else { return }
+                self.councilMode ? self.sendCouncil(next) : self.send(next)
             }
         } else if notify {
             // Whole run complete: speak the reply / notify if hidden.
@@ -726,6 +1035,10 @@ final class ChatSession: ObservableObject {
         SpeechSynth.shared.stop()
         shellProcess?.terminate()
         shellProcess = nil
+        if councilRunning {
+            cancelCouncilBackends()
+            councilRunning = false
+        }
         // Mid-run: graceful in-band interrupt when the backend supports it
         // (the process and session stay alive). Otherwise — including idle
         // teardown from tab close / force hide — kill the process so no
@@ -750,10 +1063,19 @@ final class ChatSession: ObservableObject {
                 "Recent topics: \(topics). End of last answer: …\(lastAnswer)",
                 forKey: "lastConversationDigest")
         }
+        streamGeneration += 1   // orphan any in-flight events (incl. the
+        // .done that Copilot/Codex/local emit from their kill paths —
+        // without this, a mid-council reset ghost-starts a synthesis).
+        councilRunning = false
+        councilAnswers = []
+        councilFinished = []
+        councilSynthesizing = false
         claudeCode.reset()
         copilot.reset()
         codex.reset()
         localModel.reset()
+        for backend in councilInstances.values { backend.reset() }
+        councilInstances = [:]
         messages.removeAll()
         isStreaming = false
         statusText = nil

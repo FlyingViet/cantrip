@@ -303,6 +303,9 @@ struct LauncherView: View {
 
             Spacer()
 
+            councilMenu
+                .hoverHint("Council mode — several models answer in parallel, then the chair delivers a joint verdict", $toolbarHint)
+
             Button(action: { session.isPrivate.toggle() }) {
                 Image(systemName: session.isPrivate ? "eye.slash.fill" : "eye.slash")
                     .font(.system(size: 14))
@@ -737,6 +740,83 @@ struct LauncherView: View {
         if panel.runModal() == .OK, let url = panel.url {
             session.workdir = url.path
         }
+    }
+
+    // ── Council mode: pick model seats; same backend may hold several ──
+
+    private var councilMenu: some View {
+        Menu {
+            Toggle(isOn: Binding(
+                get: { session.councilMode },
+                set: { session.councilMode = $0 })) {
+                Text("Council mode")
+            }
+            .disabled(settings.councilMembers.count < 2)
+
+            if !settings.councilMembers.isEmpty {
+                Section("Seats (click to remove)") {
+                    ForEach(settings.councilMembers) { member in
+                        Button {
+                            settings.councilMembers.removeAll { $0.id == member.id }
+                            if settings.councilMembers.count < 2 { session.councilMode = false }
+                        } label: {
+                            Label(member.label, systemImage: "minus.circle")
+                        }
+                    }
+                }
+            }
+
+            Section("Add a seat") {
+                Menu("Claude Code") {
+                    councilModelButtons(backend: .claudeCode,
+                                        models: AppSettings.claudeModelAliases)
+                }
+                Menu("Copilot") {
+                    councilModelButtons(backend: .copilot,
+                                        models: settings.copilotAvailableModels)
+                }
+                Menu("Codex") {
+                    councilModelButtons(backend: .codex,
+                                        models: [settings.codexModel].filter { !$0.isEmpty })
+                }
+                Menu("Local Model") {
+                    councilModelButtons(backend: .localModel,
+                                        models: [settings.localModel].filter { !$0.isEmpty })
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: session.councilMode ? "person.3.fill" : "person.3")
+                    .font(.system(size: 13))
+                if session.councilMode {
+                    Text("\(settings.councilMembers.count)")
+                        .font(.caption)
+                }
+            }
+            .foregroundStyle(session.councilMode ? Color.accentColor : Color.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(session.councilMode
+              ? "Council mode ON: \(settings.councilMembers.map(\.label).joined(separator: " + ")) answer in parallel; \(settings.backendLabel(settings.backend)) chairs the verdict"
+              : "Council mode — pick 2+ model seats, then every prompt gets parallel answers and a joint verdict")
+    }
+
+    @ViewBuilder
+    private func councilModelButtons(backend: BackendKind, models: [String]) -> some View {
+        Button("Configured default") { addCouncilSeat(backend: backend, model: "") }
+        ForEach(models, id: \.self) { model in
+            Button(model) { addCouncilSeat(backend: backend, model: model) }
+        }
+    }
+
+    private func addCouncilSeat(backend: BackendKind, model: String) {
+        let member = CouncilMember(backend: backend.rawValue, model: model)
+        guard !settings.councilMembers.contains(member),
+              settings.councilMembers.count < 8 else { return }
+        settings.councilMembers.append(member)
+        if settings.councilMembers.count >= 2 { session.councilMode = true }
     }
 
     private var gitMenu: some View {
@@ -1376,10 +1456,18 @@ private struct MessageRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .assistant:
             // Tool steps render in the progress sidebar, not inline.
-            if message.text.isEmpty && message.thinking.isEmpty {
+            if message.text.isEmpty && message.thinking.isEmpty && message.author == nil {
                 EmptyView()
             } else {
                 VStack(alignment: .leading, spacing: 6) {
+                    if let author = message.author {
+                        Label(author, systemImage: author.hasPrefix("Verdict")
+                              ? "checkmark.seal" : "person.crop.circle")
+                            .font(.caption2)
+                            .foregroundStyle(author.hasPrefix("Verdict")
+                                             ? AnyShapeStyle(Color.accentColor)
+                                             : AnyShapeStyle(.tertiary))
+                    }
                     if !message.thinking.isEmpty {
                         ThinkingDisclosure(text: message.thinking)
                     }

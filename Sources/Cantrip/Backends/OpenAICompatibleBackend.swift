@@ -5,6 +5,9 @@ import Foundation
 /// When "Act on my behalf" is enabled, exposes a `run_shell` function and
 /// executes tool-call loops so the local model can act, not just chat.
 final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate {
+    /// Per-instance model override (council members run models different
+    /// from the session's setting). Nil = use the configured model.
+    var modelOverride: String?
     private let settings = AppSettings.shared
     private var history: [[String: Any]] = []
     private var task: URLSessionDataTask?
@@ -67,7 +70,7 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate {
         messages += history
 
         var body: [String: Any] = [
-            "model": settings.localModel,
+            "model": modelOverride ?? settings.localModel,
             "messages": messages,
             "stream": true,
         ]

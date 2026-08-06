@@ -7,6 +7,9 @@ import Foundation
 /// continuity uses a bounded window of raw recent and related turns.
 final class CopilotBackend: Backend {
     private var process: Process?
+    /// Per-instance model override (council members run models different
+    /// from the session's setting). Nil = use the configured model.
+    var modelOverride: String?
     private let settings = AppSettings.shared
     private let queue = DispatchQueue(label: "copilot-backend")
 
@@ -67,7 +70,7 @@ final class CopilotBackend: Backend {
         if settings.copilotAllowTools || settings.allowActions {
             copilotArgs.append("--allow-all-tools")
         }
-        let model = settings.copilotModel.trimmingCharacters(in: .whitespaces)
+        let model = (modelOverride ?? settings.copilotModel).trimmingCharacters(in: .whitespaces)
         if !model.isEmpty { copilotArgs += ["--model", model] }
         let effort = settings.copilotEffort.trimmingCharacters(in: .whitespaces)
         if !effort.isEmpty { copilotArgs += ["--reasoning-effort", effort] }
