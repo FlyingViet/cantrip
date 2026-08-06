@@ -29,6 +29,8 @@ struct LauncherView: View {
     @State private var archivedSessions: [SessionManager.ArchivedSession] = []
     /// Instant caption for whichever toolbar icon is hovered.
     @State private var toolbarHint: String?
+    /// Council seat panes the user pinned visible (max 2 shown).
+    @State private var pinnedSeats: [String] = []
     @State private var showTerminal = false
     @State private var terminalCommand = ""
     @State private var terminalHistoryIndex: Int?
@@ -37,7 +39,12 @@ struct LauncherView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             mainColumn
-                .frame(width: metrics.contentWidth)
+                // Council seat panes get their own 300pt on top of the
+                // configured width, so the main transcript isn't squeezed.
+                .frame(width: metrics.contentWidth
+                    + (session.councilMode && settings.councilMembers.count >= 2
+                       && (!session.messages.isEmpty || session.statusText != nil)
+                       ? 300 : 0))
             if showSettings {
                 Divider().opacity(0.3)
                 settingsSidebar
@@ -389,19 +396,14 @@ struct LauncherView: View {
             .hoverHint("Screen context — let queries see your displays", $toolbarHint)
 
             Button(action: { withAnimation(.easeOut(duration: 0.15)) { showSettings.toggle() } }) {
-                Image(systemName: "gearshape")
+                Image(systemName: showSettings ? "gearshape.fill" : "gearshape")
                     .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(showSettings ? Color.accentColor : Color.secondary)
             }
             .buttonStyle(.plain)
 
-            Button(action: { session.newConversation() }) {
-                Image(systemName: "plus.bubble")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("New conversation (this session)")
+            // ("New conversation" button removed — ⌘N still works, and new
+            // tabs (⌘T) are the natural fresh-start.)
 
             Menu {
                 let archived = manager.archivedSessions()
@@ -752,6 +754,13 @@ struct LauncherView: View {
                 Text("Council mode")
             }
             .disabled(settings.councilMembers.count < 2)
+
+            Picker("Convene for", selection: Binding(
+                get: { settings.councilScope },
+                set: { settings.councilScope = $0 })) {
+                Text("Planning & review only").tag("planReview")
+                Text("Every message").tag("always")
+            }
 
             if !settings.councilMembers.isEmpty {
                 Section("Seats (click to remove)") {
@@ -1327,13 +1336,35 @@ struct LauncherView: View {
     // MARK: - Conversation
 
     private var conversationView: some View {
+        HStack(alignment: .top, spacing: 0) {
+            mainTranscript
+            if session.councilMode, settings.councilMembers.count >= 2 {
+                Divider().opacity(0.3)
+                councilSeatColumn
+                    .frame(width: 300)
+                    .frame(maxHeight: metrics.transcriptMaxHeight)
+            }
+        }
+    }
+
+    /// The orchestrator view: user turns, worker replies, and council
+    /// verdicts. Individual seat answers live in the side panes while
+    /// council mode is on.
+    private var transcriptMessages: [ChatMessage] {
+        guard session.councilMode else { return session.messages }
+        return session.messages.filter {
+            $0.author == nil || $0.author?.hasPrefix("Verdict") == true
+        }
+    }
+
+    private var mainTranscript: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 // VStack, not LazyVStack: lazy layout sometimes renders
                 // nothing after a tab switch until scrolled. The transcript
                 // is capped at ~30 messages, so laziness buys nothing.
                 VStack(alignment: .leading, spacing: 12) {
-                    ForEach(session.messages) { message in
+                    ForEach(transcriptMessages) { message in
                         MessageRow(message: message)
                             .id(message.id)
                     }
@@ -1386,6 +1417,128 @@ struct LauncherView: View {
         DispatchQueue.main.async {
             proxy.scrollTo("conversation-bottom", anchor: .bottom)
         }
+    }
+
+    // ── Council seat panes: fixed column, max 2 visible, switchable ──
+
+    private var councilSeatLabels: [String] {
+        settings.councilMembers.map(\.label)
+    }
+
+    private var displayedSeats: [String] {
+        let labels = councilSeatLabels
+        let pinned = pinnedSeats.filter(labels.contains)
+        return pinned.isEmpty ? Array(labels.prefix(2)) : Array(pinned.prefix(2))
+    }
+
+    private var councilSeatColumn: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Seat chips: tap to choose which two panes are visible.
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(councilSeatLabels, id: \.self) { label in
+                        Button(action: { toggleSeatPin(label) }) {
+                            Text(shortSeatName(label))
+                                .font(.caption2)
+                                .lineLimit(1)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(displayedSeats.contains(label)
+                                            ? Color.accentColor.opacity(0.25)
+                                            : Color.primary.opacity(0.06),
+                                            in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .help(label)
+                    }
+                }
+            }
+            ScrollView { // panes can exceed short transcript heights
+                VStack(spacing: 6) {
+                    ForEach(displayedSeats, id: \.self) { label in
+                        let message = latestSeatMessage(label)
+                        SeatPane(label: label,
+                                 message: message,
+                                 streaming: session.isStreaming
+                                     && message.map { !session.councilFinished.contains($0.id) } ?? false)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+    }
+
+    private func toggleSeatPin(_ label: String) {
+        var pinned = pinnedSeats.filter(councilSeatLabels.contains)
+        if pinned.isEmpty { pinned = displayedSeats } // adopt the defaults
+        if let idx = pinned.firstIndex(of: label) {
+            pinned.remove(at: idx)
+        } else {
+            pinned.append(label)
+            if pinned.count > 2 { pinned.removeFirst() } // max 2 panes
+        }
+        pinnedSeats = pinned
+    }
+
+    private func latestSeatMessage(_ label: String) -> ChatMessage? {
+        session.messages.last(where: { $0.author == label })
+    }
+
+    private func shortSeatName(_ label: String) -> String {
+        label.components(separatedBy: " · ").last ?? label
+    }
+}
+
+/// One advisor's live answer: fixed-size pane, bottom-pinned scroll so
+/// streaming output follows like a terminal.
+private struct SeatPane: View {
+    let label: String
+    let message: ChatMessage?
+    let streaming: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: "person.crop.circle")
+                    .font(.caption2)
+                Text(label)
+                    .font(.caption2).bold()
+                    .lineLimit(1)
+                Spacer()
+                if streaming { ProgressView().controlSize(.mini) }
+            }
+            .foregroundStyle(.secondary)
+            Divider().opacity(0.3)
+            if let message, !message.text.isEmpty || !message.thinking.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if !message.thinking.isEmpty {
+                            Text(message.thinking)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(message.text.isEmpty ? nil : 3)
+                        }
+                        if !message.text.isEmpty {
+                            MarkdownContent(text: message.text)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .defaultScrollAnchor(.bottom)
+            } else {
+                Text(streaming ? "Deliberating…" : "No answer yet")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity)
+        .frame(height: 220)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

@@ -8,6 +8,9 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate {
     /// Per-instance model override (council members run models different
     /// from the session's setting). Nil = use the configured model.
     var modelOverride: String?
+    /// Read-only instance (council advisors): no tool loop, regardless
+    /// of global autonomy.
+    var readOnly = false
     private let settings = AppSettings.shared
     private var history: [[String: Any]] = []
     private var task: URLSessionDataTask?
@@ -74,7 +77,7 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate {
             "messages": messages,
             "stream": true,
         ]
-        if settings.allowActions {
+        if settings.allowActions, !readOnly {
             var tools: [[String: Any]] = [[
                 "type": "function",
                 "function": [

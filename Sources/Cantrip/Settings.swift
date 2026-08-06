@@ -146,6 +146,11 @@ final class AppSettings: ObservableObject {
             }
         }
     }
+    /// When councils convene: "planReview" (default — execution prompts
+    /// go straight to the single worker) or "always".
+    @Published var councilScope: String {
+        didSet { d.set(councilScope, forKey: "councilScope") }
+    }
     /// Allowed --reasoning-effort values parsed from `copilot help`.
     @Published var copilotEffortChoices: [String] {
         didSet { d.set(copilotEffortChoices, forKey: "copilotEffortChoices") }
@@ -549,6 +554,7 @@ final class AppSettings: ObservableObject {
             "codexPath": codexPath, "codexModel": codexModel,
             "localBaseURL": localBaseURL, "localModel": localModel,
             "localSystemPrompt": localSystemPrompt,
+            "councilScope": councilScope,
             "allowActions": allowActions, "shareLocation": shareLocation,
             "shareCalendar": shareCalendar, "attachScreen": attachScreen,
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
@@ -591,6 +597,7 @@ final class AppSettings: ObservableObject {
         str("localBaseURL") { self.localBaseURL = $0 }
         str("localModel") { self.localModel = $0 }
         str("localSystemPrompt") { self.localSystemPrompt = $0 }
+        str("councilScope") { self.councilScope = $0 }
         bool("allowActions") { self.allowActions = $0 }
         bool("shareLocation") { self.shareLocation = $0 }
         bool("shareCalendar") { self.shareCalendar = $0 }
@@ -688,6 +695,7 @@ final class AppSettings: ObservableObject {
         copilotContextTierChoices = d.stringArray(forKey: "copilotContextTierChoices") ?? []
         councilMembers = (d.data(forKey: "councilMembers")
             .flatMap { try? JSONDecoder().decode([CouncilMember].self, from: $0) }) ?? []
+        councilScope = d.string(forKey: "councilScope") ?? "planReview"
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
         localBaseURL = d.string(forKey: "localBaseURL") ?? "http://localhost:8000/v1"

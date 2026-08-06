@@ -10,6 +10,9 @@ final class CopilotBackend: Backend {
     /// Per-instance model override (council members run models different
     /// from the session's setting). Nil = use the configured model.
     var modelOverride: String?
+    /// Read-only instance (council advisors): tools are never allowed,
+    /// regardless of global autonomy.
+    var readOnly = false
     private let settings = AppSettings.shared
     private let queue = DispatchQueue(label: "copilot-backend")
 
@@ -67,7 +70,7 @@ final class CopilotBackend: Backend {
             "--output-format", "json",
             "--stream", "on"
         ]
-        if settings.copilotAllowTools || settings.allowActions {
+        if (settings.copilotAllowTools || settings.allowActions), !readOnly {
             copilotArgs.append("--allow-all-tools")
         }
         let model = (modelOverride ?? settings.copilotModel).trimmingCharacters(in: .whitespaces)
