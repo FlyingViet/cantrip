@@ -1,0 +1,9 @@
+{
+  "name": "Hello Dashboard",
+  "version": "1.0",
+  "description": "Starter panel plugin: clock, fetch demo, and a send-prompt button. Copy me and make it yours.",
+  "panel": {
+    "html": "index.html",
+    "title": "Hello"
+  }
+}

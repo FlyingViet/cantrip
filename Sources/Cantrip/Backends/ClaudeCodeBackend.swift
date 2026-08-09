@@ -206,6 +206,10 @@ final class ClaudeCodeBackend: Backend {
             args += ["--permission-mode", settings.claudePermissionMode]
         }
         if let sessionID { args += ["--resume", sessionID] }
+        // MCP servers from enabled+approved plugins (see Plugins.swift).
+        if let mcpConfig = PluginManager.claudeMCPConfigPath() {
+            args += ["--mcp-config", mcpConfig]
+        }
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: claudePath)

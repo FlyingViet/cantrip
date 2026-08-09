@@ -207,7 +207,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @objc func resetPanelSize() {
         PanelMetrics.shared.clearUserSize()
         LauncherPanel.clearUserPosition()
-        for key in ["councilPaneUserWidth", "settingsPaneUserWidth", "stepsPaneUserWidth"] {
+        for key in ["councilPaneUserWidth", "settingsPaneUserWidth",
+                    "stepsPaneUserWidth", "pluginPaneUserWidth"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         panel.center(onActiveScreen: true)
