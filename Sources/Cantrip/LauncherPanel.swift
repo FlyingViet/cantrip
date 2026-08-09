@@ -62,6 +62,19 @@ final class LauncherPanel: NSPanel {
             self.orderOut(nil)
         }
         installMoveObserver()
+
+        // Keep PanelMetrics' idea of the screen current: dragging the
+        // panel to another display (or a resolution change) must refresh
+        // availableTotalWidth, or the sidebar-squeeze math works against
+        // the old screen and the UI can clip until the next summon.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeScreenNotification,
+            object: self,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, let screen = self.screen else { return }
+            PanelMetrics.shared.update(for: screen)
+        }
     }
 
     /// While true (pinned, or a response is streaming), losing focus

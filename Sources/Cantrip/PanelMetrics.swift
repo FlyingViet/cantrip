@@ -8,6 +8,11 @@ final class PanelMetrics: ObservableObject {
     static let shared = PanelMetrics()
     @Published var contentWidth: CGFloat = 680
     @Published var transcriptMaxHeight: CGFloat = 340
+    /// The widest the whole panel may get on the current screen (mirrors
+    /// LauncherPanel.resizeContent's 95% clamp). The layout uses it to
+    /// shrink the transcript when open sidebars would otherwise push the
+    /// content past what the window can show (which clipped the UI).
+    @Published var availableTotalWidth: CGFloat = 0
 
     private let d = UserDefaults.standard
     private init() {}
@@ -24,6 +29,7 @@ final class PanelMetrics: ObservableObject {
 
     func update(for screen: NSScreen?) {
         guard let visible = screen?.visibleFrame else { return }
+        availableTotalWidth = visible.width * 0.95
         let width = userWidth > 0
             ? min(max(560, userWidth), visible.width * 0.95)
             : min(max(680, visible.width * 0.40), 1100)
