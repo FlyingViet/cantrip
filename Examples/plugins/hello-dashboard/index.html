@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 13px -apple-system, sans-serif;
+    color: CanvasText;
+    background: transparent;
+    margin: 0; padding: 12px;
+  }
+  .card {
+    background: color-mix(in srgb, CanvasText 6%, transparent);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
+  .label { font-size: 11px; opacity: 0.6; margin-bottom: 4px; }
+  #clock { font-size: 24px; font-variant-numeric: tabular-nums; }
+  button {
+    font: inherit;
+    border: none; border-radius: 7px;
+    padding: 6px 10px;
+    background: color-mix(in srgb, CanvasText 12%, transparent);
+    color: inherit; cursor: pointer;
+  }
+  button:hover { background: color-mix(in srgb, CanvasText 20%, transparent); }
+  #ip { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="label">Local time</div>
+    <div id="clock">…</div>
+  </div>
+
+  <div class="card">
+    <div class="label">fetch() demo — your public IP</div>
+    <div id="ip">loading…</div>
+  </div>
+
+  <div class="card">
+    <div class="label">Talk to Cantrip</div>
+    <button onclick="cantrip.sendPrompt('Summarize my day: calendar, weather, anything notable.')">
+      Ask for a daily summary
+    </button>
+  </div>
+
+<script>
+  // Clock — plain in-page state, refreshed every second.
+  function tick() {
+    document.getElementById("clock").textContent =
+      new Date().toLocaleTimeString();
+  }
+  tick();
+  setInterval(tick, 1000);
+
+  // fetch() works against local devices (Home Assistant, printers,
+  // routers) and the internet alike. Swap this for your own endpoint.
+  fetch("https://api.ipify.org?format=json")
+    .then(r => r.json())
+    .then(j => { document.getElementById("ip").textContent = j.ip; })
+    .catch(e => {
+      document.getElementById("ip").textContent = "offline (" + e.message + ")";
+      cantrip.log("hello-dashboard: fetch failed: " + e.message);
+    });
+</script>
+</body>
+</html>

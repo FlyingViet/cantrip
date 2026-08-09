@@ -12,9 +12,13 @@ final class MCPManager {
     private let lock = NSLock()
     private init() {}
 
-    private var configURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/cantrip/mcp.json")
+    /// User's own servers first (they win name collisions), then servers
+    /// contributed by active plugins (PluginManager keeps the merged file
+    /// current as plugins are toggled/approved).
+    private var configURLs: [URL] {
+        [FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/cantrip/mcp.json"),
+         PluginManager.mergedMCPConfigURL]
     }
 
     private func loadIfNeeded() {
@@ -22,20 +26,23 @@ final class MCPManager {
         defer { lock.unlock() }
         guard !loaded else { return }
         loaded = true
-        guard let data = try? Data(contentsOf: configURL),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let servers = (obj["mcpServers"] ?? obj["servers"]) as? [String: [String: Any]]
-        else { return }
-        for (name, spec) in servers {
-            guard let command = spec["command"] as? String else { continue }
-            let args = spec["args"] as? [String] ?? []
-            let env = spec["env"] as? [String: String] ?? [:]
-            if let connection = MCPServerConnection(name: name, command: command,
-                                                    args: args, extraEnv: env) {
-                connections[name] = connection
-                Log.write("mcp: \(name) connected with \(connection.tools.count) tools")
-            } else {
-                Log.write("mcp: \(name) failed to start")
+        for configURL in configURLs {
+            guard let data = try? Data(contentsOf: configURL),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let servers = (obj["mcpServers"] ?? obj["servers"]) as? [String: [String: Any]]
+            else { continue }
+            for (name, spec) in servers {
+                guard connections[name] == nil,
+                      let command = spec["command"] as? String else { continue }
+                let args = spec["args"] as? [String] ?? []
+                let env = spec["env"] as? [String: String] ?? [:]
+                if let connection = MCPServerConnection(name: name, command: command,
+                                                        args: args, extraEnv: env) {
+                    connections[name] = connection
+                    Log.write("mcp: \(name) connected with \(connection.tools.count) tools")
+                } else {
+                    Log.write("mcp: \(name) failed to start")
+                }
             }
         }
     }

@@ -69,6 +69,9 @@ final class CodexBackend: Backend {
         if settings.allowActions, !readOnly {
             codexArgs.append("--dangerously-bypass-approvals-and-sandbox")
         }
+        // MCP servers from enabled+approved plugins, as TOML config
+        // overrides (codex has no --mcp-config flag; see Plugins.swift).
+        codexArgs += PluginManager.codexMCPOverrides()
         codexArgs.append(prompt)
 
         Log.write("launching \(command) via login shell, workdir=\(workdir)")

@@ -35,6 +35,14 @@ struct LauncherView: View {
     @AppStorage("councilPaneUserWidth") private var councilPaneUserWidth = 300.0
     @AppStorage("settingsPaneUserWidth") private var settingsPaneUserWidth = 330.0
     @AppStorage("stepsPaneUserWidth") private var stepsPaneUserWidth = 280.0
+    // Plugins ("Extensions"): popover, approve-on-install flow, and the
+    // dashboard pane a panel-plugin renders into.
+    @ObservedObject private var pluginManager = PluginManager.shared
+    @State private var showExtensions = false
+    @State private var pendingApproval: Plugin?
+    @State private var pluginReloadToken = 0
+    @AppStorage("activePluginPanel") private var activePluginPanelID = ""
+    @AppStorage("pluginPaneUserWidth") private var pluginPaneUserWidth = 320.0
     @State private var showTerminal = false
     @State private var terminalCommand = ""
     @State private var terminalHistoryIndex: Int?
@@ -56,6 +64,11 @@ struct LauncherView: View {
                 PaneDivider(width: paneBinding($stepsPaneUserWidth, range: 220...480),
                             range: 220...480)
                 stepsSidebar
+            }
+            if let plugin = activePluginPanel {
+                PaneDivider(width: paneBinding($pluginPaneUserWidth, range: 240...640),
+                            range: 240...640)
+                pluginSidebar(plugin)
             }
         }
         .padding(.bottom, 6)
@@ -316,6 +329,23 @@ struct LauncherView: View {
 
             councilMenu
                 .hoverHint("Council mode — several models answer in parallel, then the chair delivers a joint verdict", $toolbarHint)
+
+            Button(action: {
+                pluginManager.reload()
+                pendingApproval = nil
+                showExtensions.toggle()
+            }) {
+                Image(systemName: "puzzlepiece.extension")
+                    .font(.system(size: 13))
+                    .foregroundStyle(showExtensions || activePluginPanel != nil
+                                     ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Extensions — your plugins (dashboards & MCP tools)")
+            .hoverHint("Extensions — toggle plugins, open their dashboards", $toolbarHint)
+            .popover(isPresented: $showExtensions, arrowEdge: .bottom) {
+                extensionsPopover
+            }
 
             Button(action: { session.isPrivate.toggle() }) {
                 Image(systemName: session.isPrivate ? "eye.slash.fill" : "eye.slash")
@@ -582,6 +612,190 @@ struct LauncherView: View {
         }
         .padding(12)
         .frame(width: CGFloat(stepsPaneUserWidth), alignment: .topLeading)
+    }
+
+    // MARK: - Extensions (plugins)
+
+    /// A plugin's dashboard, as a right-side pane. Definite height (the
+    /// transcript's max) because a WKWebView has no intrinsic size and the
+    /// panel lays out with fixedSize(vertical: true).
+    private func pluginSidebar(_ plugin: Plugin) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(plugin.panelTitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: { pluginReloadToken += 1 }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Reload the plugin page")
+                Button(action: { activePluginPanelID = "" }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Close this dashboard")
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            PluginPanelView(plugin: plugin, reloadToken: pluginReloadToken) { prompt in
+                session.submit(prompt)
+            }
+            .id(plugin.id)
+            .frame(height: metrics.transcriptMaxHeight)
+        }
+        .frame(width: CGFloat(pluginPaneUserWidth), alignment: .topLeading)
+    }
+
+    private var extensionsPopover: some View {
+        Group {
+            if let plugin = pendingApproval {
+                approvalCard(plugin)
+            } else {
+                pluginList
+            }
+        }
+        .frame(width: 340)
+    }
+
+    private var pluginList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Extensions")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if pluginManager.plugins.isEmpty {
+                Text("No plugins installed. Drop a folder containing a manifest.json into the plugins directory — PLUGINS.md in the repo has the format and a starter example.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(pluginManager.plugins) { plugin in
+                pluginRow(plugin)
+            }
+            Divider()
+            HStack {
+                Button("Open Plugins Folder") {
+                    NSWorkspace.shared.open(PluginManager.pluginsDirectory)
+                }
+                Spacer()
+                Button("Rescan") { pluginManager.reload() }
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(12)
+    }
+
+    private func pluginRow(_ plugin: Plugin) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(plugin.manifest.name)
+                        .font(.callout)
+                    if let version = plugin.manifest.version {
+                        Text("v\(version)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if pluginManager.isEnabled(plugin), !pluginManager.isApproved(plugin) {
+                        // Manifest changed since approval (or never approved):
+                        // stays inert until the user re-reviews it.
+                        Text("needs approval")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                if let description = plugin.manifest.description {
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer()
+            if pluginManager.isActive(plugin), plugin.panelURL != nil {
+                Button(action: {
+                    activePluginPanelID =
+                        activePluginPanelID == plugin.id ? "" : plugin.id
+                }) {
+                    Image(systemName: "sidebar.trailing")
+                        .font(.system(size: 12))
+                        .foregroundStyle(activePluginPanelID == plugin.id
+                                         ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(activePluginPanelID == plugin.id
+                      ? "Hide this plugin's dashboard"
+                      : "Show this plugin's dashboard")
+            }
+            // The toggle reflects ACTIVE (enabled + approved): a plugin
+            // whose manifest changed since approval reads as OFF, and
+            // switching it on re-opens the approval card.
+            Toggle("", isOn: Binding(
+                get: { pluginManager.isActive(plugin) },
+                set: { on in
+                    if on, !pluginManager.isApproved(plugin) {
+                        pendingApproval = plugin // approve-on-install gate
+                    } else {
+                        pluginManager.setEnabled(plugin, on)
+                        if !on, activePluginPanelID == plugin.id {
+                            activePluginPanelID = ""
+                        }
+                    }
+                }))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+        }
+    }
+
+    private func approvalCard(_ plugin: Plugin) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Approve “\(plugin.manifest.name)”?")
+                .font(.callout.weight(.semibold))
+            if let description = plugin.manifest.description {
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("This plugin provides:")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if plugin.capabilitySummary.isEmpty {
+                Text("• Nothing — the manifest declares no panel or MCP servers.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(plugin.capabilitySummary, id: \.self) { line in
+                Text("• \(line)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Dashboard pages run with full network access; MCP server commands run as your user. Approval is tied to this exact manifest — any edit asks again.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel") { pendingApproval = nil }
+                Button("Approve & Enable") {
+                    pluginManager.approve(plugin)
+                    pluginManager.setEnabled(plugin, true)
+                    pendingApproval = nil
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(12)
     }
 
     private func keycap(_ keys: String, _ label: String) -> some View {
@@ -1004,7 +1218,18 @@ struct LauncherView: View {
     private var sidebarExtra: CGFloat {
         (showSettings ? CGFloat(settingsPaneUserWidth) + 7 : 0)
             + (showSteps ? CGFloat(stepsPaneUserWidth) + 7 : 0)
+            + (activePluginPanel != nil ? CGFloat(pluginPaneUserWidth) + 7 : 0)
             + councilPaneWidth
+    }
+
+    /// The plugin whose dashboard pane is showing: it must still be
+    /// enabled, approved, and have a valid panel entry file — disabling
+    /// or editing the plugin closes the pane automatically.
+    private var activePluginPanel: Plugin? {
+        guard !activePluginPanelID.isEmpty else { return nil }
+        return pluginManager.activePlugins.first {
+            $0.id == activePluginPanelID && $0.panelURL != nil
+        }
     }
 
     /// The council seat column's contribution to the panel width. MUST be
