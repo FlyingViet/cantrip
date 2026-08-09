@@ -54,7 +54,7 @@ struct LauncherView: View {
                 // Council seat panes get their own width on top of the
                 // configured width, so the main transcript isn't squeezed
                 // (kept in lockstep with sidebarExtra — see its comment).
-                .frame(width: metrics.contentWidth + councilPaneWidth)
+                .frame(width: effectiveContentWidth + councilPaneWidth)
             if showSettings {
                 PaneDivider(width: paneBinding($settingsPaneUserWidth, range: 280...560),
                             range: 280...560)
@@ -1214,6 +1214,20 @@ struct LauncherView: View {
         if showUsage { usage.refreshQuotas() }
     }
 
+    /// The transcript's width after yielding to open sidebars. The window
+    /// itself is clamped to 95% of the screen (LauncherPanel.resizeContent),
+    /// so when the stored contentWidth plus the panes can't fit — panel
+    /// already at max width, then settings opens — something must give.
+    /// It's the transcript, down to its 560pt floor, and only while the
+    /// panes are open: this is computed, never persisted, so closing the
+    /// pane restores the full width. Without this the content laid out
+    /// wider than the window could grow and the UI clipped.
+    private var effectiveContentWidth: CGFloat {
+        let available = metrics.availableTotalWidth
+        guard available > 0 else { return metrics.contentWidth }
+        return min(metrics.contentWidth, max(560, available - sidebarExtra))
+    }
+
     /// Width consumed by open sidebars (for resize math).
     private var sidebarExtra: CGFloat {
         (showSettings ? CGFloat(settingsPaneUserWidth) + 7 : 0)
@@ -1262,6 +1276,15 @@ struct LauncherView: View {
                 let clamped = min(max(proposed, range.lowerBound), range.upperBound)
                 let requested = clamped - storage.wrappedValue
                 guard abs(requested) > 0.01 else { return }
+                // Stored width above what's visible (panel squeezed onto a
+                // smaller screen) is phantom slack: with it in place, a
+                // shrink-the-pane drag would eat the slack invisibly and
+                // the divider would feel dead. Snap it away so the trade
+                // operates on the width the user actually sees.
+                if metrics.contentWidth > effectiveContentWidth {
+                    PanelMetrics.shared.adjustContentWidth(
+                        by: effectiveContentWidth - metrics.contentWidth)
+                }
                 let given = PanelMetrics.shared.adjustContentWidth(by: -CGFloat(requested))
                 guard given != 0 else { return } // transcript pinned at its clamp
                 storage.wrappedValue -= Double(given)
