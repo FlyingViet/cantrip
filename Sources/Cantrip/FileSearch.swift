@@ -62,7 +62,9 @@ final class FileSearch: ObservableObject {
             if depthA != depthB { return depthA < depthB }
             return nameA < nameB
         }
-        let urls = ranked.prefix(5).map { URL(fileURLWithPath: $0) }
+        // Generous cap: the suggestions dropdown scrolls, so surfacing
+        // more than a screenful is useful rather than overwhelming.
+        let urls = ranked.prefix(30).map { URL(fileURLWithPath: $0) }
         DispatchQueue.main.async { self.results = urls }
     }
 }
