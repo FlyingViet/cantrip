@@ -43,6 +43,15 @@ struct LauncherView: View {
     @State private var pluginReloadToken = 0
     @AppStorage("activePluginPanel") private var activePluginPanelID = ""
     @AppStorage("pluginPaneUserWidth") private var pluginPaneUserWidth = 320.0
+    // Window sizing inputs: the laid-out content, plus how far the
+    // floating suggestions dropdown reaches (it's overlay-only, so the
+    // window must be told to make room downward when it's taller than
+    // what's beneath it).
+    @State private var measuredContentSize = CGSize.zero
+    @State private var suggestionExtent: CGFloat = 0
+    /// Natural (unscrolled) height of the suggestion rows, so the
+    /// dropdown can size to its content below the scroll cap.
+    @State private var suggestionListHeight: CGFloat = 0
     @State private var showTerminal = false
     @State private var terminalCommand = ""
     @State private var terminalHistoryIndex: Int?
@@ -80,8 +89,14 @@ struct LauncherView: View {
             Color.clear
                 .preference(key: ContentSizeKey.self, value: geo.size)
         })
+        .coordinateSpace(name: "panel")
         .onPreferenceChange(ContentSizeKey.self) { size in
-            onSizeChange(size)
+            measuredContentSize = size
+            reportSize()
+        }
+        .onPreferenceChange(SuggestionExtentKey.self) { extent in
+            suggestionExtent = extent
+            reportSize()
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .onChange(of: pinned) {
@@ -185,14 +200,25 @@ struct LauncherView: View {
                     .opacity(0)
                 )
                 .background(sessionShortcuts)
-            if let suggestion = appSuggestion {
-                appSuggestionRow(suggestion)
-            }
-            if query.hasPrefix("/") {
-                commandSuggestionRows
-            }
-            if !fileSearch.results.isEmpty && !showHistory {
-                fileResultsRows
+                // Suggestions float OVER the content below instead of
+                // pushing it down — the panel keeps its size. Only when
+                // there's nothing beneath (fresh empty panel) do they lay
+                // out inline, because there the window must grow or the
+                // rows would render past its bottom edge.
+                .overlay(alignment: .bottom) {
+                    if lowerSectionVisible, hasSuggestions {
+                        suggestionsOverlay
+                            .alignmentGuide(.bottom) { $0[.top] } // hang below
+                            .background(GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: SuggestionExtentKey.self,
+                                    value: geo.frame(in: .named("panel")).maxY)
+                            })
+                    }
+                }
+                .zIndex(1) // draw the overlay above later VStack siblings
+            if !lowerSectionVisible, hasSuggestions {
+                suggestionList
             }
             if !session.attachments.isEmpty {
                 attachmentChips
@@ -626,13 +652,13 @@ struct LauncherView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(action: rescanAndReloadPlugins) {
+                Button(action: { pluginReloadToken += 1 }) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
-                .help("Rescan plugins and reload this page")
+                .help("Reload the plugin page")
                 Button(action: { activePluginPanelID = "" }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11))
@@ -646,7 +672,7 @@ struct LauncherView: View {
             PluginPanelView(plugin: plugin, reloadToken: pluginReloadToken) { prompt in
                 session.submit(prompt)
             }
-            .id("\(plugin.id)|\(plugin.manifestHash)")
+            .id(plugin.id)
             .frame(height: metrics.transcriptMaxHeight)
         }
         .frame(width: CGFloat(pluginPaneUserWidth), alignment: .topLeading)
@@ -683,7 +709,7 @@ struct LauncherView: View {
                     NSWorkspace.shared.open(PluginManager.pluginsDirectory)
                 }
                 Spacer()
-                Button("Rescan & Reload") { rescanAndReloadPlugins() }
+                Button("Rescan") { pluginManager.reload() }
             }
             .buttonStyle(.plain)
             .font(.caption)
@@ -780,7 +806,7 @@ struct LauncherView: View {
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Dashboard pages run with full network access; panel data and MCP server commands run as your user. Approval is tied to this exact manifest — any edit asks again.")
+            Text("Dashboard pages run with full network access; MCP server commands run as your user. Approval is tied to this exact manifest — any edit asks again.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -788,20 +814,14 @@ struct LauncherView: View {
                 Spacer()
                 Button("Cancel") { pendingApproval = nil }
                 Button("Approve & Enable") {
-                    if pluginManager.approve(plugin) {
-                        pluginManager.setEnabled(plugin, true)
-                    }
+                    pluginManager.approve(plugin)
+                    pluginManager.setEnabled(plugin, true)
                     pendingApproval = nil
                 }
                 .keyboardShortcut(.defaultAction)
             }
         }
         .padding(12)
-    }
-
-    private func rescanAndReloadPlugins() {
-        pluginManager.reload()
-        pluginReloadToken &+= 1
     }
 
     private func keycap(_ keys: String, _ label: String) -> some View {
@@ -1077,6 +1097,83 @@ struct LauncherView: View {
     }
 
     // MARK: - Command (skill) typeahead
+
+    /// The window height request: normally the measured content, but when
+    /// the floating dropdown hangs past the content's bottom the window
+    /// extends downward to contain it (top edge is fixed, so existing UI
+    /// never moves — the panel just gains room underneath). The 10pt pad
+    /// gives the dropdown's shadow breathing space.
+    private func reportSize() {
+        var size = measuredContentSize
+        if suggestionExtent > 0 {
+            size.height = max(size.height, suggestionExtent + 10)
+        }
+        onSizeChange(size)
+    }
+
+    /// The section below the input bar exists (transcript, terminal,
+    /// history, or usage) — i.e. there is content for suggestions to
+    /// float over.
+    private var lowerSectionVisible: Bool {
+        showTerminal || showUsage || showHistory
+            || !session.messages.isEmpty || session.statusText != nil
+    }
+
+    private var hasSuggestions: Bool {
+        appSuggestion != nil
+            || query.hasPrefix("/")
+            || (!fileSearch.results.isEmpty && !showHistory)
+    }
+
+    /// The suggestion rows themselves, shared between the inline layout
+    /// (empty panel) and the floating overlay.
+    @ViewBuilder private var suggestionRows: some View {
+        if let suggestion = appSuggestion {
+            appSuggestionRow(suggestion)
+        }
+        if query.hasPrefix("/") {
+            commandSuggestionRows
+        }
+        if !fileSearch.results.isEmpty && !showHistory {
+            fileResultsRows
+        }
+    }
+
+    /// The rows in a scroll container capped at 320pt. A ScrollView is
+    /// greedy (it takes whatever height it's offered), so the rows'
+    /// natural height is measured and the frame pinned to
+    /// min(content, cap): short lists hug their content, long lists
+    /// scroll instead of growing the dropdown or the panel.
+    private var suggestionList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                suggestionRows
+            }
+            .background(GeometryReader { geo in
+                Color.clear.preference(key: SuggestionListHeightKey.self,
+                                       value: geo.size.height)
+            })
+        }
+        .frame(height: min(max(suggestionListHeight, 1), 320))
+        .onPreferenceChange(SuggestionListHeightKey.self) {
+            suggestionListHeight = $0
+        }
+        // Preferences don't fire on removal, so reset — otherwise the
+        // next appearance flashes one frame at the previous height.
+        .onDisappear { suggestionListHeight = 0 }
+    }
+
+    /// Floating dropdown: opaque enough to read over the transcript,
+    /// shadowed so it reads as a layer, and never part of the layout —
+    /// showing or dismissing it cannot move or resize anything.
+    private var suggestionsOverlay: some View {
+        suggestionList
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.white.opacity(0.12)))
+            .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+            .padding(.horizontal, 8)
+    }
 
     private var commandSuggestionRows: some View {
         let matches = CommandRegistry.shared.matches(for: query)
@@ -1971,6 +2068,26 @@ private struct ContentSizeKey: PreferenceKey {
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
         let next = nextValue()
         if next != .zero { value = next }
+    }
+}
+
+/// Bottom edge of the floating suggestions dropdown in the panel's
+/// coordinate space. The dropdown doesn't participate in layout, so when
+/// it reaches past the measured content the window must extend DOWNWARD
+/// to fit it (top edge fixed — nothing on screen moves).
+private struct SuggestionExtentKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Natural height of the suggestion rows inside their ScrollView, so the
+/// dropdown sizes to content below the scroll cap (see suggestionList).
+private struct SuggestionListHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
