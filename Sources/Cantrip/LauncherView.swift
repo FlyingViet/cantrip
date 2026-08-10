@@ -48,7 +48,9 @@ struct LauncherView: View {
     // window must be told to make room downward when it's taller than
     // what's beneath it).
     @State private var measuredContentSize = CGSize.zero
-    @State private var suggestionExtent: CGFloat = 0
+    /// The composer's frame in the panel's coordinate space — the
+    /// dropdown pins its top edge to this frame's bottom.
+    @State private var inputBarFrame = CGRect.zero
     /// Natural (unscrolled) height of the suggestion rows, so the
     /// dropdown can size to its content below the scroll cap.
     @State private var suggestionListHeight: CGFloat = 0
@@ -90,12 +92,23 @@ struct LauncherView: View {
                 .preference(key: ContentSizeKey.self, value: geo.size)
         })
         .coordinateSpace(name: "panel")
+        // The floating dropdown lives at PANEL level, explicitly placed:
+        // top edge at the composer's measured bottom, expanding downward
+        // over whatever is beneath (Spotlight-style). Overlays draw above
+        // the whole base composite, so no zIndex juggling is needed.
+        .overlay(alignment: .topLeading) {
+            if lowerSectionVisible, hasSuggestions, inputBarFrame != .zero {
+                suggestionsOverlay
+                    .frame(width: inputBarFrame.width)
+                    .offset(x: inputBarFrame.minX, y: inputBarFrame.maxY)
+            }
+        }
         .onPreferenceChange(ContentSizeKey.self) { size in
             measuredContentSize = size
             reportSize()
         }
-        .onPreferenceChange(SuggestionExtentKey.self) { extent in
-            suggestionExtent = extent
+        .onPreferenceChange(InputBarFrameKey.self) { frame in
+            inputBarFrame = frame
             reportSize()
         }
         .frame(maxHeight: .infinity, alignment: .top)
@@ -200,23 +213,15 @@ struct LauncherView: View {
                     .opacity(0)
                 )
                 .background(sessionShortcuts)
-                // Suggestions float OVER the content below instead of
-                // pushing it down — the panel keeps its size. Only when
-                // there's nothing beneath (fresh empty panel) do they lay
-                // out inline, because there the window must grow or the
-                // rows would render past its bottom edge.
-                .overlay(alignment: .bottom) {
-                    if lowerSectionVisible, hasSuggestions {
-                        suggestionsOverlay
-                            .alignmentGuide(.bottom) { $0[.top] } // hang below
-                            .background(GeometryReader { geo in
-                                Color.clear.preference(
-                                    key: SuggestionExtentKey.self,
-                                    value: geo.frame(in: .named("panel")).maxY)
-                            })
-                    }
-                }
-                .zIndex(1) // draw the overlay above later VStack siblings
+                // Report where the composer ends so the suggestions
+                // dropdown can pin its top edge exactly there (see the
+                // panel-level overlay in body) — Spotlight-style, always
+                // fully below the typing area, never covering it.
+                .background(GeometryReader { geo in
+                    Color.clear.preference(
+                        key: InputBarFrameKey.self,
+                        value: geo.frame(in: .named("panel")))
+                })
             if !lowerSectionVisible, hasSuggestions {
                 suggestionList
             }
@@ -1099,14 +1104,17 @@ struct LauncherView: View {
     // MARK: - Command (skill) typeahead
 
     /// The window height request: normally the measured content, but when
-    /// the floating dropdown hangs past the content's bottom the window
+    /// the floating dropdown reaches past the content's bottom the window
     /// extends downward to contain it (top edge is fixed, so existing UI
-    /// never moves — the panel just gains room underneath). The 10pt pad
-    /// gives the dropdown's shadow breathing space.
+    /// never moves — the panel just gains room underneath). The dropdown
+    /// bottom is arithmetic — composer bottom + capped list height — so
+    /// no geometry needs measuring through the offset.
     private func reportSize() {
         var size = measuredContentSize
-        if suggestionExtent > 0 {
-            size.height = max(size.height, suggestionExtent + 10)
+        if lowerSectionVisible, hasSuggestions, inputBarFrame != .zero {
+            let dropdownBottom = inputBarFrame.maxY
+                + min(max(suggestionListHeight, 1), 320)
+            size.height = max(size.height, dropdownBottom + 16)
         }
         onSizeChange(size)
     }
@@ -1157,10 +1165,20 @@ struct LauncherView: View {
         .frame(height: min(max(suggestionListHeight, 1), 320))
         .onPreferenceChange(SuggestionListHeightKey.self) {
             suggestionListHeight = $0
+            reportSize() // dropdown height feeds the window's extent
         }
         // Preferences don't fire on removal, so reset — otherwise the
-        // next appearance flashes one frame at the previous height.
-        .onDisappear { suggestionListHeight = 0 }
+        // next appearance flashes one frame at the previous height, and
+        // the window would keep the dropdown's extra room. Guarded: when
+        // the list is merely MOVING between the inline site and the
+        // floating overlay (hasSuggestions still true), the other
+        // instance may already have re-reported the same height — its
+        // preference won't fire again for an unchanged value, so zeroing
+        // here after it appeared would stick the dropdown at 1pt.
+        .onDisappear {
+            if !hasSuggestions { suggestionListHeight = 0 }
+            reportSize()
+        }
     }
 
     /// Floating dropdown: opaque enough to read over the transcript,
@@ -2071,14 +2089,14 @@ private struct ContentSizeKey: PreferenceKey {
     }
 }
 
-/// Bottom edge of the floating suggestions dropdown in the panel's
-/// coordinate space. The dropdown doesn't participate in layout, so when
-/// it reaches past the measured content the window must extend DOWNWARD
-/// to fit it (top edge fixed — nothing on screen moves).
-private struct SuggestionExtentKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+/// The composer's frame in the panel's coordinate space — the floating
+/// suggestions dropdown pins its top edge to this frame's bottom, so it
+/// can only ever appear BELOW the typing area, expanding downward.
+private struct InputBarFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
     }
 }
 
