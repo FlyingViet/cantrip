@@ -41,7 +41,15 @@ One plugin = one folder in `~/.config/cantrip/plugins/`:
   "description": "Lights, temperature, and quick scenes for the house.",
   "panel": {
     "html": "index.html",
-    "title": "Home"
+    "title": "Home",
+    "capabilities": ["dailyBriefing"]
+  },
+  "dataSources": {
+    "status": {
+      "command": "bin/status",
+      "args": ["--json"],
+      "timeoutSeconds": 15
+    }
   },
   "mcpServers": {
     "homeassistant": {
@@ -65,6 +73,10 @@ Panel pages get a small API injected before your scripts run:
 cantrip.sendPrompt("dim the living room lights");  // submits a query to the
                                                    // active Cantrip session
 cantrip.log("refresh took 120ms");                 // writes to Cantrip.log
+cantrip.openURL("http://homeassistant.local:8123"); // opens an HTTP(S) page
+                                                   // in the default browser
+const calendar = await cantrip.requestData("dailyBriefing.calendar");
+await cantrip.runAction("openLog");
 ```
 
 Everything else is ordinary web platform: `fetch()` works against local
@@ -74,10 +86,34 @@ filesystem access from the page — if you need real tools, declare an MCP
 server and let the model call it, or `cantrip.sendPrompt(...)` and let
 the agent do the work with its own permission gates.
 
+Plugins that need local or authenticated data can declare `dataSources`.
+`cantrip.requestData("status")` runs the matching command with the plugin
+folder as its working directory and resolves with the JSON object written
+to stdout. Relative commands must stay inside the plugin folder, commands
+must be executable, timeouts are capped at 60 seconds, and output is capped
+at 1 MB. Keep credentials in the command's server-side environment or a
+protected local file, never in panel JavaScript. Each command line is shown
+on the approval card.
+
+Native panel APIs are promise-based and denied unless the manifest declares
+the matching capability. Built-in capabilities are `cantripStatus`,
+`cantripActions`, and `dailyBriefing`; they expose only Cantrip's fixed status,
+maintenance commands, and read-only local briefing sources. Daily Briefing
+uses Contacts to return only recent messages from known contacts. Its
+`.calendar`, `.mail`, and `.messages` requests resolve independently and use a
+short cache; append `.refresh` to bypass it. Capabilities are listed on the
+approval card, and changing them invalidates approval.
+
 ## Install, approval, and lifecycle
 
 - Drop the folder in `~/.config/cantrip/plugins/` (the Extensions popover
-  has an **Open Plugins Folder** button), then hit **Rescan**.
+  has an **Open Plugins Folder** button), then hit **Rescan & Reload**.
+- Cantrip watches installed plugin files and reloads changed panels
+  automatically. **Rescan & Reload** is the manual fallback and also discovers
+  newly added or removed plugin folders; neither path requires restarting
+  Cantrip.
+- Only changes to Cantrip's native Swift plugin host or bridge require a
+  rebuild and relaunch.
 - Flipping a plugin on the first time shows an approval card listing
   exactly what the manifest declares — the panel file and every MCP
   server command line. Nothing runs before you approve.
@@ -86,9 +122,8 @@ the agent do the work with its own permission gates.
   "needs approval" and it goes inert until you re-review it.
 - MCP changes apply to the *next* model process: the merged config at
   `~/.config/cantrip/plugin-mcp.json` is regenerated on every toggle,
-  and backends read it when they spawn. The local-model backend loads
-  MCP servers once per app run, so toggles there apply after a Cantrip
-  restart.
+  and backends read it when they spawn. Local-model MCP connections are
+  invalidated and reconnected on the next request.
 - Server names are sanitized to `[A-Za-z0-9_-]`; if two plugins declare
   the same server name, the later one (alphabetical by plugin name) is
   auto-prefixed with its plugin id.
@@ -99,7 +134,8 @@ Plugins are code you chose to install, running with meaningful reach:
 panel pages have unrestricted network access (CORS is relaxed so
 dashboards can talk to local devices that don't send CORS headers, which
 also means a page may be able to read local files and send them over the
-network), and MCP servers are real processes running as your user. Treat
+network), and panel data commands and MCP servers are real processes running
+as your user. Treat
 installing a plugin like installing any app. The approval card shows the
 exact MCP command lines so you can eyeball them — read them, especially
 for plugins you didn't write.
@@ -115,9 +151,11 @@ to remove it.
 
 `Examples/plugins/hello-dashboard/` in this repo is a working panel
 plugin: a clock, a fetch demo, and a button that sends a prompt to the
-session. Copy it into `~/.config/cantrip/plugins/`, enable it in the
-Extensions popover, and edit from there:
+session. For development, symlink it into the plugin directory so edits in
+the checkout are live, then enable it in the Extensions popover:
 
 ```bash
-cp -r Examples/plugins/hello-dashboard ~/.config/cantrip/plugins/
+mkdir -p ~/.config/cantrip/plugins
+ln -s "$PWD/Examples/plugins/hello-dashboard" \
+  ~/.config/cantrip/plugins/hello-dashboard
 ```

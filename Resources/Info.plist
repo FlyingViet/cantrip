@@ -36,6 +36,10 @@
     <string>Cantrip can share your approximate location with the assistant so queries like "what's the weather" work.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Cantrip can share your approximate location with the assistant so queries like "what's the weather" work.</string>
+    <key>NSContactsUsageDescription</key>
+    <string>Cantrip uses your contacts to limit Daily Briefing messages to people you know.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Cantrip uses your calendar to show upcoming events in Daily Briefing.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key>

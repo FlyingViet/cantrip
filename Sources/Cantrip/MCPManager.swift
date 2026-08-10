@@ -47,11 +47,29 @@ final class MCPManager {
         }
     }
 
+    /// Drop cached local-model MCP processes after the generated plugin
+    /// configuration changes. The next local-model request reconnects using
+    /// the current config, so plugin changes do not require an app restart.
+    func invalidateConfiguration() {
+        lock.lock()
+        let staleConnections = Array(connections.values)
+        connections.removeAll()
+        loaded = false
+        lock.unlock()
+        staleConnections.forEach { $0.stop() }
+        if !staleConnections.isEmpty {
+            Log.write("mcp: plugin configuration changed; connections will reload")
+        }
+    }
+
     /// Tools formatted for the OpenAI chat-completions `tools` parameter.
     func openAITools() -> [[String: Any]] {
         loadIfNeeded()
+        lock.lock()
+        let currentConnections = connections
+        lock.unlock()
         var result: [[String: Any]] = []
-        for (server, connection) in connections {
+        for (server, connection) in currentConnections {
             for tool in connection.tools {
                 result.append([
                     "type": "function",
@@ -69,7 +87,10 @@ final class MCPManager {
     func call(_ fullName: String, arguments: [String: Any]) -> (String, Bool) {
         loadIfNeeded()
         let parts = fullName.components(separatedBy: "__")
-        guard parts.count >= 3, let connection = connections[parts[1]] else {
+        lock.lock()
+        let connection = parts.count >= 3 ? connections[parts[1]] : nil
+        lock.unlock()
+        guard parts.count >= 3, let connection else {
             return ("Unknown MCP tool \(fullName)", false)
         }
         let toolName = parts.dropFirst(2).joined(separator: "__")
@@ -96,6 +117,7 @@ final class MCPServerConnection {
     private let stateLock = NSLock()
     private var results: [Int: [String: Any]] = [:]
     private var semaphores: [Int: DispatchSemaphore] = [:]
+    private var stopped = false
 
     init?(name: String, command: String, args: [String], extraEnv: [String: String]) {
         self.name = name
@@ -153,6 +175,26 @@ final class MCPServerConnection {
         return (trimmed.isEmpty ? "(empty result)" : String(trimmed.prefix(6000)), !isError)
     }
 
+    func stop() {
+        stateLock.lock()
+        guard !stopped else {
+            stateLock.unlock()
+            return
+        }
+        stopped = true
+        let waiting = Array(semaphores.values)
+        semaphores.removeAll()
+        stateLock.unlock()
+
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        if process.isRunning { process.terminate() }
+        waiting.forEach { $0.signal() }
+    }
+
+    deinit {
+        stop()
+    }
+
     // MARK: JSON-RPC plumbing
 
     private func consume(_ data: Data) {
@@ -176,6 +218,10 @@ final class MCPServerConnection {
     private func request(_ method: String, params: [String: Any],
                          timeout: TimeInterval) -> [String: Any]? {
         stateLock.lock()
+        guard !stopped else {
+            stateLock.unlock()
+            return nil
+        }
         let id = nextID
         nextID += 1
         let semaphore = DispatchSemaphore(value: 0)

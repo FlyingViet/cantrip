@@ -4,3 +4,8 @@
 Resources/AppIcon.icns
 *.xcodeproj
 .swiftpm/
+
+# Local plugin installations; keep the committed example fixture.
+Examples/plugins/*
+!Examples/plugins/hello-dashboard/
+!Examples/plugins/hello-dashboard/**
