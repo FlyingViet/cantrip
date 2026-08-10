@@ -626,13 +626,13 @@ struct LauncherView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(action: { pluginReloadToken += 1 }) {
+                Button(action: rescanAndReloadPlugins) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
-                .help("Reload the plugin page")
+                .help("Rescan plugins and reload this page")
                 Button(action: { activePluginPanelID = "" }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11))
@@ -646,7 +646,7 @@ struct LauncherView: View {
             PluginPanelView(plugin: plugin, reloadToken: pluginReloadToken) { prompt in
                 session.submit(prompt)
             }
-            .id(plugin.id)
+            .id("\(plugin.id)|\(plugin.manifestHash)")
             .frame(height: metrics.transcriptMaxHeight)
         }
         .frame(width: CGFloat(pluginPaneUserWidth), alignment: .topLeading)
@@ -683,7 +683,7 @@ struct LauncherView: View {
                     NSWorkspace.shared.open(PluginManager.pluginsDirectory)
                 }
                 Spacer()
-                Button("Rescan") { pluginManager.reload() }
+                Button("Rescan & Reload") { rescanAndReloadPlugins() }
             }
             .buttonStyle(.plain)
             .font(.caption)
@@ -780,7 +780,7 @@ struct LauncherView: View {
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Dashboard pages run with full network access; MCP server commands run as your user. Approval is tied to this exact manifest — any edit asks again.")
+            Text("Dashboard pages run with full network access; panel data and MCP server commands run as your user. Approval is tied to this exact manifest — any edit asks again.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -788,14 +788,20 @@ struct LauncherView: View {
                 Spacer()
                 Button("Cancel") { pendingApproval = nil }
                 Button("Approve & Enable") {
-                    pluginManager.approve(plugin)
-                    pluginManager.setEnabled(plugin, true)
+                    if pluginManager.approve(plugin) {
+                        pluginManager.setEnabled(plugin, true)
+                    }
                     pendingApproval = nil
                 }
                 .keyboardShortcut(.defaultAction)
             }
         }
         .padding(12)
+    }
+
+    private func rescanAndReloadPlugins() {
+        pluginManager.reload()
+        pluginReloadToken &+= 1
     }
 
     private func keycap(_ keys: String, _ label: String) -> some View {

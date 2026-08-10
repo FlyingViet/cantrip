@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import Combine
+import Darwin
 
 // MARK: - Manifest
 
@@ -16,16 +17,23 @@ struct PluginManifest: Codable {
     struct PanelSpec: Codable {
         let html: String        // entry file, relative to the plugin folder
         let title: String?      // pane header; defaults to the plugin name
+        let capabilities: [String]? // opt-in native data/action bridge access
     }
     struct MCPServerSpec: Codable {
         let command: String
         let args: [String]?
         let env: [String: String]?
     }
+    struct DataSourceSpec: Codable {
+        let command: String
+        let args: [String]?
+        let timeoutSeconds: Double?
+    }
     let name: String
     let version: String?
     let description: String?
     let panel: PanelSpec?
+    let dataSources: [String: DataSourceSpec]?
     let mcpServers: [String: MCPServerSpec]?
 }
 
@@ -34,6 +42,7 @@ struct Plugin: Identifiable {
     let directory: URL
     let manifest: PluginManifest
     let manifestHash: String    // SHA-256 of manifest.json — approval is per-hash
+    let contentRevision: String // file metadata hash — reloads edited panel assets
 
     /// Resolved, validated panel entry file (must stay inside the folder;
     /// symlinks are resolved before the containment check).
@@ -53,6 +62,24 @@ struct Plugin: Identifiable {
         var lines: [String] = []
         if let panel = manifest.panel {
             lines.append("UI panel: \(panel.html)")
+            for capability in panel.capabilities ?? [] {
+                let detail: String
+                switch capability {
+                case "cantripStatus":
+                    detail = "read Cantrip build, Git, backend, usage, and logs"
+                case "cantripActions":
+                    detail = "run fixed update/build/relaunch actions and open the repo or log"
+                case "dailyBriefing":
+                    detail = "read upcoming Calendar events, unread Mail, Contacts, and recent contact or group-chat messages"
+                default:
+                    detail = capability
+                }
+                lines.append("Panel capability: \(detail)")
+            }
+        }
+        for (name, source) in (manifest.dataSources ?? [:]).sorted(by: { $0.key < $1.key }) {
+            let cmd = ([source.command] + (source.args ?? [])).joined(separator: " ")
+            lines.append("Panel data “\(name)”: \(cmd)")
         }
         for (name, server) in (manifest.mcpServers ?? [:]).sorted(by: { $0.key < $1.key }) {
             let cmd = ([server.command] + (server.args ?? [])).joined(separator: " ")
@@ -82,6 +109,8 @@ final class PluginManager: ObservableObject {
     private let d = UserDefaults.standard
     private static let enabledKey = "enabledPlugins"
     private static let approvedKey = "approvedPluginHashes"
+    private var fileWatchers: [DispatchSourceFileSystemObject] = []
+    private var pendingWatchedReload: DispatchWorkItem?
 
     nonisolated static var pluginsDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -113,7 +142,9 @@ final class PluginManager: ObservableObject {
                                                 includingPropertiesForKeys: [.isDirectoryKey],
                                                 options: [.skipsHiddenFiles])) ?? []
         for dir in dirs {
-            guard (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            let resolvedDirectory = dir.resolvingSymlinksInPath()
+            guard (try? resolvedDirectory.resourceValues(forKeys: [.isDirectoryKey]))?
+                .isDirectory == true
             else { continue }
             let manifestURL = dir.appendingPathComponent("manifest.json")
             guard let data = try? Data(contentsOf: manifestURL) else { continue }
@@ -123,10 +154,106 @@ final class PluginManager: ObservableObject {
             }
             let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
             found.append(Plugin(id: dir.lastPathComponent, directory: dir,
-                                manifest: manifest, manifestHash: hash))
+                                manifest: manifest, manifestHash: hash,
+                                contentRevision: Self.contentRevision(for: dir)))
         }
         plugins = found.sorted { $0.manifest.name.lowercased() < $1.manifest.name.lowercased() }
         rewriteMergedMCPConfig()
+        rebuildFileWatchers()
+    }
+
+    /// A cheap recursive fingerprint for deciding whether an open panel needs
+    /// to load again. It hashes paths, sizes, and nanosecond modification
+    /// timestamps rather than file contents, so large plugin binaries stay
+    /// inexpensive to rescan.
+    private static func contentRevision(for directory: URL) -> String {
+        let keys: Set<URLResourceKey> = [
+            .isRegularFileKey, .fileSizeKey, .contentModificationDateKey,
+        ]
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else { return "" }
+
+        var entries: [String] = []
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(forKeys: keys),
+                  values.isRegularFile == true else { continue }
+            let relative = String(url.path.dropFirst(directory.path.count))
+            let modified = values.contentModificationDate?
+                .timeIntervalSinceReferenceDate.bitPattern ?? 0
+            entries.append("\(relative)|\(values.fileSize ?? 0)|\(modified)")
+        }
+        let data = Data(entries.sorted().joined(separator: "\n").utf8)
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: Live reload
+
+    /// Watch the plugin tree itself, including symlink targets used for local
+    /// development. Directory watchers catch additions/removals; file watchers
+    /// catch in-place edits made by editors.
+    private func rebuildFileWatchers() {
+        pendingWatchedReload?.cancel()
+        pendingWatchedReload = nil
+        fileWatchers.forEach { $0.cancel() }
+        fileWatchers.removeAll()
+
+        var urls = [Self.pluginsDirectory]
+        for plugin in plugins {
+            urls.append(plugin.directory)
+            if let enumerator = FileManager.default.enumerator(
+                at: plugin.directory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) {
+                for case let url as URL in enumerator {
+                    urls.append(url)
+                }
+            }
+        }
+
+        // Avoid exhausting file descriptors for plugins that vendor large
+        // dependency trees. Manual Rescan remains authoritative in that case.
+        if urls.count > 512 {
+            urls = [Self.pluginsDirectory]
+            for plugin in plugins {
+                urls.append(plugin.directory)
+                urls.append(plugin.directory.appendingPathComponent("manifest.json"))
+                if let panelURL = plugin.panelURL { urls.append(panelURL) }
+            }
+            Log.write("plugins: large plugin tree; watching manifests and panel entry files")
+        }
+
+        var watchedPaths = Set<String>()
+        for url in urls {
+            let path = url.standardizedFileURL.path
+            guard watchedPaths.insert(path).inserted else { continue }
+            let descriptor = open(path, O_EVTONLY)
+            guard descriptor >= 0 else { continue }
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: descriptor,
+                eventMask: [.write, .delete, .rename, .attrib, .extend, .link, .revoke],
+                queue: .global(qos: .utility)
+            )
+            source.setEventHandler { [weak self] in
+                Task { @MainActor in self?.scheduleWatchedReload() }
+            }
+            source.setCancelHandler { close(descriptor) }
+            source.resume()
+            fileWatchers.append(source)
+        }
+    }
+
+    private func scheduleWatchedReload() {
+        pendingWatchedReload?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.pendingWatchedReload = nil
+            self?.reload()
+        }
+        pendingWatchedReload = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
 
     // MARK: State
@@ -150,11 +277,19 @@ final class PluginManager: ObservableObject {
         Log.write("plugins: \(plugin.id) \(enabled ? "enabled" : "disabled")")
     }
 
-    func approve(_ plugin: Plugin) {
+    @discardableResult
+    func approve(_ plugin: Plugin) -> Bool {
+        guard plugins.contains(where: {
+            $0.id == plugin.id && $0.manifestHash == plugin.manifestHash
+        }) else {
+            Log.write("plugins: \(plugin.id) changed while approval was open; rescan required")
+            return false
+        }
         approvedHashes[plugin.id] = plugin.manifestHash
         d.set(approvedHashes, forKey: Self.approvedKey)
         rewriteMergedMCPConfig()
         Log.write("plugins: \(plugin.id) approved (\(plugin.manifestHash.prefix(12)))")
+        return true
     }
 
     func revokeApproval(_ plugin: Plugin) {
@@ -197,7 +332,13 @@ final class PluginManager: ObservableObject {
         let servers = activeMCPServers()
         let fm = FileManager.default
         guard !servers.isEmpty else {
-            try? fm.removeItem(at: Self.mergedMCPConfigURL)
+            guard fm.fileExists(atPath: Self.mergedMCPConfigURL.path) else { return }
+            do {
+                try fm.removeItem(at: Self.mergedMCPConfigURL)
+                MCPManager.shared.invalidateConfiguration()
+            } catch {
+                Log.write("plugins: failed to remove MCP config: \(error.localizedDescription)")
+            }
             return
         }
         var dict: [String: Any] = [:]
@@ -211,7 +352,13 @@ final class PluginManager: ObservableObject {
         guard let data = try? JSONSerialization.data(withJSONObject: payload,
                                                      options: [.sortedKeys, .prettyPrinted])
         else { return }
-        try? data.write(to: Self.mergedMCPConfigURL, options: .atomic)
+        if (try? Data(contentsOf: Self.mergedMCPConfigURL)) == data { return }
+        do {
+            try data.write(to: Self.mergedMCPConfigURL, options: .atomic)
+            MCPManager.shared.invalidateConfiguration()
+        } catch {
+            Log.write("plugins: failed to write MCP config: \(error.localizedDescription)")
+        }
     }
 
     /// Path for the Claude CLI's --mcp-config, or nil when no active plugin
