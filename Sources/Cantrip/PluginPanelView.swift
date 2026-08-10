@@ -7,7 +7,7 @@ import AppKit
 ///   cantrip.sendPrompt(text) — submit a query to the active session
 ///   cantrip.log(text)        — write to Cantrip.log (debugging)
 ///   cantrip.openURL(url)      — open an HTTP(S) URL in the default browser
-///   cantrip.requestData(name) — read an approved native data source
+///   cantrip.requestData(name, payload?) — call an approved native data source
 ///   cantrip.runAction(name)   — run an approved fixed Cantrip action
 /// Network access from the page is unrestricted (fetch to a Home Assistant
 /// box, a local API, the internet) — which is exactly why plugins require
@@ -68,12 +68,13 @@ struct PluginPanelView: NSViewRepresentable {
         if (envelope.ok) pending.resolve(envelope.value);
         else pending.reject(new Error(envelope.error || "Cantrip request failed"));
     };
-    function request(type, name) {
+    function request(type, name, payload) {
         return new Promise(function (resolve, reject) {
             var id = nextRequestID++;
             pendingRequests.set(id, { resolve: resolve, reject: reject });
-            window.webkit.messageHandlers.cantrip.postMessage(
-                { type: type, name: String(name), id: id });
+            var message = { type: type, name: String(name), id: id };
+            if (payload !== undefined) message.payload = payload;
+            window.webkit.messageHandlers.cantrip.postMessage(message);
         });
     }
     window.cantrip = {
@@ -89,8 +90,8 @@ struct PluginPanelView: NSViewRepresentable {
             window.webkit.messageHandlers.cantrip.postMessage(
                 { type: "openURL", text: String(url) });
         },
-        requestData: function (name) {
-            return request("requestData", name);
+        requestData: function (name, payload) {
+            return request("requestData", name, payload);
         },
         runAction: function (name) {
             return request("runAction", name);
@@ -175,7 +176,21 @@ struct PluginPanelView: NSViewRepresentable {
             case "requestData":
                 guard let id = body["id"] as? Int,
                       let name = body["name"] as? String else { return }
-                requestData(name, id: id, webView: message.webView)
+                let payload: [String: Any]?
+                if let rawPayload = body["payload"] {
+                    guard let objectPayload = rawPayload as? [String: Any] else {
+                       respond(
+                           id: id,
+                           error: "Plugin data payload must be a JSON object",
+                           in: message.webView
+                       )
+                       return
+                    }
+                    payload = objectPayload
+                } else {
+                    payload = nil
+                }
+                requestData(name, payload: payload, id: id, webView: message.webView)
             case "runAction":
                 guard let id = body["id"] as? Int,
                       let name = body["name"] as? String else { return }
@@ -207,10 +222,16 @@ struct PluginPanelView: NSViewRepresentable {
             }
         }
 
-        private func requestData(_ name: String, id: Int, webView: WKWebView?) {
+        private func requestData(
+            _ name: String,
+            payload: [String: Any]?,
+            id: Int,
+            webView: WKWebView?
+        ) {
             if name == "dailyBriefing"
                 || name == "dailyBriefing.calendar"
                 || name == "dailyBriefing.calendar.refresh"
+                || name == "dailyBriefing.calendar.travel"
                 || name == "dailyBriefing.mail"
                 || name == "dailyBriefing.mail.refresh"
                 || name == "dailyBriefing.messages"
@@ -233,6 +254,10 @@ struct PluginPanelView: NSViewRepresentable {
                     PluginPanelData.dailyBriefingCalendar(
                         forceRefresh: forceRefresh
                     ) { [weak self, weak webView] result in
+                        self?.respond(id: id, result: result, in: webView)
+                    }
+                case "dailyBriefing.calendar.travel":
+                    PluginPanelData.travelCalendar { [weak self, weak webView] result in
                         self?.respond(id: id, result: result, in: webView)
                     }
                 case "dailyBriefing.mail", "dailyBriefing.mail.refresh":
@@ -270,6 +295,7 @@ struct PluginPanelView: NSViewRepresentable {
             }
             PluginPanelData.pluginDataSource(
                 source,
+                payload: payload,
                 pluginRoot: pluginRoot
             ) { [weak self, weak webView] result in
                 self?.respond(id: id, result: result, in: webView)

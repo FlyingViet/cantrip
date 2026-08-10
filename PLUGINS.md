@@ -76,6 +76,10 @@ cantrip.log("refresh took 120ms");                 // writes to Cantrip.log
 cantrip.openURL("http://homeassistant.local:8123"); // opens an HTTP(S) page
                                                    // in the default browser
 const calendar = await cantrip.requestData("dailyBriefing.calendar");
+const results = await cantrip.requestData("media", {
+  action: "search",
+  query: "Arrival"
+});
 await cantrip.runAction("openLog");
 ```
 
@@ -89,11 +93,14 @@ the agent do the work with its own permission gates.
 Plugins that need local or authenticated data can declare `dataSources`.
 `cantrip.requestData("status")` runs the matching command with the plugin
 folder as its working directory and resolves with the JSON object written
-to stdout. Relative commands must stay inside the plugin folder, commands
-must be executable, timeouts are capped at 60 seconds, and output is capped
-at 1 MB. Keep credentials in the command's server-side environment or a
-protected local file, never in panel JavaScript. Each command line is shown
-on the approval card.
+to stdout. An optional JSON object passed as the second argument is written
+to the command's standard input (capped at 64 KB), which lets one approved
+command safely handle searches and mutations without exposing credentials
+to panel JavaScript. Relative commands must stay inside the plugin folder,
+commands must be executable, timeouts are capped at 60 seconds, and output
+is capped at 1 MB. Keep credentials in the command's server-side environment
+or a protected local file, never in panel JavaScript. Each command line is
+shown on the approval card.
 
 Native panel APIs are promise-based and denied unless the manifest declares
 the matching capability. Built-in capabilities are `cantripStatus`,

@@ -153,6 +153,32 @@ enum PluginPanelData {
         }
     }
 
+    static func travelCalendar(
+        completion: @escaping (Result<[String: Any], Error>) -> Void
+    ) {
+        authorizeCalendar { result in
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    let rows = try calendarEvents(
+                        from: result.get(),
+                        days: 180,
+                        includeTravelDetails: true
+                    )
+                    completeBriefingSection(
+                        "calendar",
+                        rows: rows,
+                        generatedAt: Date(),
+                        cached: false,
+                        completion: completion
+                    )
+                } catch {
+                    Log.write("departure-board calendar: \(error.localizedDescription)")
+                    completeBriefing(.failure(error), completion: completion)
+                }
+            }
+        }
+    }
+
     static func dailyBriefingMail(
         forceRefresh: Bool = false,
         completion: @escaping (Result<[String: Any], Error>) -> Void
@@ -281,6 +307,7 @@ enum PluginPanelData {
 
     static func pluginDataSource(
         _ source: PluginManifest.DataSourceSpec,
+        payload: [String: Any]?,
         pluginRoot: URL,
         completion: @escaping (Result<[String: Any], Error>) -> Void
     ) {
@@ -289,11 +316,25 @@ enum PluginPanelData {
             do {
                 let executable = try pluginExecutable(source.command, root: pluginRoot)
                 let timeout = min(max(source.timeoutSeconds ?? 15, 1), 60)
+                let input: Data?
+                if let payload {
+                    guard JSONSerialization.isValidJSONObject(payload) else {
+                        throw PanelDataError("Plugin data payload must be a JSON object")
+                    }
+                    let encoded = try JSONSerialization.data(withJSONObject: payload)
+                    guard encoded.count <= 65_536 else {
+                        throw PanelDataError("Plugin data payload exceeds 64 KB")
+                    }
+                    input = encoded
+                } else {
+                    input = nil
+                }
                 let output = try runOnce(
                     executable.path,
                     source.args ?? [],
                     timeout: timeout,
-                    currentDirectory: pluginRoot
+                    currentDirectory: pluginRoot,
+                    input: input
                 )
                 guard let data = output.data(using: .utf8), data.count <= 1_000_000 else {
                     throw PanelDataError("Plugin data output exceeds 1 MB")
@@ -383,9 +424,13 @@ enum PluginPanelData {
         }
     }
 
-    private static func calendarEvents(from store: EKEventStore) throws -> [[String: Any]] {
+    private static func calendarEvents(
+        from store: EKEventStore,
+        days: Int = 7,
+        includeTravelDetails: Bool = false
+    ) throws -> [[String: Any]] {
         let startDate = Date()
-        guard let endDate = Calendar.current.date(byAdding: .day, value: 7, to: startDate) else {
+        guard let endDate = Calendar.current.date(byAdding: .day, value: days, to: startDate) else {
             throw PanelDataError("Could not calculate the Calendar date range")
         }
         let predicate = store.predicateForEvents(
@@ -405,13 +450,23 @@ enum PluginPanelData {
             .map { event -> [String: Any] in
                 let title = event.title?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return [
+                var row: [String: Any] = [
                     "date": dateFormatter.string(from: event.startDate),
                     "time": timeFormatter.string(from: event.startDate),
                     "title": title.isEmpty ? "(Untitled event)" : title,
                     "calendar": event.calendar.title,
                     "allDay": event.isAllDay
                 ]
+                if includeTravelDetails {
+                    row["startAt"] = isoDate(event.startDate)
+                    row["endAt"] = isoDate(event.endDate)
+                    row["location"] = event.location?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if let lastModifiedDate = event.lastModifiedDate {
+                        row["lastModifiedAt"] = isoDate(lastModifiedDate)
+                    }
+                }
+                return row
             }
     }
 
@@ -856,13 +911,22 @@ enum PluginPanelData {
         _ executable: String,
         _ arguments: [String],
         timeout: TimeInterval,
-        currentDirectory: URL? = nil
+        currentDirectory: URL? = nil,
+        input: Data? = nil
     ) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.currentDirectoryURL = currentDirectory
-        process.standardInput = FileHandle.nullDevice
+        let inputPipe: Pipe?
+        if input != nil {
+            let pipe = Pipe()
+            process.standardInput = pipe
+            inputPipe = pipe
+        } else {
+            process.standardInput = FileHandle.nullDevice
+            inputPipe = nil
+        }
         let output = Pipe()
         let errors = Pipe()
         process.standardOutput = output
@@ -871,6 +935,10 @@ enum PluginPanelData {
             try process.run()
         } catch {
             throw PanelDataError("Could not launch \(URL(fileURLWithPath: executable).lastPathComponent): \(error.localizedDescription)")
+        }
+        if let input, let inputPipe {
+            try? inputPipe.fileHandleForWriting.write(contentsOf: input)
+            try? inputPipe.fileHandleForWriting.close()
         }
         try? output.fileHandleForWriting.close()
         try? errors.fileHandleForWriting.close()
