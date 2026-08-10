@@ -121,6 +121,12 @@ struct PluginPanelView: NSViewRepresentable {
             let key = "\(plugin.id)|\(plugin.manifestHash)|\(plugin.contentRevision)|\(token)"
             guard key != loadedKey else { return }
             loadedKey = key
+            if webView.url?.standardizedFileURL == url.standardizedFileURL {
+                // A fresh file request can still reuse cached CSS/JS subresources.
+                // Reloading from origin revalidates the complete panel document.
+                webView.reloadFromOrigin()
+                return
+            }
             let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
             let readRoot = plugin.directory.standardizedFileURL.resolvingSymlinksInPath()
             webView.loadFileRequest(request, allowingReadAccessTo: readRoot)
