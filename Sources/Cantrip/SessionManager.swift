@@ -17,6 +17,13 @@ final class SessionManager: ObservableObject {
         sessions[min(max(activeIndex, 0), sessions.count - 1)]
     }
 
+    /// Which tabs are open (and which is active) survives restarts.
+    /// Restoring from the transcript files alone reopened sessions the
+    /// user had already closed — closing only archives, so the closed
+    /// transcript was still among the newest files at next launch.
+    private static let openIDsKey = "openSessionIDs"
+    private static let activeIDKey = "activeSessionID"
+
     init() {
         let files = ((try? FileManager.default.contentsOfDirectory(
             at: Self.chatsDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
@@ -28,13 +35,48 @@ final class SessionManager: ObservableObject {
                     .contentModificationDate) ?? .distantPast
                 return ma < mb
             }
-        for file in files.suffix(6) {
-            if let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent) {
+        if let saved = UserDefaults.standard.stringArray(forKey: Self.openIDsKey) {
+            // Restore exactly the tabs that were open, in tab order —
+            // skipping any whose transcript has since been deleted.
+            let onDisk = Set(files.map {
+                $0.deletingPathExtension().lastPathComponent.uppercased()
+            })
+            for idString in saved {
+                guard let id = UUID(uuidString: idString),
+                      onDisk.contains(id.uuidString.uppercased()) else { continue }
                 adopt(ChatSession(id: id))
+            }
+        } else {
+            // First launch after this change: no saved tab list yet, so
+            // fall back once to the old recent-files behavior.
+            for file in files.suffix(6) {
+                if let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent) {
+                    adopt(ChatSession(id: id))
+                }
             }
         }
         if sessions.isEmpty { adopt(ChatSession()) }
-        activeIndex = sessions.count - 1
+        if let activeID = UserDefaults.standard.string(forKey: Self.activeIDKey),
+           let index = sessions.firstIndex(where: {
+               $0.id.uuidString.caseInsensitiveCompare(activeID) == .orderedSame
+           }) {
+            activeIndex = index
+        } else {
+            activeIndex = sessions.count - 1
+        }
+        persistOpenSessions()
+    }
+
+    /// Called after every tab mutation/selection, so a crash or force-quit
+    /// still restores the right tabs.
+    private func persistOpenSessions() {
+        UserDefaults.standard.set(sessions.map(\.id.uuidString),
+                                  forKey: Self.openIDsKey)
+        let clamped = min(max(activeIndex, 0), sessions.count - 1)
+        if sessions.indices.contains(clamped) {
+            UserDefaults.standard.set(sessions[clamped].id.uuidString,
+                                      forKey: Self.activeIDKey)
+        }
     }
 
     static var chatsDir: URL {
@@ -64,21 +106,25 @@ final class SessionManager: ObservableObject {
     func newSession() {
         adopt(ChatSession())
         activeIndex = sessions.count - 1
+        persistOpenSessions()
     }
 
     func select(_ index: Int) {
         guard sessions.indices.contains(index) else { return }
         activeIndex = index
+        persistOpenSessions()
     }
 
     func selectPrevious() {
         guard sessions.count > 1 else { return }
         activeIndex = (activeIndex - 1 + sessions.count) % sessions.count
+        persistOpenSessions()
     }
 
     func selectNext() {
         guard sessions.count > 1 else { return }
         activeIndex = (activeIndex + 1) % sessions.count
+        persistOpenSessions()
     }
 
     /// Closing a tab ARCHIVES it — the transcript stays on disk and the
@@ -92,6 +138,7 @@ final class SessionManager: ObservableObject {
         if sessions.isEmpty { adopt(ChatSession()) }
         activeIndex = min(activeIndex, sessions.count - 1)
         anyStreaming = sessions.contains { $0.isStreaming }
+        persistOpenSessions()
     }
 
     // MARK: - Archived sessions (transcripts on disk, not open as tabs)
@@ -129,10 +176,12 @@ final class SessionManager: ObservableObject {
     func restore(_ id: UUID) {
         if let existing = sessions.firstIndex(where: { $0.id == id }) {
             activeIndex = existing
+            persistOpenSessions()
             return
         }
         adopt(ChatSession(id: id))
         activeIndex = sessions.count - 1
+        persistOpenSessions()
     }
 
     func deleteArchived(_ id: UUID) {
