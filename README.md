@@ -7,7 +7,8 @@ apps, finds files, and does math like Spotlight — but you can also tell it to
 *do things* ("text Dan I'm late", "what am I working on?", "record this
 stream") and it acts on your Mac using Claude, Copilot, Codex, or your own
 local model. It sees your screens, remembers what works, runs jobs in
-parallel tabs, and can even upgrade its own code.
+parallel tabs, can convene several models for a joint answer, hosts your own
+dashboards and MCP tools, and can even upgrade its own code.
 
 ![Cantrip icon](Resources/AppIcon.png)
 
@@ -37,10 +38,23 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   (vLLM / Ollama / llama.cpp — e.g. Hermes), with per-backend model *and*
   reasoning-effort pickers (context-window hints included). Local models get
   a tool-calling loop (`run_shell` + your MCP servers), so even they can act.
+- **Council mode** — choose 2–8 seats from any mix of backends and models.
+  Read-only advisors answer in parallel in live, collapsible side panes, then
+  your active backend chairs a synthesis and delivers one verdict. By default
+  councils convene for planning, review, research, and investigation while
+  implementation goes to one worker; you can also convene them for every
+  message.
 - **Steerable mid-flight** — while a response runs: ↩ queues your next
   message, ⌘↩ interrupts and redirects, and on Claude ⌥↩ injects your
   message into the *current* turn's context without interrupting (the same
-  streaming-input mechanism Claude Code itself uses).
+  streaming-input mechanism Claude Code itself uses). Claude interrupts
+  in-band to keep its process and session hot; stateless backends carry a
+  summary of completed steps into the redirected turn.
+- **Runs recover instead of restarting** — if a backend fails or the
+  inactivity watchdog stops a run after it made progress, Cantrip resumes it
+  once automatically. A second interruption exposes a **Resume from where it
+  left off** button, preserves completed-step context, and holds queued
+  messages until the original task actually finishes.
 - **A real CLI** — `cat build.log | cantrip "why did this fail?"` streams
   answers to stdout through the running app, with `--backend`, your cwd as
   the working directory, and its own conversation continuity.
@@ -60,7 +74,18 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   working directory, terminal, and backend processes. A 90-minute download
   babysits itself in one tab while you work in another; finished background
   sessions notify you. Closed sessions archive: reopen any of them (titles,
-  dates, full context) from the history view.
+  dates, full context) from the history view. Relaunch restores exactly the
+  tabs that were open, including the active tab, without reopening archived
+  sessions.
+- **Extensions: dashboards + agent tools** — install a folder in
+  `~/.config/cantrip/plugins/` to add an HTML/JS dashboard side pane, MCP
+  servers, approved JSON data commands, or all three. Panels can submit
+  prompts and request explicitly declared native capabilities: build, Git,
+  backend, usage, and log status; fixed update/build/relaunch actions; or
+  cached Calendar, unread Mail, Contacts-only Messages, and travel-calendar
+  data. First enablement shows an approval card; approval is tied to the
+  manifest hash, and installed files reload without restarting Cantrip. See
+  [PLUGINS.md](PLUGINS.md).
 - **Self-updating** — when the GitHub repo is ahead, an "Update available"
   chip appears; one click streams the pull + rebuild into the transcript.
   Bundle replacement is transactional, then Cantrip relaunches that exact
@@ -77,7 +102,9 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   can point at any of them.
 - **Progress you can audit** — a sidebar shows every tool step live, grouped
   by kind; Claude Code subagents appear nested inside their parent task.
-  File edits render as colored diffs with one-click revert.
+  File edits render as colored diffs with one-click revert. Extended thinking
+  from Claude, Copilot, and compatible local models streams into a collapsed
+  **Reasoning** disclosure and is never persisted.
 - **Usage dashboard** — per-platform quota overview: Claude's rate-limit
   window and 30-day spend (from the CLI's own figures), Copilot AI credits
   via GitHub's billing API, honest placeholders where platforms expose
@@ -90,6 +117,12 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   (commit message from staged diff, branch review), colored diffs of every
   file the agent touched with one-click revert, MCP server integration,
   settings in a dotfile.
+- **A workspace that stays out of your way** — drag and resize the launcher;
+  its height and vertical position persist while it recenters horizontally
+  on the current display. Council, settings, steps, and extension panes have
+  independent draggable dividers, the transcript yields space when the
+  screen gets tight, and suggestions float below the composer instead of
+  reflowing the whole panel.
 - **Self-healing** — it knows its own source location, log file, and rebuild
   command; ask it to fix or extend itself and it will.
 
@@ -98,7 +131,7 @@ Ask anything more and it goes to an AI agent that can genuinely act:
 ## Install
 
 Requirements: macOS 14+, Xcode Command Line Tools, and at least one backend
-(Claude Code, Copilot CLI, or a local OpenAI-compatible server).
+(Claude Code, Copilot CLI, Codex CLI, or a local OpenAI-compatible server).
 
 ```sh
 git clone https://github.com/brihoang1995/cantrip.git ~/Coding/Cantrip
@@ -164,10 +197,13 @@ off by default; treat it like handing over a terminal, because it is one.
 
 The bar is two rows: input + mic on top; below it the toolbar — working
 directory, git actions (in repos), then terminal, private mode, history,
-usage dashboard, progress sidebar, pin, screen context, backend picker,
-gear, and new conversation/session. Hover any icon for an instant caption.
-Drag any file onto the panel to attach it. Settings open as a right-hand
-sidebar so you can tweak models mid-conversation.
+usage dashboard, progress sidebar, council, extensions, pin, screen context,
+backend picker, gear, and new conversation/session. Hover any icon for an
+instant caption. Drag any file onto the panel to attach it. Settings open as
+a right-hand sidebar so you can tweak models mid-conversation. Drag the
+panel or any pane divider to arrange the workspace; menu bar → **Reset Panel
+Size** restores the defaults. Panel opacity and launch-at-login live in
+Settings.
 
 ## Configuration
 
@@ -175,6 +211,11 @@ sidebar so you can tweak models mid-conversation.
   `~/.cantriprc` JSON via the menu bar icon (dotfiles-friendly).
 - **Memory vault**: `~/Cantrip Memory` by default (configurable) —
   open it in Obsidian; edit `USER.md` to tell it about yourself.
+- **Extensions**: folders in `~/.config/cantrip/plugins/`; use the
+  puzzle-piece menu to approve, enable, open, and rescan them. Panels and
+  manifests live-reload, while MCP changes apply to the next model process.
+  The complete manifest, bridge, data-source, lifecycle, and security
+  reference is [PLUGINS.md](PLUGINS.md).
 - **MCP servers**: `~/.config/cantrip/mcp.json`, standard
   `{"mcpServers": {…}}` format; their tools go to the local-model backend.
 - **Skills**: executables in `~/.config/cantrip/commands/` — a
