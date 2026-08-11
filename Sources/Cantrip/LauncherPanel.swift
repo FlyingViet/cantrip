@@ -58,7 +58,9 @@ final class LauncherPanel: NSPanel {
             object: self,
             queue: .main
         ) { [weak self] _ in
-            guard let self, !self.keepVisibleWhileUnfocused else { return }
+            guard let self,
+                  !self.keepVisibleWhileUnfocused,
+                  self.attachedModalPresentationCount == 0 else { return }
             self.orderOut(nil)
         }
         installMoveObserver()
@@ -80,6 +82,15 @@ final class LauncherPanel: NSPanel {
     /// While true (pinned, or a response is streaming), losing focus
     /// does NOT dismiss the panel — it persists as an overlay.
     var keepVisibleWhileUnfocused = false
+    private var attachedModalPresentationCount = 0
+
+    func beginAttachedModalPresentation() {
+        attachedModalPresentationCount += 1
+    }
+
+    func endAttachedModalPresentation() {
+        attachedModalPresentationCount = max(0, attachedModalPresentationCount - 1)
+    }
 
     // Remember where the user drags the panel: the top edge persists as
     // a fraction of the screen's visible height (maps across displays);
