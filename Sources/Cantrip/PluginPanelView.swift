@@ -214,8 +214,13 @@ struct PluginPanelView: NSViewRepresentable {
             alert.addButton(withTitle: "Continue")
             alert.addButton(withTitle: "Cancel")
             if let window = webView.window {
+                let launcherPanel = window as? LauncherPanel
+                launcherPanel?.beginAttachedModalPresentation()
                 alert.beginSheetModal(for: window) { response in
                     completionHandler(response == .alertFirstButtonReturn)
+                    DispatchQueue.main.async {
+                        launcherPanel?.endAttachedModalPresentation()
+                    }
                 }
             } else {
                 completionHandler(alert.runModal() == .alertFirstButtonReturn)
