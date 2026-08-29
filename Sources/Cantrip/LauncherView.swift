@@ -502,6 +502,7 @@ struct LauncherView: View {
         switch settings.backend {
         case .claudeCode: return "terminal"
         case .copilot: return "airplane"
+        case .copilotRemote: return "antenna.radiowaves.left.and.right"
         case .codex: return "chevron.left.forwardslash.chevron.right"
         case .localModel: return "cpu"
         }
@@ -950,6 +951,8 @@ struct LauncherView: View {
                 return "Copilot · \(model)"
             }
             return "Copilot"
+        case .copilotRemote:
+            return "Copilot Remote · \(settings.acpAddress)"
         case .codex:
             let model = settings.codexModel.trimmingCharacters(in: .whitespaces)
             return model.isEmpty ? "Codex" : "Codex · \(model)"
@@ -969,6 +972,8 @@ struct LauncherView: View {
                 return "Copilot · \(model)"
             }
             return "Copilot"
+        case .copilotRemote:
+            return "Copilot Remote · \(settings.acpAddress)"
         case .codex:
             let model = settings.codexModel.trimmingCharacters(in: .whitespaces)
             return model.isEmpty ? "Codex" : "Codex · \(model)"
@@ -2592,6 +2597,12 @@ struct SettingsView: View {
                 Toggle("Discourage subagents (they're slow server-side) — work inline instead", isOn: $settings.copilotDiscourageSubagents)
                     .font(.caption)
                     .toggleStyle(.checkbox)
+            case .copilotRemote:
+                labeledField("ACP server (host:port)", text: $settings.acpAddress, prompt: "127.0.0.1:3000")
+                labeledField("Working directory", text: $settings.claudeWorkdir, prompt: NSHomeDirectory())
+                Text("Connects to a Copilot CLI running as an ACP server: `copilot --acp --port 3000`. It binds loopback only, so reach a remote machine through a tunnel — `ssh -N -L 3000:127.0.0.1:3000 yourbox` — then point this at 127.0.0.1:3000. Model & tools are whatever the server was started with; \"Act on my behalf\" approves its tool requests, otherwise they're declined.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             case .codex:
                 labeledField("codex path (blank = auto)", text: $settings.codexPath, prompt: "/opt/homebrew/bin/codex")
                 labeledField("Model (blank = default, e.g. gpt-5-codex)", text: $settings.codexModel, prompt: "")

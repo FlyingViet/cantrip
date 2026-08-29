@@ -4,6 +4,7 @@ import ServiceManagement
 enum BackendKind: String, CaseIterable, Identifiable {
     case claudeCode = "Claude Code"
     case copilot = "Copilot"
+    case copilotRemote = "Copilot Remote"
     case codex = "Codex"
     case localModel = "Local Model"
     var id: String { rawValue }
@@ -92,6 +93,13 @@ final class AppSettings: ObservableObject {
     /// Path to the `copilot` binary. Empty = auto-detect.
     @Published var copilotPath: String {
         didSet { d.set(copilotPath, forKey: "copilotPath") }
+    }
+    /// host:port of a Copilot CLI ACP server (`copilot --acp --port N`).
+    /// It binds loopback by default, so remote instances are reached via
+    /// a tunnel (ssh -L / tailscale) — the address here is where the
+    /// tunnel lands, e.g. 127.0.0.1:3000.
+    @Published var acpAddress: String {
+        didSet { d.set(acpAddress, forKey: "acpAddress") }
     }
     /// Optional model override passed as --model.
     @Published var copilotModel: String {
@@ -527,6 +535,9 @@ final class AppSettings: ObservableObject {
         case .copilot:
             if let model = effectiveCopilotModel { return "Copilot · \(model)" }
             return "Copilot"
+        case .copilotRemote:
+            let address = acpAddress.trimmingCharacters(in: .whitespaces)
+            return "Copilot Remote · \(address.isEmpty ? "127.0.0.1:3000" : address)"
         case .codex:
             let model = codexModel.trimmingCharacters(in: .whitespaces)
             return model.isEmpty ? "Codex" : "Codex · \(model)"
@@ -549,6 +560,7 @@ final class AppSettings: ObservableObject {
             "claudeModel": claudeModel, "claudePermissionMode": claudePermissionMode,
             "claudeEffort": claudeEffort,
             "copilotPath": copilotPath, "copilotModel": copilotModel,
+            "acpAddress": acpAddress,
             "copilotAllowTools": copilotAllowTools, "copilotEffort": copilotEffort,
             "copilotContextTier": copilotContextTier,
             "codexPath": codexPath, "codexModel": codexModel,
@@ -588,6 +600,7 @@ final class AppSettings: ObservableObject {
         str("claudePermissionMode") { self.claudePermissionMode = $0 }
         str("claudeEffort") { self.claudeEffort = $0 }
         str("copilotPath") { self.copilotPath = $0 }
+        str("acpAddress") { self.acpAddress = $0 }
         str("copilotModel") { self.copilotModel = $0 }
         bool("copilotAllowTools") { self.copilotAllowTools = $0 }
         str("copilotEffort") { self.copilotEffort = $0 }
@@ -682,6 +695,7 @@ final class AppSettings: ObservableObject {
         claudePermissionMode = d.string(forKey: "claudePermissionMode") ?? "default"
         claudeEffort = d.string(forKey: "claudeEffort") ?? ""
         copilotPath = d.string(forKey: "copilotPath") ?? ""
+        acpAddress = d.string(forKey: "acpAddress") ?? "127.0.0.1:3000"
         copilotModel = d.string(forKey: "copilotModel") ?? ""
         copilotAllowTools = d.bool(forKey: "copilotAllowTools")
         copilotEffort = d.string(forKey: "copilotEffort") ?? ""

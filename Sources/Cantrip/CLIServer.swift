@@ -98,6 +98,7 @@ final class CLIServer {
         switch kind {
         case .claudeCode: fresh = ClaudeCodeBackend(persistKey: "cli-claudeSession")
         case .copilot: fresh = CopilotBackend()
+        case .copilotRemote: fresh = CopilotACPBackend()
         case .codex: fresh = CodexBackend(persistKey: "cli-codexSession")
         case .localModel: fresh = OpenAICompatibleBackend()
         }
@@ -109,6 +110,7 @@ final class CLIServer {
         switch raw.lowercased() {
         case "claude", "claudecode", "claude-code": return .claudeCode
         case "copilot", "gh": return .copilot
+        case "acp", "copilot-remote", "copilotremote": return .copilotRemote
         case "codex", "openai": return .codex
         case "local", "hermes": return .localModel
         default: return BackendKind(rawValue: raw)

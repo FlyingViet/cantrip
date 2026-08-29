@@ -90,6 +90,7 @@ final class ChatSession: ObservableObject {
     private var watchdog: Timer?
     private let claudeCode: ClaudeCodeBackend
     private let copilot = CopilotBackend()
+    private let copilotRemote = CopilotACPBackend()
     private let codex: CodexBackend
     private let localModel = OpenAICompatibleBackend()
     let shell = PersistentShell()
@@ -112,6 +113,7 @@ final class ChatSession: ObservableObject {
         switch kind {
         case .claudeCode: return claudeCode
         case .copilot: return copilot
+        case .copilotRemote: return copilotRemote
         case .codex: return codex
         case .localModel: return localModel
         }
@@ -427,6 +429,12 @@ final class ChatSession: ObservableObject {
         case .copilot:
             let b = CopilotBackend()
             b.modelOverride = member.model.isEmpty ? nil : member.model
+            b.readOnly = true
+            fresh = b
+        case .copilotRemote:
+            let b = CopilotACPBackend()
+            // No per-session model override in ACP; readOnly makes the
+            // seat decline every tool-permission request instead.
             b.readOnly = true
             fresh = b
         case .codex:
@@ -1007,7 +1015,10 @@ final class ChatSession: ObservableObject {
     private var backendKeepsSession: Bool {
         switch settings.backend {
         case .claudeCode, .codex: return true
-        case .copilot, .localModel: return false
+        // copilotRemote keeps its ACP session while the app runs, but an
+        // interrupted turn's context isn't replayable — inject like the
+        // other stateless backends.
+        case .copilot, .copilotRemote, .localModel: return false
         }
     }
 
@@ -1155,6 +1166,7 @@ final class ChatSession: ObservableObject {
         councilSynthesizing = false
         claudeCode.reset()
         copilot.reset()
+        copilotRemote.reset()
         codex.reset()
         localModel.reset()
         for backend in councilInstances.values { backend.reset() }
