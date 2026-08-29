@@ -42,6 +42,10 @@ enum PluginPanelData {
             model = settings.effectiveCopilotModel ?? "CLI default"
             effort = settings.copilotEffort.isEmpty ? "Default" : settings.copilotEffort
             context = settings.effectiveCopilotContextTier ?? "Default"
+        case .copilotRemote:
+            model = "ACP server default"
+            effort = "Server default"
+            context = "Server default"
         case .codex:
             model = settings.codexModel.isEmpty ? "CLI default" : settings.codexModel
             effort = "CLI default"
