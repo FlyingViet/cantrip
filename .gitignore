@@ -9,3 +9,10 @@ Resources/AppIcon.icns
 Examples/plugins/*
 !Examples/plugins/hello-dashboard/
 !Examples/plugins/hello-dashboard/**
+
+# Windows Electron build outputs
+windows/node_modules/
+windows/dist/
+windows/dist-electron/
+windows/release/
+windows/*.log

@@ -18,11 +18,15 @@ Cantrip supports user-written plugins in two layers:
      servers with it directly (`copilot mcp add NAME -- COMMAND ARGS...`,
      stored in `~/.copilot/mcp-config.json`).
 
-A plugin can ship either layer or both.
+A plugin can ship either layer or both. The manifest schema is shared by both
+platforms. macOS hosts dashboards in a side pane; Windows uses a dedicated
+sandboxed dashboard window and documents its security boundary in
+[`windows/PLUGINS.md`](windows/PLUGINS.md).
 
 ## Anatomy
 
-One plugin = one folder in `~/.config/cantrip/plugins/`:
+One plugin = one folder in `~/.config/cantrip/plugins/` on macOS or
+`%APPDATA%\cantrip\plugins\` on Windows:
 
 ```
 ~/.config/cantrip/plugins/
