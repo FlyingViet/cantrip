@@ -1,0 +1,70 @@
+{
+  "name": "cantrip-windows",
+  "version": "0.3.0",
+  "description": "A keyboard-first Windows AI launcher inspired by Cantrip",
+  "main": "dist-electron/main/main.js",
+  "author": "FlyingViet",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FlyingViet/cantrip.git"
+  },
+  "scripts": {
+    "dev": "npm run build && electron .",
+    "start": "electron .",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
+    "build": "npm run typecheck && vite build && tsc -p tsconfig.electron.json",
+    "package:win": "npm run build && electron-builder --win nsis",
+    "release:win": "npm run build && electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.14",
+    "electron-updater": "6.8.9",
+    "marked": "^18.0.11"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "electron": "41.6.1",
+    "electron-builder": "25.1.8",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  },
+  "build": {
+    "appId": "dev.flyingviet.cantrip.windows",
+    "productName": "Cantrip",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../Examples/plugins",
+        "to": "examples"
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "FlyingViet",
+      "repo": "cantrip",
+      "releaseType": "release"
+    },
+    "win": {
+      "icon": "assets/Cantrip.ico",
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerIcon": "assets/Cantrip.ico",
+      "uninstallerIcon": "assets/Cantrip.ico"
+    }
+  }
+}

@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cantrip</title>
+  </head>
+  <body>
+    <main class="palette" aria-label="Cantrip launcher">
+      <section class="composer">
+        <span class="sparkle" aria-hidden="true">✦</span>
+        <input
+          id="query"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Ask Cantrip or search apps"
+          placeholder="Ask, calculate, launch, or type ! for PowerShell…"
+        />
+        <button id="stop" class="icon-button hidden" type="button" title="Stop current run">■</button>
+        <kbd id="shortcut">Alt Space</kbd>
+      </section>
+
+      <aside id="shortcut-warning" class="shortcut-warning hidden" role="status">
+        <span id="shortcut-warning-text"></span>
+        <button id="retry-shortcut" type="button">Retry Alt+Space</button>
+      </aside>
+
+      <section id="attachments" class="attachments hidden" aria-label="Screen context"></section>
+
+      <section id="suggestions" class="suggestions" aria-live="polite"></section>
+
+      <section id="transcript" class="transcript hidden" aria-live="polite">
+        <header>
+          <span id="run-label">Cantrip</span>
+          <span id="run-state"></span>
+        </header>
+        <div id="output" class="markdown-output"></div>
+      </section>
+
+      <footer class="toolbar">
+        <button id="workdir" class="toolbar-button truncate" type="button" title="Choose working directory">
+          <span aria-hidden="true">⌂</span>
+          <span id="workdir-label">Documents</span>
+        </button>
+        <button
+          id="screen-context"
+          class="toolbar-button screen-context"
+          type="button"
+          title="Capture all displays for the next AI prompt"
+          aria-label="Capture screen context"
+        >▣</button>
+        <span class="spacer"></span>
+        <label class="actions-toggle" title="Permit the selected CLI to modify files and run tools">
+          <input id="allow-actions" type="checkbox" />
+          <span>Allow agent actions</span>
+        </label>
+        <select id="backend" aria-label="AI backend"></select>
+        <button
+          id="plugins-toggle"
+          class="toolbar-button settings-toggle"
+          type="button"
+          title="Plugins"
+          aria-label="Open plugins"
+        >◈</button>
+        <button
+          id="settings-toggle"
+          class="toolbar-button settings-toggle"
+          type="button"
+          title="Settings"
+          aria-label="Open settings"
+          aria-expanded="false"
+        >⚙</button>
+      </footer>
+
+      <aside id="settings-panel" class="settings-panel hidden" aria-label="Cantrip settings">
+        <header class="settings-header">
+          <div>
+            <strong>Settings</strong>
+            <small>Backend and launcher preferences</small>
+          </div>
+          <button id="settings-close" type="button" aria-label="Close settings">×</button>
+        </header>
+
+        <div class="settings-content">
+          <section class="settings-section">
+            <h2>AI backend</h2>
+            <label class="settings-field">
+              <span>Configure</span>
+              <select id="settings-backend"></select>
+            </label>
+            <label class="settings-field">
+              <span>Model</span>
+              <input
+                id="settings-model"
+                type="text"
+                list="settings-model-options"
+                autocomplete="off"
+                placeholder="CLI / account default"
+              />
+              <datalist id="settings-model-options"></datalist>
+              <small id="settings-model-help"></small>
+            </label>
+            <label class="settings-field">
+              <span>Reasoning effort</span>
+              <select id="settings-effort"></select>
+            </label>
+            <label class="settings-field">
+              <span>Context tier</span>
+              <select id="settings-context"></select>
+              <small id="settings-context-help"></small>
+            </label>
+            <button id="settings-reset-backend" class="secondary-button" type="button">
+              Reset backend defaults
+            </button>
+          </section>
+
+          <section class="settings-section">
+            <h2>General</h2>
+            <label class="settings-check">
+              <span>
+                <strong>Allow agent actions</strong>
+                <small>Permit file edits and command execution</small>
+              </span>
+              <input id="settings-allow-actions" type="checkbox" />
+            </label>
+            <label class="settings-check">
+              <span>
+                <strong>Start with Windows</strong>
+                <small>Keep Cantrip available in the tray</small>
+              </span>
+              <input id="settings-launch-at-login" type="checkbox" />
+            </label>
+            <label class="settings-field">
+              <span class="range-label">
+                Panel opacity
+                <output id="settings-opacity-value">100%</output>
+              </span>
+              <input id="settings-opacity" type="range" min="85" max="100" step="1" value="100" />
+            </label>
+            <p id="settings-error" class="settings-error hidden" role="alert"></p>
+          </section>
+
+          <section id="settings-plugins-section" class="settings-section">
+            <div class="section-heading">
+              <h2>Plugins</h2>
+              <span>
+                <button id="plugins-install-example" type="button">Example</button>
+                <button id="plugins-open-folder" type="button">Folder</button>
+                <button id="plugins-rescan" type="button">Rescan</button>
+              </span>
+            </div>
+            <div id="plugins-list" class="plugins-list"></div>
+          </section>
+
+          <section class="settings-section">
+            <h2>Updates</h2>
+            <div class="update-summary">
+              <strong id="update-version">Cantrip</strong>
+              <small id="update-status">Ready to check for updates.</small>
+            </div>
+            <progress id="update-progress" class="hidden" max="100" value="0"></progress>
+            <button id="update-action" class="secondary-button" type="button">
+              Check for updates
+            </button>
+          </section>
+
+          <section class="settings-section settings-about">
+            <h2>Keyboard</h2>
+            <p><kbd id="settings-shortcut">Alt Space</kbd> summon or dismiss</p>
+            <p><kbd>Ctrl Enter</kbd> force an AI query over app launch</p>
+            <p><kbd>Esc</kbd> close settings or dismiss Cantrip</p>
+          </section>
+        </div>
+      </aside>
+    </main>
+    <script type="module" src="/src/renderer/renderer.ts"></script>
+  </body>
+</html>

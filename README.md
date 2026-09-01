@@ -12,6 +12,14 @@ dashboards and MCP tools, and can even upgrade its own code.
 
 ![Cantrip icon](Resources/AppIcon.png)
 
+## Platforms
+
+- **macOS 14+** — the full Swift reference implementation documented below.
+- **Windows 10/11** — the Electron/TypeScript implementation in
+  [`windows/`](windows/), with Windows-native setup, feature status, and parity
+  tracking in [`windows/README.md`](windows/README.md) and
+  [`windows/PARITY.md`](windows/PARITY.md).
+
 ## What it does
 
 Press **⌥Space** and type. Instant, local, no AI round-trip:
@@ -130,11 +138,13 @@ Ask anything more and it goes to an AI agent that can genuinely act:
 
 ## Install
 
+### macOS
+
 Requirements: macOS 14+, Xcode Command Line Tools, and at least one backend
 (Claude Code, Copilot CLI, Codex CLI, or a local OpenAI-compatible server).
 
 ```sh
-git clone https://github.com/brihoang1995/cantrip.git ~/Coding/Cantrip
+git clone https://github.com/FlyingViet/cantrip.git ~/Coding/Cantrip
 cd ~/Coding/Cantrip
 ./install.sh
 ```
@@ -144,6 +154,25 @@ certificate (so macOS permission grants survive rebuilds — expect one
 password dialog), renders the app icon, builds, installs the `cantrip`
 CLI on your PATH, adds a `cantrip-rebuild` alias, and launches the app.
 A sparkle appears in your menu bar; press **⌥Space**.
+
+### Windows
+
+Download `Cantrip Setup <version>.exe` from
+[GitHub Releases](https://github.com/FlyingViet/cantrip/releases), or run from
+source with Node.js 20.19+:
+
+```powershell
+git clone https://github.com/FlyingViet/cantrip.git
+cd cantrip\windows
+npm ci
+npm run dev
+```
+
+Press **Alt+Space**. If another launcher such as PowerToys Run owns it, Cantrip
+reports the conflict and uses **Ctrl+Space** until the shortcut is released.
+The Windows app has its own settings, screen-context capture, Markdown output,
+sandboxed plugins, and in-app updater; remaining parity work is explicit in
+[`windows/PARITY.md`](windows/PARITY.md).
 
 ### Backends
 
