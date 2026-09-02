@@ -18,7 +18,14 @@ Native SwiftUI iOS client for a self-hosted **Hermes agent** (`~/.hermes`) — v
   as SSE. We send only the new turn; the gateway chains history server-side.
 - Headers: `Authorization: Bearer <API_SERVER_KEY>`, `X-Hermes-Session-Key`
   (stable per-install id → scopes long-term memory). The base URL is user-set in
-  Settings (the gateway's LAN address or an HTTPS tunnel) — nothing hardcoded.
+  Settings — nothing hardcoded.
+- Execution uses named gateway model routes. `copilot-coding` is the default;
+  `local-private` remains unavailable until explicitly advertised by
+  `/v1/models`. Never silently fall back from the private lane to Copilot.
+- Copilot and local lanes keep separate local transcripts,
+  `previous_response_id` chains, and long-term-memory session keys.
+- Non-loopback HTTP is rejected. Use HTTPS over a private network or
+  authenticated tunnel; loopback HTTP is only for simulator development.
 - SSE events drive the UI: `response.output_text.delta` → streamed text;
   `function_call` / `function_call_output` → inline tool/skill activity (the
   "see Hermes working" rows); `response.completed`/`failed` → end.

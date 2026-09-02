@@ -1,7 +1,9 @@
 import Foundation
 
 enum HermesError: LocalizedError {
-    case badResponse, http(Int)
+    case badResponse
+    case http(Int)
+
     var errorDescription: String? {
         switch self {
         case .badResponse: return "Unexpected response from the gateway."
@@ -20,21 +22,31 @@ struct HermesClient {
     let sessionKey: String
     let model: String
 
-    /// Quick reachability + auth check for the settings screen.
-    func health() async -> Bool {
-        var req = URLRequest(url: baseURL.appendingPathComponent("health"))
+    /// Authenticated probe used by Settings and execution-lane discovery.
+    /// `/health` is public, so it cannot verify the API key.
+    func models() async throws -> Set<String> {
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/models"))
         req.timeoutInterval = 8
-        if !apiKey.isEmpty { req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
-        guard let (_, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse else { return false }
-        return (200..<500).contains(http.statusCode)   // any HTTP answer = reachable
+        authorize(&req)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw HermesError.badResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw HermesError.http(http.statusCode)
+        }
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = object["data"] as? [[String: Any]] else {
+            throw HermesError.badResponse
+        }
+        return Set(entries.compactMap { $0["id"] as? String })
     }
 
     /// Fetch the slash-command + skill menu for "/" autocomplete suggestions.
     func commands() async -> [HermesCommand] {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/commands"))
         req.timeoutInterval = 12
-        if !apiKey.isEmpty { req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+        authorize(&req)
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -57,7 +69,7 @@ struct HermesClient {
                     req.timeoutInterval = 1800     // agentic runs can be long
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                    if !apiKey.isEmpty { req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+                    authorize(&req)
                     req.setValue(sessionKey, forHTTPHeaderField: "X-Hermes-Session-Key")
                     var body: [String: Any] = ["model": model, "input": input, "stream": true, "store": true]
                     // App-only formatting + verbosity directives (sent as Responses-API
@@ -114,6 +126,11 @@ struct HermesClient {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    private func authorize(_ request: inout URLRequest) {
+        guard !apiKey.isEmpty else { return }
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     }
 
     // MARK: - SSE event decoding (tolerant)

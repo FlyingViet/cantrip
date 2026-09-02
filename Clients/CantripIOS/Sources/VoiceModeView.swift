@@ -59,6 +59,7 @@ struct VoiceModeView: View {
                     Text(statusText).font(.callout.weight(.medium)).foregroundStyle(.white.opacity(0.85))
                         .animation(.default, value: statusText)
                     Spacer()
+                    ExecutionLaneBadge(lane: vm.activeLane)
                 }
 
                 // ── Your words: live while dictating, pinned while it answers ──

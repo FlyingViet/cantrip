@@ -16,7 +16,7 @@ A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.c
 ## How it works
 
 ```
-  iPhone (AgentGateway)  ──HTTPS, Bearer key──►  Cloudflare tunnel / LAN
+  iPhone (AgentGateway)  ──HTTPS + bearer key──►  private network / tunnel
                                                         │
                                                         ▼
                                        Hermes gateway api_server  (:8642)
@@ -36,7 +36,8 @@ The app speaks the gateway's **OpenAI-compatible API server** (`gateway/platform
 
 - A running **Hermes agent** (`~/.hermes`) on a machine you control (Mac, Linux box, etc.).
 - **Xcode 16+** on a Mac to build the app, and an **Apple ID** to run it on your device (a free account works for personal use).
-- *(Optional)* a domain + **Cloudflare Tunnel** (or any HTTPS reverse proxy) if you want to use it away from home.
+- An HTTPS path to the gateway, using a private network such as Tailscale/WireGuard
+  or an authenticated HTTPS tunnel.
 
 ---
 
@@ -60,7 +61,31 @@ API_SERVER_PORT=8642
 
 > 🔒 The adapter **refuses to bind to a non-localhost address without a key** — so `0.0.0.0` is safe: every `/v1/*` request requires the Bearer key (constant-time checked). Only `/health` is open.
 
-### 3. Restart the gateway
+### 3. Configure the Copilot execution lane
+
+The app requests named model routes so a future private-local conversation can
+never silently fall back to Copilot. Keep Copilot as the default for now:
+
+```yaml
+# ~/.hermes/config.yaml
+model:
+  default: copilot-shim
+  provider: ollama
+
+gateway:
+  api_server:
+    extra:
+      model_routes:
+        copilot-coding:
+          model: copilot-shim
+          provider: ollama
+          base_url: http://127.0.0.1:11437/v1
+```
+
+The **Private Local** lane remains disabled in the app until the gateway
+advertises a separate `local-private` route.
+
+### 4. Restart the gateway
 
 However you run Hermes — e.g. if it's a launchd service:
 
@@ -70,30 +95,33 @@ launchctl kickstart -k "gui/$(id -u)/ai.hermes.gateway"
 
 …or just `hermes gateway run --replace`. Channels (Telegram/Discord/etc.) reconnect in a few seconds.
 
-### 4. Verify
+### 5. Verify locally
 
 ```sh
 KEY=<your key>
-curl -s http://<gateway-host>:8642/health
-curl -s -X POST http://<gateway-host>:8642/v1/responses \
+curl -s http://127.0.0.1:8642/health
+curl -s -X POST http://127.0.0.1:8642/v1/responses \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"model":"hermes-agent","input":"say hi","stream":false}'
+  -d '{"model":"copilot-coding","input":"say hi","stream":false}'
 ```
 
 You should get `{"status":"ok",…}` and then a JSON reply. A request **without** the key must return **401**.
 
-### 5. (Optional) Use it anywhere — Cloudflare Tunnel
+### 6. Expose only the gateway over HTTPS
 
-For access off your LAN, expose `localhost:8642` over HTTPS, e.g. with `cloudflared`:
+Prefer a private Tailscale/WireGuard network. An authenticated Cloudflare
+Tunnel or another HTTPS reverse proxy also works:
 
 ```sh
 cloudflared tunnel route dns <tunnel-name> agent.yourdomain.com
 # map agent.yourdomain.com → http://localhost:8642 in your tunnel config, then run the tunnel
 ```
 
-The Bearer key still gates every request end-to-end. For belt-and-suspenders, put **Cloudflare Access** in front of the hostname too.
+The bearer key still gates every request. If the endpoint is publicly
+addressable, put an identity-aware access layer in front of it as defense in
+depth. Never expose the local-model or Copilot-shim ports directly.
 
-### 6. (Optional) Enable `/` suggestions + the Skills browser
+### 7. (Optional) Enable `/` suggestions + the Skills browser
 
 The app's command autocomplete and **Skills** list need a small extra endpoint. Add `GET /v1/commands` to `gateway/platforms/api_server.py` — register the route alongside the others and add this handler:
 
@@ -140,10 +168,22 @@ On first launch, open **Settings (⚙️)** and enter:
 
 | Field | Value |
 |---|---|
-| **Gateway URL** | `https://agent.yourdomain.com` (tunnel) or `http://<lan-ip>:8642` (home) |
+| **Gateway URL** | Your private or tunneled `https://` gateway URL |
 | **API key** | the `API_SERVER_KEY` from Part 1 |
 
-Tap **Test connection** → it should go green. Then talk or type.
+Tap **Test authenticated connection**. The app verifies the key against
+`/v1/models` and confirms that `copilot-coding` is advertised. A public
+`/health` response alone is not considered a successful test.
+
+## Execution lanes
+
+- **Copilot** is the default and uses the `copilot-coding` gateway route.
+- **Private Local** uses the future `local-private` route and is unavailable
+  until the gateway advertises it.
+- Each lane has independent on-device conversation history and a distinct
+  long-term-memory session key.
+- Every assistant reply is labeled **Coding · Copilot** or **Private · Local**.
+- Switching lanes never carries the other lane's `previous_response_id`.
 
 > Get the key back any time: `grep '^API_SERVER_KEY=' ~/.hermes/.env | cut -d= -f2-` (or copy it to your clipboard with `… | pbcopy` on macOS and paste via Universal Clipboard).
 
@@ -164,9 +204,10 @@ Once installed, **"Talk to Hermes"** appears in the Shortcuts app and is assigna
 | Symptom | Fix |
 |---|---|
 | **Test connection fails / 401** | Wrong key or URL. Re-copy `API_SERVER_KEY`; confirm the URL has no trailing slash. |
-| **Reply comes back empty** | Make sure the gateway returns `/v1/responses` SSE (try the curl in step 4). |
-| **Skills list empty** | You haven't added the `/v1/commands` endpoint (Part 1, step 6), or the gateway is unreachable. |
-| **Can't reach it on the phone** | `API_SERVER_HOST` must be `0.0.0.0` (not `127.0.0.1`), and the phone must reach the host (same LAN, or via the tunnel). |
+| **Reply comes back empty** | Make sure the gateway returns `/v1/responses` SSE (try the curl in step 5). |
+| **Skills list empty** | You haven't added the `/v1/commands` endpoint (Part 1, step 7), or the gateway is unreachable. |
+| **Can't reach it on the phone** | Confirm the HTTPS proxy/private-network endpoint reaches the gateway and that `/v1/models` accepts the API key. |
+| **Copilot route missing** | Add `gateway.api_server.extra.model_routes.copilot-coding` to `~/.hermes/config.yaml`, then restart the gateway. |
 
 ---
 
@@ -184,21 +225,25 @@ runs a Hermes agent at ~/.hermes. Do the following and report each result:
        API_SERVER_KEY=<the key>
        API_SERVER_HOST=0.0.0.0
        API_SERVER_PORT=8642
-3. Restart the Hermes gateway so the api_server picks up the new config (use the
+3. Back up ~/.hermes/config.yaml, keep the global default on copilot-shim, and
+   add gateway.api_server.extra.model_routes.copilot-coding pointing to
+   model copilot-shim at http://127.0.0.1:11437/v1.
+4. Restart the Hermes gateway so the api_server picks up the new config (use the
    launchd service `ai.hermes.gateway` if present, else `hermes gateway run --replace`).
    Wait until port 8642 is LISTENING.
-4. Verify: `curl -s http://127.0.0.1:8642/health` returns ok, a POST to
+5. Verify: `curl -s http://127.0.0.1:8642/health` returns ok, a POST to
    /v1/responses WITH the Bearer key streams a reply, and the SAME request
-   WITHOUT the key returns HTTP 401. Confirm all your Hermes channels reconnected.
-5. (Optional, for the app's "/" suggestions + Skills list) Add a `GET /v1/commands`
+   WITHOUT the key returns HTTP 401. Confirm `/v1/models` advertises
+   `copilot-coding` and all Hermes channels reconnected.
+6. (Optional, for the app's "/" suggestions + Skills list) Add a `GET /v1/commands`
    route + handler to gateway/platforms/api_server.py that returns
    telegram_menu_commands() as {command, description, kind} (kind="command" for
    names in telegram_bot_commands(), else "skill"). py_compile it, restart, verify.
-6. (Optional) If I want to use the app away from home, set up a Cloudflare tunnel
-   (or reverse proxy) from a hostname to http://127.0.0.1:8642 over HTTPS.
+7. Expose only the gateway through a private network or authenticated HTTPS
+   reverse proxy. Do not expose the model server or Copilot shim.
 
-Then tell me: the gateway URL to enter in the app (LAN IP:8642 or the tunnel
-hostname), and remind me the API key is in ~/.hermes/.env as API_SERVER_KEY.
+Then tell me the HTTPS gateway URL to enter in the app, and remind me the API
+key is in ~/.hermes/.env as API_SERVER_KEY.
 Treat the key like a password — it grants full agent (tool/shell) access.
 ```
 
@@ -208,4 +253,7 @@ Treat the key like a password — it grants full agent (tool/shell) access.
 
 - Every `/v1/*` endpoint requires the Bearer key (constant-time compared); only `/health` is open.
 - The key grants **full agent access** (it can run tools/shell) — treat it like a password. It lives in `~/.hermes/.env` on the server and the iOS **Keychain** on the phone, never in this repo.
-- Over a tunnel the key is HTTPS-encrypted; on a plain-HTTP LAN it crosses your local network in the clear — fine for a trusted home network.
+- Non-loopback plain HTTP is rejected by the app because it exposes both prompts
+  and the bearer key. Loopback HTTP remains available for simulator development.
+- Named execution routes prevent a missing private model from silently falling
+  back to the Copilot default.

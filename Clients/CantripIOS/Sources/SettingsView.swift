@@ -7,7 +7,6 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var key = ""
     @State private var testing = false
-    @State private var testResult: Bool?
     @AppStorage("hermes.voicePause") private var voicePause = 2.5
     @AppStorage("hermes.showSteps") private var showSteps = false
     @AppStorage("hermes.voiceEngine") private var voiceEngine = "system"
@@ -15,15 +14,8 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextField("https://your-gateway.example.com", text: $env.baseURL)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                    SecureField("API key (API_SERVER_KEY)", text: $key)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .onChange(of: key) { _, v in env.setAPIKey(v) }
-                    TextField("Model", text: $env.model).textInputAutocapitalization(.never).autocorrectionDisabled()
-                } header: { Text("Hermes Gateway") }
-                footer: { Text("The gateway's OpenAI-compatible API server (/v1/responses). Use the LAN address at home or the Cloudflare tunnel hostname anywhere.") }
+                executionSection
+                gatewaySection
 
                 Section {
                     NavigationLink {
@@ -63,30 +55,117 @@ struct SettingsView: View {
                 } header: { Text("Replies") }
                 footer: { Text("Off: just the final answer. On: stream the agent's step-by-step narration as it works. Tool activity still shows either way.") }
 
-                Section {
-                    Button { Task { await test() } } label: {
-                        HStack {
-                            Text("Test connection")
-                            Spacer()
-                            if testing { ProgressView() }
-                            else if let ok = testResult {
-                                Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                    .foregroundStyle(ok ? .green : .red)
-                            }
-                        }
-                    }
-                }
+                connectionSection
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .onAppear { key = env.apiKey }
+            .task { await env.refreshGateway() }
+        }
+    }
+
+    private var executionSection: some View {
+        Section {
+            ForEach(ExecutionLane.allCases) { lane in
+                Button {
+                    env.select(lane)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: lane.systemImage)
+                            .foregroundStyle(lane.isPrivate ? .green : .orange)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(lane.title)
+                                .foregroundStyle(.primary)
+                            Text(
+                                lane == .local && !env.isAvailable(.local)
+                                    ? "Unavailable until the local-private gateway route is configured."
+                                    : lane.detail
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if lane == env.executionLane {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!env.isAvailable(lane))
+            }
+        } header: {
+            Text("Execution")
+        } footer: {
+            Text("Each lane keeps separate conversation history. Copilot remains the default until a private local route is explicitly advertised by the gateway.")
+        }
+    }
+
+    private var gatewaySection: some View {
+        Section {
+            TextField("https://your-private-gateway.example.com", text: $env.baseURL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .onChange(of: env.baseURL) { _, _ in env.invalidateGateway() }
+            SecureField("API key (API_SERVER_KEY)", text: $key)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .onChange(of: key) { _, value in env.setAPIKey(value) }
+            if let issue = env.transportIssue {
+                Label(issue, systemImage: "exclamationmark.shield.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else {
+                Label("Encrypted transport", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+        } header: {
+            Text("Hermes Gateway")
+        } footer: {
+            Text("Use HTTPS through a private network or authenticated tunnel. Plain LAN HTTP is blocked because it exposes prompts and the API key.")
+        }
+    }
+
+    private var connectionSection: some View {
+        Section {
+            Button {
+                Task { await test() }
+            } label: {
+                HStack {
+                    Text("Test authenticated connection")
+                    Spacer()
+                    connectionIndicator
+                }
+            }
+            if case .failed(let message) = env.connectionState {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var connectionIndicator: some View {
+        if testing || env.connectionState == .checking {
+            ProgressView()
+        } else if env.connectionState == .connected {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        } else if case .failed = env.connectionState {
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.red)
         }
     }
 
     private func test() async {
-        testing = true; testResult = nil
-        testResult = await env.client?.health() ?? false
+        testing = true
+        await env.refreshGateway()
         testing = false
     }
 

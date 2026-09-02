@@ -1,5 +1,53 @@
 import Foundation
 
+enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
+    case copilot
+    case local
+
+    static let defaultLane: ExecutionLane = .copilot
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .copilot: "Copilot"
+        case .local: "Private Local"
+        }
+    }
+
+    var badgeTitle: String {
+        switch self {
+        case .copilot: "Coding · Copilot"
+        case .local: "Private · Local"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .copilot:
+            "Uses the Copilot shim. Requests may leave your Mac."
+        case .local:
+            "Uses the explicitly configured local-private inference route."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .copilot: "chevron.left.forwardslash.chevron.right"
+        case .local: "lock.shield.fill"
+        }
+    }
+
+    var modelAlias: String {
+        switch self {
+        case .copilot: "copilot-coding"
+        case .local: "local-private"
+        }
+    }
+
+    var isPrivate: Bool { self == .local }
+}
+
 /// One turn in the conversation. Assistant turns accumulate streamed text plus
 /// any tool activity the agent performed (rendered inline, Claude-Code style).
 /// `Codable` so the transcript survives app restarts.
@@ -11,6 +59,7 @@ struct ChatTurn: Identifiable, Codable {
     var actions: [ChatAction] = []
     var streaming = false
     var error: String?
+    var executionLane: ExecutionLane?
 
     enum Role: String, Codable { case user, assistant }
 

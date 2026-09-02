@@ -6,6 +6,7 @@ final class ChatViewModel: ObservableObject {
     @Published var turns: [ChatTurn] = []
     @Published var sending = false
     private(set) var previousResponseId: String?
+    private(set) var activeLane: ExecutionLane
 
     let env: HermesEnv
     let voice: VoiceController
@@ -14,7 +15,8 @@ final class ChatViewModel: ObservableObject {
     init(env: HermesEnv, voice: VoiceController) {
         self.env = env
         self.voice = voice
-        let snap = ChatStore.load()           // restore the prior transcript
+        activeLane = env.executionLane
+        let snap = ChatStore.load(for: activeLane)
         self.turns = snap.turns
         self.previousResponseId = snap.previousResponseId
         voice.onFinalTranscript = { [weak self] text in self?.send(text, spoken: true) }
@@ -25,10 +27,27 @@ final class ChatViewModel: ObservableObject {
         // Paused → drop every send (text, voice, skill, button) so we never fire
         // an unintentional request at the agent.
         guard !UserDefaults.standard.bool(forKey: "hermes.paused") else { return }
-        guard !text.isEmpty, let client = env.client, !sending else { return }
+        guard !text.isEmpty, !sending else { return }
+        let lane = activeLane
+        guard lane != .local || env.isAvailable(.local) else {
+            appendLocalFailure(
+                "The local-private route is not configured on the gateway.",
+                for: text,
+                lane: lane
+            )
+            return
+        }
+        guard let client = env.client(for: lane) else {
+            appendLocalFailure(
+                env.configurationIssue ?? "Configure the gateway before sending.",
+                for: text,
+                lane: lane
+            )
+            return
+        }
 
-        turns.append(ChatTurn(role: .user, text: text))
-        turns.append(ChatTurn(role: .assistant, streaming: true))
+        turns.append(ChatTurn(role: .user, text: text, executionLane: lane))
+        turns.append(ChatTurn(role: .assistant, streaming: true, executionLane: lane))
         let idx = turns.count - 1
         sending = true
 
@@ -62,12 +81,36 @@ final class ChatViewModel: ObservableObject {
                 turns[idx].error = "No response received (the gateway answered but sent no text)."
             }
             turns[idx].actions = ChatTurn.parseActions(turns[idx].text)            // confirmation buttons
-            ChatStore.save(turns: turns, previousResponseId: previousResponseId)   // persist the transcript
+            ChatStore.save(
+                turns: turns,
+                previousResponseId: previousResponseId,
+                for: lane
+            )
             if speakReply {
                 if turns[idx].error == nil { speakReady(at: idx, force: true) }     // flush the final tail
                 voice.finishReply()
             }
         }
+    }
+
+    private func appendLocalFailure(
+        _ message: String,
+        for input: String,
+        lane: ExecutionLane
+    ) {
+        turns.append(ChatTurn(role: .user, text: input, executionLane: lane))
+        turns.append(
+            ChatTurn(
+                role: .assistant,
+                error: message,
+                executionLane: lane
+            )
+        )
+        ChatStore.save(
+            turns: turns,
+            previousResponseId: previousResponseId,
+            for: lane
+        )
     }
 
     /// Barge-in: stop the in-flight reply + its speech and start listening for a
@@ -198,7 +241,20 @@ final class ChatViewModel: ObservableObject {
         stop()
         turns.removeAll()
         previousResponseId = nil
-        ChatStore.clear()
+        ChatStore.clear(for: activeLane)
+    }
+
+    func switchLane(to lane: ExecutionLane) {
+        guard lane != activeLane, !sending else { return }
+        ChatStore.save(
+            turns: turns,
+            previousResponseId: previousResponseId,
+            for: activeLane
+        )
+        activeLane = lane
+        let snapshot = ChatStore.load(for: lane)
+        turns = snapshot.turns
+        previousResponseId = snapshot.previousResponseId
     }
 
     private func apply(_ ev: HermesStreamEvent, at idx: Int) {
@@ -238,7 +294,7 @@ final class ChatViewModel: ObservableObject {
 }
 
 struct ChatView: View {
-    private let env: HermesEnv
+    @ObservedObject private var env: HermesEnv
     @StateObject private var voice: VoiceController
     @StateObject private var vm: ChatViewModel
     @ObservedObject private var router = AppRouter.shared
@@ -260,7 +316,7 @@ struct ChatView: View {
     }
 
     init(env: HermesEnv) {
-        self.env = env
+        _env = ObservedObject(wrappedValue: env)
         let v = VoiceController()
         _voice = StateObject(wrappedValue: v)
         _vm = StateObject(wrappedValue: ChatViewModel(env: env, voice: v))
@@ -275,6 +331,14 @@ struct ChatView: View {
             .navigationTitle("Hermes")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text("Hermes")
+                            .font(.headline)
+                        ExecutionLanePicker(env: env)
+                            .disabled(vm.sending)
+                    }
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         Button { paused.toggle() } label: {
@@ -298,6 +362,7 @@ struct ChatView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                        .disabled(vm.sending)
                 }
             }
             .sheet(isPresented: $showSettings, onDismiss: reloadCommands) { SettingsView(env: env, voice: voice) }
@@ -326,7 +391,14 @@ struct ChatView: View {
                 showVoiceMode = false
             }
         }
-        .task { reloadCommands() }
+        .onChange(of: env.executionLane) { _, lane in
+            vm.switchLane(to: lane)
+            reloadCommands()
+        }
+        .task {
+            await env.refreshGateway()
+            reloadCommands()
+        }
     }
 
     /// Load the command/skill menu for "/" suggestions. Only overwrites on a
@@ -476,6 +548,49 @@ struct ChatView: View {
     }
 }
 
+struct ExecutionLaneBadge: View {
+    let lane: ExecutionLane
+
+    var body: some View {
+        Label(lane.badgeTitle, systemImage: lane.systemImage)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(lane.isPrivate ? Color.green : Color.orange)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                (lane.isPrivate ? Color.green : Color.orange).opacity(0.12),
+                in: Capsule()
+            )
+    }
+}
+
+private struct ExecutionLanePicker: View {
+    @ObservedObject var env: HermesEnv
+
+    var body: some View {
+        Menu {
+            ForEach(ExecutionLane.allCases) { lane in
+                Button {
+                    env.select(lane)
+                } label: {
+                    Label(
+                        lane == .local && !env.isAvailable(.local)
+                            ? "\(lane.title) · Not configured"
+                            : lane.title,
+                        systemImage: lane == env.executionLane
+                            ? "checkmark.circle.fill"
+                            : lane.systemImage
+                    )
+                }
+                .disabled(!env.isAvailable(lane))
+            }
+        } label: {
+            ExecutionLaneBadge(lane: env.executionLane)
+        }
+        .menuIndicator(.hidden)
+    }
+}
+
 /// A pulsing brain for the "thinking" state (the agent is working) — used instead
 /// of the waveform, which is for listening/speaking (audio).
 struct ThinkingView: View {
@@ -544,6 +659,9 @@ private struct TurnView: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {
+                if let lane = turn.executionLane {
+                    ExecutionLaneBadge(lane: lane)
+                }
                 ForEach(turn.tools) { ToolRow(tool: $0) }
                 if !turn.text.isEmpty {
                     Markdown(turn.text)            // full GFM: tables, lists, code blocks, headings
