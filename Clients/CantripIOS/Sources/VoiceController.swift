@@ -105,9 +105,24 @@ final class VoiceController: NSObject, ObservableObject {
             for: AVAudioSession.routeChangeNotification
         )
         .receive(on: RunLoop.main)
-        .sink { [weak self] _ in
+        .sink { [weak self] notification in
             guard self?.isListening == true else { return }
-            self?.stopListening(finalize: false)
+            guard let rawReason = notification.userInfo?[
+                AVAudioSessionRouteChangeReasonKey
+            ] as? UInt,
+            let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason)
+            else {
+                return
+            }
+            switch reason {
+            case .oldDeviceUnavailable, .noSuitableRouteForCategory:
+                self?.recognitionError = "The microphone route changed. Tap the mic to continue."
+                self?.stopListening(finalize: false)
+            default:
+                // Activating .playAndRecord emits category/override changes.
+                // Those are expected and must not tear down our own input tap.
+                break
+            }
         }
         .store(in: &cancellables)
     }
@@ -272,6 +287,9 @@ final class VoiceController: NSObject, ObservableObject {
                 try prepareListeningAudioSession()
                 let input = engine.inputNode
                 let format = input.outputFormat(forBus: 0)
+                guard format.sampleRate > 0, format.channelCount > 0 else {
+                    throw VoiceInputError.invalidMicrophoneFormat
+                }
                 input.removeTap(onBus: 0)
                 let continuation = streamPair.continuation
                 input.installTap(
@@ -406,6 +424,7 @@ final class VoiceController: NSObject, ObservableObject {
 
     private func prepareListeningAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
         try session.setCategory(
             .playAndRecord,
             mode: .spokenAudio,
@@ -556,6 +575,14 @@ final class VoiceController: NSObject, ObservableObject {
 
     private func resumeIfHandsFree() {
         if handsFree { startListening() }
+    }
+}
+
+private enum VoiceInputError: LocalizedError {
+    case invalidMicrophoneFormat
+
+    var errorDescription: String? {
+        "The microphone returned an invalid audio format."
     }
 }
 

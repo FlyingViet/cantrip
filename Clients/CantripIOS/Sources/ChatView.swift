@@ -713,6 +713,7 @@ struct ChatView: View {
     @StateObject private var vm: ChatViewModel
     @ObservedObject private var router = AppRouter.shared
     @State private var input = ""
+    @State private var composerRevision = UUID()
     @State private var showSettings = false
     @State private var showVoiceMode = false
     @State private var showSkills = false
@@ -888,6 +889,7 @@ struct ChatView: View {
                     .buttonStyle(.bordered).help("Voice mode")
 
                 TextField("Message Hermes…", text: $input, axis: .vertical)
+                    .id(composerRevision)
                     .textFieldStyle(.plain).lineLimit(1...5)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Color(.secondarySystemBackground), in: Capsule())
@@ -988,8 +990,10 @@ struct ChatView: View {
     }
 
     private func sendText() {
-        let text = input
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
         input = ""
+        composerRevision = UUID()
         vm.send(text)
     }
 }
