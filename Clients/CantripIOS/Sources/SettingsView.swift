@@ -7,6 +7,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var key = ""
     @State private var testing = false
+    @ObservedObject private var parakeet = ParakeetSpeechEngine.shared
+    @AppStorage("hermes.sttEngine") private var sttEngine = SpeechInputEngine.parakeet.rawValue
     @AppStorage("hermes.voicePause") private var voicePause = 2.5
     @AppStorage("hermes.showSteps") private var showSteps = false
     @AppStorage("hermes.voiceEngine") private var voiceEngine = "system"
@@ -16,6 +18,7 @@ struct SettingsView: View {
             Form {
                 executionSection
                 gatewaySection
+                speechRecognitionSection
 
                 Section {
                     NavigationLink {
@@ -128,6 +131,84 @@ struct SettingsView: View {
             Text("Hermes Gateway")
         } footer: {
             Text("Use HTTPS through a private network or authenticated tunnel. Plain LAN HTTP is blocked because it exposes prompts and the API key.")
+        }
+    }
+
+    private var speechRecognitionSection: some View {
+        Section {
+            Picker("Engine", selection: $sttEngine) {
+                ForEach(SpeechInputEngine.allCases) { engine in
+                    Text(engine.title).tag(engine.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: sttEngine) { _, _ in
+                voice.requestAuth()
+            }
+
+            if sttEngine == SpeechInputEngine.parakeet.rawValue {
+                parakeetStateRow
+                switch parakeet.state {
+                case .idle, .cached, .failed:
+                    Button {
+                        prepareParakeet()
+                    } label: {
+                        Label(
+                            parakeet.isPrepared
+                                ? "Load Parakeet"
+                                : "Download Parakeet",
+                            systemImage: "waveform.badge.magnifyingglass"
+                        )
+                    }
+                case .preparing, .ready:
+                    EmptyView()
+                }
+            }
+        } header: {
+            Text("Speech Recognition")
+        } footer: {
+            Text("Parakeet EOU runs entirely on this device and is the recommended low-latency engine. Apple Speech remains available as a no-download fallback.")
+        }
+    }
+
+    @ViewBuilder
+    private var parakeetStateRow: some View {
+        switch parakeet.state {
+        case .idle:
+            Label("Model not downloaded", systemImage: "arrow.down.circle")
+                .foregroundStyle(.secondary)
+        case .cached:
+            Label("Model downloaded", systemImage: "checkmark.circle")
+                .foregroundStyle(.green)
+        case .ready:
+            Label("Parakeet ready", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .preparing(let progress, let phase):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(phase)
+                    Spacer()
+                    Text("\(Int(progress * 100))%")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                ProgressView(value: progress)
+            }
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    private func prepareParakeet() {
+        Task {
+            do {
+                await QwenVoiceEngine.shared.releaseMemory()
+                try await parakeet.prepareIfNeeded()
+            } catch {
+                // The engine publishes the actionable error in its state row.
+            }
         }
     }
 

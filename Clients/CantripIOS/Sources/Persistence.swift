@@ -1,12 +1,15 @@
 import Foundation
 
-/// Local persistence for the conversation so the transcript survives app
-/// restarts — reopening shows the prior history (and keeps chaining the same
-/// server-side session via `previousResponseId`) instead of a blank chat.
+/// Per-lane conversation persistence, including enough run identity to reconnect
+/// after iOS suspends or terminates the app.
 enum ChatStore {
     struct Snapshot: Codable {
         var turns: [ChatTurn]
         var previousResponseId: String?
+        var conversationID: String?
+        var gatewayIdentity: String?
+        var pendingRun: PendingHermesRun?
+        var activeRun: ActiveHermesRun?
     }
 
     private static var directoryURL: URL {
@@ -25,14 +28,26 @@ enum ChatStore {
 
     static func save(
         turns: [ChatTurn],
-        previousResponseId: String?,
+        conversationID: String,
+        gatewayIdentity: String?,
+        pendingRun: PendingHermesRun?,
+        activeRun: ActiveHermesRun?,
         for lane: ExecutionLane
     ) {
-        // Don't persist an in-flight (streaming) turn; mark it settled.
-        let cleaned = turns.filter { !$0.streaming || !$0.isEmpty }.map { t -> ChatTurn in
-            var c = t; c.streaming = false; return c
+        let liveAssistantID = activeRun?.assistantTurnID ?? pendingRun?.assistantTurnID
+        let cleaned = turns.map { turn -> ChatTurn in
+            var copy = turn
+            copy.streaming = turn.id == liveAssistantID
+            return copy
         }
-        let snap = Snapshot(turns: cleaned, previousResponseId: previousResponseId)
+        let snap = Snapshot(
+            turns: cleaned,
+            previousResponseId: nil,
+            conversationID: conversationID,
+            gatewayIdentity: gatewayIdentity,
+            pendingRun: pendingRun,
+            activeRun: activeRun
+        )
         guard let data = try? JSONEncoder().encode(snap) else { return }
         try? data.write(to: fileURL(for: lane), options: .atomic)
     }
@@ -41,7 +56,14 @@ enum ChatStore {
         migrateLegacyCopilotHistoryIfNeeded(for: lane)
         guard let data = try? Data(contentsOf: fileURL(for: lane)),
               let snap = try? JSONDecoder().decode(Snapshot.self, from: data) else {
-            return Snapshot(turns: [], previousResponseId: nil)
+            return Snapshot(
+                turns: [],
+                previousResponseId: nil,
+                conversationID: nil,
+                gatewayIdentity: nil,
+                pendingRun: nil,
+                activeRun: nil
+            )
         }
         return snap
     }
@@ -63,6 +85,8 @@ enum ChatStore {
         // The legacy response chain used the gateway's implicit global route.
         // Preserve the visible transcript, but start a new explicit Copilot chain.
         snapshot.previousResponseId = nil
+        snapshot.pendingRun = nil
+        snapshot.activeRun = nil
         guard let migrated = try? JSONEncoder().encode(snapshot) else { return }
         try? migrated.write(to: fileURL(for: lane), options: .atomic)
         try? FileManager.default.removeItem(at: legacyFileURL)

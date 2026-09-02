@@ -2,8 +2,10 @@
 
 A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.com/) — by **voice** and **chat** — instead of being stuck in Telegram or Discord.
 
-- 💬 **Streaming chat** with inline tool/skill activity (Claude-Code style)
-- 🎙️ **Voice mode** — full-screen, hands-free *listen → think → speak* loop, on-device speech (nothing leaves your phone)
+- 💬 **Durable streaming chat** — tasks continue on the Mac if iOS suspends or
+  closes; reopen the app to recover the current status and final response
+- 🎙️ **Voice mode** — local Parakeet EOU transcription plus a full-screen,
+  hands-free *listen → think → speak* loop
 - ⚡ **`/` autocomplete** + a **Skills browser** (tap a skill to run it)
 - 🔘 **Action Button / Shortcuts / Siri** — "Talk to Hermes" jumps straight into voice mode
 - 💾 **Persistent history** — reopen to your prior conversation
@@ -20,7 +22,9 @@ A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.c
                                                         │
                                                         ▼
                                        Hermes gateway api_server  (:8642)
-                                         POST /v1/responses  (SSE stream)
+                                         POST /v1/runs       (durable task)
+                                         GET  /v1/runs/:id   (recovery)
+                                         GET  /events        (live SSE)
                                          GET  /v1/commands    (optional)
                                                         │
                                                         ▼
@@ -100,9 +104,11 @@ launchctl kickstart -k "gui/$(id -u)/ai.hermes.gateway"
 ```sh
 KEY=<your key>
 curl -s http://127.0.0.1:8642/health
-curl -s -X POST http://127.0.0.1:8642/v1/responses \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"model":"copilot-coding","input":"say hi","stream":false}'
+curl -s -X POST http://127.0.0.1:8642/v1/runs \
+  -H "Authorization: Bearer $KEY" \
+  -H "Idempotency-Key: setup-check-1" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"copilot-coding","input":"say hi"}'
 ```
 
 You should get `{"status":"ok",…}` and then a JSON reply. A request **without** the key must return **401**.
@@ -183,7 +189,36 @@ Tap **Test authenticated connection**. The app verifies the key against
 - Each lane has independent on-device conversation history and a distinct
   long-term-memory session key.
 - Every assistant reply is labeled **Coding · Copilot** or **Private · Local**.
-- Switching lanes never carries the other lane's `previous_response_id`.
+- Switching lanes never carries the other lane's run or conversation history.
+
+## Durable tasks
+
+Every message creates a server-owned `/v1/runs` task. AgentGateway persists the
+run ID before observing its event stream. Closing, suspending, or force-quitting
+the app only disconnects the viewer; it does not call the gateway's stop
+endpoint.
+
+When the app opens again it polls the saved run ID and replaces any partial text
+with the gateway's authoritative final output. If iOS loses the initial `202`
+response, the app safely retries with the same `Idempotency-Key`, and the gateway
+returns the original run instead of executing the request twice. Results remain
+recoverable for 24 hours. Only tapping **Stop** or using voice barge-in
+explicitly interrupts a run.
+
+Tool approvals are also recoverable: a run waiting for approval stores the
+redacted command and available choices in its pollable status.
+
+## Local speech recognition
+
+**Parakeet EOU 120M** is the default speech-input engine. It downloads its
+Core ML assets from FluidAudio's Hugging Face repository on first use, then
+transcribes microphone audio entirely on the device. Settings shows download
+and compilation progress.
+
+Choose **Apple Speech** in Settings for the no-download fallback. The fallback
+sets `requiresOnDeviceRecognition`, so microphone audio is never intentionally
+sent to Apple's servers. Parakeet and Qwen release their loaded models before
+the other engine starts, limiting peak memory on iPhone.
 
 > Get the key back any time: `grep '^API_SERVER_KEY=' ~/.hermes/.env | cut -d= -f2-` (or copy it to your clipboard with `… | pbcopy` on macOS and paste via Universal Clipboard).
 
@@ -204,10 +239,11 @@ Once installed, **"Talk to Hermes"** appears in the Shortcuts app and is assigna
 | Symptom | Fix |
 |---|---|
 | **Test connection fails / 401** | Wrong key or URL. Re-copy `API_SERVER_KEY`; confirm the URL has no trailing slash. |
-| **Reply comes back empty** | Make sure the gateway returns `/v1/responses` SSE (try the curl in step 5). |
+| **Task never updates** | Reopen the app and confirm `GET /v1/runs/{id}` is reachable. The run continues on the Mac even when its SSE viewer disconnects. |
 | **Skills list empty** | You haven't added the `/v1/commands` endpoint (Part 1, step 7), or the gateway is unreachable. |
 | **Can't reach it on the phone** | Confirm the HTTPS proxy/private-network endpoint reaches the gateway and that `/v1/models` accepts the API key. |
 | **Copilot route missing** | Add `gateway.api_server.extra.model_routes.copilot-coding` to `~/.hermes/config.yaml`, then restart the gateway. |
+| **Parakeet cannot start** | Open Settings → Speech Recognition and retry model preparation, or select the fully on-device Apple Speech fallback. |
 
 ---
 
@@ -231,10 +267,10 @@ runs a Hermes agent at ~/.hermes. Do the following and report each result:
 4. Restart the Hermes gateway so the api_server picks up the new config (use the
    launchd service `ai.hermes.gateway` if present, else `hermes gateway run --replace`).
    Wait until port 8642 is LISTENING.
-5. Verify: `curl -s http://127.0.0.1:8642/health` returns ok, a POST to
-   /v1/responses WITH the Bearer key streams a reply, and the SAME request
-   WITHOUT the key returns HTTP 401. Confirm `/v1/models` advertises
-   `copilot-coding` and all Hermes channels reconnected.
+5. Verify: `curl -s http://127.0.0.1:8642/health` returns ok, an authenticated
+   POST to /v1/runs returns a run_id, replaying the same Idempotency-Key returns
+   that same run_id, and a request WITHOUT the key returns HTTP 401. Confirm
+   `/v1/models` advertises `copilot-coding` and all Hermes channels reconnected.
 6. (Optional, for the app's "/" suggestions + Skills list) Add a `GET /v1/commands`
    route + handler to gateway/platforms/api_server.py that returns
    telegram_menu_commands() as {command, description, kind} (kind="command" for
@@ -257,3 +293,5 @@ Treat the key like a password — it grants full agent (tool/shell) access.
   and the bearer key. Loopback HTTP remains available for simulator development.
 - Named execution routes prevent a missing private model from silently falling
   back to the Copilot default.
+- Durable run creation requires authentication and an app-generated
+  `Idempotency-Key`; replay never starts a second side-effecting task.

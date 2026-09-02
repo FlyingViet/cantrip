@@ -77,6 +77,20 @@ final class HermesEnv: ObservableObject {
 
     var isConfigured: Bool { configurationIssue == nil }
 
+    var gatewayIdentity: String? {
+        guard let url = URL(string: trimmed(baseURL)),
+              let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased() else {
+            return nil
+        }
+        let defaultPort = scheme == "https" ? 443 : 80
+        var path = url.path
+        while path.count > 1, path.hasSuffix("/") {
+            path.removeLast()
+        }
+        return "\(scheme)://\(host):\(url.port ?? defaultPort)\(path)"
+    }
+
     var client: HermesClient? {
         client(for: executionLane)
     }

@@ -48,6 +48,71 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
     var isPrivate: Bool { self == .local }
 }
 
+enum SpeechInputEngine: String, CaseIterable, Identifiable {
+    case apple
+    case parakeet
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .apple: "Apple Speech"
+        case .parakeet: "Parakeet"
+        }
+    }
+}
+
+struct HermesConversationMessage: Codable, Equatable, Sendable {
+    let role: String
+    let content: String
+}
+
+struct PendingHermesRun: Codable, Equatable, Sendable {
+    let idempotencyKey: String
+    let assistantTurnID: UUID
+    let input: String
+    let history: [HermesConversationMessage]
+    let sessionID: String
+    let executionLane: ExecutionLane
+    let showSteps: Bool
+    let startedAt: Date
+}
+
+struct ActiveHermesRun: Codable, Equatable, Sendable {
+    let runID: String
+    let idempotencyKey: String
+    let assistantTurnID: UUID
+    let sessionID: String
+    let executionLane: ExecutionLane
+    let startedAt: Date
+}
+
+struct HermesRunApproval: Codable, Equatable, Sendable {
+    let command: String?
+    let description: String?
+    let choices: [String]
+}
+
+struct HermesRunStatus: Decodable, Equatable, Sendable {
+    let runID: String
+    let status: String
+    let output: String?
+    let error: String?
+    let approval: HermesRunApproval?
+
+    enum CodingKeys: String, CodingKey {
+        case runID = "run_id"
+        case status
+        case output
+        case error
+        case approval
+    }
+
+    var isTerminal: Bool {
+        ["completed", "failed", "cancelled"].contains(status)
+    }
+}
+
 /// One turn in the conversation. Assistant turns accumulate streamed text plus
 /// any tool activity the agent performed (rendered inline, Claude-Code style).
 /// `Codable` so the transcript survives app restarts.
@@ -60,6 +125,7 @@ struct ChatTurn: Identifiable, Codable {
     var streaming = false
     var error: String?
     var executionLane: ExecutionLane?
+    var approval: HermesRunApproval?
 
     enum Role: String, Codable { case user, assistant }
 
@@ -130,15 +196,12 @@ struct HermesCommand: Identifiable, Hashable {
 }
 
 enum HermesStreamEvent {
-    case responseCreated(id: String)
     case textDelta(String)
-    /// The complete assistant text from the terminal `response.completed` event —
-    /// used to fill the bubble if streamed deltas were missed (CRLF / shape drift).
     case finalText(String)
     case toolStarted(id: String, name: String)
-    case toolArgumentsDelta(id: String, delta: String)
     case toolCompleted(id: String)
-    case toolOutput(id: String, output: String)
+    case approvalRequested(HermesRunApproval)
+    case approvalResponded
     case completed
     case failed(String)
 }

@@ -11,7 +11,12 @@ struct VoiceModeView: View {
 
     private var statusText: String {
         if voice.isSpeaking { return "Speaking — tap to interrupt" }
-        if vm.sending { return "Thinking — tap to interrupt" }
+        if voice.isPreparingRecognition {
+            return voice.recognitionStatusText ?? "Preparing speech recognition"
+        }
+        if vm.sending {
+            return vm.runStatusText ?? "Thinking — tap to interrupt"
+        }
         if voice.isListening { return "Listening" }
         return "Tap the mic to talk"
     }
@@ -104,7 +109,7 @@ struct VoiceModeView: View {
                         .frame(width: 76, height: 76)
                         .background(voice.isListening ? Color.red : Color.white.opacity(0.16), in: Circle())
                 }
-                .disabled(!voice.authorized)
+                .disabled(!voice.authorized || voice.isPreparingRecognition)
             }
             .padding()
         }

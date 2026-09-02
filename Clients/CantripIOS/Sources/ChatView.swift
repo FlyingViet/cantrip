@@ -5,21 +5,43 @@ import MarkdownUI
 final class ChatViewModel: ObservableObject {
     @Published var turns: [ChatTurn] = []
     @Published var sending = false
-    private(set) var previousResponseId: String?
+    @Published private(set) var runStatusText: String?
     private(set) var activeLane: ExecutionLane
 
     let env: HermesEnv
     let voice: VoiceController
-    private var streamTask: Task<Void, Never>?
+    private var conversationID: String
+    private var gatewayIdentity: String?
+    private var pendingRun: PendingHermesRun?
+    private var activeRun: ActiveHermesRun?
+    private var observationTask: Task<Void, Never>?
 
     init(env: HermesEnv, voice: VoiceController) {
         self.env = env
         self.voice = voice
         activeLane = env.executionLane
-        let snap = ChatStore.load(for: activeLane)
-        self.turns = snap.turns
-        self.previousResponseId = snap.previousResponseId
+        let snapshot = ChatStore.load(for: activeLane)
+        turns = snapshot.turns
+        gatewayIdentity = env.gatewayIdentity
+        if let storedGateway = snapshot.gatewayIdentity,
+           storedGateway != env.gatewayIdentity {
+            turns = []
+            conversationID = UUID().uuidString
+            pendingRun = nil
+            activeRun = nil
+        } else {
+            conversationID = snapshot.conversationID ?? UUID().uuidString
+            pendingRun = snapshot.pendingRun
+            activeRun = snapshot.activeRun
+        }
+        sending = pendingRun != nil || activeRun != nil
+        if sending {
+            runStatusText = "Reconnecting to the run on your Mac…"
+        }
         voice.onFinalTranscript = { [weak self] text in self?.send(text, spoken: true) }
+        Task { [weak self] in
+            self?.resumeActiveRun()
+        }
     }
 
     func send(_ raw: String, spoken: Bool = false) {
@@ -47,49 +69,40 @@ final class ChatViewModel: ObservableObject {
         }
 
         turns.append(ChatTurn(role: .user, text: text, executionLane: lane))
-        turns.append(ChatTurn(role: .assistant, streaming: true, executionLane: lane))
-        let idx = turns.count - 1
+        let assistant = ChatTurn(
+            role: .assistant,
+            streaming: true,
+            executionLane: lane
+        )
+        turns.append(assistant)
+        let pending = PendingHermesRun(
+            idempotencyKey: "ios-\(UUID().uuidString)",
+            assistantTurnID: assistant.id,
+            input: text,
+            history: conversationHistory(),
+            sessionID: conversationID,
+            executionLane: lane,
+            showSteps: UserDefaults.standard.bool(forKey: "hermes.showSteps"),
+            startedAt: Date()
+        )
+        pendingRun = pending
         sending = true
+        runStatusText = "Sending to your Mac…"
+        persist()
 
         // Speak the reply aloud sentence-by-sentence as it streams when this turn
         // was voice-initiated or we're in hands-free voice mode.
         let speakReply = spoken || voice.handsFree
-        let showSteps = UserDefaults.standard.bool(forKey: "hermes.showSteps")
         spokenCount = 0
         speechTableHeader = nil
         if speakReply { voice.beginReply() }
 
-        streamTask = Task {
-            do {
-                for try await ev in client.stream(input: text, previousResponseId: previousResponseId, showSteps: showSteps) {
-                    apply(ev, at: idx)
-                    if speakReply { speakReady(at: idx) }   // speak each completed sentence as it lands
-                }
-            } catch is CancellationError {
-            } catch {
-                turns[idx].error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                // A 404 means a stale server-side chain — drop it so the next turn starts fresh.
-                if let he = error as? HermesError, case .http(404) = he { previousResponseId = nil }
-            }
-            // Interrupted (barge-in) — the caller already stopped speech + is listening.
-            if Task.isCancelled { return }
-            turns[idx].streaming = false
-            sending = false
-            // Never leave a silently-empty bubble — surface that the turn produced
-            // nothing so it's debuggable instead of looking like a hang.
-            if turns[idx].text.isEmpty, turns[idx].tools.isEmpty, turns[idx].error == nil {
-                turns[idx].error = "No response received (the gateway answered but sent no text)."
-            }
-            turns[idx].actions = ChatTurn.parseActions(turns[idx].text)            // confirmation buttons
-            ChatStore.save(
-                turns: turns,
-                previousResponseId: previousResponseId,
-                for: lane
+        startObservation {
+            await self.dispatchAndObserve(
+                pending,
+                client: client,
+                speakReply: speakReply
             )
-            if speakReply {
-                if turns[idx].error == nil { speakReady(at: idx, force: true) }     // flush the final tail
-                voice.finishReply()
-            }
         }
     }
 
@@ -108,9 +121,206 @@ final class ChatViewModel: ObservableObject {
         )
         ChatStore.save(
             turns: turns,
-            previousResponseId: previousResponseId,
+            conversationID: conversationID,
+            gatewayIdentity: gatewayIdentity,
+            pendingRun: pendingRun,
+            activeRun: activeRun,
             for: lane
         )
+    }
+
+    func resumeActiveRun() {
+        guard observationTask == nil else { return }
+        guard let resumableLane = activeRun?.executionLane
+                ?? pendingRun?.executionLane else {
+            return
+        }
+        guard let client = env.client(for: resumableLane) else {
+            runStatusText = env.configurationIssue
+                ?? "Configure the gateway to reconnect to this run."
+            return
+        }
+        if let pendingRun {
+            startObservation {
+                await self.dispatchAndObserve(
+                    pendingRun,
+                    client: client,
+                    speakReply: false
+                )
+            }
+        } else if let activeRun {
+            startObservation {
+                await self.observe(
+                    activeRun,
+                    client: client,
+                    speakReply: false,
+                    triesEventStream: false
+                )
+            }
+        }
+    }
+
+    private func startObservation(
+        _ operation: @escaping @MainActor () async -> Void
+    ) {
+        guard observationTask == nil else { return }
+        observationTask = Task { [weak self] in
+            await operation()
+            self?.observationTask = nil
+        }
+    }
+
+    private func dispatchAndObserve(
+        _ pending: PendingHermesRun,
+        client: HermesClient,
+        speakReply: Bool
+    ) async {
+        while !Task.isCancelled, pendingRun?.idempotencyKey == pending.idempotencyKey {
+            do {
+                let run = try await client.startRun(pending)
+                pendingRun = nil
+                activeRun = run
+                runStatusText = "Running on your Mac · safe to close the app"
+                persist()
+                await observe(
+                    run,
+                    client: client,
+                    speakReply: speakReply,
+                    triesEventStream: true
+                )
+                return
+            } catch is CancellationError {
+                return
+            } catch let error as HermesError {
+                if error.isRetryable {
+                    runStatusText = "Waiting to reconnect · the request will not be duplicated"
+                    try? await Task.sleep(for: .seconds(3))
+                    continue
+                }
+                finishRun(
+                    pending.assistantTurnID,
+                    error: error.localizedDescription,
+                    speakReply: speakReply
+                )
+                return
+            } catch {
+                runStatusText = "Waiting to reconnect · the request will not be duplicated"
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    private func observe(
+        _ run: ActiveHermesRun,
+        client: HermesClient,
+        speakReply: Bool,
+        triesEventStream: Bool
+    ) async {
+        if triesEventStream {
+            do {
+                var terminalError: String?
+                var completed = false
+                for try await event in client.streamRunEvents(run.runID) {
+                    switch event {
+                    case .completed:
+                        completed = true
+                    case .failed(let message):
+                        terminalError = message
+                    default:
+                        apply(event, to: run.assistantTurnID)
+                        if speakReply,
+                           let index = turnIndex(run.assistantTurnID) {
+                            speakReady(at: index)
+                        }
+                    }
+                    if completed || terminalError != nil {
+                        break
+                    }
+                }
+                if completed || terminalError != nil {
+                    finishRun(
+                        run.assistantTurnID,
+                        error: terminalError,
+                        speakReply: speakReply
+                    )
+                    return
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                // The gateway intentionally drops a disconnected event queue.
+                // Polling remains authoritative and never restarts the run.
+            }
+        }
+        await poll(run, client: client, speakReply: speakReply)
+    }
+
+    private func poll(
+        _ run: ActiveHermesRun,
+        client: HermesClient,
+        speakReply: Bool
+    ) async {
+        while !Task.isCancelled, activeRun?.runID == run.runID {
+            if Date().timeIntervalSince(run.startedAt) > 86_400 {
+                finishRun(
+                    run.assistantTurnID,
+                    error: "This run exceeded the 24-hour recovery window.",
+                    speakReply: speakReply
+                )
+                return
+            }
+            do {
+                let status = try await client.runStatus(run.runID)
+                let hadApproval = turnIndex(run.assistantTurnID).map {
+                    turns[$0].approval != nil
+                } ?? false
+                if let approval = status.approval,
+                   status.status == "waiting_for_approval" {
+                    setApproval(approval, on: run.assistantTurnID)
+                    runStatusText = "Waiting for your approval"
+                    persist()
+                } else {
+                    clearApproval(on: run.assistantTurnID)
+                    runStatusText = Self.statusText(for: status.status)
+                    if hadApproval {
+                        persist()
+                    }
+                }
+                switch status.status {
+                case "completed":
+                    finishRun(
+                        run.assistantTurnID,
+                        output: status.output,
+                        speakReply: speakReply
+                    )
+                    return
+                case "failed", "cancelled":
+                    finishRun(
+                        run.assistantTurnID,
+                        error: status.error ?? "Run \(status.status).",
+                        speakReply: speakReply
+                    )
+                    return
+                default:
+                    break
+                }
+            } catch is CancellationError {
+                return
+            } catch let error as HermesError {
+                if case .http(404) = error {
+                    finishRun(
+                        run.assistantTurnID,
+                        error: "The saved run result expired before it could be recovered.",
+                        speakReply: speakReply
+                    )
+                    return
+                }
+                runStatusText = "Reconnecting · the run is still on your Mac"
+            } catch {
+                runStatusText = "Reconnecting · the run is still on your Mac"
+            }
+            try? await Task.sleep(for: .seconds(3))
+        }
     }
 
     /// Barge-in: stop the in-flight reply + its speech and start listening for a
@@ -119,6 +329,138 @@ final class ChatViewModel: ObservableObject {
         stop()
         voice.stopSpeaking()
         voice.startListening()
+    }
+
+    func approveRun(_ choice: String, for turnID: UUID) {
+        guard let run = activeRun,
+              run.assistantTurnID == turnID,
+              let client = env.client(for: run.executionLane) else {
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await client.approveRun(run.runID, choice: choice)
+                self.clearApproval(on: turnID)
+                if let index = self.turnIndex(turnID) {
+                    self.turns[index].error = nil
+                }
+                self.runStatusText = "Running on your Mac · safe to close the app"
+                self.persist()
+            } catch {
+                if let index = self.turnIndex(turnID) {
+                    self.turns[index].error = (error as? LocalizedError)?
+                        .errorDescription ?? error.localizedDescription
+                }
+                self.persist()
+            }
+        }
+    }
+
+    private func persist() {
+        ChatStore.save(
+            turns: turns,
+            conversationID: conversationID,
+            gatewayIdentity: gatewayIdentity,
+            pendingRun: pendingRun,
+            activeRun: activeRun,
+            for: activeLane
+        )
+    }
+
+    private func conversationHistory(
+        maxCharacters: Int = 24_000,
+        maxPairs: Int = 12
+    ) -> [HermesConversationMessage] {
+        var pairs: [(String, String)] = []
+        var pendingUser: String?
+        for turn in turns {
+            switch turn.role {
+            case .user:
+                pendingUser = turn.text
+            case .assistant:
+                guard let user = pendingUser,
+                      turn.error == nil,
+                      !turn.text.isEmpty else {
+                    pendingUser = nil
+                    continue
+                }
+                pairs.append((user, turn.text))
+                pendingUser = nil
+            }
+        }
+
+        guard let anchor = pairs.first else { return [] }
+        var selected: [(String, String)] = []
+        var characters = anchor.0.count + anchor.1.count
+        for pair in pairs.dropFirst().suffix(max(0, maxPairs - 1)).reversed() {
+            let pairCount = pair.0.count + pair.1.count
+            if characters + pairCount > maxCharacters {
+                break
+            }
+            selected.append(pair)
+            characters += pairCount
+        }
+        let boundedPairs = [anchor] + selected.reversed()
+        return boundedPairs.flatMap { pair in
+            [
+                HermesConversationMessage(role: "user", content: pair.0),
+                HermesConversationMessage(role: "assistant", content: pair.1),
+            ]
+        }
+    }
+
+    private func finishRun(
+        _ assistantTurnID: UUID,
+        output: String? = nil,
+        error: String? = nil,
+        speakReply: Bool
+    ) {
+        guard let index = turnIndex(assistantTurnID) else { return }
+        if let output, !output.isEmpty {
+            turns[index].text = output
+        }
+        turns[index].streaming = false
+        turns[index].approval = nil
+        turns[index].error = error
+        if turns[index].text.isEmpty, error == nil {
+            turns[index].error = "The run completed without a response."
+        }
+        turns[index].actions = ChatTurn.parseActions(turns[index].text)
+        pendingRun = nil
+        activeRun = nil
+        sending = false
+        runStatusText = nil
+        persist()
+        if speakReply {
+            if turns[index].error == nil {
+                speakReady(at: index, force: true)
+            }
+            voice.finishReply()
+        }
+    }
+
+    private func setApproval(_ approval: HermesRunApproval, on turnID: UUID) {
+        guard let index = turnIndex(turnID) else { return }
+        turns[index].approval = approval
+    }
+
+    private func clearApproval(on turnID: UUID) {
+        guard let index = turnIndex(turnID) else { return }
+        turns[index].approval = nil
+    }
+
+    private func turnIndex(_ id: UUID) -> Int? {
+        turns.firstIndex { $0.id == id }
+    }
+
+    private static func statusText(for status: String) -> String {
+        switch status {
+        case "queued": "Queued on your Mac · safe to close the app"
+        case "waiting_for_approval": "Waiting for your approval"
+        case "stopping": "Stopping on your Mac…"
+        default: "Running on your Mac · safe to close the app"
+        }
     }
 
     // How many characters of the current reply have already been queued for
@@ -232,68 +574,140 @@ final class ChatViewModel: ObservableObject {
     }
 
     func stop() {
-        streamTask?.cancel()
-        sending = false
-        if let i = turns.indices.last { turns[i].streaming = false }
+        guard sending else { return }
+        observationTask?.cancel()
+        observationTask = nil
+        runStatusText = "Stopping on your Mac…"
+        let savedActiveRun = activeRun
+        let savedPendingRun = pendingRun
+        let lane = savedActiveRun?.executionLane
+            ?? savedPendingRun?.executionLane
+            ?? activeLane
+        guard let client = env.client(for: lane) else {
+            runStatusText = "Could not reach the gateway to stop this run."
+            return
+        }
+        startObservation { [self] in
+            do {
+                let run: ActiveHermesRun
+                if let savedActiveRun {
+                    run = savedActiveRun
+                } else if let savedPendingRun {
+                    run = try await client.startRun(savedPendingRun)
+                    pendingRun = nil
+                    activeRun = run
+                    persist()
+                } else {
+                    sending = false
+                    runStatusText = nil
+                    return
+                }
+                try await client.stopRun(run.runID)
+                runStatusText = "Stopping on your Mac…"
+                await poll(run, client: client, speakReply: false)
+            } catch {
+                runStatusText = "Stop failed; reconnecting to the run on your Mac…"
+                if let savedActiveRun {
+                    await observe(
+                        savedActiveRun,
+                        client: client,
+                        speakReply: false,
+                        triesEventStream: false
+                    )
+                } else if let savedPendingRun {
+                    await dispatchAndObserve(
+                        savedPendingRun,
+                        client: client,
+                        speakReply: false
+                    )
+                }
+            }
+        }
     }
 
     func newConversation() {
-        stop()
+        guard !sending else { return }
         turns.removeAll()
-        previousResponseId = nil
+        conversationID = UUID().uuidString
+        pendingRun = nil
+        activeRun = nil
         ChatStore.clear(for: activeLane)
     }
 
     func switchLane(to lane: ExecutionLane) {
         guard lane != activeLane, !sending else { return }
-        ChatStore.save(
-            turns: turns,
-            previousResponseId: previousResponseId,
-            for: activeLane
-        )
+        persist()
         activeLane = lane
         let snapshot = ChatStore.load(for: lane)
         turns = snapshot.turns
-        previousResponseId = snapshot.previousResponseId
-    }
-
-    private func apply(_ ev: HermesStreamEvent, at idx: Int) {
-        guard turns.indices.contains(idx) else { return }
-        switch ev {
-        case .responseCreated(let id):
-            previousResponseId = id
-        case .textDelta(let t):
-            turns[idx].text += t
-        case .finalText(let t):
-            if turns[idx].text.isEmpty { turns[idx].text = t }   // fallback if deltas were missed
-        case .toolStarted(let id, let name):
-            turns[idx].tools.append(ToolActivity(id: id, name: name))
-        case .toolArgumentsDelta(let id, let delta):
-            if let i = toolIndex(id, in: idx) { turns[idx].tools[i].arguments += delta }
-        case .toolCompleted(let id):
-            if let i = toolIndex(id, in: idx) { turns[idx].tools[i].done = true }
-        case .toolOutput(let id, let output):
-            if let i = toolIndex(id, in: idx, awaitingOutput: true) {
-                turns[idx].tools[i].output = output
-                turns[idx].tools[i].done = true
-            }
-        case .completed:
-            break
-        case .failed(let m):
-            turns[idx].error = m
+        gatewayIdentity = env.gatewayIdentity
+        if let storedGateway = snapshot.gatewayIdentity,
+           storedGateway != gatewayIdentity {
+            turns = []
+            conversationID = UUID().uuidString
+            pendingRun = nil
+            activeRun = nil
+        } else {
+            conversationID = snapshot.conversationID ?? UUID().uuidString
+            pendingRun = snapshot.pendingRun
+            activeRun = snapshot.activeRun
+        }
+        sending = pendingRun != nil || activeRun != nil
+        if sending {
+            runStatusText = "Reconnecting to the run on your Mac…"
+            resumeActiveRun()
+        } else {
+            runStatusText = nil
         }
     }
 
-    /// Match a tool event to its activity by id, falling back to the most recent
-    /// tool still awaiting output (the Responses API uses different ids for the
-    /// call item vs its output, so exact-id matches don't always line up).
-    private func toolIndex(_ id: String, in idx: Int, awaitingOutput: Bool = false) -> Int? {
+    func gatewayDidChange() {
+        guard !sending, gatewayIdentity != env.gatewayIdentity else { return }
+        turns.removeAll()
+        conversationID = UUID().uuidString
+        gatewayIdentity = env.gatewayIdentity
+        pendingRun = nil
+        activeRun = nil
+        runStatusText = nil
+        ChatStore.clear(for: activeLane)
+    }
+
+    private func apply(_ ev: HermesStreamEvent, to turnID: UUID) {
+        guard let index = turnIndex(turnID) else { return }
+        switch ev {
+        case .textDelta(let t):
+            turns[index].text += t
+        case .finalText(let t):
+            turns[index].text = t
+        case .toolStarted(let id, let name):
+            turns[index].tools.append(ToolActivity(id: id, name: name))
+        case .toolCompleted(let id):
+            if let i = toolIndex(id, in: index) {
+                turns[index].tools[i].done = true
+            }
+        case .approvalRequested(let approval):
+            turns[index].approval = approval
+            persist()
+        case .approvalResponded:
+            turns[index].approval = nil
+            persist()
+        case .completed:
+            break
+        case .failed(let m):
+            turns[index].error = m
+        }
+    }
+
+    /// Run events currently omit call IDs on completion, so fall back to the
+    /// most recent unfinished tool when no exact ID exists.
+    private func toolIndex(_ id: String, in idx: Int) -> Int? {
         if let i = turns[idx].tools.firstIndex(where: { $0.id == id }) { return i }
-        return turns[idx].tools.lastIndex(where: { awaitingOutput ? $0.output == nil : true })
+        return turns[idx].tools.lastIndex(where: { !$0.done })
     }
 }
 
 struct ChatView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var env: HermesEnv
     @StateObject private var voice: VoiceController
     @StateObject private var vm: ChatViewModel
@@ -354,7 +768,7 @@ struct ChatView: View {
                         Button(role: .destructive) { vm.newConversation() } label: {
                             Label("New conversation", systemImage: "square.and.pencil")
                         }
-                        .disabled(vm.turns.isEmpty)
+                        .disabled(vm.turns.isEmpty || vm.sending)
                     } label: {
                         Image(systemName: paused ? "pause.circle.fill" : "line.3.horizontal")
                             .foregroundStyle(paused ? Color.orange : Color.accentColor)
@@ -365,7 +779,15 @@ struct ChatView: View {
                         .disabled(vm.sending)
                 }
             }
-            .sheet(isPresented: $showSettings, onDismiss: reloadCommands) { SettingsView(env: env, voice: voice) }
+            .sheet(
+                isPresented: $showSettings,
+                onDismiss: {
+                    vm.gatewayDidChange()
+                    reloadCommands()
+                }
+            ) {
+                SettingsView(env: env, voice: voice)
+            }
             .sheet(isPresented: $showSkills) {
                 SkillsView(client: env.client) { skill in
                     showSkills = false
@@ -395,6 +817,11 @@ struct ChatView: View {
             vm.switchLane(to: lane)
             reloadCommands()
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                vm.resumeActiveRun()
+            }
+        }
         .task {
             await env.refreshGateway()
             reloadCommands()
@@ -414,7 +841,12 @@ struct ChatView: View {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     if vm.turns.isEmpty { emptyState }
                     ForEach(vm.turns) { turn in
-                        TurnView(turn: turn) { vm.send($0.command) }.id(turn.id)
+                        TurnView(
+                            turn: turn,
+                            onAction: { vm.send($0.command) },
+                            onApproval: { vm.approveRun($0, for: turn.id) }
+                        )
+                        .id(turn.id)
                     }
                 }
                 .padding()
@@ -518,13 +950,25 @@ struct ChatView: View {
 
     /// Animated waveform status — "talking back" while listening, replying, or speaking.
     @ViewBuilder private var voiceStatus: some View {
-        if voice.isListening {
+        if voice.isPreparingRecognition {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(voice.recognitionStatusText ?? "Preparing speech recognition…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+        } else if voice.isListening {
             HStack(spacing: 10) {
                 WaveformView(active: true, color: .red)
                 Text(voice.partial.isEmpty ? "Listening…" : voice.partial)
                     .font(.callout).foregroundStyle(.secondary).lineLimit(2)
                 Spacer(minLength: 0)
             }
+        } else if let error = voice.recognitionError {
+            Label(error, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.red)
         } else if voice.isSpeaking {
             HStack(spacing: 10) {
                 WaveformView(active: true, color: .accentColor)
@@ -535,7 +979,9 @@ struct ChatView: View {
         } else if vm.sending {
             HStack(spacing: 10) {
                 ThinkingView(size: 22, color: .accentColor)
-                Text("Hermes is thinking…").font(.callout).foregroundStyle(.secondary)
+                Text(vm.runStatusText ?? "Hermes is thinking…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
         }
@@ -634,6 +1080,7 @@ struct WaveformView: View {
 private struct TurnView: View {
     let turn: ChatTurn
     var onAction: (ChatAction) -> Void = { _ in }
+    var onApproval: (String) -> Void = { _ in }
 
     /// Parse inline markdown (bold/italic/code/links) while preserving the
     /// newlines streamed from the agent; falls back to plain text on a partial
@@ -677,6 +1124,39 @@ private struct TurnView: View {
                     }
                     .padding(.top, 4)
                 }
+                if let approval = turn.approval {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            approval.description ?? "This action needs approval.",
+                            systemImage: "exclamationmark.shield"
+                        )
+                        .font(.caption)
+                        if let command = approval.command, !command.isEmpty {
+                            Text(command)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(6)
+                        }
+                        HStack(spacing: 8) {
+                            ForEach(approval.choices, id: \.self) { choice in
+                                Button(approvalTitle(choice)) {
+                                    onApproval(choice)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(
+                                    choice == "deny"
+                                        ? Color.secondary
+                                        : Color.accentColor
+                                )
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .background(
+                        Color.orange.opacity(0.1),
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
+                }
                 if turn.streaming && turn.text.isEmpty && turn.tools.isEmpty {
                     ThinkingView(size: 22, color: .gray)
                 }
@@ -686,6 +1166,16 @@ private struct TurnView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func approvalTitle(_ choice: String) -> String {
+        switch choice {
+        case "once": "Allow Once"
+        case "session": "Allow Session"
+        case "always": "Always Allow"
+        case "deny": "Deny"
+        default: choice.capitalized
         }
     }
 }

@@ -12,6 +12,7 @@ settings:
     DEVELOPMENT_TEAM: "9M3XNFG4J7"
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1,2"
+    "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
 packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
@@ -21,6 +22,9 @@ packages:
   Qwen3TTS:
     url: https://github.com/AtomGradient/swift-qwen3-tts
     branch: main
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    revision: 5c19d5e12320e22bbfb7a1877b089d2665a69add
 schemes:
   Hermes:
     build:
@@ -61,6 +65,7 @@ targets:
     dependencies:
       - package: MarkdownUI
       - package: Qwen3TTS
+      - package: FluidAudio
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.hermbot

@@ -24,6 +24,11 @@ env:
   TEAM_ID: "9M3XNFG4J7"
   # CFBundleVersion = 100000 + run number → strictly increasing (all ASC needs).
   BUILD_NUMBER_BASE: "100000"
+  # SwiftPM uses bare repositories for its cache. Keep this scoped to CI
+  # instead of relaxing the runner's global Git security setting.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.bareRepository
+  GIT_CONFIG_VALUE_0: all
 
 jobs:
   testflight:

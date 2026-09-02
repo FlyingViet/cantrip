@@ -3,15 +3,17 @@ import Speech
 import AVFoundation
 import Combine
 
-/// On-device speech: `SFSpeechRecognizer` for transcription + `AVSpeechSynthesizer`
-/// for replies. Drives a hands-free loop — listen → (silence) → hand the final
-/// transcript to the caller → speak the reply → listen again — with push-to-talk
-/// as the manual fallback. No audio leaves the device.
+/// Fully on-device voice loop. Parakeet EOU is the primary transcription engine;
+/// Apple Speech remains available as a fallback. Replies use Qwen or the selected
+/// system voice. Microphone audio never leaves the device.
 @MainActor
 final class VoiceController: NSObject, ObservableObject {
     @Published private(set) var isListening = false
     @Published private(set) var isSpeaking = false
     @Published private(set) var authorized = false
+    @Published private(set) var isPreparingRecognition = false
+    @Published private(set) var recognitionError: String?
+    @Published private(set) var recognitionStatusText: String?
     @Published var handsFree = false
     @Published var partial = ""
 
@@ -19,6 +21,8 @@ final class VoiceController: NSObject, ObservableObject {
     var onFinalTranscript: ((String) -> Void)?
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    private var microphoneAuthorized = false
+    private var appleSpeechAuthorized = false
     // lazy: ChatView's init eagerly builds throwaway VoiceControllers on every
     // parent re-render — allocating an AVAudioEngine + synthesizer per render
     // is wasted work that shows up as jank. Real instances pay on first use.
@@ -31,6 +35,12 @@ final class VoiceController: NSObject, ObservableObject {
         return s
     }()
     private var silenceTimer: Timer?
+    private var maximumListenTimer: Timer?
+    private var recognitionGeneration = UUID()
+    private var activeInputEngine: SpeechInputEngine?
+    private var parakeetContinuation: AsyncStream<AudioChunk>.Continuation?
+    private var parakeetProcessingTask: Task<Void, Never>?
+    private var parakeetStartTask: Task<Void, Never>?
     /// How long a pause must last before the utterance is treated as finished
     /// (and sent). Read live from UserDefaults so the Settings slider applies
     /// immediately; default is generous so catching your breath / thinking
@@ -41,6 +51,10 @@ final class VoiceController: NSObject, ObservableObject {
     }
 
     private var cancellables = Set<AnyCancellable>()
+
+    private struct AudioChunk: @unchecked Sendable {
+        let buffer: AVAudioPCMBuffer
+    }
 
     override init() {
         super.init()
@@ -61,12 +75,51 @@ final class VoiceController: NSObject, ObservableObject {
                 self.resumeIfHandsFree()
             }
             .store(in: &cancellables)
+
+        ParakeetSpeechEngine.shared.$state
+            .receive(on: RunLoop.main)
+            .sink { [weak self] state in
+                guard let self, self.isPreparingRecognition else { return }
+                switch state {
+                case .preparing(let progress, let phase):
+                    self.recognitionStatusText = "\(phase) · \(Int(progress * 100))%"
+                case .ready:
+                    self.recognitionStatusText = "Starting Parakeet…"
+                default:
+                    break
+                }
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(
+            for: AVAudioSession.interruptionNotification
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _ in
+            guard self?.isListening == true else { return }
+            self?.stopListening(finalize: false)
+        }
+        .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(
+            for: AVAudioSession.routeChangeNotification
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _ in
+            guard self?.isListening == true else { return }
+            self?.stopListening(finalize: false)
+        }
+        .store(in: &cancellables)
     }
 
     func requestAuth() {
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
             AVAudioApplication.requestRecordPermission { mic in
-                Task { @MainActor in self?.authorized = (status == .authorized && mic) }
+                Task { @MainActor in
+                    self?.appleSpeechAuthorized = status == .authorized
+                    self?.microphoneAuthorized = mic
+                    self?.refreshAuthorization()
+                }
             }
         }
     }
@@ -76,14 +129,33 @@ final class VoiceController: NSObject, ObservableObject {
     func toggleListening() { isListening ? stopListening(finalize: true) : startListening() }
 
     func startListening() {
-        guard authorized, !isListening, !isSpeaking, let recognizer, recognizer.isAvailable else { return }
+        refreshAuthorization()
+        guard authorized, !isListening, !isSpeaking, !isPreparingRecognition else {
+            return
+        }
+        recognitionError = nil
+        recognitionStatusText = nil
+        let generation = UUID()
+        recognitionGeneration = generation
+        switch selectedInputEngine {
+        case .apple:
+            startAppleListening(generation: generation)
+        case .parakeet:
+            startParakeetListening(generation: generation)
+        }
+    }
+
+    private func startAppleListening(generation: UUID) {
+        guard appleSpeechAuthorized, let recognizer, recognizer.isAvailable else {
+            recognitionError = "Apple Speech recognition is unavailable."
+            return
+        }
         do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.duckOthers, .defaultToSpeaker])
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            try prepareListeningAudioSession()
 
             let req = SFSpeechAudioBufferRecognitionRequest()
             req.shouldReportPartialResults = true
+            req.requiresOnDeviceRecognition = true
             request = req
 
             let input = engine.inputNode
@@ -97,9 +169,12 @@ final class VoiceController: NSObject, ObservableObject {
 
             partial = ""
             isListening = true
+            activeInputEngine = .apple
+            armMaximumListenTimer()
             task = recognizer.recognitionTask(with: req) { [weak self] result, error in
                 guard let self else { return }
                 Task { @MainActor in
+                    guard self.recognitionGeneration == generation else { return }
                     if let result {
                         // The recognizer streams duplicate (often empty) partials
                         // while waiting for speech — publishing each one is a
@@ -118,20 +193,188 @@ final class VoiceController: NSObject, ObservableObject {
                 }
             }
         } catch {
+            recognitionError = error.localizedDescription
             stopListening(finalize: false)
         }
     }
 
+    private func startParakeetListening(generation: UUID) {
+        if QwenVoiceEngine.shared.hasInFlightSynthesis,
+           appleSpeechAuthorized,
+           recognizer?.supportsOnDeviceRecognition == true {
+            QwenVoiceEngine.shared.stop()
+            Task {
+                await QwenVoiceEngine.shared.releaseMemory()
+            }
+            recognitionError = "Using on-device Apple Speech while the neural voice finishes stopping."
+            startAppleListening(generation: generation)
+            return
+        }
+        isPreparingRecognition = true
+        recognitionStatusText = "Preparing Parakeet…"
+        parakeetStartTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                await QwenVoiceEngine.shared.releaseMemory()
+                let speechEngine = ParakeetSpeechEngine.shared
+                try await speechEngine.startSession(
+                    silenceSeconds: silenceSeconds,
+                    onPartial: { [weak self] text in
+                        Task { @MainActor in
+                            guard let self,
+                                  self.recognitionGeneration == generation else {
+                                return
+                            }
+                            self.acceptPartial(text)
+                        }
+                    },
+                    onEndOfUtterance: { [weak self] _ in
+                        Task { @MainActor in
+                            guard let self,
+                                  self.recognitionGeneration == generation,
+                                  self.isListening else {
+                                return
+                            }
+                            self.stopListening(finalize: true)
+                        }
+                    }
+                )
+                guard recognitionGeneration == generation else {
+                    await speechEngine.cancelSession()
+                    isPreparingRecognition = false
+                    return
+                }
+
+                let streamPair = AsyncStream.makeStream(
+                    of: AudioChunk.self,
+                    bufferingPolicy: .bufferingNewest(32)
+                )
+                parakeetContinuation = streamPair.continuation
+                parakeetProcessingTask = Task { [weak self] in
+                    do {
+                        for await chunk in streamPair.stream {
+                            try Task.checkCancellation()
+                            try await speechEngine.process(chunk.buffer)
+                        }
+                    } catch is CancellationError {
+                    } catch {
+                        await MainActor.run {
+                            guard let self,
+                                  self.recognitionGeneration == generation else {
+                                return
+                            }
+                            self.recognitionError = error.localizedDescription
+                            self.stopListening(finalize: false)
+                        }
+                    }
+                }
+
+                try prepareListeningAudioSession()
+                let input = engine.inputNode
+                let format = input.outputFormat(forBus: 0)
+                input.removeTap(onBus: 0)
+                let continuation = streamPair.continuation
+                input.installTap(
+                    onBus: 0,
+                    bufferSize: 2048,
+                    format: format
+                ) { buffer, _ in
+                    guard let copy = Self.copyPCMBuffer(buffer) else { return }
+                    continuation.yield(AudioChunk(buffer: copy))
+                }
+                engine.prepare()
+                try engine.start()
+
+                partial = ""
+                isPreparingRecognition = false
+                recognitionStatusText = nil
+                isListening = true
+                activeInputEngine = .parakeet
+                armMaximumListenTimer()
+            } catch is CancellationError {
+                isPreparingRecognition = false
+                recognitionStatusText = nil
+            } catch {
+                await ParakeetSpeechEngine.shared.cancelSession()
+                isPreparingRecognition = false
+                recognitionStatusText = nil
+                if appleSpeechAuthorized,
+                   recognizer?.supportsOnDeviceRecognition == true {
+                    recognitionError = "Parakeet unavailable; using on-device Apple Speech."
+                    startAppleListening(generation: generation)
+                } else {
+                    recognitionError = "Parakeet could not start: \(error.localizedDescription)"
+                }
+                refreshAuthorization()
+            }
+        }
+    }
+
     func stopListening(finalize: Bool) {
-        silenceTimer?.invalidate(); silenceTimer = nil
-        if engine.isRunning { engine.stop(); engine.inputNode.removeTap(onBus: 0) }
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+        maximumListenTimer?.invalidate()
+        maximumListenTimer = nil
+        recognitionGeneration = UUID()
+        parakeetStartTask?.cancel()
+        parakeetStartTask = nil
+        if engine.isRunning { engine.stop() }
+        engine.inputNode.removeTap(onBus: 0)
         request?.endAudio()
         task?.cancel()
-        request = nil; task = nil
+        request = nil
+        task = nil
         isListening = false
-        let text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
-        partial = ""
-        if finalize, !text.isEmpty { onFinalTranscript?(text) }
+        isPreparingRecognition = false
+        recognitionStatusText = nil
+
+        let capturedPartial = partial.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let inputEngine = activeInputEngine
+        activeInputEngine = nil
+        if inputEngine == .parakeet {
+            let processingTask = parakeetProcessingTask
+            parakeetContinuation?.finish()
+            parakeetContinuation = nil
+            parakeetProcessingTask = nil
+            if finalize {
+                isPreparingRecognition = true
+                Task {
+                    _ = await processingTask?.result
+                    do {
+                        let final = try await ParakeetSpeechEngine.shared.finish()
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        partial = ""
+                        isPreparingRecognition = false
+                        recognitionStatusText = nil
+                        let transcript = final.isEmpty ? capturedPartial : final
+                        if !transcript.isEmpty {
+                            onFinalTranscript?(transcript)
+                        }
+                    } catch {
+                        partial = ""
+                        isPreparingRecognition = false
+                        recognitionStatusText = nil
+                        recognitionError = error.localizedDescription
+                        if !capturedPartial.isEmpty {
+                            onFinalTranscript?(capturedPartial)
+                        }
+                    }
+                }
+            } else {
+                processingTask?.cancel()
+                partial = ""
+                Task {
+                    await ParakeetSpeechEngine.shared.cancelSession()
+                }
+            }
+        } else {
+            partial = ""
+            if finalize, !capturedPartial.isEmpty {
+                onFinalTranscript?(capturedPartial)
+            }
+        }
     }
 
     /// Reset the "user stopped talking" timer on every new partial; when it fires,
@@ -141,6 +384,69 @@ final class VoiceController: NSObject, ObservableObject {
         silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceSeconds, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.stopListening(finalize: true) }
         }
+    }
+
+    private func acceptPartial(_ text: String) {
+        guard text != partial else { return }
+        partial = text
+        bumpSilenceTimer()
+    }
+
+    private func armMaximumListenTimer() {
+        maximumListenTimer?.invalidate()
+        maximumListenTimer = Timer.scheduledTimer(
+            withTimeInterval: 120,
+            repeats: false
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.stopListening(finalize: true)
+            }
+        }
+    }
+
+    private func prepareListeningAudioSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(
+            .playAndRecord,
+            mode: .spokenAudio,
+            options: [.duckOthers, .defaultToSpeaker]
+        )
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+    }
+
+    private var selectedInputEngine: SpeechInputEngine {
+        let raw = UserDefaults.standard.string(forKey: "hermes.sttEngine")
+        return SpeechInputEngine(rawValue: raw ?? "") ?? .parakeet
+    }
+
+    private func refreshAuthorization() {
+        authorized = microphoneAuthorized
+            && (selectedInputEngine == .parakeet || appleSpeechAuthorized)
+    }
+
+    nonisolated private static func copyPCMBuffer(
+        _ source: AVAudioPCMBuffer
+    ) -> AVAudioPCMBuffer? {
+        guard source.format.commonFormat == .pcmFormatFloat32,
+              !source.format.isInterleaved,
+              let sourceChannels = source.floatChannelData,
+              let copy = AVAudioPCMBuffer(
+                pcmFormat: source.format,
+                frameCapacity: source.frameLength
+              ),
+              let destinationChannels = copy.floatChannelData else {
+            return nil
+        }
+        copy.frameLength = source.frameLength
+        let byteCount = Int(source.frameLength) * MemoryLayout<Float>.size
+        for channel in 0..<Int(source.format.channelCount) {
+            memcpy(
+                destinationChannels[channel],
+                sourceChannels[channel],
+                byteCount
+            )
+        }
+        return copy
     }
 
     // MARK: Speaking
@@ -156,7 +462,12 @@ final class VoiceController: NSObject, ObservableObject {
     /// Begin a streamed spoken reply: chunks arrive via `enqueue`, end with `finishReply`.
     func beginReply() {
         replyStreamDone = false
-        if QwenVoiceEngine.routeActive { QwenVoiceEngine.shared.beginReply() }
+        if QwenVoiceEngine.routeActive {
+            Task {
+                await ParakeetSpeechEngine.shared.releaseMemory()
+            }
+            QwenVoiceEngine.shared.beginReply()
+        }
     }
 
     /// Speak the next chunk of a streamed reply (queued behind any in-flight chunk).

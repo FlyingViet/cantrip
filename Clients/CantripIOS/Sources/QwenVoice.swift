@@ -112,12 +112,17 @@ final class QwenVoiceEngine: ObservableObject {
     private let synth = QwenSynth()
     private var pendingTexts: [String] = []
     private var processing = false
+    private var activeSynthesisTasks = 0
     private var scheduledBuffers = 0
     private var replyDone = true
     /// Bumped by `stop()` so in-flight synthesis/buffer callbacks from a
     /// barged-in reply can't re-schedule audio or fire `onIdle`.
     private var generation = 0
     private var downloadTask: Task<Void, Never>?
+
+    var hasInFlightSynthesis: Bool {
+        activeSynthesisTasks > 0
+    }
 
     private let player = AVAudioPlayerNode()
     private let timePitch = AVAudioUnitTimePitch()   // speed without chipmunking
@@ -200,6 +205,11 @@ final class QwenVoiceEngine: ObservableObject {
         speaking = false
     }
 
+    func releaseMemory() async {
+        stop()
+        await synth.unload()
+    }
+
     /// AVAudioPlayerNode raises an UNCATCHABLE NSException (`required condition
     /// is false: _engine->IsRunning()`) if touched while its engine is stopped —
     /// and the engine stops itself whenever the mic flips the audio session.
@@ -240,9 +250,11 @@ final class QwenVoiceEngine: ObservableObject {
                 }
                 do {
                     let preset = Self.selectedPreset
-                    let samples = try await self.synth.synthesize(text, speaker: preset.speaker,
-                                                                  instruct: preset.instruct,
-                                                                  modelDir: Self.modelDir)
+                    let samples = try await self.synthesizeChunk(
+                        text,
+                        speaker: preset.speaker,
+                        instruct: preset.instruct
+                    )
                     if gen == self.generation { self.schedule(samples, gen: gen) }
                 } catch QwenVoiceError.insufficientMemory {
                     // The selected (bf16) model won't fit on this device. Stop
@@ -264,6 +276,21 @@ final class QwenVoiceEngine: ObservableObject {
                 self.checkIdle()
             }
         }
+    }
+
+    private func synthesizeChunk(
+        _ text: String,
+        speaker: String,
+        instruct: String?
+    ) async throws -> [Float] {
+        activeSynthesisTasks += 1
+        defer { activeSynthesisTasks -= 1 }
+        return try await synth.synthesize(
+            text,
+            speaker: speaker,
+            instruct: instruct,
+            modelDir: Self.modelDir
+        )
     }
 
     private func schedule(_ samples: [Float], gen: Int) {
