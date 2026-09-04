@@ -46,12 +46,14 @@ Remote-only controls above the transcript provide session selection, new
 sessions and conversations, queued/redirected/injected prompts, stop, and
 resume.
 
-Open the shared **Settings** screen and enter the HTTPS URL exposed by Cantrip's
-Tailscale Serve configuration plus its pairing token. The URL is stored in app
-preferences and the token is stored in Keychain. Plain HTTP is accepted only
-for localhost development. A green dot beside the session picker means the app
-has recently completed an authenticated request; gray means the connection is
-unconfigured, unavailable, unauthenticated, paused in the background, or stale.
+Open the shared **Settings** screen and enter Cantrip's pairing token. On the
+same local network, AgentGateway discovers Cantrip with Bonjour and connects
+directly using forward-secret TLS with the pairing token as a pre-shared key.
+You can also save Cantrip's Tailscale Serve HTTPS URL as a fallback for use away
+from home. The URL is stored in app preferences and the token is stored in
+Keychain. A green dot beside the session picker means the app has recently
+completed an authenticated request; gray means the connection is unconfigured,
+unavailable, unauthenticated, paused in the background, or stale.
 
 ---
 
