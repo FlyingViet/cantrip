@@ -58,11 +58,14 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   streaming-input mechanism Claude Code itself uses). Claude interrupts
   in-band to keep its process and session hot; stateless backends carry a
   summary of completed steps into the redirected turn.
-- **Runs recover instead of restarting** — if a backend fails or the
-  inactivity watchdog stops a run after it made progress, Cantrip resumes it
-  once automatically. A second interruption exposes a **Resume from where it
-  left off** button, preserves completed-step context, and holds queued
-  messages until the original task actually finishes.
+- **Durable, inspectable runs** — every run is an append-only JSONL event
+  journal under `~/.cache/Cantrip/runs`: prompt/mode/workdir, partial output,
+  tool state and diffs, approvals, queue mutations, retry attempts, usage,
+  cancellation, and terminal result. A crash ignores only a possible partial
+  tail record, restores the exact partial transcript and completed steps, and
+  exposes **Resume from where it left off** while preserving queued work.
+  Backend failures still get one bounded automatic resume. Use `cantrip runs`
+  to list runs or `cantrip runs <session-or-run-id>` to inspect the timeline.
 - **A real CLI** — `cat build.log | cantrip "why did this fail?"` streams
   answers to stdout through the running app, with `--backend`, your cwd as
   the working directory, and its own conversation continuity.

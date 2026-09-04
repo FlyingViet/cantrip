@@ -18,6 +18,7 @@ using the same operating-system API.
 | In-app updates | Implemented; release bootstrap required | GitHub Releases checks, download progress, restart-to-install, tray controls, and release workflow. Repository and signed releases must be published. |
 | File search | Missing | Use Windows Search API, with optional Everything integration. |
 | Session tabs and history | Missing | Persist per-tab backend, workdir, transcript, and open/archive state. |
+| Durable run journal | Missing | Port macOS's append-only event log, queue claims, partial-output/tool replay, retention, and run inspection to the main process. |
 | Backend continuity | Missing | Capture backend session IDs and use Claude/Copilot/Codex resume flags. |
 | Persistent terminal | Missing | Use ConPTY (`node-pty`) per session with state/history/Ctrl-C. |
 | Local OpenAI-compatible backend | Missing | Stream `/v1/chat/completions`; add approved shell/MCP tool loop. |

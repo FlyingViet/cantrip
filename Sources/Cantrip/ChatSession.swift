@@ -11,15 +11,23 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var thinking: String = ""
     /// Which model produced this (council mode) — shown as a caption.
     var author: String?
+    /// Associates persisted transcript messages with their durable run.
+    var runID: UUID?
     enum Role: String, Codable { case user, assistant, error }
     // Activities and thinking are runtime-only; transcripts skip them.
-    private enum CodingKeys: String, CodingKey { case id, role, text, author }
+    private enum CodingKeys: String, CodingKey { case id, role, text, author, runID }
 }
 
 struct QueuedPrompt: Identifiable, Equatable {
-    let id = UUID()
+    let id: UUID
     let text: String
     let includesAmbientContext: Bool
+
+    init(id: UUID = UUID(), text: String, includesAmbientContext: Bool) {
+        self.id = id
+        self.text = text
+        self.includesAmbientContext = includesAmbientContext
+    }
 }
 
 /// Drives the conversation: routes queries to the selected backend,
@@ -33,7 +41,7 @@ final class ChatSession: ObservableObject {
     /// Image file paths pasted (⌘V) to attach to the next query.
     @Published var attachments: [String] = []
     /// Messages queued while a response is streaming (run in order after).
-    @Published var queued: [QueuedPrompt] = []
+    @Published private(set) var queued: [QueuedPrompt] = []
     /// Text grabbed from another app via ⌥⇧Space, attached to next query.
     @Published var selectionContext: SelectionContext?
     /// Called when the whole run (including queue) completes; AppDelegate
@@ -51,6 +59,17 @@ final class ChatSession: ObservableObject {
     private var currentRunIncludesAmbientContext = true
     /// One free automatic resume per user-initiated run; manual after that.
     private var autoResumeSpent = false
+    /// Durable run identity survives backend retries and process restarts.
+    private var currentRunID: UUID?
+    private var lastJournalRunID: UUID?
+    private var currentRunStartedAt: Date?
+    private var currentRunMode: RunJournal.Mode?
+    private var currentRunBackend: BackendKind?
+    private var currentAttempt = 0
+    private var runningBackendKind: BackendKind?
+    private var activityStartedAt: [String: Date] = [:]
+    private var recordedArtifacts: Set<String> = []
+    private var journal: RunJournal?
     /// Council mode: fan each prompt out to several backends in parallel,
     /// then have a chair synthesize the joint answer.
     @Published var councilMode = false {
@@ -89,6 +108,11 @@ final class ChatSession: ObservableObject {
                 deleteTranscript()   // scrub anything already written
                 Log.write("session \(id.uuidString.prefix(8)): private mode ON")
             } else {
+                do {
+                    journal = try RunJournal(sessionID: id)
+                } catch {
+                    Log.write("run-journal: could not reopen \(id.uuidString.prefix(8)): \(error.localizedDescription)")
+                }
                 persistTranscript()
             }
         }
@@ -115,7 +139,7 @@ final class ChatSession: ObservableObject {
     }
 
     private var activeBackend: Backend {
-        backend(for: settings.backend)
+        backend(for: runningBackendKind ?? settings.backend)
     }
 
     private func backend(for kind: BackendKind) -> Backend {
@@ -134,9 +158,15 @@ final class ChatSession: ObservableObject {
             ?? AppSettings.shared.claudeWorkdir
         self.claudeCode = ClaudeCodeBackend(persistKey: "claudeSessionID-\(id.uuidString)")
         self.codex = CodexBackend(persistKey: "codexSessionID-\(id.uuidString)")
+        do {
+            journal = try RunJournal(sessionID: id)
+        } catch {
+            Log.write("run-journal: could not open \(id.uuidString.prefix(8)): \(error.localizedDescription)")
+        }
         shellObservation = shell.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
         loadTranscript()
+        restoreDurableState()
     }
 
     // MARK: - Transcript persistence (survives app restarts)
@@ -147,6 +177,12 @@ final class ChatSession: ObservableObject {
 
     func deleteTranscript() {
         try? FileManager.default.removeItem(at: transcriptURL)
+        do {
+            try journal?.remove()
+        } catch {
+            Log.write("run-journal: could not delete \(id.uuidString.prefix(8)): \(error.localizedDescription)")
+        }
+        journal = nil
         UserDefaults.standard.removeObject(forKey: "claudeSessionID-\(id.uuidString)")
         UserDefaults.standard.removeObject(forKey: "codexSessionID-\(id.uuidString)")
         UserDefaults.standard.removeObject(forKey: "workdir-\(id.uuidString)")
@@ -182,6 +218,407 @@ final class ChatSession: ObservableObject {
         Log.write("transcript: restored \(messages.count) messages (\(id.uuidString.prefix(8)))")
     }
 
+    // MARK: - Durable run state
+
+    private func appendRunEvent(_ event: RunJournal.Event, durable: Bool = false) {
+        guard !isPrivate else { return }
+        do {
+            try journal?.append(event, durable: durable)
+        } catch {
+            Log.write("run-journal: append failed for \(id.uuidString.prefix(8)): \(error.localizedDescription)")
+        }
+    }
+
+    @discardableResult
+    private func beginRun(
+        prompt: String,
+        mode: RunJournal.Mode,
+        backends: [String],
+        backend: BackendKind?,
+        includesAmbientContext: Bool,
+        queueItemID: UUID? = nil
+    ) -> UUID {
+        if currentRunID != nil {
+            cancelRun(reason: "superseded by a new run")
+        }
+        let runID = UUID()
+        currentRunID = runID
+        lastJournalRunID = runID
+        currentRunStartedAt = Date()
+        currentRunMode = mode
+        currentRunBackend = backend
+        currentAttempt = 1
+        activityStartedAt.removeAll()
+        recordedArtifacts.removeAll()
+
+        var event = RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: .turnStarted
+        )
+        event.prompt = prompt
+        event.mode = mode
+        event.backends = backends
+        event.backend = backend?.rawValue
+        event.workdir = workdir
+        event.includesAmbientContext = includesAmbientContext
+        event.queueItemID = queueItemID
+        appendRunEvent(event, durable: true)
+        return runID
+    }
+
+    private func recordResumeAttempt(reason: String) {
+        guard let runID = currentRunID else { return }
+        currentAttempt += 1
+        var event = RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: .attempt
+        )
+        event.attemptNumber = currentAttempt
+        event.reason = reason
+        appendRunEvent(event, durable: true)
+    }
+
+    @discardableResult
+    private func appendRunMessage(_ message: ChatMessage) -> UUID {
+        var message = message
+        message.runID = message.runID ?? currentRunID
+        messages.append(message)
+        guard let runID = message.runID else { return message.id }
+
+        var event = RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: .messageStarted
+        )
+        event.messageID = message.id
+        event.role = message.role.rawValue
+        event.text = message.text
+        event.author = message.author
+        appendRunEvent(event)
+        return message.id
+    }
+
+    private func recordOutput(
+        _ text: String,
+        messageID: UUID,
+        author: String? = nil
+    ) {
+        guard !text.isEmpty, let runID = currentRunID else { return }
+        var event = RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: .output
+        )
+        event.messageID = messageID
+        event.role = ChatMessage.Role.assistant.rawValue
+        event.text = text
+        event.author = author
+        event.channel = "text"
+        appendRunEvent(event)
+    }
+
+    private func recordActivity(_ activity: ToolActivity, messageID: UUID) {
+        guard let runID = currentRunID else { return }
+        let now = Date()
+        if activity.state == .running, activityStartedAt[activity.id] == nil {
+            activityStartedAt[activity.id] = now
+        }
+
+        var event = RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: .toolActivity
+        )
+        event.messageID = messageID
+        event.activity = journalActivity(activity)
+        if activity.state != .running, let started = activityStartedAt.removeValue(
+            forKey: activity.id
+        ) {
+            event.durationMS = max(0, Int(now.timeIntervalSince(started) * 1_000))
+        }
+        appendRunEvent(event, durable: activity.state != .running)
+
+        for change in activity.fileChanges {
+            let key = "\(messageID.uuidString)|\(activity.id)|\(change.id)"
+            guard recordedArtifacts.insert(key).inserted else { continue }
+            var artifactEvent = RunJournal.Event(
+                sessionID: id,
+                runID: runID,
+                kind: .artifact
+            )
+            artifactEvent.messageID = messageID
+            artifactEvent.artifact = RunJournal.Artifact(
+                path: change.path,
+                kind: "diff",
+                content: change.diff
+            )
+            appendRunEvent(artifactEvent)
+        }
+    }
+
+    private func recordUsage(_ usage: BackendUsage) {
+        if let backend = BackendKind(rawValue: usage.backend) {
+            UsageTracker.shared.recordCost(
+                backend: backend,
+                costUSD: usage.costUSD,
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens
+            )
+        }
+        guard let runID = currentRunID else { return }
+        var event = RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: .usage
+        )
+        event.usage = RunJournal.Usage(
+            backend: usage.backend,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            costUSD: usage.costUSD
+        )
+        appendRunEvent(event, durable: true)
+    }
+
+    private func recordApproval(_ approval: BackendApproval) {
+        guard let runID = currentRunID else { return }
+        var event = RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: .approval
+        )
+        event.tool = approval.tool
+        event.decision = approval.decision
+        event.decidedBy = approval.decidedBy
+        appendRunEvent(event, durable: true)
+    }
+
+    private func recordInterruption(_ reason: String) {
+        guard let runID = currentRunID else { return }
+        var event = RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: .interruption
+        )
+        event.attemptNumber = currentAttempt
+        event.reason = reason
+        appendRunEvent(event, durable: true)
+    }
+
+    private func completeRun(status: String, summary: String = "") {
+        guard let runID = currentRunID else { return }
+        var event = RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: .result
+        )
+        event.status = status
+        event.durationMS = currentRunStartedAt.map {
+            max(0, Int(Date().timeIntervalSince($0) * 1_000))
+        }
+        event.summaryDigest = RunJournal.digest(summary)
+        appendRunEvent(event, durable: true)
+        clearCurrentRun()
+    }
+
+    private func cancelRun(reason: String) {
+        guard let runID = currentRunID else { return }
+        var event = RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: .cancelled
+        )
+        event.reason = reason
+        event.durationMS = currentRunStartedAt.map {
+            max(0, Int(Date().timeIntervalSince($0) * 1_000))
+        }
+        appendRunEvent(event, durable: true)
+        clearCurrentRun()
+    }
+
+    private func clearCurrentRun() {
+        currentRunID = nil
+        currentRunStartedAt = nil
+        currentRunMode = nil
+        currentRunBackend = nil
+        currentAttempt = 0
+        runningBackendKind = nil
+        activityStartedAt.removeAll()
+        recordedArtifacts.removeAll()
+        currentRunPrompt = nil
+        canResume = false
+    }
+
+    private func enqueue(_ text: String, includesAmbientContext: Bool) {
+        let item = QueuedPrompt(
+            text: text,
+            includesAmbientContext: includesAmbientContext
+        )
+        queued.append(item)
+        recordQueueEvent(.queueAdded, item: item)
+    }
+
+    func removeQueued(at index: Int) {
+        guard queued.indices.contains(index) else { return }
+        let item = queued.remove(at: index)
+        recordQueueEvent(.queueRemoved, item: item)
+    }
+
+    private func removeQueued(_ item: QueuedPrompt) {
+        guard let index = queued.firstIndex(where: { $0.id == item.id }) else { return }
+        queued.remove(at: index)
+        recordQueueEvent(.queueRemoved, item: item)
+    }
+
+    private func clearQueue() {
+        guard !queued.isEmpty else { return }
+        queued.removeAll()
+        guard let runID = currentRunID ?? lastJournalRunID else { return }
+        appendRunEvent(RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: .queueCleared
+        ), durable: true)
+    }
+
+    private func recordQueueEvent(
+        _ kind: RunJournal.EventKind,
+        item: QueuedPrompt
+    ) {
+        guard let runID = currentRunID ?? lastJournalRunID else { return }
+        var event = RunJournal.Event(
+            sessionID: id,
+            runID: runID,
+            kind: kind
+        )
+        event.queueItem = RunJournal.QueueItem(
+            id: item.id,
+            text: item.text,
+            includesAmbientContext: item.includesAmbientContext
+        )
+        appendRunEvent(event, durable: true)
+    }
+
+    private func restoreDurableState() {
+        guard let state = journal?.recoveryState() else { return }
+        queued = state.queued.map {
+            QueuedPrompt(
+                id: $0.id,
+                text: $0.text,
+                includesAmbientContext: $0.includesAmbientContext
+            )
+        }
+        lastJournalRunID = state.lastRunID
+        guard let run = state.activeRun else { return }
+
+        currentRunID = run.id
+        lastJournalRunID = run.id
+        currentRunStartedAt = run.startedAt
+        currentRunMode = run.mode
+        currentRunBackend = run.backend.flatMap(BackendKind.init(rawValue:))
+            ?? run.backends.compactMap(BackendKind.init(rawValue:)).first
+        currentAttempt = run.attemptNumber
+        currentRunPrompt = run.prompt
+        currentRunIncludesAmbientContext = run.includesAmbientContext
+        autoResumeSpent = run.attemptNumber > 1
+        workdir = run.workdir
+
+        for recovered in run.messages {
+            let activities = recovered.activities.map(restoredActivity)
+            if let index = messages.firstIndex(where: { $0.id == recovered.id }) {
+                messages[index].text = recovered.text
+                messages[index].activities = activities
+                messages[index].author = recovered.author
+                messages[index].runID = run.id
+            } else {
+                messages.append(ChatMessage(
+                    id: recovered.id,
+                    role: ChatMessage.Role(rawValue: recovered.role) ?? .assistant,
+                    text: recovered.text,
+                    activities: activities,
+                    author: recovered.author,
+                    runID: run.id
+                ))
+            }
+        }
+        if !messages.contains(where: { $0.runID == run.id && $0.role == .user }) {
+            messages.append(ChatMessage(role: .user, text: run.prompt, runID: run.id))
+        }
+
+        let interruptionMessage = "Run interrupted when Cantrip exited. Its partial output, completed steps, and queue were restored."
+        for message in messages where message.runID == run.id {
+            for activity in message.activities {
+                recordActivity(activity, messageID: message.id)
+            }
+        }
+        recordInterruption("Cantrip exited before the run reached a terminal state.")
+        if !messages.contains(where: { $0.runID == run.id && $0.text == interruptionMessage }) {
+            appendRunMessage(ChatMessage(
+                role: .error,
+                text: interruptionMessage,
+                runID: run.id
+            ))
+        }
+        canResume = run.mode == .single && currentRunBackend != nil
+        persistTranscript()
+        Log.write(
+            "run-journal: restored \(run.mode.rawValue) run \(run.id.uuidString.prefix(8))"
+                + " with \(run.messages.count) messages and \(queued.count) queued"
+        )
+    }
+
+    private func journalActivity(_ activity: ToolActivity) -> RunJournal.Activity {
+        RunJournal.Activity(
+            id: activity.id,
+            title: activity.title,
+            toolName: activity.toolName,
+            state: journalState(activity.state),
+            input: activity.input,
+            output: activity.output,
+            fileChanges: activity.fileChanges.map {
+                RunJournal.FileChange(id: $0.id, path: $0.path, diff: $0.diff)
+            },
+            terminalCommand: activity.terminalCommand,
+            children: activity.children.map(journalActivity)
+        )
+    }
+
+    private func restoredActivity(_ activity: RunJournal.Activity) -> ToolActivity {
+        ToolActivity(
+            id: activity.id,
+            title: activity.title,
+            toolName: activity.toolName,
+            state: restoredActivityState(activity.state),
+            input: activity.input,
+            output: activity.output,
+            fileChanges: activity.fileChanges.map {
+                ToolFileChange(id: $0.id, path: $0.path, diff: $0.diff)
+            },
+            terminalCommand: activity.terminalCommand,
+            children: activity.children.map(restoredActivity)
+        )
+    }
+
+    private func restoredActivityState(_ state: String) -> ToolActivityState {
+        switch state {
+        case "succeeded": return .succeeded
+        case "cancelled": return .cancelled
+        case "failed": return .failed
+        default: return .failed
+        }
+    }
+
+    private func journalState(_ state: ToolActivityState) -> String {
+        switch state {
+        case .running: return "running"
+        case .succeeded: return "succeeded"
+        case .failed: return "failed"
+        case .cancelled: return "cancelled"
+        }
+    }
+
     /// UI entry point. While streaming: queues by default; `interrupt`
     /// kills and redirects; `inject` adds to the running turn's context
     /// (Claude backend) without interrupting.
@@ -200,29 +637,38 @@ final class ChatSession: ObservableObject {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         guard isStreaming else {
+            if !queued.isEmpty {
+                enqueue(prompt, includesAmbientContext: includesAmbientContext)
+                let next = queued[0]
+                councilMode
+                    ? sendCouncil(
+                        next.text,
+                        includesAmbientContext: next.includesAmbientContext,
+                        queuedItem: next
+                    )
+                    : send(
+                        next.text,
+                        includesAmbientContext: next.includesAmbientContext,
+                        queuedItem: next
+                    )
+                removeQueued(next)
+                return
+            }
             councilMode
                 ? sendCouncil(prompt, includesAmbientContext: includesAmbientContext)
                 : send(prompt, includesAmbientContext: includesAmbientContext)
             return
         }
         if councilRunning, inject, !interrupt {
-            queued.append(QueuedPrompt(
-                text: prompt,
-                includesAmbientContext: includesAmbientContext
-            )) // per-member injection would diverge the seats
+            enqueue(prompt, includesAmbientContext: includesAmbientContext)
             return
         }
         if inject, !interrupt {
             if activeBackend.injectMidTurn(prompt) {
-                messages.append(ChatMessage(role: .user, text: prompt))
-                messages.append(ChatMessage(role: .assistant, text: ""))
+                appendRunMessage(ChatMessage(role: .user, text: prompt))
+                appendRunMessage(ChatMessage(role: .assistant, text: ""))
                 persistTranscript()
-            } else {
-                queued.append(QueuedPrompt(
-                    text: prompt,
-                    includesAmbientContext: includesAmbientContext
-                )) // backend can't inject — queue it
-            }
+            } else { enqueue(prompt, includesAmbientContext: includesAmbientContext) }
             return
         }
         if interrupt, councilRunning {
@@ -233,6 +679,7 @@ final class ChatSession: ObservableObject {
             councilRunning = false
             finalizeRunningActivities(as: .cancelled)
             statusText = nil
+            cancelRun(reason: "redirected by user")
             finishStream(dequeue: false)
             councilMode
                 ? sendCouncil(prompt, includesAmbientContext: includesAmbientContext)
@@ -255,6 +702,7 @@ final class ChatSession: ObservableObject {
             if !backendKeepsSession, let steps = interruptedStepSummary() {
                 interruptContext = "(Context — steps my interrupted request had already taken:\n\(steps))"
             }
+            cancelRun(reason: "redirected by user")
             finishStream(dequeue: false)
             if councilMode {
                 sendCouncil(prompt, includesAmbientContext: includesAmbientContext)
@@ -263,16 +711,14 @@ final class ChatSession: ObservableObject {
                      includesAmbientContext: includesAmbientContext)
             }
         } else {
-            queued.append(QueuedPrompt(
-                text: prompt,
-                includesAmbientContext: includesAmbientContext
-            ))
+            enqueue(prompt, includesAmbientContext: includesAmbientContext)
         }
     }
 
     private func send(_ text: String, interrupted: Bool = false,
                       preamble: String? = nil, isResume: Bool = false,
-                      includesAmbientContext: Bool = true) {
+                      includesAmbientContext: Bool = true,
+                      queuedItem: QueuedPrompt? = nil) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isStreaming else { return }
 
@@ -304,20 +750,30 @@ final class ChatSession: ObservableObject {
             return
         }
 
-        Log.write("send: \"\(prompt.prefix(80))\" via \(settings.backend.rawValue)")
+        let backendKind = isResume ? (currentRunBackend ?? settings.backend) : settings.backend
+        Log.write("send: \"\(prompt.prefix(80))\" via \(backendKind.rawValue)")
         canResume = false
         if !isResume {
             // Fresh run: remember the prompt so an interrupted run can be
             // resumed, and re-arm the one free automatic resume.
+            beginRun(
+                prompt: prompt,
+                mode: .single,
+                backends: [settings.backendLabel(backendKind)],
+                backend: backendKind,
+                includesAmbientContext: includesAmbientContext,
+                queueItemID: queuedItem?.id
+            )
             currentRunPrompt = prompt
             currentRunIncludesAmbientContext = includesAmbientContext
             autoResumeSpent = false
         }
+        runningBackendKind = backendKind
         let isFirstOfConversation = messages.isEmpty
         let previousTurns = completedConversationTurns()
         if title == "New chat" { title = String(prompt.prefix(34)) }
-        messages.append(ChatMessage(role: .user, text: prompt))
-        messages.append(ChatMessage(role: .assistant, text: ""))
+        appendRunMessage(ChatMessage(role: .user, text: prompt))
+        appendRunMessage(ChatMessage(role: .assistant, text: ""))
         isStreaming = true
         statusText = "Thinking…"
 
@@ -331,10 +787,10 @@ final class ChatSession: ObservableObject {
         }
         backendPrompt = composeContext(onto: backendPrompt, query: prompt,
                                        isFirstOfConversation: isFirstOfConversation,
-                                       backendKind: settings.backend,
+                                       backendKind: backendKind,
                                        includesAmbientContext: includesAmbientContext)
 
-        UsageTracker.shared.recordQuery(backend: settings.backend)
+        UsageTracker.shared.recordQuery(backend: backendKind)
         armWatchdog()
         streamGeneration += 1
         let generation = streamGeneration
@@ -343,7 +799,7 @@ final class ChatSession: ObservableObject {
             userMessage: prompt,
             previousTurns: previousTurns
         )
-        activeBackend.send(request, workdir: workdir) { [weak self] event in
+        backend(for: backendKind).send(request, workdir: workdir) { [weak self] event in
             DispatchQueue.main.async {
                 guard let self, self.streamGeneration == generation else { return }
                 self.handle(event)
@@ -501,25 +957,41 @@ final class ChatSession: ObservableObject {
         for backend in councilInstances.values { backend.cancel() }
     }
 
-    private func sendCouncil(_ text: String, includesAmbientContext: Bool = true) {
+    private func sendCouncil(
+        _ text: String,
+        includesAmbientContext: Bool = true,
+        queuedItem: QueuedPrompt? = nil
+    ) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isStreaming else { return }
         // Shell/skill/instant prompts don't need a council.
         if prompt.hasPrefix("!") || prompt.hasPrefix("/")
             || (selectionContext == nil && InstantAnswers.answer(for: prompt) != nil) {
-            send(prompt, includesAmbientContext: includesAmbientContext)
+            send(
+                prompt,
+                includesAmbientContext: includesAmbientContext,
+                queuedItem: queuedItem
+            )
             return
         }
         // Councils are for planning and review — implementation is one
         // worker's job, and N models implementing in parallel is waste.
         if settings.councilScope == "planReview", Self.looksLikeExecution(prompt) {
             Log.write("council: execution prompt — routed to the worker (\(settings.backend.rawValue))")
-            send(prompt, includesAmbientContext: includesAmbientContext)
+            send(
+                prompt,
+                includesAmbientContext: includesAmbientContext,
+                queuedItem: queuedItem
+            )
             return
         }
         let members = settings.councilMembers.filter { $0.kind != nil }
         guard members.count >= 2 else {
-            send(prompt, includesAmbientContext: includesAmbientContext)
+            send(
+                prompt,
+                includesAmbientContext: includesAmbientContext,
+                queuedItem: queuedItem
+            )
             return
         }
 
@@ -534,10 +1006,18 @@ final class ChatSession: ObservableObject {
         Log.write("council: \(members.map(\.label).joined(separator: " + ")) → \"\(prompt.prefix(60))\"")
         canResume = false
         currentRunPrompt = nil   // council rounds aren't single-backend resumable
+        beginRun(
+            prompt: prompt,
+            mode: .council,
+            backends: members.map(\.label) + ["Chair: \(settings.backend.rawValue)"],
+            backend: nil,
+            includesAmbientContext: includesAmbientContext,
+            queueItemID: queuedItem?.id
+        )
         let isFirstOfConversation = messages.isEmpty
         let previousTurns = completedConversationTurns()
         if title == "New chat" { title = String(prompt.prefix(34)) }
-        messages.append(ChatMessage(role: .user, text: prompt))
+        appendRunMessage(ChatMessage(role: .user, text: prompt))
         isStreaming = true
         councilRunning = true
         councilAnswers = []
@@ -569,7 +1049,7 @@ final class ChatSession: ObservableObject {
         for (index, member) in members.enumerated() {
             let message = ChatMessage(role: .assistant, text: "", author: member.label)
             let messageID = message.id
-            messages.append(message)
+            appendRunMessage(message)
             councilAnswers.append((kind: member.kind ?? .claudeCode, messageID: messageID))
             if let kind = member.kind { UsageTracker.shared.recordQuery(backend: kind) }
             let request = BackendRequest(prompt: roundPrompt, userMessage: prompt,
@@ -591,6 +1071,7 @@ final class ChatSession: ObservableObject {
         switch event {
         case .textDelta(let delta):
             appendCouncil(text: delta, to: messageID)
+            recordOutput(delta, messageID: messageID)
         case .thinkingDelta(let delta):
             appendCouncil(thinking: delta, to: messageID)
         case .status:
@@ -603,7 +1084,12 @@ final class ChatSession: ObservableObject {
                     messages[idx].activities.append(activity)
                 }
                 shell.mirror(activity)
+                recordActivity(activity, messageID: messageID)
             }
+        case .usage(let usage):
+            recordUsage(usage)
+        case .approval(let approval):
+            recordApproval(approval)
         case .done:
             councilMemberFinished(messageID: messageID, prompt: prompt)
         case .failure(let message):
@@ -644,7 +1130,7 @@ final class ChatSession: ObservableObject {
         var message = ChatMessage(role: .assistant, text: "")
         message.author = "Verdict · \(chairLabel)"
         let messageID = message.id
-        messages.append(message)
+        appendRunMessage(message)
 
         var synthesisPrompt = """
         (COUNCIL SYNTHESIS — you are the chair. The user asked:
@@ -678,6 +1164,7 @@ final class ChatSession: ObservableObject {
                 switch event {
                 case .textDelta(let delta):
                     self.appendCouncil(text: delta, to: messageID)
+                    self.recordOutput(delta, messageID: messageID)
                 case .thinkingDelta(let delta):
                     self.appendCouncil(thinking: delta, to: messageID)
                 case .status:
@@ -691,17 +1178,27 @@ final class ChatSession: ObservableObject {
                             self.messages[idx].activities.append(activity)
                         }
                         self.shell.mirror(activity)
+                        self.recordActivity(activity, messageID: messageID)
                     }
+                case .usage(let usage):
+                    self.recordUsage(usage)
+                case .approval(let approval):
+                    self.recordApproval(approval)
                 case .done:
                     self.streamGeneration += 1 // orphan chair double-terminals
                     self.councilRunning = false
                     self.finalizeRunningActivities(as: .succeeded)
+                    let summary = self.messages.first(where: { $0.id == messageID })?.text ?? ""
+                    self.completeRun(status: "succeeded", summary: summary)
                     self.finishStream()
                 case .failure(let message):
                     self.streamGeneration += 1
                     self.councilRunning = false
-                    self.messages.append(ChatMessage(role: .error,
-                                                     text: "Synthesis failed: \(message)"))
+                    self.appendRunMessage(ChatMessage(
+                        role: .error,
+                        text: "Synthesis failed: \(message)"
+                    ))
+                    self.completeRun(status: "failed", summary: message)
                     self.finishStream()
                 }
             }
@@ -789,9 +1286,16 @@ final class ChatSession: ObservableObject {
         Log.write("shell: \(command.prefix(100))")
         canResume = false
         currentRunPrompt = nil // shell runs aren't LLM-resumable
+        beginRun(
+            prompt: "! " + command,
+            mode: .shell,
+            backends: ["Shell"],
+            backend: nil,
+            includesAmbientContext: false
+        )
         if title == "New chat" { title = "! " + String(command.prefix(30)) }
-        messages.append(ChatMessage(role: .user, text: "! " + command))
-        messages.append(ChatMessage(role: .assistant, text: "```\n"))
+        appendRunMessage(ChatMessage(role: .user, text: "! " + command))
+        let assistantID = appendRunMessage(ChatMessage(role: .assistant, text: "```\n"))
         isStreaming = true
         statusText = "Running: \(command.prefix(40))…"
         armWatchdog()
@@ -817,6 +1321,7 @@ final class ChatSession: ObservableObject {
                     // Keep runaway output bounded in the transcript.
                     if self.messages[idx].text.count < 30_000 {
                         self.messages[idx].text += chunk
+                        self.recordOutput(chunk, messageID: assistantID)
                     }
                 }
             }
@@ -828,14 +1333,22 @@ final class ChatSession: ObservableObject {
                 guard let self, self.streamGeneration == generation else { return }
                 if let idx = self.messages.lastIndex(where: { $0.role == .assistant }) {
                     var text = self.messages[idx].text
-                    if text == "```\n" { text += "(no output)\n" }
-                    text += "\n```"
+                    var suffix = ""
+                    if text == "```\n" { suffix += "(no output)\n" }
+                    suffix += "\n```"
                     if proc.terminationStatus != 0 {
-                        text += "\nexit \(proc.terminationStatus)"
+                        suffix += "\nexit \(proc.terminationStatus)"
                     }
+                    text += suffix
                     self.messages[idx].text = text
+                    self.recordOutput(suffix, messageID: assistantID)
                 }
                 self.shellProcess = nil
+                let summary = self.messages.last(where: { $0.role == .assistant })?.text ?? ""
+                self.completeRun(
+                    status: proc.terminationStatus == 0 ? "succeeded" : "failed",
+                    summary: summary
+                )
                 self.finishStream()
             }
         }
@@ -844,9 +1357,10 @@ final class ChatSession: ObservableObject {
             try p.run()
             shellProcess = p
         } catch {
-            messages.append(ChatMessage(role: .error,
-                                        text: "Failed to run: \(error.localizedDescription)"))
+            let errorText = "Failed to run: \(error.localizedDescription)"
+            appendRunMessage(ChatMessage(role: .error, text: errorText))
             shellProcess = nil
+            completeRun(status: "failed", summary: errorText)
             finishStream(dequeue: false)
         }
     }
@@ -858,9 +1372,17 @@ final class ChatSession: ObservableObject {
         Log.write("skill: /\(command.name) \(args.prefix(60))")
         canResume = false
         currentRunPrompt = nil // script runs aren't LLM-resumable
+        let displayPrompt = "/\(command.name)\(args.isEmpty ? "" : " \(args)")"
+        beginRun(
+            prompt: displayPrompt,
+            mode: .script,
+            backends: ["Skill: /\(command.name)"],
+            backend: nil,
+            includesAmbientContext: false
+        )
         if title == "New chat" { title = "/" + command.name }
-        messages.append(ChatMessage(role: .user, text: "/\(command.name)\(args.isEmpty ? "" : " \(args)")"))
-        messages.append(ChatMessage(role: .assistant, text: ""))
+        appendRunMessage(ChatMessage(role: .user, text: displayPrompt))
+        let assistantID = appendRunMessage(ChatMessage(role: .assistant, text: ""))
         isStreaming = true
         statusText = "Running /\(command.name)…"
         armWatchdog()
@@ -889,6 +1411,7 @@ final class ChatSession: ObservableObject {
                 if let idx = self.messages.lastIndex(where: { $0.role == .assistant }),
                    self.messages[idx].text.count < 30_000 {
                     self.messages[idx].text += chunk
+                    self.recordOutput(chunk, messageID: assistantID)
                 }
             }
         }
@@ -897,14 +1420,22 @@ final class ChatSession: ObservableObject {
             DispatchQueue.main.async {
                 guard let self, self.streamGeneration == generation else { return }
                 if let idx = self.messages.lastIndex(where: { $0.role == .assistant }) {
+                    var suffix = ""
                     if self.messages[idx].text.isEmpty {
-                        self.messages[idx].text = "*(no output)*"
+                        suffix = "*(no output)*"
                     }
                     if proc.terminationStatus != 0 {
-                        self.messages[idx].text += "\n\n`exit \(proc.terminationStatus)`"
+                        suffix += "\n\n`exit \(proc.terminationStatus)`"
                     }
+                    self.messages[idx].text += suffix
+                    self.recordOutput(suffix, messageID: assistantID)
                 }
                 self.shellProcess = nil
+                let summary = self.messages.last(where: { $0.role == .assistant })?.text ?? ""
+                self.completeRun(
+                    status: proc.terminationStatus == 0 ? "succeeded" : "failed",
+                    summary: summary
+                )
                 self.finishStream()
             }
         }
@@ -912,8 +1443,9 @@ final class ChatSession: ObservableObject {
             try p.run()
             shellProcess = p
         } catch {
-            messages.append(ChatMessage(role: .error,
-                                        text: "Failed to run /\(command.name): \(error.localizedDescription)"))
+            let errorText = "Failed to run /\(command.name): \(error.localizedDescription)"
+            appendRunMessage(ChatMessage(role: .error, text: errorText))
+            completeRun(status: "failed", summary: errorText)
             finishStream(dequeue: false)
         }
     }
@@ -950,6 +1482,11 @@ final class ChatSession: ObservableObject {
             Log.write("ui: textDelta(\(delta.count) chars)")
             if let idx = messages.lastIndex(where: { $0.role == .assistant }) {
                 messages[idx].text += delta
+                recordOutput(
+                    delta,
+                    messageID: messages[idx].id,
+                    author: messages[idx].author
+                )
             }
             statusText = currentActivity?.title
         case .thinkingDelta(let delta):
@@ -966,9 +1503,18 @@ final class ChatSession: ObservableObject {
         case .activity(let activity):
             updateActivity(activity)
             shell.mirror(activity)
+            if let message = messages.last(where: { $0.role == .assistant }) {
+                recordActivity(activity, messageID: message.id)
+            }
             statusText = currentActivity?.title ?? "Thinking…"
+        case .usage(let usage):
+            recordUsage(usage)
+        case .approval(let approval):
+            recordApproval(approval)
         case .done:
             finalizeRunningActivities(as: .succeeded)
+            let summary = messages.last(where: { $0.role == .assistant })?.text ?? ""
+            completeRun(status: "succeeded", summary: summary)
             finishStream()
         case .failure(let message):
             handleRunInterruption(errorText: message)
@@ -992,8 +1538,10 @@ final class ChatSession: ObservableObject {
         activeBackend.cancel()
         finalizeRunningActivities(as: .failed)
         let resumable = currentRunPrompt != nil && lastRunHadProgress
-        messages.append(ChatMessage(role: .error, text: errorText))
+        recordInterruption(errorText)
+        appendRunMessage(ChatMessage(role: .error, text: errorText))
         guard resumable else {
+            completeRun(status: "failed", summary: errorText)
             finishStream()
             return
         }
@@ -1055,6 +1603,7 @@ final class ChatSession: ObservableObject {
         }
         preamble += "\nResume that task from where it left off: verify which steps already completed, then continue — don't redo finished work or start over.)"
         Log.write("resume: \(auto ? "auto" : "manual") resume of interrupted run")
+        recordResumeAttempt(reason: auto ? "automatic-resume" : "manual-resume")
         send(
             "Continue from where you left off.",
             preamble: preamble,
@@ -1067,7 +1616,7 @@ final class ChatSession: ObservableObject {
     /// interrupted-turn context themselves; stateless ones need the
     /// harness to inject it.
     private var backendKeepsSession: Bool {
-        switch settings.backend {
+        switch currentRunBackend ?? settings.backend {
         case .claudeCode, .codex: return true
         // copilotRemote keeps its ACP session while the app runs, but an
         // interrupted turn's context isn't replayable — inject like the
@@ -1162,19 +1711,21 @@ final class ChatSession: ObservableObject {
         }
         persistTranscript()
         // Auto-run the next queued message (through the council when on).
-        if dequeue, !queued.isEmpty {
-            let next = queued.removeFirst()
+        if dequeue, let next = queued.first {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.councilMode
                     ? self.sendCouncil(
                         next.text,
-                        includesAmbientContext: next.includesAmbientContext
+                        includesAmbientContext: next.includesAmbientContext,
+                        queuedItem: next
                     )
                     : self.send(
                         next.text,
-                        includesAmbientContext: next.includesAmbientContext
+                        includesAmbientContext: next.includesAmbientContext,
+                        queuedItem: next
                     )
+                self.removeQueued(next)
             }
         } else if notify {
             // Whole run complete: speak the reply / notify if hidden.
@@ -1202,8 +1753,9 @@ final class ChatSession: ObservableObject {
         if !(isStreaming && activeBackend.interruptTurn()) {
             activeBackend.cancel()
         }
-        queued.removeAll()           // manual stop aborts the whole queue
+        clearQueue()                 // manual stop aborts the whole queue
         finalizeRunningActivities(as: .cancelled)
+        cancelRun(reason: "cancelled by user")
         finishStream(dequeue: false)
     }
 
@@ -1240,6 +1792,15 @@ final class ChatSession: ObservableObject {
         currentRunPrompt = nil
         currentRunIncludesAmbientContext = true
         autoResumeSpent = false
+        if let runID = currentRunID ?? lastJournalRunID {
+            appendRunEvent(RunJournal.Event(
+                sessionID: id,
+                runID: runID,
+                kind: .conversationReset
+            ), durable: true)
+        }
+        clearQueue()
+        clearCurrentRun()
         persistTranscript()
     }
 
@@ -1265,6 +1826,9 @@ final class ChatSession: ObservableObject {
                 )
                 messages[messageIndex].activities[activityIndex] = finalized
                 shell.mirror(finalized)
+                if messages[messageIndex].runID == currentRunID {
+                    recordActivity(finalized, messageID: messages[messageIndex].id)
+                }
             }
         }
     }

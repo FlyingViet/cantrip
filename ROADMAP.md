@@ -23,25 +23,21 @@ council scope is "planning & review".
   worktrees at launch.
 - Non-repo workdirs: fall back to in-place execution (current behavior).
 
-## 2. Persist runs as append-only events
+## 2. ✓ Persist runs as append-only events
 
-One JSONL file per session (`~/.cache/Cantrip/runs/<session>.jsonl`),
-one event per line, never rewritten:
+**Landed:** one versioned JSONL journal per session at
+`~/.cache/Cantrip/runs/<session>.jsonl`, with ordered events for single,
+council, shell, and skill runs. It records partial output, full tool lifecycle
+and diff artifacts, ACP policy approvals, durable queue claims/mutations,
+attempts, token/cost usage, interruptions, cancellations, duration, and
+terminal summary digests. Boundary events are fsynced; replay tolerates a
+truncated final record, reconstructs unfinished messages and activities, and
+preserves the queue across crashes. Private sessions never journal. Files are
+mode 0600 in a 0700 directory and rotate after 60 days.
 
-- `turn_started` {prompt, mode: single|council, seats, workdir, ts}
-- `step` / `tool_call` {tool, args-digest, state, duration}
-- `artifact` {path, kind: diff|file|screenshot}
-- `approval` {tool, decision, by: user|policy}
-- `attempt` {n, reason: retry|resume|interrupt}
-- `budget` {tokens_in, tokens_out, cost_usd}   (from result events)
-- `cancelled` {by: user|watchdog|timeout}
-- `result` {status, duration, summary-digest}
-
-Writer: a tiny `RunJournal` actor with an append(Event) API; hook the
-existing seams (send/sendCouncil, handle(.activity), handleRunInterruption,
-finishStream, UsageTracker.recordCost). Reader: `cantrip runs <session>`
-in the CLI + a debug view later. Rotation: delete files older than 60
-days alongside the memory-vault session prune.
+`cantrip runs` lists recent runs and
+`cantrip runs <session-or-run-id>` prints an event timeline. A native debug
+view remains optional rather than part of the durability contract.
 
 ## 3. Copilot sessions + granular flags; startup backend health
 

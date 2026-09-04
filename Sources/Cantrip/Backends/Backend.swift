@@ -27,12 +27,27 @@ struct ToolActivity: Identifiable, Equatable {
     var children: [ToolActivity] = []
 }
 
+struct BackendUsage {
+    let backend: String
+    let costUSD: Double
+    let inputTokens: Int
+    let outputTokens: Int
+}
+
+struct BackendApproval {
+    let tool: String
+    let decision: String
+    let decidedBy: String
+}
+
 /// Events streamed from a backend while answering a query.
 enum BackendEvent {
     case textDelta(String)         // partial assistant text
     case thinkingDelta(String)     // partial reasoning (extended thinking)
     case status(String)            // transient status, e.g. "Thinking"
     case activity(ToolActivity)    // tool lifecycle and file-change details
+    case usage(BackendUsage)       // token/cost accounting for this run
+    case approval(BackendApproval) // harness policy decision for a tool
     case done                      // stream finished successfully
     case failure(String)           // error message
 }

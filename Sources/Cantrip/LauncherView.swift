@@ -940,7 +940,7 @@ struct LauncherView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer()
-                    Button(action: { session.queued.remove(at: index) }) {
+                    Button(action: { session.removeQueued(at: index) }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)

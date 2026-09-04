@@ -5,6 +5,7 @@ Usage:
   cantrip "why is the sky blue"
   cat build.log | cantrip "why did this fail?"
   cantrip --backend claude "review this diff" < changes.diff
+  cantrip runs [session-or-run-id]
 
 If the app isn't running, the exact bundle next to this script's repo is
 launched (never LaunchServices' pick among stale copies), with a warning
@@ -18,6 +19,7 @@ import sys
 import time
 
 SOCKET = os.path.expanduser("~/.cache/Cantrip/cantrip.sock")
+RUNS_DIR = os.path.expanduser("~/.cache/Cantrip/runs")
 
 
 def repo_dir():
@@ -88,8 +90,150 @@ def launch_app():
     return None
 
 
+def load_run_events(path):
+    events = []
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass  # A process exit may leave one partial tail record.
+    except OSError:
+        pass
+    return events
+
+
+def event_summary(event):
+    kind = event.get("kind", "unknown")
+    if kind == "turn_started":
+        return f"{event.get('mode', 'single')} · {event.get('prompt', '')[:100]}"
+    if kind == "tool_activity":
+        activity = event.get("activity", {})
+        return (f"{activity.get('state', '?')} · "
+                f"{activity.get('toolName', 'tool')} · "
+                f"{activity.get('title', '')}")
+    if kind == "artifact":
+        artifact = event.get("artifact", {})
+        return f"{artifact.get('kind', 'file')} · {artifact.get('path', '')}"
+    if kind == "queue_added" or kind == "queue_removed":
+        return event.get("queueItem", {}).get("text", "")[:100]
+    if kind == "attempt":
+        return f"#{event.get('attemptNumber', '?')} · {event.get('reason', '')}"
+    if kind == "usage":
+        usage = event.get("usage", {})
+        return (f"{usage.get('backend', '')} · "
+                f"{usage.get('inputTokens', 0)} in / "
+                f"{usage.get('outputTokens', 0)} out · "
+                f"${usage.get('costUSD', 0):.4f}")
+    if kind == "approval":
+        return (f"{event.get('decision', '?')} · {event.get('tool', '')} · "
+                f"{event.get('decidedBy', '')}")
+    if kind in ("interruption", "cancelled"):
+        return event.get("reason", "")
+    if kind == "result":
+        duration = event.get("durationMS")
+        suffix = f" · {duration / 1000:.1f}s" if isinstance(duration, int) else ""
+        return f"{event.get('status', '?')}{suffix}"
+    if kind == "output":
+        text = event.get("text", "").replace("\n", " ")
+        return text[:100]
+    if kind == "message_started":
+        return f"{event.get('role', '?')} · {event.get('text', '')[:100]}"
+    return ""
+
+
+def inspect_runs(identifier=None):
+    try:
+        paths = [
+            os.path.join(RUNS_DIR, name)
+            for name in os.listdir(RUNS_DIR)
+            if name.endswith(".jsonl")
+        ]
+    except OSError:
+        paths = []
+    if not paths:
+        print("cantrip: no durable runs recorded", file=sys.stderr)
+        return 1
+
+    if identifier:
+        needle = identifier.lower()
+        selected = []
+        for path in paths:
+            events = load_run_events(path)
+            session_id = os.path.basename(path)[:-6]
+            matching_runs = {
+                event.get("runID")
+                for event in events
+                if str(event.get("runID", "")).lower().startswith(needle)
+            }
+            if session_id.lower().startswith(needle):
+                selected.extend(events)
+            elif matching_runs:
+                selected.extend(
+                    event for event in events
+                    if event.get("runID") in matching_runs
+                )
+        if not selected:
+            print(f"cantrip: no session or run matches {identifier}",
+                  file=sys.stderr)
+            return 1
+        selected.sort(key=lambda event: (
+            event.get("timestamp", ""), event.get("sequence", 0)
+        ))
+        for event in selected:
+            timestamp = event.get("timestamp", "?")
+            run_id = str(event.get("runID", ""))[:8]
+            kind = event.get("kind", "unknown")
+            detail = event_summary(event)
+            print(f"{timestamp}  {run_id}  {kind:18} {detail}".rstrip())
+        return 0
+
+    summaries = []
+    terminal = {"result", "cancelled", "conversation_reset"}
+    for path in paths:
+        events = load_run_events(path)
+        runs = {}
+        for event in events:
+            run_id = event.get("runID")
+            if not run_id:
+                continue
+            state = runs.setdefault(run_id, {
+                "session": event.get("sessionID", ""),
+                "started": "",
+                "mode": "?",
+                "prompt": "",
+                "status": "unfinished",
+            })
+            if event.get("kind") == "turn_started":
+                state.update({
+                    "started": event.get("timestamp", ""),
+                    "mode": event.get("mode", "single"),
+                    "prompt": event.get("prompt", ""),
+                    "status": "unfinished",
+                })
+            elif event.get("kind") in terminal:
+                state["status"] = (event.get("status")
+                                   or event.get("kind").replace("_", " "))
+        summaries.extend((run_id, state) for run_id, state in runs.items())
+    summaries.sort(key=lambda pair: pair[1]["started"], reverse=True)
+    print("STARTED                       SESSION   RUN       MODE     STATUS       PROMPT")
+    for run_id, state in summaries[:50]:
+        print(f"{state['started'][:25]:25} "
+              f"{state['session'][:8]:8}  {run_id[:8]:8}  "
+              f"{state['mode'][:7]:7}  {state['status'][:11]:11}  "
+              f"{state['prompt'][:80]}")
+    return 0
+
+
 def main() -> int:
     args = sys.argv[1:]
+    if args and args[0] == "runs":
+        if len(args) > 2:
+            print("cantrip: usage: cantrip runs [session-or-run-id]",
+                  file=sys.stderr)
+            return 2
+        return inspect_runs(args[1] if len(args) == 2 else None)
     backend = None
     if "--backend" in args:
         i = args.index("--backend")

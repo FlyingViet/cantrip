@@ -1,6 +1,46 @@
 import Foundation
 import Network
 
+private final class CLIRunLatch {
+    private let lock = NSLock()
+    private var terminal = false
+    private var artifacts: Set<String> = []
+    private var output = ""
+
+    func acceptsEvent() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !terminal
+    }
+
+    func claimTerminal() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !terminal else { return false }
+        terminal = true
+        return true
+    }
+
+    func claimArtifact(_ key: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return artifacts.insert(key).inserted
+    }
+
+    func appendOutput(_ text: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard output.count < 20_000 else { return }
+        output += String(text.prefix(20_000 - output.count))
+    }
+
+    func outputSummary() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return output
+    }
+}
+
 /// Unix-socket server backing the `cantrip` CLI. Protocol: one JSON
 /// request line in ({"text", "backend"?, "cwd"?}), streamed JSON lines
 /// out ({"delta"} … {"done"} | {"error"}).
@@ -9,7 +49,26 @@ final class CLIServer {
     private var listener: NWListener?
     /// Persistent CLI backends so consecutive invocations keep context.
     private var backends: [BackendKind: Backend] = [:]
-    private init() {}
+    private let journalSessionID: UUID
+    private lazy var runJournal: RunJournal? = {
+        do {
+            return try RunJournal(sessionID: journalSessionID)
+        } catch {
+            Log.write("cli: run journal unavailable: \(error.localizedDescription)")
+            return nil
+        }
+    }()
+    private init() {
+        let key = "cliRunJournalSessionID"
+        if let raw = UserDefaults.standard.string(forKey: key),
+           let id = UUID(uuidString: raw) {
+            journalSessionID = id
+        } else {
+            let id = UUID()
+            journalSessionID = id
+            UserDefaults.standard.set(id.uuidString, forKey: key)
+        }
+    }
 
     static var socketPath: String {
         FileManager.default.homeDirectoryForCurrentUser
@@ -65,6 +124,19 @@ final class CLIServer {
         let kind = (obj["backend"] as? String).flatMap(Self.backendKind)
             ?? AppSettings.shared.backend
         Log.write("cli: query via \(kind.rawValue) (\(text.count) chars)")
+        let runID = UUID()
+        let userMessageID = UUID()
+        let assistantMessageID = UUID()
+        let startedAt = Date()
+        let latch = CLIRunLatch()
+        recordRunStart(
+            runID: runID,
+            userMessageID: userMessageID,
+            assistantMessageID: assistantMessageID,
+            prompt: text,
+            backend: kind,
+            workdir: cwd
+        )
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -72,24 +144,212 @@ final class CLIServer {
             let request = BackendRequest(prompt: text, userMessage: text,
                                          previousTurns: [])
             backend.send(request, workdir: cwd) { [weak self] event in
+                guard let self, latch.acceptsEvent() else { return }
                 switch event {
                 case .textDelta(let delta):
-                    self?.send(["delta": delta], on: connection, close: false)
+                    latch.appendOutput(delta)
+                    var output = RunJournal.Event(
+                        sessionID: self.journalSessionID,
+                        runID: runID,
+                        kind: .output
+                    )
+                    output.messageID = assistantMessageID
+                    output.role = "assistant"
+                    output.channel = "text"
+                    output.text = delta
+                    self.appendRunEvent(output)
+                    self.send(["delta": delta], on: connection, close: false)
                 case .thinkingDelta:
                     break // reasoning isn't part of the CLI's output contract
                 case .status(let status):
-                    self?.send(["status": status], on: connection, close: false)
+                    self.send(["status": status], on: connection, close: false)
                 case .activity(let activity):
+                    self.recordActivity(
+                        activity,
+                        messageID: assistantMessageID,
+                        runID: runID,
+                        latch: latch
+                    )
                     if activity.state == .running {
-                        self?.send(["status": activity.title], on: connection, close: false)
+                        self.send(["status": activity.title], on: connection, close: false)
                     }
+                case .usage(let usage):
+                    if let backend = BackendKind(rawValue: usage.backend) {
+                        UsageTracker.shared.recordCost(
+                            backend: backend,
+                            costUSD: usage.costUSD,
+                            inputTokens: usage.inputTokens,
+                            outputTokens: usage.outputTokens
+                        )
+                    }
+                    var usageEvent = RunJournal.Event(
+                        sessionID: self.journalSessionID,
+                        runID: runID,
+                        kind: .usage
+                    )
+                    usageEvent.usage = RunJournal.Usage(
+                        backend: usage.backend,
+                        inputTokens: usage.inputTokens,
+                        outputTokens: usage.outputTokens,
+                        costUSD: usage.costUSD
+                    )
+                    self.appendRunEvent(usageEvent, durable: true)
+                case .approval(let approval):
+                    var approvalEvent = RunJournal.Event(
+                        sessionID: self.journalSessionID,
+                        runID: runID,
+                        kind: .approval
+                    )
+                    approvalEvent.tool = approval.tool
+                    approvalEvent.decision = approval.decision
+                    approvalEvent.decidedBy = approval.decidedBy
+                    self.appendRunEvent(approvalEvent, durable: true)
+                    self.send([
+                        "status": "\(approval.decision.capitalized): \(approval.tool)"
+                    ], on: connection, close: false)
                 case .done:
-                    self?.send(["done": true], on: connection, close: true)
+                    guard latch.claimTerminal() else { return }
+                    self.recordTerminal(
+                        runID: runID,
+                        status: "succeeded",
+                        startedAt: startedAt,
+                        summary: latch.outputSummary()
+                    )
+                    self.send(["done": true], on: connection, close: true)
                 case .failure(let message):
-                    self?.send(["error": message], on: connection, close: true)
+                    guard latch.claimTerminal() else { return }
+                    var interruption = RunJournal.Event(
+                        sessionID: self.journalSessionID,
+                        runID: runID,
+                        kind: .interruption
+                    )
+                    interruption.reason = message
+                    self.appendRunEvent(interruption, durable: true)
+                    self.recordTerminal(
+                        runID: runID,
+                        status: "failed",
+                        startedAt: startedAt,
+                        summary: message
+                    )
+                    self.send(["error": message], on: connection, close: true)
                 }
             }
         }
+    }
+
+    private func appendRunEvent(_ event: RunJournal.Event, durable: Bool = false) {
+        do {
+            try runJournal?.append(event, durable: durable)
+        } catch {
+            Log.write("cli: run journal append failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func recordRunStart(
+        runID: UUID,
+        userMessageID: UUID,
+        assistantMessageID: UUID,
+        prompt: String,
+        backend: BackendKind,
+        workdir: String
+    ) {
+        var start = RunJournal.Event(
+            sessionID: journalSessionID,
+            runID: runID,
+            kind: .turnStarted
+        )
+        start.prompt = prompt
+        start.mode = .single
+        start.backend = backend.rawValue
+        start.backends = [AppSettings.shared.backendLabel(backend)]
+        start.workdir = workdir
+        start.includesAmbientContext = false
+        appendRunEvent(start, durable: true)
+
+        var user = RunJournal.Event(
+            sessionID: journalSessionID,
+            runID: runID,
+            kind: .messageStarted
+        )
+        user.messageID = userMessageID
+        user.role = "user"
+        user.text = prompt
+        appendRunEvent(user)
+
+        var assistant = RunJournal.Event(
+            sessionID: journalSessionID,
+            runID: runID,
+            kind: .messageStarted
+        )
+        assistant.messageID = assistantMessageID
+        assistant.role = "assistant"
+        appendRunEvent(assistant)
+    }
+
+    private func recordActivity(
+        _ activity: ToolActivity,
+        messageID: UUID,
+        runID: UUID,
+        latch: CLIRunLatch
+    ) {
+        var event = RunJournal.Event(
+            sessionID: journalSessionID,
+            runID: runID,
+            kind: .toolActivity
+        )
+        event.messageID = messageID
+        event.activity = runActivity(activity)
+        appendRunEvent(event, durable: activity.state != .running)
+
+        for change in activity.fileChanges {
+            let key = "\(activity.id)|\(change.id)"
+            guard latch.claimArtifact(key) else { continue }
+            var artifact = RunJournal.Event(
+                sessionID: journalSessionID,
+                runID: runID,
+                kind: .artifact
+            )
+            artifact.messageID = messageID
+            artifact.artifact = RunJournal.Artifact(
+                path: change.path,
+                kind: "diff",
+                content: change.diff
+            )
+            appendRunEvent(artifact)
+        }
+    }
+
+    private func runActivity(_ activity: ToolActivity) -> RunJournal.Activity {
+        RunJournal.Activity(
+            id: activity.id,
+            title: activity.title,
+            toolName: activity.toolName,
+            state: activityState(activity.state),
+            input: activity.input,
+            output: activity.output,
+            fileChanges: activity.fileChanges.map {
+                RunJournal.FileChange(id: $0.id, path: $0.path, diff: $0.diff)
+            },
+            terminalCommand: activity.terminalCommand,
+            children: activity.children.map(runActivity)
+        )
+    }
+
+    private func recordTerminal(
+        runID: UUID,
+        status: String,
+        startedAt: Date,
+        summary: String = ""
+    ) {
+        var result = RunJournal.Event(
+            sessionID: journalSessionID,
+            runID: runID,
+            kind: .result
+        )
+        result.status = status
+        result.durationMS = max(0, Int(Date().timeIntervalSince(startedAt) * 1_000))
+        result.summaryDigest = RunJournal.digest(summary)
+        appendRunEvent(result, durable: true)
     }
 
     private func backend(for kind: BackendKind) -> Backend {
@@ -114,6 +374,15 @@ final class CLIServer {
         case "codex", "openai": return .codex
         case "local", "hermes": return .localModel
         default: return BackendKind(rawValue: raw)
+        }
+    }
+
+    private func activityState(_ state: ToolActivityState) -> String {
+        switch state {
+        case .running: return "running"
+        case .succeeded: return "succeeded"
+        case .failed: return "failed"
+        case .cancelled: return "cancelled"
         }
     }
 

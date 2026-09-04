@@ -438,6 +438,11 @@ final class CopilotACPBackend: Backend {
         let approved = chosenKind.hasPrefix("allow")
         currentOnEvent?(.status((approved ? "Approved: " : "Declined: ")
                                 + String(title.prefix(60))))
+        currentOnEvent?(.approval(BackendApproval(
+            tool: title,
+            decision: approved ? "allowed" : "denied",
+            decidedBy: readOnly ? "council-policy" : "action-policy"
+        )))
         if !approved {
             Log.write("acp: declined permission for \(title) (enable Act on my behalf to approve)")
         }
