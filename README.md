@@ -99,10 +99,12 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   transcript just like closing a local tab.
   Private tabs are never exposed, and remotely submitted prompts cannot consume
   staged screenshots, selections, attachments, calendar data, or location.
-  Enable it in Settings and copy the pairing token. AgentGateway automatically
-  discovers Cantrip on the same LAN and connects with pairing-token-protected
-  forward-secret TLS. Away from home, publish the displayed loopback port with
-  Tailscale Serve (never Funnel); the saved HTTPS endpoint remains the fallback.
+  Enable it in Settings and copy the pairing token. AgentGateway and another
+  Mac's Cantrip Remote tab automatically discover the host on the same LAN and
+  connect with pairing-token-protected forward-secret TLS. The Remote tab stores
+  its client pairing token in Keychain and prefers LAN automatically. Away from
+  home, publish the displayed loopback port with Tailscale Serve (never Funnel);
+  the saved HTTPS endpoint remains the fallback.
 - **Extensions: dashboards + agent tools** — install a folder in
   `~/.config/cantrip/plugins/` to add an HTML/JS dashboard side pane, MCP
   servers, approved JSON data commands, or all three. Panels can submit

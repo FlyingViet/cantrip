@@ -1,14 +1,10 @@
-import CryptoKit
 import Foundation
 import Network
-import Security
 
 /// Authenticated HTTP control plane for the live sessions owned by the app.
 /// Loopback HTTP remains available for Tailscale Serve. A separate Bonjour
 /// listener uses forward-secret TLS with the pairing token as a PSK for LAN use.
 final class RemoteControlServer {
-    static let lanServiceType = "_cantrip-remote._tcp"
-
     var onError: ((String?) -> Void)?
 
     private weak var manager: SessionManager?
@@ -87,12 +83,12 @@ final class RemoteControlServer {
 
     private func startLANListener(token: String) {
         do {
-            let listener = try NWListener(using: Self.lanParameters(token: token))
+            let listener = try NWListener(using: RemoteLANProtocol.parameters(token: token))
             listener.service = NWListener.Service(
                 name: Host.current().localizedName ?? "Cantrip",
-                type: Self.lanServiceType,
+                type: RemoteLANProtocol.serviceType,
                 txtRecord: NWTXTRecord([
-                    "id": Self.tokenFingerprint(token),
+                    "id": RemoteLANProtocol.tokenFingerprint(token),
                     "v": "1",
                 ])
             )
@@ -125,42 +121,6 @@ final class RemoteControlServer {
             onError?("Direct local-network control failed: \(error.localizedDescription)")
             Log.write("remote-control: LAN listener failed: \(error.localizedDescription)")
         }
-    }
-
-    private static func lanParameters(token: String) -> NWParameters {
-        let tls = NWProtocolTLS.Options()
-        let derivedKey = Data(SHA256.hash(data: Data(token.utf8)))
-        let key = derivedKey.withUnsafeBytes { DispatchData(bytes: $0) }
-        let identity = Data("cantrip-remote-v1".utf8).withUnsafeBytes {
-            DispatchData(bytes: $0)
-        }
-        sec_protocol_options_add_pre_shared_key(
-            tls.securityProtocolOptions,
-            key as dispatch_data_t,
-            identity as dispatch_data_t
-        )
-        sec_protocol_options_set_min_tls_protocol_version(
-            tls.securityProtocolOptions,
-            .TLSv12
-        )
-        sec_protocol_options_set_max_tls_protocol_version(
-            tls.securityProtocolOptions,
-            .TLSv12
-        )
-        sec_protocol_options_append_tls_ciphersuite(
-            tls.securityProtocolOptions,
-            tls_ciphersuite_t(
-                rawValue: UInt16(TLS_DHE_PSK_WITH_AES_128_GCM_SHA256)
-            )!
-        )
-        return NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
-    }
-
-    private static func tokenFingerprint(_ token: String) -> String {
-        SHA256.hash(data: Data(token.utf8))
-            .prefix(8)
-            .map { String(format: "%02x", $0) }
-            .joined()
     }
 
     private func accept(_ connection: NWConnection) {
@@ -438,7 +398,7 @@ final class RemoteControlServer {
     }
 }
 
-private struct HTTPRequest {
+struct HTTPRequest {
     let method: String
     let path: String
     let headers: [String: String]
@@ -607,7 +567,7 @@ private extension RemoteControlServer {
     $("send").onclick=()=>{const text=$("draft").value.trim();if(text){$("draft").value="";action("messages",{text,mode:$("mode").value})}};
     $("draft").onkeydown=event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selected=data.session.id;refresh()};
-    $("forget").onclick=()=>{localStorage.removeItem("cantripToken");token="";connection(false);pair(true)};if(token){pair(false);refresh();timer=setInterval(refresh,1500)}else pair(true);
+    $("forget").onclick=()=>{localStorage.removeItem("cantripToken");token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null)};if(token){pair(false);refresh();timer=setInterval(refresh,1500)}else pair(true);
     </script></body></html>
     """
 }
