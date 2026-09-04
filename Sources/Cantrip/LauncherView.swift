@@ -58,6 +58,7 @@ struct LauncherView: View {
     @State private var terminalCommand = ""
     @State private var terminalHistoryIndex: Int?
     @State private var terminalHistoryDraft = ""
+    @StateObject private var remoteConnection = RemoteConnection()
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -66,17 +67,17 @@ struct LauncherView: View {
                 // configured width, so the main transcript isn't squeezed
                 // (kept in lockstep with sidebarExtra — see its comment).
                 .frame(width: effectiveContentWidth + councilPaneWidth)
-            if showSettings {
+            if !manager.showingRemote, showSettings {
                 PaneDivider(width: paneBinding($settingsPaneUserWidth, range: 280...560),
                             range: 280...560)
                 settingsSidebar
             }
-            if showSteps {
+            if !manager.showingRemote, showSteps {
                 PaneDivider(width: paneBinding($stepsPaneUserWidth, range: 220...480),
                             range: 220...480)
                 stepsSidebar
             }
-            if let plugin = activePluginPanel {
+            if !manager.showingRemote, let plugin = activePluginPanel {
                 PaneDivider(width: paneBinding($pluginPaneUserWidth, range: 240...640),
                             range: 240...640)
                 pluginSidebar(plugin)
@@ -97,7 +98,8 @@ struct LauncherView: View {
         // over whatever is beneath (Spotlight-style). Overlays draw above
         // the whole base composite, so no zIndex juggling is needed.
         .overlay(alignment: .topLeading) {
-            if lowerSectionVisible, hasSuggestions, inputBarFrame != .zero {
+            if !manager.showingRemote,
+               lowerSectionVisible, hasSuggestions, inputBarFrame != .zero {
                 suggestionsOverlay
                     .frame(width: inputBarFrame.width)
                     .offset(x: inputBarFrame.minX, y: inputBarFrame.maxY)
@@ -139,6 +141,7 @@ struct LauncherView: View {
         }
         // Any file dropped on the panel becomes an attachment.
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            guard !manager.showingRemote else { return false }
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
                     guard let url, url.isFileURL else { return }
@@ -182,22 +185,31 @@ struct LauncherView: View {
     /// you're typing in.
     private var privateTintOverlay: some View {
         RoundedRectangle(cornerRadius: 16)
-            .fill(Color.purple.opacity(session.isPrivate ? 0.08 : 0))
+            .fill(Color.purple.opacity(!manager.showingRemote && session.isPrivate ? 0.08 : 0))
             .allowsHitTesting(false)
     }
 
     private var panelBorder: some View {
         RoundedRectangle(cornerRadius: 16)
-            .strokeBorder(session.isPrivate ? Color.purple.opacity(0.55)
-                                            : Color.white.opacity(0.15))
+            .strokeBorder(!manager.showingRemote && session.isPrivate
+                          ? Color.purple.opacity(0.55)
+                          : Color.white.opacity(0.15))
     }
 
     private var mainColumn: some View {
         VStack(spacing: 0) {
-            if manager.sessions.count > 1 {
-                sessionTabs
-                Divider().opacity(0.3)
+            sessionTabs
+            Divider().opacity(0.3)
+            if manager.showingRemote {
+                RemoteConnectionView(connection: remoteConnection)
+            } else {
+                localSessionContent
             }
+        }
+    }
+
+    private var localSessionContent: some View {
+        VStack(spacing: 0) {
             inputBar
                 .background(
                     // ⌘↩ never reaches TextField.onSubmit (the modifier
@@ -512,12 +524,18 @@ struct LauncherView: View {
     private var sessionShortcuts: some View {
         Group {
             ForEach(1..<10, id: \.self) { n in
-                Button(action: { manager.select(n - 1) }) { EmptyView() }
+                Button(action: {
+                    manager.select(n - 1)
+                }) { EmptyView() }
                     .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
             }
-            Button(action: { manager.selectPrevious() }) { EmptyView() }
+            Button(action: {
+                manager.selectPrevious()
+            }) { EmptyView() }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
-            Button(action: { manager.selectNext() }) { EmptyView() }
+            Button(action: {
+                manager.selectNext()
+            }) { EmptyView() }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
         }
         .buttonStyle(.plain)
@@ -557,14 +575,35 @@ struct LauncherView: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
-                    .background(index == manager.activeIndex
+                    .background(!manager.showingRemote && index == manager.activeIndex
                                 ? AnyShapeStyle(.quaternary)
                                 : AnyShapeStyle(.clear),
                                 in: Capsule())
                     .contentShape(Capsule())
-                    .onTapGesture { manager.select(index) }
+                    .onTapGesture {
+                        manager.select(index)
+                    }
                 }
-                Button(action: { manager.newSession() }) {
+                Button(action: selectRemote) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(.system(size: 10))
+                        Text("Remote")
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(manager.showingRemote
+                                ? AnyShapeStyle(.quaternary)
+                                : AnyShapeStyle(.clear),
+                                in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Connect to sessions on another Cantrip")
+
+                Button(action: {
+                    manager.newSession()
+                }) {
                     Image(systemName: "plus")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
@@ -575,6 +614,16 @@ struct LauncherView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
         }
+    }
+
+    private func selectRemote() {
+        manager.selectRemote()
+        showSettings = false
+        showSteps = false
+        showTerminal = false
+        showUsage = false
+        showHistory = false
+        activePluginPanelID = ""
     }
 
     // MARK: - Settings sidebar
@@ -1356,7 +1405,8 @@ struct LauncherView: View {
 
     /// Width consumed by open sidebars (for resize math).
     private var sidebarExtra: CGFloat {
-        (showSettings ? CGFloat(settingsPaneUserWidth) + 7 : 0)
+        guard !manager.showingRemote else { return 0 }
+        return (showSettings ? CGFloat(settingsPaneUserWidth) + 7 : 0)
             + (showSteps ? CGFloat(stepsPaneUserWidth) + 7 : 0)
             + (activePluginPanel != nil ? CGFloat(pluginPaneUserWidth) + 7 : 0)
             + councilPaneWidth
@@ -1378,7 +1428,7 @@ struct LauncherView: View {
     /// an unaccounted column makes every drag re-add its width (the
     /// resize feedback glitch).
     private var councilActive: Bool {
-        session.councilMode && settings.councilMembers.count >= 2
+        !manager.showingRemote && session.councilMode && settings.councilMembers.count >= 2
             && !showUsage && !showHistory
             && (!session.messages.isEmpty || session.statusText != nil)
     }

@@ -87,11 +87,13 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   sessions.
 - **Tailscale remote control** — an optional authenticated HTTP daemon binds
   only to `127.0.0.1` and controls those same live, open sessions from its
-  mobile web UI or the Hermes/Agent Gateway app. Private tabs are never
-  exposed, and remotely submitted prompts cannot consume staged screenshots,
-  selections, attachments, calendar data, or location. Enable it in Settings,
-  copy the pairing token, then publish the displayed port with Tailscale Serve
-  (never Funnel).
+  mobile web UI, the native Cantrip **Remote** tab, or the Hermes/Agent Gateway
+  app. The Remote tab embeds the host's isolated web client, keeps pairing
+  storage scoped to that host, and never mixes remote sessions into local tabs.
+  Private tabs are never exposed, and remotely submitted prompts cannot consume
+  staged screenshots, selections, attachments, calendar data, or location.
+  Enable it in Settings, copy the pairing token, then publish the displayed
+  port with Tailscale Serve (never Funnel).
 - **Extensions: dashboards + agent tools** — install a folder in
   `~/.config/cantrip/plugins/` to add an HTML/JS dashboard side pane, MCP
   servers, approved JSON data commands, or all three. Panels can submit
