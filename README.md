@@ -95,6 +95,8 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   host is responding, embeds the host's isolated web client, keeps pairing
   storage scoped to that host, never mixes remote sessions into local tabs, and
   follows live output only while the viewer remains at the latest message.
+  Remote session pills can be created and closed; closing archives the
+  transcript just like closing a local tab.
   Private tabs are never exposed, and remotely submitted prompts cannot consume
   staged screenshots, selections, attachments, calendar data, or location.
   Enable it in Settings, copy the pairing token, then publish the displayed
