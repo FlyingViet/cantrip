@@ -528,6 +528,10 @@ private struct CantripRemoteAPI {
         return response.session
     }
 
+    func closeSession(id: String) async throws -> CantripRemoteSession {
+        try await action("close", sessionID: id)
+    }
+
     private struct MessageBody: Encodable {
         let text: String
         let mode: String
@@ -846,6 +850,27 @@ final class CantripRemoteModel: ObservableObject {
     @discardableResult
     func newConversation() async -> Bool {
         await sessionAction("new-conversation")
+    }
+
+    @discardableResult
+    func closeSession(_ id: String) async -> Bool {
+        guard sessions.contains(where: { $0.id == id }) else { return false }
+        guard let replacement = await mutate({ api in
+            try await api.closeSession(id: id)
+        }) else { return false }
+
+        sessions.removeAll { $0.id == id }
+        if let index = sessions.firstIndex(where: { $0.id == replacement.id }) {
+            sessions[index] = replacement
+        } else {
+            sessions.append(replacement)
+        }
+
+        if selectedSessionID == id {
+            selectedSessionID = replacement.id
+            apply(replacement)
+        }
+        return true
     }
 
     private func sessionAction(_ action: String) async -> Bool {
@@ -1245,6 +1270,17 @@ struct CantripRemoteView: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            Task { await model.closeSession(session.id) }
+                        } label: {
+                            Label("Close Session", systemImage: "xmark")
+                        }
+                        .disabled(model.isMutating)
+                    }
+                    .accessibilityAction(named: "Close Session") {
+                        Task { await model.closeSession(session.id) }
+                    }
                 }
             }
             .padding(.horizontal)

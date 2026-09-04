@@ -1156,36 +1156,10 @@ struct ChatView: View {
                 Circle()
                     .fill(remote.isConnected ? Color.green : Color.gray)
                     .frame(width: 8, height: 8)
-                Menu {
-                    if remote.sessions.isEmpty {
-                        Text("No sessions")
-                    } else {
-                        ForEach(remote.sessions) { session in
-                            Button {
-                                Task {
-                                    await remote.selectSession(session.id)
-                                    vm.syncRemoteTranscript()
-                                }
-                            } label: {
-                                Label(
-                                    session.title,
-                                    systemImage: session.id == remote.selectedSessionID
-                                        ? "checkmark.circle.fill"
-                                        : "rectangle.stack"
-                                )
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Text(remote.selectedSession?.title ?? "Choose Session")
-                            .lineLimit(1)
-                        Image(systemName: "chevron.down")
-                            .font(.caption2)
-                    }
-                    .font(.callout.weight(.semibold))
-                }
-                .disabled(!remote.isConfigured || remote.sessions.isEmpty)
+                Text(remote.endpointHost)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
 
                 Spacer(minLength: 0)
 
@@ -1236,6 +1210,14 @@ struct ChatView: View {
                             Label("New Conversation", systemImage: "square.and.pencil")
                         }
                         .disabled(remote.selectedSession?.isStreaming == true)
+                        Divider()
+                        Button(role: .destructive) {
+                            if let id = remote.selectedSessionID {
+                                closeRemoteSession(id)
+                            }
+                        } label: {
+                            Label("Close Session", systemImage: "xmark")
+                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -1243,6 +1225,8 @@ struct ChatView: View {
                     .accessibilityLabel("Cantrip session actions")
                 }
             }
+
+            remoteSessionTabs
 
             if remote.selectedSession != nil {
                 HStack(spacing: 8) {
@@ -1273,6 +1257,70 @@ struct ChatView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.thinMaterial)
+    }
+
+    @ViewBuilder
+    private var remoteSessionTabs: some View {
+        if remote.sessions.isEmpty {
+            Text("No sessions")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(remote.sessions) { session in
+                        remoteSessionTab(session)
+                    }
+                }
+            }
+        }
+    }
+
+    private func remoteSessionTab(_ session: CantripRemoteSession) -> some View {
+        Button {
+            Task {
+                await remote.selectSession(session.id)
+                vm.syncRemoteTranscript()
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if session.isStreaming {
+                    ProgressView().controlSize(.mini)
+                }
+                Text(session.title)
+                    .lineLimit(1)
+            }
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background(
+                session.id == remote.selectedSessionID
+                    ? Color.accentColor.opacity(0.24)
+                    : Color(.secondarySystemBackground),
+                in: Capsule()
+            )
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                closeRemoteSession(session.id)
+            } label: {
+                Label("Close Session", systemImage: "xmark")
+            }
+            .disabled(remote.isMutating)
+        }
+        .accessibilityHint("Long press for session actions")
+        .accessibilityAction(named: "Close Session") {
+            closeRemoteSession(session.id)
+        }
+    }
+
+    private func closeRemoteSession(_ id: String) {
+        Task {
+            _ = await remote.closeSession(id)
+            vm.syncRemoteTranscript()
+        }
     }
 
     private var transcriptList: some View {
@@ -1621,16 +1669,13 @@ private struct TurnView: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
-                if let thinking = turn.thinking, !thinking.isEmpty {
-                    DisclosureGroup("Reasoning") {
-                        Text(thinking)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 3)
-                    }
-                    .font(.caption)
+                if hasIntermediateSteps {
+                    IntermediateStepsView(
+                        thinking: turn.thinking,
+                        tools: turn.tools,
+                        streaming: turn.streaming
+                    )
                 }
-                ForEach(turn.tools) { ToolRow(tool: $0) }
                 if !turn.text.isEmpty {
                     Markdown(turn.text)            // full GFM: tables, lists, code blocks, headings
                         .textSelection(.enabled)
@@ -1690,6 +1735,10 @@ private struct TurnView: View {
         }
     }
 
+    private var hasIntermediateSteps: Bool {
+        !(turn.thinking?.isEmpty ?? true) || !turn.tools.isEmpty
+    }
+
     private func approvalTitle(_ choice: String) -> String {
         switch choice {
         case "once": "Allow Once"
@@ -1697,6 +1746,66 @@ private struct TurnView: View {
         case "always": "Always Allow"
         case "deny": "Deny"
         default: choice.capitalized
+        }
+    }
+}
+
+/// Keeps all reasoning and tool activity for one response behind one summary.
+private struct IntermediateStepsView: View {
+    let thinking: String?
+    let tools: [ToolActivity]
+    let streaming: Bool
+    @State private var expanded = false
+
+    private var hasThinking: Bool {
+        !(thinking?.isEmpty ?? true)
+    }
+
+    private var stepCount: Int {
+        tools.count + (hasThinking ? 1 : 0)
+    }
+
+    private var isActive: Bool {
+        streaming || tools.contains { !$0.done }
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let thinking, !thinking.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Reasoning", systemImage: "brain")
+                            .font(.caption.weight(.semibold))
+                        Text(thinking)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        Color(.tertiarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
+                }
+                ForEach(tools) { ToolRow(tool: $0) }
+            }
+            .padding(.top, 6)
+        } label: {
+            HStack(spacing: 7) {
+                if isActive {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                Text("Intermediate steps")
+                    .fontWeight(.semibold)
+                Spacer(minLength: 8)
+                Text("\(stepCount) \(stepCount == 1 ? "step" : "steps")")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
         }
     }
 }
