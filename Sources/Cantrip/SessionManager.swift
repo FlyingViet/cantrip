@@ -8,6 +8,7 @@ import Combine
 final class SessionManager: ObservableObject {
     @Published var sessions: [ChatSession] = []
     @Published var activeIndex = 0
+    @Published var showingRemote = false
     @Published private(set) var anyStreaming = false
     /// Fires when any session's run completes (for notifications).
     var onAnyRunFinished: ((ChatSession) -> Void)?
@@ -108,6 +109,7 @@ final class SessionManager: ObservableObject {
         let session = ChatSession()
         adopt(session)
         activeIndex = sessions.count - 1
+        showingRemote = false
         persistOpenSessions()
         return session
     }
@@ -115,19 +117,44 @@ final class SessionManager: ObservableObject {
     func select(_ index: Int) {
         guard sessions.indices.contains(index) else { return }
         activeIndex = index
+        showingRemote = false
         persistOpenSessions()
     }
 
+    func selectRemote() {
+        showingRemote = true
+    }
+
     func selectPrevious() {
-        guard sessions.count > 1 else { return }
-        activeIndex = (activeIndex - 1 + sessions.count) % sessions.count
+        if showingRemote {
+            showingRemote = false
+            activeIndex = sessions.count - 1
+        } else if activeIndex == 0 {
+            showingRemote = true
+        } else {
+            activeIndex -= 1
+        }
         persistOpenSessions()
     }
 
     func selectNext() {
-        guard sessions.count > 1 else { return }
-        activeIndex = (activeIndex + 1) % sessions.count
+        if showingRemote {
+            showingRemote = false
+            activeIndex = 0
+        } else if activeIndex == sessions.count - 1 {
+            showingRemote = true
+        } else {
+            activeIndex += 1
+        }
         persistOpenSessions()
+    }
+
+    func closeSelectedTab() {
+        if showingRemote {
+            showingRemote = false
+        } else {
+            close(activeIndex)
+        }
     }
 
     /// Closing a tab ARCHIVES it — the transcript stays on disk and the

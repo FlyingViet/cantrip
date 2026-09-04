@@ -216,7 +216,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
 
             // ⌘V with an image on the clipboard → attach it.
-            if event.charactersIgnoringModifiers?.lowercased() == "v",
+            if !self.manager.showingRemote,
+               event.charactersIgnoringModifiers?.lowercased() == "v",
                let path = ImagePasteboard.capture() {
                 self.manager.active.attachments.append(path)
                 return nil // consumed
@@ -241,6 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func stopRequest() {
+        guard !manager.showingRemote else { return }
         manager.active.cancel()
     }
 
@@ -272,7 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func closeCurrentSession() {
-        manager.close(manager.activeIndex)
+        manager.closeSelectedTab()
     }
 
     @objc func selectPreviousSession() {
@@ -317,11 +319,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func newConversation() {
+        guard !manager.showingRemote else { return }
         manager.active.newConversation()
     }
 
     @objc func forceHide() {
-        manager.active.cancel()
+        if !manager.showingRemote {
+            manager.active.cancel()
+        }
         OverlayController.shared.clear()
         panel.keepVisibleWhileUnfocused = false
         panel.orderOut(nil)
