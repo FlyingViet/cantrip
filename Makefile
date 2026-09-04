@@ -6,14 +6,14 @@ APP_BACKUP = .$(APP_NAME).app.previous
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-context test-features test-recovery cert icon app run clean
+.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery cert icon app run clean
 
 all: app
 
 build:
 	swift build -c release
 
-test: test-context test-features test-recovery
+test: test-context test-features test-copilot-parser test-package-tracking test-recovery
 
 test-context:
 	@BIN="/tmp/cantrip-context-tests-$$$$"; \
@@ -25,6 +25,18 @@ test-features:
 	@BIN="/tmp/cantrip-feature-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc Sources/Cantrip/AppSearch.swift Tests/FeatureTests/main.swift -o "$$BIN"; \
+	"$$BIN"
+
+test-copilot-parser:
+	@BIN="/tmp/cantrip-copilot-parser-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/ConversationContext.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Tests/CopilotJSONStreamParserTests/main.swift -o "$$BIN"; \
+	"$$BIN"
+
+test-package-tracking:
+	@BIN="/tmp/cantrip-package-tracking-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/PackageTracking.swift Tests/PackageTrackingTests/main.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-recovery:

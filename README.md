@@ -85,13 +85,21 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   dates, full context) from the history view. Relaunch restores exactly the
   tabs that were open, including the active tab, without reopening archived
   sessions.
+- **Tailscale remote control** — an optional authenticated HTTP daemon binds
+  only to `127.0.0.1` and controls those same live, open sessions from its
+  mobile web UI or the Hermes/Agent Gateway app. Private tabs are never
+  exposed, and remotely submitted prompts cannot consume staged screenshots,
+  selections, attachments, calendar data, or location. Enable it in Settings,
+  copy the pairing token, then publish the displayed port with Tailscale Serve
+  (never Funnel).
 - **Extensions: dashboards + agent tools** — install a folder in
   `~/.config/cantrip/plugins/` to add an HTML/JS dashboard side pane, MCP
   servers, approved JSON data commands, or all three. Panels can submit
   prompts and request explicitly declared native capabilities: build, Git,
   backend, usage, and log status; fixed update/build/relaunch actions; or
-  cached Calendar, unread Mail, Contacts-only Messages, and travel-calendar
-  data. First enablement shows an approval card; approval is tied to the
+  cached Calendar, unread Mail, Contacts-only Messages, travel-calendar data,
+  and local package tracking extracted from recent Mail. First enablement shows
+  an approval card; approval is tied to the
   manifest hash, and installed files reload without restarting Cantrip. See
   [PLUGINS.md](PLUGINS.md).
 - **Self-updating** — when the GitHub repo is ahead, an "Update available"

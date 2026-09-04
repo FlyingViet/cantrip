@@ -80,6 +80,7 @@ cantrip.log("refresh took 120ms");                 // writes to Cantrip.log
 cantrip.openURL("http://homeassistant.local:8123"); // opens an HTTP(S) page
                                                    // in the default browser
 const calendar = await cantrip.requestData("dailyBriefing.calendar");
+const packages = await cantrip.requestData("packageTracking");
 const results = await cantrip.requestData("media", {
   action: "search",
   query: "Arrival"
@@ -108,12 +109,23 @@ shown on the approval card.
 
 Native panel APIs are promise-based and denied unless the manifest declares
 the matching capability. Built-in capabilities are `cantripStatus`,
-`cantripActions`, and `dailyBriefing`; they expose only Cantrip's fixed status,
-maintenance commands, and read-only local briefing sources. Daily Briefing
+`cantripActions`, `dailyBriefing`, and `packageTracking`; they expose only
+Cantrip's fixed status, maintenance commands, and read-only local sources. Daily Briefing
 uses Contacts to return only recent messages from known contacts. Its
 `.calendar`, `.mail`, and `.messages` requests resolve independently and use a
 short cache; append `.refresh` to bypass it. Capabilities are listed on the
 approval card, and changing them invalidates approval.
+
+`packageTracking` scans the past 30 days in independent three-day windows, with
+at most two Mail queries active. Mail filters subjects and senders first, then
+Cantrip reads bodies only for matching messages from Inbox and available
+Archive/All Mail folders. Timed-out windows return an explicitly marked partial
+scan while preserving completed windows. The bridge returns normalized shipment
+status, merchant, carrier, tracking number/link, and delivery estimate; raw
+message bodies never cross it. Results are cached for 10 minutes; request
+`packageTracking.refresh` to force a new scan. The working
+`Examples/plugins/package-tracker/` panel groups results into Arriving soon,
+Active, and Delivered.
 
 ## Install, approval, and lifecycle
 

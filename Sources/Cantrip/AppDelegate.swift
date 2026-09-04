@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var cancellables: Set<AnyCancellable> = []
     private let manager = SessionManager()
     private let recoveryReport: CrashRecovery.Report?
+    private var remoteControlServer: RemoteControlServer?
+    private var remoteControlMenuItem: NSMenuItem?
 
     init(recoveryReport: CrashRecovery.Report?) {
         self.recoveryReport = recoveryReport
@@ -72,6 +74,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         menu.addItem(withTitle: "Toggle (⌥Space)", action: #selector(togglePanel), keyEquivalent: "")
         menu.addItem(withTitle: "Stop Current Request", action: #selector(stopRequest), keyEquivalent: "")
         menu.addItem(withTitle: "Hide Panel & Overlays", action: #selector(forceHide), keyEquivalent: "")
+        menu.addItem(.separator())
+        let remoteControlMenuItem = NSMenuItem(
+            title: "Remote Control Daemon",
+            action: #selector(toggleRemoteControlDaemon),
+            keyEquivalent: ""
+        )
+        remoteControlMenuItem.target = self
+        menu.addItem(remoteControlMenuItem)
+        self.remoteControlMenuItem = remoteControlMenuItem
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Cantrip", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
@@ -137,6 +148,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Unix-socket server for the `cantrip` CLI.
         CLIServer.shared.start()
 
+        // Authenticated loopback HTTP control plane. Tailscale Serve is
+        // responsible for HTTPS and remote reachability.
+        let remoteControlServer = RemoteControlServer(manager: manager)
+        remoteControlServer.onError = { message in
+            DispatchQueue.main.async {
+                AppSettings.shared.reportRemoteControlError(message)
+            }
+        }
+        self.remoteControlServer = remoteControlServer
+        AppSettings.shared.$remoteControlEnabled
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] enabled in
+                self?.remoteControlMenuItem?.state = enabled ? .on : .off
+                if !enabled {
+                    self?.remoteControlServer?.stop()
+                    AppSettings.shared.reportRemoteControlError(nil)
+                }
+            }
+            .store(in: &cancellables)
+        Publishers.CombineLatest3(
+            AppSettings.shared.$remoteControlEnabled,
+            AppSettings.shared.$remoteControlPort,
+            AppSettings.shared.$remoteControlCredentialRevision
+        )
+        .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+        .sink { enabled, port, _ in
+            guard enabled else { return }
+            guard let token = AppSettings.shared.ensureRemoteControlToken() else {
+                remoteControlServer.stop()
+                return
+            }
+            remoteControlServer.start(port: port, token: token)
+        }
+        .store(in: &cancellables)
+
         // Daily memory consolidation, off the launch path.
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
             Consolidator.runIfDue()
@@ -189,11 +236,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        remoteControlServer?.stop()
         CrashRecovery.markCleanExit()
     }
 
     @objc func stopRequest() {
         manager.active.cancel()
+    }
+
+    @objc func toggleRemoteControlDaemon() {
+        AppSettings.shared.remoteControlEnabled.toggle()
     }
 
     @objc func exportSettings() {

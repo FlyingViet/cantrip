@@ -112,9 +112,6 @@ final class CopilotBackend: Backend {
                 for event in output.consume(data) {
                     onEvent(event)
                 }
-                if output.errorDescription != nil, p.isRunning {
-                    p.terminate()
-                }
             }
         }
 
@@ -130,9 +127,7 @@ final class CopilotBackend: Backend {
                     onEvent(event)
                 }
             }
-            if let parseError = output.errorDescription {
-                onEvent(.failure(parseError))
-            } else if proc.terminationStatus != 0 {
+            if proc.terminationStatus != 0 {
                 errData.append(stderr.fileHandleForReading.readDataToEndOfFile())
                 let errText = String(data: errData, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -163,35 +158,34 @@ final class CopilotBackend: Backend {
 private final class CopilotJSONOutputCollector {
     private let lock = NSLock()
     private var parser = CopilotJSONStreamParser()
-    private var parsingError: Error?
-
-    var errorDescription: String? {
-        lock.withLock {
-            parsingError.map { "Failed to parse Copilot output: \($0.localizedDescription)" }
-        }
-    }
 
     func consume(_ data: Data) -> [BackendEvent] {
         lock.withLock {
-            guard parsingError == nil else { return [] }
-            do {
-                return try parser.consume(data)
-            } catch {
-                parsingError = error
-                return []
+            parser.consume(data) { error, line in
+                Self.logMalformedLine(error, line: line)
             }
         }
     }
 
     func finish() -> [BackendEvent] {
         lock.withLock {
-            guard parsingError == nil else { return [] }
-            do {
-                return try parser.finish()
-            } catch {
-                parsingError = error
-                return []
+            parser.finish { error, line in
+                Self.logMalformedLine(error, line: line)
             }
         }
+    }
+
+    private static func logMalformedLine(
+        _ error: CopilotJSONStreamParserError,
+        line: Data
+    ) {
+        let previewLimit = 240
+        let preview = String(decoding: line.prefix(previewLimit), as: UTF8.self)
+            .replacingOccurrences(of: "\t", with: "\\t")
+        let suffix = line.count > previewLimit ? "..." : ""
+        Log.write(
+            "copilot: skipped malformed JSONL event: \(error.localizedDescription); "
+                + "bytes=\(line.count), preview=\(preview)\(suffix)"
+        )
     }
 }

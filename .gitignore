@@ -9,6 +9,8 @@ Resources/AppIcon.icns
 Examples/plugins/*
 !Examples/plugins/hello-dashboard/
 !Examples/plugins/hello-dashboard/**
+!Examples/plugins/package-tracker/
+!Examples/plugins/package-tracker/**
 
 # Windows Electron build outputs
 windows/node_modules/

@@ -1,0 +1,10 @@
+{
+  "name": "Packages",
+  "version": "1.0.0",
+  "description": "Tracks deliveries from recent Mail messages without sending email contents off this Mac.",
+  "panel": {
+    "html": "index.html",
+    "title": "Packages",
+    "capabilities": ["packageTracking"]
+  }
+}

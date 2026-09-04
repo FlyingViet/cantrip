@@ -97,6 +97,7 @@ enum PluginPanelData {
     }
 
     private static let briefingCacheTTL: TimeInterval = 5 * 60
+    private static let packageTrackingCacheTTL: TimeInterval = 10 * 60
 
     static func dailyBriefing(
         completion: @escaping (Result<[String: Any], Error>) -> Void
@@ -253,6 +254,49 @@ enum PluginPanelData {
                     Log.write("daily-briefing messages: \(error.localizedDescription)")
                     completeBriefing(.failure(error), completion: completion)
                 }
+            }
+        }
+    }
+
+    static func packageTracking(
+        forceRefresh: Bool = false,
+        completion: @escaping (Result<[String: Any], Error>) -> Void
+    ) {
+        if !forceRefresh,
+           let cached = PackageTrackingCache.shared.value(
+               maximumAge: packageTrackingCacheTTL
+           ) {
+            completeBriefing(.success([
+                "packages": cached.rows,
+                "scannedMessages": cached.scannedMessages,
+                "generatedAt": isoDate(cached.generatedAt),
+                "cached": true,
+                "partial": cached.partial
+            ]), completion: completion)
+            return
+        }
+
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                let scan = try packageMailMessages()
+                let rows = PackageTracking.shipments(from: scan.messages).map(\.payload)
+                let generatedAt = Date()
+                PackageTrackingCache.shared.store(
+                    rows,
+                    scannedMessages: scan.messages.count,
+                    partial: scan.partial,
+                    generatedAt: generatedAt
+                )
+                completeBriefing(.success([
+                    "packages": rows,
+                    "scannedMessages": scan.messages.count,
+                    "generatedAt": isoDate(generatedAt),
+                    "cached": false,
+                    "partial": scan.partial
+                ]), completion: completion)
+            } catch {
+                Log.write("package-tracking mail: \(error.localizedDescription)")
+                completeBriefing(.failure(error), completion: completion)
             }
         }
     }
@@ -518,6 +562,226 @@ enum PluginPanelData {
                 "flagged": $0[3].lowercased() == "true"
             ]
         }
+    }
+
+    private struct PackageMailScan {
+        let messages: [PackageTracking.MailMessage]
+        let partial: Bool
+    }
+
+    private struct PackageMailBatch {
+        let messages: [PackageTracking.MailMessage]
+        let partial: Bool
+    }
+
+    private static func packageMailMessages() throws -> PackageMailScan {
+        let accumulator = PackageMailScanAccumulator()
+        let queue = OperationQueue()
+        queue.name = "com.brian.agentspotlight.package-mail"
+        queue.qualityOfService = .utility
+        queue.maxConcurrentOperationCount = 2
+
+        for newestAge in stride(from: 0, to: 30, by: 3) {
+            let oldestAge = min(newestAge + 3, 30)
+            queue.addOperation {
+                do {
+                    let output = try run(
+                        "/usr/bin/osascript",
+                        ["-e", packageMailBatchScript(
+                            newestAge: newestAge,
+                            oldestAge: oldestAge
+                        )],
+                        timeout: 8
+                    )
+                    let batch = try parsePackageMailBatch(output)
+                    accumulator.store(
+                        messages: batch.messages,
+                        partial: batch.partial
+                    )
+                } catch {
+                    Log.write(
+                        "package-tracking mail batch \(newestAge)-\(oldestAge) days: "
+                            + error.localizedDescription
+                    )
+                    accumulator.store(error)
+                }
+            }
+        }
+        queue.waitUntilAllOperationsAreFinished()
+
+        let result = accumulator.result
+        guard result.completedBatches > 0 else {
+            throw result.lastError
+                ?? PanelDataError("Mail package scan did not complete any batches")
+        }
+        var seen = Set<String>()
+        let messages = result.messages.filter { seen.insert($0.id).inserted }
+        return PackageMailScan(
+            messages: messages,
+            partial: result.partial || result.completedBatches < 10
+        )
+    }
+
+    private static func packageMailBatchScript(
+        newestAge: Int,
+        oldestAge: Int
+    ) -> String {
+        """
+        on replaceText(findText, replacementText, sourceText)
+            set oldDelimiters to AppleScript's text item delimiters
+            set AppleScript's text item delimiters to findText
+            set textItems to text items of (sourceText as text)
+            set AppleScript's text item delimiters to replacementText
+            set cleanText to textItems as text
+            set AppleScript's text item delimiters to oldDelimiters
+            return cleanText
+        end replaceText
+        on clean(sourceText)
+            set valueText to sourceText as text
+            set valueText to my replaceText(ASCII character 30, " ", valueText)
+            set valueText to my replaceText(ASCII character 31, " ", valueText)
+            set valueText to my replaceText(return, " ", valueText)
+            set valueText to my replaceText(linefeed, " ", valueText)
+            return my replaceText(tab, " ", valueText)
+        end clean
+        on bounded(sourceText, maximumLength)
+            set cleanText to my clean(sourceText)
+            if (count characters of cleanText) > maximumLength then
+                return text 1 thru maximumLength of cleanText
+            end if
+            return cleanText
+        end bounded
+
+        set fieldSeparator to ASCII character 31
+        set recordSeparator to ASCII character 30
+        set newerBoundary to (current date) - (\(newestAge) * days)
+        set olderBoundary to (current date) - (\(oldestAge) * days)
+        set nowEpoch to (do shell script "/bin/date +%s") as integer
+        set maximumMatches to 30
+        set output to ""
+        set matchedCount to 0
+        set scanWasPartial to false
+        set seenMessageIdentifiers to {}
+
+        tell application "Mail"
+            set sourceMailboxes to {inbox}
+            repeat with mailAccount in every account
+                set foundArchive to false
+                try
+                    set end of sourceMailboxes to mailbox "Archive" of mailAccount
+                    set foundArchive to true
+                end try
+                if not foundArchive then
+                    try
+                        set end of sourceMailboxes to mailbox "All Mail" of mailAccount
+                        set foundArchive to true
+                    end try
+                end if
+                if not foundArchive then
+                    try
+                        set gmailRoot to mailbox "[Gmail]" of mailAccount
+                        set end of sourceMailboxes to mailbox "All Mail" of gmailRoot
+                    end try
+                end if
+            end repeat
+
+            repeat with sourceMailbox in sourceMailboxes
+                if matchedCount >= maximumMatches then
+                    set scanWasPartial to true
+                    exit repeat
+                end if
+
+                set candidateMessages to {}
+                try
+                    with timeout of 3 seconds
+                        set candidateMessages to every message of sourceMailbox whose ¬
+                            (date received > olderBoundary and ¬
+                            date received <= newerBoundary and ¬
+                            (subject contains "track" or subject contains "ship" or ¬
+                            subject contains "deliver" or subject contains "arriv" or ¬
+                            subject contains "package" or subject contains "order" or ¬
+                            subject contains "dispatch" or subject contains "courier" or ¬
+                            sender contains "amazon" or sender contains "shop.app" or ¬
+                            sender contains "ups" or sender contains "fedex" or ¬
+                            sender contains "usps" or sender contains "dhl" or ¬
+                            sender contains "ontrac" or sender contains "lasership"))
+                    end timeout
+                on error
+                    set scanWasPartial to true
+                end try
+
+                repeat with mailMessage in candidateMessages
+                    if matchedCount >= maximumMatches then
+                        set scanWasPartial to true
+                        exit repeat
+                    end if
+                    try
+                        with timeout of 1 second
+                            set subjectText to subject of mailMessage as text
+                            set senderText to sender of mailMessage as text
+                            try
+                                set messageIdentifier to message id of mailMessage as text
+                            on error
+                                set messageIdentifier to id of mailMessage as text
+                            end try
+                            set receivedSeconds to nowEpoch + ((date received of mailMessage) - (current date))
+                        end timeout
+                        if seenMessageIdentifiers does not contain messageIdentifier then
+                            set end of seenMessageIdentifiers to messageIdentifier
+                            set bodyText to ""
+                            try
+                                with timeout of 1 second
+                                    set bodyText to content of mailMessage as text
+                                end timeout
+                            on error
+                                set scanWasPartial to true
+                            end try
+                            set output to output & my clean(messageIdentifier) & fieldSeparator & ¬
+                                (receivedSeconds as integer) & fieldSeparator & ¬
+                                my clean(senderText) & fieldSeparator & ¬
+                                my clean(subjectText) & fieldSeparator & ¬
+                                my bounded(bodyText, 12000) & recordSeparator
+                            set matchedCount to matchedCount + 1
+                        end if
+                    on error
+                        set scanWasPartial to true
+                    end try
+                end repeat
+            end repeat
+        end tell
+
+        if scanWasPartial then
+            set scanState to "partial"
+        else
+            set scanState to "complete"
+        end if
+        return "__CANTRIP_SCAN__" & fieldSeparator & scanState & recordSeparator & output
+        """
+    }
+
+    private static func parsePackageMailBatch(_ output: String) throws -> PackageMailBatch {
+        let records = output.components(separatedBy: "\u{1e}")
+        let header = records.first?.components(separatedBy: "\u{1f}") ?? []
+        guard header.count == 2, header[0] == "__CANTRIP_SCAN__" else {
+            throw PanelDataError("Mail returned an invalid package scan response")
+        }
+
+        let messages: [PackageTracking.MailMessage] = records.dropFirst().compactMap { row in
+            let fields = row.components(separatedBy: "\u{1f}")
+            guard fields.count >= 5,
+                  !fields[0].isEmpty,
+                  let timestamp = TimeInterval(fields[1]) else {
+                return nil
+            }
+            return PackageTracking.MailMessage(
+                id: fields[0],
+                receivedAt: Date(timeIntervalSince1970: timestamp),
+                sender: fields[2],
+                subject: fields[3],
+                content: fields[4]
+            )
+        }
+        return PackageMailBatch(messages: messages, partial: header[1] == "partial")
     }
 
     private static func authorizeContacts(
@@ -1087,6 +1351,90 @@ private final class BriefingSectionCache {
         lock.lock()
         entries[section] = Entry(rows: rows, generatedAt: generatedAt)
         lock.unlock()
+    }
+}
+
+private final class PackageTrackingCache {
+    static let shared = PackageTrackingCache()
+
+    struct Entry {
+        let rows: [[String: Any]]
+        let scannedMessages: Int
+        let partial: Bool
+        let generatedAt: Date
+    }
+
+    private let lock = NSLock()
+    private var entry: Entry?
+
+    func value(maximumAge: TimeInterval) -> Entry? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry,
+              Date().timeIntervalSince(entry.generatedAt) < maximumAge else {
+            return nil
+        }
+        return entry
+    }
+
+    func store(
+        _ rows: [[String: Any]],
+        scannedMessages: Int,
+        partial: Bool,
+        generatedAt: Date
+    ) {
+        lock.lock()
+        entry = Entry(
+            rows: rows,
+            scannedMessages: scannedMessages,
+            partial: partial,
+            generatedAt: generatedAt
+        )
+        lock.unlock()
+    }
+}
+
+private final class PackageMailScanAccumulator {
+    struct Result {
+        let messages: [PackageTracking.MailMessage]
+        let completedBatches: Int
+        let partial: Bool
+        let lastError: Error?
+    }
+
+    private let lock = NSLock()
+    private var messages: [PackageTracking.MailMessage] = []
+    private var completedBatches = 0
+    private var partial = false
+    private var lastError: Error?
+
+    func store(
+        messages batchMessages: [PackageTracking.MailMessage],
+        partial batchWasPartial: Bool
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        messages.append(contentsOf: batchMessages)
+        completedBatches += 1
+        partial = partial || batchWasPartial
+    }
+
+    func store(_ error: Error) {
+        lock.lock()
+        partial = true
+        lastError = error
+        lock.unlock()
+    }
+
+    var result: Result {
+        lock.lock()
+        defer { lock.unlock() }
+        return Result(
+            messages: messages,
+            completedBatches: completedBatches,
+            partial: partial,
+            lastError: lastError
+        )
     }
 }
 
