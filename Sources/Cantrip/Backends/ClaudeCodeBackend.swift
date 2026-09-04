@@ -410,12 +410,13 @@ final class ClaudeCodeBackend: Backend {
         case "result":
             if let cost = obj["total_cost_usd"] as? Double {
                 let usage = obj["usage"] as? [String: Any]
-                UsageTracker.shared.recordCost(
-                    backend: .claudeCode, costUSD: cost,
+                onEvent(.usage(BackendUsage(
+                    backend: "Claude Code", costUSD: cost,
                     inputTokens: (usage?["input_tokens"] as? Int ?? 0)
                         + (usage?["cache_creation_input_tokens"] as? Int ?? 0)
                         + (usage?["cache_read_input_tokens"] as? Int ?? 0),
-                    outputTokens: usage?["output_tokens"] as? Int ?? 0)
+                    outputTokens: usage?["output_tokens"] as? Int ?? 0
+                )))
             }
             if let isError = obj["is_error"] as? Bool, isError,
                let result = obj["result"] as? String {

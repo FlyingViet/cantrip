@@ -7,6 +7,7 @@ if let watcherFlag = CommandLine.arguments.firstIndex(of: "--cantrip-crash-watch
 }
 
 let recoveryReport = CrashRecovery.start()
+try? RunJournal.prune()
 
 MainActor.assumeIsolated {
     let app = NSApplication.shared

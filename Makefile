@@ -6,14 +6,14 @@ APP_BACKUP = .$(APP_NAME).app.previous
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery cert icon app run clean
+.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal cert icon app run clean
 
 all: app
 
 build:
 	swift build -c release
 
-test: test-context test-features test-copilot-parser test-package-tracking test-recovery
+test: test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal
 
 test-context:
 	@BIN="/tmp/cantrip-context-tests-$$$$"; \
@@ -43,6 +43,12 @@ test-recovery:
 	@BIN="/tmp/cantrip-recovery-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc Sources/Cantrip/CrashRecovery.swift Tests/CrashRecoveryTests/main.swift -o "$$BIN"; \
+	"$$BIN"
+
+test-run-journal:
+	@BIN="/tmp/cantrip-run-journal-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/RunJournal.swift Tests/RunJournalTests/main.swift -o "$$BIN"; \
 	"$$BIN"
 
 # Auto-create the signing certificate if it's missing (first install).
