@@ -207,6 +207,10 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate {
         }
         if target.absoluteString == "about:blank" || sameOrigin(target, endpoint) {
             decisionHandler(.allow)
+        } else if navigationAction.navigationType == .linkActivated,
+                  ["http", "https", "mailto"].contains(target.scheme?.lowercased() ?? "") {
+            NSWorkspace.shared.open(target)
+            decisionHandler(.cancel)
         } else {
             errorMessage = "Blocked navigation outside the paired Cantrip host."
             decisionHandler(.cancel)
