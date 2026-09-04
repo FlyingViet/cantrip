@@ -433,8 +433,11 @@ private extension RemoteControlServer {
     <div class="composer"><select id="mode"><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <textarea id="draft" class="grow" placeholder="Message Cantrip"></textarea><button id="resume" class="hidden">Resume</button><button id="stop">Stop</button><button id="send" class="primary">Send</button></div></main>
     <script>
-    const $=id=>document.getElementById(id);let token=localStorage.cantripToken||"",selected=null,timer=null;
+    const $=id=>document.getElementById(id);let token=localStorage.cantripToken||"",selected=null,timer=null,renderedSession=null,followOutput=true;
     function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false"}
+    function atBottom(){const root=document.scrollingElement||document.documentElement;return root.scrollHeight-root.clientHeight-root.scrollTop<=4}
+    addEventListener("wheel",event=>{if(event.deltaY<0)followOutput=false},{passive:true});
+    addEventListener("scroll",()=>{followOutput=atBottom()},{passive:true});
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
       const response=await fetch(path,options);const data=await response.json();if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
@@ -443,13 +446,13 @@ private extension RemoteControlServer {
       catch(error){connection(false);$("status").textContent=error.message;if(error.message.includes("token"))pair(true)}}
     function renderSessions(items){const nav=$("sessions");nav.replaceChildren();for(const item of items){const button=document.createElement("button");button.textContent=item.title;
       button.className=item.id===selected?"active":"";button.onclick=()=>{selected=item.id;refresh()};nav.append(button)}}
-    function render(session){const box=$("messages");box.replaceChildren();if(!session){box.textContent="No open sessions.";return}
+    function render(session){const box=$("messages"),sessionID=session?.id||null,shouldFollow=followOutput||sessionID!==renderedSession;renderedSession=sessionID;box.replaceChildren();if(!session){box.textContent="No open sessions.";return}
       $("status").textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount||0} queued`;$("resume").classList.toggle("hidden",!session.canResume);
       for(const message of session.messages){const row=document.createElement("article");row.className=`message ${message.role}`;
         const meta=document.createElement("div");meta.className="meta";meta.textContent=message.author||message.role;row.append(meta);
         const text=document.createElement("div");text.textContent=message.text;row.append(text);
         for(const activity of message.activities||[]){const a=document.createElement("div");a.className="activity";a.textContent=`${activity.state==="running"?"◌":"✓"} ${activity.toolName}: ${activity.title}`;row.append(a)}
-        box.append(row)}window.scrollTo({top:document.body.scrollHeight})}
+        box.append(row)}if(shouldFollow)window.scrollTo({top:document.documentElement.scrollHeight})}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
     $("pairButton").onclick=async()=>{token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh();timer=setInterval(refresh,1500)}
       catch(error){$("pairError").textContent=error.message}};
