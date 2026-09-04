@@ -148,8 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Unix-socket server for the `cantrip` CLI.
         CLIServer.shared.start()
 
-        // Authenticated loopback HTTP control plane. Tailscale Serve is
-        // responsible for HTTPS and remote reachability.
+        // Authenticated loopback HTTP for Tailscale plus encrypted Bonjour LAN access.
         let remoteControlServer = RemoteControlServer(manager: manager)
         remoteControlServer.onError = { message in
             DispatchQueue.main.async {

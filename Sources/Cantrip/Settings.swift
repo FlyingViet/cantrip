@@ -55,8 +55,7 @@ final class AppSettings: ObservableObject {
     @Published private(set) var remoteControlError: String?
     @Published private(set) var remoteControlCredentialRevision = 0
 
-    /// Opt-in for the loopback HTTP control plane. Tailscale Serve provides
-    /// HTTPS and tailnet reachability without exposing a LAN listener.
+    /// Opt-in for loopback HTTP through Tailscale and encrypted Bonjour LAN access.
     @Published var remoteControlEnabled: Bool {
         didSet { d.set(remoteControlEnabled, forKey: "remoteControlEnabled") }
     }
