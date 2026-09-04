@@ -157,11 +157,14 @@ final class RemoteControlServer {
         let parts = tail.split(separator: "/", omittingEmptySubsequences: true)
         guard let rawID = parts.first,
               let id = UUID(uuidString: String(rawID)),
-              let session = manager.sessions.first(where: { $0.id == id && !$0.isPrivate })
+              let sessionIndex = manager.sessions.firstIndex(where: {
+                  $0.id == id && !$0.isPrivate
+              })
         else {
             sendError(404, "session not found", on: connection)
             return
         }
+        let session = manager.sessions[sessionIndex]
 
         if parts.count == 1, request.method == "GET" {
             sendJSON(["session": snapshot(session)], on: connection)
@@ -209,6 +212,10 @@ final class RemoteControlServer {
             }
             session.newConversation()
             sendJSON(["session": snapshot(session)], on: connection)
+        case "close":
+            manager.close(sessionIndex)
+            let replacementIndex = min(sessionIndex, manager.sessions.count - 1)
+            sendJSON(["session": snapshot(manager.sessions[replacementIndex])], on: connection)
         default:
             sendError(404, "action not found", on: connection)
         }
@@ -424,7 +431,7 @@ private extension RemoteControlServer {
     .tools{display:flex;align-items:center;gap:8px;min-height:32px;padding:2px 14px 8px}.tools-spacer{flex:1;min-width:8px}.connection{display:flex;align-items:center;gap:5px;color:var(--tertiary);font-size:11px}.connection-dot{width:6px;height:6px;border-radius:50%;background:var(--tertiary)}[data-cantrip-connected=true] .connection-dot{background:var(--green)}
     .control{min-height:27px;padding:4px 9px;border:1px solid var(--line);border-radius:7px;background:var(--surface)}.control:hover{background:var(--surface-2)}.control.primary{border-color:var(--accent);background:var(--accent);color:white}.control:disabled{opacity:.45;cursor:default}.quiet{border:0;background:transparent;color:var(--secondary);font-size:12px}.quiet:hover{background:var(--surface)}
     .round{display:grid;place-items:center;flex:none;width:27px;height:27px;padding:0;border:0;border-radius:50%;background:var(--surface-2);font-size:17px;font-weight:600;line-height:1}.round:hover{filter:brightness(1.12)}.round.primary{background:var(--accent);color:white}.round.danger{color:var(--red);font-size:12px}
-    #sessions{display:flex;gap:5px;min-width:0;overflow-x:auto;scrollbar-width:none}#sessions::-webkit-scrollbar{display:none}#sessions button{flex:none;max-width:190px;padding:4px 9px;border:0;border-radius:999px;background:transparent;color:var(--secondary);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#sessions button:hover{background:var(--surface);color:var(--text)}#sessions button.active{background:var(--surface-2);color:var(--text)}
+    #sessions{display:flex;gap:5px;min-width:0;overflow-x:auto;scrollbar-width:none}#sessions::-webkit-scrollbar{display:none}.session-tab{display:flex;align-items:center;flex:none;max-width:210px;border-radius:999px;color:var(--secondary)}.session-tab:hover{background:var(--surface);color:var(--text)}.session-tab.active{background:var(--surface-2);color:var(--text)}.session-select{min-width:0;max-width:180px;padding:4px 4px 4px 9px;border:0;background:transparent;color:inherit;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.session-close{display:grid;place-items:center;flex:none;width:22px;height:22px;padding:0 3px 1px 0;border:0;border-radius:50%;background:transparent;color:var(--tertiary);font-size:15px;line-height:1;opacity:.45}.session-tab:hover .session-close,.session-tab.active .session-close,.session-close:focus-visible{opacity:1}.session-close:hover{color:var(--red)}
     select{height:27px;max-width:90px;padding:0 5px;border:0;border-radius:6px;outline:0;background:transparent;color:var(--secondary);font-size:12px}select:hover,select:focus{background:var(--surface)}
     #messages{width:100%;min-height:calc(100vh - 88px);margin:0;padding:16px;display:flex;flex-direction:column;gap:12px}
     .message{width:100%;overflow-wrap:anywhere}.message.user{color:var(--secondary);font-size:13px;font-weight:600;line-height:1.4}.message.assistant{color:var(--text);line-height:1.5}.message.error{color:var(--orange);padding-left:21px;position:relative}.message.error:before{content:"!";position:absolute;left:3px;font-weight:800}.author{display:block;margin-bottom:5px;color:var(--tertiary);font-size:11px;font-weight:600}
@@ -434,7 +441,7 @@ private extension RemoteControlServer {
     .step{margin:5px 0;border:1px solid var(--line);border-radius:7px;background:var(--surface)}.step>summary,.step-static{display:flex;align-items:center;gap:7px;padding:7px 9px;font-size:12px}.step>summary:after{content:"›";margin-left:auto;color:var(--tertiary);font-size:16px;transition:transform .12s}.step[open]>summary:after{transform:rotate(90deg)}.step-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tool-name{margin-left:auto;color:var(--tertiary);font:10px ui-monospace,SFMono-Regular,Menlo,monospace}.step>summary .tool-name{margin-left:8px}.step-details{display:grid;gap:8px;padding:0 9px 9px 30px}.detail-label{margin-bottom:4px;color:var(--secondary);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}.step-details pre{max-height:180px;margin:0;padding:8px;border-radius:5px;background:var(--surface);overflow:auto;white-space:pre-wrap;word-break:break-word;color:var(--secondary);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
     .run-status{display:flex;align-items:center;gap:7px;color:var(--secondary);font-size:13px}.spinner{width:12px;height:12px;border:1.5px solid rgba(255,255,255,.2);border-top-color:var(--secondary);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.empty{margin:auto;color:var(--tertiary)}
     #pair{width:min(calc(100% - 32px),430px);margin:18vh auto 0;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.2)}#pair h2{margin:0 0 7px;font-size:18px}#pair p{line-height:1.45}#pairControls{display:flex;gap:7px;margin-top:15px}#pair input{min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;outline:0;background:var(--surface)}#pair input:focus{border-color:var(--accent)}
-    @media(max-width:620px){.prompt-row{padding-inline:12px}.tools{padding-inline:10px}.connection-label{display:none}#sessions button{max-width:120px}#messages{padding:14px 12px 22px}}
+    @media(max-width:620px){.prompt-row{padding-inline:12px}.tools{padding-inline:10px}.connection-label{display:none}.session-tab{max-width:145px}.session-select{max-width:115px}#messages{padding:14px 12px 22px}}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
@@ -456,8 +463,9 @@ private extension RemoteControlServer {
     async function refresh(){try{const listed=await api("/api/v1/sessions");if(!selected||!listed.sessions.some(s=>s.id===selected))selected=listed.sessions[0]?.id||null;
       renderSessions(listed.sessions);if(selected){const data=await api(`/api/v1/sessions/${selected}`);render(data.session)}else render(null);connection(true)}
       catch(error){connection(false);if(error.message.includes("token"))pair(true)}}
-    function renderSessions(items){const nav=$("sessions");nav.replaceChildren();for(const item of items){const button=document.createElement("button");button.textContent=item.title;
-      button.className=item.id===selected?"active":"";button.onclick=()=>{selected=item.id;renderedPayload="";refresh()};nav.append(button)}}
+    function renderSessions(items){const nav=$("sessions");nav.replaceChildren();for(const item of items){const tab=document.createElement("span");tab.className=`session-tab ${item.id===selected?"active":""}`;
+      const button=document.createElement("button");button.className="session-select";button.textContent=item.title;button.title=item.title;button.onclick=()=>{selected=item.id;renderedPayload="";refresh()};
+      const close=document.createElement("button");close.className="session-close";close.textContent="×";close.title=`Close ${item.title}`;close.setAttribute("aria-label",`Close ${item.title}`);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};tab.append(button,close);nav.append(tab)}}
     function safeURL(raw,image=false){try{const url=new URL(raw,location.href);if(url.protocol==="https:"||url.protocol==="http:"||(!image&&url.protocol==="mailto:"))return url.href}catch{}return null}
     function appendInline(parent,source){source=source.replace(/<br\\s*\\/?\\s*>/gi,"\\n");let cursor=0,plain="";
       const flush=()=>{if(plain){parent.append(document.createTextNode(plain));plain=""}};
@@ -503,6 +511,8 @@ private extension RemoteControlServer {
         if(session.isStreaming||session.queuedCount){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
       requestAnimationFrame(()=>{root.scrollTop=shouldFollow?root.scrollHeight:Math.min(previousTop,Math.max(0,root.scrollHeight-root.clientHeight));followOutput=shouldFollow;suppressScroll=false})}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
+    async function closeSession(id){try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selected=data.session.id;renderedPayload="";await refresh()}
+      catch(error){connection(false);const label=document.querySelector(".connection-label");if(label)label.textContent=`Close failed: ${error.message}`}}
     $("pairButton").onclick=async()=>{token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh();timer=setInterval(refresh,1500)}
       catch(error){$("pairError").textContent=error.message}};
     $("send").onclick=()=>{const text=$("draft").value.trim();if(text){$("draft").value="";action("messages",{text,mode:$("mode").value})}};
