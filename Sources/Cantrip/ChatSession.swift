@@ -16,6 +16,12 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey { case id, role, text, author }
 }
 
+struct QueuedPrompt: Identifiable, Equatable {
+    let id = UUID()
+    let text: String
+    let includesAmbientContext: Bool
+}
+
 /// Drives the conversation: routes queries to the selected backend,
 /// accumulates streamed output, and exposes state to the UI.
 @MainActor
@@ -27,7 +33,7 @@ final class ChatSession: ObservableObject {
     /// Image file paths pasted (⌘V) to attach to the next query.
     @Published var attachments: [String] = []
     /// Messages queued while a response is streaming (run in order after).
-    @Published var queued: [String] = []
+    @Published var queued: [QueuedPrompt] = []
     /// Text grabbed from another app via ⌥⇧Space, attached to next query.
     @Published var selectionContext: SelectionContext?
     /// Called when the whole run (including queue) completes; AppDelegate
@@ -40,6 +46,9 @@ final class ChatSession: ObservableObject {
     @Published var canResume = false
     /// The user prompt whose run was interrupted; resume re-anchors on it.
     private var currentRunPrompt: String?
+    /// Resuming a remotely originated run must retain its no-ambient-context
+    /// boundary, including the automatic resume path.
+    private var currentRunIncludesAmbientContext = true
     /// One free automatic resume per user-initiated run; manual after that.
     private var autoResumeSpent = false
     /// Council mode: fan each prompt out to several backends in parallel,
@@ -177,14 +186,30 @@ final class ChatSession: ObservableObject {
     /// kills and redirects; `inject` adds to the running turn's context
     /// (Claude backend) without interrupting.
     func submit(_ text: String, interrupt: Bool = false, inject: Bool = false) {
+        submit(text, interrupt: interrupt, inject: inject, includesAmbientContext: true)
+    }
+
+    /// Remote clients share the live session but must not consume context
+    /// staged by the person at the Mac or capture ambient Mac data.
+    func submitRemote(_ text: String, interrupt: Bool = false, inject: Bool = false) {
+        submit(text, interrupt: interrupt, inject: inject, includesAmbientContext: false)
+    }
+
+    private func submit(_ text: String, interrupt: Bool, inject: Bool,
+                        includesAmbientContext: Bool) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         guard isStreaming else {
-            councilMode ? sendCouncil(prompt) : send(prompt)
+            councilMode
+                ? sendCouncil(prompt, includesAmbientContext: includesAmbientContext)
+                : send(prompt, includesAmbientContext: includesAmbientContext)
             return
         }
         if councilRunning, inject, !interrupt {
-            queued.append(prompt) // per-member injection would diverge the seats
+            queued.append(QueuedPrompt(
+                text: prompt,
+                includesAmbientContext: includesAmbientContext
+            )) // per-member injection would diverge the seats
             return
         }
         if inject, !interrupt {
@@ -193,7 +218,10 @@ final class ChatSession: ObservableObject {
                 messages.append(ChatMessage(role: .assistant, text: ""))
                 persistTranscript()
             } else {
-                queued.append(prompt) // backend can't inject — queue it
+                queued.append(QueuedPrompt(
+                    text: prompt,
+                    includesAmbientContext: includesAmbientContext
+                )) // backend can't inject — queue it
             }
             return
         }
@@ -206,7 +234,9 @@ final class ChatSession: ObservableObject {
             finalizeRunningActivities(as: .cancelled)
             statusText = nil
             finishStream(dequeue: false)
-            councilMode ? sendCouncil(prompt) : send(prompt)
+            councilMode
+                ? sendCouncil(prompt, includesAmbientContext: includesAmbientContext)
+                : send(prompt, includesAmbientContext: includesAmbientContext)
             return
         }
         if interrupt {
@@ -227,17 +257,22 @@ final class ChatSession: ObservableObject {
             }
             finishStream(dequeue: false)
             if councilMode {
-                sendCouncil(prompt)
+                sendCouncil(prompt, includesAmbientContext: includesAmbientContext)
             } else {
-                send(prompt, interrupted: true, preamble: interruptContext)
+                send(prompt, interrupted: true, preamble: interruptContext,
+                     includesAmbientContext: includesAmbientContext)
             }
         } else {
-            queued.append(prompt)
+            queued.append(QueuedPrompt(
+                text: prompt,
+                includesAmbientContext: includesAmbientContext
+            ))
         }
     }
 
     private func send(_ text: String, interrupted: Bool = false,
-                      preamble: String? = nil, isResume: Bool = false) {
+                      preamble: String? = nil, isResume: Bool = false,
+                      includesAmbientContext: Bool = true) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isStreaming else { return }
 
@@ -275,6 +310,7 @@ final class ChatSession: ObservableObject {
             // Fresh run: remember the prompt so an interrupted run can be
             // resumed, and re-arm the one free automatic resume.
             currentRunPrompt = prompt
+            currentRunIncludesAmbientContext = includesAmbientContext
             autoResumeSpent = false
         }
         let isFirstOfConversation = messages.isEmpty
@@ -295,7 +331,8 @@ final class ChatSession: ObservableObject {
         }
         backendPrompt = composeContext(onto: backendPrompt, query: prompt,
                                        isFirstOfConversation: isFirstOfConversation,
-                                       backendKind: settings.backend)
+                                       backendKind: settings.backend,
+                                       includesAmbientContext: includesAmbientContext)
 
         UsageTracker.shared.recordQuery(backend: settings.backend)
         armWatchdog()
@@ -321,29 +358,35 @@ final class ChatSession: ObservableObject {
     /// user turn, and share the result between council members.
     private func composeContext(onto prompt: String, query: String,
                                 isFirstOfConversation: Bool,
-                                backendKind: BackendKind?) -> String {
+                                backendKind: BackendKind?,
+                                includesAmbientContext: Bool = true) -> String {
         var backendPrompt = prompt
         if isFirstOfConversation,
            let digest = UserDefaults.standard.string(forKey: "lastConversationDigest"),
            !digest.isEmpty {
             backendPrompt += "\n\n(Context — summary of my previous conversation, for continuity: \(digest))"
         }
-        if settings.shareLocation, let location = LocationProvider.shared.contextLine {
+        if includesAmbientContext, settings.shareLocation,
+           let location = LocationProvider.shared.contextLine {
             backendPrompt += "\n\n(Context: my current location is \(location), local time \(Date().formatted(date: .abbreviated, time: .shortened)). Use this if relevant to my request; otherwise ignore it and don't mention it.)"
         }
-        if settings.fileRAGEnabled, let files = FileRAG.shared.injection() {
+        if includesAmbientContext, settings.fileRAGEnabled,
+           let files = FileRAG.shared.injection() {
             backendPrompt += "\n\n(FILES — content excerpts from documents on my disk that match this query, found via the Spotlight index:\n\(files)\nUse them if relevant — you may open the full file at its path for more context. If they're unrelated to my request, ignore them and don't mention them.)"
         }
-        if settings.shareCalendar, let agenda = CalendarProvider.shared.contextLine {
+        if includesAmbientContext, settings.shareCalendar,
+           let agenda = CalendarProvider.shared.contextLine {
             backendPrompt += "\n\n(Context — my calendar for the next 48 hours:\n\(agenda.prefix(1500))\nUse this if relevant to my request; otherwise ignore it and don't mention it.)"
         }
-        if let selection = selectionContext {
+        if includesAmbientContext, let selection = selectionContext {
             backendPrompt += "\n\n(Selected text from \(selection.appName), which my request refers to:\n\"\"\"\n\(selection.text.prefix(4000))\n\"\"\")"
             selectionContext = nil
         }
-        SpeechSynth.shared.stop()
-        OverlayController.shared.clear()
-        if !attachments.isEmpty, backendKind != .localModel {
+        if includesAmbientContext {
+            SpeechSynth.shared.stop()
+            OverlayController.shared.clear()
+        }
+        if includesAmbientContext, !attachments.isEmpty, backendKind != .localModel {
             let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp",
                                           "heic", "tiff", "bmp", "svg"]
             for path in attachments {
@@ -355,8 +398,10 @@ final class ChatSession: ObservableObject {
                 }
             }
         }
-        attachments.removeAll()
-        if settings.attachScreen, backendKind != .localModel,
+        if includesAmbientContext {
+            attachments.removeAll()
+        }
+        if includesAmbientContext, settings.attachScreen, backendKind != .localModel,
            !ScreenCapture.shared.lastCaptures.isEmpty {
             let captures = ScreenCapture.shared.lastCaptures
             let list = captures.map { capture in
@@ -456,24 +501,27 @@ final class ChatSession: ObservableObject {
         for backend in councilInstances.values { backend.cancel() }
     }
 
-    private func sendCouncil(_ text: String) {
+    private func sendCouncil(_ text: String, includesAmbientContext: Bool = true) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isStreaming else { return }
         // Shell/skill/instant prompts don't need a council.
         if prompt.hasPrefix("!") || prompt.hasPrefix("/")
             || (selectionContext == nil && InstantAnswers.answer(for: prompt) != nil) {
-            send(prompt)
+            send(prompt, includesAmbientContext: includesAmbientContext)
             return
         }
         // Councils are for planning and review — implementation is one
         // worker's job, and N models implementing in parallel is waste.
         if settings.councilScope == "planReview", Self.looksLikeExecution(prompt) {
             Log.write("council: execution prompt — routed to the worker (\(settings.backend.rawValue))")
-            send(prompt)
+            send(prompt, includesAmbientContext: includesAmbientContext)
             return
         }
         let members = settings.councilMembers.filter { $0.kind != nil }
-        guard members.count >= 2 else { send(prompt); return }
+        guard members.count >= 2 else {
+            send(prompt, includesAmbientContext: includesAmbientContext)
+            return
+        }
 
         // Seats removed/reordered since the last round: kill their live
         // backend processes so nothing leaks.
@@ -499,7 +547,8 @@ final class ChatSession: ObservableObject {
 
         let composed = composeContext(onto: prompt, query: prompt,
                                       isFirstOfConversation: isFirstOfConversation,
-                                      backendKind: nil)
+                                      backendKind: nil,
+                                      includesAmbientContext: includesAmbientContext)
         let roundPrompt = composed + """
 
 
@@ -1006,7 +1055,12 @@ final class ChatSession: ObservableObject {
         }
         preamble += "\nResume that task from where it left off: verify which steps already completed, then continue — don't redo finished work or start over.)"
         Log.write("resume: \(auto ? "auto" : "manual") resume of interrupted run")
-        send("Continue from where you left off.", preamble: preamble, isResume: true)
+        send(
+            "Continue from where you left off.",
+            preamble: preamble,
+            isResume: true,
+            includesAmbientContext: currentRunIncludesAmbientContext
+        )
     }
 
     /// Backends with native session state (--resume / exec resume) carry
@@ -1112,7 +1166,15 @@ final class ChatSession: ObservableObject {
             let next = queued.removeFirst()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.councilMode ? self.sendCouncil(next) : self.send(next)
+                self.councilMode
+                    ? self.sendCouncil(
+                        next.text,
+                        includesAmbientContext: next.includesAmbientContext
+                    )
+                    : self.send(
+                        next.text,
+                        includesAmbientContext: next.includesAmbientContext
+                    )
             }
         } else if notify {
             // Whole run complete: speak the reply / notify if hidden.
@@ -1176,6 +1238,7 @@ final class ChatSession: ObservableObject {
         statusText = nil
         canResume = false
         currentRunPrompt = nil
+        currentRunIncludesAmbientContext = true
         autoResumeSpent = false
         persistTranscript()
     }

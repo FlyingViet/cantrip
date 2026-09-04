@@ -233,6 +233,22 @@ struct PluginPanelView: NSViewRepresentable {
             id: Int,
             webView: WKWebView?
         ) {
+            if name == "packageTracking" || name == "packageTracking.refresh" {
+                guard allowedCapabilities.contains("packageTracking") else {
+                    respond(
+                        id: id,
+                        error: "Plugin has not declared the packageTracking capability",
+                        in: webView
+                    )
+                    return
+                }
+                PluginPanelData.packageTracking(
+                    forceRefresh: name.hasSuffix(".refresh")
+                ) { [weak self, weak webView] result in
+                    self?.respond(id: id, result: result, in: webView)
+                }
+                return
+            }
             if name == "dailyBriefing"
                 || name == "dailyBriefing.calendar"
                 || name == "dailyBriefing.calendar.refresh"

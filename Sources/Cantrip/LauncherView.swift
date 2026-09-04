@@ -870,7 +870,7 @@ struct LauncherView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 14, height: 14)
                         .background(Circle().fill(.quaternary))
-                    Text(item)
+                    Text(item.text)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -2637,6 +2637,46 @@ struct SettingsView: View {
                 .font(.caption)
                 .toggleStyle(.checkbox)
             if let error = settings.launchAtLoginError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+            Divider().opacity(0.3)
+            Toggle("Remote control daemon (loopback only)", isOn: $settings.remoteControlEnabled)
+                .font(.caption)
+                .toggleStyle(.checkbox)
+            if settings.remoteControlEnabled {
+                HStack(spacing: 8) {
+                    Text("Port")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("8765", text: Binding(
+                        get: { String(settings.remoteControlPort) },
+                        set: {
+                            if let port = Int($0), (1...65535).contains(port) {
+                                settings.remoteControlPort = port
+                            }
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 72)
+                    Button("Copy pairing token") {
+                        if let token = settings.ensureRemoteControlToken() {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(token, forType: .string)
+                        }
+                    }
+                    .font(.caption)
+                    Button("Regenerate") {
+                        settings.regenerateRemoteControlToken()
+                    }
+                    .font(.caption)
+                }
+                Text("Listening on 127.0.0.1:\(settings.remoteControlPort). Publish it with Tailscale Serve, never Funnel. Regenerating the token disconnects paired clients.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            if let error = settings.remoteControlError {
                 Text(error)
                     .font(.caption2)
                     .foregroundStyle(.red)

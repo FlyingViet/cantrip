@@ -71,6 +71,8 @@ struct Plugin: Identifiable {
                     detail = "run fixed update/build/relaunch actions and open the repo or log"
                 case "dailyBriefing":
                     detail = "read upcoming Calendar events, unread Mail, Contacts, and recent contact or group-chat messages"
+                case "packageTracking":
+                    detail = "scan recent Mail locally for package status, tracking numbers, carriers, and delivery estimates"
                 default:
                     detail = capability
                 }

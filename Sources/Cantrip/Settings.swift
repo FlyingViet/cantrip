@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import ServiceManagement
 
 enum BackendKind: String, CaseIterable, Identifiable {
@@ -51,6 +52,59 @@ final class AppSettings: ObservableObject {
     private let d = UserDefaults.standard
     private let launchAtLoginBundlePathKey = "launchAtLoginBundlePath"
     @Published private(set) var launchAtLoginError: String?
+    @Published private(set) var remoteControlError: String?
+    @Published private(set) var remoteControlCredentialRevision = 0
+
+    /// Opt-in for the loopback HTTP control plane. Tailscale Serve provides
+    /// HTTPS and tailnet reachability without exposing a LAN listener.
+    @Published var remoteControlEnabled: Bool {
+        didSet { d.set(remoteControlEnabled, forKey: "remoteControlEnabled") }
+    }
+    @Published var remoteControlPort: Int {
+        didSet { d.set(remoteControlPort, forKey: "remoteControlPort") }
+    }
+
+    var remoteControlToken: String {
+        RemoteControlCredentials.load() ?? ""
+    }
+
+    @discardableResult
+    func ensureRemoteControlToken() -> String? {
+        if let existing = RemoteControlCredentials.load(), !existing.isEmpty {
+            remoteControlError = nil
+            return existing
+        }
+        guard let token = RemoteControlCredentials.generate() else {
+            remoteControlError = "Could not generate a secure pairing token."
+            return nil
+        }
+        let status = RemoteControlCredentials.store(token)
+        guard status == errSecSuccess else {
+            remoteControlError = "Could not save the pairing token in Keychain (OSStatus \(status))."
+            return nil
+        }
+        remoteControlError = nil
+        remoteControlCredentialRevision += 1
+        return token
+    }
+
+    func regenerateRemoteControlToken() {
+        guard let token = RemoteControlCredentials.generate() else {
+            remoteControlError = "Could not generate a secure pairing token."
+            return
+        }
+        let status = RemoteControlCredentials.store(token)
+        if status == errSecSuccess {
+            remoteControlError = nil
+            remoteControlCredentialRevision += 1
+        } else {
+            remoteControlError = "Could not save the pairing token in Keychain (OSStatus \(status))."
+        }
+    }
+
+    func reportRemoteControlError(_ message: String?) {
+        remoteControlError = message
+    }
 
     @Published var backend: BackendKind {
         didSet { d.set(backend.rawValue, forKey: "backend") }
@@ -572,6 +626,8 @@ final class AppSettings: ObservableObject {
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
             "memoryPath": memoryPath, "fileRAGEnabled": fileRAGEnabled,
             "panelOpacity": panelOpacity,
+            "remoteControlEnabled": remoteControlEnabled,
+            "remoteControlPort": remoteControlPort,
         ]
         if let data = try? JSONSerialization.data(
             withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]) {
@@ -619,6 +675,10 @@ final class AppSettings: ObservableObject {
         bool("memoryEnabled") { self.memoryEnabled = $0 }
         str("memoryPath") { self.memoryPath = $0 }
         bool("fileRAGEnabled") { self.fileRAGEnabled = $0 }
+        bool("remoteControlEnabled") { self.remoteControlEnabled = $0 }
+        if let port = dict["remoteControlPort"] as? Int {
+            remoteControlPort = port
+        }
         if let opacity = dict["panelOpacity"] as? Double {
             panelOpacity = min(max(opacity, 0.5), 1.0)
         }
@@ -688,6 +748,9 @@ final class AppSettings: ObservableObject {
     }
 
     private init() {
+        remoteControlEnabled = d.bool(forKey: "remoteControlEnabled")
+        let storedRemotePort = d.integer(forKey: "remoteControlPort")
+        remoteControlPort = storedRemotePort == 0 ? 8765 : storedRemotePort
         backend = BackendKind(rawValue: d.string(forKey: "backend") ?? "") ?? .claudeCode
         claudePath = d.string(forKey: "claudePath") ?? ""
         claudeWorkdir = d.string(forKey: "claudeWorkdir") ?? NSHomeDirectory()
@@ -728,6 +791,56 @@ final class AppSettings: ObservableObject {
         panelOpacity = storedOpacity == 0 ? 1.0 : min(max(storedOpacity, 0.5), 1.0)
         memoryEnabled = d.object(forKey: "memoryEnabled") == nil ? true : d.bool(forKey: "memoryEnabled")
         memoryPath = d.string(forKey: "memoryPath") ?? "\(NSHomeDirectory())/Cantrip Memory"
+    }
+}
+
+private enum RemoteControlCredentials {
+    private static let service = "com.brian.agentspotlight.remote-control"
+    private static let account = "pairing-token"
+
+    static func load() -> String? {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func store(_ token: String) -> OSStatus {
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(token.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
+        let updateStatus = SecItemUpdate(
+            baseQuery as CFDictionary,
+            attributes as CFDictionary
+        )
+        if updateStatus == errSecSuccess { return updateStatus }
+        guard updateStatus == errSecItemNotFound else { return updateStatus }
+        var item = baseQuery
+        for (key, value) in attributes { item[key] = value }
+        return SecItemAdd(item as CFDictionary, nil)
+    }
+
+    static func generate() -> String? {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            return nil
+        }
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
     }
 }
 

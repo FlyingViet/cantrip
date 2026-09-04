@@ -9,7 +9,10 @@ struct CopilotJSONStreamParser {
     /// Whether reasoning streamed as deltas (skip the aggregate block).
     private var reasoningDeltaSeen = false
 
-    mutating func consume(_ data: Data) throws -> [BackendEvent] {
+    mutating func consume(
+        _ data: Data,
+        onMalformedLine: (CopilotJSONStreamParserError, Data) -> Void
+    ) -> [BackendEvent] {
         buffer.append(data)
         var events: [BackendEvent] = []
 
@@ -17,17 +20,33 @@ struct CopilotJSONStreamParser {
             let afterNewline = buffer.index(after: newline)
             let line = buffer.subdata(in: buffer.startIndex..<newline)
             buffer.removeSubrange(buffer.startIndex..<afterNewline)
-            events += try parseLine(line)
+            events += parseRecovering(line, onMalformedLine: onMalformedLine)
         }
 
         return events
     }
 
-    mutating func finish() throws -> [BackendEvent] {
+    mutating func finish(
+        onMalformedLine: (CopilotJSONStreamParserError, Data) -> Void
+    ) -> [BackendEvent] {
         guard !buffer.isEmpty else { return [] }
         let line = buffer
         buffer.removeAll(keepingCapacity: false)
-        return try parseLine(line)
+        return parseRecovering(line, onMalformedLine: onMalformedLine)
+    }
+
+    private mutating func parseRecovering(
+        _ line: Data,
+        onMalformedLine: (CopilotJSONStreamParserError, Data) -> Void
+    ) -> [BackendEvent] {
+        do {
+            return try parseLine(line)
+        } catch let error as CopilotJSONStreamParserError {
+            onMalformedLine(error, line)
+        } catch {
+            onMalformedLine(.invalidEvent(error), line)
+        }
+        return []
     }
 
     private mutating func parseLine(_ data: Data) throws -> [BackendEvent] {

@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    color-scheme: dark;
+    --text: #f5f7fb;
+    --muted: #8d98aa;
+    --line: rgba(255,255,255,.10);
+    --card: rgba(255,255,255,.055);
+    --card-hover: rgba(255,255,255,.09);
+    --blue: #75baff;
+    --green: #58d79b;
+    --amber: #f0bc59;
+    --red: #ff7b84;
+  }
+  * { box-sizing: border-box; }
+  body {
+    min-width: 270px;
+    margin: 0;
+    padding: 15px;
+    color: var(--text);
+    background:
+      radial-gradient(circle at 8% -8%, rgba(70,145,255,.22), transparent 34%),
+      transparent;
+    font: 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  }
+  header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .eyebrow {
+    color: var(--blue);
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  h1 {
+    margin: 3px 0;
+    font-size: 22px;
+    letter-spacing: -.04em;
+  }
+  .subtitle { color: var(--muted); font-size: 10px; line-height: 1.35; }
+  button {
+    min-height: 30px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 5px 9px;
+    color: var(--text);
+    background: var(--card);
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover { background: var(--card-hover); }
+  button:disabled { opacity: .45; cursor: default; }
+  .refresh { white-space: nowrap; }
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    margin-bottom: 14px;
+  }
+  .metric {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 9px;
+    background: var(--card);
+  }
+  .metric strong {
+    display: block;
+    margin-bottom: 2px;
+    font-size: 20px;
+    font-variant-numeric: tabular-nums;
+  }
+  .metric span { color: var(--muted); font-size: 9px; }
+  .section { margin-top: 11px; }
+  .section[hidden] { display: none; }
+  .section-head {
+    display: flex;
+    justify-content: space-between;
+    margin: 0 2px 6px;
+    color: var(--muted);
+    font-size: 9px;
+    font-weight: 750;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+  }
+  .count {
+    border-radius: 999px;
+    padding: 1px 6px;
+    color: #d9eaff;
+    background: rgba(117,186,255,.13);
+  }
+  .items {
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--card);
+  }
+  .item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 9px;
+    align-items: center;
+    padding: 10px;
+    border-top: 1px solid rgba(255,255,255,.06);
+  }
+  .item:first-child { border-top: 0; }
+  .merchant { font-size: 11px; font-weight: 700; }
+  .status { margin-left: 5px; color: var(--blue); font-size: 9px; font-weight: 650; }
+  .status.delivered { color: var(--green); }
+  .status.delayed { color: var(--red); }
+  .title, .detail {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .title { margin-top: 3px; font-size: 10px; }
+  .detail { margin-top: 3px; color: var(--muted); font-size: 9px; }
+  .track {
+    min-height: 26px;
+    border-color: rgba(117,186,255,.28);
+    padding: 4px 8px;
+    color: #d9eaff;
+    background: rgba(117,186,255,.12);
+    font-size: 9px;
+  }
+  .empty {
+    padding: 18px 12px;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.45;
+    text-align: center;
+  }
+  .empty.error { color: #ffabb1; }
+  footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 12px;
+    color: var(--muted);
+    font-size: 9px;
+  }
+  @media (max-width: 330px) {
+    body { padding: 12px; }
+    .summary { gap: 5px; }
+    .metric { padding: 7px; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="eyebrow">Local Mail tracker</div>
+      <h1>Packages</h1>
+      <div class="subtitle">Tracking details stay on this Mac.</div>
+    </div>
+    <button class="refresh" id="refresh">Refresh</button>
+  </header>
+
+  <div class="summary">
+    <div class="metric"><strong id="soonTotal">--</strong><span>Arriving soon</span></div>
+    <div class="metric"><strong id="activeTotal">--</strong><span>Active</span></div>
+    <div class="metric"><strong id="deliveredTotal">--</strong><span>Delivered</span></div>
+  </div>
+
+  <section class="section" id="arrivingSoonSection">
+    <div class="section-head"><span>Arriving soon</span><span class="count" id="arrivingSoonCount">--</span></div>
+    <div class="items" id="arrivingSoon"></div>
+  </section>
+
+  <section class="section" id="activeSection">
+    <div class="section-head"><span>Active shipments</span><span class="count" id="activeCount">--</span></div>
+    <div class="items" id="active"></div>
+  </section>
+
+  <section class="section" id="deliveredSection">
+    <div class="section-head"><span>Recently delivered</span><span class="count" id="deliveredCount">--</span></div>
+    <div class="items" id="delivered"></div>
+  </section>
+
+  <div class="items" id="emptyState" hidden></div>
+
+  <footer>
+    <span id="scope">Inbox + Archive, past 30 days</span>
+    <span id="updated">Starting scan...</span>
+  </footer>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const groups = ["arrivingSoon", "active", "delivered"];
+
+  function empty(text, error = false) {
+    const node = document.createElement("div");
+    node.className = `empty${error ? " error" : ""}`;
+    node.textContent = text;
+    return node;
+  }
+
+  function shortTracking(value) {
+    if (!value) return "";
+    return value.length > 10 ? `\u2026${value.slice(-8)}` : value;
+  }
+
+  function updatedLabel(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+
+  function packageRow(pkg) {
+    const row = document.createElement("div");
+    row.className = "item";
+
+    const content = document.createElement("div");
+    const heading = document.createElement("div");
+    const merchant = document.createElement("span");
+    merchant.className = "merchant";
+    merchant.textContent = pkg.merchant || "Shipment";
+    const status = document.createElement("span");
+    status.className = `status ${pkg.status || ""}`;
+    status.textContent = pkg.statusLabel || "Shipment update";
+    heading.append(merchant, status);
+
+    const title = document.createElement("div");
+    title.className = "title";
+    title.textContent = pkg.title || "Package update";
+
+    const details = [
+      pkg.eta ? `ETA ${pkg.eta}` : "",
+      pkg.trackingNumber ? `${pkg.carrier} ${shortTracking(pkg.trackingNumber)}` : pkg.carrier,
+      updatedLabel(pkg.updatedAt)
+    ].filter(Boolean);
+    const detail = document.createElement("div");
+    detail.className = "detail";
+    detail.textContent = details.join(" \u00b7 ");
+    content.append(heading, title, detail);
+    row.appendChild(content);
+
+    if (pkg.trackingURL) {
+      const button = document.createElement("button");
+      button.className = "track";
+      button.textContent = "Track";
+      button.addEventListener("click", () => cantrip.openURL(pkg.trackingURL));
+      row.appendChild(button);
+    }
+    return row;
+  }
+
+  function render(packages) {
+    const grouped = Object.fromEntries(groups.map(group => [group, []]));
+    packages.forEach(pkg => (grouped[pkg.group] || grouped.active).push(pkg));
+
+    groups.forEach(group => {
+      const rows = grouped[group];
+      const section = $(`${group}Section`);
+      const container = $(group);
+      $(`${group}Count`).textContent = rows.length;
+      container.replaceChildren(...rows.map(packageRow));
+      section.hidden = rows.length === 0;
+    });
+
+    $("soonTotal").textContent = grouped.arrivingSoon.length;
+    $("activeTotal").textContent = grouped.active.length;
+    $("deliveredTotal").textContent = grouped.delivered.length;
+    $("emptyState").hidden = packages.length !== 0;
+    if (!packages.length) {
+      $("emptyState").replaceChildren(empty(
+        "No delivery updates found in recent Inbox or Archive mail."
+      ));
+    }
+  }
+
+  async function load(force = false) {
+    $("refresh").disabled = true;
+    try {
+      const data = await cantrip.requestData(
+        force ? "packageTracking.refresh" : "packageTracking"
+      );
+      render(data.packages || []);
+      const count = Number(data.scannedMessages) || 0;
+      $("scope").textContent = `${count} matching email${count === 1 ? "" : "s"} in past 30 days${
+        data.partial ? " \u00b7 partial scan" : " \u00b7 scanned locally"
+      }`;
+      $("updated").textContent = `Updated ${new Date(data.generatedAt).toLocaleTimeString([], {
+        hour: "numeric", minute: "2-digit"
+      })}${data.cached ? " \u00b7 cached" : ""}`;
+    } catch (error) {
+      groups.forEach(group => { $(`${group}Section`).hidden = true; });
+      $("emptyState").hidden = false;
+      $("emptyState").replaceChildren(empty(error.message, true));
+      $("updated").textContent = "Mail scan unavailable";
+      cantrip.log(`package-tracker: ${error.message}`);
+    } finally {
+      $("refresh").disabled = false;
+    }
+  }
+
+  $("refresh").addEventListener("click", () => load(true));
+  load();
+  setInterval(load, 10 * 60 * 1000);
+</script>
+</body>
+</html>

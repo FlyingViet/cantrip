@@ -103,10 +103,13 @@ final class SessionManager: ObservableObject {
         sessions.append(session)
     }
 
-    func newSession() {
-        adopt(ChatSession())
+    @discardableResult
+    func newSession() -> ChatSession {
+        let session = ChatSession()
+        adopt(session)
         activeIndex = sessions.count - 1
         persistOpenSessions()
+        return session
     }
 
     func select(_ index: Int) {
