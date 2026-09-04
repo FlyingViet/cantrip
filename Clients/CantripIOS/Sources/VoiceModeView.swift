@@ -7,7 +7,7 @@ import MarkdownUI
 struct VoiceModeView: View {
     @ObservedObject var voice: VoiceController
     @ObservedObject var vm: ChatViewModel
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
 
     private var statusText: String {
         if voice.isSpeaking { return "Speaking — tap to interrupt" }
@@ -46,7 +46,7 @@ struct VoiceModeView: View {
                 // ── Top: close + compact animation + status ──
                 HStack {
                     Spacer()
-                    Button { dismiss() } label: {
+                    Button(action: onClose) {
                         Image(systemName: "xmark").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                             .padding(10).background(.ultraThinMaterial, in: Circle())
                     }
@@ -114,13 +114,7 @@ struct VoiceModeView: View {
             .padding()
         }
         .onAppear {
-            voice.handsFree = true
-            if !voice.isListening, !voice.isSpeaking, !vm.isWorking { voice.startListening() }
-        }
-        .onDisappear {
-            voice.handsFree = false
-            voice.stopListening(finalize: false)
-            voice.stopSpeaking()
+            vm.enterVoiceMode()
         }
     }
 }

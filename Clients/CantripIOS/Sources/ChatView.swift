@@ -18,11 +18,13 @@ final class ChatViewModel: ObservableObject {
     private var pendingRun: PendingHermesRun?
     private var activeRun: ActiveHermesRun?
     private var observationTask: Task<Void, Never>?
+    private var observationGeneration = 0
     private var remoteSessionID: String?
     private var remoteMessageIDs: [String: UUID] = [:]
     private var remoteSpeechBaseline: Set<String> = []
     private var remoteSpeechTargetID: String?
     private var remoteSpeechActive = false
+    private var spokenReplyTurnID: UUID?
 
     var isWorking: Bool {
         sending || remoteIsStreaming
@@ -120,14 +122,13 @@ final class ChatViewModel: ObservableObject {
         let speakReply = spoken || voice.handsFree
         spokenCount = 0
         speechTableHeader = nil
-        if speakReply { voice.beginReply() }
+        spokenReplyTurnID = speakReply ? assistant.id : nil
+        if speakReply {
+            voice.beginReply()
+        }
 
         startObservation {
-            await self.dispatchAndObserve(
-                pending,
-                client: client,
-                speakReply: speakReply
-            )
+            await self.dispatchAndObserve(pending, client: client)
         }
     }
 
@@ -323,21 +324,27 @@ final class ChatViewModel: ObservableObject {
         }
         if let pendingRun {
             startObservation {
-                await self.dispatchAndObserve(
-                    pendingRun,
-                    client: client,
-                    speakReply: false
-                )
+                await self.dispatchAndObserve(pendingRun, client: client)
             }
         } else if let activeRun {
             startObservation {
                 await self.observe(
                     activeRun,
                     client: client,
-                    speakReply: false,
                     triesEventStream: false
                 )
             }
+        }
+    }
+
+    func setAppActive(_ active: Bool) {
+        if active {
+            if pendingRun != nil || activeRun != nil {
+                runStatusText = "Reconnecting to the run on your Mac…"
+            }
+            resumeActiveRun()
+        } else {
+            suspendRunObservation()
         }
     }
 
@@ -345,16 +352,32 @@ final class ChatViewModel: ObservableObject {
         _ operation: @escaping @MainActor () async -> Void
     ) {
         guard observationTask == nil else { return }
+        observationGeneration += 1
+        let generation = observationGeneration
         observationTask = Task { [weak self] in
             await operation()
-            self?.observationTask = nil
+            guard let self, self.observationGeneration == generation else {
+                return
+            }
+            self.observationTask = nil
         }
+    }
+
+    private func suspendRunObservation() {
+        guard activeLane != .cantrip else { return }
+        cancelObservation()
+        persist()
+    }
+
+    private func cancelObservation() {
+        observationGeneration += 1
+        observationTask?.cancel()
+        observationTask = nil
     }
 
     private func dispatchAndObserve(
         _ pending: PendingHermesRun,
-        client: HermesClient,
-        speakReply: Bool
+        client: HermesClient
     ) async {
         while !Task.isCancelled, pendingRun?.idempotencyKey == pending.idempotencyKey {
             do {
@@ -366,7 +389,6 @@ final class ChatViewModel: ObservableObject {
                 await observe(
                     run,
                     client: client,
-                    speakReply: speakReply,
                     triesEventStream: true
                 )
                 return
@@ -380,8 +402,7 @@ final class ChatViewModel: ObservableObject {
                 }
                 finishRun(
                     pending.assistantTurnID,
-                    error: error.localizedDescription,
-                    speakReply: speakReply
+                    error: error.localizedDescription
                 )
                 return
             } catch {
@@ -394,7 +415,6 @@ final class ChatViewModel: ObservableObject {
     private func observe(
         _ run: ActiveHermesRun,
         client: HermesClient,
-        speakReply: Bool,
         triesEventStream: Bool
     ) async {
         if triesEventStream {
@@ -409,7 +429,7 @@ final class ChatViewModel: ObservableObject {
                         terminalError = message
                     default:
                         apply(event, to: run.assistantTurnID)
-                        if speakReply,
+                        if shouldSpeakReply(for: run.assistantTurnID),
                            let index = turnIndex(run.assistantTurnID) {
                             speakReady(at: index)
                         }
@@ -421,8 +441,7 @@ final class ChatViewModel: ObservableObject {
                 if completed || terminalError != nil {
                     finishRun(
                         run.assistantTurnID,
-                        error: terminalError,
-                        speakReply: speakReply
+                        error: terminalError
                     )
                     return
                 }
@@ -433,20 +452,18 @@ final class ChatViewModel: ObservableObject {
                 // Polling remains authoritative and never restarts the run.
             }
         }
-        await poll(run, client: client, speakReply: speakReply)
+        await poll(run, client: client)
     }
 
     private func poll(
         _ run: ActiveHermesRun,
-        client: HermesClient,
-        speakReply: Bool
+        client: HermesClient
     ) async {
         while !Task.isCancelled, activeRun?.runID == run.runID {
             if Date().timeIntervalSince(run.startedAt) > 86_400 {
                 finishRun(
                     run.assistantTurnID,
-                    error: "This run exceeded the 24-hour recovery window.",
-                    speakReply: speakReply
+                    error: "This run exceeded the 24-hour recovery window."
                 )
                 return
             }
@@ -471,15 +488,13 @@ final class ChatViewModel: ObservableObject {
                 case "completed":
                     finishRun(
                         run.assistantTurnID,
-                        output: status.output,
-                        speakReply: speakReply
+                        output: status.output
                     )
                     return
                 case "failed", "cancelled":
                     finishRun(
                         run.assistantTurnID,
-                        error: status.error ?? "Run \(status.status).",
-                        speakReply: speakReply
+                        error: status.error ?? "Run \(status.status)."
                     )
                     return
                 default:
@@ -491,8 +506,7 @@ final class ChatViewModel: ObservableObject {
                 if case .http(404) = error {
                     finishRun(
                         run.assistantTurnID,
-                        error: "The saved run result expired before it could be recovered.",
-                        speakReply: speakReply
+                        error: "The saved run result expired before it could be recovered."
                     )
                     return
                 }
@@ -508,7 +522,32 @@ final class ChatViewModel: ObservableObject {
     /// new prompt — for talking over a long answer you've already read.
     func interruptAndListen() {
         stop()
+        voice.startListening()
+    }
+
+    func enterVoiceMode() {
+        voice.handsFree = true
+        resumeVoiceModeIfIdle()
+    }
+
+    func leaveVoiceMode() {
+        voice.handsFree = false
+        spokenReplyTurnID = nil
+        remoteSpeechActive = false
+        remoteSpeechBaseline.removeAll()
+        remoteSpeechTargetID = nil
+        voice.stopListening(finalize: false)
         voice.stopSpeaking()
+    }
+
+    func resumeVoiceModeIfIdle() {
+        guard voice.handsFree,
+              !isWorking,
+              !voice.isListening,
+              !voice.isSpeaking,
+              !voice.isPreparingRecognition else {
+            return
+        }
         voice.startListening()
     }
 
@@ -595,10 +634,10 @@ final class ChatViewModel: ObservableObject {
     private func finishRun(
         _ assistantTurnID: UUID,
         output: String? = nil,
-        error: String? = nil,
-        speakReply: Bool
+        error: String? = nil
     ) {
         guard let index = turnIndex(assistantTurnID) else { return }
+        let speakReply = shouldSpeakReply(for: assistantTurnID)
         if let output, !output.isEmpty {
             turns[index].text = output
         }
@@ -620,6 +659,13 @@ final class ChatViewModel: ObservableObject {
             }
             voice.finishReply()
         }
+        if spokenReplyTurnID == assistantTurnID {
+            spokenReplyTurnID = nil
+        }
+    }
+
+    private func shouldSpeakReply(for assistantTurnID: UUID) -> Bool {
+        spokenReplyTurnID == assistantTurnID
     }
 
     private func setApproval(_ approval: HermesRunApproval, on turnID: UUID) {
@@ -771,8 +817,9 @@ final class ChatViewModel: ObservableObject {
             return
         }
         guard sending else { return }
-        observationTask?.cancel()
-        observationTask = nil
+        spokenReplyTurnID = nil
+        voice.stopSpeaking()
+        cancelObservation()
         runStatusText = "Stopping on your Mac…"
         let savedActiveRun = activeRun
         let savedPendingRun = pendingRun
@@ -800,22 +847,17 @@ final class ChatViewModel: ObservableObject {
                 }
                 try await client.stopRun(run.runID)
                 runStatusText = "Stopping on your Mac…"
-                await poll(run, client: client, speakReply: false)
+                await poll(run, client: client)
             } catch {
                 runStatusText = "Stop failed; reconnecting to the run on your Mac…"
                 if let savedActiveRun {
                     await observe(
                         savedActiveRun,
                         client: client,
-                        speakReply: false,
                         triesEventStream: false
                     )
                 } else if let savedPendingRun {
-                    await dispatchAndObserve(
-                        savedPendingRun,
-                        client: client,
-                        speakReply: false
-                    )
+                    await dispatchAndObserve(savedPendingRun, client: client)
                 }
             }
         }
@@ -1024,10 +1066,20 @@ struct ChatView: View {
                     vm.send(skill.command)        // run it → returns to chat showing the interaction
                 }
             }
-            .fullScreenCover(isPresented: $showVoiceMode) { VoiceModeView(voice: voice, vm: vm) }
+            .fullScreenCover(
+                isPresented: $showVoiceMode,
+                onDismiss: vm.leaveVoiceMode
+            ) {
+                VoiceModeView(
+                    voice: voice,
+                    vm: vm,
+                    onClose: { showVoiceMode = false }
+                )
+            }
         }
         .onAppear {
             voice.requestAuth()
+            vm.setAppActive(scenePhase == .active)
             if router.startVoiceMode { showVoiceMode = true; router.startVoiceMode = false }   // cold launch from the Action Button
         }
         .onChange(of: router.startVoiceMode) { _, start in
@@ -1054,8 +1106,9 @@ struct ChatView: View {
             vm.syncRemoteTranscript()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                vm.resumeActiveRun()
+            vm.setAppActive(phase == .active)
+            if phase == .active, showVoiceMode {
+                vm.resumeVoiceModeIfIdle()
             }
         }
         .task {

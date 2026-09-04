@@ -217,14 +217,19 @@ Tap **Test authenticated connection**. The app verifies the key against
 Every message creates a server-owned `/v1/runs` task. AgentGateway persists the
 run ID before observing its event stream. Closing, suspending, or force-quitting
 the app only disconnects the viewer; it does not call the gateway's stop
-endpoint.
+endpoint. When iOS leaves the foreground, the app drops its potentially stale
+event connection while the task keeps running on the Mac.
 
-When the app opens again it polls the saved run ID and replaces any partial text
-with the gateway's authoritative final output. If iOS loses the initial `202`
-response, the app safely retries with the same `Idempotency-Key`, and the gateway
-returns the original run instead of executing the request twice. Results remain
-recoverable for 24 hours. Only tapping **Stop** or using voice barge-in
-explicitly interrupts a run.
+When the app becomes active again it starts a fresh poll for the saved run ID
+and replaces any partial text with the gateway's authoritative final output. If
+iOS loses the initial `202` response, the app safely retries with the same
+`Idempotency-Key`, and the gateway returns the original run instead of executing
+the request twice. Results remain recoverable for 24 hours. Only tapping
+**Stop** or using voice barge-in explicitly interrupts a run.
+
+Voice Mode preserves its hands-free reply intent across that suspension. Return
+to the app and the recovered response is still spoken before listening resumes;
+only closing Voice Mode tears down its microphone and TTS state.
 
 Tool approvals are also recoverable: a run waiting for approval stores the
 redacted command and available choices in its pollable status.
