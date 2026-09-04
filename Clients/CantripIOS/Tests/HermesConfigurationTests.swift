@@ -2,6 +2,18 @@ import XCTest
 @testable import Hermes
 
 final class HermesConfigurationTests: XCTestCase {
+    @MainActor
+    func testParakeetOnlyReportsDownloadAfterCacheCheck() {
+        XCTAssertEqual(
+            ParakeetSpeechEngine.initialPreparationPhase(isKnownCached: true),
+            "Loading Parakeet"
+        )
+        XCTAssertEqual(
+            ParakeetSpeechEngine.initialPreparationPhase(isKnownCached: false),
+            "Checking speech model"
+        )
+    }
+
     func testCopilotIsTheDefaultExecutionLane() {
         XCTAssertEqual(ExecutionLane.defaultLane, .copilot)
         XCTAssertEqual(ExecutionLane.copilot.modelAlias, "copilot-coding")

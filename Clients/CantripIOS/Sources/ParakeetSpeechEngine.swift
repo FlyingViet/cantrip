@@ -26,6 +26,10 @@ final class ParakeetSpeechEngine: ObservableObject {
             : .idle
     }
 
+    static func initialPreparationPhase(isKnownCached: Bool) -> String {
+        isKnownCached ? "Loading Parakeet" : "Checking speech model"
+    }
+
     var isPrepared: Bool {
         switch state {
         case .cached, .ready:
@@ -45,7 +49,11 @@ final class ParakeetSpeechEngine: ObservableObject {
             return
         }
 
-        state = .preparing(progress: 0, phase: "Preparing download")
+        let isKnownCached = isPrepared
+        state = .preparing(
+            progress: 0,
+            phase: Self.initialPreparationPhase(isKnownCached: isKnownCached)
+        )
         let task = Task { @MainActor in
             let configuration = MLModelConfiguration()
             configuration.computeUnits = .cpuAndNeuralEngine
