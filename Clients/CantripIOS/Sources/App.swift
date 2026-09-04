@@ -8,30 +8,7 @@ struct HermesApp: App {
 
     var body: some Scene {
         WindowGroup {
-            TabView {
-                CantripRemoteView()
-                    .tabItem {
-                        Label {
-                            Text("Remote")
-                        } icon: {
-                            Image(uiImage: CantripRemoteTabIcon.image(
-                                connected: remoteModel.isConnected
-                            ))
-                            .renderingMode(.original)
-                        }
-                        .accessibilityLabel(
-                            remoteModel.isConnected
-                                ? "Remote, Connected"
-                                : "Remote, Disconnected"
-                        )
-                    }
-
-                ChatView(env: env)
-                    .tabItem {
-                        Label("Hermes", systemImage: "brain")
-                    }
-            }
-            .environmentObject(remoteModel)
+            ChatView(env: env, remote: remoteModel)
             .preferredColorScheme(.dark)
             .onAppear {
                 remoteModel.setAppActive(scenePhase == .active)

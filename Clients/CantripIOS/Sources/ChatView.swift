@@ -6,33 +6,48 @@ final class ChatViewModel: ObservableObject {
     @Published var turns: [ChatTurn] = []
     @Published var sending = false
     @Published private(set) var runStatusText: String?
-    private(set) var activeLane: ExecutionLane
+    @Published private(set) var activeLane: ExecutionLane
+    @Published private(set) var remoteIsStreaming = false
+    @Published var remoteDeliveryMode: CantripDeliveryMode = .queue
 
     let env: HermesEnv
+    let remote: CantripRemoteModel
     let voice: VoiceController
     private var conversationID: String
     private var gatewayIdentity: String?
     private var pendingRun: PendingHermesRun?
     private var activeRun: ActiveHermesRun?
     private var observationTask: Task<Void, Never>?
+    private var remoteSessionID: String?
+    private var remoteMessageIDs: [String: UUID] = [:]
+    private var remoteSpeechBaseline: Set<String> = []
+    private var remoteSpeechTargetID: String?
+    private var remoteSpeechActive = false
 
-    init(env: HermesEnv, voice: VoiceController) {
+    var isWorking: Bool {
+        sending || remoteIsStreaming
+    }
+
+    init(env: HermesEnv, remote: CantripRemoteModel, voice: VoiceController) {
         self.env = env
+        self.remote = remote
         self.voice = voice
         activeLane = env.executionLane
-        let snapshot = ChatStore.load(for: activeLane)
-        turns = snapshot.turns
-        gatewayIdentity = env.gatewayIdentity
-        if let storedGateway = snapshot.gatewayIdentity,
-           storedGateway != env.gatewayIdentity {
-            turns = []
-            conversationID = UUID().uuidString
-            pendingRun = nil
-            activeRun = nil
+        conversationID = UUID().uuidString
+        if activeLane == .cantrip {
+            gatewayIdentity = nil
         } else {
-            conversationID = snapshot.conversationID ?? UUID().uuidString
-            pendingRun = snapshot.pendingRun
-            activeRun = snapshot.activeRun
+            let snapshot = ChatStore.load(for: activeLane)
+            turns = snapshot.turns
+            gatewayIdentity = env.gatewayIdentity
+            if let storedGateway = snapshot.gatewayIdentity,
+               storedGateway != env.gatewayIdentity {
+                turns = []
+            } else {
+                conversationID = snapshot.conversationID ?? UUID().uuidString
+                pendingRun = snapshot.pendingRun
+                activeRun = snapshot.activeRun
+            }
         }
         sending = pendingRun != nil || activeRun != nil
         if sending {
@@ -40,7 +55,12 @@ final class ChatViewModel: ObservableObject {
         }
         voice.onFinalTranscript = { [weak self] text in self?.send(text, spoken: true) }
         Task { [weak self] in
-            self?.resumeActiveRun()
+            guard let self else { return }
+            if self.activeLane == .cantrip {
+                self.syncRemoteTranscript()
+            } else {
+                self.resumeActiveRun()
+            }
         }
     }
 
@@ -49,7 +69,12 @@ final class ChatViewModel: ObservableObject {
         // Paused → drop every send (text, voice, skill, button) so we never fire
         // an unintentional request at the agent.
         guard !UserDefaults.standard.bool(forKey: "hermes.paused") else { return }
-        guard !text.isEmpty, !sending else { return }
+        guard !text.isEmpty else { return }
+        if activeLane == .cantrip {
+            sendRemote(text, spoken: spoken)
+            return
+        }
+        guard !sending else { return }
         let lane = activeLane
         guard lane != .local || env.isAvailable(.local) else {
             appendLocalFailure(
@@ -106,6 +131,158 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    private func sendRemote(_ text: String, spoken: Bool) {
+        guard !sending, !remote.isMutating else { return }
+        guard remote.isConfigured else {
+            appendRemoteFailure("Configure Cantrip Remote in Settings.", for: text)
+            return
+        }
+        guard remote.selectedSessionID != nil else {
+            appendRemoteFailure("Choose or create a Cantrip session first.", for: text)
+            return
+        }
+
+        let speakReply = spoken || voice.handsFree
+        remoteSpeechBaseline = Set(
+            remote.selectedSession?.transcript.map(\.id) ?? []
+        )
+        remoteSpeechTargetID = nil
+        remoteSpeechActive = speakReply
+        spokenCount = 0
+        speechTableHeader = nil
+        if speakReply { voice.beginReply() }
+
+        turns.append(
+            ChatTurn(role: .user, text: text, executionLane: .cantrip)
+        )
+        turns.append(
+            ChatTurn(
+                role: .assistant,
+                streaming: true,
+                executionLane: .cantrip
+            )
+        )
+        sending = true
+        runStatusText = "Sending to Cantrip…"
+
+        Task { [weak self] in
+            guard let self else { return }
+            let sent = await self.remote.send(
+                text,
+                mode: self.remoteDeliveryMode
+            )
+            self.sending = false
+            if sent {
+                self.syncRemoteTranscript()
+            } else {
+                if let index = self.turns.lastIndex(where: {
+                    $0.role == .assistant && $0.streaming
+                }) {
+                    self.turns[index].streaming = false
+                    self.turns[index].error = self.remote.errorMessage
+                        ?? "Cantrip did not accept the prompt."
+                }
+                self.remoteIsStreaming = false
+                self.runStatusText = nil
+                self.finishRemoteSpeech()
+            }
+        }
+    }
+
+    private func appendRemoteFailure(_ message: String, for input: String) {
+        turns.append(
+            ChatTurn(role: .user, text: input, executionLane: .cantrip)
+        )
+        turns.append(
+            ChatTurn(
+                role: .assistant,
+                error: message,
+                executionLane: .cantrip
+            )
+        )
+    }
+
+    func syncRemoteTranscript() {
+        guard activeLane == .cantrip else { return }
+        let session = remote.selectedSession
+        if remoteSessionID != session?.id {
+            let changedExistingSession = remoteSessionID != nil
+            remoteSessionID = session?.id
+            remoteMessageIDs.removeAll()
+            if changedExistingSession, remoteSpeechActive {
+                voice.stopSpeaking()
+                remoteSpeechActive = false
+            }
+        }
+
+        let transcript = session?.transcript ?? []
+        let lastAssistantID = transcript.last(where: {
+            $0.role != "user" && $0.role != "error"
+        })?.id
+        turns = transcript.map { message in
+            let id = remoteMessageIDs[message.id] ?? UUID()
+            remoteMessageIDs[message.id] = id
+            let isError = message.role == "error"
+            return ChatTurn(
+                id: id,
+                role: message.role == "user" ? .user : .assistant,
+                text: isError ? "" : message.text,
+                tools: message.activities.map {
+                    ToolActivity(
+                        id: $0.id,
+                        name: $0.toolName,
+                        arguments: $0.title,
+                        output: $0.state == "running" ? nil : $0.state.capitalized,
+                        done: $0.state != "running"
+                    )
+                },
+                streaming: session?.isStreaming == true
+                    && message.id == lastAssistantID,
+                error: isError ? message.text : nil,
+                executionLane: .cantrip,
+                thinking: message.thinking.isEmpty ? nil : message.thinking,
+                author: message.author
+            )
+        }
+
+        remoteIsStreaming = session?.isStreaming ?? false
+        if remoteIsStreaming {
+            runStatusText = session?.status ?? "Cantrip is working…"
+        } else {
+            runStatusText = nil
+        }
+
+        guard remoteSpeechActive else { return }
+        if remoteSpeechTargetID == nil {
+            remoteSpeechTargetID = transcript.last(where: {
+                $0.role != "user"
+                    && $0.role != "error"
+                    && !remoteSpeechBaseline.contains($0.id)
+            })?.id
+        }
+        if let targetID = remoteSpeechTargetID,
+           let targetUUID = remoteMessageIDs[targetID],
+           let index = turnIndex(targetUUID) {
+            speakReady(at: index)
+        }
+        if !remoteIsStreaming, !remote.isMutating {
+            finishRemoteSpeech()
+        }
+    }
+
+    private func finishRemoteSpeech() {
+        guard remoteSpeechActive else { return }
+        if let targetID = remoteSpeechTargetID,
+           let targetUUID = remoteMessageIDs[targetID],
+           let index = turnIndex(targetUUID) {
+            speakReady(at: index, force: true)
+        }
+        remoteSpeechActive = false
+        remoteSpeechBaseline.removeAll()
+        remoteSpeechTargetID = nil
+        voice.finishReply()
+    }
+
     private func appendLocalFailure(
         _ message: String,
         for input: String,
@@ -130,6 +307,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     func resumeActiveRun() {
+        guard activeLane != .cantrip else {
+            syncRemoteTranscript()
+            return
+        }
         guard observationTask == nil else { return }
         guard let resumableLane = activeRun?.executionLane
                 ?? pendingRun?.executionLane else {
@@ -358,6 +539,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func persist() {
+        guard activeLane != .cantrip else { return }
         ChatStore.save(
             turns: turns,
             conversationID: conversationID,
@@ -574,6 +756,20 @@ final class ChatViewModel: ObservableObject {
     }
 
     func stop() {
+        if activeLane == .cantrip {
+            guard remoteIsStreaming, !remote.isMutating else { return }
+            remoteSpeechActive = false
+            remoteSpeechBaseline.removeAll()
+            remoteSpeechTargetID = nil
+            voice.stopSpeaking()
+            runStatusText = "Stopping Cantrip…"
+            Task { [weak self] in
+                guard let self else { return }
+                _ = await self.remote.stop()
+                self.syncRemoteTranscript()
+            }
+            return
+        }
         guard sending else { return }
         observationTask?.cancel()
         observationTask = nil
@@ -626,6 +822,15 @@ final class ChatViewModel: ObservableObject {
     }
 
     func newConversation() {
+        if activeLane == .cantrip {
+            guard !remote.isMutating else { return }
+            Task { [weak self] in
+                guard let self else { return }
+                _ = await self.remote.newConversation()
+                self.syncRemoteTranscript()
+            }
+            return
+        }
         guard !sending else { return }
         turns.removeAll()
         conversationID = UUID().uuidString
@@ -636,8 +841,23 @@ final class ChatViewModel: ObservableObject {
 
     func switchLane(to lane: ExecutionLane) {
         guard lane != activeLane, !sending else { return }
-        persist()
+        if activeLane == .cantrip {
+            remoteSpeechActive = false
+            voice.stopSpeaking()
+        } else {
+            persist()
+        }
         activeLane = lane
+        remoteIsStreaming = false
+        runStatusText = nil
+        if lane == .cantrip {
+            pendingRun = nil
+            activeRun = nil
+            gatewayIdentity = nil
+            conversationID = UUID().uuidString
+            syncRemoteTranscript()
+            return
+        }
         let snapshot = ChatStore.load(for: lane)
         turns = snapshot.turns
         gatewayIdentity = env.gatewayIdentity
@@ -662,6 +882,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func gatewayDidChange() {
+        guard activeLane != .cantrip else { return }
         guard !sending, gatewayIdentity != env.gatewayIdentity else { return }
         turns.removeAll()
         conversationID = UUID().uuidString
@@ -709,6 +930,7 @@ final class ChatViewModel: ObservableObject {
 struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var env: HermesEnv
+    @ObservedObject private var remote: CantripRemoteModel
     @StateObject private var voice: VoiceController
     @StateObject private var vm: ChatViewModel
     @ObservedObject private var router = AppRouter.shared
@@ -730,16 +952,23 @@ struct ChatView: View {
         return Array(commands.filter { $0.command.lowercased().hasPrefix(q) }.prefix(6))
     }
 
-    init(env: HermesEnv) {
+    init(env: HermesEnv, remote: CantripRemoteModel) {
         _env = ObservedObject(wrappedValue: env)
+        _remote = ObservedObject(wrappedValue: remote)
         let v = VoiceController()
         _voice = StateObject(wrappedValue: v)
-        _vm = StateObject(wrappedValue: ChatViewModel(env: env, voice: v))
+        _vm = StateObject(
+            wrappedValue: ChatViewModel(env: env, remote: remote, voice: v)
+        )
     }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                if vm.activeLane == .cantrip {
+                    remoteControls
+                    Divider()
+                }
                 transcriptList
                 inputBar
             }
@@ -750,7 +979,7 @@ struct ChatView: View {
                     VStack(spacing: 1) {
                         Text("Hermes")
                             .font(.headline)
-                        ExecutionLanePicker(env: env)
+                        ExecutionLanePicker(env: env, remote: remote)
                             .disabled(vm.sending)
                     }
                 }
@@ -762,14 +991,14 @@ struct ChatView: View {
                         }
                         Divider()
                         Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
-                            .disabled(paused)
+                            .disabled(paused || vm.activeLane == .cantrip)
                         Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
-                            .disabled(paused)
+                            .disabled(paused || !destinationReady)
                         Divider()
                         Button(role: .destructive) { vm.newConversation() } label: {
                             Label("New conversation", systemImage: "square.and.pencil")
                         }
-                        .disabled(vm.turns.isEmpty || vm.sending)
+                        .disabled(newConversationDisabled)
                     } label: {
                         Image(systemName: paused ? "pause.circle.fill" : "line.3.horizontal")
                             .foregroundStyle(paused ? Color.orange : Color.accentColor)
@@ -787,7 +1016,7 @@ struct ChatView: View {
                     reloadCommands()
                 }
             ) {
-                SettingsView(env: env, voice: voice)
+                SettingsView(env: env, remote: remote, voice: voice)
             }
             .sheet(isPresented: $showSkills) {
                 SkillsView(client: env.client) { skill in
@@ -818,6 +1047,12 @@ struct ChatView: View {
             vm.switchLane(to: lane)
             reloadCommands()
         }
+        .onChange(of: remote.transcriptRevision) { _, _ in
+            vm.syncRemoteTranscript()
+        }
+        .onChange(of: remote.selectedSessionID) { _, _ in
+            vm.syncRemoteTranscript()
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 vm.resumeActiveRun()
@@ -833,7 +1068,158 @@ struct ChatView: View {
     /// non-empty result, so a transient failure (e.g. a 401 before the key is
     /// entered) doesn't wipe a good list — and it can be retried safely.
     private func reloadCommands() {
-        Task { if let c = await env.client?.commands(), !c.isEmpty { commands = c } }
+        guard vm.activeLane != .cantrip else {
+            commands = []
+            return
+        }
+        Task {
+            if let c = await env.client?.commands(),
+               !c.isEmpty,
+               vm.activeLane != .cantrip {
+                commands = c
+            }
+        }
+    }
+
+    private var newConversationDisabled: Bool {
+        if vm.activeLane == .cantrip {
+            return remote.selectedSessionID == nil
+                || remote.isMutating
+                || remote.selectedSession?.isStreaming == true
+        }
+        return vm.turns.isEmpty || vm.sending
+    }
+
+    private var destinationReady: Bool {
+        if vm.activeLane == .cantrip {
+            return remote.isConfigured && remote.selectedSessionID != nil
+        }
+        return env.isConfigured
+    }
+
+    private var remoteControls: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(remote.isConnected ? Color.green : Color.gray)
+                    .frame(width: 8, height: 8)
+                Menu {
+                    if remote.sessions.isEmpty {
+                        Text("No sessions")
+                    } else {
+                        ForEach(remote.sessions) { session in
+                            Button {
+                                Task {
+                                    await remote.selectSession(session.id)
+                                    vm.syncRemoteTranscript()
+                                }
+                            } label: {
+                                Label(
+                                    session.title,
+                                    systemImage: session.id == remote.selectedSessionID
+                                        ? "checkmark.circle.fill"
+                                        : "rectangle.stack"
+                                )
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(remote.selectedSession?.title ?? "Choose Session")
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                    }
+                    .font(.callout.weight(.semibold))
+                }
+                .disabled(!remote.isConfigured || remote.sessions.isEmpty)
+
+                Spacer(minLength: 0)
+
+                if remote.isRefreshing {
+                    ProgressView().controlSize(.small)
+                }
+                Button {
+                    Task { await remote.refreshNow() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(!remote.isConfigured || remote.isRefreshing)
+                .accessibilityLabel("Refresh Cantrip sessions")
+
+                Button {
+                    Task {
+                        _ = await remote.createSession()
+                        vm.syncRemoteTranscript()
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .disabled(!remote.isConfigured || remote.isMutating)
+                .accessibilityLabel("Create Cantrip session")
+
+                if remote.selectedSession != nil {
+                    Menu {
+                        if remote.selectedSession?.canResume == true {
+                            Button {
+                                Task {
+                                    _ = await remote.resume()
+                                    vm.syncRemoteTranscript()
+                                }
+                            } label: {
+                                Label("Resume", systemImage: "play")
+                            }
+                        }
+                        if remote.selectedSession?.isStreaming == true {
+                            Button(role: .destructive) {
+                                vm.stop()
+                            } label: {
+                                Label("Stop", systemImage: "stop.circle")
+                            }
+                        }
+                        Button {
+                            vm.newConversation()
+                        } label: {
+                            Label("New Conversation", systemImage: "square.and.pencil")
+                        }
+                        .disabled(remote.selectedSession?.isStreaming == true)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .disabled(remote.isMutating)
+                    .accessibilityLabel("Cantrip session actions")
+                }
+            }
+
+            if remote.selectedSession != nil {
+                HStack(spacing: 8) {
+                    Picker("Delivery", selection: $vm.remoteDeliveryMode) {
+                        ForEach(CantripDeliveryMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("Cantrip prompt delivery mode")
+
+                    if let status = remote.selectedSession?.status, !status.isEmpty {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+
+            if let error = remote.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.thinMaterial)
     }
 
     private var transcriptList: some View {
@@ -861,9 +1247,29 @@ struct ChatView: View {
 
     @ViewBuilder private var emptyState: some View {
         VStack(spacing: 10) {
-            Image(systemName: env.isConfigured ? "waveform.circle.fill" : "gearshape.circle.fill")
+            Image(systemName: emptyStateIcon)
                 .font(.system(size: 56)).foregroundStyle(.tint)
-            if env.isConfigured {
+            if vm.activeLane == .cantrip, !remote.isConfigured {
+                Text("Connect to Cantrip").font(.title3.weight(.semibold))
+                Text("Open Settings and enter Cantrip's Remote URL and pairing token.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("Open Settings") { showSettings = true }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 4)
+            } else if vm.activeLane == .cantrip {
+                Text("Choose a Cantrip session").font(.title3.weight(.semibold))
+                Text("Select an existing session above or create a new one, then type or use voice as usual.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("Create Session") {
+                    Task {
+                        _ = await remote.createSession()
+                        vm.syncRemoteTranscript()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(remote.isMutating)
+                .padding(.top, 4)
+            } else if env.isConfigured {
                 Text("Talk to Hermes").font(.title3.weight(.semibold))
                 Text("Type, or tap the mic to start a voice conversation. Toggle hands-free to keep the loop going.")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -877,6 +1283,15 @@ struct ChatView: View {
         .frame(maxWidth: .infinity).padding(.top, 80).padding(.horizontal, 30)
     }
 
+    private var emptyStateIcon: String {
+        if vm.activeLane == .cantrip {
+            return remote.isConfigured
+                ? "rectangle.stack.badge.plus"
+                : "antenna.radiowaves.left.and.right.slash"
+        }
+        return env.isConfigured ? "waveform.circle.fill" : "gearshape.circle.fill"
+    }
+
     private var inputBar: some View {
         VStack(spacing: 8) {
             if paused {
@@ -886,17 +1301,26 @@ struct ChatView: View {
             voiceStatus
             HStack(spacing: 10) {
                 Button { showVoiceMode = true } label: { Image(systemName: "infinity") }
-                    .buttonStyle(.bordered).help("Voice mode")
+                    .buttonStyle(.bordered)
+                    .disabled(!destinationReady)
+                    .help("Voice mode")
 
-                TextField("Message Hermes…", text: $input, axis: .vertical)
+                TextField(
+                    vm.activeLane == .cantrip ? "Message Cantrip…" : "Message Hermes…",
+                    text: $input,
+                    axis: .vertical
+                )
                     .id(composerRevision)
                     .textFieldStyle(.plain).lineLimit(1...5)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Color(.secondarySystemBackground), in: Capsule())
+                    .disabled(!destinationReady || vm.sending)
                     .onSubmit(sendText)
 
-                if vm.sending {
+                if vm.sending, vm.activeLane != .cantrip {
                     Button { vm.stop() } label: { Image(systemName: "stop.circle.fill").font(.title2) }
+                } else if vm.sending {
+                    ProgressView().controlSize(.small)
                 } else if input.isEmpty {
                     Button {
                         if voice.isSpeaking { vm.interruptAndListen() } else { voice.toggleListening() }
@@ -904,9 +1328,10 @@ struct ChatView: View {
                         Image(systemName: voice.isListening ? "mic.fill" : "mic")
                             .font(.title2).foregroundStyle(voice.isListening ? Color.red : Color.accentColor)
                     }
-                    .disabled(!voice.authorized)
+                    .disabled(!voice.authorized || !destinationReady)
                 } else {
                     Button(action: sendText) { Image(systemName: "arrow.up.circle.fill").font(.title2) }
+                        .disabled(!destinationReady || remote.isMutating)
                 }
             }
             }
@@ -978,10 +1403,15 @@ struct ChatView: View {
                 Spacer(minLength: 0)
                 Button { voice.stopSpeaking() } label: { Image(systemName: "stop.circle").font(.title3) }
             }
-        } else if vm.sending {
+        } else if vm.isWorking {
             HStack(spacing: 10) {
                 ThinkingView(size: 22, color: .accentColor)
-                Text(vm.runStatusText ?? "Hermes is thinking…")
+                Text(
+                    vm.runStatusText
+                        ?? (vm.activeLane == .cantrip
+                            ? "Cantrip is working…"
+                            : "Hermes is thinking…")
+                )
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
@@ -1001,14 +1431,22 @@ struct ChatView: View {
 struct ExecutionLaneBadge: View {
     let lane: ExecutionLane
 
+    private var tint: Color {
+        switch lane {
+        case .copilot: .orange
+        case .local: .green
+        case .cantrip: .cyan
+        }
+    }
+
     var body: some View {
         Label(lane.badgeTitle, systemImage: lane.systemImage)
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(lane.isPrivate ? Color.green : Color.orange)
+            .foregroundStyle(tint)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(
-                (lane.isPrivate ? Color.green : Color.orange).opacity(0.12),
+                tint.opacity(0.12),
                 in: Capsule()
             )
     }
@@ -1016,6 +1454,7 @@ struct ExecutionLaneBadge: View {
 
 private struct ExecutionLanePicker: View {
     @ObservedObject var env: HermesEnv
+    @ObservedObject var remote: CantripRemoteModel
 
     var body: some View {
         Menu {
@@ -1024,9 +1463,7 @@ private struct ExecutionLanePicker: View {
                     env.select(lane)
                 } label: {
                     Label(
-                        lane == .local && !env.isAvailable(.local)
-                            ? "\(lane.title) · Not configured"
-                            : lane.title,
+                        pickerTitle(lane),
                         systemImage: lane == env.executionLane
                             ? "checkmark.circle.fill"
                             : lane.systemImage
@@ -1038,6 +1475,19 @@ private struct ExecutionLanePicker: View {
             ExecutionLaneBadge(lane: env.executionLane)
         }
         .menuIndicator(.hidden)
+    }
+
+    private func pickerTitle(_ lane: ExecutionLane) -> String {
+        switch lane {
+        case .local where !env.isAvailable(.local):
+            "\(lane.title) · Not configured"
+        case .cantrip where remote.isConnected:
+            "\(lane.title) · Connected"
+        case .cantrip where !remote.isConfigured:
+            "\(lane.title) · Set up"
+        default:
+            lane.title
+        }
     }
 }
 
@@ -1112,6 +1562,20 @@ private struct TurnView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if let lane = turn.executionLane {
                     ExecutionLaneBadge(lane: lane)
+                }
+                if let author = turn.author, !author.isEmpty {
+                    Text(author)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                if let thinking = turn.thinking, !thinking.isEmpty {
+                    DisclosureGroup("Reasoning") {
+                        Text(thinking)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 3)
+                    }
+                    .font(.caption)
                 }
                 ForEach(turn.tools) { ToolRow(tool: $0) }
                 if !turn.text.isEmpty {

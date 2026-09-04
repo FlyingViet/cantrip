@@ -14,7 +14,7 @@ struct VoiceModeView: View {
         if voice.isPreparingRecognition {
             return voice.recognitionStatusText ?? "Preparing speech recognition"
         }
-        if vm.sending {
+        if vm.isWorking {
             return vm.runStatusText ?? "Thinking — tap to interrupt"
         }
         if voice.isListening { return "Listening" }
@@ -53,7 +53,7 @@ struct VoiceModeView: View {
                 }
                 HStack(spacing: 12) {
                     Group {
-                        if vm.sending, !voice.isSpeaking, !voice.isListening {
+                        if vm.isWorking, !voice.isSpeaking, !voice.isListening {
                             ThinkingView(size: 28, color: .accentColor)
                         } else {
                             WaveformView(active: voice.isListening || voice.isSpeaking, color: stateColor,
@@ -101,7 +101,7 @@ struct VoiceModeView: View {
 
                 // ── Mic (tap to talk, or barge-in while speaking/thinking) ──
                 Button {
-                    if voice.isSpeaking || vm.sending { vm.interruptAndListen() }
+                    if voice.isSpeaking || vm.isWorking { vm.interruptAndListen() }
                     else { voice.toggleListening() }
                 } label: {
                     Image(systemName: voice.isListening ? "mic.fill" : "mic")
@@ -115,7 +115,7 @@ struct VoiceModeView: View {
         }
         .onAppear {
             voice.handsFree = true
-            if !voice.isListening, !voice.isSpeaking, !vm.sending { voice.startListening() }
+            if !voice.isListening, !voice.isSpeaking, !vm.isWorking { voice.startListening() }
         }
         .onDisappear {
             voice.handsFree = false

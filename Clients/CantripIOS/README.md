@@ -10,8 +10,8 @@ A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.c
 - 🔘 **Action Button / Shortcuts / Siri** — "Talk to Hermes" jumps straight into voice mode
 - 💾 **Persistent history** — reopen to your prior conversation
 - 🔑 **Your gateway, your key** — points at *your* Hermes server, nothing hardcoded
-- 📡 **Cantrip Remote** — attach to and control existing Cantrip sessions from a
-  dedicated native tab
+- 📡 **Cantrip Remote** — choose Cantrip from the agent picker and use the same
+  chat, dictation, hands-free voice, and TTS interface
 
 > The app is a thin, secure client. All the intelligence (skills, memory, tools) lives in **your** Hermes gateway. You bring the gateway + an API key; the app does the rest.
 
@@ -36,19 +36,21 @@ A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.c
 
 The app speaks the gateway's **OpenAI-compatible API server** (`gateway/platforms/api_server.py`), which is the *full agent* — not the raw inference shim.
 
-## Cantrip Remote tab
+## Cantrip Remote
 
-The first tab is a native remote control for
-[Cantrip](https://github.com/FlyingViet/Cantrip). It attaches to Cantrip's
-existing session IDs rather than launching another agent, and supports session
-selection, new sessions and conversations, queued/redirected/injected prompts,
-stop, and resume.
+Tap the agent badge under **Hermes** (the `</>` badge when Copilot is selected)
+and choose **Cantrip Remote**. It attaches to Cantrip's existing session IDs
+rather than launching another agent. Cantrip then uses the same transcript,
+composer, microphone, hands-free voice mode, and spoken replies as Hermes.
+Remote-only controls above the transcript provide session selection, new
+sessions and conversations, queued/redirected/injected prompts, stop, and
+resume.
 
-Open **Remote → Settings** and enter the HTTPS URL exposed by Cantrip's
+Open the shared **Settings** screen and enter the HTTPS URL exposed by Cantrip's
 Tailscale Serve configuration plus its pairing token. The URL is stored in app
 preferences and the token is stored in Keychain. Plain HTTP is accepted only
-for localhost development. A green dot on the Remote tab means the app has
-recently completed an authenticated request; gray means the connection is
+for localhost development. A green dot beside the session picker means the app
+has recently completed an authenticated request; gray means the connection is
 unconfigured, unavailable, unauthenticated, paused in the background, or stale.
 
 ---
@@ -203,9 +205,11 @@ Tap **Test authenticated connection**. The app verifies the key against
 - **Copilot** is the default and uses the `copilot-coding` gateway route.
 - **Private Local** uses the future `local-private` route and is unavailable
   until the gateway advertises it.
-- Each lane has independent on-device conversation history and a distinct
-  long-term-memory session key.
-- Every assistant reply is labeled **Coding · Copilot** or **Private · Local**.
+- **Cantrip Remote** controls a selected live Cantrip session using the same
+  chat and voice UI.
+- Each destination has independent conversation history. Hermes lanes also use
+  distinct long-term-memory session keys.
+- Every assistant reply is labeled with its active destination.
 - Switching lanes never carries the other lane's run or conversation history.
 
 ## Durable tasks

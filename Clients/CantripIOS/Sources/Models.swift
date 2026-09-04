@@ -3,6 +3,7 @@ import Foundation
 enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
     case copilot
     case local
+    case cantrip
 
     static let defaultLane: ExecutionLane = .copilot
 
@@ -12,6 +13,7 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .copilot: "Copilot"
         case .local: "Private Local"
+        case .cantrip: "Cantrip Remote"
         }
     }
 
@@ -19,6 +21,7 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .copilot: "Coding · Copilot"
         case .local: "Private · Local"
+        case .cantrip: "Remote · Cantrip"
         }
     }
 
@@ -28,6 +31,8 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
             "Uses the Copilot shim. Requests may leave your Mac."
         case .local:
             "Uses the explicitly configured local-private inference route."
+        case .cantrip:
+            "Controls an existing Cantrip session through its Remote server."
         }
     }
 
@@ -35,6 +40,7 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .copilot: "chevron.left.forwardslash.chevron.right"
         case .local: "lock.shield.fill"
+        case .cantrip: "antenna.radiowaves.left.and.right"
         }
     }
 
@@ -42,6 +48,7 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .copilot: "copilot-coding"
         case .local: "local-private"
+        case .cantrip: "cantrip-remote"
         }
     }
 
@@ -126,6 +133,8 @@ struct ChatTurn: Identifiable, Codable {
     var error: String?
     var executionLane: ExecutionLane?
     var approval: HermesRunApproval?
+    var thinking: String?
+    var author: String?
 
     enum Role: String, Codable { case user, assistant }
 

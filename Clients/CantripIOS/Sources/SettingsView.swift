@@ -3,6 +3,7 @@ import AVFoundation
 
 struct SettingsView: View {
     @ObservedObject var env: HermesEnv
+    @ObservedObject var remote: CantripRemoteModel
     let voice: VoiceController
     @Environment(\.dismiss) private var dismiss
     @State private var key = ""
@@ -18,6 +19,7 @@ struct SettingsView: View {
             Form {
                 executionSection
                 gatewaySection
+                CantripRemoteSettingsSection(model: remote, allowsClearing: true)
                 speechRecognitionSection
 
                 Section {
@@ -82,9 +84,7 @@ struct SettingsView: View {
                             Text(lane.title)
                                 .foregroundStyle(.primary)
                             Text(
-                                lane == .local && !env.isAvailable(.local)
-                                    ? "Unavailable until the local-private gateway route is configured."
-                                    : lane.detail
+                                laneStatus(lane)
                             )
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -103,7 +103,20 @@ struct SettingsView: View {
         } header: {
             Text("Execution")
         } footer: {
-            Text("Each lane keeps separate conversation history. Copilot remains the default until a private local route is explicitly advertised by the gateway.")
+            Text("Choose the agent behind the shared chat and voice interface. Each destination keeps its own conversation.")
+        }
+    }
+
+    private func laneStatus(_ lane: ExecutionLane) -> String {
+        switch lane {
+        case .local where !env.isAvailable(.local):
+            "Unavailable until the local-private gateway route is configured."
+        case .cantrip where remote.isConnected:
+            "Connected to \(remote.endpointHost)."
+        case .cantrip where remote.isConfigured:
+            "Configured for \(remote.endpointHost), but not currently connected."
+        default:
+            lane.detail
         }
     }
 
