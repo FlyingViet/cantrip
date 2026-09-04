@@ -14,7 +14,6 @@ struct RemoteConnectionView: View {
             }
         }
         .onAppear { connection.activate() }
-        .onDisappear { connection.deactivate() }
     }
 
     private var setupView: some View {
@@ -54,8 +53,11 @@ struct RemoteConnectionView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "antenna.radiowaves.left.and.right")
-                    .foregroundStyle(connection.isLoading || connection.errorMessage != nil
-                                     ? Color.orange : Color.green)
+                    .foregroundStyle(connection.isLoading
+                                     ? Color.orange
+                                     : connection.isConnected
+                                        ? Color.green
+                                        : Color.secondary)
                     .symbolEffect(.pulse, isActive: connection.isLoading)
 
                 Text(connection.endpoint?.host ?? "Remote Cantrip")
@@ -98,6 +100,7 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var address: String
     @Published private(set) var endpoint: URL?
     @Published private(set) var isLoading = false
+    @Published private(set) var isConnected = false
     @Published private(set) var errorMessage: String?
 
     let webView: WKWebView
@@ -105,6 +108,7 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate {
     private let defaults = UserDefaults.standard
     private let endpointKey = "remoteClientEndpoint"
     private var active = false
+    private var connectionStatusTimer: Timer?
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -123,14 +127,11 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate {
     func activate() {
         active = true
         guard let endpoint else { return }
-        load(endpoint)
-    }
-
-    func deactivate() {
-        active = false
-        isLoading = false
-        webView.stopLoading()
-        webView.loadHTMLString("", baseURL: nil)
+        if webView.url == nil || webView.url?.absoluteString == "about:blank" {
+            load(endpoint)
+        } else {
+            startConnectionStatusPolling()
+        }
     }
 
     func connect() {
@@ -152,21 +153,31 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     func changeServer() {
+        stopConnectionStatusPolling()
         webView.stopLoading()
         webView.loadHTMLString("", baseURL: nil)
         endpoint = nil
         defaults.removeObject(forKey: endpointKey)
         isLoading = false
+        isConnected = false
         errorMessage = nil
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        stopConnectionStatusPolling()
         isLoading = true
+        isConnected = false
         errorMessage = nil
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isLoading = false
+        guard sameOrigin(webView.url, endpoint) else {
+            stopConnectionStatusPolling()
+            isConnected = false
+            return
+        }
+        startConnectionStatusPolling()
     }
 
     func webView(
@@ -203,7 +214,9 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     private func load(_ url: URL) {
+        stopConnectionStatusPolling()
         isLoading = true
+        isConnected = false
         webView.load(URLRequest(
             url: url,
             cachePolicy: .reloadIgnoringLocalCacheData,
@@ -212,9 +225,40 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     private func report(_ error: Error) {
+        stopConnectionStatusPolling()
         isLoading = false
+        isConnected = false
         guard (error as NSError).code != NSURLErrorCancelled else { return }
         errorMessage = error.localizedDescription
+    }
+
+    private func startConnectionStatusPolling() {
+        stopConnectionStatusPolling()
+        refreshConnectionStatus()
+        connectionStatusTimer = Timer.scheduledTimer(
+            withTimeInterval: 1.5,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshConnectionStatus()
+            }
+        }
+    }
+
+    private func stopConnectionStatusPolling() {
+        connectionStatusTimer?.invalidate()
+        connectionStatusTimer = nil
+    }
+
+    private func refreshConnectionStatus() {
+        webView.evaluateJavaScript(
+            "document.documentElement.dataset.cantripConnected === 'true'"
+        ) { [weak self] value, error in
+            DispatchQueue.main.async {
+                self?.isConnected = error == nil
+                    && ((value as? NSNumber)?.boolValue ?? false)
+            }
+        }
     }
 
     private func sameOrigin(_ lhs: URL?, _ rhs: URL?) -> Bool {
@@ -261,8 +305,4 @@ private struct RemoteWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {}
-
-    static func dismantleNSView(_ webView: WKWebView, coordinator: Void) {
-        webView.stopLoading()
-    }
 }

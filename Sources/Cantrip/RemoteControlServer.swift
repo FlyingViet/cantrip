@@ -411,7 +411,7 @@ private struct HTTPRequest {
 private extension RemoteControlServer {
     static let webApp = """
     <!doctype html>
-    <html lang="en"><head>
+    <html lang="en" data-cantrip-connected="false"><head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="dark"><title>Cantrip Remote</title>
     <style>
@@ -434,12 +434,13 @@ private extension RemoteControlServer {
     <textarea id="draft" class="grow" placeholder="Message Cantrip"></textarea><button id="resume" class="hidden">Resume</button><button id="stop">Stop</button><button id="send" class="primary">Send</button></div></main>
     <script>
     const $=id=>document.getElementById(id);let token=localStorage.cantripToken||"",selected=null,timer=null;
+    function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false"}
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
       const response=await fetch(path,options);const data=await response.json();if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}
-    function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show&&timer){clearInterval(timer);timer=null}}
+    function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
     async function refresh(){try{const listed=await api("/api/v1/sessions");if(!selected||!listed.sessions.some(s=>s.id===selected))selected=listed.sessions[0]?.id||null;
-      renderSessions(listed.sessions);if(selected){const data=await api(`/api/v1/sessions/${selected}`);render(data.session)}else render(null)}
-      catch(error){$("status").textContent=error.message;if(error.message.includes("token"))pair(true)}}
+      renderSessions(listed.sessions);if(selected){const data=await api(`/api/v1/sessions/${selected}`);render(data.session)}else render(null);connection(true)}
+      catch(error){connection(false);$("status").textContent=error.message;if(error.message.includes("token"))pair(true)}}
     function renderSessions(items){const nav=$("sessions");nav.replaceChildren();for(const item of items){const button=document.createElement("button");button.textContent=item.title;
       button.className=item.id===selected?"active":"";button.onclick=()=>{selected=item.id;refresh()};nav.append(button)}}
     function render(session){const box=$("messages");box.replaceChildren();if(!session){box.textContent="No open sessions.";return}
@@ -450,12 +451,12 @@ private extension RemoteControlServer {
         for(const activity of message.activities||[]){const a=document.createElement("div");a.className="activity";a.textContent=`${activity.state==="running"?"◌":"✓"} ${activity.toolName}: ${activity.title}`;row.append(a)}
         box.append(row)}window.scrollTo({top:document.body.scrollHeight})}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
-    $("pairButton").onclick=async()=>{token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;pair(false);refresh();timer=setInterval(refresh,1500)}
+    $("pairButton").onclick=async()=>{token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh();timer=setInterval(refresh,1500)}
       catch(error){$("pairError").textContent=error.message}};
     $("send").onclick=()=>{const text=$("draft").value.trim();if(text){$("draft").value="";action("messages",{text,mode:$("mode").value})}};
     $("draft").onkeydown=event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selected=data.session.id;refresh()};
-    $("forget").onclick=()=>{localStorage.removeItem("cantripToken");token="";pair(true)};if(token){pair(false);refresh();timer=setInterval(refresh,1500)}else pair(true);
+    $("forget").onclick=()=>{localStorage.removeItem("cantripToken");token="";connection(false);pair(true)};if(token){pair(false);refresh();timer=setInterval(refresh,1500)}else pair(true);
     </script></body></html>
     """
 }
