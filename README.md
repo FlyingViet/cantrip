@@ -90,7 +90,8 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   mobile web UI, the native Cantrip **Remote** tab, or the Hermes/Agent Gateway
   app. The Remote tab is pinned first (⌘1), shows a green dot while its paired
   host is responding, embeds the host's isolated web client, keeps pairing
-  storage scoped to that host, and never mixes remote sessions into local tabs.
+  storage scoped to that host, never mixes remote sessions into local tabs, and
+  follows live output only while the viewer remains at the latest message.
   Private tabs are never exposed, and remotely submitted prompts cannot consume
   staged screenshots, selections, attachments, calendar data, or location.
   Enable it in Settings, copy the pairing token, then publish the displayed
