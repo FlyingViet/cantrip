@@ -2708,7 +2708,7 @@ struct SettingsView: View {
                     .foregroundStyle(.red)
             }
             Divider().opacity(0.3)
-            Toggle("Remote control daemon (loopback only)", isOn: $settings.remoteControlEnabled)
+            Toggle("Remote control daemon", isOn: $settings.remoteControlEnabled)
                 .font(.caption)
                 .toggleStyle(.checkbox)
             if settings.remoteControlEnabled {
@@ -2738,7 +2738,7 @@ struct SettingsView: View {
                     }
                     .font(.caption)
                 }
-                Text("Listening on 127.0.0.1:\(settings.remoteControlPort). Publish it with Tailscale Serve, never Funnel. Regenerating the token disconnects paired clients.")
+                Text("Tailscale Serve can proxy 127.0.0.1:\(settings.remoteControlPort). AgentGateway also discovers an end-to-end encrypted connection automatically on the same local network. Regenerating the token disconnects paired clients.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

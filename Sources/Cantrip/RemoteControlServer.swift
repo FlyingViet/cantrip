@@ -1,15 +1,20 @@
+import CryptoKit
 import Foundation
 import Network
+import Security
 
 /// Authenticated HTTP control plane for the live sessions owned by the app.
-/// The listener is deliberately loopback-only; Tailscale Serve adds HTTPS
-/// and tailnet reachability without exposing a LAN service.
+/// Loopback HTTP remains available for Tailscale Serve. A separate Bonjour
+/// listener uses forward-secret TLS with the pairing token as a PSK for LAN use.
 final class RemoteControlServer {
+    static let lanServiceType = "_cantrip-remote._tcp"
+
     var onError: ((String?) -> Void)?
 
     private weak var manager: SessionManager?
     private let queue = DispatchQueue(label: "com.brian.cantrip.remote-control")
     private var listener: NWListener?
+    private var lanListener: NWListener?
     private var activePort: Int?
     private var token = ""
     private let maximumRequestBytes = 1 << 20
@@ -29,7 +34,9 @@ final class RemoteControlServer {
             stop()
             return
         }
-        if listener != nil, activePort == port, self.token == token { return }
+        if listener != nil, lanListener != nil, activePort == port, self.token == token {
+            return
+        }
         stop()
 
         do {
@@ -60,6 +67,7 @@ final class RemoteControlServer {
             activePort = port
             self.token = token
             listener.start(queue: queue)
+            startLANListener(token: token)
         } catch {
             onError?("Remote control daemon failed: \(error.localizedDescription)")
             Log.write("remote-control: listener failed: \(error.localizedDescription)")
@@ -70,8 +78,89 @@ final class RemoteControlServer {
         listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
+        lanListener?.stateUpdateHandler = nil
+        lanListener?.cancel()
+        lanListener = nil
         activePort = nil
         token = ""
+    }
+
+    private func startLANListener(token: String) {
+        do {
+            let listener = try NWListener(using: Self.lanParameters(token: token))
+            listener.service = NWListener.Service(
+                name: Host.current().localizedName ?? "Cantrip",
+                type: Self.lanServiceType,
+                txtRecord: NWTXTRecord([
+                    "id": Self.tokenFingerprint(token),
+                    "v": "1",
+                ])
+            )
+            listener.newConnectionHandler = { [weak self] connection in
+                self?.accept(connection)
+            }
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener, self.lanListener === listener else { return }
+                switch state {
+                case .ready:
+                    self.onError?(nil)
+                    if let port = listener.port {
+                        Log.write("remote-control: encrypted LAN service ready on port \(port)")
+                    }
+                case .failed(let error):
+                    self.onError?(
+                        "Direct local-network control failed: \(error.localizedDescription)"
+                    )
+                    Log.write("remote-control: LAN listener failed: \(error.localizedDescription)")
+                    listener.stateUpdateHandler = nil
+                    listener.cancel()
+                    self.lanListener = nil
+                default:
+                    break
+                }
+            }
+            lanListener = listener
+            listener.start(queue: queue)
+        } catch {
+            onError?("Direct local-network control failed: \(error.localizedDescription)")
+            Log.write("remote-control: LAN listener failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func lanParameters(token: String) -> NWParameters {
+        let tls = NWProtocolTLS.Options()
+        let derivedKey = Data(SHA256.hash(data: Data(token.utf8)))
+        let key = derivedKey.withUnsafeBytes { DispatchData(bytes: $0) }
+        let identity = Data("cantrip-remote-v1".utf8).withUnsafeBytes {
+            DispatchData(bytes: $0)
+        }
+        sec_protocol_options_add_pre_shared_key(
+            tls.securityProtocolOptions,
+            key as dispatch_data_t,
+            identity as dispatch_data_t
+        )
+        sec_protocol_options_set_min_tls_protocol_version(
+            tls.securityProtocolOptions,
+            .TLSv12
+        )
+        sec_protocol_options_set_max_tls_protocol_version(
+            tls.securityProtocolOptions,
+            .TLSv12
+        )
+        sec_protocol_options_append_tls_ciphersuite(
+            tls.securityProtocolOptions,
+            tls_ciphersuite_t(
+                rawValue: UInt16(TLS_DHE_PSK_WITH_AES_128_GCM_SHA256)
+            )!
+        )
+        return NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
+    }
+
+    private static func tokenFingerprint(_ token: String) -> String {
+        SHA256.hash(data: Data(token.utf8))
+            .prefix(8)
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     private func accept(_ connection: NWConnection) {
