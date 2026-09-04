@@ -206,6 +206,7 @@ struct LauncherView: View {
                 localSessionContent
             }
         }
+        .background(sessionShortcuts)
     }
 
     private var localSessionContent: some View {
@@ -224,7 +225,6 @@ struct LauncherView: View {
                     .frame(width: 0, height: 0)
                     .opacity(0)
                 )
-                .background(sessionShortcuts)
                 // Report where the composer ends so the suggestions
                 // dropdown can pin its top edge exactly there (see the
                 // panel-level overlay in body) — Spotlight-style, always
@@ -520,12 +520,14 @@ struct LauncherView: View {
         }
     }
 
-    /// ⌘1–9 select session; ⌘⇧[ / ⌘⇧] cycle.
+    /// ⌘1–9 select tabs; ⌘⇧[ / ⌘⇧] cycle.
     private var sessionShortcuts: some View {
         Group {
-            ForEach(1..<10, id: \.self) { n in
+            Button(action: selectRemote) { EmptyView() }
+                .keyboardShortcut("1", modifiers: .command)
+            ForEach(2..<10, id: \.self) { n in
                 Button(action: {
-                    manager.select(n - 1)
+                    manager.select(n - 2)
                 }) { EmptyView() }
                     .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
             }
@@ -548,19 +550,39 @@ struct LauncherView: View {
     private var sessionTabs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                Button(action: selectRemote) {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(remoteConnection.isConnected
+                                  ? Color.green
+                                  : Color.secondary.opacity(0.45))
+                            .frame(width: 6, height: 6)
+                            .accessibilityLabel(remoteConnection.isConnected
+                                                ? "Connected"
+                                                : "Disconnected")
+                        shortcutBadge(1)
+                        Text("Remote")
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(manager.showingRemote
+                                ? AnyShapeStyle(.quaternary)
+                                : AnyShapeStyle(.clear),
+                                in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(remoteConnection.isConnected
+                      ? "Connected to remote Cantrip"
+                      : "Connect to sessions on another Cantrip")
+
                 ForEach(Array(manager.sessions.enumerated()), id: \.element.id) { index, chat in
                     HStack(spacing: 5) {
                         if chat.isStreaming {
                             ProgressView().controlSize(.mini)
                         }
-                        if index < 9 {
-                            Text("⌘\(index + 1)")
-                                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 3)
-                                .padding(.vertical, 1)
-                                .background(.quaternary.opacity(0.6),
-                                            in: RoundedRectangle(cornerRadius: 3))
+                        if index < 8 {
+                            shortcutBadge(index + 2)
                         }
                         Text(chat.title)
                             .font(.caption)
@@ -584,22 +606,6 @@ struct LauncherView: View {
                         manager.select(index)
                     }
                 }
-                Button(action: selectRemote) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .font(.system(size: 10))
-                        Text("Remote")
-                            .font(.caption)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(manager.showingRemote
-                                ? AnyShapeStyle(.quaternary)
-                                : AnyShapeStyle(.clear),
-                                in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .help("Connect to sessions on another Cantrip")
 
                 Button(action: {
                     manager.newSession()
@@ -614,6 +620,16 @@ struct LauncherView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
         }
+    }
+
+    private func shortcutBadge(_ number: Int) -> some View {
+        Text("⌘\(number)")
+            .font(.system(size: 9, weight: .semibold, design: .rounded))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 3)
+            .padding(.vertical, 1)
+            .background(.quaternary.opacity(0.6),
+                        in: RoundedRectangle(cornerRadius: 3))
     }
 
     private func selectRemote() {

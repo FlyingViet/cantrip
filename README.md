@@ -78,7 +78,7 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   notes the agents write after figuring things out, searchable session logs,
   and a nightly background consolidation pass. It gets better with use, and
   you can read everything it knows.
-- **Parallel sessions** — tabs (⌘T, ⌘1–9), each with its own conversation,
+- **Parallel sessions** — tabs (⌘T, ⌘2–9), each with its own conversation,
   working directory, terminal, and backend processes. A 90-minute download
   babysits itself in one tab while you work in another; finished background
   sessions notify you. Closed sessions archive: reopen any of them (titles,
@@ -88,7 +88,8 @@ Ask anything more and it goes to an AI agent that can genuinely act:
 - **Tailscale remote control** — an optional authenticated HTTP daemon binds
   only to `127.0.0.1` and controls those same live, open sessions from its
   mobile web UI, the native Cantrip **Remote** tab, or the Hermes/Agent Gateway
-  app. The Remote tab embeds the host's isolated web client, keeps pairing
+  app. The Remote tab is pinned first (⌘1), shows a green dot while its paired
+  host is responding, embeds the host's isolated web client, keeps pairing
   storage scoped to that host, and never mixes remote sessions into local tabs.
   Private tabs are never exposed, and remotely submitted prompts cannot consume
   staged screenshots, selections, attachments, calendar data, or location.
