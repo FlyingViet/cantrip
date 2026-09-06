@@ -6,14 +6,19 @@ APP_BACKUP = .$(APP_NAME).app.previous
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal cert icon app run clean
+.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images cert icon app run clean
 
 all: app
 
 build:
 	swift build -c release
 
-test: test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal
+test: test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images
+
+test-remote-images:
+	@BIN="/tmp/cantrip-remote-image-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/RemoteImageAttachments.swift Tests/RemoteImageTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-context:
 	@BIN="/tmp/cantrip-context-tests-$$$$"; \

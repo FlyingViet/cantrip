@@ -23,6 +23,7 @@ using the same operating-system API.
 | Persistent terminal | Missing | Use ConPTY (`node-pty`) per session with state/history/Ctrl-C. |
 | Local OpenAI-compatible backend | Missing | Stream `/v1/chat/completions`; add approved shell/MCP tool loop. |
 | Attachments and screen context | Partial | Multi-monitor screen capture, previews, backend delivery, and transient cleanup are implemented. Clipboard/drop files remain. |
+| Remote image uploads | Missing | macOS accepts bounded authenticated AgentGateway photo/screenshot uploads, with session capability discovery and durable image files for queued/recovered prompts. |
 | Selected-text capture | Missing | Windows UI Automation or guarded clipboard capture. |
 | Git actions/diffs/revert | Missing | Git status, staged-diff commit prompt, diff renderer, explicit revert. |
 | Notifications | Missing | Windows Action Center notifications for background completion. |

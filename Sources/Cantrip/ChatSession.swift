@@ -626,6 +626,10 @@ final class ChatSession: ObservableObject {
         submit(text, interrupt: interrupt, inject: inject, includesAmbientContext: true)
     }
 
+    var supportsRemoteImages: Bool {
+        settings.backend != .localModel && runningBackendKind != .localModel
+    }
+
     /// Remote clients share the live session but must not consume context
     /// staged by the person at the Mac or capture ambient Mac data.
     func submitRemote(_ text: String, interrupt: Bool = false, inject: Bool = false) {
