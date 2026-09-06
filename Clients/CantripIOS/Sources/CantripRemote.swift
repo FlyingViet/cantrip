@@ -53,6 +53,7 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     let queuedCount: Int
     let status: String?
     let messages: [CantripRemoteMessage]?
+    let supportsImageAttachments: Bool?
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
 }
@@ -78,6 +79,7 @@ private enum CantripRemoteError: LocalizedError {
     case http(Int, String)
     case decoding
     case invalidResponse
+    case imagesUnsupported
 
     var errorDescription: String? {
         switch self {
@@ -97,6 +99,8 @@ private enum CantripRemoteError: LocalizedError {
             return "Cantrip returned data this app could not read. Update both apps and try again."
         case .invalidResponse:
             return "Cantrip returned an invalid HTTP response."
+        case .imagesUnsupported:
+            return "Image attachments require an updated Cantrip host using Claude, Copilot, or Codex. Your images have not been sent."
         }
     }
 }
@@ -196,7 +200,7 @@ private actor CantripRequestGate {
     }
 }
 
-private enum CantripTransport: Hashable {
+enum CantripTransport: Hashable {
     case lan(NWEndpoint)
     case remote(URL)
 }
@@ -302,6 +306,7 @@ private final class CantripLANRequest: @unchecked Sendable {
     private let endpoint: NWEndpoint
     private let token: String
     private let requestData: Data
+    private let timeout: TimeInterval
     private let queue = DispatchQueue(label: "com.itzhoang.hermbot.cantrip-request")
     private var connection: NWConnection?
     private var continuation: CheckedContinuation<CantripLANResponse, Error>?
@@ -313,6 +318,7 @@ private final class CantripLANRequest: @unchecked Sendable {
         self.endpoint = endpoint
         self.token = token
         let payload = body ?? Data()
+        timeout = payload.count > 256 * 1024 ? 60 : 12
         let header = """
         \(method) \(path) HTTP/1.1\r
         Host: cantrip.local\r
@@ -379,7 +385,7 @@ private final class CantripLANRequest: @unchecked Sendable {
             }
         }
         connection.start(queue: queue)
-        queue.asyncAfter(deadline: .now() + 12) { [weak self] in
+        queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
             guard let self, !self.isComplete else { return }
             self.finish(.failure(CantripRemoteError.transport(
                 "The local connection timed out."
@@ -476,15 +482,25 @@ private final class CantripLANRequest: @unchecked Sendable {
     }
 }
 
-private struct CantripRemoteAPI {
+struct CantripRemoteAPI {
     let transport: CantripTransport
     let token: String
+    var urlSession: URLSession?
 
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 12
         configuration.timeoutIntervalForResource = 20
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration)
+    }()
+
+    private static let imageSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 90
         configuration.waitsForConnectivity = false
         return URLSession(configuration: configuration)
     }()
@@ -509,9 +525,24 @@ private struct CantripRemoteAPI {
         return response.session
     }
 
-    func send(_ text: String, mode: CantripDeliveryMode, sessionID: String) async throws
+    func send(
+        _ text: String,
+        mode: CantripDeliveryMode,
+        sessionID: String,
+        images: [ChatImageAttachment] = []
+    ) async throws
         -> CantripRemoteSession {
-        let body = try JSONEncoder().encode(MessageBody(text: text, mode: mode.rawValue))
+        if !images.isEmpty {
+            guard images.count <= ImageAttachmentProcessor.maximumCount else {
+                throw ImageAttachmentError.tooMany
+            }
+            // Check the same authenticated host used for the mutation. Older hosts
+            // ignore unknown JSON fields, which would silently send only the text.
+            guard try await session(id: sessionID).supportsImageAttachments == true else {
+                throw CantripRemoteError.imagesUnsupported
+            }
+        }
+        let body = try JSONEncoder().encode(CantripMessageBody(text: text, mode: mode, images: images))
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(sessionID)/messages",
             method: "POST",
@@ -532,11 +563,6 @@ private struct CantripRemoteAPI {
         try await action("close", sessionID: id)
     }
 
-    private struct MessageBody: Encodable {
-        let text: String
-        let mode: String
-    }
-
     private func request<Response: Decodable>(
         path: String,
         method: String = "GET",
@@ -555,10 +581,11 @@ private struct CantripRemoteAPI {
             throw CantripRemoteError.invalidResponse
         }
         let url = try endpoint(path: path, baseURL: baseURL)
+        let isImageUpload = (body?.count ?? 0) > 256 * 1024
         var request = URLRequest(
             url: url,
             cachePolicy: .reloadIgnoringLocalCacheData,
-            timeoutInterval: 12
+            timeoutInterval: isImageUpload ? 60 : 12
         )
         request.httpMethod = method
         request.httpBody = body
@@ -571,7 +598,8 @@ private struct CantripRemoteAPI {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await Self.session.data(for: request)
+            let session = urlSession ?? (isImageUpload ? Self.imageSession : Self.session)
+            (data, response) = try await session.data(for: request)
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as URLError where error.code == .cancelled {
@@ -826,11 +854,17 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     @discardableResult
-    func send(_ text: String, mode: CantripDeliveryMode) async -> Bool {
+    func send(
+        _ text: String,
+        mode: CantripDeliveryMode,
+        images: [ChatImageAttachment] = [],
+        sessionID: String? = nil
+    ) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let sessionID = selectedSessionID else { return false }
+        guard !trimmed.isEmpty || !images.isEmpty,
+              let sessionID = sessionID ?? selectedSessionID else { return false }
         guard let session = await mutate({ api in
-            try await api.send(trimmed, mode: mode, sessionID: sessionID)
+            try await api.send(trimmed, mode: mode, sessionID: sessionID, images: images)
         }) else { return false }
         guard selectedSessionID == sessionID else { return true }
         apply(session)
@@ -1089,6 +1123,8 @@ final class CantripRemoteModel: ObservableObject {
         case is CancellationError:
             return false
         case CantripRemoteError.http:
+            return false
+        case CantripRemoteError.imagesUnsupported, is ImageAttachmentError:
             return false
         default:
             return true

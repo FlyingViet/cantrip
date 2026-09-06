@@ -73,7 +73,10 @@ final class ChatViewModel: ObservableObject {
         guard !UserDefaults.standard.bool(forKey: "hermes.paused") else { return }
         guard !text.isEmpty else { return }
         if activeLane == .cantrip {
-            sendRemote(text, spoken: spoken)
+            let sessionID = remote.selectedSessionID
+            Task {
+                await sendRemote(text, spoken: spoken, sessionID: sessionID)
+            }
             return
         }
         guard !sending else { return }
@@ -132,16 +135,27 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func sendRemote(_ text: String, spoken: Bool) {
-        guard !sending, !remote.isMutating else { return }
+    @discardableResult
+    func sendRemote(
+        _ text: String,
+        spoken: Bool = false,
+        images: [ChatImageAttachment] = [],
+        sessionID: String? = nil
+    ) async -> Bool {
+        guard activeLane == .cantrip,
+              !UserDefaults.standard.bool(forKey: "hermes.paused"),
+              !sending, !remote.isMutating else { return false }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !images.isEmpty else { return false }
         guard remote.isConfigured else {
             appendRemoteFailure("Configure Cantrip Remote in Settings.", for: text)
-            return
+            return false
         }
-        guard remote.selectedSessionID != nil else {
+        guard let targetSessionID = sessionID ?? remote.selectedSessionID else {
             appendRemoteFailure("Choose or create a Cantrip session first.", for: text)
-            return
+            return false
         }
+        guard targetSessionID == remote.selectedSessionID else { return false }
 
         let speakReply = spoken || voice.handsFree
         remoteSpeechBaseline = Set(
@@ -153,9 +167,8 @@ final class ChatViewModel: ObservableObject {
         speechTableHeader = nil
         if speakReply { voice.beginReply() }
 
-        turns.append(
-            ChatTurn(role: .user, text: text, executionLane: .cantrip)
-        )
+        let displayText = images.isEmpty ? text : text + "\n[\(images.count) image(s) attached]"
+        turns.append(ChatTurn(role: .user, text: displayText, executionLane: .cantrip))
         turns.append(
             ChatTurn(
                 role: .assistant,
@@ -166,28 +179,28 @@ final class ChatViewModel: ObservableObject {
         sending = true
         runStatusText = "Sending to Cantrip…"
 
-        Task { [weak self] in
-            guard let self else { return }
-            let sent = await self.remote.send(
-                text,
-                mode: self.remoteDeliveryMode
-            )
-            self.sending = false
-            if sent {
-                self.syncRemoteTranscript()
-            } else {
-                if let index = self.turns.lastIndex(where: {
-                    $0.role == .assistant && $0.streaming
-                }) {
-                    self.turns[index].streaming = false
-                    self.turns[index].error = self.remote.errorMessage
-                        ?? "Cantrip did not accept the prompt."
-                }
-                self.remoteIsStreaming = false
-                self.runStatusText = nil
-                self.finishRemoteSpeech()
+        let sent = await remote.send(
+            text,
+            mode: remoteDeliveryMode,
+            images: images,
+            sessionID: targetSessionID
+        )
+        sending = false
+        if sent {
+            syncRemoteTranscript()
+        } else {
+            if let index = turns.lastIndex(where: {
+                $0.role == .assistant && $0.streaming
+            }) {
+                turns[index].streaming = false
+                turns[index].error = remote.errorMessage
+                    ?? "Cantrip did not accept the prompt."
             }
+            remoteIsStreaming = false
+            runStatusText = nil
+            finishRemoteSpeech()
         }
+        return sent
     }
 
     private func appendRemoteFailure(_ message: String, for input: String) {
@@ -977,6 +990,10 @@ struct ChatView: View {
     @StateObject private var vm: ChatViewModel
     @ObservedObject private var router = AppRouter.shared
     @State private var input = ""
+    @State private var imageDrafts: [String: [ChatImageAttachment]] = [:]
+    @State private var imageImportID: UUID?
+    @State private var submittingRemote = false
+    @State private var imageSendError: String?
     @State private var composerRevision = UUID()
     @State private var showSettings = false
     @State private var showVoiceMode = false
@@ -1009,6 +1026,7 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 if vm.activeLane == .cantrip {
                     remoteControls
+                        .disabled(vm.sending || importingImages || submittingRemote)
                     Divider()
                 }
                 transcriptList
@@ -1022,7 +1040,7 @@ struct ChatView: View {
                         Text("Hermes")
                             .font(.headline)
                         ExecutionLanePicker(env: env, remote: remote)
-                            .disabled(vm.sending)
+                            .disabled(vm.sending || importingImages || submittingRemote)
                     }
                 }
                 ToolbarItem(placement: .topBarLeading) {
@@ -1035,7 +1053,7 @@ struct ChatView: View {
                         Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
                             .disabled(paused || vm.activeLane == .cantrip)
                         Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
-                            .disabled(paused || !destinationReady)
+                            .disabled(paused || !destinationReady || hasImageDraft || importingImages)
                         Divider()
                         Button(role: .destructive) { vm.newConversation() } label: {
                             Label("New conversation", systemImage: "square.and.pencil")
@@ -1048,7 +1066,7 @@ struct ChatView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
-                        .disabled(vm.sending)
+                        .disabled(vm.sending || importingImages || submittingRemote)
                 }
             }
             .sheet(
@@ -1075,6 +1093,14 @@ struct ChatView: View {
                     vm: vm,
                     onClose: { showVoiceMode = false }
                 )
+            }
+            .alert("Message not confirmed", isPresented: Binding(
+                get: { imageSendError != nil },
+                set: { if !$0 { imageSendError = nil } }
+            )) {
+                Button("OK") { imageSendError = nil }
+            } message: {
+                Text(imageSendError ?? "")
             }
         }
         .onAppear {
@@ -1138,6 +1164,7 @@ struct ChatView: View {
         if vm.activeLane == .cantrip {
             return remote.selectedSessionID == nil
                 || remote.isMutating
+                || importingImages || submittingRemote || vm.sending || hasImageDraft
                 || remote.selectedSession?.isStreaming == true
         }
         return vm.turns.isEmpty || vm.sending
@@ -1318,7 +1345,9 @@ struct ChatView: View {
 
     private func closeRemoteSession(_ id: String) {
         Task {
-            _ = await remote.closeSession(id)
+            if await remote.closeSession(id) {
+                imageDrafts.removeValue(forKey: id)
+            }
             vm.syncRemoteTranscript()
         }
     }
@@ -1400,10 +1429,24 @@ struct ChatView: View {
             } else {
             if !suggestions.isEmpty { suggestionList }
             voiceStatus
+            if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
+                ImageAttachmentPicker(
+                    attachments: Binding(
+                        get: { imageDrafts[sessionID] ?? [] },
+                        set: { imageDrafts[sessionID] = $0 }
+                    ),
+                    importID: $imageImportID,
+                    imageSupport: remote.selectedSession?.id == sessionID
+                        ? remote.selectedSession?.supportsImageAttachments : nil,
+                    disabled: !destinationReady || vm.sending || submittingRemote
+                        || remote.isMutating || voice.isListening
+                )
+                .id(sessionID)
+            }
             HStack(spacing: 10) {
                 Button { showVoiceMode = true } label: { Image(systemName: "infinity") }
                     .buttonStyle(.bordered)
-                    .disabled(!destinationReady)
+                    .disabled(!destinationReady || hasImageDraft || importingImages)
                     .help("Voice mode")
 
                 TextField(
@@ -1415,14 +1458,14 @@ struct ChatView: View {
                     .textFieldStyle(.plain).lineLimit(1...5)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Color(.secondarySystemBackground), in: Capsule())
-                    .disabled(!destinationReady || vm.sending)
+                    .disabled(!destinationReady || vm.sending || submittingRemote)
                     .onSubmit(sendText)
 
                 if vm.sending, vm.activeLane != .cantrip {
                     Button { vm.stop() } label: { Image(systemName: "stop.circle.fill").font(.title2) }
-                } else if vm.sending {
+                } else if vm.sending || submittingRemote || importingImages {
                     ProgressView().controlSize(.small)
-                } else if input.isEmpty {
+                } else if input.isEmpty && !hasImageDraft {
                     Button {
                         if voice.isSpeaking { vm.interruptAndListen() } else { voice.toggleListening() }
                     } label: {
@@ -1522,11 +1565,41 @@ struct ChatView: View {
 
     private func sendText() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !paused, !importingImages, !submittingRemote, !vm.sending,
+              destinationReady, !remote.isMutating,
+              !text.isEmpty || hasImageDraft else { return }
+        if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
+            let images = imageDrafts[sessionID] ?? []
+            let originalInput = input
+            submittingRemote = true
+            Task { @MainActor in
+                defer { submittingRemote = false }
+                let sent = await vm.sendRemote(text, images: images, sessionID: sessionID)
+                if sent {
+                    let sentIDs = Set(images.map(\.id))
+                    imageDrafts[sessionID]?.removeAll { sentIDs.contains($0.id) }
+                    if remote.selectedSessionID == sessionID, input == originalInput {
+                        input = ""
+                        composerRevision = UUID()
+                    }
+                } else {
+                    imageSendError = (remote.errorMessage ?? "Cantrip did not confirm the message.")
+                        + "\n\nYour draft has been kept. If the connection was lost, check the session before sending again to avoid a duplicate."
+                }
+            }
+            return
+        }
         input = ""
         composerRevision = UUID()
         vm.send(text)
     }
+
+    private var hasImageDraft: Bool {
+        guard vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID else { return false }
+        return !(imageDrafts[sessionID] ?? []).isEmpty
+    }
+
+    private var importingImages: Bool { imageImportID != nil }
 }
 
 struct ExecutionLaneBadge: View {

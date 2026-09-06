@@ -55,6 +55,24 @@ Keychain. A green dot beside the session picker means the app has recently
 completed an authenticated request; gray means the connection is unconfigured,
 unavailable, unauthenticated, paused in the background, or stale.
 
+In a Cantrip session, tap **Attach images** to choose photos/screenshots from
+Photos, select image files, or paste a copied image. Preview and remove images
+before sending, with or without a typed message. Up to four images can be sent
+at once; each is oriented, resized to at most 2048 pixels per side, and
+JPEG-compressed to at most 1 MB without the original photo's location metadata.
+Image drafts are scoped to their session and are kept in memory if sending
+fails. They are not automatically retried: after a lost connection, check the
+session before resending to avoid duplicates.
+
+Attachments require the updated **macOS Cantrip host** with a Claude, Copilot,
+or Codex backend; older hosts and unsupported backends are blocked explicitly.
+The Mac stores the uploaded files under
+`~/.cache/Cantrip/remote-attachments/` so queued and recovered runs can open
+them, using the same image-file tools as local Cantrip attachments. This does
+not capture or consume any context staged by the person at the Mac. Image
+attachments currently apply to **Cantrip Remote**, not the Hermes gateway's
+Copilot/Private Local lanes or shell/slash commands.
+
 ---
 
 ## Prerequisites
