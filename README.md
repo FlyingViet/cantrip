@@ -1,325 +1,116 @@
 # ✦ Cantrip
 
-*A small spell you can cast instantly, at will, without cost.*
+**A keyboard-first launcher with an AI agent built in.**
 
-**TL;DR: Spotlight, but it's an AI agent.** ⌥Space opens a bar that launches
-apps, finds files, and does math like Spotlight — but you can also tell it to
-*do things* ("text Dan I'm late", "what am I working on?", "record this
-stream") and it acts on your Mac using Claude, Copilot, Codex, or your own
-local model. It sees your screens, remembers what works, runs jobs in
-parallel tabs, can convene several models for a joint answer, hosts your own
-dashboards and MCP tools, and can even upgrade its own code.
+Open apps, calculate, ask questions, or give an agent a task. Cantrip connects
+to Claude Code, GitHub Copilot CLI, OpenAI Codex CLI, or an OpenAI-compatible
+model server on macOS. AI access is separate: bring an authenticated backend
+or your own model server. Provider charges and usage limits still apply.
 
-![Cantrip icon](Resources/AppIcon.png)
+**[User Guide](docs/README.md)** ·
+[Mac setup](docs/getting-started-macos.md) ·
+[Windows setup](docs/windows.md)
 
-## Start here: User Guide
-
-**New to Cantrip?** The [User Guide](docs/README.md) provides step-by-step
-instructions, expected results, and troubleshooting, with separate Mac and
-Windows guidance.
-
-| I want to... | Guide |
-|---|---|
-| Install and ask my first question | [Mac](docs/getting-started-macos.md) / [Windows](docs/windows.md) |
-| Set up an AI backend or local model | [Backend setup](docs/backends.md) |
-| Attach a screenshot or document | [Files and screen context](docs/files-and-screen-context.md) |
-| Connect AgentGateway or another Mac | [Remote control and photo uploads](docs/remote-control.md) |
-| Understand permissions and saved data | [Privacy and memory](docs/privacy-and-memory.md) |
-| Update or fix a problem | [Updates and troubleshooting](docs/updating-and-troubleshooting.md) |
-
-The sections below are a product and technical overview; the guide is the
-task-by-task reference.
+<img width="692" height="236" alt="Cantrip launcher interface" src="https://github.com/user-attachments/assets/ee8f9398-b48d-4455-b30b-77193cc05275" />
 
 ## Platforms
 
-- **macOS 14+** — the full Swift reference implementation documented below.
-- **Windows 10/11** — the Electron/TypeScript implementation in
-  [`windows/`](windows/), with Windows-native setup, feature status, and parity
-  tracking in [`windows/README.md`](windows/README.md) and
-  [`windows/PARITY.md`](windows/PARITY.md).
+| Platform | Requirements | Status |
+|---|---|---|
+| macOS | macOS 14+, Xcode Command Line Tools | Full Swift app; open with **Option+Space** |
+| Windows | Windows 10/11 x64; Node.js 20.19+ for source builds | Electron app; open with **Alt+Space** |
+
+Windows supports app launching, math, Claude/Copilot/Codex, screen capture,
+and plugins. It does **not** yet support local models, persistent session
+tabs, memory, voice, council, or Cantrip Remote. See the
+[feature comparison](docs/windows.md#what-is-and-is-not-available).
 
 ## What it does
 
-Press **⌥Space** and type. Instant, local, no AI round-trip:
+The macOS app includes:
 
-- **App launching** — type `saf` or `open chrome`, get the matching app with its
-  icon; running apps rank first and Enter switches to them instead of launching
-  another instance
-- **File search** — filename fragments search the Spotlight index; click to open
-- **Math & conversions** — `142*8.5`, `10 km to miles`, `72 f to c`
-- **Raw shell** — `!git status` streams command output right into the panel
-- **Unified session terminal** — the `>` toolbar icon opens a persistent shell
-  for that tab. Agent-run commands and their output appear there automatically,
-  then you can keep working in the same view; `cd`, exports, and manual shell
-  state persist, ↑/↓ navigate all session commands, and Control-C interrupts
-  the active manual command or agent run
-- **Skills** — `/name args` runs your own scripts from
-  `~/.config/cantrip/commands` (typeahead shows each skill's description);
-  stdout renders as markdown in the panel
+- **Launcher and terminal:** open apps, search files through Spotlight,
+  calculate, convert units, and run explicit shell commands.
+- **AI workspace:** streaming answers, file/screenshot attachments, voice,
+  session tabs, recoverable runs, and a terminal per session.
+- **Agent actions:** commands and file edits with backend-specific
+  permissions; inspect tool activity and file diffs.
+- **Memory and council:** editable Markdown memory and multi-model answers.
+- **Remote control:** use the Mac's sessions from AgentGateway on iPhone/iPad,
+  another Mac, or a browser. Native clients support paired LAN connections;
+  Tailscale Serve provides optional away-from-home access.
+- **Extensions:** dashboards, MCP tools, custom slash commands, and a
+  `cantrip` command for asking questions from Terminal.
 
-Ask anything more and it goes to an AI agent that can genuinely act:
+Capabilities depend on the backend. The current Local Model backend does
+not receive file/image attachments or screen captures; tool use requires
+a compatible model and action permissions.
 
-- **Four swappable backends** — Claude Code (full agentic harness), GitHub
-  Copilot CLI, OpenAI Codex CLI, or any OpenAI-compatible local model
-  (vLLM / Ollama / llama.cpp — e.g. Hermes), with per-backend model *and*
-  reasoning-effort pickers (context-window hints included). Local models get
-  a tool-calling loop (`run_shell` + your MCP servers), so even they can act.
-- **Council mode** — choose 2–8 seats from any mix of backends and models.
-  Read-only advisors answer in parallel in live, collapsible side panes, then
-  your active backend chairs a synthesis and delivers one verdict. By default
-  councils convene for planning, review, research, and investigation while
-  implementation goes to one worker; you can also convene them for every
-  message.
-- **Steerable mid-flight** — while a response runs: ↩ queues your next
-  message, ⌘↩ interrupts and redirects, and on Claude ⌥↩ injects your
-  message into the *current* turn's context without interrupting (the same
-  streaming-input mechanism Claude Code itself uses). Claude interrupts
-  in-band to keep its process and session hot; stateless backends carry a
-  summary of completed steps into the redirected turn.
-- **Durable, inspectable runs** — every run is an append-only JSONL event
-  journal under `~/.cache/Cantrip/runs`: prompt/mode/workdir, partial output,
-  tool state and diffs, approvals, queue mutations, retry attempts, usage,
-  cancellation, and terminal result. A crash ignores only a possible partial
-  tail record, restores the exact partial transcript and completed steps, and
-  exposes **Resume from where it left off** while preserving queued work.
-  Backend failures still get one bounded automatic resume. Use `cantrip runs`
-  to list runs or `cantrip runs <session-or-run-id>` to inspect the timeline.
-- **A real CLI** — `cat build.log | cantrip "why did this fail?"` streams
-  answers to stdout through the running app, with `--backend`, your cwd as
-  the working directory, and its own conversation continuity.
-- **Context, automatically** — your location, next 48h of calendar, a
-  screenshot of what you were just doing (opt-in), text you selected in any
-  app (⌥⇧Space), pasted or dropped files, and content excerpts from your
-  own documents matching the query (via the Spotlight index). Stateless
-  backends keep three recent raw turns, retrieve up to two related older turns
-  with local semantic matching, and send a compact topic summary instead of
-  repeatedly reinjecting the full transcript.
-- **Hermes-style memory** — a folder of plain markdown (Obsidian-compatible):
-  always-loaded core files with hard caps that force consolidation, procedure
-  notes the agents write after figuring things out, searchable session logs,
-  and a nightly background consolidation pass. It gets better with use, and
-  you can read everything it knows.
-- **Parallel sessions** — tabs (⌘T, ⌘2–9), each with its own conversation,
-  working directory, terminal, and backend processes. A 90-minute download
-  babysits itself in one tab while you work in another; finished background
-  sessions notify you. Closed sessions archive: reopen any of them (titles,
-  dates, full context) from the history view. Relaunch restores exactly the
-  tabs that were open, including the active tab, without reopening archived
-  sessions.
-- **Encrypted remote control** — an optional authenticated daemon controls
-  those same live, open sessions from its
-  mobile web UI, the native Cantrip **Remote** tab, or the Hermes/Agent Gateway
-  app. The Remote tab is pinned first (⌘1), shows a green dot while its paired
-  host is responding, embeds the host's isolated web client, keeps pairing
-  storage scoped to that host, never mixes remote sessions into local tabs, and
-  follows live output only while the viewer remains at the latest message.
-  Remote session pills can be created and closed; closing archives the
-  transcript just like closing a local tab.
-  Private tabs are never exposed, and remotely submitted prompts cannot consume
-  staged screenshots, selections, attachments, calendar data, or location.
-  Enable it in Settings and copy the pairing token. AgentGateway and another
-  Mac's Cantrip Remote tab automatically discover the host on the same LAN and
-  connect with pairing-token-protected forward-secret TLS. The Remote tab stores
-  its client pairing token in Keychain and prefers LAN automatically. Away from
-  home, publish the displayed loopback port with Tailscale Serve (never Funnel);
-  the saved HTTPS endpoint remains the fallback.
-  AgentGateway can also send up to four explicitly selected photos/screenshots
-  per prompt, over either authenticated transport. The Mac validates each
-  uploaded JPEG (at most 1 MB and 2048 pixels per side), stores it with
-  owner-only permissions under `~/.cache/Cantrip/remote-attachments/`, and
-  passes its path to the existing agent image-file tools. Files remain on disk
-  for queued prompts, resumed runs, and follow-up context; clearing this cache
-  makes those historical image paths unavailable. Local-model sessions and
-  shell/slash commands do not accept image uploads. The API advertises
-  `supportsImageAttachments` per session and accepts an optional
-  `images: [{"data": "<base64 JPEG>"}]` alongside `text` and `mode` on
-  `POST /api/v1/sessions/:id/messages`; image-only prompts may use empty `text`.
-- **Extensions: dashboards + agent tools** — install a folder in
-  `~/.config/cantrip/plugins/` to add an HTML/JS dashboard side pane, MCP
-  servers, approved JSON data commands, or all three. Panels can submit
-  prompts and request explicitly declared native capabilities: build, Git,
-  backend, usage, and log status; fixed update/build/relaunch actions; or
-  cached Calendar, unread Mail, Contacts-only Messages, travel-calendar data,
-  and local package tracking extracted from recent Mail. First enablement shows
-  an approval card; approval is tied to the
-  manifest hash, and installed files reload without restarting Cantrip. See
-  [PLUGINS.md](PLUGINS.md).
-- **Self-updating** — when the GitHub repo is ahead, an "Update available"
-  chip appears; one click streams the pull + rebuild into the transcript.
-  Bundle replacement is transactional, then Cantrip relaunches that exact
-  build instead of letting macOS choose among older app copies.
-- **Crash recovery** — every launch records its commit and bundle path. An
-  unexpected exit relaunches the same bundle and opens a visible recovery
-  message with the crashed and running build IDs. After three automatic
-  recoveries in a minute, the fourth crash pauses instead of looping.
-- **Voice** — dictate queries; voice mode speaks replies and auto-listens
-  for follow-ups.
-- **On-screen tutorials** — ask how to do something in a visible app and it
-  draws numbered tooltips directly on your screen pointing at the controls.
-  Multi-display aware: all monitors are captured for context, and tooltips
-  can point at any of them.
-- **Progress you can audit** — a sidebar shows every tool step live, grouped
-  by kind; Claude Code subagents appear nested inside their parent task.
-  File edits render as colored diffs with one-click revert. Extended thinking
-  from Claude, Copilot, and compatible local models streams into a collapsed
-  **Reasoning** disclosure and is never persisted.
-- **Usage dashboard** — per-platform quota overview: Claude's rate-limit
-  window and 30-day spend (from the CLI's own figures), Copilot AI credits
-  via GitHub's billing API, honest placeholders where platforms expose
-  nothing.
-- **Private mode** — per-session incognito (eye-slash button, panel turns
-  purple): suppresses session transcript/run-journal persistence and memory
-  session logging, and instructs the agent to treat memory as read-only.
-  This does not disable automatic context, tool writes, image caches, or
-  backend/provider records. See the
-  [privacy boundaries](docs/privacy-and-memory.md#use-private-mode).
-- **Developer extras** — per-session repo workdirs, git quick actions
-  (commit message from staged diff, branch review), colored diffs of every
-  file the agent touched with one-click revert, MCP server integration,
-  settings in a dotfile.
-- **A workspace that stays out of your way** — drag and resize the launcher;
-  its height and vertical position persist while it recenters horizontally
-  on the current display. Council, settings, steps, and extension panes have
-  independent draggable dividers, the transcript yields space when the
-  screen gets tight, and suggestions float below the composer instead of
-  reflowing the whole panel.
-- **Self-healing** — it knows its own source location, log file, and rebuild
-  command; ask it to fix or extend itself and it will.
-
-<img width="692" height="236" alt="image" src="https://github.com/user-attachments/assets/ee8f9398-b48d-4455-b30b-77193cc05275" />
-
-## Install
+## Quick start
 
 ### macOS
 
-Requirements: macOS 14+, Xcode Command Line Tools, and at least one backend
-(Claude Code, Copilot CLI, Codex CLI, or a local OpenAI-compatible server).
+Install Xcode Command Line Tools and
+[set up one AI backend](docs/backends.md), then run:
 
 ```sh
+mkdir -p ~/Coding
 git clone https://github.com/FlyingViet/cantrip.git ~/Coding/Cantrip
 cd ~/Coding/Cantrip
 ./install.sh
 ```
 
-The installer checks prerequisites, creates a self-signed code-signing
-certificate (so macOS permission grants survive rebuilds — expect one
-password dialog), renders the app icon, builds, installs the `cantrip`
-CLI on your PATH, adds a `cantrip-rebuild` alias, and launches the app.
-A sparkle appears in your menu bar; press **⌥Space**.
+The installer builds and signs `Cantrip.app`, installs the `cantrip` CLI,
+and opens the app. A signing-certificate password dialog may appear.
+Keep the checkout: rebuilds and updates use it.
+
+1. Press **Option+Space**, then open the **gear**.
+2. Select your **Backend** and review the permissions and context settings below.
+3. Type a question and press **Return**. If an app suggestion is selected,
+   **Command+Return** sends to the AI instead.
+
+For prerequisites, sign-in, and launch-at-login instructions, see
+[Mac setup](docs/getting-started-macos.md). Already installed?
+Use the [update guide](docs/updating-and-troubleshooting.md).
 
 ### Windows
 
-Download `Cantrip Setup <version>.exe` from
-[GitHub Releases](https://github.com/FlyingViet/cantrip/releases), or run from
-source with Node.js 20.19+:
+Follow [Windows setup](docs/windows.md) to install a release that includes
+a Windows installer, or run from source. If **Alt+Space** is occupied,
+Cantrip falls back to **Ctrl+Space** and reports the conflict.
 
-```powershell
-git clone https://github.com/FlyingViet/cantrip.git
-cd cantrip\windows
-npm ci
-npm run dev
-```
+## Permissions and privacy
 
-Press **Alt+Space**. If another launcher such as PowerToys Run owns it, Cantrip
-reports the conflict and uses **Ctrl+Space** until the shortcut is released.
-The Windows app has its own settings, screen-context capture, Markdown output,
-sandboxed plugins, and in-app updater; remaining parity work is explicit in
-[`windows/PARITY.md`](windows/PARITY.md).
+On Mac, **Act on my behalf** is off by default. For your first question,
+leave it off, keep Claude **Permissions** at **Safe**, and leave Copilot
+**Allow all tools** off. These controls are separate; explicit shell
+commands also execute independently of the action toggle.
 
-### Backends
+**Memory, document search, calendar, and location context are enabled by
+default** on Mac, subject to OS permissions where required. Review Settings
+before sharing sensitive work. Screen context and Remote hosting are off
+by default. Private mode suppresses Cantrip conversation persistence, but
+does not prevent tool writes, image caches, or backend/provider logging.
+Read [permissions, privacy, and memory](docs/privacy-and-memory.md).
 
-- **Claude Code**: `npm install -g @anthropic-ai/claude-code`, then run
-  `claude` once to authenticate. In Cantrip's gear menu, pick a model
-  (`sonnet`, `opus`, `haiku`, `fable`…) and a permission level.
-- **Copilot**: `npm install -g @github/copilot`, run `copilot` once to
-  authenticate. The model dropdown tries your account's entitlement (via
-  the Copilot API when a token is available) and falls back to a curated
-  current-models list. The context picker can opt supported models such as
-  GPT-5.6 Sol into Copilot's `long_context` tier (up to 1M tokens).
-- **Codex**: `npm install -g @openai/codex`, run `codex` once to sign in.
-  Optional model override (e.g. `gpt-5-codex`) in the gear.
-- **Local model**: point the gear's Base URL at any `/v1` endpoint
-  (e.g. `http://hermes.local:8000/v1`), set the model name.
+## Learn more
 
-### Permissions
-
-macOS prompts as features are first used — approve what you want:
-
-| Permission | Enables | How |
-|---|---|---|
-| Microphone + Speech | voice input | automatic prompt |
-| Location | "what's the weather" | automatic prompt |
-| Calendar (Automation) | schedule-aware answers | automatic prompt |
-| Accessibility | ⌥⇧Space selected-text capture | prompt → System Settings |
-| Screen Recording | screen context, tutorials | manual: System Settings → Privacy, then relaunch |
-| Full Disk Access | reading iMessage history | manual, optional |
-
-The big switch — **"Act on my behalf"** in the gear — lets agents run
-commands, edit files, and send messages without per-action approval. It's
-off by default; treat it like handing over a terminal, because it is one.
-
-## Usage cheat sheet
-
-| Keys / prefix | Action |
+| Task | Guide |
 |---|---|
-| ⌥Space | summon / dismiss |
-| ⌥⇧Space | grab selected text from the frontmost app, then summon |
-| ↩ | send (or launch the suggested app) · while busy: queue |
-| ⌘↩ | interrupt the current run and redirect it |
-| ⌥↩ | inject into the current turn without interrupting (Claude) |
-| `!cmd` | run a raw shell command |
-| `/skill args` | run a script from ~/.config/cantrip/commands |
-| Terminal ↑ / ↓ · Control-C | previous / next command · interrupt process |
-| ⌘T · ⌘1–9 · ⌘⇧[ ] | new / jump / cycle sessions |
-| ⌘← ⌘→ | with text: jump cursor to start/end (⇧ selects) · empty field: switch tabs |
-| ⌘N | new conversation (current session) |
-| ⌘V | paste text — or attach an image/file from the clipboard |
-| Esc | dismiss panel & overlays |
+| Choose a backend or local model | [Backend setup](docs/backends.md) |
+| Launch apps, run commands, or use voice/CLI | [Everyday tasks](docs/everyday-tasks.md) |
+| Attach files, screenshots, or selected text | [Files and screen context](docs/files-and-screen-context.md) |
+| Resume work or compare models | [Sessions and council](docs/sessions-and-council.md) |
+| Pair AgentGateway, send photos, or connect another Mac | [Remote control](docs/remote-control.md) |
+| Add dashboards, tools, or slash commands | [Extensions and skills](docs/extensions-and-skills.md) |
+| Find a shortcut or fix a problem | [Keyboard reference](docs/keyboard-shortcuts.md) / [Troubleshooting](docs/updating-and-troubleshooting.md) |
 
-The bar is two rows: input + mic on top; below it the toolbar — working
-directory, git actions (in repos), then terminal, private mode, history,
-usage dashboard, progress sidebar, council, extensions, pin, screen context,
-backend picker, gear, and new conversation/session. Hover any icon for an
-instant caption. Drag any file onto the panel to attach it. Settings open as
-a right-hand sidebar so you can tweak models mid-conversation. Drag the
-panel or any pane divider to arrange the workspace; menu bar → **Reset Panel
-Size** restores the defaults. Panel opacity and launch-at-login live in
-Settings.
+## Development
 
-## Configuration
+| Platform | Source | Build / test |
+|---|---|---|
+| macOS | [`Sources/Cantrip/`](Sources/Cantrip/) | From the repo root: `make build`, `make test` |
+| Windows | [`windows/`](windows/) | From `windows/`, run `npm ci`, then `npm run build` / `npm test` |
 
-- **Settings**: gear icon in the panel; export/import as
-  `~/.cantriprc` JSON via the menu bar icon (dotfiles-friendly).
-- **Memory vault**: `~/Cantrip Memory` by default (configurable) —
-  open it in Obsidian; edit `USER.md` to tell it about yourself.
-- **Extensions**: folders in `~/.config/cantrip/plugins/`; use the
-  puzzle-piece menu to approve, enable, open, and rescan them. Panels and
-  manifests live-reload, while MCP changes apply to the next model process.
-  The complete manifest, bridge, data-source, lifecycle, and security
-  reference is [PLUGINS.md](PLUGINS.md).
-- **MCP servers**: `~/.config/cantrip/mcp.json`, standard
-  `{"mcpServers": {…}}` format; their tools go to the local-model backend.
-- **Skills**: executables in `~/.config/cantrip/commands/` — a
-  `# description: …` header line feeds the typeahead; args arrive as `$@`,
-  the session workdir as `$CANTRIP_WORKDIR`; emit markdown.
-- **CLI**: `cantrip "question"`, `--backend claude|copilot|codex|local`,
-  stdin is appended to the prompt. Uses the running app, or attempts to launch
-  the checkout's own `Cantrip.app` if it is not running.
-- **Logs**: `~/Library/Logs/Cantrip.log`.
-
-## Troubleshooting
-
-- **Panel won't appear**: check the menu bar sparkle exists; see the log.
-- **"Failed to authenticate"**: re-login the backend CLI (`claude` → `/login`).
-- **Permissions re-asked after rebuilds**: signing fell back to ad-hoc — run
-  `make cert`, and if needed set the cert to Always Trust in Keychain Access.
-- **Stuck request**: red stop button, or menu bar → Stop Current Request /
-  Hide Panel & Overlays. Silent streams auto-cancel after 15 minutes.
-- **Recovered crash**: the panel identifies both builds and the exact bundle
-  path. Full details are appended to `~/Library/Logs/Cantrip.log`.
-- **Copilot quota "unavailable"**: GitHub's billing API needs the `user`
-  scope — run `gh auth refresh -h github.com -s user`, then ↻ in the
-  usage dashboard.
-- **Weird behavior after self-modification**: inspect `git status` and
-  `git diff`, preserve your changes, and follow
-  [Updates and troubleshooting](docs/updating-and-troubleshooting.md).
+See the [plugin reference](PLUGINS.md) and
+[Windows parity checklist](windows/PARITY.md) for implementation details.
