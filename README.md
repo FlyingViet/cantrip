@@ -105,6 +105,17 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   its client pairing token in Keychain and prefers LAN automatically. Away from
   home, publish the displayed loopback port with Tailscale Serve (never Funnel);
   the saved HTTPS endpoint remains the fallback.
+  AgentGateway can also send up to four explicitly selected photos/screenshots
+  per prompt, over either authenticated transport. The Mac validates each
+  uploaded JPEG (at most 1 MB and 2048 pixels per side), stores it with
+  owner-only permissions under `~/.cache/Cantrip/remote-attachments/`, and
+  passes its path to the existing agent image-file tools. Files remain on disk
+  for queued prompts, resumed runs, and follow-up context; clearing this cache
+  makes those historical image paths unavailable. Local-model sessions and
+  shell/slash commands do not accept image uploads. The API advertises
+  `supportsImageAttachments` per session and accepts an optional
+  `images: [{"data": "<base64 JPEG>"}]` alongside `text` and `mode` on
+  `POST /api/v1/sessions/:id/messages`; image-only prompts may use empty `text`.
 - **Extensions: dashboards + agent tools** — install a folder in
   `~/.config/cantrip/plugins/` to add an HTML/JS dashboard side pane, MCP
   servers, approved JSON data commands, or all three. Panels can submit

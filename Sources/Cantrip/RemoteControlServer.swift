@@ -13,7 +13,7 @@ final class RemoteControlServer {
     private var lanListener: NWListener?
     private var activePort: Int?
     private var token = ""
-    private let maximumRequestBytes = 1 << 20
+    private let maximumRequestBytes = RemoteImageAttachments.maximumRequestBytes
 
     init(manager: SessionManager) {
         self.manager = manager
@@ -227,8 +227,7 @@ final class RemoteControlServer {
         switch parts[1] {
         case "messages":
             guard let body = request.json,
-                  let text = body["text"] as? String,
-                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                  let text = body["text"] as? String
             else {
                 sendError(400, "message text is required", on: connection)
                 return
@@ -238,11 +237,38 @@ final class RemoteControlServer {
                 sendError(400, "mode must be queue, interrupt, or inject", on: connection)
                 return
             }
-            session.submitRemote(
-                text,
-                interrupt: mode == "interrupt",
-                inject: mode == "inject"
-            )
+            do {
+                let images = try RemoteImageAttachments.decode(body["images"])
+                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || !images.isEmpty else {
+                    sendError(400, "message text or images are required", on: connection)
+                    return
+                }
+                guard images.isEmpty || session.supportsRemoteImages else {
+                    sendError(409, "The selected Cantrip backend does not support image attachments.", on: connection)
+                    return
+                }
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard images.isEmpty || (!trimmed.hasPrefix("!") && !trimmed.hasPrefix("/")) else {
+                    sendError(400, "Attach images to an agent prompt, not a shell or slash command.", on: connection)
+                    return
+                }
+                let prompt = try RemoteImageAttachments.preparePrompt(
+                    text, images: images, sessionID: session.id
+                )
+                session.submitRemote(
+                    prompt,
+                    interrupt: mode == "interrupt",
+                    inject: mode == "inject"
+                )
+            } catch let error as RemoteImageAttachmentError {
+                sendError(400, error.localizedDescription, on: connection)
+                return
+            } catch {
+                Log.write("remote-control: image storage failed: \(error.localizedDescription)")
+                sendError(500, "Could not save the attached images on the Mac.", on: connection)
+                return
+            }
             sendJSON(["session": snapshot(session)], status: 202, on: connection)
         case "cancel":
             session.cancel()
@@ -296,6 +322,7 @@ final class RemoteControlServer {
             "canResume": session.canResume,
             "councilMode": session.councilMode,
             "queuedCount": session.queued.count,
+            "supportsImageAttachments": session.supportsRemoteImages,
         ]
         if let status = session.statusText { result["status"] = status }
         if includeMessages {
