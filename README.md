@@ -12,6 +12,24 @@ dashboards and MCP tools, and can even upgrade its own code.
 
 ![Cantrip icon](Resources/AppIcon.png)
 
+## Start here: User Guide
+
+**New to Cantrip?** The [User Guide](docs/README.md) provides step-by-step
+instructions, expected results, and troubleshooting, with separate Mac and
+Windows guidance.
+
+| I want to... | Guide |
+|---|---|
+| Install and ask my first question | [Mac](docs/getting-started-macos.md) / [Windows](docs/windows.md) |
+| Set up an AI backend or local model | [Backend setup](docs/backends.md) |
+| Attach a screenshot or document | [Files and screen context](docs/files-and-screen-context.md) |
+| Connect AgentGateway or another Mac | [Remote control and photo uploads](docs/remote-control.md) |
+| Understand permissions and saved data | [Privacy and memory](docs/privacy-and-memory.md) |
+| Update or fix a problem | [Updates and troubleshooting](docs/updating-and-troubleshooting.md) |
+
+The sections below are a product and technical overview; the guide is the
+task-by-task reference.
+
 ## Platforms
 
 - **macOS 14+** — the full Swift reference implementation documented below.
@@ -150,9 +168,11 @@ Ask anything more and it goes to an AI agent that can genuinely act:
   via GitHub's billing API, honest placeholders where platforms expose
   nothing.
 - **Private mode** — per-session incognito (eye-slash button, panel turns
-  purple): no transcript, no history, no memory writes, nothing on disk
-  from Cantrip's side. (Backend CLIs and providers keep their own records —
-  only a local model is end-to-end local.)
+  purple): suppresses session transcript/run-journal persistence and memory
+  session logging, and instructs the agent to treat memory as read-only.
+  This does not disable automatic context, tool writes, image caches, or
+  backend/provider records. See the
+  [privacy boundaries](docs/privacy-and-memory.md#use-private-mode).
 - **Developer extras** — per-session repo workdirs, git quick actions
   (commit message from staged diff, branch review), colored diffs of every
   file the agent touched with one-click revert, MCP server integration,
@@ -283,7 +303,8 @@ Settings.
   `# description: …` header line feeds the typeahead; args arrive as `$@`,
   the session workdir as `$CANTRIP_WORKDIR`; emit markdown.
 - **CLI**: `cantrip "question"`, `--backend claude|copilot|codex|local`,
-  stdin is appended to the prompt. Requires the app running.
+  stdin is appended to the prompt. Uses the running app, or attempts to launch
+  the checkout's own `Cantrip.app` if it is not running.
 - **Logs**: `~/Library/Logs/Cantrip.log`.
 
 ## Troubleshooting
@@ -299,4 +320,6 @@ Settings.
 - **Copilot quota "unavailable"**: GitHub's billing API needs the `user`
   scope — run `gh auth refresh -h github.com -s user`, then ↻ in the
   usage dashboard.
-- **Weird behavior after self-modification**: `git diff`, laugh, revert.
+- **Weird behavior after self-modification**: inspect `git status` and
+  `git diff`, preserve your changes, and follow
+  [Updates and troubleshooting](docs/updating-and-troubleshooting.md).

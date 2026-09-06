@@ -23,6 +23,9 @@ platforms. macOS hosts dashboards in a side pane; Windows uses a dedicated
 sandboxed dashboard window and documents its security boundary in
 [`windows/PLUGINS.md`](windows/PLUGINS.md).
 
+For step-by-step installation rather than the API reference, see
+[Extensions and skills in the User Guide](docs/extensions-and-skills.md).
+
 ## Anatomy
 
 One plugin = one folder in `~/.config/cantrip/plugins/` on macOS or
@@ -130,9 +133,9 @@ Active, and Delivered.
 ## Install, approval, and lifecycle
 
 - Drop the folder in `~/.config/cantrip/plugins/` (the Extensions popover
-  has an **Open Plugins Folder** button), then hit **Rescan & Reload**.
+  has an **Open Plugins Folder** button), then hit **Rescan**.
 - Cantrip watches installed plugin files and reloads changed panels
-  automatically. **Rescan & Reload** is the manual fallback and also discovers
+  automatically. **Rescan** is the manual fallback and also discovers
   newly added or removed plugin folders; neither path requires restarting
   Cantrip.
 - Only changes to Cantrip's native Swift plugin host or bridge require a

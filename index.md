@@ -4,6 +4,7 @@
 |------|---------|
 | `CLAUDE.md` | Cross-platform development context |
 | `README.md` | Product overview and platform installation |
+| `docs/README.md` | User Guide: step-by-step setup, everyday tasks, Remote, privacy, and troubleshooting |
 | `PLUGINS.md` | Shared plugin contract |
 | `ROADMAP.md` | macOS/reference roadmap |
 | `Sources/Cantrip/` | macOS Swift application |

@@ -4,6 +4,10 @@ A Windows-first MVP of [Cantrip](https://github.com/FlyingViet/cantrip):
 Spotlight-style local actions plus Claude, GitHub Copilot, or Codex in one
 global launcher.
 
+**Looking for instructions rather than development details?** Start with the
+[Windows User Guide](../docs/windows.md) for installation, first use, screen
+capture, updates, and platform limitations.
+
 ## Included
 
 - **Alt+Space** global summon/dismiss shortcut with a clearly reported
