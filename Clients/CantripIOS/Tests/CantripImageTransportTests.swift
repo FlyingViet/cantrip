@@ -56,6 +56,102 @@ final class CantripImageTransportTests: XCTestCase {
         return try JSONSerialization.data(withJSONObject: ["session": session])
     }
 
+    private func tabSnapshot() -> Data {
+        Data("""
+        {"session":{"id":"\(sessionID)","title":"Project","customTitle":"Project",
+        "isLocked":true,"supportsTabMetadata":true,"workdir":"/tmp","isStreaming":true,
+        "canResume":false,"councilMode":false,"queuedCount":0}}
+        """.utf8)
+    }
+
+    func testLegacyHostsDoNotReceiveTabMetadataMutations() async throws {
+        let response = try snapshot(support: nil)
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            return (200, response)
+        }
+        do {
+            _ = try await api().updateTab(id: sessionID, name: "Project", isLocked: true)
+            XCTFail("Old hosts must show the update notice")
+        } catch CantripRemoteError.tabMetadataUnsupported {}
+        XCTAssertEqual(methods, ["GET"])
+    }
+
+    func testRenameAndLockAreAuthenticatedPartialUpdates() async throws {
+        let response = tabSnapshot()
+        var bodies: [[String: Any]] = []
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-pairing-token")
+            if request.httpMethod == "POST" {
+                XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.sessionID)/metadata")
+                let data: Data
+                if let body = request.httpBody {
+                    data = body
+                } else {
+                    let stream = try XCTUnwrap(request.httpBodyStream)
+                    stream.open()
+                    defer { stream.close() }
+                    var bytes = [UInt8](repeating: 0, count: 1024)
+                    var collected = Data()
+                    while stream.hasBytesAvailable {
+                        let count = stream.read(&bytes, maxLength: bytes.count)
+                        guard count >= 0 else { throw try XCTUnwrap(stream.streamError) }
+                        if count == 0 { break }
+                        collected.append(contentsOf: bytes.prefix(count))
+                    }
+                    data = collected
+                }
+                bodies.append(try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any]))
+            }
+            return (200, response)
+        }
+        let client = try api()
+        let renamed = try await client.updateTab(id: sessionID, name: " Project ")
+        XCTAssertEqual(renamed.customTitle, "Project")
+        XCTAssertEqual(renamed.isLocked, true)
+        XCTAssertTrue(renamed.isStreaming)
+        _ = try await client.updateTab(id: sessionID, isLocked: false)
+        _ = try await client.updateTab(id: sessionID, name: " ")
+        XCTAssertEqual(bodies[0]["customTitle"] as? String, "Project")
+        XCTAssertNil(bodies[0]["isLocked"], "Renaming must not overwrite a concurrent lock")
+        XCTAssertEqual(bodies[1]["isLocked"] as? Bool, false)
+        XCTAssertNil(bodies[1]["customTitle"], "Unlocking must not overwrite a concurrent rename")
+        XCTAssertEqual(bodies[2]["customTitle"] as? String, "")
+        XCTAssertEqual(methods, ["GET", "POST", "GET", "POST", "GET", "POST"])
+    }
+
+    func testTabMutationsAreNotReplayedAndLockedHostErrorsSurface() async throws {
+        let response = tabSnapshot()
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            if request.httpMethod == "POST" { throw URLError(.networkConnectionLost) }
+            return (200, response)
+        }
+        do {
+            _ = try await api().updateTab(id: sessionID, isLocked: true)
+            XCTFail("Uncertain changes must surface")
+        } catch {}
+        XCTAssertEqual(methods, ["GET", "POST"])
+
+        methods = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            return (409, Data(#"{"error":"Unlock this tab first"}"#.utf8))
+        }
+        do {
+            _ = try await api().closeSession(id: sessionID)
+            XCTFail("Host lock must protect against stale client state")
+        } catch CantripRemoteError.http(let status, let message) {
+            XCTAssertEqual(status, 409)
+            XCTAssertEqual(message, "Unlock this tab first")
+        }
+        XCTAssertEqual(methods, ["POST"])
+    }
+
     func testLegacyHostIsNeverSentAnImageMutation() async throws {
         for support: Bool? in [nil, false] {
             let response = try snapshot(support: support)

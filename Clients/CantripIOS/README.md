@@ -38,13 +38,28 @@ The app speaks the gateway's **OpenAI-compatible API server** (`gateway/platform
 
 ## Cantrip Remote
 
-Tap the agent badge under **Hermes** (the `</>` badge when Copilot is selected)
+Tap the agent badge under the conversation title (the `</>` badge when Copilot is selected)
 and choose **Cantrip Remote**. It attaches to Cantrip's existing session IDs
 rather than launching another agent. Cantrip then uses the same transcript,
 composer, microphone, hands-free voice mode, and spoken replies as Hermes.
 Remote-only controls above the transcript provide session selection, new
 sessions and conversations, queued/redirected/injected prompts, stop, and
 resume.
+
+Long-press a session tab, or open its **...** menu, to **Rename Tab** or
+**Lock Tab**. Names and locks are saved on the host Mac and sync with local
+Cantrip, other Macs' Remote views, and browser clients. A lock icon marks
+protected tabs; unlock before closing a session or using New Conversation.
+Sending, stopping/resuming work, and queue removal remain available.
+These controls require the host's `supportsTabMetadata` capability; update
+and reopen Cantrip first.
+
+For the Hermes **Copilot** and **Private Local** conversations, use the
+top-left menu's **Rename Tab** and **Lock Tab** actions. Each lane keeps its
+own name and lock across app restarts and lane switches; a lock blocks the
+destructive New Conversation action. Names are up to 80 characters, and
+leaving a name blank restores its automatic label. Locks are accidental-close
+protection, not encryption or a password.
 
 When prompts are waiting, a **Queued messages** card above the composer shows
 the count and next prompt. Tap it to read the full queue in execution order;

@@ -10,6 +10,7 @@ enum ChatStore {
         var gatewayIdentity: String?
         var pendingRun: PendingHermesRun?
         var activeRun: ActiveHermesRun?
+        var tabMetadata: ChatTabMetadata?
     }
 
     private static var directoryURL: URL {
@@ -32,6 +33,7 @@ enum ChatStore {
         gatewayIdentity: String?,
         pendingRun: PendingHermesRun?,
         activeRun: ActiveHermesRun?,
+        tabMetadata: ChatTabMetadata? = nil,
         for lane: ExecutionLane
     ) {
         let liveAssistantID = activeRun?.assistantTurnID ?? pendingRun?.assistantTurnID
@@ -46,7 +48,8 @@ enum ChatStore {
             conversationID: conversationID,
             gatewayIdentity: gatewayIdentity,
             pendingRun: pendingRun,
-            activeRun: activeRun
+            activeRun: activeRun,
+            tabMetadata: tabMetadata
         )
         guard let data = try? JSONEncoder().encode(snap) else { return }
         try? data.write(to: fileURL(for: lane), options: .atomic)

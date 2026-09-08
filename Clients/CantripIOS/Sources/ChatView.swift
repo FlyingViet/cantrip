@@ -10,6 +10,33 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var remoteIsStreaming = false
     @Published var remoteDeliveryMode: CantripDeliveryMode = .auto
     @Published private(set) var scrollToLatestRequest = 0
+    @Published private(set) var tabMetadata = ChatTabMetadata()
+    @Published var tabActionError: String?
+
+    var tabTitle: String {
+        if activeLane == .cantrip { return remote.selectedSession?.title ?? "Cantrip Remote" }
+        return tabMetadata.customTitle
+            ?? turns.first(where: { $0.role == .user }).map { String($0.text.prefix(34)) }
+            ?? activeLane.title
+    }
+
+    var isTabLocked: Bool {
+        activeLane == .cantrip ? remote.selectedSession?.isLocked == true : tabMetadata.isLocked
+    }
+
+    func renameTab(_ name: String) {
+        do {
+            try tabMetadata.rename(name)
+            persist()
+        } catch {
+            tabActionError = error.localizedDescription
+        }
+    }
+
+    func setTabLocked(_ locked: Bool) {
+        tabMetadata.isLocked = locked
+        persist()
+    }
 
     let env: HermesEnv
     let remote: CantripRemoteModel
@@ -47,6 +74,7 @@ final class ChatViewModel: ObservableObject {
                storedGateway != env.gatewayIdentity {
                 turns = []
             } else {
+                tabMetadata = snapshot.tabMetadata ?? ChatTabMetadata()
                 conversationID = snapshot.conversationID ?? UUID().uuidString
                 pendingRun = snapshot.pendingRun
                 activeRun = snapshot.activeRun
@@ -329,6 +357,7 @@ final class ChatViewModel: ObservableObject {
             gatewayIdentity: gatewayIdentity,
             pendingRun: pendingRun,
             activeRun: activeRun,
+            tabMetadata: tabMetadata,
             for: lane
         )
     }
@@ -611,6 +640,7 @@ final class ChatViewModel: ObservableObject {
             gatewayIdentity: gatewayIdentity,
             pendingRun: pendingRun,
             activeRun: activeRun,
+            tabMetadata: tabMetadata,
             for: activeLane
         )
     }
@@ -890,6 +920,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     func newConversation() {
+        guard !isTabLocked else {
+            tabActionError = ChatTabError.locked.localizedDescription
+            return
+        }
         if activeLane == .cantrip {
             guard !remote.isMutating else { return }
             Task { [weak self] in
@@ -904,6 +938,7 @@ final class ChatViewModel: ObservableObject {
         conversationID = UUID().uuidString
         pendingRun = nil
         activeRun = nil
+        tabMetadata = ChatTabMetadata()
         ChatStore.clear(for: activeLane)
     }
 
@@ -916,6 +951,7 @@ final class ChatViewModel: ObservableObject {
             persist()
         }
         activeLane = lane
+        tabMetadata = ChatTabMetadata()
         remoteIsStreaming = false
         runStatusText = nil
         if lane == .cantrip {
@@ -936,6 +972,7 @@ final class ChatViewModel: ObservableObject {
             pendingRun = nil
             activeRun = nil
         } else {
+            tabMetadata = snapshot.tabMetadata ?? ChatTabMetadata()
             conversationID = snapshot.conversationID ?? UUID().uuidString
             pendingRun = snapshot.pendingRun
             activeRun = snapshot.activeRun
@@ -958,6 +995,7 @@ final class ChatViewModel: ObservableObject {
         pendingRun = nil
         activeRun = nil
         runStatusText = nil
+        tabMetadata = ChatTabMetadata()
         ChatStore.clear(for: activeLane)
     }
 
@@ -1012,6 +1050,9 @@ struct ChatView: View {
     @State private var showVoiceMode = false
     @State private var showSkills = false
     @State private var showQueue = false
+    @State private var renamingRemoteSession: CantripRemoteSession?
+    @State private var showRenameLocalTab = false
+    @State private var tabName = ""
     @FocusState private var composerFocused: Bool
     @State private var commands: [HermesCommand] = []
     /// When paused, the app sends nothing — guards against unintentional requests
@@ -1051,41 +1092,7 @@ struct ChatView: View {
             }
             .navigationTitle("Hermes")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 1) {
-                        Text("Hermes")
-                            .font(.headline)
-                        ExecutionLanePicker(env: env, remote: remote)
-                            .disabled(vm.sending || importingImages || submittingRemote)
-                    }
-                }
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Button { paused.toggle() } label: {
-                            Label(paused ? "Resume agent" : "Pause agent",
-                                  systemImage: paused ? "play.circle" : "pause.circle")
-                        }
-                        Divider()
-                        Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
-                            .disabled(paused || vm.activeLane == .cantrip)
-                        Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
-                            .disabled(paused || !destinationReady || hasImageDraft || importingImages)
-                        Divider()
-                        Button(role: .destructive) { vm.newConversation() } label: {
-                            Label("New conversation", systemImage: "square.and.pencil")
-                        }
-                        .disabled(newConversationDisabled)
-                    } label: {
-                        Image(systemName: paused ? "pause.circle.fill" : "line.3.horizontal")
-                            .foregroundStyle(paused ? Color.orange : Color.accentColor)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
-                        .disabled(vm.sending || importingImages || submittingRemote)
-                }
-            }
+            .toolbar { chatToolbar }
             .sheet(
                 isPresented: $showSettings,
                 onDismiss: {
@@ -1105,6 +1112,24 @@ struct ChatView: View {
                 if let sessionID = remote.selectedSessionID {
                     CantripQueueView(remote: remote, sessionID: sessionID)
                 }
+            }
+            .sheet(item: $renamingRemoteSession) { session in
+                CantripTabRenameSheet(model: remote, session: session)
+            }
+            .alert("Rename Tab", isPresented: $showRenameLocalTab) {
+                TextField("Tab name", text: $tabName)
+                Button("Cancel", role: .cancel) {}
+                Button("Save") { vm.renameTab(tabName) }
+            } message: {
+                Text("Up to 80 characters. Leave blank to use the automatic name.")
+            }
+            .alert("Tab could not be changed", isPresented: Binding(
+                get: { vm.tabActionError != nil },
+                set: { if !$0 { vm.tabActionError = nil } }
+            )) {
+                Button("OK") { vm.tabActionError = nil }
+            } message: {
+                Text(vm.tabActionError ?? "")
             }
             .fullScreenCover(
                 isPresented: $showVoiceMode,
@@ -1165,6 +1190,61 @@ struct ChatView: View {
         }
     }
 
+    @ToolbarContentBuilder
+    private var chatToolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            VStack(spacing: 1) {
+                HStack(spacing: 4) {
+                    if vm.isTabLocked { Image(systemName: "lock.fill") }
+                    Text(vm.tabTitle).lineLimit(1)
+                }
+                .font(.headline)
+                ExecutionLanePicker(env: env, remote: remote)
+                    .disabled(vm.sending || importingImages || submittingRemote)
+            }
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            Menu {
+                Button { paused.toggle() } label: {
+                    Label(paused ? "Resume agent" : "Pause agent",
+                          systemImage: paused ? "play.circle" : "pause.circle")
+                }
+                Divider()
+                Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
+                    .disabled(paused || vm.activeLane == .cantrip)
+                Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
+                    .disabled(paused || !destinationReady || hasImageDraft || importingImages)
+                Divider()
+                if vm.activeLane != .cantrip {
+                    Button {
+                        tabName = vm.tabMetadata.customTitle ?? vm.tabTitle
+                        showRenameLocalTab = true
+                    } label: {
+                        Label("Rename Tab", systemImage: "pencil")
+                    }
+                    Button {
+                        vm.setTabLocked(!vm.isTabLocked)
+                    } label: {
+                        Label(vm.isTabLocked ? "Unlock Tab" : "Lock Tab",
+                              systemImage: vm.isTabLocked ? "lock.open" : "lock")
+                    }
+                    Divider()
+                }
+                Button(role: .destructive) { vm.newConversation() } label: {
+                    Label("New conversation", systemImage: "square.and.pencil")
+                }
+                .disabled(newConversationDisabled)
+            } label: {
+                Image(systemName: paused ? "pause.circle.fill" : "line.3.horizontal")
+                    .foregroundStyle(paused ? Color.orange : Color.accentColor)
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                .disabled(vm.sending || importingImages || submittingRemote)
+        }
+    }
+
     /// Load the command/skill menu for "/" suggestions. Only overwrites on a
     /// non-empty result, so a transient failure (e.g. a 401 before the key is
     /// entered) doesn't wipe a good list — and it can be retried safely.
@@ -1183,6 +1263,7 @@ struct ChatView: View {
     }
 
     private var newConversationDisabled: Bool {
+        if vm.isTabLocked { return true }
         if vm.activeLane == .cantrip {
             return remote.selectedSessionID == nil
                 || remote.isMutating
@@ -1258,14 +1339,12 @@ struct ChatView: View {
                         } label: {
                             Label("New Conversation", systemImage: "square.and.pencil")
                         }
-                        .disabled(remote.selectedSession?.isStreaming == true)
+                        .disabled(newConversationDisabled)
                         Divider()
-                        Button(role: .destructive) {
-                            if let id = remote.selectedSessionID {
-                                closeRemoteSession(id)
-                            }
-                        } label: {
-                            Label("Close Session", systemImage: "xmark")
+                        if let session = remote.selectedSession {
+                            CantripTabActions(model: remote, session: session,
+                                onRename: { renamingRemoteSession = session },
+                                onClose: { closeRemoteSession(session.id) })
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -1341,6 +1420,9 @@ struct ChatView: View {
             }
         } label: {
             HStack(spacing: 6) {
+                if session.isLocked == true {
+                    Image(systemName: "lock.fill").accessibilityLabel("Locked tab")
+                }
                 if session.isStreaming {
                     ProgressView().controlSize(.mini)
                 }
@@ -1363,12 +1445,9 @@ struct ChatView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button(role: .destructive) {
-                closeRemoteSession(session.id)
-            } label: {
-                Label("Close Session", systemImage: "xmark")
-            }
-            .disabled(remote.isMutating)
+            CantripTabActions(model: remote, session: session,
+                onRename: { renamingRemoteSession = session },
+                onClose: { closeRemoteSession(session.id) })
         }
         .accessibilityHint("Long press for session actions")
         .accessibilityAction(named: "Close Session") {

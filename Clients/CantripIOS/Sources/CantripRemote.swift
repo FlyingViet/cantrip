@@ -65,6 +65,9 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsAutoDelivery: Bool? = nil
     var deliveryStatus: String? = nil
     var supportsQueueRemoval: Bool? = nil
+    var customTitle: String? = nil
+    var isLocked: Bool? = nil
+    var supportsTabMetadata: Bool? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
 }
@@ -93,6 +96,7 @@ enum CantripRemoteError: LocalizedError {
     case imagesUnsupported
     case autoDeliveryUnsupported
     case queueRemovalUnsupported
+    case tabMetadataUnsupported
 
     static func isRouteFailure(_ error: Error) -> Bool {
         switch error {
@@ -129,6 +133,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac for Auto sending, or choose Queue, Redirect, or Inject. Your message has not been sent."
         case .queueRemovalUnsupported:
             return "Update and reopen Cantrip on your Mac to remove queued messages from AgentGateway."
+        case .tabMetadataUnsupported:
+            return "Update and reopen Cantrip on your Mac to rename or lock its tabs."
         }
     }
 }
@@ -612,6 +618,29 @@ struct CantripRemoteAPI {
         try await action("close", sessionID: id)
     }
 
+    func updateTab(id: String, name: String? = nil, isLocked: Bool? = nil) async throws -> CantripRemoteSession {
+        struct Body: Encodable {
+            var customTitle: String?
+            var isLocked: Bool?
+        }
+        var validatedName: String?
+        if let name {
+            var metadata = ChatTabMetadata()
+            try metadata.rename(name)
+            validatedName = metadata.customTitle ?? ""
+        }
+        let host = try await session(id: id)
+        guard host.supportsTabMetadata == true else {
+            throw CantripRemoteError.tabMetadataUnsupported
+        }
+        let response: CantripSessionResponse = try await request(
+            path: "/api/v1/sessions/\(id)/metadata",
+            method: "POST",
+            body: JSONEncoder().encode(Body(customTitle: validatedName, isLocked: isLocked))
+        )
+        return response.session
+    }
+
     func removeQueuedPrompt(id: String, sessionID: String) async throws -> CantripRemoteSession {
         let host = try await session(id: sessionID)
         guard host.supportsQueueRemoval == true else {
@@ -743,6 +772,7 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var isMutating = false
+    private var mutationRevision = 0
     @Published private(set) var transcriptRevision = 0
     @Published private(set) var isLocalNetworkAvailable = false
     @Published private(set) var tailscaleOnly: Bool
@@ -984,6 +1014,10 @@ final class CantripRemoteModel: ObservableObject {
     @discardableResult
     func closeSession(_ id: String) async -> Bool {
         guard sessions.contains(where: { $0.id == id }) else { return false }
+        guard sessions.first(where: { $0.id == id })?.isLocked != true else {
+            errorMessage = ChatTabError.locked.localizedDescription
+            return false
+        }
         guard let replacement = await mutate({ api in
             try await api.closeSession(id: id)
         }) else { return false }
@@ -1002,8 +1036,29 @@ final class CantripRemoteModel: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func updateTab(_ id: String, name: String? = nil, isLocked: Bool? = nil) async -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish before editing this tab."
+            return false
+        }
+        guard let session = await mutate({ api in
+            try await api.updateTab(id: id, name: name, isLocked: isLocked)
+        }) else { return false }
+        if selectedSessionID == id {
+            apply(session)
+        } else if let index = sessions.firstIndex(where: { $0.id == id }) {
+            sessions[index] = session
+        }
+        return true
+    }
+
     private func sessionAction(_ action: String) async -> Bool {
         guard let sessionID = selectedSessionID else { return false }
+        guard action != "new-conversation" || selectedSession?.isLocked != true else {
+            errorMessage = ChatTabError.locked.localizedDescription
+            return false
+        }
         guard let session = await mutate({ api in
             try await api.action(action, sessionID: sessionID)
         }) else { return false }
@@ -1016,6 +1071,7 @@ final class CantripRemoteModel: ObservableObject {
         _ operation: @escaping (CantripRemoteAPI) async throws -> T
     ) async -> T? {
         guard !isMutating else { return nil }
+        mutationRevision += 1
         isMutating = true
         defer { isMutating = false }
         do {
@@ -1037,11 +1093,12 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     private func refresh() async {
-        guard appIsActive, isConfigured, !isRefreshing else { return }
+        guard appIsActive, isConfigured, !isRefreshing, !isMutating else { return }
         isRefreshing = true
         defer { isRefreshing = false }
 
         let requestedID = selectedSessionID
+        let revision = mutationRevision
         do {
             let generation = configurationGeneration
             let listed = try await performAuthenticated(allowFallback: true) { api in
@@ -1059,6 +1116,7 @@ final class CantripRemoteModel: ObservableObject {
                 detail = nil
             }
             guard generation == configurationGeneration else { throw CancellationError() }
+            guard revision == mutationRevision else { return }
 
             sessions = listed
             if selectedSessionID == requestedID || selectedSessionID == nil {
@@ -1276,6 +1334,7 @@ struct CantripRemoteView: View {
     @State private var showSettings = false
     @State private var draft = ""
     @State private var deliveryMode: CantripDeliveryMode = .auto
+    @State private var renamingSession: CantripRemoteSession?
 
     var body: some View {
         NavigationStack {
@@ -1308,6 +1367,9 @@ struct CantripRemoteView: View {
             }
             .sheet(isPresented: $showSettings) {
                 CantripRemoteSettingsSheet(model: model)
+            }
+            .sheet(item: $renamingSession) { session in
+                CantripTabRenameSheet(model: model, session: session)
             }
         }
     }
@@ -1388,6 +1450,9 @@ struct CantripRemoteView: View {
                         Task { await model.selectSession(session.id) }
                     } label: {
                         HStack(spacing: 6) {
+                            if session.isLocked == true {
+                                Image(systemName: "lock.fill").accessibilityLabel("Locked tab")
+                            }
                             if session.isStreaming {
                                 ProgressView().controlSize(.mini)
                             }
@@ -1406,12 +1471,9 @@ struct CantripRemoteView: View {
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
-                        Button(role: .destructive) {
-                            Task { await model.closeSession(session.id) }
-                        } label: {
-                            Label("Close Session", systemImage: "xmark")
-                        }
-                        .disabled(model.isMutating)
+                        CantripTabActions(model: model, session: session,
+                            onRename: { renamingSession = session },
+                            onClose: { Task { await model.closeSession(session.id) } })
                     }
                     .accessibilityAction(named: "Close Session") {
                         Task { await model.closeSession(session.id) }
@@ -1458,7 +1520,7 @@ struct CantripRemoteView: View {
                     Label("New", systemImage: "arrow.counterclockwise")
                 }
                 .buttonStyle(.bordered)
-                .disabled(session.isStreaming || model.isMutating)
+                .disabled(session.isStreaming || model.isMutating || session.isLocked == true)
                 .accessibilityLabel("Start new conversation")
             }
         }
