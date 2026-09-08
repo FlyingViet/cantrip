@@ -106,6 +106,14 @@ Click **Progress**, the sidebar icon, to see tool steps. Expand a step to
 inspect available input, output, and file changes. **Usage**, the chart icon,
 shows available backend usage figures; an unavailable quota is not zero usage.
 
+Copilot shows the account-wide included allowance used/remaining, reset date
+(in your local time), additional-usage status, and snapshot freshness. Install
+an up-to-date Copilot CLI and Node.js on the Mac and sign in to Copilot.
+Token/AI-credit plans are shown as percentages, not estimated prompt counts.
+Refresh is shared with AgentGateway and limited to once a minute. Missing or
+failed readings are marked unavailable/stale, never assumed to be zero usage.
+Model-specific or short-term throttling can still apply with budget remaining.
+
 File-diff **Revert** controls can discard changes to that file. Review and
 back up work before using them; they are not a general undo history.
 

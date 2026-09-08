@@ -23,7 +23,7 @@ test-github-builds:
 test-session-tabs:
 	@BIN="/tmp/cantrip-session-tab-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library $(filter-out Sources/Cantrip/main.swift,$(wildcard Sources/Cantrip/*.swift Sources/Cantrip/Backends/*.swift)) Tests/SessionTabTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc -parse-as-library $(filter-out Sources/Cantrip/main.swift,$(wildcard Sources/Cantrip/*.swift Sources/Cantrip/Backends/*.swift)) Tests/SessionTabTests/*.swift -o "$$BIN" && "$$BIN"
 
 test-message-routing:
 	@BIN="/tmp/cantrip-message-routing-tests-$$$$"; \

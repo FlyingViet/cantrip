@@ -42,6 +42,9 @@ The macOS app includes:
 - **Agent actions:** commands and file edits with backend-specific
   permissions; inspect tool activity and file diffs.
 - **Memory and council:** editable Markdown memory and multi-model answers.
+- **Copilot usage:** account-wide remaining allowance, reset date, and additional
+  usage in the Mac's **Usage** panel and AgentGateway's header beside the lane picker.
+  Reads your existing Copilot login without sending a prompt; credentials stay on the Mac.
 - **Long prompts:** compact, plain-text previews with **Read full prompt**,
   paged reading, and full-text copy/download in Mac and Remote. The submitted
   text stays intact. Memory retrieval uses bounded, deduplicated query terms
