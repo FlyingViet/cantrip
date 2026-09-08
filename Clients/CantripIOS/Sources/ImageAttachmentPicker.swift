@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct ImageAttachmentPicker: View {
     @Binding var attachments: [ChatImageAttachment]
     @Binding var importID: UUID?
+    @ObservedObject var remote: CantripRemoteModel
     let imageSupport: Bool?
     let disabled: Bool
 
@@ -117,13 +118,10 @@ struct ImageAttachmentPicker: View {
             HStack(spacing: 10) {
                 ForEach(Array(attachments.enumerated()), id: \.element.id) { index, attachment in
                     ZStack(alignment: .topTrailing) {
-                        if let image = attachment.preview {
-                            Image(uiImage: image)
-                                .resizable().scaledToFill()
-                                .frame(width: 76, height: 76)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .accessibilityLabel("Attached image \(index + 1)")
-                        }
+                        ChatImageThumbnail(
+                            source: ChatMessageImage(attachment), remote: remote,
+                            index: index, size: 76
+                        )
                         Button {
                             attachments.removeAll { $0.id == attachment.id }
                         } label: {

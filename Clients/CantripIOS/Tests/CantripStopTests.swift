@@ -92,7 +92,7 @@ final class CantripStopTests: XCTestCase {
         XCTAssertFalse(button(session: busy, stopping: true).isEnabled)
     }
 
-    func testVisibleButtonHasComfortableTapTargetAtLargeTextSizes() throws {
+    func testCompactButtonPreservesTapTargetAtLargeTextSizes() throws {
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
@@ -101,6 +101,7 @@ final class CantripStopTests: XCTestCase {
                 let control = button(session: try session(streaming: true), stopping: stopping)
                     .environment(\.dynamicTypeSize, size)
                 let controller = UIHostingController(rootView: control)
+                controller.safeAreaRegions = []
                 let window = UIWindow(windowScene: scene)
                 window.rootViewController = controller
                 window.makeKeyAndVisible()
@@ -108,9 +109,20 @@ final class CantripStopTests: XCTestCase {
                 controller.view.layoutIfNeeded()
                 let measured = controller.sizeThatFits(in: CGSize(width: 180, height: 500))
                 XCTAssertGreaterThanOrEqual(measured.width, 44)
-                XCTAssertLessThanOrEqual(measured.width, 180)
-                XCTAssertGreaterThanOrEqual(measured.height, 44)
-                XCTAssertLessThan(measured.height, 250)
+                XCTAssertLessThanOrEqual(measured.width, 128)
+                XCTAssertEqual(measured.height, 44, accuracy: 0.5)
+                if size == .large || size == .accessibility5 {
+                    window.frame = CGRect(origin: .zero, size: measured)
+                    controller.view.frame = window.bounds
+                    controller.view.layoutIfNeeded()
+                    let image = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
+                        controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
+                    }
+                    let attachment = XCTAttachment(image: image)
+                    attachment.name = "compact-stop-\(stopping ? "pending" : "ready")-\(size)"
+                    attachment.lifetime = .keepAlways
+                    add(attachment)
+                }
             }
         }
     }

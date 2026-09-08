@@ -135,6 +135,7 @@ struct ChatTurn: Identifiable, Codable {
     var approval: HermesRunApproval?
     var thinking: String?
     var author: String?
+    var images: [ChatMessageImage]?
 
     enum Role: String, Codable { case user, assistant }
 
@@ -167,7 +168,7 @@ struct ChatTurn: Identifiable, Codable {
         }
     }
 
-    var isEmpty: Bool { text.isEmpty && tools.isEmpty && error == nil }
+    var isEmpty: Bool { text.isEmpty && tools.isEmpty && error == nil && (images?.isEmpty ?? true) }
 }
 
 /// A tappable choice parsed from a confirmation prompt (e.g. /new's "Approve

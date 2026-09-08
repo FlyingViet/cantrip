@@ -20,9 +20,12 @@ struct CantripStopButton: View {
             Button(role: .destructive) {
                 onStop(session.id)
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     if isStopping {
-                        ProgressView().controlSize(.small)
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.75)
+                            .frame(width: 12, height: 12)
                     } else {
                         Image(systemName: "stop.fill")
                     }
@@ -30,11 +33,16 @@ struct CantripStopButton: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.65)
                 }
-                .font(.callout.weight(.semibold))
+                .font(.caption.weight(.semibold))
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(.red.opacity(isEnabled ? 0.12 : 0.06), in: Capsule())
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
+            .foregroundStyle(isEnabled ? Color.red : Color.secondary)
             .tint(.red)
             .disabled(!isEnabled)
             .accessibilityLabel(isStopping ? "Stopping Cantrip prompt" : "Stop current Cantrip prompt")

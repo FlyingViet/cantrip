@@ -201,8 +201,10 @@ final class ChatViewModel: ObservableObject {
         let isQueuedSend = (remoteDeliveryMode == .queue || remoteDeliveryMode == .auto)
             && remote.selectedSession?.isStreaming == true
         if !isQueuedSend {
-            let displayText = images.isEmpty ? text : text + "\n[\(images.count) image(s) attached]"
-            turns.append(ChatTurn(role: .user, text: displayText, executionLane: .cantrip))
+            turns.append(ChatTurn(
+                role: .user, text: text, executionLane: .cantrip,
+                images: images.map(ChatMessageImage.init)
+            ))
             turns.append(
                 ChatTurn(
                     role: .assistant,
@@ -281,7 +283,7 @@ final class ChatViewModel: ObservableObject {
             return ChatTurn(
                 id: id,
                 role: message.role == "user" ? .user : .assistant,
-                text: isError ? "" : message.text,
+                text: isError ? "" : message.presentedText,
                 tools: message.activities.map {
                     ToolActivity(
                         id: $0.id,
@@ -296,7 +298,8 @@ final class ChatViewModel: ObservableObject {
                 error: isError ? message.text : nil,
                 executionLane: .cantrip,
                 thinking: message.thinking.isEmpty ? nil : message.thinking,
-                author: message.author
+                author: message.author,
+                images: message.images?.map { $0.inSession(session?.id ?? "") }
             )
         }
 
@@ -1219,16 +1222,10 @@ struct ChatView: View {
     @ToolbarContentBuilder
     private var chatToolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            HStack(spacing: 4) {
-                VStack(spacing: 1) {
-                    HStack(spacing: 4) {
-                        if vm.isTabLocked { Image(systemName: "lock.fill") }
-                        Text(vm.tabTitle).lineLimit(1)
-                    }
-                    .font(.headline)
-                    ExecutionLanePicker(env: env, remote: remote)
-                        .disabled(vm.sending || importingImages || submittingRemote)
-                }
+            ChatHeader(title: vm.tabTitle, isLocked: vm.isTabLocked) {
+                ExecutionLanePicker(env: env, remote: remote)
+                    .disabled(vm.sending || importingImages || submittingRemote)
+            } usage: {
                 CopilotUsageButton(remote: remote) { composerFocused = false }
             }
         }
@@ -1241,6 +1238,17 @@ struct ChatView: View {
                         Label("Tabs", systemImage: "sidebar.left")
                     }
                     .disabled(!remoteTabsEnabled)
+                    if remote.selectedSession?.canResume == true {
+                        Button {
+                            Task {
+                                _ = await remote.resume()
+                                vm.syncRemoteTranscript()
+                            }
+                        } label: {
+                            Label("Resume", systemImage: "play")
+                        }
+                        .disabled(remote.isMutating)
+                    }
                     Divider()
                 }
                 Button { paused.toggle() } label: {
@@ -1359,50 +1367,6 @@ struct ChatView: View {
                 }
                 .disabled(!remote.isConfigured || remote.isRefreshing)
                 .accessibilityLabel("Refresh Cantrip sessions")
-
-                Button(action: createRemoteSession) {
-                    Image(systemName: "plus")
-                }
-                .disabled(!remote.isConfigured || remote.isMutating)
-                .accessibilityLabel("Create Cantrip session")
-
-                if remote.selectedSession != nil {
-                    Menu {
-                        if remote.selectedSession?.canResume == true {
-                            Button {
-                                Task {
-                                    _ = await remote.resume()
-                                    vm.syncRemoteTranscript()
-                                }
-                            } label: {
-                                Label("Resume", systemImage: "play")
-                            }
-                        }
-                        if remote.selectedSession?.isStreaming == true {
-                            Button(role: .destructive) {
-                                vm.stop()
-                            } label: {
-                                Label("Stop", systemImage: "stop.circle")
-                            }
-                        }
-                        Button {
-                            vm.newConversation()
-                        } label: {
-                            Label("New Conversation", systemImage: "square.and.pencil")
-                        }
-                        .disabled(newConversationDisabled)
-                        Divider()
-                        if let session = remote.selectedSession {
-                            CantripTabActions(model: remote, session: session,
-                                onRename: { renamingRemoteSession = session },
-                                onClose: { closeRemoteSession(session.id) })
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                    .disabled(remote.isMutating)
-                    .accessibilityLabel("Cantrip session actions")
-                }
             }
 
             remoteSessionPicker
@@ -1490,6 +1454,7 @@ struct ChatView: View {
             ForEach(vm.turns) { turn in
                 TurnView(
                     turn: turn,
+                    remote: remote,
                     onAction: { vm.send($0.command) },
                     onApproval: { vm.approveRun($0, for: turn.id) }
                 )
@@ -1575,6 +1540,7 @@ struct ChatView: View {
                         set: { imageDrafts[sessionID] = $0 }
                     ),
                     importID: $imageImportID,
+                    remote: remote,
                     imageSupport: remote.selectedSession?.id == sessionID
                         ? remote.selectedSession?.supportsImageAttachments : nil,
                     disabled: !destinationReady || vm.sending || submittingRemote
@@ -1743,8 +1709,46 @@ struct ChatView: View {
     private var importingImages: Bool { imageImportID != nil }
 }
 
+struct ChatHeader<Lane: View, Usage: View>: View {
+    let title: String
+    let isLocked: Bool
+    @ViewBuilder var lane: () -> Lane
+    @ViewBuilder var usage: () -> Usage
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                if isLocked { Image(systemName: "lock.fill") }
+                Text(title).lineLimit(1)
+            }
+            .font(.headline)
+            HStack(alignment: .center, spacing: 4) {
+                lane()
+                usage()
+            }
+            .buttonStyle(.plain)
+        }
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+    }
+}
+
+struct ChatHeaderIcon: View {
+    let systemName: String
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 12, weight: .semibold))
+            .imageScale(.medium)
+            .frame(width: 16, height: 16)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(.tint.opacity(0.12), in: Capsule())
+    }
+}
+
 struct ExecutionLaneBadge: View {
     let lane: ExecutionLane
+    var iconOnly = false
 
     private var tint: Color {
         switch lane {
@@ -1755,15 +1759,24 @@ struct ExecutionLaneBadge: View {
     }
 
     var body: some View {
-        Label(lane.badgeTitle, systemImage: lane.systemImage)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(
-                tint.opacity(0.12),
-                in: Capsule()
-            )
+        if iconOnly {
+            ChatHeaderIcon(systemName: lane.systemImage)
+                .foregroundStyle(tint)
+                .tint(tint)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel(lane.title)
+        } else {
+            Label(lane.badgeTitle, systemImage: lane.systemImage)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    tint.opacity(0.12),
+                    in: Capsule()
+                )
+        }
     }
 }
 
@@ -1787,9 +1800,10 @@ private struct ExecutionLanePicker: View {
                 .disabled(!env.isAvailable(lane))
             }
         } label: {
-            ExecutionLaneBadge(lane: env.executionLane)
+            ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
         }
         .menuIndicator(.hidden)
+        .accessibilityIdentifier("execution-lane-picker")
     }
 
     private func pickerTitle(_ lane: ExecutionLane) -> String {
@@ -1849,6 +1863,7 @@ struct WaveformView: View {
 
 private struct TurnView: View {
     let turn: ChatTurn
+    @ObservedObject var remote: CantripRemoteModel
     var onAction: (ChatAction) -> Void = { _ in }
     var onApproval: (String) -> Void = { _ in }
 
@@ -1869,7 +1884,10 @@ private struct TurnView: View {
         if turn.role == .user {
             HStack {
                 Spacer(minLength: 40)
-                PromptTextView(text: turn.text)
+                VStack(alignment: .leading, spacing: 8) {
+                    if !turn.text.isEmpty { PromptTextView(text: turn.text) }
+                    ChatImageGallery(images: turn.images ?? [], remote: remote)
+                }
                     .padding(.horizontal, 14).padding(.vertical, 9)
                     .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
                     .foregroundStyle(.white)

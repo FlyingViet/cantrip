@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import XCTest
 @testable import Hermes
 
@@ -229,6 +230,103 @@ final class CantripImageTransportTests: XCTestCase {
         }
         _ = try await api().send("Hello", mode: .queue, sessionID: sessionID)
         XCTAssertEqual(requests, 1)
+    }
+
+    func testImageReadsAreAuthenticatedBoundedAndPinnedToTheirSession() async throws {
+        let imageID = UUID().uuidString + "/image-1.jpg"
+        let bytes = Data([1, 2, 3])
+        let response = try JSONSerialization.data(withJSONObject: ["data": bytes.base64EncodedString()])
+        var paths: [String] = []
+        ImageRequestProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertNotNil(request.value(forHTTPHeaderField: "Authorization"))
+            XCTAssertEqual(request.timeoutInterval, 3)
+            XCTAssertNil(request.httpBody)
+            paths.append(try XCTUnwrap(request.url?.path))
+            return (200, response)
+        }
+        let client = try api()
+        let thumbnail = try await client.imageData(sessionID: sessionID, imageID: imageID, thumbnail: true)
+        let full = try await client.imageData(sessionID: sessionID, imageID: imageID, thumbnail: false)
+        XCTAssertEqual(thumbnail, bytes)
+        XCTAssertEqual(full, bytes)
+        XCTAssertEqual(paths, [
+            "/api/v1/sessions/\(sessionID)/attachments/\(imageID)/thumbnail",
+            "/api/v1/sessions/\(sessionID)/attachments/\(imageID)",
+        ])
+        for invalid in ["../image-1.jpg", imageID + "/../../secret", imageID + "?path=/etc/passwd",
+                        UUID().uuidString + "/image-5.jpg"] {
+            do {
+                _ = try await client.imageData(sessionID: sessionID, imageID: invalid, thumbnail: false)
+                XCTFail("Invalid references must not be sent")
+            } catch CantripRemoteError.invalidResponse {}
+        }
+        XCTAssertEqual(paths.count, 2)
+    }
+
+    func testMissingAndUnauthorizedImagesSurfaceErrors() async throws {
+        let imageID = UUID().uuidString + "/image-1.jpg"
+        for status in [401, 404, 500] {
+            ImageRequestProtocol.handler = { _ in (status, Data(#"{"error":"Image unavailable"}"#.utf8)) }
+            do {
+                _ = try await api().imageData(sessionID: sessionID, imageID: imageID, thumbnail: true)
+                XCTFail("Must show an image failure")
+            } catch CantripRemoteError.authentication {
+                XCTAssertEqual(status, 401)
+            } catch CantripRemoteError.http(let code, _) {
+                XCTAssertEqual(code, status)
+            }
+        }
+        ImageRequestProtocol.handler = { _ in
+            let bytes = Data(repeating: 0, count: ImageAttachmentProcessor.maximumImageBytes + 1)
+            return (200, try JSONSerialization.data(withJSONObject: ["data": bytes.base64EncodedString()]))
+        }
+        do {
+            _ = try await api().imageData(sessionID: sessionID, imageID: imageID, thumbnail: false)
+            XCTFail("Oversized responses must be rejected")
+        } catch ImageAttachmentError.invalidImage {}
+    }
+
+    @MainActor
+    func testImageCacheIsSeparatedBySizeAndClearedOnRepairing() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ImageRequestProtocol.self]
+        let remote = CantripRemoteModel(urlSession: URLSession(configuration: configuration))
+        defer { remote.clearConfiguration() }
+        let imageID = UUID().uuidString + "/image-1.jpg"
+        var imageReads = 0
+        var invalidPixels = false
+        let pixels = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 16, height: 8))
+            .image { $0.fill(CGRect(x: 0, y: 0, width: 16, height: 8)) }
+            .jpegData(compressionQuality: 0.8))
+        let response = try JSONSerialization.data(withJSONObject: ["data": pixels.base64EncodedString()])
+        ImageRequestProtocol.handler = { request in
+            if request.url?.path.contains("/attachments/") == true {
+                imageReads += 1
+                return (200, invalidPixels ? Data(#"{"data":"AQID"}"#.utf8) : response)
+            }
+            return (200, Data(#"{"sessions":[]}"#.utf8))
+        }
+        let configured = await remote.configure(url: "https://cantrip.example", pairingToken: "image-test-token")
+        XCTAssertTrue(configured, remote.errorMessage ?? "")
+        for _ in 0..<2 {
+            _ = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: true)
+        }
+        XCTAssertEqual(imageReads, 1)
+        _ = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: false)
+        XCTAssertEqual(imageReads, 2)
+        let reconfigured = await remote.configure(url: "https://another-cantrip.example", pairingToken: "new-image-test-token")
+        XCTAssertTrue(reconfigured, remote.errorMessage ?? "")
+        _ = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: true)
+        XCTAssertEqual(imageReads, 3, "A new pairing must not reuse another Mac's image cache")
+        invalidPixels = true
+        do {
+            _ = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: false)
+            XCTFail("Invalid pixels must show an error, not enter the cache")
+        } catch ImageAttachmentError.invalidImage {}
+        invalidPixels = false
+        _ = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: false)
+        XCTAssertEqual(imageReads, 5, "Retry must fetch again after a decode failure")
     }
 
     func testAutoOnLegacyHostDoesNotSendAMutation() async throws {

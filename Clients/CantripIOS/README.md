@@ -76,12 +76,15 @@ also tap the current tab control or choose **hamburger menu > Tabs**. Select a
 tab to return to chat; swipe left, tap outside, or use **Close tabs** to dismiss
 without changing tabs. The drawer shows the selected tab, activity, locks, and
 queued counts, with a **New Tab** button at the bottom. Opening it dismisses the
-keyboard without clearing your draft. Auto and Stop stay beside the chat controls.
+keyboard without clearing your draft. Auto and a compact Stop stay beside the chat
+controls; Stop retains a full-size tap target. New Tab and tab actions live in the
+drawer rather than duplicate top-bar buttons. Resume (when available) and New
+conversation remain in the shared chat's hamburger menu.
 
 Touch and hold anywhere on the tab control or a drawer row to **Rename Tab**, **Lock Tab** /
 **Unlock Tab**, or **Close Session** (delete the tab). A regular tap opens only
 the drawer from the tab control, or selects a tab from a drawer row. Each row's
-**...** menu and the shared chat's **...** menu also keep these actions.
+**...** menu also keeps these actions.
 Names and locks
 are saved on the host Mac and sync with local
 Cantrip, other Macs' Remote views, and browser clients. A lock icon marks
@@ -167,8 +170,8 @@ the local lane never falls back to a cloud provider. This changes Cantrip
 Remote only, not the Hermes gateway's own execution lanes.
 
 In a Cantrip session, tap **Attach images** to choose photos/screenshots from
-Photos, select image files, or paste a copied image. Preview and remove images
-before sending, with or without a typed message. Up to four images can be sent
+Photos, select image files, or paste a copied image. Tap a draft thumbnail to
+view the full image, or use **x** to remove it before sending. Up to four images can be sent
 at once; each is oriented, resized to at most 2048 pixels per side, and
 JPEG-compressed to at most 1 MB without the original photo's location metadata.
 Image drafts are scoped to their session and are kept in memory if sending
@@ -184,12 +187,22 @@ not capture or consume any context staged by the person at the Mac. Image
 attachments currently apply to **Cantrip Remote**, not the Hermes gateway's
 Copilot/Private Local lanes or shell/slash commands.
 
+Sent and queued images appear as **tappable thumbnails instead of Mac file
+paths**. Tap to open a full-screen, aspect-fit viewer; pinch or double-tap to
+zoom, drag to pan, and tap **Done** to return. Previously uploaded images also
+work when their files remain on the Mac and their session is open.
+This requires the updated Cantrip host as well as AgentGateway; older hosts
+retain their text-only attachment display. Downloads use the existing paired
+Tailscale/LAN connection, with an in-memory cache cleared when pairing changes.
+Missing files or connection failures show a retry state, not a blank image.
+
 ### Copilot account usage
 
-The **usage gauge next to the Local/Remote antenna lane picker** in the top
-header shows your remaining included Copilot allowance. Tap it for used and
-remaining percentages, the reset date/time, additional-usage status, account,
-and last-checked time. It works from every chat lane without switching sessions.
+The **usage gauge next to the Local/Remote antenna lane picker** shares its
+icon size and row beneath the chat title. It shows **AI credits remaining / total**
+in compact form (for example, `964.4K / 1M`). Tap it for the full credit amounts, a secondary percentage
+progress bar, the reset date/time, additional-usage status, account, and
+last-checked time. It works from every chat lane without switching sessions.
 
 This reads the Copilot account signed in on your **Cantrip Mac**, not a phone
 login or a per-chat token estimate. Update/reopen Cantrip and install a recent
@@ -201,8 +214,12 @@ The Mac refreshes at most once per minute, shared with its Usage panel. Mobile
 polling stops in the background. Pull-to-refresh reads the host cache without
 bypassing its throttle. Failed or old readings say **Stale**; unavailable data
 shows **--**, not zero or a full allowance. Re-pairing clears the old account.
-Credit/token billing is not labeled as prompt counts, reset dates use your
-local time, and remaining budget does not rule out short-term/model throttling.
+Credit amounts use the account's reported units directly, with up to two decimal
+places in details. Positive balances below `0.01` display as `<0.01`, not zero.
+Missing amounts are explicitly unavailable; they are not estimated from rounded
+percentages. Legacy request plans retain request labels, and unlimited plans
+show **Unlimited**. Reset dates use your local time, and remaining budget does
+not rule out short-term/model throttling.
 
 ### GitHub build queue
 

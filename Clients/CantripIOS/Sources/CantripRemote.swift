@@ -43,11 +43,19 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     let thinking: String
     let author: String?
     let activities: [CantripRemoteActivity]
+    var displayText: String? = nil
+    var images: [ChatMessageImage]? = nil
+
+    var presentedText: String { displayText ?? text }
 }
 
 struct CantripRemoteQueuedPrompt: Decodable, Equatable, Identifiable {
     let id: String
     let text: String
+    var displayText: String? = nil
+    var images: [ChatMessageImage]? = nil
+
+    var presentedText: String { displayText ?? text }
 }
 
 struct CantripRemoteSession: Decodable, Equatable, Identifiable {
@@ -583,6 +591,22 @@ struct CantripRemoteAPI {
         }
     }
 
+    func imageData(sessionID: String, imageID: String, thumbnail: Bool) async throws -> Data {
+        guard UUID(uuidString: sessionID) != nil, ChatMessageImage.validRemoteID(imageID) else {
+            throw CantripRemoteError.invalidResponse
+        }
+        struct ImageResponse: Decodable { let data: Data }
+        let response: ImageResponse = try await request(
+            path: "/api/v1/sessions/\(sessionID)/attachments/\(imageID)"
+                + (thumbnail ? "/thumbnail" : "")
+        )
+        guard !response.data.isEmpty,
+              response.data.count <= ImageAttachmentProcessor.maximumImageBytes else {
+            throw ImageAttachmentError.invalidImage
+        }
+        return response.data
+    }
+
     func session(id: String) async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(id)"
@@ -840,6 +864,11 @@ final class CantripRemoteModel: ObservableObject {
     private let requestGate = CantripRequestGate()
     private let router = CantripRemoteRouter()
     private let urlSession: URLSession?
+    private let imageCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.totalCostLimit = 12 << 20
+        return cache
+    }()
 
     init(urlSession: URLSession? = nil) {
         self.urlSession = urlSession
@@ -895,6 +924,7 @@ final class CantripRemoteModel: ObservableObject {
             stopPolling()
             configurationGeneration += 1
             usageIdentity = UUID()
+            imageCache.removeAllObjects()
             router.reset()
             baseURL = normalized
             self.tailscaleOnly = tailscaleOnly
@@ -932,6 +962,7 @@ final class CantripRemoteModel: ObservableObject {
             lanBrowser.stop()
             configurationGeneration += 1
             usageIdentity = UUID()
+            imageCache.removeAllObjects()
             router.reset()
             UserDefaults.standard.removeObject(forKey: Self.endpointKey)
             UserDefaults.standard.removeObject(forKey: Self.tailscaleOnlyKey)
@@ -973,6 +1004,25 @@ final class CantripRemoteModel: ObservableObject {
         return try await performAuthenticated(allowFallback: true) { api in
             try await api.copilotUsage()
         }
+    }
+
+    func image(sessionID: String, imageID: String, thumbnail: Bool) async throws -> UIImage {
+        let identity = usageIdentity
+        let key = "\(usageIdentity)/\(sessionID)/\(imageID)/\(thumbnail)" as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
+        let data = try await performAuthenticated(allowFallback: true) { api in
+            try await api.imageData(sessionID: sessionID, imageID: imageID, thumbnail: thumbnail)
+        }
+        let image = try await Task.detached(priority: .userInitiated) {
+            try ChatImageDecoder.decode(
+                data, maximumDimension: thumbnail ? 320 : ImageAttachmentProcessor.maximumDimension
+            )
+        }.value
+        try Task.checkCancellation()
+        guard identity == usageIdentity else { throw CancellationError() }
+        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? data.count
+        imageCache.setObject(image, forKey: key, cost: cost)
+        return image
     }
 
     func selectSession(_ id: String) async {
@@ -1406,17 +1456,6 @@ struct CantripRemoteView: View {
             }
             .navigationTitle("Remote")
             .toolbar {
-                if model.isConfigured {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            Task { await model.createSession() }
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .disabled(model.isMutating)
-                        .accessibilityLabel("Create remote session")
-                    }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: {
                         Image(systemName: "gearshape")
@@ -1635,7 +1674,9 @@ private struct CantripRemoteTranscript: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
                 ForEach(model.selectedSession?.transcript ?? []) { message in
-                    CantripRemoteMessageBubble(message: message)
+                    CantripRemoteMessageBubble(
+                        message: message, model: model, sessionID: model.selectedSession?.id ?? ""
+                    )
                         .id(message.id)
                 }
                 Color.clear
@@ -1683,6 +1724,8 @@ private struct CantripRemoteTranscript: View {
 
 private struct CantripRemoteMessageBubble: View {
     let message: CantripRemoteMessage
+    @ObservedObject var model: CantripRemoteModel
+    let sessionID: String
 
     var body: some View {
         HStack {
@@ -1700,13 +1743,16 @@ private struct CantripRemoteMessageBubble: View {
                     }
                     .font(.caption)
                 }
-                if !message.text.isEmpty {
+                if !message.presentedText.isEmpty {
                     if message.role == "user" {
-                        PromptTextView(text: message.text)
+                        PromptTextView(text: message.presentedText)
                     } else {
                         Markdown(message.text)
                     }
                 }
+                ChatImageGallery(
+                    images: (message.images ?? []).map { $0.inSession(sessionID) }, remote: model
+                )
                 ForEach(message.activities) { activity in
                     Label {
                         Text("\(activity.toolName): \(activity.title)")

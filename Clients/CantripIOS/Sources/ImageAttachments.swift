@@ -10,6 +10,34 @@ struct ChatImageAttachment: Identifiable, Equatable, Sendable {
     var preview: UIImage? { UIImage(data: data) }
 }
 
+struct ChatMessageImage: Codable, Equatable, Identifiable, Sendable {
+    let id: String
+    var sessionID: String?
+    var data: Data?
+
+    init(id: String, sessionID: String? = nil, data: Data? = nil) {
+        self.id = id
+        self.sessionID = sessionID
+        self.data = data
+    }
+
+    init(_ attachment: ChatImageAttachment) {
+        self.init(id: attachment.id.uuidString, data: attachment.data)
+    }
+
+    func inSession(_ id: String) -> Self {
+        Self(id: self.id, sessionID: id)
+    }
+
+    static func validRemoteID(_ id: String) -> Bool {
+        let parts = id.split(separator: "/", omittingEmptySubsequences: false)
+        return parts.count == 2 && UUID(uuidString: String(parts[0])) != nil
+            && (1...ImageAttachmentProcessor.maximumCount).contains {
+                parts[1] == "image-\($0).jpg"
+            }
+    }
+}
+
 enum ImageAttachmentError: LocalizedError {
     case invalidImage
     case tooLarge

@@ -47,9 +47,46 @@ struct CopilotQuotaBucket: Decodable, Identifiable {
 
     var summary: String {
         if isUnlimited { return "Unlimited \(title.lowercased())" }
-        guard let remainingPercent else { return "\(title): remaining amount unavailable" }
+        if let amounts = amountSummary { return amounts }
+        if billingMode == "credits" { return "AI-credit amounts unavailable" }
+        return percentageSummary ?? "\(title): remaining amount unavailable"
+    }
+
+    var amountSummary: String? {
+        guard let ratio = amountRatio(), let unit else { return nil }
+        return "\(ratio) \(unit) remaining"
+    }
+
+    var unit: String? {
+        switch billingMode {
+        case "credits": return "AI credits"
+        case "requests": return "requests"
+        default: return nil
+        }
+    }
+
+    func amountRatio(compact: Bool = false, locale: Locale = .current) -> String? {
+        guard !isUnlimited, unit != nil, let remaining, let entitlement,
+              remaining.isFinite, entitlement.isFinite, remaining >= 0, entitlement >= 0 else { return nil }
+        return "\(copilotAmount(remaining, compact: compact, locale: locale)) / \(copilotAmount(entitlement, compact: compact, locale: locale))"
+    }
+
+    var percentageSummary: String? {
+        guard let remainingPercent, remainingPercent.isFinite else { return nil }
         return String(format: "%.1f%% used / %.1f%% remaining", 100 - remainingPercent, remainingPercent)
     }
+}
+
+func copilotAmount(_ amount: Double, compact: Bool = false, locale: Locale = .current) -> String {
+    let format = FloatingPointFormatStyle<Double>.number.locale(locale)
+    // Do not round a nearly exhausted balance up, or a small positive balance down to zero.
+    if amount > 0 && amount < 0.01 {
+        return "<" + 0.01.formatted(format.precision(.fractionLength(2)))
+    }
+    if compact && amount >= 1000 {
+        return amount.formatted(format.notation(.compactName).precision(.fractionLength(0...1)).rounded(rule: .down))
+    }
+    return amount.formatted(format.precision(.fractionLength(0...2)).rounded(rule: .down))
 }
 
 func copilotDate(_ value: String?) -> Date? {
@@ -99,11 +136,19 @@ final class CopilotUsageModel: ObservableObject {
         }
     }
 
-    func headerText(at date: Date) -> String {
+    func headerText(at date: Date, locale: Locale = .current) -> String {
         guard let snapshot, let bucket = snapshot.account?.primary else { return "--" }
         guard error == nil, !snapshot.isStale(at: date) else { return "Stale" }
         if bucket.isUnlimited { return "Unlimited" }
+        if let ratio = bucket.amountRatio(compact: true, locale: locale) { return ratio }
+        if bucket.billingMode == "credits" { return "--" }
         return bucket.remainingPercent.map { String(format: "%.1f%%", $0) } ?? "--"
+    }
+
+    func accessibilityValue(at date: Date) -> String {
+        guard let snapshot, let bucket = snapshot.account?.primary else { return "Account allowance unavailable" }
+        let stale = error != nil || snapshot.isStale(at: date)
+        return (stale ? "Stale. Last known: " : "") + bucket.summary
     }
 }
 
@@ -120,18 +165,11 @@ struct CopilotUsageButton: View {
                 onOpen()
                 isPresented = true
             } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "gauge.with.dots.needle.33percent")
-                    Text(model.headerText(at: context.date))
-                        .font(.caption2.monospacedDigit())
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                }
-                .frame(width: 78, height: 44)
-                .contentShape(Rectangle())
+                CopilotUsageButtonLabel(text: model.headerText(at: context.date))
             }
             .accessibilityLabel("Copilot account usage")
-            .accessibilityValue(model.headerText(at: context.date) + " remaining; tap for details")
+            .accessibilityValue(model.accessibilityValue(at: context.date))
+            .accessibilityHint("Shows account allowance details")
             .accessibilityIdentifier("copilot-usage-button")
         }
         .sheet(isPresented: $isPresented) {
@@ -147,6 +185,25 @@ struct CopilotUsageButton: View {
                     try await Task.sleep(for: .seconds(model.snapshot?.isRefreshing == true ? 2 : 60))
                 } catch { return }
             }
+        }
+    }
+
+    struct CopilotUsageButtonLabel: View {
+        let text: String
+
+        var body: some View {
+            HStack(spacing: 4) {
+                ChatHeaderIcon(systemName: "gauge.with.dots.needle.33percent")
+                Text(text)
+                    .font(.caption2.monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(width: 90, alignment: .leading)
+            }
+            // The compact toolbar stays legible; full-size amounts remain in the accessible details sheet.
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .frame(height: 44)
+            .contentShape(Rectangle())
         }
     }
 
@@ -233,20 +290,19 @@ struct CopilotQuotaRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(bucket.summary).font(.headline)
-            if !bucket.isUnlimited, let remaining = bucket.remainingPercent {
+            if !bucket.isUnlimited, let remaining = bucket.remainingPercent,
+               let percentage = bucket.percentageSummary {
                 ProgressView(value: 100 - remaining, total: 100)
                     .tint(remaining <= 10 ? .orange : .accentColor)
                     .accessibilityLabel("Included allowance used")
                     .accessibilityValue(String(format: "%.1f%%", 100 - remaining))
+                Text(percentage)
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Text(bucket.billingMode == "credits"
                  ? "Token / AI-credit billing; these are not prompt counts."
                  : bucket.billingMode == "requests" ? "Request-based billing" : "Billing units not reported")
                 .font(.caption).foregroundStyle(.secondary)
-            if bucket.billingMode == "requests", !bucket.isUnlimited,
-               let remaining = bucket.remaining, let entitlement = bucket.entitlement {
-                Text("\(remaining.formatted()) of \(entitlement.formatted()) included requests remaining")
-            }
             Text(bucket.overageAllowed.map { "Additional usage: \($0 ? "enabled" : "disabled")" }
                  ?? "Additional usage: not reported")
             if let overage = bucket.overage {

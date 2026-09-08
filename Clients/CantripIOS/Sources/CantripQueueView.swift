@@ -15,7 +15,7 @@ struct CantripQueueButton: View {
                         .font(.caption)
                 }
                 if let next = session.queued?.first {
-                    Text(verbatim: PromptText(next.text).preview)
+                    Text(verbatim: PromptText(next.presentedText).preview)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -121,12 +121,15 @@ struct CantripQueueView: View {
                     .buttonStyle(.borderless)
                     .disabled(!canRemove)
                     .accessibilityLabel("Remove queued message")
-                    .accessibilityHint(PromptText(prompt.text).preview)
+                    .accessibilityHint(PromptText(prompt.presentedText).preview)
                 }
             }
-            PromptTextView(text: prompt.text)
+            PromptTextView(text: prompt.presentedText)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+            ChatImageGallery(
+                images: (prompt.images ?? []).map { $0.inSession(sessionID) }, remote: remote
+            )
         }
         .padding(.vertical, 4)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
