@@ -1299,6 +1299,12 @@ struct ChatView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
+                // Reserve the indicator's space so polling never shifts the controls.
+                ProgressView()
+                    .controlSize(.small)
+                    .opacity(remote.isRefreshing ? 1 : 0)
+                    .accessibilityHidden(!remote.isRefreshing)
+
                 Spacer(minLength: 0)
 
                 CantripStopButton(
@@ -1310,9 +1316,6 @@ struct ChatView: View {
                     onStop: vm.stopRemote
                 )
 
-                if remote.isRefreshing {
-                    ProgressView().controlSize(.small)
-                }
                 Button {
                     Task { await remote.refreshNow() }
                 } label: {
