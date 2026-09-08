@@ -772,6 +772,7 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var isMutating = false
+    @Published private(set) var stoppingSessionID: String?
     private var mutationRevision = 0
     @Published private(set) var transcriptRevision = 0
     @Published private(set) var isLocalNetworkAvailable = false
@@ -815,8 +816,10 @@ final class CantripRemoteModel: ObservableObject {
     private let lanBrowser = CantripLANBrowser()
     private let requestGate = CantripRequestGate()
     private let router = CantripRemoteRouter()
+    private let urlSession: URLSession?
 
-    init() {
+    init(urlSession: URLSession? = nil) {
+        self.urlSession = urlSession
         let storedURL = UserDefaults.standard.string(forKey: Self.endpointKey) ?? ""
         configuredURL = storedURL
         tailscaleOnly = UserDefaults.standard.bool(forKey: Self.tailscaleOnlyKey)
@@ -983,8 +986,14 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     @discardableResult
-    func stop() async -> Bool {
-        await sessionAction("cancel")
+    func stop(sessionID: String) async -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish, then try stopping again."
+            return false
+        }
+        stoppingSessionID = sessionID
+        defer { stoppingSessionID = nil }
+        return await sessionAction("cancel", sessionID: sessionID)
     }
 
     @discardableResult
@@ -1053,8 +1062,8 @@ final class CantripRemoteModel: ObservableObject {
         return true
     }
 
-    private func sessionAction(_ action: String) async -> Bool {
-        guard let sessionID = selectedSessionID else { return false }
+    private func sessionAction(_ action: String, sessionID: String? = nil) async -> Bool {
+        guard let sessionID = sessionID ?? selectedSessionID else { return false }
         guard action != "new-conversation" || selectedSession?.isLocked != true else {
             errorMessage = ChatTabError.locked.localizedDescription
             return false
@@ -1062,8 +1071,11 @@ final class CantripRemoteModel: ObservableObject {
         guard let session = await mutate({ api in
             try await api.action(action, sessionID: sessionID)
         }) else { return false }
-        guard selectedSessionID == sessionID else { return true }
-        apply(session)
+        if selectedSessionID == sessionID {
+            apply(session)
+        } else if let index = sessions.firstIndex(where: { $0.id == sessionID }) {
+            sessions[index] = session
+        }
         return true
     }
 
@@ -1168,7 +1180,7 @@ final class CantripRemoteModel: ObservableObject {
         guard generation == configurationGeneration else { throw CancellationError() }
         updateRoutes()
         return try await router.perform(readOnly: allowFallback) { transport in
-            let api = CantripRemoteAPI(transport: transport, token: token)
+            let api = CantripRemoteAPI(transport: transport, token: token, urlSession: self.urlSession)
             return try await operation(api)
         }
     }
@@ -1180,8 +1192,10 @@ final class CantripRemoteModel: ObservableObject {
 
     private func recoverTailscale() {
         guard appIsActive, let token, !tailscaleOnly else { return }
-        router.recoverTailscale { transport in
-            _ = try await CantripRemoteAPI(transport: transport, token: token).sessions()
+        router.recoverTailscale { [urlSession] transport in
+            _ = try await CantripRemoteAPI(
+                transport: transport, token: token, urlSession: urlSession
+            ).sessions()
         }
     }
 
@@ -1487,12 +1501,13 @@ struct CantripRemoteView: View {
                     .buttonStyle(.bordered)
                     .disabled(model.isMutating)
                 }
-                if session.isStreaming {
-                    Button("Stop", role: .destructive) {
-                        Task { await model.stop() }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(model.isMutating)
+                CantripStopButton(
+                    session: session,
+                    isConnected: model.isConnected,
+                    isMutating: model.isMutating,
+                    isStopping: model.stoppingSessionID == session.id
+                ) { id in
+                    Task { await model.stop(sessionID: id) }
                 }
                 Button {
                     Task { await model.newConversation() }

@@ -859,17 +859,8 @@ final class ChatViewModel: ObservableObject {
 
     func stop() {
         if activeLane == .cantrip {
-            guard remoteIsStreaming, !remote.isMutating else { return }
-            remoteSpeechActive = false
-            remoteSpeechBaseline.removeAll()
-            remoteSpeechTargetID = nil
-            voice.stopSpeaking()
-            runStatusText = "Stopping Cantrip…"
-            Task { [weak self] in
-                guard let self else { return }
-                _ = await self.remote.stop()
-                self.syncRemoteTranscript()
-            }
+            guard let sessionID = remote.selectedSessionID else { return }
+            stopRemote(sessionID: sessionID)
             return
         }
         guard sending else { return }
@@ -916,6 +907,23 @@ final class ChatViewModel: ObservableObject {
                     await dispatchAndObserve(savedPendingRun, client: client)
                 }
             }
+        }
+    }
+
+    func stopRemote(sessionID: String) {
+        guard activeLane == .cantrip,
+              remote.selectedSession?.id == sessionID,
+              remote.selectedSession?.isStreaming == true,
+              !remote.isMutating else { return }
+        remoteSpeechActive = false
+        remoteSpeechBaseline.removeAll()
+        remoteSpeechTargetID = nil
+        voice.stopSpeaking()
+        runStatusText = "Stopping Cantrip…"
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.remote.stop(sessionID: sessionID)
+            self.syncRemoteTranscript()
         }
     }
 
@@ -1292,6 +1300,15 @@ struct ChatView: View {
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
+
+                CantripStopButton(
+                    session: remote.selectedSession,
+                    isConnected: remote.isConnected,
+                    isMutating: remote.isMutating,
+                    isStopping: remote.stoppingSessionID != nil
+                        && remote.stoppingSessionID == remote.selectedSessionID,
+                    onStop: vm.stopRemote
+                )
 
                 if remote.isRefreshing {
                     ProgressView().controlSize(.small)

@@ -64,6 +64,14 @@ Locked tabs remain selectable. The **Auto** delivery dropdown sits beside the
 tab dropdown; choose a manual mode there for a one-message override.
 Use **+** to create another session.
 
+While the selected tab is working, a red **Stop** button is visible beside
+the session controls; there is no need to open the **...** menu. It stops
+the prompt on the Mac and clears that tab's queued prompts, without deleting
+the tab or its conversation. Locked tabs can still be stopped. The button
+shows **Stopping...** while the request is pending and is disabled when
+disconnected or another request is in flight. A failed request is shown in
+the Remote error banner; it is never automatically retried.
+
 Touch and hold anywhere on the tab dropdown to **Rename Tab**, **Lock Tab** /
 **Unlock Tab**, or **Close Session** (delete the tab). A regular tap opens only
 the tab list. The shared chat's **...** menu also keeps these actions.
