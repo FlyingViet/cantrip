@@ -6,7 +6,7 @@ APP_BACKUP = .$(APP_NAME).app.previous
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs cert icon app run clean
+.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs cert artwork icon app run clean
 
 all: app
 
@@ -75,6 +75,10 @@ test-run-journal:
 cert:
 	@security find-identity -v -p codesigning 2>/dev/null | grep -Eq '^[[:space:]]*[0-9]+\)' \
 		|| sh Scripts/make-cert.sh "$(CERT_NAME)"
+
+artwork:
+	swift Scripts/generate-artwork.swift
+	@sh Scripts/make-icns.sh
 
 icon:
 	@sh Scripts/make-icns.sh
