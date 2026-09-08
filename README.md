@@ -38,8 +38,9 @@ The macOS app includes:
 - **Memory and council:** editable Markdown memory and multi-model answers.
 - **Remote control:** use the Mac's sessions from AgentGateway on iPhone/iPad,
   another Mac, or a browser. Native clients support paired LAN connections;
-  Tailscale Serve provides optional away-from-home access. AgentGateway can
-  also display queued prompts from the host.
+  Tailscale Serve provides optional away-from-home access. Automatic routing
+  backs off failed LAN connections and recovers without replaying sends;
+  Tailscale-only mode is also available. AgentGateway can display queued prompts.
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a
   `cantrip` command for asking questions from Terminal.
 

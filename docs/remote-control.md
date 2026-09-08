@@ -109,6 +109,28 @@ it; arrange a separate supported HTTPS origin/port first.
 and can use the saved HTTPS origin when away. HTTPS does not remove the
 requirement for the pairing token.
 
+### Automatic recovery and Tailscale-only mode
+
+Automatic mode keeps a working fallback instead of retrying an unhealthy LAN
+route on every refresh, even when the host is still advertised by Bonjour.
+LAN connection attempts and reads time out after two seconds. Failed LAN
+routes back off for 30 seconds, then an independent, authenticated read-only
+probe can restore LAN without holding up fallback refreshes. Longer mutation
+and image-upload response deadlines remain in place.
+
+The Mac Remote view switches upstream routes behind the same local bridge:
+the selected session and unsent draft stay in the existing page. If no route
+works, it reports the connection failure and retries reads as routes recover.
+Uncertain sends and other mutations are **not automatically replayed**. Check
+the session before sending again; the host may have accepted the first request.
+
+To bypass LAN, enable **Tailscale only (skip local network)** when pairing,
+or use **Route > Tailscale only** in the Mac Remote header. AgentGateway has
+the same toggle in Remote settings. A saved fallback URL is required; keep
+Tailscale connected when using its HTTPS address. Choose **Automatic (LAN +
+fallback)** on the Mac, or turn off the toggle in AgentGateway, to restore
+direct LAN discovery. LAN-only use remains supported without a fallback URL.
+
 For the browser client, connect the device to Tailscale, open the same HTTPS
 origin, paste the pairing token, and click **Connect**. The browser saves its
 token in that browser profile; use **Unpair** on shared devices. A browser

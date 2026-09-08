@@ -57,16 +57,20 @@ final class RemoteLANBrowser {
 final class RemoteLANBridge {
     var onReady: ((URL) -> Void)?
     var onFailure: ((String) -> Void)?
+    var onRouteChanged: ((RemoteRoute) -> Void)?
+    var onPageFailure: ((String) -> Void)?
 
-    private let endpoint: NWEndpoint
-    private let token: String
+    private let client: RemoteRouteClient
     private let queue = DispatchQueue(label: "com.brian.cantrip.remote-lan-bridge")
     private var listener: NWListener?
     private var requests: [UUID: RemoteLANProxyRequest] = [:]
 
-    init(endpoint: NWEndpoint, token: String) {
-        self.endpoint = endpoint
-        self.token = token
+    init(token: String) {
+        client = RemoteRouteClient(token: token)
+    }
+
+    func update(endpoints: [NWEndpoint], fallback: URL?) async {
+        await client.update(endpoints: endpoints, fallback: fallback)
     }
 
     func start() {
@@ -119,6 +123,7 @@ final class RemoteLANBridge {
             let active = Array(self.requests.values)
             self.requests.removeAll()
             active.forEach { $0.cancel() }
+            Task { await self.client.stop() }
         }
     }
 
@@ -126,9 +131,14 @@ final class RemoteLANBridge {
         let id = UUID()
         let request = RemoteLANProxyRequest(
             localConnection: connection,
-            remoteEndpoint: endpoint,
-            token: token,
-            queue: queue
+            client: client,
+            queue: queue,
+            onRouteChanged: { [weak self] route in
+                DispatchQueue.main.async { self?.onRouteChanged?(route) }
+            },
+            onPageFailure: { [weak self] message in
+                DispatchQueue.main.async { self?.onPageFailure?(message) }
+            }
         ) { [weak self] in
             self?.requests.removeValue(forKey: id)
         }
@@ -150,31 +160,33 @@ final class RemoteLANBridge {
     }
 }
 
-private final class RemoteLANProxyRequest {
+// Mutable request state is confined to the bridge's serial queue.
+private final class RemoteLANProxyRequest: @unchecked Sendable {
     private let localConnection: NWConnection
-    private let remoteEndpoint: NWEndpoint
-    private let token: String
+    private let client: RemoteRouteClient
     private let queue: DispatchQueue
     private let completion: () -> Void
-    private var remoteConnection: NWConnection?
+    private let onRouteChanged: (RemoteRoute) -> Void
+    private let onPageFailure: (String) -> Void
+    private var task: Task<Void, Never>?
     private var requestBuffer = Data()
-    private var responseBuffer = Data()
     private var finished = false
 
     private let maximumRequestBytes = 1 << 20
-    private let maximumResponseBytes = 32 << 20
 
     init(
         localConnection: NWConnection,
-        remoteEndpoint: NWEndpoint,
-        token: String,
+        client: RemoteRouteClient,
         queue: DispatchQueue,
+        onRouteChanged: @escaping (RemoteRoute) -> Void,
+        onPageFailure: @escaping (String) -> Void,
         completion: @escaping () -> Void
     ) {
         self.localConnection = localConnection
-        self.remoteEndpoint = remoteEndpoint
-        self.token = token
+        self.client = client
         self.queue = queue
+        self.onRouteChanged = onRouteChanged
+        self.onPageFailure = onPageFailure
         self.completion = completion
     }
 
@@ -193,6 +205,10 @@ private final class RemoteLANProxyRequest {
             }
         }
         localConnection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self, !self.finished, self.task == nil else { return }
+            self.sendError(status: 408, reason: "The local request timed out.")
+        }
     }
 
     func cancel() {
@@ -208,8 +224,8 @@ private final class RemoteLANProxyRequest {
             if let data { self.requestBuffer.append(data) }
             if self.requestBuffer.count > self.maximumRequestBytes {
                 self.sendError(status: 413, reason: "Payload Too Large")
-            } else if HTTPRequest.parse(self.requestBuffer) != nil {
-                self.connectToRemote()
+            } else if let request = HTTPRequest.parse(self.requestBuffer) {
+                self.forward(request)
             } else if !HTTPRequest.needsMoreData(self.requestBuffer) {
                 self.sendError(status: 400, reason: "Bad Request")
             } else if isComplete || error != nil {
@@ -220,61 +236,27 @@ private final class RemoteLANProxyRequest {
         }
     }
 
-    private func connectToRemote() {
-        let connection = NWConnection(
-            to: remoteEndpoint,
-            using: RemoteLANProtocol.parameters(token: token)
-        )
-        remoteConnection = connection
-        connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self, let connection, self.remoteConnection === connection else { return }
-            switch state {
-            case .ready:
-                self.sendRequest()
-            case .failed:
-                self.sendError(status: 502, reason: "Bad Gateway")
-            case .cancelled where !self.finished:
-                self.sendError(status: 502, reason: "Bad Gateway")
-            default:
-                break
-            }
-        }
-        connection.start(queue: queue)
-    }
-
-    private func sendRequest() {
-        remoteConnection?.send(
-            content: requestBuffer,
-            completion: .contentProcessed { [weak self] error in
-                guard let self, !self.finished else { return }
-                if error == nil {
-                    self.receiveResponse()
-                } else {
-                    self.sendError(status: 502, reason: "Bad Gateway")
-                }
-            }
-        )
-    }
-
-    private func receiveResponse() {
-        remoteConnection?.receive(
-            minimumIncompleteLength: 1,
-            maximumLength: 64 * 1024
-        ) { [weak self] data, _, isComplete, error in
-            guard let self, !self.finished else { return }
-            if let data { self.responseBuffer.append(data) }
+    private func forward(_ request: HTTPRequest) {
+        task = Task { [weak self] in
+            guard let self else { return }
             do {
-                if self.responseBuffer.count > self.maximumResponseBytes {
-                    self.sendError(status: 502, reason: "Bad Gateway")
-                } else if let length = try Self.completeResponseLength(self.responseBuffer) {
-                    self.sendResponse(self.responseBuffer.prefix(length))
-                } else if isComplete || error != nil {
-                    self.sendError(status: 502, reason: "Bad Gateway")
-                } else {
-                    self.receiveResponse()
+                let response = try await self.client.request(request)
+                let route = await self.client.preferred
+                self.queue.async {
+                    guard !self.finished else { return }
+                    if let route { self.onRouteChanged(route) }
+                    self.sendResponse(response.data)
                 }
+            } catch is CancellationError {
+                self.queue.async { self.finish() }
             } catch {
-                self.sendError(status: 502, reason: "Bad Gateway")
+                let message = error.localizedDescription
+                    + (request.method == "GET" ? "" : " The request may have reached Cantrip. Check the session before sending again.")
+                self.queue.async {
+                    guard !self.finished else { return }
+                    if request.method == "GET", request.path == "/" { self.onPageFailure(message) }
+                    self.sendError(status: 502, reason: message)
+                }
             }
         }
     }
@@ -289,24 +271,13 @@ private final class RemoteLANProxyRequest {
     }
 
     private func sendError(status: Int, reason: String) {
-        let body = Data("\(reason)\n".utf8)
-        let header = """
-        HTTP/1.1 \(status) \(reason)\r
-        Content-Type: text/plain; charset=utf-8\r
-        Content-Length: \(body.count)\r
-        Cache-Control: no-store\r
-        Connection: close\r
-        \r
-
-        """
-        var response = Data(header.utf8)
-        response.append(body)
-        localConnection.send(
-            content: response,
-            completion: .contentProcessed { [weak self] _ in
-                self?.finish()
-            }
-        )
+        do {
+            let body = try JSONSerialization.data(withJSONObject: ["error": reason])
+            sendResponse(RemoteHTTPResponse(status: status, contentType: "application/json", body: body).data)
+        } catch {
+            onPageFailure("Could not report the connection failure: \(error.localizedDescription)")
+            finish()
+        }
     }
 
     private func finish() {
@@ -314,49 +285,10 @@ private final class RemoteLANProxyRequest {
         finished = true
         localConnection.stateUpdateHandler = nil
         localConnection.cancel()
-        remoteConnection?.stateUpdateHandler = nil
-        remoteConnection?.cancel()
-        remoteConnection = nil
+        task?.cancel()
+        task = nil
         completion()
     }
-
-    private static func completeResponseLength(_ data: Data) throws -> Int? {
-        let delimiter = Data([13, 10, 13, 10])
-        guard let headerRange = data.range(of: delimiter) else {
-            guard data.count <= 64 * 1024 else { throw RemoteLANBridgeParseError.invalid }
-            return nil
-        }
-        guard let header = String(
-            data: data[..<headerRange.lowerBound],
-            encoding: .utf8
-        ) else {
-            throw RemoteLANBridgeParseError.invalid
-        }
-        let contentLength = header.components(separatedBy: "\r\n")
-            .dropFirst()
-            .compactMap { line -> Int? in
-                let parts = line.split(separator: ":", maxSplits: 1)
-                guard parts.count == 2,
-                      parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                        .lowercased() == "content-length"
-                else { return nil }
-                return Int(parts[1].trimmingCharacters(in: .whitespacesAndNewlines))
-            }
-            .first
-        guard let contentLength,
-              contentLength >= 0,
-              contentLength <= 32 << 20,
-              headerRange.upperBound <= (32 << 20) - contentLength
-        else {
-            throw RemoteLANBridgeParseError.invalid
-        }
-        let completeLength = headerRange.upperBound + contentLength
-        return data.count >= completeLength ? completeLength : nil
-    }
-}
-
-private enum RemoteLANBridgeParseError: Error {
-    case invalid
 }
 
 enum RemoteClientCredentials {
