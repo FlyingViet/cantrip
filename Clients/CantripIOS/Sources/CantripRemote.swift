@@ -76,7 +76,7 @@ private struct CantripErrorResponse: Decodable {
     let error: String
 }
 
-private enum CantripRemoteError: LocalizedError {
+enum CantripRemoteError: LocalizedError {
     case invalidURL(String)
     case missingToken
     case keychain(String)
@@ -86,6 +86,17 @@ private enum CantripRemoteError: LocalizedError {
     case decoding
     case invalidResponse
     case imagesUnsupported
+
+    static func isRouteFailure(_ error: Error) -> Bool {
+        switch error {
+        case CantripRemoteError.transport, CantripRemoteError.invalidResponse:
+            return true
+        case CantripRemoteError.http(let status, _):
+            return [502, 503, 504].contains(status)
+        default:
+            return false
+        }
+    }
 
     var errorDescription: String? {
         switch self {
@@ -319,12 +330,13 @@ private final class CantripLANRequest: @unchecked Sendable {
     private var responseBuffer = Data()
     private var isCancelled = false
     private var isComplete = false
+    private var isReady = false
 
     init(endpoint: NWEndpoint, token: String, method: String, path: String, body: Data?) {
         self.endpoint = endpoint
         self.token = token
         let payload = body ?? Data()
-        timeout = payload.count > 256 * 1024 ? 60 : 12
+        timeout = method == "GET" ? 2 : (payload.count > 256 * 1024 ? 60 : 12)
         let header = """
         \(method) \(path) HTTP/1.1\r
         Host: cantrip.local\r
@@ -375,6 +387,7 @@ private final class CantripLANRequest: @unchecked Sendable {
             guard let self else { return }
             switch state {
             case .ready:
+                self.isReady = true
                 self.sendRequest()
             case .failed(let error):
                 self.finish(.failure(CantripRemoteError.transport(
@@ -391,6 +404,12 @@ private final class CantripLANRequest: @unchecked Sendable {
             }
         }
         connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, !self.isReady, !self.isComplete else { return }
+            self.finish(.failure(CantripRemoteError.transport(
+                "The local connection timed out."
+            )))
+        }
         queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
             guard let self, !self.isComplete else { return }
             self.finish(.failure(CantripRemoteError.transport(
@@ -690,11 +709,12 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var isMutating = false
     @Published private(set) var transcriptRevision = 0
     @Published private(set) var isLocalNetworkAvailable = false
+    @Published private(set) var tailscaleOnly: Bool
 
     var isConnected: Bool { connectionState == .connected }
     var hasConfiguration: Bool { baseURL != nil || token != nil }
     var isConfigured: Bool {
-        token != nil && (baseURL != nil || !lanEndpoints.isEmpty)
+        token != nil && (baseURL != nil || (!tailscaleOnly && !lanEndpoints.isEmpty))
     }
 
     var endpointHost: String {
@@ -712,6 +732,7 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     private static let endpointKey = "cantrip.remote.base-url"
+    private static let tailscaleOnlyKey = "cantrip.remote.tailscale-only"
     private static let staleInterval: Duration = .seconds(5)
     private static let pollInterval: Duration = .milliseconds(1500)
 
@@ -726,10 +747,12 @@ final class CantripRemoteModel: ObservableObject {
     private var activeTransport: CantripTransport?
     private let lanBrowser = CantripLANBrowser()
     private let requestGate = CantripRequestGate()
+    private let router = CantripRemoteRouter()
 
     init() {
         let storedURL = UserDefaults.standard.string(forKey: Self.endpointKey) ?? ""
         configuredURL = storedURL
+        tailscaleOnly = UserDefaults.standard.bool(forKey: Self.tailscaleOnlyKey)
         token = CantripRemoteCredentials.loadToken()
         hasStoredToken = token != nil
         do {
@@ -757,9 +780,16 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
-    func configure(url rawURL: String, pairingToken rawToken: String) async -> Bool {
+    func configure(
+        url rawURL: String,
+        pairingToken rawToken: String,
+        tailscaleOnly: Bool = false
+    ) async -> Bool {
         do {
             let normalized = try Self.normalizedBaseURL(rawURL)
+            guard !tailscaleOnly || normalized != nil else {
+                throw CantripRemoteError.invalidURL("Enter a fallback URL to use Tailscale only.")
+            }
             let enteredToken = rawToken.trimmingCharacters(in: .whitespacesAndNewlines)
             let effectiveToken = enteredToken.isEmpty ? token : enteredToken
             guard let effectiveToken, !effectiveToken.isEmpty else {
@@ -771,7 +801,10 @@ final class CantripRemoteModel: ObservableObject {
 
             stopPolling()
             configurationGeneration += 1
+            router.reset()
             baseURL = normalized
+            self.tailscaleOnly = tailscaleOnly
+            UserDefaults.standard.set(tailscaleOnly, forKey: Self.tailscaleOnlyKey)
             token = effectiveToken
             configuredURL = normalized?.absoluteString ?? ""
             hasStoredToken = true
@@ -804,7 +837,10 @@ final class CantripRemoteModel: ObservableObject {
             stopPolling()
             lanBrowser.stop()
             configurationGeneration += 1
+            router.reset()
             UserDefaults.standard.removeObject(forKey: Self.endpointKey)
+            UserDefaults.standard.removeObject(forKey: Self.tailscaleOnlyKey)
+            tailscaleOnly = false
             baseURL = nil
             token = nil
             activeTransport = nil
@@ -832,7 +868,7 @@ final class CantripRemoteModel: ObservableObject {
         selectedSession = nil
         transcriptRevision += 1
         do {
-            let detail = try await performAuthenticated { api in
+            let detail = try await performAuthenticated(allowFallback: true) { api in
                 try await api.session(id: id)
             }
             guard selectedSessionID == id else { return }
@@ -942,6 +978,9 @@ final class CantripRemoteModel: ObservableObject {
                 markDisconnected()
             }
             errorMessage = error.localizedDescription
+            if CantripRemoteError.isRouteFailure(error) {
+                errorMessage = "\(error.localizedDescription) The request may have reached Cantrip. Check the session before sending again."
+            }
             return nil
         }
     }
@@ -978,6 +1017,7 @@ final class CantripRemoteModel: ObservableObject {
                 }
             }
             errorMessage = nil
+            recoverLAN()
         } catch is CancellationError {
             return
         } catch {
@@ -994,49 +1034,43 @@ final class CantripRemoteModel: ObservableObject {
             throw CantripRemoteError.missingToken
         }
         let generation = configurationGeneration
-        let candidates = transportCandidates(allowFallback: allowFallback)
-        guard !candidates.isEmpty else {
-            throw CantripRemoteError.transport(
-                "No local Cantrip was found and no fallback URL is configured."
+        let result = try await requestGate.withLock {
+            try await self.performRouted(
+                generation: generation, token: token,
+                allowFallback: allowFallback, operation: operation
             )
         }
-
-        var lastError: Error?
-        for transport in candidates {
-            do {
-                let api = CantripRemoteAPI(transport: transport, token: token)
-                let result = try await requestGate.withLock {
-                    try await operation(api)
-                }
-                try Task.checkCancellation()
-                guard generation == configurationGeneration else {
-                    throw CancellationError()
-                }
-                activeTransport = transport
-                markAuthenticatedSuccess()
-                return result
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                lastError = error
-                if !allowFallback {
-                    throw error
-                }
-            }
-        }
-        throw lastError ?? CantripRemoteError.invalidResponse
+        try Task.checkCancellation()
+        guard generation == configurationGeneration else { throw CancellationError() }
+        activeTransport = router.preferred
+        markAuthenticatedSuccess()
+        return result
     }
 
-    private func transportCandidates(allowFallback: Bool) -> [CantripTransport] {
-        let available = lanEndpoints.map(CantripTransport.lan)
+    private func performRouted<T>(
+        generation: Int,
+        token: String,
+        allowFallback: Bool,
+        operation: (CantripRemoteAPI) async throws -> T
+    ) async throws -> T {
+        guard generation == configurationGeneration else { throw CancellationError() }
+        updateRoutes()
+        return try await router.perform(readOnly: allowFallback) { transport in
+            let api = CantripRemoteAPI(transport: transport, token: token)
+            return try await operation(api)
+        }
+    }
+
+    private func updateRoutes() {
+        router.available = (tailscaleOnly ? [] : lanEndpoints.map(CantripTransport.lan))
             + (baseURL.map { [.remote($0)] } ?? [])
-        if allowFallback {
-            return available
+    }
+
+    private func recoverLAN() {
+        guard appIsActive, let token, !tailscaleOnly else { return }
+        router.recoverLAN { transport in
+            _ = try await CantripRemoteAPI(transport: transport, token: token).sessions()
         }
-        if let activeTransport, available.contains(activeTransport) {
-            return [activeTransport]
-        }
-        return Array(available.prefix(1))
     }
 
     private func apply(_ session: CantripRemoteSession) {
@@ -1068,7 +1102,7 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     private func startLANDiscovery() {
-        guard let token else {
+        guard let token, !tailscaleOnly else {
             lanBrowser.stop()
             updateLANEndpoints([])
             return
@@ -1084,6 +1118,7 @@ final class CantripRemoteModel: ObservableObject {
         guard endpoints != lanEndpoints else { return }
         lanEndpoints = endpoints
         isLocalNetworkAvailable = !endpoints.isEmpty
+        updateRoutes()
         if case .lan(let endpoint) = activeTransport,
            !endpoints.contains(endpoint) {
             activeTransport = nil
@@ -1099,6 +1134,7 @@ final class CantripRemoteModel: ObservableObject {
         pollingTask = nil
         staleTask?.cancel()
         staleTask = nil
+        router.cancelProbe()
         markDisconnected()
     }
 
@@ -1559,6 +1595,7 @@ struct CantripRemoteSettingsSection: View {
     @State private var token = ""
     @State private var saving = false
     @State private var saved = false
+    @State private var tailscaleOnly = false
 
     var body: some View {
         Section {
@@ -1570,14 +1607,18 @@ struct CantripRemoteSettingsSection: View {
                         text: $token)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+            Toggle("Tailscale only (skip local network)", isOn: $tailscaleOnly)
             Button(saved ? "Saved" : "Save and Connect") {
                 saving = true
                 saved = false
                 Task {
-                    saved = await model.configure(url: url, pairingToken: token)
+                    saved = await model.configure(
+                        url: url, pairingToken: token, tailscaleOnly: tailscaleOnly
+                    )
                     if saved {
                         url = model.configuredURL
                         token = ""
+                        tailscaleOnly = model.tailscaleOnly
                     }
                     saving = false
                 }
@@ -1602,16 +1643,18 @@ struct CantripRemoteSettingsSection: View {
                     model.clearConfiguration()
                     url = ""
                     token = ""
+                    tailscaleOnly = false
                     saved = false
                 }
             }
         } header: {
             Text("Cantrip Remote")
         } footer: {
-            Text("Local discovery uses Bonjour and pairing-token-protected forward-secret TLS. The optional fallback URL is stored in app preferences; the pairing token remains in Keychain.")
+            Text("Automatic mode keeps a working route, backs off failed LAN connections, and probes LAN recovery without interrupting refreshes. Tailscale only requires a fallback URL. The pairing token remains in Keychain.")
         }
         .onAppear {
             url = model.configuredURL
+            tailscaleOnly = model.tailscaleOnly
         }
     }
 }

@@ -1,0 +1,115 @@
+import Foundation
+
+@MainActor
+final class CantripRemoteRouter {
+    var available: [CantripTransport] = [] {
+        didSet {
+            if let preferred, !available.contains(preferred) { self.preferred = nil }
+        }
+    }
+    private(set) var preferred: CantripTransport?
+    private var retryAfter: [CantripTransport: Date] = [:]
+    private var probeTask: Task<Void, Never>?
+    private var generation = 0
+    var now: () -> Date = Date.init
+
+    func reset() {
+        generation += 1
+        probeTask?.cancel()
+        probeTask = nil
+        preferred = nil
+        retryAfter = [:]
+        available = []
+    }
+
+    func cancelProbe() {
+        generation += 1
+        probeTask?.cancel()
+        probeTask = nil
+    }
+
+    func perform<T>(
+        readOnly: Bool,
+        operation: (CantripTransport) async throws -> T
+    ) async throws -> T {
+        let generation = generation
+        var candidates = available.filter { (retryAfter[$0] ?? .distantPast) <= now() }
+        if let preferred, let index = candidates.firstIndex(of: preferred) {
+            candidates.insert(candidates.remove(at: index), at: 0)
+        }
+        if !readOnly { candidates = Array(candidates.prefix(1)) }
+        guard !candidates.isEmpty else {
+            throw CantripRemoteError.transport(
+                "No healthy route is available. Retrying shortly; check the host and fallback URL."
+            )
+        }
+        var lastError: Error = CantripRemoteError.invalidResponse
+        for route in candidates {
+            try Task.checkCancellation()
+            guard available.contains(route) else { continue }
+            let previousPreferred = preferred
+            do {
+                let result = try await operation(route)
+                try Task.checkCancellation()
+                guard generation == self.generation else { throw CancellationError() }
+                retryAfter[route] = nil
+                if available.contains(route), preferred == previousPreferred {
+                    preferred = route
+                }
+                return result
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard generation == self.generation else { throw CancellationError() }
+                guard CantripRemoteError.isRouteFailure(error) else { throw error }
+                failed(route)
+                lastError = error
+                if !readOnly { throw error }
+            }
+        }
+        throw lastError
+    }
+
+    @discardableResult
+    func recoverLAN(probe: @escaping (CantripTransport) async throws -> Void) -> Task<Void, Never>? {
+        guard probeTask == nil,
+              !isLAN(preferred),
+              let route = available.first(where: {
+                  isLAN($0) && (retryAfter[$0] ?? .distantPast) <= now()
+              })
+        else { return nil }
+        let generation = generation
+        probeTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if generation == self.generation { self.probeTask = nil }
+            }
+            do {
+                try await probe(route)
+                try Task.checkCancellation()
+                guard generation == self.generation, self.available.contains(route) else { return }
+                self.retryAfter[route] = nil
+                self.preferred = route
+            } catch is CancellationError {
+                return
+            } catch {
+                guard generation == self.generation else { return }
+                // A recovery probe must not interrupt the working fallback, including
+                // when a stale advertisement belongs to an incompatible host.
+                print("[CantripRemote] LAN recovery probe failed; backing off: \(error.localizedDescription)")
+                self.failed(route)
+            }
+        }
+        return probeTask
+    }
+
+    private func failed(_ route: CantripTransport) {
+        retryAfter[route] = now().addingTimeInterval(isLAN(route) ? 30 : 3)
+        if preferred == route { preferred = nil }
+    }
+
+    private func isLAN(_ route: CantripTransport?) -> Bool {
+        if case .lan = route { return true }
+        return false
+    }
+}

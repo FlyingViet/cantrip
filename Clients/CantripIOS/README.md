@@ -63,7 +63,20 @@ same local network, AgentGateway discovers Cantrip with Bonjour and connects
 directly using forward-secret TLS with the pairing token as a pre-shared key.
 You can also save Cantrip's Tailscale Serve HTTPS URL as a fallback for use away
 from home. The URL is stored in app preferences and the token is stored in
-Keychain. A green dot beside the session picker means the app has recently
+Keychain. Automatic routing keeps the working connection instead of retrying
+a broken LAN route on every refresh. LAN connection attempts and reads have a
+two-second deadline; failed LAN routes back off for 30 seconds. Read-only
+recovery probes run separately from refreshes and restore LAN after a successful
+authenticated response. Discovery changes do not clear the backoff.
+
+Enable **Tailscale only (skip local network)** in Remote settings to bypass
+LAN discovery; this requires a saved fallback URL and Tailscale connectivity
+when using a tailnet address. Automatic mode remains the default, and LAN-only
+use still works without a fallback URL. Sends and other mutations are never
+automatically replayed after a connection failure: check the session before
+sending again, since the host may already have accepted the request.
+
+A green dot beside the session picker means the app has recently
 completed an authenticated request; gray means the connection is unconfigured,
 unavailable, unauthenticated, paused in the background, or stale.
 
