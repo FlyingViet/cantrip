@@ -21,7 +21,7 @@ struct RemoteConnectionView: View {
             Label("Connect to another Cantrip", systemImage: "antenna.radiowaves.left.and.right")
                 .font(.headline)
 
-            Text("Enter the pairing token from the other Mac. Cantrip connects directly when both Macs are on the same local network; a Tailscale Serve URL is an optional fallback.")
+            Text("Enter the pairing token from the other Mac. Cantrip prefers your saved Tailscale Serve URL, even on the same local network. Direct LAN is used if Tailscale is unavailable or no URL is saved.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -79,7 +79,7 @@ struct RemoteConnectionView: View {
                 Spacer()
 
                 Menu("Route") {
-                    Button("Automatic (LAN + fallback)") { connection.setTailscaleOnly(false) }
+                    Button("Automatic (Tailscale first)") { connection.setTailscaleOnly(false) }
                     Button("Tailscale only") { connection.setTailscaleOnly(true) }
                 }
                 .fixedSize()
@@ -218,11 +218,11 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
         let trimmedAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let url = Self.validatedURL(trimmedAddress)
         guard trimmedAddress.isEmpty || url != nil else {
-            errorMessage = "Use an HTTPS fallback URL, or HTTP only for localhost."
+            errorMessage = "Use an HTTPS Tailscale URL, or HTTP only for localhost."
             return
         }
         guard !tailscaleOnly || url != nil else {
-            errorMessage = "Enter a fallback URL to use Tailscale only."
+            errorMessage = "Enter a Tailscale URL to use Tailscale only."
             return
         }
 
@@ -270,7 +270,7 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
 
     func setTailscaleOnly(_ enabled: Bool) {
         guard !enabled || fallbackURL != nil else {
-            errorMessage = "Save a fallback URL before choosing Tailscale only."
+            errorMessage = "Save a Tailscale URL before choosing Tailscale only."
             return
         }
         tailscaleOnly = enabled

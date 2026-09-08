@@ -6,14 +6,19 @@ APP_BACKUP = .$(APP_NAME).app.previous
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing cert icon app run clean
+.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing cert icon app run clean
 
 all: app
 
 build:
 	swift build -c release
 
-test: test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing
+test: test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing
+
+test-message-routing:
+	@BIN="/tmp/cantrip-message-routing-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/Log.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-remote-routing:
 	@BIN="/tmp/cantrip-remote-routing-tests-$$$$"; \

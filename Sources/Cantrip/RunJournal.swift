@@ -13,6 +13,7 @@ final class RunJournal {
         case queueAdded = "queue_added"
         case queueRemoved = "queue_removed"
         case queueCleared = "queue_cleared"
+        case messageRouted = "message_routed"
         case attempt
         case usage
         case interruption
@@ -260,7 +261,7 @@ final class RunJournal {
             case .queueCleared:
                 queueItems.removeAll()
                 queueOrder.removeAll()
-            case .turnStarted:
+            case .turnStarted, .messageStarted:
                 if let id = event.queueItemID {
                     queueItems.removeValue(forKey: id)
                     queueOrder.removeAll { $0 == id }

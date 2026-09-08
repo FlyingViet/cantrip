@@ -42,6 +42,10 @@ final class ChatSession: ObservableObject {
     @Published var attachments: [String] = []
     /// Messages queued while a response is streaming (run in order after).
     @Published private(set) var queued: [QueuedPrompt] = []
+    @Published private(set) var deliveryStatus: String?
+    private var routingTask: Task<Void, Never>?
+    private var routingItemID: UUID?
+    private var routingRevision = 0
     /// Text grabbed from another app via ⌥⇧Space, attached to next query.
     @Published var selectionContext: SelectionContext?
     /// Called when the whole run (including queue) completes; AppDelegate
@@ -281,7 +285,7 @@ final class ChatSession: ObservableObject {
     }
 
     @discardableResult
-    private func appendRunMessage(_ message: ChatMessage) -> UUID {
+    private func appendRunMessage(_ message: ChatMessage, queueItemID: UUID? = nil) -> UUID {
         var message = message
         message.runID = message.runID ?? currentRunID
         messages.append(message)
@@ -296,7 +300,8 @@ final class ChatSession: ObservableObject {
         event.role = message.role.rawValue
         event.text = message.text
         event.author = message.author
-        appendRunEvent(event)
+        event.queueItemID = queueItemID
+        appendRunEvent(event, durable: queueItemID != nil)
         return message.id
     }
 
@@ -451,28 +456,36 @@ final class ChatSession: ObservableObject {
         canResume = false
     }
 
-    private func enqueue(_ text: String, includesAmbientContext: Bool) {
+    @discardableResult
+    private func enqueue(_ text: String, includesAmbientContext: Bool) -> QueuedPrompt {
         let item = QueuedPrompt(
             text: text,
             includesAmbientContext: includesAmbientContext
         )
         queued.append(item)
         recordQueueEvent(.queueAdded, item: item)
+        return item
     }
 
     func removeQueued(at index: Int) {
         guard queued.indices.contains(index) else { return }
         let item = queued.remove(at: index)
+        if routingItemID == item.id {
+            invalidateRouting()
+            deliveryStatus = "Removed queued message."
+        }
         recordQueueEvent(.queueRemoved, item: item)
     }
 
     private func removeQueued(_ item: QueuedPrompt) {
         guard let index = queued.firstIndex(where: { $0.id == item.id }) else { return }
         queued.remove(at: index)
+        if routingItemID == item.id { invalidateRouting() }
         recordQueueEvent(.queueRemoved, item: item)
     }
 
     private func clearQueue() {
+        invalidateRouting()
         guard !queued.isEmpty else { return }
         queued.removeAll()
         guard let runID = currentRunID ?? lastJournalRunID else { return }
@@ -619,11 +632,8 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    /// UI entry point. While streaming: queues by default; `interrupt`
-    /// kills and redirects; `inject` adds to the running turn's context
-    /// (Claude backend) without interrupting.
-    func submit(_ text: String, interrupt: Bool = false, inject: Bool = false) {
-        submit(text, interrupt: interrupt, inject: inject, includesAmbientContext: true)
+    func submit(_ text: String, mode: MessageDeliveryMode = .auto) {
+        receive(text, mode: mode, includesAmbientContext: true)
     }
 
     var supportsRemoteImages: Bool {
@@ -632,35 +642,157 @@ final class ChatSession: ObservableObject {
 
     /// Remote clients share the live session but must not consume context
     /// staged by the person at the Mac or capture ambient Mac data.
-    func submitRemote(_ text: String, interrupt: Bool = false, inject: Bool = false) {
-        submit(text, interrupt: interrupt, inject: inject, includesAmbientContext: false)
+    func submitRemote(_ text: String, mode: MessageDeliveryMode = .auto) {
+        receive(text, mode: mode, includesAmbientContext: false)
+    }
+
+    private func invalidateRouting() {
+        if routingItemID != nil {
+            deliveryStatus = "Queued: routing was superseded; current work was not interrupted."
+        }
+        routingRevision += 1
+        routingTask?.cancel()
+        routingTask = nil
+        routingItemID = nil
+    }
+
+    private var routerProvider: MessageRouter.Provider {
+        let kind = settings.backend == .localModel ? .localModel : runningBackendKind ?? settings.backend
+        switch kind {
+        case .copilot:
+            return .copilot(command: settings.copilotPath.isEmpty ? "copilot" : settings.copilotPath)
+        case .claudeCode:
+            return .claude(command: settings.claudePath.isEmpty ? "claude" : settings.claudePath)
+        case .localModel:
+            return .local(baseURL: settings.localBaseURL, model: settings.localModel,
+                          apiKey: settings.localAPIKey)
+        case .codex, .copilotRemote:
+            return .unavailable("this backend does not expose isolated tool-free routing; use a manual override.")
+        }
+    }
+
+    private func receive(_ text: String, mode: MessageDeliveryMode, includesAmbientContext: Bool) {
+        var prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        invalidateRouting()
+        deliveryStatus = nil
+        let wasBusy = isStreaming || !queued.isEmpty
+        // Bind staged attachments to this message before asynchronous routing.
+        // A queued/remote send must never consume somebody else's next draft.
+        if includesAmbientContext, wasBusy, !prompt.hasPrefix("!"), !prompt.hasPrefix("/") {
+            prompt = consumeStagedContext(onto: prompt, backendKind: runningBackendKind ?? settings.backend)
+        }
+        guard mode == .auto, isStreaming else {
+            submit(prompt, interrupt: mode == .interrupt, inject: mode == .inject,
+                   includesAmbientContext: includesAmbientContext,
+                   consumesStagedContext: !wasBusy)
+            return
+        }
+        let item = enqueue(prompt, includesAmbientContext: includesAmbientContext)
+        guard currentRunMode == .single, !councilRunning,
+              !prompt.hasPrefix("!"), !prompt.hasPrefix("/"), prompt.count <= 6_000 else {
+            deliveryStatus = "Queued: commands, councils, and large messages run in order."
+            return
+        }
+        let supportsInjection = runningBackendKind == .claudeCode
+        let snapshot = MessageRoutingSnapshot(
+            message: text.trimmingCharacters(in: .whitespacesAndNewlines),
+            currentTask: currentRunPrompt ?? "",
+            recentConversation: messages.suffix(6).map {
+                .init(role: $0.role.rawValue, text: $0.text)
+            },
+            activity: currentActivity.map {
+                "\($0.toolName): \($0.title)\n\($0.terminalCommand ?? "")"
+            } ?? statusText ?? "",
+            pendingMessages: queued.filter { $0.id != item.id }.map(\.text),
+            supportsInjection: supportsInjection
+        )
+        let generation = streamGeneration
+        let revision = routingRevision
+        let provider = routerProvider
+        let originalBackend = settings.backend
+        let originalWorkdir = workdir
+        let originalPrivacy = isPrivate
+        routingItemID = item.id
+        deliveryStatus = "Deciding how to deliver your message..."
+        routingTask = Task { [weak self] in
+            let resolution: MessageRoutingResolution
+            do {
+                let decision = try await MessageRouter.classify(snapshot, provider: provider)
+                resolution = MessageRoutingPolicy.resolve(
+                    decision, message: snapshot.message, supportsInjection: supportsInjection
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                resolution = .queued(error.localizedDescription)
+                Log.write("message-router: \(error.localizedDescription)")
+            }
+            guard let self, !Task.isCancelled, self.routingRevision == revision else { return }
+            self.routingTask = nil
+            self.routingItemID = nil
+            guard self.settings.backend == originalBackend, self.workdir == originalWorkdir,
+                  self.isPrivate == originalPrivacy,
+                  MessageRoutingPolicy.canApply(
+                    originalGeneration: generation, currentGeneration: self.streamGeneration,
+                    originalRevision: revision, currentRevision: self.routingRevision,
+                    isStreaming: self.isStreaming,
+                    stillQueued: self.queued.contains(where: { $0.id == item.id })
+                  ) else {
+                self.deliveryStatus = self.queued.contains(where: { $0.id == item.id })
+                    ? "Queued: the task changed while routing; no interruption was applied."
+                    : "Message no longer waiting; the late routing decision was ignored."
+                return
+            }
+            self.deliveryStatus = resolution.explanation
+            if let runID = self.currentRunID {
+                var event = RunJournal.Event(sessionID: self.id, runID: runID, kind: .messageRouted)
+                event.queueItemID = item.id
+                event.reason = resolution.explanation
+                self.appendRunEvent(event, durable: true)
+            }
+            switch resolution.action {
+            case .queue:
+                break
+            case .inject:
+                if self.activeBackend.injectMidTurn(item.text) {
+                    self.appendRunMessage(ChatMessage(role: .user, text: item.text), queueItemID: item.id)
+                    self.appendRunMessage(ChatMessage(role: .assistant, text: ""))
+                    self.removeQueued(item)
+                    self.persistTranscript()
+                } else {
+                    self.deliveryStatus = "Queued: the backend's live input channel was unavailable."
+                }
+            case .redirect:
+                self.submit(item.text, interrupt: true, inject: false,
+                            includesAmbientContext: item.includesAmbientContext,
+                            consumesStagedContext: false, queuedItem: item)
+                self.removeQueued(item)
+            case .cancel:
+                self.appendRunMessage(ChatMessage(role: .user, text: item.text), queueItemID: item.id)
+                self.removeQueued(item)
+                self.cancel(keepQueue: true)
+                self.deliveryStatus = resolution.explanation
+            }
+        }
     }
 
     private func submit(_ text: String, interrupt: Bool, inject: Bool,
-                        includesAmbientContext: Bool) {
+                        includesAmbientContext: Bool, consumesStagedContext: Bool = true,
+                        queuedItem: QueuedPrompt? = nil) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         guard isStreaming else {
             if !queued.isEmpty {
                 enqueue(prompt, includesAmbientContext: includesAmbientContext)
-                let next = queued[0]
-                councilMode
-                    ? sendCouncil(
-                        next.text,
-                        includesAmbientContext: next.includesAmbientContext,
-                        queuedItem: next
-                    )
-                    : send(
-                        next.text,
-                        includesAmbientContext: next.includesAmbientContext,
-                        queuedItem: next
-                    )
-                removeQueued(next)
+                drainQueue()
                 return
             }
             councilMode
-                ? sendCouncil(prompt, includesAmbientContext: includesAmbientContext)
-                : send(prompt, includesAmbientContext: includesAmbientContext)
+                ? sendCouncil(prompt, includesAmbientContext: includesAmbientContext,
+                              consumesStagedContext: consumesStagedContext)
+                : send(prompt, includesAmbientContext: includesAmbientContext,
+                       consumesStagedContext: consumesStagedContext)
             return
         }
         if councilRunning, inject, !interrupt {
@@ -686,8 +818,10 @@ final class ChatSession: ObservableObject {
             cancelRun(reason: "redirected by user")
             finishStream(dequeue: false)
             councilMode
-                ? sendCouncil(prompt, includesAmbientContext: includesAmbientContext)
-                : send(prompt, includesAmbientContext: includesAmbientContext)
+                ? sendCouncil(prompt, includesAmbientContext: includesAmbientContext,
+                              consumesStagedContext: consumesStagedContext, queuedItem: queuedItem)
+                : send(prompt, includesAmbientContext: includesAmbientContext,
+                       consumesStagedContext: consumesStagedContext, queuedItem: queuedItem)
             return
         }
         if interrupt {
@@ -696,6 +830,8 @@ final class ChatSession: ObservableObject {
             // Prefer a graceful in-band interrupt (keeps the process and
             // session hot); fall back to killing the process.
             if !activeBackend.interruptTurn() { activeBackend.cancel() }
+            shellProcess?.terminate()
+            shellProcess = nil
             finalizeRunningActivities(as: .cancelled)
             statusText = nil
             // Stateless backends (Copilot, local) get a fresh process with
@@ -709,10 +845,12 @@ final class ChatSession: ObservableObject {
             cancelRun(reason: "redirected by user")
             finishStream(dequeue: false)
             if councilMode {
-                sendCouncil(prompt, includesAmbientContext: includesAmbientContext)
+                sendCouncil(prompt, includesAmbientContext: includesAmbientContext,
+                            consumesStagedContext: consumesStagedContext, queuedItem: queuedItem)
             } else {
                 send(prompt, interrupted: true, preamble: interruptContext,
-                     includesAmbientContext: includesAmbientContext)
+                     includesAmbientContext: includesAmbientContext,
+                     consumesStagedContext: consumesStagedContext, queuedItem: queuedItem)
             }
         } else {
             enqueue(prompt, includesAmbientContext: includesAmbientContext)
@@ -722,6 +860,7 @@ final class ChatSession: ObservableObject {
     private func send(_ text: String, interrupted: Bool = false,
                       preamble: String? = nil, isResume: Bool = false,
                       includesAmbientContext: Bool = true,
+                      consumesStagedContext: Bool = true,
                       queuedItem: QueuedPrompt? = nil) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isStreaming else { return }
@@ -792,7 +931,8 @@ final class ChatSession: ObservableObject {
         backendPrompt = composeContext(onto: backendPrompt, query: prompt,
                                        isFirstOfConversation: isFirstOfConversation,
                                        backendKind: backendKind,
-                                       includesAmbientContext: includesAmbientContext)
+                                       includesAmbientContext: includesAmbientContext,
+                                       consumesStagedContext: consumesStagedContext)
 
         UsageTracker.shared.recordQuery(backend: backendKind)
         armWatchdog()
@@ -819,7 +959,8 @@ final class ChatSession: ObservableObject {
     private func composeContext(onto prompt: String, query: String,
                                 isFirstOfConversation: Bool,
                                 backendKind: BackendKind?,
-                                includesAmbientContext: Bool = true) -> String {
+                                includesAmbientContext: Bool = true,
+                                consumesStagedContext: Bool = true) -> String {
         var backendPrompt = prompt
         if isFirstOfConversation,
            let digest = UserDefaults.standard.string(forKey: "lastConversationDigest"),
@@ -838,28 +979,12 @@ final class ChatSession: ObservableObject {
            let agenda = CalendarProvider.shared.contextLine {
             backendPrompt += "\n\n(Context — my calendar for the next 48 hours:\n\(agenda.prefix(1500))\nUse this if relevant to my request; otherwise ignore it and don't mention it.)"
         }
-        if includesAmbientContext, let selection = selectionContext {
-            backendPrompt += "\n\n(Selected text from \(selection.appName), which my request refers to:\n\"\"\"\n\(selection.text.prefix(4000))\n\"\"\")"
-            selectionContext = nil
+        if includesAmbientContext, consumesStagedContext {
+            backendPrompt = consumeStagedContext(onto: backendPrompt, backendKind: backendKind)
         }
         if includesAmbientContext {
             SpeechSynth.shared.stop()
             OverlayController.shared.clear()
-        }
-        if includesAmbientContext, !attachments.isEmpty, backendKind != .localModel {
-            let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp",
-                                          "heic", "tiff", "bmp", "svg"]
-            for path in attachments {
-                let ext = (path as NSString).pathExtension.lowercased()
-                if imageExts.contains(ext) {
-                    backendPrompt += "\n\n(Attached image: \(path) — view this image file; it is part of my request.)"
-                } else {
-                    backendPrompt += "\n\n(Attached file: \(path) — read/analyze this file; it is part of my request.)"
-                }
-            }
-        }
-        if includesAmbientContext {
-            attachments.removeAll()
         }
         if includesAmbientContext, settings.attachScreen, backendKind != .localModel,
            !ScreenCapture.shared.lastCaptures.isEmpty {
@@ -908,6 +1033,25 @@ final class ChatSession: ObservableObject {
             }
         }
         return backendPrompt
+    }
+
+    private func consumeStagedContext(onto prompt: String, backendKind: BackendKind?) -> String {
+        var result = prompt
+        if let selection = selectionContext {
+            result += "\n\n(Selected text from \(selection.appName), which my request refers to:\n\"\"\"\n\(selection.text.prefix(4000))\n\"\"\")"
+            selectionContext = nil
+        }
+        if backendKind != .localModel {
+            let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "tiff", "bmp", "svg"]
+            for path in attachments {
+                let isImage = imageExts.contains((path as NSString).pathExtension.lowercased())
+                result += isImage
+                    ? "\n\n(Attached image: \(path) — view this image file; it is part of my request.)"
+                    : "\n\n(Attached file: \(path) — read/analyze this file; it is part of my request.)"
+            }
+        }
+        attachments.removeAll()
+        return result
     }
 
     // MARK: - Council mode (multi-model orchestration)
@@ -964,6 +1108,7 @@ final class ChatSession: ObservableObject {
     private func sendCouncil(
         _ text: String,
         includesAmbientContext: Bool = true,
+        consumesStagedContext: Bool = true,
         queuedItem: QueuedPrompt? = nil
     ) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -974,6 +1119,7 @@ final class ChatSession: ObservableObject {
             send(
                 prompt,
                 includesAmbientContext: includesAmbientContext,
+                consumesStagedContext: consumesStagedContext,
                 queuedItem: queuedItem
             )
             return
@@ -985,6 +1131,7 @@ final class ChatSession: ObservableObject {
             send(
                 prompt,
                 includesAmbientContext: includesAmbientContext,
+                consumesStagedContext: consumesStagedContext,
                 queuedItem: queuedItem
             )
             return
@@ -994,6 +1141,7 @@ final class ChatSession: ObservableObject {
             send(
                 prompt,
                 includesAmbientContext: includesAmbientContext,
+                consumesStagedContext: consumesStagedContext,
                 queuedItem: queuedItem
             )
             return
@@ -1032,7 +1180,8 @@ final class ChatSession: ObservableObject {
         let composed = composeContext(onto: prompt, query: prompt,
                                       isFirstOfConversation: isFirstOfConversation,
                                       backendKind: nil,
-                                      includesAmbientContext: includesAmbientContext)
+                                      includesAmbientContext: includesAmbientContext,
+                                      consumesStagedContext: consumesStagedContext)
         let roundPrompt = composed + """
 
 
@@ -1677,6 +1826,10 @@ final class ChatSession: ObservableObject {
     }
 
     private func finishStream(dequeue: Bool = true, notify: Bool = true) {
+        if routingItemID != nil {
+            invalidateRouting()
+            deliveryStatus = "Queued: the task ended before routing finished."
+        }
         watchdog?.invalidate()
         watchdog = nil
         councilRunning = false
@@ -1715,21 +1868,11 @@ final class ChatSession: ObservableObject {
         }
         persistTranscript()
         // Auto-run the next queued message (through the council when on).
-        if dequeue, let next = queued.first {
+        if dequeue, !queued.isEmpty {
+            let generation = streamGeneration
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.councilMode
-                    ? self.sendCouncil(
-                        next.text,
-                        includesAmbientContext: next.includesAmbientContext,
-                        queuedItem: next
-                    )
-                    : self.send(
-                        next.text,
-                        includesAmbientContext: next.includesAmbientContext,
-                        queuedItem: next
-                    )
-                self.removeQueued(next)
+                guard let self, self.streamGeneration == generation else { return }
+                self.drainQueue()
             }
         } else if notify {
             // Whole run complete: speak the reply / notify if hidden.
@@ -1741,7 +1884,31 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    private func drainQueue() {
+        guard !isStreaming, let next = queued.first else { return }
+        councilMode
+            ? sendCouncil(next.text, includesAmbientContext: next.includesAmbientContext,
+                          consumesStagedContext: false, queuedItem: next)
+            : send(next.text, includesAmbientContext: next.includesAmbientContext,
+                   consumesStagedContext: false, queuedItem: next)
+        removeQueued(next)
+        deliveryStatus = "Sent the next queued message."
+        if !isStreaming, !queued.isEmpty {
+            let generation = streamGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.streamGeneration == generation else { return }
+                self.drainQueue()
+            }
+        }
+    }
+
     func cancel() {
+        cancel(keepQueue: false)
+    }
+
+    private func cancel(keepQueue: Bool) {
+        invalidateRouting()
+        deliveryStatus = nil
         streamGeneration += 1        // orphan any in-flight events
         SpeechSynth.shared.stop()
         shellProcess?.terminate()
@@ -1757,13 +1924,15 @@ final class ChatSession: ObservableObject {
         if !(isStreaming && activeBackend.interruptTurn()) {
             activeBackend.cancel()
         }
-        clearQueue()                 // manual stop aborts the whole queue
+        if !keepQueue { clearQueue() } // only explicit Stop aborts the whole queue
         finalizeRunningActivities(as: .cancelled)
         cancelRun(reason: "cancelled by user")
-        finishStream(dequeue: false)
+        finishStream(dequeue: false, notify: !keepQueue)
     }
 
     func newConversation() {
+        invalidateRouting()
+        deliveryStatus = nil
         // Continuity: stash a digest of this conversation for the next one.
         if messages.count >= 2, !isPrivate {
             let topics = messages.filter { $0.role == .user }.suffix(3)
