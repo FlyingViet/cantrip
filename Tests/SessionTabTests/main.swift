@@ -215,6 +215,13 @@ struct SessionTabTests {
             precondition(response.0 == expected, "\(path): expected \(expected), got \(response.0)")
         }
         try await Task.sleep(nanoseconds: 300_000_000)
+        let buildsPath = "api/v1/github/builds"
+        let unauthorizedBuilds = try await request(buildsPath, method: "GET", authenticated: false)
+        precondition(unauthorizedBuilds.0 == 401)
+        try await expectStatus(405, buildsPath)
+        let builds = try await request(buildsPath, method: "GET")
+        precondition(builds.0 == 200 && builds.1["isRefreshing"] is Bool)
+        precondition(builds.1["repositories"] is [Any])
         let path = "api/v1/sessions/\(chat.id)"
         try await expectStatus(409, path + "/close")
         try await expectStatus(409, path + "/new-conversation")
