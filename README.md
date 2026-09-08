@@ -43,8 +43,9 @@ The macOS app includes:
   another Mac, or a browser. Native clients support paired LAN connections;
   a saved Tailscale Serve URL is preferred even on the local network. Automatic
   routing uses LAN if Tailscale is unavailable and restores Tailscale with
-  read-only probes, without switching healthy Tailscale connections to LAN or replaying sends;
-  Tailscale-only mode is also available. AgentGateway can display queued prompts.
+  two confirmed read-only probes. Bounded reads and coalesced web refreshes avoid
+  stalled request backlogs, without switching healthy Tailscale connections to LAN or replaying sends;
+  Tailscale-only mode is also available. AgentGateway can display and remove queued prompts.
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a
   `cantrip` command for asking questions from Terminal.
 
