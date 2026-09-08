@@ -41,6 +41,8 @@ struct RemoteConnectionView: View {
             .textFieldStyle(.roundedBorder)
             .onSubmit { connection.connect() }
 
+            Toggle("Tailscale only (skip local network)", isOn: $connection.tailscaleOnly)
+
             HStack {
                 Spacer()
                 Button("Connect") { connection.connect() }
@@ -75,6 +77,12 @@ struct RemoteConnectionView: View {
                     .lineLimit(1)
 
                 Spacer()
+
+                Menu("Route") {
+                    Button("Automatic (LAN + fallback)") { connection.setTailscaleOnly(false) }
+                    Button("Tailscale only") { connection.setTailscaleOnly(true) }
+                }
+                .fixedSize()
 
                 if let error = connection.errorMessage {
                     Text(error)
@@ -120,6 +128,7 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
     WKScriptMessageHandler {
     @Published var address: String
     @Published var pairingToken = ""
+    @Published var tailscaleOnly: Bool
     @Published private(set) var endpoint: URL?
     @Published private(set) var hasStoredPairingToken: Bool
     @Published private(set) var isUsingLocalNetwork = false
@@ -139,22 +148,24 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
 
     var endpointLabel: String {
         if isUsingLocalNetwork { return "Local network" }
-        return endpoint?.host ?? fallbackURL?.host ?? "Remote Cantrip"
+        return fallbackURL?.host ?? "Remote Cantrip"
     }
 
     let webView: WKWebView
 
     private let defaults = UserDefaults.standard
     private let endpointKey = "remoteClientEndpoint"
+    private let tailscaleOnlyKey = "remoteClientTailscaleOnly"
     private let lanBrowser = RemoteLANBrowser()
     private var fallbackURL: URL?
     private var lanEndpoints: [NWEndpoint] = []
-    private var activeLANEndpoint: NWEndpoint?
     private var lanBridge: RemoteLANBridge?
     private var bridgeGeneration = 0
     private var scriptMessageHandler: WeakScriptMessageHandler?
     private var active = false
     private var connectionStatusTimer: Timer?
+    private var discoveryStarted = false
+    private var pageRetryTask: Task<Void, Never>?
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -163,6 +174,7 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
 
         let storedAddress = UserDefaults.standard.string(forKey: endpointKey) ?? ""
         address = storedAddress
+        tailscaleOnly = UserDefaults.standard.bool(forKey: tailscaleOnlyKey)
         fallbackURL = Self.validatedURL(storedAddress)
         endpoint = nil
         hasStoredPairingToken = RemoteClientCredentials.load() != nil
@@ -182,6 +194,10 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
     func activate() {
         active = true
         startLANDiscovery()
+        if let token = RemoteClientCredentials.load() {
+            ensureBridge(token: token)
+            return
+        }
         guard let endpoint else {
             if let fallbackURL {
                 useFallback(fallbackURL)
@@ -205,6 +221,10 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
             errorMessage = "Use an HTTPS fallback URL, or HTTP only for localhost."
             return
         }
+        guard !tailscaleOnly || url != nil else {
+            errorMessage = "Enter a fallback URL to use Tailscale only."
+            return
+        }
 
         let enteredToken = pairingToken.trimmingCharacters(in: .whitespacesAndNewlines)
         let storedToken = RemoteClientCredentials.load()
@@ -223,6 +243,7 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
         pairingToken = ""
         hasStoredPairingToken = RemoteClientCredentials.load() != nil
         fallbackURL = url
+        defaults.set(tailscaleOnly, forKey: tailscaleOnlyKey)
         address = url?.absoluteString ?? ""
         if address.isEmpty {
             defaults.removeObject(forKey: endpointKey)
@@ -239,8 +260,26 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
         isConnected = false
         if active {
             startLANDiscovery()
-            if let url { useFallback(url) }
+            if let token = RemoteClientCredentials.load() {
+                ensureBridge(token: token)
+            } else if let url {
+                useFallback(url)
+            }
         }
+    }
+
+    func setTailscaleOnly(_ enabled: Bool) {
+        guard !enabled || fallbackURL != nil else {
+            errorMessage = "Save a fallback URL before choosing Tailscale only."
+            return
+        }
+        tailscaleOnly = enabled
+        defaults.set(enabled, forKey: tailscaleOnlyKey)
+        lanBrowser.stop()
+        discoveryStarted = false
+        lanEndpoints = []
+        startLANDiscovery()
+        updateBridgeRoutes()
     }
 
     func reload() {
@@ -263,6 +302,8 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
         fallbackURL = nil
         endpoint = nil
         defaults.removeObject(forKey: endpointKey)
+        defaults.removeObject(forKey: tailscaleOnlyKey)
+        tailscaleOnly = false
         isLoading = false
         isConnected = false
         errorMessage = nil
@@ -342,10 +383,10 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
     }
 
     private func report(_ error: Error) {
+        guard (error as NSError).code != NSURLErrorCancelled else { return }
         stopConnectionStatusPolling()
         isLoading = false
         isConnected = false
-        guard (error as NSError).code != NSURLErrorCancelled else { return }
         errorMessage = error.localizedDescription
     }
 
@@ -386,11 +427,15 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
     }
 
     private func startLANDiscovery() {
-        guard active, let token = RemoteClientCredentials.load(), !token.isEmpty else {
+        guard active, !tailscaleOnly,
+              let token = RemoteClientCredentials.load(), !token.isEmpty else {
             lanBrowser.stop()
+            discoveryStarted = false
             lanEndpoints = []
             return
         }
+        guard !discoveryStarted else { return }
+        discoveryStarted = true
         lanBrowser.onEndpointsChanged = { [weak self] endpoints in
             self?.updateLANEndpoints(endpoints)
         }
@@ -400,41 +445,51 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
     private func updateLANEndpoints(_ endpoints: [NWEndpoint]) {
         guard endpoints != lanEndpoints else { return }
         lanEndpoints = endpoints
-        guard let preferred = endpoints.first,
-              let token = RemoteClientCredentials.load()
-        else {
-            if activeLANEndpoint != nil {
-                resetLANConnection()
-                if let fallbackURL {
-                    useFallback(fallbackURL)
-                } else {
-                    endpoint = nil
-                    isLoading = false
-                    isConnected = false
-                    errorMessage = "The paired Cantrip left the local network, and no fallback URL is configured."
-                }
-            }
-            return
-        }
-        guard preferred != activeLANEndpoint else { return }
-        connectToLAN(preferred, token: token)
+        if let token = RemoteClientCredentials.load() { ensureBridge(token: token) }
+        updateBridgeRoutes()
     }
 
-    private func connectToLAN(_ lanEndpoint: NWEndpoint, token: String) {
+    private func updateBridgeRoutes() {
+        guard let bridge = lanBridge else { return }
+        let endpoints = tailscaleOnly ? [] : lanEndpoints
+        let fallback = fallbackURL
+        Task { await bridge.update(endpoints: endpoints, fallback: fallback) }
+    }
+
+    private func ensureBridge(token: String) {
+        guard lanBridge == nil else {
+            updateBridgeRoutes()
+            return
+        }
+        guard !lanEndpoints.isEmpty || fallbackURL != nil else { return }
         bridgeGeneration += 1
         let generation = bridgeGeneration
-        lanBridge?.stop()
-        let bridge = RemoteLANBridge(endpoint: lanEndpoint, token: token)
+        let bridge = RemoteLANBridge(token: token)
         bridge.onReady = { [weak self, weak bridge] url in
             guard let self, let bridge,
                   self.bridgeGeneration == generation,
                   self.lanBridge === bridge
             else { return }
-            self.activeLANEndpoint = lanEndpoint
-            self.isUsingLocalNetwork = true
             self.endpoint = url
             self.errorMessage = nil
             self.load(url)
+        }
+        bridge.onRouteChanged = { [weak self, weak bridge] route in
+            guard let self, let bridge,
+                  self.bridgeGeneration == generation, self.lanBridge === bridge else { return }
+            self.isUsingLocalNetwork = route.isLAN
+        }
+        bridge.onPageFailure = { [weak self, weak bridge] message in
+            guard let self, let bridge,
+                  self.bridgeGeneration == generation, self.lanBridge === bridge else { return }
+            self.errorMessage = message
+            self.pageRetryTask?.cancel()
+            self.pageRetryTask = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(3)) } catch { return }
+                guard let self, self.bridgeGeneration == generation,
+                      let endpoint = self.endpoint else { return }
+                self.load(endpoint)
+            }
         }
         bridge.onFailure = { [weak self, weak bridge] message in
             guard let self, let bridge,
@@ -452,11 +507,16 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
             }
         }
         lanBridge = bridge
-        bridge.start()
+        let endpoints = tailscaleOnly ? [] : lanEndpoints
+        let fallback = fallbackURL
+        Task {
+            await bridge.update(endpoints: endpoints, fallback: fallback)
+            guard bridgeGeneration == generation, lanBridge === bridge else { return }
+            bridge.start()
+        }
     }
 
     private func useFallback(_ url: URL) {
-        activeLANEndpoint = nil
         isUsingLocalNetwork = false
         endpoint = url
         load(url)
@@ -464,10 +524,13 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
 
     private func resetLANConnection() {
         bridgeGeneration += 1
+        pageRetryTask?.cancel()
+        pageRetryTask = nil
+        lanBrowser.stop()
+        discoveryStarted = false
         lanBridge?.stop()
         lanBridge = nil
         lanEndpoints = []
-        activeLANEndpoint = nil
         isUsingLocalNetwork = false
     }
 
