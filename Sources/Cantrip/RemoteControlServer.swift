@@ -9,6 +9,7 @@ final class RemoteControlServer {
 
     private weak var manager: SessionManager?
     private let queue = DispatchQueue(label: "com.brian.cantrip.remote-control")
+    private let encodingQueue = DispatchQueue(label: "cantrip.remote-encoding", qos: .userInitiated)
     private var listener: NWListener?
     private var lanListener: NWListener?
     private var activePort: Int?
@@ -144,8 +145,9 @@ final class RemoteControlServer {
                 return
             }
             if let request = HTTPRequest.parse(next) {
+                let json = authorized(request.headers["authorization"]) ? request.json : nil
                 Task { @MainActor [weak self] in
-                    self?.route(request, on: connection)
+                    self?.route(request, json: json, on: connection)
                 }
             } else if !HTTPRequest.needsMoreData(next) {
                 self.sendError(400, "malformed request", on: connection)
@@ -158,7 +160,7 @@ final class RemoteControlServer {
     }
 
     @MainActor
-    private func route(_ request: HTTPRequest, on connection: NWConnection) {
+    private func route(_ request: HTTPRequest, json: [String: Any]?, on connection: NWConnection) {
         if request.method == "GET", request.path == "/" {
             send(
                 status: 200,
@@ -240,7 +242,7 @@ final class RemoteControlServer {
 
         switch parts[1] {
         case "metadata":
-            guard let body = request.json,
+            guard let body = json,
                   !body.isEmpty,
                   Set(body.keys).isSubset(of: ["customTitle", "isLocked"]),
                   body["customTitle"] == nil || body["customTitle"] is String,
@@ -261,7 +263,7 @@ final class RemoteControlServer {
                 sendError(500, "Could not save the tab on the Mac.", on: connection)
             }
         case "messages":
-            guard let body = request.json,
+            guard let body = json,
                   let text = body["text"] as? String
             else {
                 sendError(400, "message text is required", on: connection)
@@ -421,19 +423,22 @@ final class RemoteControlServer {
         status: Int = 200,
         on connection: NWConnection
     ) {
-        guard let data = try? JSONSerialization.data(
-            withJSONObject: object,
-            options: [.sortedKeys]
-        ) else {
-            sendError(500, "response serialization failed", on: connection)
-            return
+        // Only the immutable snapshot is captured; encoding large transcripts
+        // must not monopolize the main actor or the socket receive queue.
+        encodingQueue.async {
+            do {
+                let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+                self.send(
+                    status: status,
+                    contentType: "application/json; charset=utf-8",
+                    body: data,
+                    on: connection
+                )
+            } catch {
+                Log.write("remote-control: response serialization failed: \(error.localizedDescription)")
+                self.sendError(500, "response serialization failed", on: connection)
+            }
         }
-        send(
-            status: status,
-            contentType: "application/json; charset=utf-8",
-            body: data,
-            on: connection
-        )
     }
 
     private func sendError(_ status: Int, _ message: String, on connection: NWConnection) {
@@ -506,6 +511,7 @@ private extension RemoteControlServer {
     .run-status{display:flex;align-items:center;gap:7px;color:var(--secondary);font-size:13px}.spinner{width:12px;height:12px;border:1.5px solid rgba(255,255,255,.2);border-top-color:var(--secondary);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.empty{margin:auto;color:var(--tertiary)}
     #pair{width:min(calc(100% - 32px),430px);margin:18vh auto 0;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.2)}#pair h2{margin:0 0 7px;font-size:18px}#pair p{line-height:1.45}#pairControls{display:flex;gap:7px;margin-top:15px}#pair input{min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;outline:0;background:var(--surface)}#pair input:focus{border-color:var(--accent)}
     #tabEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#tabEditor::backdrop{background:rgba(0,0,0,.35)}#tabEditor form{display:grid;gap:12px}#tabName{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}.tab-actions{display:flex;justify-content:flex-end;gap:8px}#tabError,#actionError{color:var(--orange);font-size:12px}#actionError:not(:empty){padding:8px 14px}.session-close:disabled{opacity:.65;cursor:default}.session-menu{border:0;background:transparent;color:var(--secondary);padding:2px 5px}
+    .prompt-preview{white-space:pre-wrap}.prompt-preview.clipped{max-height:11.2em;overflow:hidden}#promptReader{width:min(calc(100% - 24px),680px);border:1px solid var(--line);border-radius:12px;background:Canvas;color:var(--text)}#promptReader::backdrop{background:rgba(0,0,0,.35)}#promptPage{height:55vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
     @media(max-width:620px){.prompt-row{padding-inline:12px}.tools{padding-inline:10px}.connection-label{display:none}.session-tab{max-width:145px}.session-select{max-width:115px}#messages{padding:14px 12px 22px}}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
@@ -522,6 +528,8 @@ private extension RemoteControlServer {
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
+    <dialog id="promptReader" aria-labelledby="promptTitle"><strong id="promptTitle">Full prompt</strong>
+    <pre id="promptPage"></pre><div class="tab-actions"><button id="promptPrevious" class="control">Previous</button><span id="promptNumber"></span><button id="promptNext" class="control">Next</button><button id="promptDownload" class="control">Download all</button><button id="promptDone" class="control">Done</button></div></dialog>
     <script>
     const $=id=>document.getElementById(id);let token=localStorage.cantripToken||"",selected=null,timer=null,renderedSession=null,renderedPayload="",followOutput=true,suppressScroll=false;const expanded=new Set();
     function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false";const label=document.querySelector(".connection-label");if(label)label.textContent=active?"Connected":"Reconnecting…"}
@@ -592,12 +600,23 @@ private extension RemoteControlServer {
       const label=document.createElement("span");const noun=activities.length===1?"step":"steps";label.textContent=state==="running"?`Working · ${activities.length} ${noun}`:`${activities.length} ${noun}`;summary.append(label);disclosure.append(summary);
       const body=document.createElement("div");body.className="disclosure-body";for(const activity of activities)appendActivity(body,activity,messageID);disclosure.append(body);parent.append(disclosure)}
     function appendThinking(parent,text,messageID){if(!text)return;const details=remember(document.createElement("details"),`thinking:${messageID}`);details.className="disclosure";const summary=document.createElement("summary");const label=document.createElement("span");label.textContent="Reasoning";summary.append(label);const body=document.createElement("div");body.className="disclosure-body prose";body.textContent=text;details.append(summary,body);parent.append(details)}
+    function promptSlice(text,start,limit){let end=Math.min(text.length,start+limit);if(end<text.length&&text.charCodeAt(end-1)>=0xD800&&text.charCodeAt(end-1)<=0xDBFF)end--;return {text:text.slice(start,end),end}}
+    function appendPrompt(parent,text){const preview=document.createElement("div"),page=promptSlice(text,0,1200),long=page.end<text.length;preview.className=`prompt-preview${long?" clipped":""}`;preview.textContent=page.text;parent.append(preview);
+      if(long){const button=document.createElement("button");button.className="control quiet";button.textContent="Read full prompt";button.onclick=()=>readPrompt(text);parent.append(button)}}
+    let readingPrompt="",promptStarts=[0],promptEnd=0;
+    function renderPromptPage(){const page=promptSlice(readingPrompt,promptStarts[promptStarts.length-1],4000);promptEnd=page.end;$("promptPage").textContent=page.text;$("promptPage").scrollTop=0;$("promptNumber").textContent=`Page ${promptStarts.length}`;$("promptPrevious").disabled=promptStarts.length===1;$("promptNext").disabled=promptEnd===readingPrompt.length}
+    function readPrompt(text){readingPrompt=text;promptStarts=[0];renderPromptPage();$("promptReader").showModal()}
+    $("promptPrevious").onclick=()=>{if(promptStarts.length>1){promptStarts.pop();renderPromptPage()}};
+    $("promptNext").onclick=()=>{if(promptEnd<readingPrompt.length){promptStarts.push(promptEnd);renderPromptPage()}};
+    $("promptDownload").onclick=()=>{const url=URL.createObjectURL(new Blob([readingPrompt],{type:"text/plain;charset=utf-8"})),link=document.createElement("a");link.href=url;link.download="cantrip-prompt.txt";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+    $("promptDone").onclick=()=>$("promptReader").close();
+    $("promptReader").addEventListener("close",()=>{readingPrompt="";promptStarts=[0];$("promptPage").textContent=""});
     function render(session){const box=$("messages"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
       const root=document.scrollingElement||document.documentElement,sameSession=sessionID===renderedSession,shouldFollow=followOutput||!sameSession,previousTop=root.scrollTop;renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;box.replaceChildren();$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
       if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{for(const message of session.messages){const activities=message.activities||[];if(!message.text&&!message.thinking&&!activities.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
-          appendThinking(row,message.thinking,message.id);if(message.text)appendProse(row,message.text);appendActivities(row,activities,message.id);box.append(row)}
+          appendThinking(row,message.thinking,message.id);if(message.text){if(message.role==="user")appendPrompt(row,message.text);else appendProse(row,message.text)}appendActivities(row,activities,message.id);box.append(row)}
         if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}
         if(session.isStreaming||session.queuedCount){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
       requestAnimationFrame(()=>{root.scrollTop=shouldFollow?root.scrollHeight:Math.min(previousTop,Math.max(0,root.scrollHeight-root.clientHeight));followOutput=shouldFollow;suppressScroll=false})}

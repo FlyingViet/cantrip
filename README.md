@@ -40,6 +40,10 @@ The macOS app includes:
 - **Agent actions:** commands and file edits with backend-specific
   permissions; inspect tool activity and file diffs.
 - **Memory and council:** editable Markdown memory and multi-model answers.
+- **Long prompts:** compact, plain-text previews with **Read full prompt**,
+  paged reading, and full-text copy/download in Mac and Remote. The submitted
+  text stays intact. Memory retrieval uses bounded, deduplicated query terms
+  and runs off the UI thread; large Remote responses are encoded off-thread.
 - **Remote control:** use the Mac's sessions from AgentGateway on iPhone/iPad,
   another Mac, or a browser. Native clients support paired LAN connections;
   a saved Tailscale Serve URL is preferred even on the local network. Automatic

@@ -82,9 +82,17 @@ private func testAppSearchRanking() {
 }
 
 testAppSearchRanking()
+let longPrompt = String(repeating: "Explain this long prompt ", count: 50_000)
+let started = Date()
+expect(best(longPrompt, from: (0..<500).map { ("Application \($0)", false) }) == nil,
+       "large prompts must skip app suggestion matching")
+expect(Date().timeIntervalSince(started) < 0.1,
+       "large prompts must be rejected before per-app normalization")
+expect(AppSearchMatcher.score(query: longPrompt, appName: "Application") == nil,
+       "direct score calls must also bypass long prompts")
 
 if failures > 0 {
     fputs("\(failures) feature test(s) failed\n", stderr)
     exit(1)
 }
-print("All 10 feature tests passed")
+print("App search ranking and long-prompt bypass tests passed")

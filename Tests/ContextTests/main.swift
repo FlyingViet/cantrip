@@ -116,8 +116,17 @@ testAugmentedCurrentPromptAppearsOnlyOnce()
 testSelectedContextIsBounded()
 testExplicitRequestLoadsEveryTurn()
 
+let pasted = String(repeating: "swift actor swift network ", count: 40_000)
+expect(ConversationContextBuilder.terms(from: pasted) == ["swift", "actor", "network"],
+       "large pasted queries should deduplicate retrieval terms")
+let manyTerms = (0..<500).map { "term\($0)" }.joined(separator: " ")
+expect(ConversationContextBuilder.terms(from: manyTerms).count == ConversationContextBuilder.retrievalTermLimit,
+       "retrieval must have a fixed term budget")
+expect(ConversationContextBuilder.composePrompt(currentPrompt: pasted, query: pasted, turns: []).hasSuffix(pasted),
+       "retrieval budgets must never truncate the actual prompt")
+
 if failures > 0 {
     fputs("\(failures) context test(s) failed\n", stderr)
     exit(1)
 }
-print("All 5 context tests passed")
+print("Context selection and long-prompt retrieval budgets passed")

@@ -992,7 +992,7 @@ struct LauncherView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 14, height: 14)
                         .background(Circle().fill(.quaternary))
-                    Text(item.text)
+                    PromptTextView(text: item.text)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -2244,7 +2244,7 @@ private struct MessageRow: View {
     var body: some View {
         switch message.role {
         case .user:
-            Text(message.text)
+            PromptTextView(text: message.text)
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)

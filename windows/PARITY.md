@@ -31,6 +31,7 @@ using the same operating-system API.
 | Mid-flight queue/redirect/inject | Missing | Queue and restart-with-context; Claude streaming input where supported. macOS also exposes ordered queued prompt IDs/text and durable stable-ID queue removal through authenticated Remote APIs for AgentGateway. |
 | Content-aware Auto sending | Missing | macOS defaults to a bounded, tool-free message classifier for Copilot, Claude and local models. Conservative queue fallback, manual overrides, and shared Remote/iOS decisions; no Windows router yet. |
 | Memory and file RAG | Missing | Markdown vault plus Windows Search/local semantic retrieval. |
+| Long-prompt responsiveness | Missing | macOS bypasses launcher suggestions for large pastes, prepares memory context and encodes Remote responses off the UI thread, bounds retrieval terms, and displays paged full-text prompt previews in Mac/Remote. Prompt content is not truncated. |
 | MCP and plugins | Partial | Compatible manifests, hash approvals, sandbox dashboards, bounded data sources, Claude/Codex MCP merge, and live reload are implemented. Local-model MCP client, Copilot injection, daily briefing, and in-window side panes remain. |
 | Council mode | Missing | Parallel read-only seats and one active chair synthesis. |
 | CLI bridge | Missing | Named pipe server plus installed `cantrip` command. |

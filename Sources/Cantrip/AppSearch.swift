@@ -8,10 +8,13 @@ struct AppSearchScore: Equatable {
 }
 
 enum AppSearchMatcher {
+    static let maximumQueryBytes = 512
+
     static func bestMatchIndex(
         query: String,
         candidates: [(name: String, isRunning: Bool)]
     ) -> Int? {
+        guard query.utf8.count <= maximumQueryBytes else { return nil }
         let matches = candidates.enumerated().compactMap { index, candidate in
             score(query: query, appName: candidate.name).map {
                 (index: index, candidate: candidate, score: $0)
@@ -40,6 +43,7 @@ enum AppSearchMatcher {
     }
 
     static func score(query rawQuery: String, appName rawName: String) -> AppSearchScore? {
+        guard rawQuery.utf8.count <= maximumQueryBytes else { return nil }
         let query = searchableQuery(from: rawQuery)
         let name = normalize(rawName)
         guard query.count >= 2, !name.isEmpty else { return nil }
