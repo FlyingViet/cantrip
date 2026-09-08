@@ -184,6 +184,26 @@ not capture or consume any context staged by the person at the Mac. Image
 attachments currently apply to **Cantrip Remote**, not the Hermes gateway's
 Copilot/Private Local lanes or shell/slash commands.
 
+### Copilot account usage
+
+The **usage gauge next to the Local/Remote antenna lane picker** in the top
+header shows your remaining included Copilot allowance. Tap it for used and
+remaining percentages, the reset date/time, additional-usage status, account,
+and last-checked time. It works from every chat lane without switching sessions.
+
+This reads the Copilot account signed in on your **Cantrip Mac**, not a phone
+login or a per-chat token estimate. Update/reopen Cantrip and install a recent
+Copilot CLI plus Node.js on the Mac. Existing Remote pairing is used for the
+read-only `/api/v1/copilot/usage` endpoint; credentials never reach the phone.
+An older host shows an explicit update notice.
+
+The Mac refreshes at most once per minute, shared with its Usage panel. Mobile
+polling stops in the background. Pull-to-refresh reads the host cache without
+bypassing its throttle. Failed or old readings say **Stale**; unavailable data
+shows **--**, not zero or a full allowance. Re-pairing clears the old account.
+Credit/token billing is not labeled as prompt counts, reset dates use your
+local time, and remaining budget does not rule out short-term/model throttling.
+
 ### GitHub build queue
 
 Open **hamburger menu > GitHub Builds** from any chat lane to see builds

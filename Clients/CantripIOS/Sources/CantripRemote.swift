@@ -98,6 +98,7 @@ enum CantripRemoteError: LocalizedError {
     case queueRemovalUnsupported
     case tabMetadataUnsupported
     case githubBuildsUnsupported
+    case copilotUsageUnsupported
 
     static func isRouteFailure(_ error: Error) -> Bool {
         switch error {
@@ -138,6 +139,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to rename or lock its tabs."
         case .githubBuildsUnsupported:
             return "Update and reopen Cantrip on your Mac to view GitHub builds."
+        case .copilotUsageUnsupported:
+            return "Update and reopen Cantrip on your Mac to view Copilot account usage."
         }
     }
 }
@@ -572,6 +575,14 @@ struct CantripRemoteAPI {
         }
     }
 
+    func copilotUsage() async throws -> CopilotUsageSnapshot {
+        do {
+            return try await request(path: "/api/v1/copilot/usage")
+        } catch CantripRemoteError.http(404, _) {
+            throw CantripRemoteError.copilotUsageUnsupported
+        }
+    }
+
     func session(id: String) async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(id)"
@@ -788,6 +799,7 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var transcriptRevision = 0
     @Published private(set) var isLocalNetworkAvailable = false
     @Published private(set) var tailscaleOnly: Bool
+    @Published private(set) var usageIdentity = UUID()
 
     var isConnected: Bool { connectionState == .connected }
     var hasConfiguration: Bool { baseURL != nil || token != nil }
@@ -882,6 +894,7 @@ final class CantripRemoteModel: ObservableObject {
 
             stopPolling()
             configurationGeneration += 1
+            usageIdentity = UUID()
             router.reset()
             baseURL = normalized
             self.tailscaleOnly = tailscaleOnly
@@ -918,6 +931,7 @@ final class CantripRemoteModel: ObservableObject {
             stopPolling()
             lanBrowser.stop()
             configurationGeneration += 1
+            usageIdentity = UUID()
             router.reset()
             UserDefaults.standard.removeObject(forKey: Self.endpointKey)
             UserDefaults.standard.removeObject(forKey: Self.tailscaleOnlyKey)
@@ -949,6 +963,15 @@ final class CantripRemoteModel: ObservableObject {
         }
         return try await performAuthenticated(allowFallback: true) { api in
             try await api.githubBuilds()
+        }
+    }
+
+    func copilotUsage() async throws -> CopilotUsageSnapshot {
+        guard isConfigured else {
+            throw CantripRemoteError.transport("Configure Cantrip Remote in Settings and connect to your Mac to view Copilot usage.")
+        }
+        return try await performAuthenticated(allowFallback: true) { api in
+            try await api.copilotUsage()
         }
     }
 

@@ -1219,14 +1219,17 @@ struct ChatView: View {
     @ToolbarContentBuilder
     private var chatToolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            VStack(spacing: 1) {
-                HStack(spacing: 4) {
-                    if vm.isTabLocked { Image(systemName: "lock.fill") }
-                    Text(vm.tabTitle).lineLimit(1)
+            HStack(spacing: 4) {
+                VStack(spacing: 1) {
+                    HStack(spacing: 4) {
+                        if vm.isTabLocked { Image(systemName: "lock.fill") }
+                        Text(vm.tabTitle).lineLimit(1)
+                    }
+                    .font(.headline)
+                    ExecutionLanePicker(env: env, remote: remote)
+                        .disabled(vm.sending || importingImages || submittingRemote)
                 }
-                .font(.headline)
-                ExecutionLanePicker(env: env, remote: remote)
-                    .disabled(vm.sending || importingImages || submittingRemote)
+                CopilotUsageButton(remote: remote) { composerFocused = false }
             }
         }
         ToolbarItem(placement: .topBarLeading) {
