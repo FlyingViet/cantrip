@@ -28,17 +28,18 @@ struct CopilotUsageView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(bucket.title).fontWeight(.medium)
                             Text(bucket.summary)
-                            if !bucket.isUnlimited, let remaining = bucket.remainingPercent {
+                            if !bucket.isUnlimited, let remaining = bucket.remainingPercent,
+                               let percentage = bucket.percentageSummary {
                                 ProgressView(value: 100 - remaining, total: 100)
+                                    .accessibilityLabel("Included allowance used")
+                                    .accessibilityValue(String(format: "%.1f%%", 100 - remaining))
+                                Text(percentage)
+                                    .foregroundStyle(.secondary)
                             }
                             Text(bucket.billingMode == "credits"
                                  ? "Token / AI-credit billing; these are not prompt counts."
                                  : bucket.billingMode == "requests" ? "Request-based billing" : "Billing units not reported")
                                 .foregroundStyle(.secondary)
-                            if bucket.billingMode == "requests", !bucket.isUnlimited,
-                               let remaining = bucket.remaining, let entitlement = bucket.entitlement {
-                                Text("\(remaining.formatted()) of \(entitlement.formatted()) included requests remaining")
-                            }
                             Text(bucket.overageAllowed.map { "Additional usage: \($0 ? "enabled" : "disabled")" }
                                  ?? "Additional usage: not reported")
                             if let overage = bucket.overage {

@@ -23,7 +23,7 @@ using the same operating-system API.
 | Persistent terminal | Missing | Use ConPTY (`node-pty`) per session with state/history/Ctrl-C. |
 | Local OpenAI-compatible backend | Missing | Stream `/v1/chat/completions`; add approved shell/MCP tool loop. |
 | Attachments and screen context | Partial | Multi-monitor screen capture, previews, backend delivery, and transient cleanup are implemented. Clipboard/drop files remain. |
-| Remote image uploads | Missing | macOS accepts bounded authenticated AgentGateway photo/screenshot uploads, with session capability discovery and durable image files for queued/recovered prompts. |
+| Remote image uploads | Missing | macOS accepts bounded authenticated AgentGateway photo/screenshot uploads, with session capability discovery and durable image files for queued/recovered prompts. Session-scoped authenticated image/thumbnail reads let AgentGateway show tappable previews without exposing arbitrary Mac files. |
 | Remote route recovery | Missing | macOS prefers saved Tailscale HTTPS with bounded reads, uses LAN as backup, and requires two successful recovery probes before restoring Tailscale; healthy Tailscale never probes/promotes LAN. A stable web bridge retains drafts and coalesces refreshes; late failures cannot displace a newer healthy route. All-down reads retry without a cooldown lockout. LAN-only and Tailscale-only modes remain supported; uncertain mutations are never automatically replayed. |
 | Selected-text capture | Missing | Windows UI Automation or guarded clipboard capture. |
 | Git actions/diffs/revert | Missing | Git status, staged-diff commit prompt, diff renderer, explicit revert. |
@@ -35,7 +35,7 @@ using the same operating-system API.
 | MCP and plugins | Partial | Compatible manifests, hash approvals, sandbox dashboards, bounded data sources, Claude/Codex MCP merge, and live reload are implemented. Local-model MCP client, Copilot injection, daily briefing, and in-window side panes remain. |
 | Council mode | Missing | Parallel read-only seats and one active chair synthesis. |
 | CLI bridge | Missing | Named pipe server plus installed `cantrip` command. |
-| Usage dashboard | Missing | Mac: Claude CLI figures and Copilot account SDK allowance/reset/overage; paired read-only API for AgentGateway. |
+| Usage dashboard | Missing | Mac: Claude CLI figures and Copilot account SDK AI credits remaining/total, secondary percentages, reset/overage; paired read-only API for AgentGateway. |
 | GitHub build monitor | Missing | macOS provides a pairing-authenticated, read-only cached GitHub Actions dashboard for AgentGateway, scoped by configured repository/runner registrations. GitHub credentials remain on the Mac. |
 | Voice | Missing | Windows speech recognition and SAPI/WinRT synthesis. |
 | Crash recovery | Missing | Version/crash journal, relaunch, visible recovery, loop breaker. |
