@@ -8,7 +8,7 @@
 |---|---|
 | **Option+Space** | Show or hide Cantrip |
 | **Option+Shift+Space** | Capture selected text from the front app and open Cantrip |
-| **Return** | Launch the selected app suggestion, or submit a prompt; while an AI run is busy, queue the prompt |
+| **Return** | Launch the selected app suggestion, or submit a prompt; while busy, use Auto unless a delivery override is selected |
 | **Command+Return** | Send to AI instead of the app suggestion; while busy, interrupt and redirect |
 | **Option+Return** | Inject a follow-up into an active Claude Code turn |
 | **Command+T** | New local session |

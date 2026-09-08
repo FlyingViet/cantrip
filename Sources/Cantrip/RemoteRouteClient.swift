@@ -106,7 +106,7 @@ actor RemoteRouteClient {
     }
 
     func update(endpoints: [NWEndpoint], fallback: URL?) {
-        routes = endpoints.map(RemoteRoute.lan) + (fallback.map { [.fallback($0)] } ?? [])
+        routes = (fallback.map { [.fallback($0)] } ?? []) + endpoints.map(RemoteRoute.lan)
         if let preferred, !routes.contains(preferred) { self.preferred = nil }
     }
 
@@ -147,7 +147,7 @@ actor RemoteRouteClient {
                         preferred = route
                         onRouteChanged(route)
                     }
-                    recoverLAN()
+                    recoverTailscale()
                 }
                 return response
             } catch is CancellationError {
@@ -166,10 +166,10 @@ actor RemoteRouteClient {
         if preferred == route { preferred = nil }
     }
 
-    private func recoverLAN() {
-        guard probeTask == nil, preferred?.isLAN != true,
+    private func recoverTailscale() {
+        guard probeTask == nil, preferred?.isLAN == true,
               let route = routes.first(where: {
-                  $0.isLAN && (retryAfter[$0] ?? .distantPast) <= now()
+                  !$0.isLAN && (retryAfter[$0] ?? .distantPast) <= now()
               }) else { return }
         probeTask = Task { [weak self] in
             await self?.probe(route)
@@ -188,7 +188,7 @@ actor RemoteRouteClient {
             guard response.status == 200,
                   let object = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
                   object["sessions"] is [Any] else {
-                NSLog("Cantrip LAN recovery probe rejected HTTP %ld or an invalid session response; backing off.", response.status)
+                NSLog("Cantrip Tailscale recovery probe rejected HTTP %ld or an invalid session response; backing off.", response.status)
                 failed(route)
                 return
             }
@@ -198,7 +198,7 @@ actor RemoteRouteClient {
         } catch is CancellationError {
             return
         } catch {
-            NSLog("Cantrip LAN recovery probe failed; backing off: %@", error.localizedDescription)
+            NSLog("Cantrip Tailscale recovery probe failed; backing off: %@", error.localizedDescription)
             failed(route)
         }
     }

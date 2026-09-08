@@ -40,15 +40,50 @@ archived for later recovery.
 
 | Goal | Mac shortcut | What happens |
 |---|---|---|
-| Do this next | Type a follow-up, then **Return** | Adds it to the queue |
+| Send naturally | Type a message, then **Return** | Auto decides from the message and current task |
+| Always do this next | Choose **Queue**, then **Return** | Adds it to the queue without classification |
 | Stop this approach and do something else | Type new instructions, then **Command+Return** | Interrupts and redirects the active run |
 | Add information without interrupting | **Option+Return** with Claude Code | Injects into the current turn |
 | Cancel without sending a new prompt | Click **Stop** | Cancels the active run |
 
 Check the visible queue before walking away. Remove unwanted queued items
 with their remove control. Hiding the panel does not cancel the task.
-Inject is a Claude-specific behavior; use Queue or Redirect with other
-backends.
+Manual delivery choices apply to one message, then return to **Auto**.
+Inject is a Claude-specific behavior; other backends queue added context
+instead of interrupting just to deliver it.
+
+### How Auto decides
+
+Idle sessions send immediately, with no router call. During a single-agent
+run, a small independent inference reads the new message, current task,
+bounded recent conversation, current activity, and pending prompts. It has
+no tools, repository exploration, or task-execution permissions.
+
+- Useful context is injected where supported (confidence at least 0.80).
+- Clear corrections or replacement tasks redirect (confidence at least 0.95).
+- Clear cancellation stops the current task but keeps pending messages on hold.
+- Follow-up tasks, questions, ambiguity, and router errors stay queued.
+
+Decisions must cite text from the new message. This is semantic classification,
+not keyword matching: "stop the server" while editing documentation is not a
+request to cancel the agent. The status line explains the decision or fallback.
+Model confidence is not a guarantee; explicit Stop and manual overrides remain
+available.
+
+Copilot uses `gpt-5.4-mini` through the authenticated CLI; Claude uses `haiku`.
+Both run with tools and customizations disabled, outside the repository.
+The Local Model lane uses only its configured OpenAI-compatible endpoint and
+model, never a cloud fallback. Routing can consume provider usage. The inference
+deadline is 12 seconds. Codex and Copilot Remote (ACP) currently queue with an
+explanation because they do not expose an isolated tool-free router here.
+Councils, shell/slash commands, and messages over 6,000 characters also queue
+without classification.
+
+Messages enter the durable queue before routing (except in private sessions).
+Late results cannot interrupt a newer or completed run. A newer submission
+supersedes an unfinished routing decision; the earlier message remains queued.
+Cancel/reset/removal invalidates pending decisions. Staged files and selected
+text are bound to their submitted message rather than a later draft.
 
 ## Recover after a crash or interruption
 

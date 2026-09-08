@@ -11,6 +11,7 @@ struct LauncherView: View {
     @ObservedObject var settings = AppSettings.shared
     @StateObject private var speech = SpeechRecognizer()
     @State private var query = ""
+    @State private var deliveryMode: MessageDeliveryMode = .auto
     @State private var showSettings = false
     @FocusState private var inputFocused: Bool
     var onDismiss: () -> Void
@@ -243,7 +244,7 @@ struct LauncherView: View {
             if let selection = session.selectionContext {
                 selectionChip(selection)
             }
-            if !session.queued.isEmpty || session.isStreaming {
+            if !session.queued.isEmpty || session.isStreaming || session.deliveryStatus != nil {
                 queueView
             }
             if showTerminal {
@@ -921,12 +922,25 @@ struct LauncherView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer()
-                    keycap("↩", "queue")
+                    Picker("Delivery", selection: $deliveryMode) {
+                        ForEach(MessageDeliveryMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .help("Auto interprets your message; choose a mode to override it.")
                     if settings.backend == .claudeCode {
                         keycap("⌥↩", "add context")
                     }
                     keycap("⌘↩", "interrupt")
                 }
+            }
+            if let status = session.deliveryStatus {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(Array(session.queued.enumerated()), id: \.offset) { index, item in
                 HStack(spacing: 6) {
@@ -1813,7 +1827,8 @@ struct LauncherView: View {
         if speech.isRecording { speech.stop() }
         let text = query
         query = ""
-        session.submit(text, interrupt: interrupt, inject: inject)
+        session.submit(text, mode: interrupt ? .interrupt : inject ? .inject : deliveryMode)
+        deliveryMode = .auto
     }
 
     // MARK: - Conversation

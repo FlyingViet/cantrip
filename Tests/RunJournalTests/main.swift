@@ -182,6 +182,24 @@ do {
         "starting a queued turn should atomically claim it during replay"
     )
 
+    var pendingRoute = RunJournal.Event(sessionID: sessionID, runID: claimedRunID, kind: .queueAdded)
+    pendingRoute.queueItem = firstQueue
+    try journal.append(pendingRoute, durable: true)
+    var routing = RunJournal.Event(sessionID: sessionID, runID: claimedRunID, kind: .messageRouted)
+    routing.queueItemID = firstQueue.id
+    routing.reason = "Added context to the current task."
+    try journal.append(routing, durable: true)
+    expect(journal.recoveryState()?.queued == [firstQueue],
+           "A router decision alone never consumes a saved message")
+    var injected = RunJournal.Event(sessionID: sessionID, runID: claimedRunID, kind: .messageStarted)
+    injected.messageID = UUID()
+    injected.role = "user"
+    injected.text = firstQueue.text
+    injected.queueItemID = firstQueue.id
+    try journal.append(injected, durable: true)
+    expect(journal.recoveryState()?.queued.isEmpty == true,
+           "Delivered injections atomically claim the queue item during replay")
+
     let oldID = UUID()
     let oldJournal = try RunJournal(sessionID: oldID, directory: directory)
     let oldDate = Date(timeIntervalSince1970: 1)

@@ -24,11 +24,12 @@ using the same operating-system API.
 | Local OpenAI-compatible backend | Missing | Stream `/v1/chat/completions`; add approved shell/MCP tool loop. |
 | Attachments and screen context | Partial | Multi-monitor screen capture, previews, backend delivery, and transient cleanup are implemented. Clipboard/drop files remain. |
 | Remote image uploads | Missing | macOS accepts bounded authenticated AgentGateway photo/screenshot uploads, with session capability discovery and durable image files for queued/recovered prompts. |
-| Remote route recovery | Missing | macOS keeps a stable web bridge across LAN/HTTPS failover, backs off failed LAN routes, probes recovery read-only, and offers Tailscale-only mode. Uncertain mutations are never automatically replayed. |
+| Remote route recovery | Missing | macOS prefers saved Tailscale HTTPS, uses LAN as backup, and restores Tailscale with read-only probes; healthy Tailscale never probes/promotes LAN. A stable web bridge retains drafts across failover. LAN-only and Tailscale-only modes remain supported; uncertain mutations are never automatically replayed. |
 | Selected-text capture | Missing | Windows UI Automation or guarded clipboard capture. |
 | Git actions/diffs/revert | Missing | Git status, staged-diff commit prompt, diff renderer, explicit revert. |
 | Notifications | Missing | Windows Action Center notifications for background completion. |
 | Mid-flight queue/redirect/inject | Missing | Queue and restart-with-context; Claude streaming input where supported. macOS also exposes ordered queued prompt IDs/text in authenticated Remote session details for AgentGateway. |
+| Content-aware Auto sending | Missing | macOS defaults to a bounded, tool-free message classifier for Copilot, Claude and local models. Conservative queue fallback, manual overrides, and shared Remote/iOS decisions; no Windows router yet. |
 | Memory and file RAG | Missing | Markdown vault plus Windows Search/local semantic retrieval. |
 | MCP and plugins | Partial | Compatible manifests, hash approvals, sandbox dashboards, bounded data sources, Claude/Codex MCP merge, and live reload are implemented. Local-model MCP client, Copilot injection, daily briefing, and in-window side panes remain. |
 | Council mode | Missing | Parallel read-only seats and one active chair synthesis. |

@@ -33,13 +33,17 @@ The macOS app includes:
   calculate, convert units, and run explicit shell commands.
 - **AI workspace:** streaming answers, file/screenshot attachments, voice,
   session tabs, recoverable runs, and a terminal per session.
+- **Automatic sending:** a separate, tool-free model call interprets busy-run
+  messages as context, corrections, or follow-ups. Uncertain decisions queue
+  safely; manual Queue/Redirect/Inject overrides remain available.
 - **Agent actions:** commands and file edits with backend-specific
   permissions; inspect tool activity and file diffs.
 - **Memory and council:** editable Markdown memory and multi-model answers.
 - **Remote control:** use the Mac's sessions from AgentGateway on iPhone/iPad,
   another Mac, or a browser. Native clients support paired LAN connections;
-  Tailscale Serve provides optional away-from-home access. Automatic routing
-  backs off failed LAN connections and recovers without replaying sends;
+  a saved Tailscale Serve URL is preferred even on the local network. Automatic
+  routing uses LAN if Tailscale is unavailable and restores Tailscale with
+  read-only probes, without switching healthy Tailscale connections to LAN or replaying sends;
   Tailscale-only mode is also available. AgentGateway can display queued prompts.
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a
   `cantrip` command for asking questions from Terminal.

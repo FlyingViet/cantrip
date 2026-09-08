@@ -232,9 +232,9 @@ final class RemoteControlServer {
                 sendError(400, "message text is required", on: connection)
                 return
             }
-            let mode = body["mode"] as? String ?? "queue"
-            guard ["queue", "interrupt", "inject"].contains(mode) else {
-                sendError(400, "mode must be queue, interrupt, or inject", on: connection)
+            guard let rawMode = (body["mode"] ?? "auto") as? String,
+                  let mode = MessageDeliveryMode(rawValue: rawMode) else {
+                sendError(400, "mode must be auto, queue, interrupt, or inject", on: connection)
                 return
             }
             do {
@@ -256,11 +256,7 @@ final class RemoteControlServer {
                 let prompt = try RemoteImageAttachments.preparePrompt(
                     text, images: images, sessionID: session.id
                 )
-                session.submitRemote(
-                    prompt,
-                    interrupt: mode == "interrupt",
-                    inject: mode == "inject"
-                )
+                session.submitRemote(prompt, mode: mode)
             } catch let error as RemoteImageAttachmentError {
                 sendError(400, error.localizedDescription, on: connection)
                 return
@@ -323,8 +319,10 @@ final class RemoteControlServer {
             "councilMode": session.councilMode,
             "queuedCount": session.queued.count,
             "supportsImageAttachments": session.supportsRemoteImages,
+            "supportsAutoDelivery": true,
         ]
         if let status = session.statusText { result["status"] = status }
+        if let status = session.deliveryStatus { result["deliveryStatus"] = status }
         if includeMessages {
             result["queued"] = session.queued.map { prompt in
                 [
@@ -464,7 +462,7 @@ private extension RemoteControlServer {
     <main id="app" class="hidden"><header class="workspace">
     <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off"><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
     <div class="tools"><nav id="sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><span class="tools-spacer"></span>
-    <select id="mode" aria-label="Delivery mode"><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
+    <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div></header>
     <section id="messages"></section></main>
     <script>
@@ -524,6 +522,7 @@ private extension RemoteControlServer {
       else{for(const message of session.messages){const activities=message.activities||[];if(!message.text&&!message.thinking&&!activities.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
           appendThinking(row,message.thinking,message.id);if(message.text)appendProse(row,message.text);appendActivities(row,activities,message.id);box.append(row)}
+        if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}
         if(session.isStreaming||session.queuedCount){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
       requestAnimationFrame(()=>{root.scrollTop=shouldFollow?root.scrollHeight:Math.min(previousTop,Math.max(0,root.scrollHeight-root.clientHeight));followOutput=shouldFollow;suppressScroll=false})}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
@@ -531,7 +530,7 @@ private extension RemoteControlServer {
       catch(error){connection(false);const label=document.querySelector(".connection-label");if(label)label.textContent=`Close failed: ${error.message}`}}
     $("pairButton").onclick=async()=>{token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh();timer=setInterval(refresh,1500)}
       catch(error){$("pairError").textContent=error.message}};
-    $("send").onclick=()=>{const text=$("draft").value.trim();if(text){$("draft").value="";action("messages",{text,mode:$("mode").value})}};
+    $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;$("send").disabled=true;try{await action("messages",{text,mode:$("mode").value});if($("draft").value.trim()===text)$("draft").value="";$("mode").value="auto"}catch(error){const label=document.querySelector(".connection-label");if(label)label.textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false}};
     $("draft").onkeydown=event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selected=data.session.id;refresh()};
     $("forget").onclick=()=>{localStorage.removeItem("cantripToken");token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null)};if(token){pair(false);refresh();timer=setInterval(refresh,1500)}else pair(true);

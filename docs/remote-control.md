@@ -8,7 +8,7 @@ can use the host's web client through Tailscale Serve.
 
 **You need:** a Mac with Cantrip running, an available backend on that Mac,
 and access to its Settings. Native clients on the same local network do not
-need Tailscale. For away-from-home access, configure the optional fallback.
+need Tailscale. Save a Tailscale URL for preferred access both at home and away.
 
 ## 1. Enable the host Mac
 
@@ -36,7 +36,7 @@ installation information.
 1. Put the phone/tablet and host Mac on the same local network.
 2. In AgentGateway, open **Settings** using the **gear**.
 3. In **Cantrip Remote**, paste the **Pairing token**.
-4. Leave **Tailscale fallback URL (optional)** blank for LAN-only use.
+4. Leave **Tailscale URL (optional, preferred when saved)** blank for LAN-only use.
 5. Tap **Save and Connect**. Allow Local Network access if prompted.
 6. Return to chat. Open the backend/execution picker (shown as `</>` for the
    coding choice), then choose **Cantrip Remote**.
@@ -48,11 +48,23 @@ session's live output. The work runs on the Mac, not on the iPhone/iPad.
 
 ### See queued prompts in AgentGateway
 
-While a response is running, send with **Queue** to wait for the current work.
+**Auto** is the default for typed and voice sends. The host Mac interprets
+busy-run messages using the same [routing policy](sessions-and-council.md#how-auto-decides)
+as local sends; the phone does not launch another agent. A status line explains
+whether the message was queued, injected, or redirected. The delivery menu
+keeps one-message Queue/Redirect/Inject overrides.
+
+Auto requires an updated, relaunched Mac host (`supportsAutoDelivery` in
+authenticated session snapshots). AgentGateway leaves your draft unsent and
+shows an update notice on older hosts; manual modes still work. API messages
+accept `mode: "auto"`; omitted mode also defaults to Auto.
+
+While a response is running, choose **Queue** to always wait for current work.
 The **Queued messages** card above the iOS composer shows the count and next
 prompt. Tap it for the full pending prompts in execution order, including
 those queued from the Mac or another device. A prompt leaves the queue when
-it starts and appears in the conversation.
+it starts or is delivered into the current task. Messages being classified
+are already accepted and appear in this queue until delivery is decided.
 
 Both apps must be current: the Mac's authenticated session detail includes
 the ordered queue IDs and text. Older hosts provide only a count; AgentGateway
@@ -96,27 +108,30 @@ tailscale serve --bg http://127.0.0.1:8765
 4. Replace `8765` if you changed Cantrip's **Port**. Follow any Tailscale
    instructions to enable HTTPS/Serve.
 5. Copy the HTTPS origin printed by Tailscale, for example
-   `https://your-mac.your-tailnet.ts.net`, into the client's optional fallback
+   `https://your-mac.your-tailnet.ts.net`, into the client's optional Tailscale
    URL field. Use the origin without `/api`, a query string, or a token.
 6. Save/connect again. On a phone, turn off Wi-Fi, leave Tailscale connected,
-   and send a short prompt to confirm the fallback.
+   and send a short prompt to confirm remote access.
 
 If `tailscale` is not found, follow Tailscale's instructions for making its CLI
 available. If the HTTPS root already hosts another service, do not overwrite
 it; arrange a separate supported HTTPS origin/port first.
 
-**Expected result:** native clients prefer the paired LAN host when available
-and can use the saved HTTPS origin when away. HTTPS does not remove the
+**Expected result:** native clients prefer the saved Tailscale HTTPS origin,
+even on the same local network, and use paired LAN if Tailscale is unavailable.
+Without a saved URL, they connect directly over LAN. HTTPS does not remove the
 requirement for the pairing token.
 
 ### Automatic recovery and Tailscale-only mode
 
-Automatic mode keeps a working fallback instead of retrying an unhealthy LAN
-route on every refresh, even when the host is still advertised by Bonjour.
-LAN connection attempts and reads time out after two seconds. Failed LAN
-routes back off for 30 seconds, then an independent, authenticated read-only
-probe can restore LAN without holding up fallback refreshes. Longer mutation
-and image-upload response deadlines remain in place.
+Automatic mode tries the saved Tailscale URL first and keeps it while it works.
+It never probes or promotes LAN behind a healthy Tailscale connection, even
+when Bonjour advertises the host. If Tailscale fails, reads can fall back to LAN;
+independent, authenticated read-only probes restore Tailscale after it recovers,
+without holding up LAN refreshes. Tailscale failures back off for three seconds.
+LAN connection attempts and reads time out after two seconds, and failed LAN
+routes back off for 30 seconds. Discovery changes do not clear these cooldowns.
+Longer mutation and image-upload response deadlines remain in place.
 
 The Mac Remote view switches upstream routes behind the same local bridge:
 the selected session and unsent draft stay in the existing page. If no route
@@ -126,10 +141,10 @@ the session before sending again; the host may have accepted the first request.
 
 To bypass LAN, enable **Tailscale only (skip local network)** when pairing,
 or use **Route > Tailscale only** in the Mac Remote header. AgentGateway has
-the same toggle in Remote settings. A saved fallback URL is required; keep
-Tailscale connected when using its HTTPS address. Choose **Automatic (LAN +
-fallback)** on the Mac, or turn off the toggle in AgentGateway, to restore
-direct LAN discovery. LAN-only use remains supported without a fallback URL.
+the same toggle in Remote settings. A saved Tailscale URL is required; keep
+Tailscale connected when using its HTTPS address. Choose **Automatic (Tailscale
+first)** on the Mac, or turn off the toggle in AgentGateway, to allow
+direct LAN as backup. LAN-only use remains supported without a saved URL.
 
 For the browser client, connect the device to Tailscale, open the same HTTPS
 origin, paste the pairing token, and click **Connect**. The browser saves its
