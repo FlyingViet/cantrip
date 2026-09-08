@@ -47,14 +47,45 @@ final class CantripSessionPickerTests: XCTestCase {
         }
     }
 
-    func testMenuPreservesTitlesAndShowsLockWorkAndQueueState() {
+    func testMenuPreservesTitlesLocksAndQueuesWithoutWorkingSuffix() {
         let busy = session(title: "Renamed project", locked: true, streaming: true, queued: 3)
-        XCTAssertEqual(CantripSessionPicker.statusSummary(for: busy), "Locked, Working, 3 queued")
+        XCTAssertEqual(CantripSessionPicker.statusSummary(for: busy), "Locked, 3 queued")
         XCTAssertEqual(CantripSessionPicker.menuTitle(for: busy),
-                       "Renamed project - Locked, Working, 3 queued")
+                       "Renamed project - Locked, 3 queued")
         let legacy = session(title: "Older host")
         XCTAssertEqual(CantripSessionPicker.statusSummary(for: legacy), "")
         XCTAssertEqual(CantripSessionPicker.menuTitle(for: legacy), "Older host")
+    }
+
+    func testActivityIsAnnouncedWithoutChangingVisibleTabText() {
+        for locked in [false, true] {
+            for queued in [0, 3] {
+                let idle = session(title: "My tab", locked: locked, queued: queued)
+                let busy = session(title: "My tab", locked: locked, streaming: true, queued: queued)
+                XCTAssertEqual(CantripSessionPicker.menuTitle(for: busy),
+                               CantripSessionPicker.menuTitle(for: idle))
+                XCTAssertEqual(CantripSessionPicker.statusSummary(for: busy),
+                               CantripSessionPicker.statusSummary(for: idle))
+                XCTAssertEqual(CantripSessionPicker.accessibilityTitle(for: busy), "My tab, Working")
+                XCTAssertEqual(CantripSessionPicker.accessibilityTitle(for: idle), "My tab")
+            }
+        }
+    }
+
+    func testBusyTabHasAVisibleIndicator() throws {
+        func render(streaming: Bool) throws -> Data {
+            let tab = session(streaming: streaming)
+            let picker = CantripSessionPicker(
+                sessions: [tab], selectedSessionID: tab.id, onSelect: { _ in }
+            )
+            .frame(width: 288)
+            return try XCTUnwrap(ImageRenderer(content: picker).uiImage?.pngData())
+        }
+
+        let idle = try render(streaming: false)
+        let busy = try render(streaming: true)
+        XCTAssertNotEqual(idle, busy, "Busy tabs must show an icon, not just an accessibility announcement")
+        XCTAssertEqual(idle, try render(streaming: false), "Idle tabs must not retain the activity icon")
     }
 
     func testUpdatedSnapshotsKeepSelectionAndRefreshNameAndStatus() {

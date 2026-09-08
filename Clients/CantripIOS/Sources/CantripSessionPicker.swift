@@ -82,11 +82,12 @@ struct CantripSessionPicker: View {
                         .foregroundStyle(.tint)
                 }
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(selectedSession?.title ?? (sessions.isEmpty ? "No tabs" : "Choose a tab"))
+                    CantripSessionTitle(
+                        title: selectedSession?.title ?? (sessions.isEmpty ? "No tabs" : "Choose a tab"),
+                        isStreaming: selectedSession?.isStreaming == true
+                    )
                         .font(.body.weight(.semibold))
                         .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .foregroundStyle(.primary)
                     Text(switcherSummary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -94,9 +95,6 @@ struct CantripSessionPicker: View {
                         .multilineTextAlignment(.leading)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                if selectedSession?.isStreaming == true && !dynamicTypeSize.isAccessibilitySize {
-                    ProgressView().controlSize(.small)
-                }
                 Image(systemName: "chevron.down")
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.tint)
@@ -112,7 +110,8 @@ struct CantripSessionPicker: View {
         .accessibilityIdentifier("cantrip-session-picker")
         .accessibilityLabel("Switch tab")
         .accessibilityValue(
-            [selectedSession?.title, switcherSummary].compactMap { $0 }.joined(separator: ", ")
+            [selectedSession.map(Self.accessibilityTitle), switcherSummary]
+                .compactMap { $0 }.joined(separator: ", ")
         )
         .accessibilityHint("Tap to switch tabs. Touch and hold to rename, lock, unlock, or close this tab.")
         .popover(isPresented: $showingTabs, arrowEdge: .top) {
@@ -134,9 +133,9 @@ struct CantripSessionPicker: View {
                         HStack(spacing: 10) {
                             Image(systemName: session.isLocked == true ? "lock.fill" : "bubble.left")
                                 .foregroundStyle(.tint)
-                            Text(Self.menuTitle(for: session))
-                                .multilineTextAlignment(.leading)
-                                .foregroundStyle(.primary)
+                            CantripSessionTitle(
+                                title: Self.menuTitle(for: session), isStreaming: session.isStreaming
+                            )
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             Image(systemName: "checkmark")
                                 .foregroundStyle(.tint)
@@ -148,6 +147,8 @@ struct CantripSessionPicker: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("cantrip-tab-\(session.id)")
+                    .accessibilityLabel(Self.accessibilityTitle(for: session))
+                    .accessibilityValue(Self.statusSummary(for: session))
                     .accessibilityAddTraits(session.id == selectedSessionID ? [.isSelected] : [])
                 }
             }
@@ -167,13 +168,34 @@ struct CantripSessionPicker: View {
     static func statusSummary(for session: CantripRemoteSession) -> String {
         var parts: [String] = []
         if session.isLocked == true { parts.append("Locked") }
-        if session.isStreaming { parts.append("Working") }
         if session.queuedCount > 0 { parts.append("\(session.queuedCount) queued") }
         return parts.joined(separator: ", ")
+    }
+
+    static func accessibilityTitle(for session: CantripRemoteSession) -> String {
+        session.isStreaming ? "\(session.title), Working" : session.title
     }
 
     static func menuTitle(for session: CantripRemoteSession) -> String {
         let status = statusSummary(for: session)
         return status.isEmpty ? session.title : "\(session.title) - \(status)"
+    }
+}
+
+private struct CantripSessionTitle: View {
+    let title: String
+    let isStreaming: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .multilineTextAlignment(.leading)
+                .foregroundStyle(.primary)
+            if isStreaming {
+                ThinkingView(size: 18)
+                    .fixedSize()
+                    .accessibilityHidden(true)
+            }
+        }
     }
 }

@@ -1,5 +1,13 @@
 # Hermes — iOS client (AgentGateway)
 
+<img src="Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png" width="128" alt="Cantrip: a pearl-violet C casting a golden spark" />
+
+The app icon shares Cantrip's **C and golden spark** mark. Its opaque 1024px
+source comes from `Resources/CantripIcon.png` in the Cantrip repository;
+regenerate it there with `make artwork`, then copy it to
+`Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png`. Do not add rounded
+corners or transparent padding to the iOS asset; the system applies the mask.
+
 A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.com/) — by **voice** and **chat** — instead of being stuck in Telegram or Discord.
 
 - 💬 **Durable streaming chat** — tasks continue on the Mac if iOS suspends or
@@ -48,7 +56,10 @@ resume.
 
 Tap the large **tab dropdown** above the transcript to switch sessions instead
 of scrolling through small pills. The menu marks the selected tab with a
-checkmark and includes tab names, locks, working status, and queued counts.
+checkmark and includes tab names, locks, and queued counts. A blinking brain
+beside the tab name replaces the "Working" suffix in both the dropdown and
+its tab list, disappearing when work stops. With Reduce Motion enabled the
+brain stays still; VoiceOver continues to announce "Working".
 Locked tabs remain selectable. The **Auto** delivery dropdown sits beside the
 tab dropdown; choose a manual mode there for a one-message override.
 Use **+** to create another session.

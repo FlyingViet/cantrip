@@ -1742,6 +1742,7 @@ private struct ExecutionLanePicker: View {
 /// A pulsing brain for the "thinking" state (the agent is working) — used instead
 /// of the waveform, which is for listening/speaking (audio).
 struct ThinkingView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var size: CGFloat = 28
     var color: Color = .accentColor
 
@@ -1749,8 +1750,8 @@ struct ThinkingView: View {
         Image(systemName: "brain")
             .font(.system(size: size))
             .foregroundStyle(color)
-            .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
-            .symbolEffect(.pulse, options: .repeating)
+            .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating, isActive: !reduceMotion)
+            .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
     }
 }
 
