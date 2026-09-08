@@ -76,7 +76,7 @@ final class CantripSessionPickerTests: XCTestCase {
             title: String(repeating: "Project ", count: 10), locked: true, streaming: true, queued: 12
         )
         for width: CGFloat in [288, 720] {
-            for size: DynamicTypeSize in [.large, .accessibility3] {
+            for size: DynamicTypeSize in [.large, .accessibility3, .accessibility5] {
                 let picker = CantripSessionPicker(
                     sessions: [long], selectedSessionID: long.id, onSelect: { _ in }
                 )
@@ -92,6 +92,80 @@ final class CantripSessionPickerTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(measured.height, 52)
                 XCTAssertLessThan(measured.height, 400, "Long titles should wrap within bounded space")
             }
+        }
+    }
+
+    func testSessionAndDeliveryDropdownsFitTogetherForEveryMode() throws {
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let busy = session(
+            title: String(repeating: "Project ", count: 10), locked: true, streaming: true, queued: 12
+        )
+        for width: CGFloat in [288, 361, 720] {
+            for size: DynamicTypeSize in [.large, .accessibility3, .accessibility5] {
+                for mode in CantripDeliveryMode.allCases {
+                    let bar = CantripSessionBar(
+                        sessions: [busy], selectedSessionID: busy.id,
+                        deliveryMode: .constant(mode), isMutating: false, onSelect: { _ in }
+                    ) {
+                        Button("Rename Tab") {}
+                        Button("Unlock Tab") {}
+                        Button("Close Session", role: .destructive) {}
+                    }
+                    .environment(\.dynamicTypeSize, size)
+                    let controller = UIHostingController(rootView: bar)
+                    let window = UIWindow(windowScene: scene)
+                    window.rootViewController = controller
+                    window.makeKeyAndVisible()
+                    defer { window.isHidden = true }
+                    controller.view.layoutIfNeeded()
+                    let measured = controller.sizeThatFits(in: CGSize(width: width, height: 2_000))
+                    XCTAssertEqual(measured.width, width, accuracy: 1, "\(mode) at \(size)")
+                    XCTAssertGreaterThanOrEqual(measured.height, 52)
+                    XCTAssertLessThan(measured.height, 400)
+                }
+            }
+        }
+    }
+
+    func testLongPressContextMenuUsesTheFullTabControl() throws {
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let tab = session()
+        let picker = CantripSessionPicker(
+            sessions: [tab], selectedSessionID: tab.id,
+            onSelect: { _ in XCTFail("Opening tab actions must not switch sessions") }
+        )
+        .contextMenu {
+            Button("Rename Tab") {}
+            Button("Lock Tab") {}
+            Button("Close Session", role: .destructive) {}
+        }
+        let controller = UIHostingController(rootView: picker)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 288, height: 200)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        controller.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+
+        func contextMenus(in view: UIView) -> [UIContextMenuInteraction] {
+            view.interactions.compactMap { $0 as? UIContextMenuInteraction }
+                + view.subviews.flatMap { contextMenus(in: $0) }
+        }
+        let interaction = try XCTUnwrap(contextMenus(in: controller.view).first)
+        let target = try XCTUnwrap(interaction.view)
+        XCTAssertEqual(target.bounds.width, 288, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(target.bounds.height, 52)
+        let contentFrame = target.safeAreaLayoutGuide.layoutFrame
+        for x in [contentFrame.minX + 8, contentFrame.midX, contentFrame.maxX - 8] {
+            let configuration = interaction.delegate?.contextMenuInteraction(
+                interaction, configurationForMenuAtLocation: CGPoint(x: x, y: contentFrame.midY)
+            )
+            XCTAssertNotNil(configuration, "Long press should work across the whole tab, including x=\(x)")
         }
     }
 }

@@ -1443,27 +1443,16 @@ struct CantripRemoteView: View {
     }
 
     private var sessionPicker: some View {
-        HStack(spacing: 8) {
-            CantripSessionPicker(
-                sessions: model.sessions,
-                selectedSessionID: model.selectedSessionID
-            ) { id in
-                Task { await model.selectSession(id) }
-            }
-            .contextMenu {
-                if let session = model.selectedSession {
-                    sessionActions(session)
-                }
-            }
+        CantripSessionBar(
+            sessions: model.sessions,
+            selectedSessionID: model.selectedSessionID,
+            deliveryMode: $deliveryMode,
+            isMutating: model.isMutating
+        ) { id in
+            Task { await model.selectSession(id) }
+        } actions: {
             if let session = model.selectedSession {
-                Menu {
-                    sessionActions(session)
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-                .disabled(model.isMutating)
-                .accessibilityLabel("Cantrip session actions")
+                sessionActions(session)
             }
         }
         .padding(.horizontal)
@@ -1521,17 +1510,6 @@ struct CantripRemoteView: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
-            HStack {
-                Picker("Delivery", selection: $deliveryMode) {
-                    ForEach(CantripDeliveryMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.menu)
-                .accessibilityLabel("Delivery override")
-                .disabled(model.isMutating)
-                Spacer()
-            }
             if let status = model.selectedSession?.deliveryStatus {
                 Text(status)
                     .font(.caption)

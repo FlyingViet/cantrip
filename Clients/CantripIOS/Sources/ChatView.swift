@@ -1357,22 +1357,12 @@ struct ChatView: View {
             remoteSessionPicker
 
             if remote.selectedSession != nil {
-                HStack(spacing: 8) {
-                    Picker("Delivery", selection: $vm.remoteDeliveryMode) {
-                        ForEach(CantripDeliveryMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .accessibilityLabel("Cantrip delivery override")
-                    .disabled(remote.isMutating)
-
-                    if let status = remote.selectedSession?.status, !status.isEmpty {
-                        Text(status)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                if let status = remote.selectedSession?.status, !status.isEmpty {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if let status = remote.selectedSession?.deliveryStatus {
                     Text(status)
@@ -1395,17 +1385,18 @@ struct ChatView: View {
     }
 
     private var remoteSessionPicker: some View {
-        CantripSessionPicker(
+        CantripSessionBar(
             sessions: remote.sessions,
-            selectedSessionID: remote.selectedSessionID
+            selectedSessionID: remote.selectedSessionID,
+            deliveryMode: $vm.remoteDeliveryMode,
+            isMutating: remote.isMutating
         ) { id in
             composerFocused = false
             Task {
                 await remote.selectSession(id)
                 vm.syncRemoteTranscript()
             }
-        }
-        .contextMenu {
+        } actions: {
             if let session = remote.selectedSession {
                 CantripTabActions(model: remote, session: session,
                     onRename: { renamingRemoteSession = session },
