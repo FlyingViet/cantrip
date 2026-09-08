@@ -36,6 +36,7 @@ using the same operating-system API.
 | Council mode | Missing | Parallel read-only seats and one active chair synthesis. |
 | CLI bridge | Missing | Named pipe server plus installed `cantrip` command. |
 | Usage dashboard | Missing | Claude CLI figures and Copilot billing API. |
+| GitHub build monitor | Missing | macOS provides a pairing-authenticated, read-only cached GitHub Actions dashboard for AgentGateway, scoped by configured repository/runner registrations. GitHub credentials remain on the Mac. |
 | Voice | Missing | Windows speech recognition and SAPI/WinRT synthesis. |
 | Crash recovery | Missing | Version/crash journal, relaunch, visible recovery, loop breaker. |
 | Tutorial overlays | Missing | UI Automation bounds plus one overlay window per display. |

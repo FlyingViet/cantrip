@@ -6,14 +6,19 @@ APP_BACKUP = .$(APP_NAME).app.previous
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs cert artwork icon app run clean
+.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build -c release
 
-test: test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs
+test: test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds
+
+test-github-builds:
+	@BIN="/tmp/cantrip-github-build-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc -parse-as-library Sources/Cantrip/GitHubBuildMonitor.swift Tests/GitHubBuildTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-session-tabs:
 	@BIN="/tmp/cantrip-session-tab-tests-$$$$"; \

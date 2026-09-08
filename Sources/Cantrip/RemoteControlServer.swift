@@ -14,10 +14,12 @@ final class RemoteControlServer {
     private var lanListener: NWListener?
     private var activePort: Int?
     private var token = ""
+    private let buildMonitor: GitHubBuildMonitor
     private let maximumRequestBytes = RemoteImageAttachments.maximumRequestBytes
 
-    init(manager: SessionManager) {
+    init(manager: SessionManager, buildMonitor: GitHubBuildMonitor = GitHubBuildMonitor()) {
         self.manager = manager
+        self.buildMonitor = buildMonitor
     }
 
     func start(port: Int, token: String) {
@@ -175,12 +177,30 @@ final class RemoteControlServer {
             return
         }
         guard request.path == "/api/v1/sessions"
-                || request.path.hasPrefix("/api/v1/sessions/") else {
+                || request.path.hasPrefix("/api/v1/sessions/")
+                || request.path == "/api/v1/github/builds" else {
             sendError(404, "not found", on: connection)
             return
         }
         guard authorized(request.headers["authorization"]) else {
             sendError(401, "invalid pairing token", on: connection)
+            return
+        }
+        if request.path == "/api/v1/github/builds" {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            Task {
+                let snapshot = await buildMonitor.snapshot()
+                do {
+                    let data = try JSONEncoder().encode(snapshot)
+                    send(status: 200, contentType: "application/json; charset=utf-8", body: data, on: connection)
+                } catch {
+                    Log.write("remote-control: build snapshot encoding failed: \(error.localizedDescription)")
+                    sendError(500, "build snapshot encoding failed", on: connection)
+                }
+            }
             return
         }
         guard let manager else {

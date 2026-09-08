@@ -88,6 +88,56 @@ uses the stable prompt ID and the same durable removal as the Mac UI. A prompt
 that has already started or been removed returns HTTP 409; no other prompt or
 running task is affected.
 
+### See GitHub builds in AgentGateway
+
+Open the mobile **hamburger menu > GitHub Builds** from any chat lane.
+This read-only dashboard separates running jobs, queued/eligible jobs, and
+workflow waits across configured app repositories. It shows the app, workflow
+run number/attempt, job, current step, branch/commit, elapsed time, runner
+online/busy state, and a link to GitHub.
+
+Update and reopen **both apps** first. On the Cantrip Mac, install GitHub CLI
+and sign in with `gh auth login`. The login needs access to each repository's
+Actions and runner list (for a fine-grained token, **Actions: read** and
+**Administration: read**). GitHub credentials remain on the Mac; the mobile
+client uses its existing Cantrip pairing token.
+
+Create `~/.config/Cantrip/github-builds.json` on the host with an explicit
+list of repository-scoped runner registrations, using exact runner names:
+
+```json
+[
+  {"repository": "your-account/ios-app", "app": "My iOS App", "runner": "ios-mac"},
+  {"repository": "your-account/reader", "app": "Reader", "runner": "reader-mac"}
+]
+```
+
+Each repository appears once; up to 20 entries are supported. Different
+registrations can share one physical Mac. This dashboard does not serialize,
+start, cancel, or change builds. Edits to the configuration are read at the
+next GitHub refresh; do not put tokens in this file.
+
+Authenticated `GET /api/v1/github/builds` returns an immediate cached snapshot
+and triggers a background refresh at most once per minute while polled.
+The client polls only while the screen is visible and foregrounded. Refresh
+and pull-to-refresh read that cache without bypassing the host's rate limit.
+Runners are matched by assigned ID or by **all** requested labels for
+unassigned jobs; jobs assigned to other runners and GitHub-hosted jobs with
+nonmatching labels are excluded. Workflows whose jobs/labels aren't available
+yet are shown separately with unknown runner eligibility.
+
+Waiting work is sorted by workflow creation time, **not a guaranteed FIFO
+queue**. Approval, dependencies, concurrency rules, and other eligible runners
+can change when or where it starts. Completed jobs disappear on refresh.
+The current run attempt is used after retries. Per-repository failures retain
+the last snapshot with an explicit warning and timestamp; missing setup,
+authentication failures, or incomplete/pagination-limited results never
+masquerade as an empty queue. Data older than two minutes is marked stale.
+Scans are bounded to 1,000 results per list, 100 active workflows and 500
+displayed jobs per repository; exceeding a bound surfaces an explicit warning.
+GitHub has its own reporting lag, so a busy runner can temporarily have no
+matching running job in its latest API response.
+
 ## 2b. Connect from another Mac
 
 1. Install and open Cantrip on the second Mac.
