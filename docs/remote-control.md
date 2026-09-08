@@ -72,6 +72,15 @@ shows an update notice rather than an empty queue. Update and relaunch Cantrip
 on the host to enable queue contents. Disconnected clients show the last
 known queue until they reconnect.
 
+Tap a queued prompt's **trash button**, or swipe left and tap **Remove**, to
+remove it without stopping the active task. This requires the host's
+`supportsQueueRemoval` capability. AgentGateway disables removal while
+disconnected or a mutation is pending and waits for the authoritative snapshot.
+The authenticated `DELETE /api/v1/sessions/{sessionID}/queue/{promptID}` endpoint
+uses the stable prompt ID and the same durable removal as the Mac UI. A prompt
+that has already started or been removed returns HTTP 409; no other prompt or
+running task is affected.
+
 ## 2b. Connect from another Mac
 
 1. Install and open Cantrip on the second Mac.
@@ -127,15 +136,22 @@ requirement for the pairing token.
 Automatic mode tries the saved Tailscale URL first and keeps it while it works.
 It never probes or promotes LAN behind a healthy Tailscale connection, even
 when Bonjour advertises the host. If Tailscale fails, reads can fall back to LAN;
-independent, authenticated read-only probes restore Tailscale after it recovers,
-without holding up LAN refreshes. Tailscale failures back off for three seconds.
+independent read-only probes require two consecutive authenticated successes,
+at least three seconds apart, before restoring Tailscale. They never hold up LAN
+refreshes. Tailscale reads have a three-second total deadline, and failures back
+off for 15 seconds.
 LAN connection attempts and reads time out after two seconds, and failed LAN
 routes back off for 30 seconds. Discovery changes do not clear these cooldowns.
+If every route is cooling down, reads retry one route rather than waiting out
+the whole cooldown. Late failures cannot displace newer successful requests.
 Longer mutation and image-upload response deadlines remain in place.
 
 The Mac Remote view switches upstream routes behind the same local bridge:
 the selected session and unsent draft stay in the existing page. If no route
 works, it reports the connection failure and retries reads as routes recover.
+Web refreshes are coalesced so slow responses do not build a request backlog
+or overwrite a newly selected session. Web reads have an eight-second deadline
+that leaves time for the native bridge's HTTPS-to-LAN fallback.
 Uncertain sends and other mutations are **not automatically replayed**. Check
 the session before sending again; the host may have accepted the first request.
 

@@ -200,6 +200,29 @@ do {
     expect(journal.recoveryState()?.queued.isEmpty == true,
            "Delivered injections atomically claim the queue item during replay")
 
+    let duplicatePrompts = (0..<3).map { _ in
+        RunJournal.QueueItem(id: UUID(), text: "Continue", includesAmbientContext: false)
+    }
+    for item in duplicatePrompts {
+        var added = RunJournal.Event(sessionID: sessionID, runID: claimedRunID, kind: .queueAdded)
+        added.queueItem = item
+        try journal.append(added, durable: true)
+    }
+    var removedDuplicate = RunJournal.Event(
+        sessionID: sessionID, runID: claimedRunID, kind: .queueRemoved
+    )
+    removedDuplicate.queueItem = duplicatePrompts[1]
+    try journal.append(removedDuplicate, durable: true)
+    let reopened = try RunJournal(sessionID: sessionID, directory: directory)
+    expect(
+        reopened.recoveryState()?.queued == [duplicatePrompts[0], duplicatePrompts[2]],
+        "Removing by identity persists without removing equal-text prompts or changing their order"
+    )
+    expect(
+        reopened.recoveryState()?.activeRun?.id == claimedRunID,
+        "Removing a queued message does not cancel the active run"
+    )
+
     let oldID = UUID()
     let oldJournal = try RunJournal(sessionID: oldID, directory: directory)
     let oldDate = Date(timeIntervalSince1970: 1)

@@ -84,6 +84,8 @@ actor RemoteRouteClient {
     private var routes: [RemoteRoute] = []
     private(set) var preferred: RemoteRoute?
     private var retryAfter: [RemoteRoute: Date] = [:]
+    private var routeRevisions: [RemoteRoute: Int] = [:]
+    private var recoverySuccesses: [RemoteRoute: Int] = [:]
     private(set) var probeTask: Task<Void, Never>?
     private var stopped = false
     private let token: String
@@ -106,7 +108,12 @@ actor RemoteRouteClient {
     }
 
     func update(endpoints: [NWEndpoint], fallback: URL?) {
-        routes = (fallback.map { [.fallback($0)] } ?? []) + endpoints.map(RemoteRoute.lan)
+        let updated = (fallback.map { [RemoteRoute.fallback($0)] } ?? []) + endpoints.map(RemoteRoute.lan)
+        for route in routes where !updated.contains(route) {
+            routeRevisions[route, default: 0] += 1
+            recoverySuccesses[route] = nil
+        }
+        routes = updated
         if let preferred, !routes.contains(preferred) { self.preferred = nil }
     }
 
@@ -120,6 +127,11 @@ actor RemoteRouteClient {
         try Task.checkCancellation()
         guard !stopped else { throw CancellationError() }
         var candidates = routes.filter { (retryAfter[$0] ?? .distantPast) <= now() }
+        // Cooldowns protect a working alternative, not a completely disconnected client.
+        if candidates.isEmpty, request.method == "GET",
+           let route = routes.min(by: { (retryAfter[$0] ?? .distantPast) < (retryAfter[$1] ?? .distantPast) }) {
+            candidates = [route]
+        }
         if let preferred, let index = candidates.firstIndex(of: preferred) {
             candidates.insert(candidates.remove(at: index), at: 0)
         }
@@ -131,17 +143,24 @@ actor RemoteRouteClient {
             guard !stopped else { throw CancellationError() }
             guard routes.contains(route) else { continue }
             let previousPreferred = preferred
+            let revision = routeRevisions[route, default: 0]
             do {
                 let response = try await send(route, request)
                 try Task.checkCancellation()
                 guard !stopped else { throw CancellationError() }
                 if [502, 503, 504].contains(response.status) {
-                    failed(route)
+                    if request.method == "GET", routeRevisions[route, default: 0] != revision {
+                        throw CancellationError()
+                    }
+                    failed(route, revision: revision)
                     if request.method != "GET" { return response }
                     lastError = RemoteRouteError.transport("HTTP \(response.status)")
                     continue
                 }
-                if (200..<300).contains(response.status) {
+                if (200..<300).contains(response.status),
+                   routes.contains(route), routeRevisions[route, default: 0] == revision {
+                    routeRevisions[route, default: 0] += 1
+                    recoverySuccesses[route] = nil
                     retryAfter[route] = nil
                     if routes.contains(route), preferred == previousPreferred {
                         preferred = route
@@ -153,7 +172,12 @@ actor RemoteRouteClient {
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as RemoteRouteError {
-                failed(route)
+                try Task.checkCancellation()
+                guard !stopped else { throw CancellationError() }
+                if request.method == "GET", routeRevisions[route, default: 0] != revision {
+                    throw CancellationError()
+                }
+                failed(route, revision: revision)
                 lastError = error
                 if request.method != "GET" { throw error }
             }
@@ -161,8 +185,11 @@ actor RemoteRouteClient {
         throw lastError
     }
 
-    private func failed(_ route: RemoteRoute) {
-        retryAfter[route] = now().addingTimeInterval(route.isLAN ? 30 : 3)
+    private func failed(_ route: RemoteRoute, revision: Int) {
+        guard routes.contains(route), routeRevisions[route, default: 0] == revision else { return }
+        routeRevisions[route, default: 0] += 1
+        recoverySuccesses[route] = nil
+        retryAfter[route] = now().addingTimeInterval(route.isLAN ? 30 : 15)
         if preferred == route { preferred = nil }
     }
 
@@ -178,20 +205,29 @@ actor RemoteRouteClient {
 
     private func probe(_ route: RemoteRoute) async {
         defer { probeTask = nil }
+        let revision = routeRevisions[route, default: 0]
         do {
             let response = try await send(route, HTTPRequest(
                 method: "GET", path: "/api/v1/sessions",
                 headers: ["authorization": "Bearer \(token)"], body: Data()
             ))
             try Task.checkCancellation()
-            guard !stopped, routes.contains(route) else { return }
+            guard !stopped, routes.contains(route), preferred?.isLAN == true,
+                  routeRevisions[route, default: 0] == revision else { return }
             guard response.status == 200,
                   let object = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
                   object["sessions"] is [Any] else {
                 NSLog("Cantrip Tailscale recovery probe rejected HTTP %ld or an invalid session response; backing off.", response.status)
-                failed(route)
+                failed(route, revision: revision)
                 return
             }
+            routeRevisions[route, default: 0] += 1
+            recoverySuccesses[route, default: 0] += 1
+            guard recoverySuccesses[route, default: 0] >= 2 else {
+                retryAfter[route] = now().addingTimeInterval(3)
+                return
+            }
+            recoverySuccesses[route] = nil
             retryAfter[route] = nil
             preferred = route
             onRouteChanged(route)
@@ -199,7 +235,7 @@ actor RemoteRouteClient {
             return
         } catch {
             NSLog("Cantrip Tailscale recovery probe failed; backing off: %@", error.localizedDescription)
-            failed(route)
+            failed(route, revision: revision)
         }
     }
 
@@ -219,7 +255,7 @@ actor RemoteRouteClient {
             guard let url = components.url else { throw RemoteRouteError.invalidResponse }
             var forwarded = URLRequest(
                 url: url, cachePolicy: .reloadIgnoringLocalCacheData,
-                timeoutInterval: request.body.count > 256 * 1024 ? 60 : 12
+                timeoutInterval: request.method == "GET" ? 3 : (request.body.count > 256 * 1024 ? 60 : 12)
             )
             forwarded.httpMethod = request.method
             if !request.body.isEmpty { forwarded.httpBody = request.body }
@@ -227,7 +263,8 @@ actor RemoteRouteClient {
                 forwarded.setValue(request.headers[name], forHTTPHeaderField: name)
             }
             do {
-                let (data, response) = try await fallbackSession.data(for: forwarded)
+                let session = request.method == "GET" ? fallbackReadSession : fallbackSession
+                let (data, response) = try await session.data(for: forwarded)
                 guard let response = response as? HTTPURLResponse, data.count <= 32 << 20 else {
                     throw RemoteRouteError.invalidResponse
                 }
@@ -246,6 +283,14 @@ actor RemoteRouteClient {
     private static let fallbackSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForResource = 90
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration, delegate: RemoteNoRedirectDelegate(), delegateQueue: nil)
+    }()
+
+    private static let fallbackReadSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 3
+        configuration.timeoutIntervalForResource = 3
         configuration.waitsForConnectivity = false
         return URLSession(configuration: configuration, delegate: RemoteNoRedirectDelegate(), delegateQueue: nil)
     }()

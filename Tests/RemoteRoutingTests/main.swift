@@ -1,4 +1,5 @@
 import Foundation
+import JavaScriptCore
 import Network
 
 private var failures = 0
@@ -159,7 +160,7 @@ private func runTests() async throws {
     await recoveryClient.update(endpoints: [endpoint], fallback: url)
     _ = try await recoveryClient.request(read)
     expect(await recoveryStub.calls.map(\.0) == [lan], "Bonjour churn cannot reset Tailscale cooldown")
-    clock.value = clock.value.addingTimeInterval(4)
+    clock.value = clock.value.addingTimeInterval(16)
     _ = try await recoveryClient.request(read)
     let failedProbe = await recoveryClient.probeTask
     await failedProbe?.value
@@ -168,12 +169,19 @@ private func runTests() async throws {
     await recoveryStub.clear()
     _ = try await recoveryClient.request(read)
     expect(await recoveryStub.calls.map(\.0) == [lan], "failed probe backs off without disrupting LAN")
-    clock.value = clock.value.addingTimeInterval(4)
+    clock.value = clock.value.addingTimeInterval(16)
     await recoveryStub.setFallbackFailure(false)
     _ = try await recoveryClient.request(read)
     let probe = await recoveryClient.probeTask
     await probe?.value
-    expect(await recoveryClient.preferred == fallback, "authenticated recovery probe restores Tailscale")
+    expect(await recoveryClient.preferred == lan, "one probe cannot promote intermittent Tailscale")
+    _ = try await recoveryClient.request(read)
+    expect(await recoveryClient.probeTask == nil, "recovery confirmations must be spaced apart")
+    clock.value = clock.value.addingTimeInterval(4)
+    _ = try await recoveryClient.request(read)
+    let confirmation = await recoveryClient.probeTask
+    await confirmation?.value
+    expect(await recoveryClient.preferred == fallback, "two authenticated probes restore Tailscale")
     expect(await recoveryStub.calls.map(\.1).allSatisfy { $0 == "GET" } == true, "recovery only performs reads")
     await recoveryStub.clear()
     _ = try await recoveryClient.request(write)
@@ -183,8 +191,8 @@ private func runTests() async throws {
     for outcome in ["recover", "remove", "stop"] {
         let gate = ProbeGate()
         let probeStub = Stub()
-        let probeClient = RemoteRouteClient(token: "test-token", send: { route, request in
-            if !route.isLAN { await gate.wait() }
+        let probeClient = RemoteRouteClient(token: "test-token", now: { clock.value }, send: { route, request in
+            if !route.isLAN, await probeStub.calls.filter({ !$0.0.isLAN }).isEmpty { await gate.wait() }
             return try await probeStub.send(route, request)
         })
         await probeClient.update(endpoints: [endpoint], fallback: nil)
@@ -204,6 +212,13 @@ private func runTests() async throws {
         if outcome == "stop" { await probeClient.stop() }
         await gate.resume()
         await pendingProbe?.value
+        expect(await probeClient.preferred == lan, "first probe leaves LAN preferred")
+        if outcome == "recover" {
+            clock.value = clock.value.addingTimeInterval(4)
+            _ = try await probeClient.request(read)
+            let confirmation = await probeClient.probeTask
+            await confirmation?.value
+        }
         expect(await probeClient.preferred == (outcome == "recover" ? fallback : lan),
                "only a current, successful probe can promote Tailscale (\(outcome))")
         await probeClient.stop()
@@ -238,6 +253,80 @@ private func runTests() async throws {
     _ = try await mutationClient.request(read)
     expect(await mutationStub.calls.map(\.0) == [fallback, lan], "later read uses LAN after failed Tailscale send")
     await mutationClient.stop()
+
+    for mode in ["lan", "fallback", "both"] {
+        let retryStub = Stub()
+        await retryStub.setLANFailure(true)
+        await retryStub.setFallbackFailure(true)
+        let retryClient = RemoteRouteClient(token: "test-token", send: { route, request in
+            try await retryStub.send(route, request)
+        })
+        await retryClient.update(endpoints: mode == "fallback" ? [] : [endpoint], fallback: mode == "lan" ? nil : url)
+        do {
+            _ = try await retryClient.request(read)
+            expect(false, "offline routes must fail")
+        } catch is RemoteRouteError {}
+        await retryStub.clear()
+        do {
+            _ = try await retryClient.request(write)
+            expect(false, "mutations must wait for a healthy route")
+        } catch is RemoteRouteError {}
+        expect(await retryStub.calls.isEmpty, "no writes on routes still in cooldown")
+        await retryStub.setLANFailure(false)
+        await retryStub.setFallbackFailure(false)
+        _ = try await retryClient.request(read)
+        expect(await retryStub.calls.count == 1, "all-down recovery retries one route without waiting 30 seconds")
+        await retryClient.stop()
+    }
+
+    let intermittentStub = Stub()
+    let intermittent = RemoteRouteClient(token: "test-token", now: { clock.value }, send: { route, request in
+        try await intermittentStub.send(route, request)
+    })
+    await intermittent.update(endpoints: [endpoint], fallback: nil)
+    _ = try await intermittent.request(read)
+    await intermittent.update(endpoints: [endpoint], fallback: url)
+    for (index, succeeds) in [true, false, true, true].enumerated() {
+        await intermittentStub.setFallbackFailure(!succeeds)
+        _ = try await intermittent.request(read)
+        let probe = await intermittent.probeTask
+        expect(probe != nil, "intermittent recovery starts a probe")
+        await probe?.value
+        expect(await intermittent.preferred == (index == 3 ? fallback : lan),
+               "Tailscale recovery requires consecutive successful probes")
+        clock.value = clock.value.addingTimeInterval(16)
+    }
+    await intermittent.stop()
+
+    let lateGate = ProbeGate()
+    let lateStub = Stub()
+    let lateClient = RemoteRouteClient(token: "test-token", send: { route, request in
+        if request.path == "/old" {
+            guard !route.isLAN else { throw RemoteRouteError.transport("Unexpected LAN fallback") }
+            await lateGate.wait()
+            throw RemoteRouteError.transport("Late failure")
+        }
+        return try await lateStub.send(route, request)
+    })
+    await lateClient.update(endpoints: [endpoint], fallback: url)
+    let lateRequest = Task {
+        try await lateClient.request(HTTPRequest(method: "GET", path: "/old", headers: read.headers, body: Data()))
+    }
+    for _ in 0..<100 {
+        if await lateGate.started { break }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    expect(await lateGate.started, "old request started")
+    _ = try await lateClient.request(read)
+    await lateGate.resume()
+    do {
+        _ = try await lateRequest.value
+        expect(false, "old failure must surface")
+    } catch is CancellationError {}
+    expect(await lateClient.preferred == fallback, "late failure cannot demote a newer successful route")
+    expect(await lateStub.calls.map(\.0) == [fallback], "stale failure must not switch to healthy LAN")
+    _ = try await lateClient.request(write)
+    await lateClient.stop()
 
     for status in [401, 409] {
         let errorStub = Stub()
@@ -282,6 +371,19 @@ private func runTests() async throws {
     let tls = try TestServer(tls: true)
     let tlsEndpoint = try await tls.start()
     defer { tls.stop() }
+    guard case .hostPort(_, let blackholePort) = blackholeEndpoint else { fatalError("Expected host/port") }
+    let slowHTTPS = RemoteRouteClient(token: "test-token")
+    await slowHTTPS.update(
+        endpoints: [tlsEndpoint],
+        fallback: URL(string: "https://127.0.0.1:\(blackholePort.rawValue)")!
+    )
+    let httpsStart = Date()
+    expect(try await slowHTTPS.request(read).status == 200, "stalled HTTPS falls back to authenticated LAN")
+    let httpsElapsed = Date().timeIntervalSince(httpsStart)
+    expect(httpsElapsed >= 2.5, "exercise the HTTPS deadline, not an immediate setup failure")
+    expect(httpsElapsed < 4.5, "HTTPS fallback is bounded, not a 12-second stall")
+    expect(await slowHTTPS.preferred == .lan(tlsEndpoint), "LAN remains healthy after HTTPS timeout")
+    await slowHTTPS.stop()
     let secure = RemoteRouteClient(token: "test-token")
     await secure.update(endpoints: [tlsEndpoint], fallback: nil)
     expect(try await secure.request(read).status == 200, "real authenticated TLS-PSK request succeeds")
@@ -319,6 +421,61 @@ private func runTests() async throws {
         _ = try RemoteHTTPResponse.parse(Data("HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n".utf8))
         expect(false, "invalid response length rejected")
     } catch is RemoteRouteError {}
+
+    try await MainActor.run {
+        let source = try String(contentsOfFile: "Sources/Cantrip/RemoteControlServer.swift", encoding: .utf8)
+        let start = source.range(of: "    let refreshTask=null,refreshRequested=false;")!
+        let end = source.range(of: "    function renderSessions", range: start.upperBound..<source.endIndex)!
+        let refresh = String(source[start.lowerBound..<end.lowerBound])
+        let context = JSContext()!
+        context.exceptionHandler = { _, error in expect(false, "web refresh JavaScript: \(error?.toString() ?? "unknown")") }
+        context.evaluateScript("""
+        let token="test",selected="a",pending=[],rendered=[],connections=[];
+        function api(path){return new Promise((resolve,reject)=>pending.push({path,resolve,reject}))}
+        function renderSessions(items){}
+        function render(session){rendered.push(session.id)}
+        function connection(active){connections.push(active)}
+        function pair(show){}
+        \(refresh)
+        refresh();refresh();refresh();
+        """)
+        expect(context.evaluateScript("pending.length")!.toInt32() == 1, "web refreshes coalesce while stalled")
+        context.evaluateScript(#"pending.shift().resolve({sessions:[{id:"a"},{id:"b"}]})"#)
+        expect(context.evaluateScript("pending[0].path")!.toString() == "/api/v1/sessions/a", "web loads selected session")
+        context.evaluateScript(#"selected="b";refresh();pending.shift().resolve({session:{id:"a"}})"#)
+        expect(context.evaluateScript("rendered.length")!.toInt32() == 0, "old selected session cannot overwrite new selection")
+        context.evaluateScript(#"pending.shift().resolve({sessions:[{id:"a"},{id:"b"}]})"#)
+        context.evaluateScript(#"pending.shift().resolve({session:{id:"b"}})"#)
+        expect(context.evaluateScript("rendered.join(',')")!.toString() == "b", "coalesced refresh loads current selection")
+        expect(context.evaluateScript("pending.length")!.toInt32() == 0, "coalesced refresh drains without a request backlog")
+        context.evaluateScript(#"refresh();pending.shift().reject(new Error("Offline"))"#)
+        expect(context.evaluateScript("refreshTask === null && connections.at(-1) === false")!.toBool() == true,
+               "failed refresh releases the single-flight gate and reports disconnection")
+
+        let apiStart = source.range(of: "    async function api(")!
+        let apiEnd = source.range(of: "    function pair(", range: apiStart.upperBound..<source.endIndex)!
+        context.evaluateScript("""
+        let deadlines=[],cleared=[],aborted=false,fetches=[];
+        class AbortController {
+          constructor(){this.signal={}}
+          abort(){aborted=true;this.signal.onabort?.()}
+        }
+        function setTimeout(callback,ms){deadlines.push({callback,ms});return deadlines.length}
+        function clearTimeout(id){cleared.push(id)}
+        function fetch(path,options){return new Promise((resolve,reject)=>{
+          fetches.push({resolve,reject});if(options.signal)options.signal.onabort=()=>reject(new Error("Timed out"));
+        })}
+        \(source[apiStart.lowerBound..<apiEnd.lowerBound])
+        api("/api/v1/sessions").catch(()=>{});
+        """)
+        expect(context.evaluateScript("deadlines[0].ms")!.toInt32() == 8000, "web reads have a bounded fallback-aware deadline")
+        context.evaluateScript("deadlines[0].callback()")
+        expect(context.evaluateScript("aborted && cleared.length === 1")!.toBool() == true,
+               "web read timeout aborts the fetch and cleans up its timer")
+        context.evaluateScript(#"api("/api/v1/sessions",{method:"POST"}).catch(()=>{})"#)
+        expect(context.evaluateScript("deadlines.length")!.toInt32() == 1, "web mutations retain their longer response lifetime")
+        context.evaluateScript(#"fetches.at(-1).resolve({ok:true,json:async()=>({})})"#)
+    }
 }
 
 Task {

@@ -219,6 +219,20 @@ final class RemoteControlServer {
             sendJSON(["session": snapshot(session)], on: connection)
             return
         }
+        if parts.count == 3, parts[1] == "queue", request.method == "DELETE" {
+            guard let promptID = UUID(uuidString: String(parts[2])) else {
+                sendError(400, "queued message ID must be a UUID", on: connection)
+                return
+            }
+            guard let index = session.queued.firstIndex(where: { $0.id == promptID }) else {
+                sendError(409, "This message is no longer queued. It may have started or been removed on another device.", on: connection)
+                return
+            }
+            // Resolve and remove on the main actor without yielding to queue draining.
+            session.removeQueued(at: index)
+            sendJSON(["session": snapshot(session)], on: connection)
+            return
+        }
         guard request.method == "POST", parts.count == 2 else {
             sendError(405, "method not allowed", on: connection)
             return
@@ -320,6 +334,7 @@ final class RemoteControlServer {
             "queuedCount": session.queued.count,
             "supportsImageAttachments": session.supportsRemoteImages,
             "supportsAutoDelivery": true,
+            "supportsQueueRemoval": true,
         ]
         if let status = session.statusText { result["status"] = status }
         if let status = session.deliveryStatus { result["deliveryStatus"] = status }
@@ -472,11 +487,18 @@ private extension RemoteControlServer {
     addEventListener("wheel",event=>{if(event.deltaY<0)followOutput=false},{passive:true});
     addEventListener("scroll",()=>{if(!suppressScroll)followOutput=atBottom()},{passive:true});
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
-      const response=await fetch(path,options);const data=await response.json();if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}
+      const controller=(!options.method||options.method==="GET")?new AbortController():null;
+      const deadline=controller?setTimeout(()=>controller.abort(),8000):null;if(controller)options.signal=controller.signal;
+      try{const response=await fetch(path,options);const data=await response.json();if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}finally{if(deadline!==null)clearTimeout(deadline)}}
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
-    async function refresh(){try{const listed=await api("/api/v1/sessions");if(!selected||!listed.sessions.some(s=>s.id===selected))selected=listed.sessions[0]?.id||null;
-      renderSessions(listed.sessions);if(selected){const data=await api(`/api/v1/sessions/${selected}`);render(data.session)}else render(null);connection(true)}
-      catch(error){connection(false);if(error.message.includes("token"))pair(true)}}
+    let refreshTask=null,refreshRequested=false;
+    function refresh(){refreshRequested=true;if(refreshTask)return refreshTask;
+      refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token;
+        try{const listed=await api("/api/v1/sessions");if(token!==requestToken)continue;if(selected!==requestedID){refreshRequested=true;continue}
+          if(!selected||!listed.sessions.some(s=>s.id===selected))selected=listed.sessions[0]?.id||null;
+          renderSessions(listed.sessions);const detailID=selected;if(detailID){const data=await api(`/api/v1/sessions/${detailID}`);if(token!==requestToken)continue;if(selected!==detailID){refreshRequested=true;continue}render(data.session)}else render(null);connection(true)}
+        catch(error){if(token!==requestToken)continue;connection(false);if(error.message.includes("token")){refreshRequested=false;pair(true)}}}
+      })().finally(()=>{refreshTask=null});return refreshTask}
     function renderSessions(items){const nav=$("sessions");nav.replaceChildren();for(const item of items){const tab=document.createElement("span");tab.className=`session-tab ${item.id===selected?"active":""}`;
       const button=document.createElement("button");button.className="session-select";button.textContent=item.title;button.title=item.title;button.onclick=()=>{selected=item.id;renderedPayload="";refresh()};
       const close=document.createElement("button");close.className="session-close";close.textContent="×";close.title=`Close ${item.title}`;close.setAttribute("aria-label",`Close ${item.title}`);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};tab.append(button,close);nav.append(tab)}}
