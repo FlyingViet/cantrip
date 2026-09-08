@@ -326,6 +326,12 @@ final class RemoteControlServer {
         ]
         if let status = session.statusText { result["status"] = status }
         if includeMessages {
+            result["queued"] = session.queued.map { prompt in
+                [
+                    "id": prompt.id.uuidString,
+                    "text": prompt.text,
+                ]
+            }
             result["messages"] = session.messages.map { message in
                 var object: [String: Any] = [
                     "id": message.id.uuidString,
