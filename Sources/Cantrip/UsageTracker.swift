@@ -24,17 +24,33 @@ final class UsageTracker: ObservableObject {
 
     @Published private(set) var lastQueryCost: Double?
     @Published private(set) var rateLimit: RateLimit?
-    /// e.g. "300 AI credits / 500,000 (0%) this month" — via gh API.
-    @Published private(set) var copilotQuota: String?
+    @Published private(set) var copilotUsage = CopilotUsageSnapshot()
+    var copilotQuota: String? { copilotUsage.summary }
     private var lastQuotaRefresh = Date.distantPast
+    private let quotaLoader: (@escaping (Result<CopilotAccountUsage, Error>) -> Void) -> Void
+    private let quotaClock: () -> Date
 
-    /// Refresh plan quotas (Copilot AI credits); throttled to 30 min.
-    func refreshQuotas(force: Bool = false) {
-        guard force || Date().timeIntervalSince(lastQuotaRefresh) > 1800 else { return }
-        lastQuotaRefresh = Date()
-        QuotaFetcher.fetchCopilotQuota { [weak self] summary in
+    /// Mac and Remote share one single-flight, once-per-minute account lookup.
+    func refreshQuotas() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.refreshQuotas() }
+            return
+        }
+        guard !copilotUsage.isRefreshing, quotaClock().timeIntervalSince(lastQuotaRefresh) >= 60 else { return }
+        lastQuotaRefresh = quotaClock()
+        copilotUsage.isRefreshing = true
+        quotaLoader { [weak self] result in
             DispatchQueue.main.async {
-                if let summary { self?.copilotQuota = summary }
+                guard let self else { return }
+                self.copilotUsage.isRefreshing = false
+                switch result {
+                case .success(let account):
+                    self.copilotUsage.account = account
+                    self.copilotUsage.checkedAt = ISO8601DateFormatter().string(from: self.quotaClock())
+                    self.copilotUsage.error = nil
+                case .failure(let error):
+                    self.copilotUsage.error = ((error as? CopilotQuotaError) ?? .response).localizedDescription
+                }
             }
         }
     }
@@ -45,7 +61,12 @@ final class UsageTracker: ObservableObject {
     private let rateLimitKey = "claudeRateLimit"
     private let d = UserDefaults.standard
 
-    private init() {
+    init(
+        quotaLoader: @escaping (@escaping (Result<CopilotAccountUsage, Error>) -> Void) -> Void = QuotaFetcher.fetchCopilotQuota,
+        quotaClock: @escaping () -> Date = Date.init
+    ) {
+        self.quotaLoader = quotaLoader
+        self.quotaClock = quotaClock
         if let data = d.data(forKey: rateLimitKey),
            let saved = try? JSONDecoder().decode(RateLimit.self, from: data) {
             rateLimit = saved

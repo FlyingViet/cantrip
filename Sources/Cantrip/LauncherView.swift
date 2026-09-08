@@ -276,7 +276,8 @@ struct LauncherView: View {
                 terminalView
             } else if showUsage {
                 Divider().opacity(0.3)
-                usageView
+                ScrollView { usageView }
+                    .frame(maxHeight: metrics.transcriptMaxHeight)
             } else if showHistory {
                 Divider().opacity(0.3)
                 historyView
@@ -1702,25 +1703,7 @@ struct LauncherView: View {
                         .foregroundStyle(.tertiary)
                 }
             }
-            HStack(spacing: 6) {
-                Image(systemName: "airplane")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                if let quota = usage.copilotQuota {
-                    Text("Copilot: \(quota)").font(.callout)
-                } else {
-                    Text("Copilot: quota unavailable — needs an authenticated `gh` CLI")
-                        .font(.callout)
-                        .foregroundStyle(.tertiary)
-                }
-                Button(action: { usage.refreshQuotas(force: true) }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-                .help("Refresh plan quotas")
-            }
+            CopilotUsageView(usage: usage)
             if claudeMonthSpend > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "dollarsign.circle")
@@ -1746,7 +1729,7 @@ struct LauncherView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            Text("Claude figures come from the CLI itself; Copilot from GitHub's billing API. Neither exposes plan allotments per-user yet, so percentages appear when the platforms provide them.")
+            Text("Claude figures come from its CLI. Copilot allowance comes from the Mac's signed-in Copilot account, not billing reports.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)

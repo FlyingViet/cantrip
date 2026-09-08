@@ -88,6 +88,34 @@ uses the stable prompt ID and the same durable removal as the Mac UI. A prompt
 that has already started or been removed returns HTTP 409; no other prompt or
 running task is affected.
 
+### See Copilot account usage in AgentGateway
+
+Tap the **usage gauge beside the Local/Remote lane picker (antenna)** in
+AgentGateway's top header. It shows the remaining included allowance and opens
+details for used/remaining percentages, reset time, additional usage, and the
+Copilot account signed in on the Mac. It is available from every chat lane;
+it does not switch sessions or change which backend receives your messages.
+
+Update both apps and reopen the Cantrip Mac host. The Mac needs Node.js and a
+recent Copilot CLI with the account SDK (tested with CLI 1.0.83); sign in through
+Copilot. The reader discovers the installed SDK/runtime, makes account-only
+calls, and stops its separate runtime without creating a session or invoking
+a model. It replaces the old billing-report estimate in the Mac's **Usage** panel.
+
+Pairing-authenticated, read-only `GET /api/v1/copilot/usage` returns a cached
+snapshot immediately and starts a background lookup at most once a minute.
+Mac and mobile share that cache. Only allowlisted quota/subscription fields
+leave the Mac, never the SDK authentication payload or credentials. The phone
+polls while foregrounded; pull-to-refresh does not bypass the host throttle.
+Re-pairing clears the phone's old account snapshot.
+
+Credit/token plans are not prompt counts. Resets come from the raw account's
+UTC reset date, not the SDK's synthesized snapshot-time fallback. Unknown
+resets stay unknown. Failed refreshes retain explicitly stale readings;
+snapshots also become stale after five minutes without retrieval, ten minutes
+of source age, or a passed reset. Older hosts show an update notice. This is
+not a live model-specific or short-term rate-limit meter.
+
 ### See GitHub builds in AgentGateway
 
 Open the mobile **hamburger menu > GitHub Builds** from any chat lane.

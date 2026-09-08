@@ -8,6 +8,14 @@ struct SessionTabTests {
         // Exec a fresh process so Foundation resolves every data path under the
         // temporary home before any app singleton or UserDefaults is created.
         guard ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"] != nil else {
+            if ProcessInfo.processInfo.environment["CANTRIP_QUOTA_LIVE_TEST"] == "1" {
+                let result = await withCheckedContinuation { continuation in
+                    QuotaFetcher.fetchCopilotQuota { continuation.resume(returning: $0) }
+                }
+                let account = try result.get()
+                precondition(!account.buckets.isEmpty)
+                print("Live Copilot account: \(account.primary?.summary ?? "No primary allowance")")
+            }
             let home = FileManager.default.temporaryDirectory
                 .appendingPathComponent("cantrip-tab-tests-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
@@ -96,6 +104,7 @@ struct SessionTabTests {
         try testWebTabControls()
         try testPromptPaging()
         try await testPromptPreparation()
+        try await testCopilotUsage()
         try await testHostProtection(manager: manager)
         print("Session tab persistence, protection, privacy, and web controls passed")
     }
@@ -192,7 +201,12 @@ struct SessionTabTests {
     static func testHostProtection(manager: SessionManager) async throws {
         let chat = manager.newSession()
         try chat.updateTab(name: "Host tab", isLocked: true)
-        let server = RemoteControlServer(manager: manager)
+        var quotaCalls = 0
+        let usage = UsageTracker(quotaLoader: { completion in
+            quotaCalls += 1
+            completion(.failure(CopilotQuotaError.authentication))
+        })
+        let server = RemoteControlServer(manager: manager, usage: usage)
         let port = Int.random(in: 49152...65535)
         let token = UUID().uuidString
         server.start(port: port, token: token)
@@ -222,6 +236,16 @@ struct SessionTabTests {
         let builds = try await request(buildsPath, method: "GET")
         precondition(builds.0 == 200 && builds.1["isRefreshing"] is Bool)
         precondition(builds.1["repositories"] is [Any])
+        let usagePath = "api/v1/copilot/usage"
+        let unauthorizedUsage = try await request(usagePath, method: "GET", authenticated: false)
+        precondition(unauthorizedUsage.0 == 401 && quotaCalls == 0)
+        try await expectStatus(405, usagePath)
+        precondition(quotaCalls == 0)
+        let quota = try await request(usagePath, method: "GET")
+        precondition(quota.0 == 200 && quota.1["isRefreshing"] as? Bool == true)
+        let failedQuota = try await request(usagePath, method: "GET")
+        precondition(failedQuota.1["error"] as? String == CopilotQuotaError.authentication.localizedDescription)
+        precondition(failedQuota.1["account"] == nil && quotaCalls == 1)
         let path = "api/v1/sessions/\(chat.id)"
         try await expectStatus(409, path + "/close")
         try await expectStatus(409, path + "/new-conversation")
