@@ -62,4 +62,23 @@ final class CantripQueueTests: XCTestCase {
     func testMalformedQueueIsNotSilentlyDropped() {
         XCTAssertThrowsError(try session(queue: #"[{"id":"a"}]"#, count: 1))
     }
+
+    func testAutoIsDefaultOptionAndLegacyHostHasNoCapability() throws {
+        XCTAssertEqual(CantripDeliveryMode.allCases.first, .auto)
+        let legacy = try session(queue: "[]", count: 0)
+        XCTAssertNil(legacy.supportsAutoDelivery)
+        XCTAssertNil(legacy.deliveryStatus)
+    }
+
+    func testRoutingFeedbackDecodesWithoutChangingTheTranscript() throws {
+        let data = Data(#"""
+        {"id":"session-a","title":"Chat","workdir":"/tmp","isStreaming":true,
+         "canResume":false,"councilMode":false,"queuedCount":1,"messages":[],
+         "supportsAutoDelivery":true,"deliveryStatus":"Queued: this is a follow-up task."}
+        """#.utf8)
+        let decoded = try JSONDecoder().decode(CantripRemoteSession.self, from: data)
+        XCTAssertEqual(decoded.supportsAutoDelivery, true)
+        XCTAssertEqual(decoded.deliveryStatus, "Queued: this is a follow-up task.")
+        XCTAssertTrue(decoded.transcript.isEmpty)
+    }
 }

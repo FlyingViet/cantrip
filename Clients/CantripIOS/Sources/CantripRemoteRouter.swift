@@ -34,13 +34,14 @@ final class CantripRemoteRouter {
     ) async throws -> T {
         let generation = generation
         var candidates = available.filter { (retryAfter[$0] ?? .distantPast) <= now() }
+        candidates.sort { !isLAN($0) && isLAN($1) }
         if let preferred, let index = candidates.firstIndex(of: preferred) {
             candidates.insert(candidates.remove(at: index), at: 0)
         }
         if !readOnly { candidates = Array(candidates.prefix(1)) }
         guard !candidates.isEmpty else {
             throw CantripRemoteError.transport(
-                "No healthy route is available. Retrying shortly; check the host and fallback URL."
+                "No healthy route is available. Retrying shortly; check the host and Tailscale URL."
             )
         }
         var lastError: Error = CantripRemoteError.invalidResponse
@@ -71,11 +72,11 @@ final class CantripRemoteRouter {
     }
 
     @discardableResult
-    func recoverLAN(probe: @escaping (CantripTransport) async throws -> Void) -> Task<Void, Never>? {
+    func recoverTailscale(probe: @escaping (CantripTransport) async throws -> Void) -> Task<Void, Never>? {
         guard probeTask == nil,
-              !isLAN(preferred),
+              isLAN(preferred),
               let route = available.first(where: {
-                  isLAN($0) && (retryAfter[$0] ?? .distantPast) <= now()
+                  !isLAN($0) && (retryAfter[$0] ?? .distantPast) <= now()
               })
         else { return nil }
         let generation = generation
@@ -94,9 +95,8 @@ final class CantripRemoteRouter {
                 return
             } catch {
                 guard generation == self.generation else { return }
-                // A recovery probe must not interrupt the working fallback, including
-                // when a stale advertisement belongs to an incompatible host.
-                print("[CantripRemote] LAN recovery probe failed; backing off: \(error.localizedDescription)")
+                // A recovery probe must not interrupt the working LAN connection.
+                print("[CantripRemote] Tailscale recovery probe failed; backing off: \(error.localizedDescription)")
                 self.failed(route)
             }
         }

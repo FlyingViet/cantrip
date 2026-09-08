@@ -133,6 +133,40 @@ final class CantripImageTransportTests: XCTestCase {
         XCTAssertEqual(requests, 1)
     }
 
+    func testAutoOnLegacyHostDoesNotSendAMutation() async throws {
+        let response = try snapshot(support: nil)
+        var requests = 0
+        ImageRequestProtocol.handler = { request in
+            requests += 1
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (200, response)
+        }
+        do {
+            _ = try await api().send("Actually, explain it instead", mode: .auto, sessionID: sessionID)
+            XCTFail("Auto must not silently fall back on an old host")
+        } catch CantripRemoteError.autoDeliveryUnsupported { }
+        XCTAssertEqual(requests, 1)
+    }
+
+    func testAutoPreflightsAndPostsExactlyOnce() async throws {
+        let data = try snapshot(support: true)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var host = try XCTUnwrap(object["session"] as? [String: Any])
+        host["supportsAutoDelivery"] = true
+        object["session"] = host
+        let response = try JSONSerialization.data(withJSONObject: object)
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            return (request.httpMethod == "POST" ? 202 : 200, response)
+        }
+        _ = try await api().send("The config is in /config", mode: .auto, sessionID: sessionID)
+        XCTAssertEqual(methods, ["GET", "POST"])
+        let body = try JSONEncoder().encode(CantripMessageBody(text: "Hello", mode: .auto, images: []))
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(encoded["mode"] as? String, "auto")
+    }
+
     func testQueuedSendAndRefreshReturnAuthoritativeQueue() async throws {
         let queued = Data(
             """

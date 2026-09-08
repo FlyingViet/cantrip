@@ -12,6 +12,7 @@ enum CantripRemoteConnectionState: Equatable {
 }
 
 enum CantripDeliveryMode: String, CaseIterable, Identifiable {
+    case auto
     case queue
     case interrupt
     case inject
@@ -20,6 +21,7 @@ enum CantripDeliveryMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .auto: return "Auto"
         case .queue: return "Queue"
         case .interrupt: return "Redirect"
         case .inject: return "Inject"
@@ -60,6 +62,8 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     let messages: [CantripRemoteMessage]?
     let supportsImageAttachments: Bool?
     let queued: [CantripRemoteQueuedPrompt]?
+    var supportsAutoDelivery: Bool? = nil
+    var deliveryStatus: String? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
 }
@@ -86,6 +90,7 @@ enum CantripRemoteError: LocalizedError {
     case decoding
     case invalidResponse
     case imagesUnsupported
+    case autoDeliveryUnsupported
 
     static func isRouteFailure(_ error: Error) -> Bool {
         switch error {
@@ -118,6 +123,8 @@ enum CantripRemoteError: LocalizedError {
             return "Cantrip returned an invalid HTTP response."
         case .imagesUnsupported:
             return "Image attachments require an updated Cantrip host using Claude, Copilot, or Codex. Your images have not been sent."
+        case .autoDeliveryUnsupported:
+            return "Update and reopen Cantrip on your Mac for Auto sending, or choose Queue, Redirect, or Inject. Your message has not been sent."
         }
     }
 }
@@ -557,14 +564,18 @@ struct CantripRemoteAPI {
         images: [ChatImageAttachment] = []
     ) async throws
         -> CantripRemoteSession {
-        if !images.isEmpty {
+        if !images.isEmpty || mode == .auto {
             guard images.count <= ImageAttachmentProcessor.maximumCount else {
                 throw ImageAttachmentError.tooMany
             }
             // Check the same authenticated host used for the mutation. Older hosts
             // ignore unknown JSON fields, which would silently send only the text.
-            guard try await session(id: sessionID).supportsImageAttachments == true else {
+            let host = try await session(id: sessionID)
+            guard images.isEmpty || host.supportsImageAttachments == true else {
                 throw CantripRemoteError.imagesUnsupported
+            }
+            guard mode != .auto || host.supportsAutoDelivery == true else {
+                throw CantripRemoteError.autoDeliveryUnsupported
             }
         }
         let body = try JSONEncoder().encode(CantripMessageBody(text: text, mode: mode, images: images))
@@ -788,7 +799,7 @@ final class CantripRemoteModel: ObservableObject {
         do {
             let normalized = try Self.normalizedBaseURL(rawURL)
             guard !tailscaleOnly || normalized != nil else {
-                throw CantripRemoteError.invalidURL("Enter a fallback URL to use Tailscale only.")
+                throw CantripRemoteError.invalidURL("Enter a Tailscale URL to use Tailscale only.")
             }
             let enteredToken = rawToken.trimmingCharacters(in: .whitespacesAndNewlines)
             let effectiveToken = enteredToken.isEmpty ? token : enteredToken
@@ -1017,7 +1028,7 @@ final class CantripRemoteModel: ObservableObject {
                 }
             }
             errorMessage = nil
-            recoverLAN()
+            recoverTailscale()
         } catch is CancellationError {
             return
         } catch {
@@ -1062,13 +1073,13 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     private func updateRoutes() {
-        router.available = (tailscaleOnly ? [] : lanEndpoints.map(CantripTransport.lan))
-            + (baseURL.map { [.remote($0)] } ?? [])
+        router.available = (baseURL.map { [.remote($0)] } ?? [])
+            + (tailscaleOnly ? [] : lanEndpoints.map(CantripTransport.lan))
     }
 
-    private func recoverLAN() {
+    private func recoverTailscale() {
         guard appIsActive, let token, !tailscaleOnly else { return }
-        router.recoverLAN { transport in
+        router.recoverTailscale { transport in
             _ = try await CantripRemoteAPI(transport: transport, token: token).sessions()
         }
     }
@@ -1220,7 +1231,7 @@ struct CantripRemoteView: View {
     @EnvironmentObject private var model: CantripRemoteModel
     @State private var showSettings = false
     @State private var draft = ""
-    @State private var deliveryMode: CantripDeliveryMode = .queue
+    @State private var deliveryMode: CantripDeliveryMode = .auto
 
     var body: some View {
         NavigationStack {
@@ -1419,8 +1430,15 @@ struct CantripRemoteView: View {
                         Text(mode.title).tag(mode)
                     }
                 }
-                .pickerStyle(.segmented)
-                .accessibilityLabel("Prompt delivery mode")
+                .pickerStyle(.menu)
+                .accessibilityLabel("Delivery override")
+                .disabled(model.isMutating)
+                Spacer()
+            }
+            if let status = model.selectedSession?.deliveryStatus {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Message Cantrip", text: $draft, axis: .vertical)
@@ -1450,6 +1468,7 @@ struct CantripRemoteView: View {
         Task {
             if await model.send(prompt, mode: deliveryMode) {
                 draft = ""
+                deliveryMode = .auto
             }
         }
     }
@@ -1578,7 +1597,7 @@ private struct CantripRemoteSetupView: View {
             Section {
                 Label("Connect to Cantrip", systemImage: "antenna.radiowaves.left.and.right")
                     .font(.headline)
-                Text("Enter the pairing token from Cantrip. AgentGateway connects directly when both devices are on the same local network; a Tailscale Serve URL is an optional fallback.")
+                Text("Enter the pairing token from Cantrip. AgentGateway prefers your saved Tailscale Serve URL, even on the same local network. Direct LAN is used if Tailscale is unavailable or no URL is saved.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -1599,7 +1618,7 @@ struct CantripRemoteSettingsSection: View {
 
     var body: some View {
         Section {
-            TextField("Tailscale fallback URL (optional)", text: $url)
+            TextField("Tailscale URL (optional, preferred when saved)", text: $url)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
@@ -1650,7 +1669,7 @@ struct CantripRemoteSettingsSection: View {
         } header: {
             Text("Cantrip Remote")
         } footer: {
-            Text("Automatic mode keeps a working route, backs off failed LAN connections, and probes LAN recovery without interrupting refreshes. Tailscale only requires a fallback URL. The pairing token remains in Keychain.")
+            Text("Automatic mode prefers Tailscale and uses LAN only when needed. It never probes or switches to LAN while Tailscale is working. After falling back to LAN, read-only probes restore Tailscale without blocking refreshes. Tailscale only requires a saved URL. The pairing token remains in Keychain.")
         }
         .onAppear {
             url = model.configuredURL

@@ -13,7 +13,29 @@ final class CantripRoutingTests: XCTestCase {
     private let lan = CantripTransport.lan(.hostPort(host: "127.0.0.1", port: 8765))
     private let remote = CantripTransport.remote(URL(string: "https://cantrip.example")!)
 
-    func testFailedLANBacksOffAndFallbackRemainsFirstAfterCooldown() async throws {
+    func testTailscaleIsFirstAndNeverProbesHealthyLAN() async throws {
+        let router = CantripRemoteRouter()
+        var now = Date()
+        router.now = { now }
+        router.available = [lan, remote]
+        for _ in 0..<3 {
+            _ = try await router.perform(readOnly: true) { route in
+                XCTAssertEqual(route, self.remote)
+                return 1
+            }
+            let probe = router.recoverTailscale { _ in XCTFail("Healthy Tailscale needs no probes") }
+            XCTAssertNil(probe)
+            now = now.addingTimeInterval(31)
+            router.available = [remote]
+            router.available = [lan, remote]
+        }
+        _ = try await router.perform(readOnly: false) { route in
+            XCTAssertEqual(route, self.remote)
+            return 1
+        }
+    }
+
+    func testFailedTailscaleBacksOffAndLANRemainsFirstUntilProbed() async throws {
         let router = CantripRemoteRouter()
         var now = Date()
         router.now = { now }
@@ -21,21 +43,21 @@ final class CantripRoutingTests: XCTestCase {
         var calls: [CantripTransport] = []
         let operation: (CantripTransport) async throws -> Int = { route in
             calls.append(route)
-            if route == self.lan { throw CantripRemoteError.transport("Offline") }
+            if route == self.remote { throw CantripRemoteError.transport("Offline") }
             return 1
         }
         _ = try await router.perform(readOnly: true, operation: operation)
-        XCTAssertEqual(calls, [lan, remote])
+        XCTAssertEqual(calls, [remote, lan])
         calls = []
-        router.available = [remote]
+        router.available = [lan]
         router.available = [lan, remote]
         _ = try await router.perform(readOnly: true, operation: operation)
         now = now.addingTimeInterval(31)
         _ = try await router.perform(readOnly: true, operation: operation)
-        XCTAssertEqual(calls, [remote, remote], "Bonjour churn and cooldown expiry must not stall reads")
+        XCTAssertEqual(calls, [lan, lan], "Route changes and cooldown expiry must not stall reads")
     }
 
-    func testMutationIsNotReplayedAndNextReadUsesFallback() async throws {
+    func testMutationIsNotReplayedAndNextReadUsesLAN() async throws {
         let router = CantripRemoteRouter()
         router.available = [lan, remote]
         var calls: [CantripTransport] = []
@@ -46,12 +68,12 @@ final class CantripRoutingTests: XCTestCase {
             }
             XCTFail("Mutation must report an uncertain failure")
         } catch {}
-        XCTAssertEqual(calls, [lan])
+        XCTAssertEqual(calls, [remote])
         _ = try await router.perform(readOnly: true) { route in
             calls.append(route)
             return 1
         }
-        XCTAssertEqual(calls, [lan, remote])
+        XCTAssertEqual(calls, [remote, lan])
     }
 
     func testAuthenticationAndApplicationErrorsDoNotSwitchRoutes() async throws {
@@ -70,15 +92,15 @@ final class CantripRoutingTests: XCTestCase {
         }
     }
 
-    func testRecoveryProbeDoesNotBlockFallbackAndPromotesOnlyAfterSuccess() async throws {
+    func testRecoveryProbeDoesNotBlockLANAndPromotesTailscaleOnlyAfterSuccess() async throws {
         let router = CantripRemoteRouter()
-        router.available = [remote]
+        router.available = [lan]
         _ = try await router.perform(readOnly: true) { _ in 1 }
         router.available = [lan, remote]
         let started = expectation(description: "Read-only recovery starts")
         var resume: CheckedContinuation<Void, Never>?
-        let probe = router.recoverLAN { route in
-            XCTAssertEqual(route, self.lan)
+        let probe = router.recoverTailscale { route in
+            XCTAssertEqual(route, self.remote)
             await withCheckedContinuation { continuation in
                 resume = continuation
                 started.fulfill()
@@ -86,31 +108,61 @@ final class CantripRoutingTests: XCTestCase {
         }
         await fulfillment(of: [started], timeout: 1)
         _ = try await router.perform(readOnly: true) { route in
-            XCTAssertEqual(route, self.remote)
+            XCTAssertEqual(route, self.lan)
             return 1
         }
-        XCTAssertEqual(router.preferred, remote)
+        XCTAssertEqual(router.preferred, lan)
         resume?.resume()
         await probe?.value
-        XCTAssertEqual(router.preferred, lan)
+        XCTAssertEqual(router.preferred, remote)
         _ = try await router.perform(readOnly: false) { route in
-            XCTAssertEqual(route, self.lan)
+            XCTAssertEqual(route, self.remote)
             return 1
         }
     }
 
-    func testFailedProbeLeavesFallbackHealthyAndBacksOff() async throws {
-        let router = CantripRemoteRouter()
-        router.available = [remote]
-        _ = try await router.perform(readOnly: true) { _ in 1 }
-        router.available = [lan, remote]
-        let probe = router.recoverLAN { _ in
-            throw CantripRemoteError.transport("Offline")
+    func testFailedProbeLeavesLANHealthyAndBacksOff() async throws {
+        for error in [CantripRemoteError.transport("Offline"), .authentication, .decoding] {
+            let router = CantripRemoteRouter()
+            var now = Date()
+            router.now = { now }
+            router.available = [lan]
+            _ = try await router.perform(readOnly: true) { _ in 1 }
+            router.available = [lan, remote]
+            let probe = router.recoverTailscale { _ in throw error }
+            await probe?.value
+            XCTAssertEqual(router.preferred, lan)
+            let retry = router.recoverTailscale { _ in XCTFail("Must back off failed probe") }
+            XCTAssertNil(retry)
+            now = now.addingTimeInterval(4)
+            let recovered = router.recoverTailscale { route in
+                XCTAssertEqual(route, self.remote)
+            }
+            await recovered?.value
+            XCTAssertEqual(router.preferred, remote)
         }
-        await probe?.value
-        XCTAssertEqual(router.preferred, remote)
-        let retry = router.recoverLAN { _ in XCTFail("Must back off failed probe") }
-        XCTAssertNil(retry)
+    }
+
+    func testCancelledRecoveryCannotPromoteAnOldRoute() async throws {
+        for reset in [false, true] {
+            let router = CantripRemoteRouter()
+            router.available = [lan]
+            _ = try await router.perform(readOnly: true) { _ in 1 }
+            router.available = [lan, remote]
+            let started = expectation(description: "Recovery starts before cancellation")
+            var resume: CheckedContinuation<Void, Never>?
+            let probe = router.recoverTailscale { _ in
+                await withCheckedContinuation { continuation in
+                    resume = continuation
+                    started.fulfill()
+                }
+            }
+            await fulfillment(of: [started], timeout: 1)
+            if reset { router.reset() } else { router.cancelProbe() }
+            resume?.resume()
+            await probe?.value
+            XCTAssertEqual(router.preferred, reset ? nil : lan)
+        }
     }
 
     func testConfigurationResetRejectsOldCompletionAndClearsCooldown() async throws {
@@ -138,7 +190,18 @@ final class CantripRoutingTests: XCTestCase {
             XCTAssertEqual(route, self.remote)
             return 1
         }
-        let probe = router.recoverLAN { _ in XCTFail("LAN is disabled") }
+        let probe = router.recoverTailscale { _ in XCTFail("Already using Tailscale") }
+        XCTAssertNil(probe)
+    }
+
+    func testLANOnlyStillWorksWithoutTailscaleProbes() async throws {
+        let router = CantripRemoteRouter()
+        router.available = [lan]
+        _ = try await router.perform(readOnly: true) { route in
+            XCTAssertEqual(route, self.lan)
+            return 1
+        }
+        let probe = router.recoverTailscale { _ in XCTFail("No Tailscale URL is saved") }
         XCTAssertNil(probe)
     }
 

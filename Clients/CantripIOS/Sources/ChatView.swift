@@ -8,7 +8,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var runStatusText: String?
     @Published private(set) var activeLane: ExecutionLane
     @Published private(set) var remoteIsStreaming = false
-    @Published var remoteDeliveryMode: CantripDeliveryMode = .queue
+    @Published var remoteDeliveryMode: CantripDeliveryMode = .auto
     @Published private(set) var scrollToLatestRequest = 0
 
     let env: HermesEnv
@@ -170,7 +170,7 @@ final class ChatViewModel: ObservableObject {
         if speakReply { voice.beginReply() }
 
         scrollToLatestRequest += 1
-        let isQueuedSend = remoteDeliveryMode == .queue
+        let isQueuedSend = (remoteDeliveryMode == .queue || remoteDeliveryMode == .auto)
             && remote.selectedSession?.isStreaming == true
         if !isQueuedSend {
             let displayText = images.isEmpty ? text : text + "\n[\(images.count) image(s) attached]"
@@ -194,6 +194,7 @@ final class ChatViewModel: ObservableObject {
         )
         sending = false
         if sent {
+            remoteDeliveryMode = .auto
             syncRemoteTranscript()
         } else {
             if isQueuedSend {
@@ -1283,8 +1284,9 @@ struct ChatView: View {
                             Text(mode.title).tag(mode)
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .accessibilityLabel("Cantrip prompt delivery mode")
+                    .pickerStyle(.menu)
+                    .accessibilityLabel("Cantrip delivery override")
+                    .disabled(remote.isMutating)
 
                     if let status = remote.selectedSession?.status, !status.isEmpty {
                         Text(status)
@@ -1292,6 +1294,12 @@ struct ChatView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
+                }
+                if let status = remote.selectedSession?.deliveryStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
 
