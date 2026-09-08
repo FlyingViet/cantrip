@@ -255,6 +255,43 @@ final class RemoteControlServer {
         }
         let session = manager.sessions[sessionIndex]
 
+        if parts.count >= 2, parts[1] == "attachments" {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            guard parts.count == 4 || (parts.count == 5 && parts[4] == "thumbnail") else {
+                sendError(404, "image not found", on: connection)
+                return
+            }
+            let imageID = "\(parts[2])/\(parts[3])"
+            let prompts = session.messages.filter { $0.role == .user }.map(\.text)
+                + session.queued.map(\.text)
+            guard RemoteImageAttachments.validID(imageID),
+                  prompts.contains(where: {
+                      RemoteImageAttachments.presentation($0, sessionID: id).imageIDs.contains(imageID)
+                  }) else {
+                sendError(404, "image not found in this session", on: connection)
+                return
+            }
+            let thumbnail = parts.count == 5
+            Task {
+                do {
+                    let data = try await Task.detached(priority: .userInitiated) {
+                        try RemoteImageAttachments.read(id: imageID, sessionID: id, thumbnail: thumbnail)
+                    }.value
+                    guard manager.sessions.contains(where: { $0.id == id && !$0.isPrivate }) else {
+                        sendError(404, "session not found", on: connection)
+                        return
+                    }
+                    sendJSON(["data": data.base64EncodedString()], on: connection)
+                } catch {
+                    Log.write("remote-control: attachment read failed: \(error.localizedDescription)")
+                    sendError(404, "The attached image is no longer available on the Mac.", on: connection)
+                }
+            }
+            return
+        }
         if parts.count == 1, request.method == "GET" {
             sendJSON(["session": snapshot(session)], on: connection)
             return
@@ -415,10 +452,16 @@ final class RemoteControlServer {
         if let status = session.deliveryStatus { result["deliveryStatus"] = status }
         if includeMessages {
             result["queued"] = session.queued.map { prompt in
-                [
+                let presentation = RemoteImageAttachments.presentation(prompt.text, sessionID: session.id)
+                var object: [String: Any] = [
                     "id": prompt.id.uuidString,
                     "text": prompt.text,
                 ]
+                if !presentation.imageIDs.isEmpty {
+                    object["displayText"] = presentation.text
+                    object["images"] = presentation.imageIDs.map { ["id": $0] }
+                }
+                return object
             }
             result["messages"] = session.messages.map { message in
                 var object: [String: Any] = [
@@ -428,6 +471,13 @@ final class RemoteControlServer {
                     "thinking": message.thinking,
                     "activities": message.activities.map(activitySnapshot),
                 ]
+                if message.role == .user {
+                    let presentation = RemoteImageAttachments.presentation(message.text, sessionID: session.id)
+                    if !presentation.imageIDs.isEmpty {
+                        object["displayText"] = presentation.text
+                        object["images"] = presentation.imageIDs.map { ["id": $0] }
+                    }
+                }
                 if let author = message.author { object["author"] = author }
                 return object
             }

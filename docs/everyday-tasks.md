@@ -109,7 +109,11 @@ shows available backend usage figures; an unavailable quota is not zero usage.
 Copilot shows the account-wide included allowance used/remaining, reset date
 (in your local time), additional-usage status, and snapshot freshness. Install
 an up-to-date Copilot CLI and Node.js on the Mac and sign in to Copilot.
-Token/AI-credit plans are shown as percentages, not estimated prompt counts.
+Token/AI-credit plans show **AI credits remaining / total**, with percentages
+as a secondary progress bar. Amounts use the account's reported credit units
+directly, with up to two decimal places; positive balances below `0.01` show
+`<0.01`. Missing amounts stay unavailable rather than being estimated from
+rounded percentages. Legacy request plans retain request labels.
 Refresh is shared with AgentGateway and limited to once a minute. Missing or
 failed readings are marked unavailable/stale, never assumed to be zero usage.
 Model-specific or short-term throttling can still apply with budget remaining.

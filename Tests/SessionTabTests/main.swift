@@ -1,5 +1,7 @@
 import Foundation
+import ImageIO
 import JavaScriptCore
+import UniformTypeIdentifiers
 
 @main
 struct SessionTabTests {
@@ -270,9 +272,57 @@ struct SessionTabTests {
         let queued = (accepted.1["session"] as! [String: Any])["queued"] as! [[String: Any]]
         precondition(queued.last?["text"] as? String == longPrompt,
                      "Long prompts must round-trip intact through the live server")
+        precondition(queued.last?["displayText"] == nil && queued.last?["images"] == nil,
+                     "Do not double the payload of ordinary long prompts")
         let health = try await request("health", method: "GET", authenticated: false)
         precondition(health.0 == 200)
+        let pixels = CGContext(data: nil, width: 640, height: 320, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        let imageData = NSMutableData()
+        let imageDestination = CGImageDestinationCreateWithData(imageData, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(imageDestination, pixels.makeImage()!, nil)
+        precondition(CGImageDestinationFinalize(imageDestination))
+        let imageUpload = try JSONSerialization.data(withJSONObject: [
+            "text": "Look at this", "mode": "queue",
+            "images": [["data": (imageData as Data).base64EncodedString()]],
+        ])
+        let imageAccepted = try await request(path + "/messages", body: String(decoding: imageUpload, as: UTF8.self))
+        precondition(imageAccepted.0 == 202)
+        let imageQueue = (imageAccepted.1["session"] as! [String: Any])["queued"] as! [[String: Any]]
+        let queuedImage = imageQueue.last!
+        precondition(queuedImage["displayText"] as? String == "Look at this")
+        precondition((queuedImage["text"] as! String).contains("(Attached image: "))
+        let imageID = (queuedImage["images"] as! [[String: String]])[0]["id"]!
+        let imagePath = path + "/attachments/" + imageID
+        let unauthorizedImage = try await request(imagePath, method: "GET", authenticated: false)
+        precondition(unauthorizedImage.0 == 401)
+        try await expectStatus(405, imagePath)
+        let fullImage = try await request(imagePath, method: "GET")
+        precondition(fullImage.0 == 200 && fullImage.1["data"] as? String == (imageData as Data).base64EncodedString())
+        let thumbnail = try await request(imagePath + "/thumbnail", method: "GET")
+        let thumbnailData = Data(base64Encoded: thumbnail.1["data"] as! String)!
+        let source = CGImageSourceCreateWithData(thumbnailData as CFData, nil)!
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)! as NSDictionary
+        precondition(properties[kCGImagePropertyPixelWidth] as? Int == 320)
+        chat.messages.append(ChatMessage(role: .user, text: chat.queued.last!.text))
+        let imageDetail = try await request(path, method: "GET").1["session"] as! [String: Any]
+        let imageMessage = (imageDetail["messages"] as! [[String: Any]]).last!
+        precondition(imageMessage["displayText"] as? String == "Look at this")
+        precondition((imageMessage["images"] as! [[String: String]])[0]["id"] == imageID)
+        chat.isPrivate = true
+        let privateImage = try await request(imagePath, method: "GET")
+        precondition(privateImage.0 == 404)
+        chat.isPrivate = false
+        let wrongSession = try await request("api/v1/sessions/\(manager.sessions[0].id)/attachments/" + imageID, method: "GET")
+        precondition(wrongSession.0 == 404)
+        let missingImage = try await request(path + "/attachments/\(UUID())/image-1.jpg", method: "GET")
+        precondition(missingImage.0 == 404)
         chat.cancel()
+        let retainedImage = try await request(imagePath, method: "GET")
+        precondition(retainedImage.0 == 200, "Transcript attachments survive queue draining")
+        chat.messages.removeAll()
+        let removedImage = try await request(imagePath, method: "GET")
+        precondition(removedImage.0 == 404, "Orphan files cannot be fetched without a live transcript or queue reference")
         try await expectStatus(200, path + "/metadata", body: #"{"isLocked":false}"#)
         for other in manager.sessions where other.id != chat.id { other.isPrivate = true }
         try await expectStatus(200, path + "/close")

@@ -91,9 +91,10 @@ running task is affected.
 ### See Copilot account usage in AgentGateway
 
 Tap the **usage gauge beside the Local/Remote lane picker (antenna)** in
-AgentGateway's top header. It shows the remaining included allowance and opens
-details for used/remaining percentages, reset time, additional usage, and the
-Copilot account signed in on the Mac. It is available from every chat lane;
+AgentGateway's top header. It shows **AI credits remaining / total** in compact
+form, with full amounts and a secondary percentage progress bar in the details.
+Details also include reset time, additional usage, and the Copilot account
+signed in on the Mac. It is available from every chat lane;
 it does not switch sessions or change which backend receives your messages.
 
 Update both apps and reopen the Cantrip Mac host. The Mac needs Node.js and a
@@ -109,7 +110,10 @@ leave the Mac, never the SDK authentication payload or credentials. The phone
 polls while foregrounded; pull-to-refresh does not bypass the host throttle.
 Re-pairing clears the phone's old account snapshot.
 
-Credit/token plans are not prompt counts. Resets come from the raw account's
+Credit/token amounts use the reported credit units directly, not prompt counts.
+Missing amounts remain unavailable, not inferred from rounded percentages.
+Legacy plans retain request labels and unlimited allowances remain unlimited.
+Resets come from the raw account's
 UTC reset date, not the SDK's synthesized snapshot-time fallback. Unknown
 resets stay unknown. Failed refreshes retain explicitly stale readings;
 snapshots also become stale after five minutes without retrieval, ten minutes
@@ -283,7 +287,7 @@ not Local Model. Updating only AgentGateway is not enough.
 2. Tap **Attach images** beside the chat composer.
 3. Choose **Photo Library**, **Choose Image File**, or **Paste Image**.
 4. Wait for **Preparing images...** to finish.
-5. Review the previews. Tap an image's **x** to remove it.
+5. Tap a thumbnail to view the full image, or its **x** to remove it.
 6. Add a question if desired, then send. An image-only message is allowed.
 
 **Expected result:** up to **four images per message** are sent over the
@@ -309,6 +313,22 @@ accepted the message.
 Uploaded images remain on the host in
 `~/.cache/Cantrip/remote-attachments/` so queued work and follow-ups can read
 them. They are not automatically deleted after the reply.
+
+With both apps updated, AgentGateway shows sent and queued attachments as
+tappable thumbnails rather than Mac file paths, including older uploads still
+referenced by the open session. The full-screen viewer fits the entire uploaded
+image; pinch or double-tap to zoom, drag to pan, and tap **Done** to return.
+If the Mac is unreachable or a file was deleted, the image shows a retry state.
+Older AgentGateway clients keep the original prompt text unchanged.
+
+The pairing-authenticated, read-only
+`GET /api/v1/sessions/{sessionID}/attachments/{uploadID}/image-{1...4}.jpg`
+returns the uploaded JPEG as base64 JSON (`data`); append `/thumbnail` for a
+320-pixel preview. Only stored upload IDs referenced by that public session's
+user messages or queue are available, never arbitrary filesystem paths.
+Image reads and downsampling run off the main actor. AgentGateway keeps a
+bounded in-memory cache, clears it on pairing changes, and uses the same
+Tailscale-first/LAN-fallback routing as other read-only requests.
 
 ## Understand what is available remotely
 

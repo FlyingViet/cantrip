@@ -96,6 +96,47 @@ do {
     expect(secondRequests.count == 2, "different requests cannot overwrite queued images")
     expect(try Data(contentsOf: imageURL) == data, "earlier queued image remains available")
 
+    let presentation = RemoteImageAttachments.presentation(prompt, sessionID: sessionID, root: root)
+    expect(presentation.text == "Please look at the attached images.", "hide the upload marker only")
+    expect(presentation.imageIDs == [requests[0].lastPathComponent + "/image-1.jpg"],
+           "publish session-scoped IDs, not file paths")
+    let imageID = presentation.imageIDs[0]
+    expect(try RemoteImageAttachments.read(id: imageID, sessionID: sessionID,
+                                          thumbnail: false, root: root) == data,
+           "read original uploaded pixels")
+    let thumb = try RemoteImageAttachments.read(id: imageID, sessionID: sessionID,
+                                               thumbnail: true, root: root)
+    expect(CGImageSourceCreateWithData(thumb as CFData, nil) != nil, "thumbnail is a decodable image")
+    expect(RemoteImageAttachments.presentation(prompt, sessionID: UUID(), root: root).imageIDs.isEmpty,
+           "a copied marker from a different session is not exposed")
+    let arbitrary = "(Attached image: /etc/passwd - view this image file; it is part of my request.)"
+    expect(RemoteImageAttachments.presentation(arbitrary, sessionID: sessionID, root: root).text == arbitrary,
+           "ordinary file paths remain untouched")
+    for id in ["../image-1.jpg", imageID + "/extra", imageID.replacingOccurrences(of: "image-1", with: "image-5"),
+               imageID.replacingOccurrences(of: "/", with: "/../")] {
+        expect(!RemoteImageAttachments.validID(id), "reject path traversal and invalid image IDs")
+    }
+    let sourcePrompt = "Look at this\n\n" + prompt
+    expect(RemoteImageAttachments.presentation(sourcePrompt, sessionID: sessionID, root: root).text
+        == "Look at this\n\nPlease look at the attached images.", "preserve typed prompt text")
+    let largePrompt = try RemoteImageAttachments.preparePrompt(
+        "Large", images: [RemoteImageUpload(data: jpeg(width: 1200, height: 600))],
+        sessionID: sessionID, root: root
+    )
+    let largeID = RemoteImageAttachments.presentation(largePrompt, sessionID: sessionID, root: root).imageIDs[0]
+    let small = try RemoteImageAttachments.read(id: largeID, sessionID: sessionID, thumbnail: true, root: root)
+    let smallSource = CGImageSourceCreateWithData(small as CFData, nil)!
+    let dimensions = CGImageSourceCopyPropertiesAtIndex(smallSource, 0, nil)! as NSDictionary
+    expect(dimensions[kCGImagePropertyPixelWidth] as? Int == 320, "thumbnail dimension is bounded")
+    expect(dimensions[kCGImagePropertyPixelHeight] as? Int == 160, "thumbnail preserves aspect ratio")
+    try FileManager.default.removeItem(at: imageURL)
+    try FileManager.default.createSymbolicLink(at: imageURL, withDestinationURL:
+        root.appendingPathComponent(sessionID.uuidString).appendingPathComponent(largeID))
+    do {
+        _ = try RemoteImageAttachments.read(id: imageID, sessionID: sessionID, thumbnail: false, root: root)
+        expect(false, "reject a replaced symlink even when it points to another image")
+    } catch is RemoteImageAttachmentError {}
+
     let fourImages = try JSONSerialization.data(withJSONObject: [
         "text": "", "mode": "queue",
         "images": Array(repeating: ["data": Data(repeating: 0, count: 1 << 20).base64EncodedString()], count: 4)

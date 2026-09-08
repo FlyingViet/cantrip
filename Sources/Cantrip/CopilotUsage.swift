@@ -52,9 +52,46 @@ struct CopilotQuotaBucket: Codable, Identifiable {
 
     var summary: String {
         if isUnlimited { return "Unlimited \(title.lowercased())" }
-        guard let remainingPercent else { return "\(title): remaining amount unavailable" }
+        if let amounts = amountSummary { return amounts }
+        if billingMode == "credits" { return "AI-credit amounts unavailable" }
+        return percentageSummary ?? "\(title): remaining amount unavailable"
+    }
+
+    var amountSummary: String? {
+        guard let ratio = amountRatio(), let unit else { return nil }
+        return "\(ratio) \(unit) remaining"
+    }
+
+    var unit: String? {
+        switch billingMode {
+        case "credits": return "AI credits"
+        case "requests": return "requests"
+        default: return nil
+        }
+    }
+
+    func amountRatio(compact: Bool = false, locale: Locale = .current) -> String? {
+        guard !isUnlimited, unit != nil, let remaining, let entitlement,
+              remaining.isFinite, entitlement.isFinite, remaining >= 0, entitlement >= 0 else { return nil }
+        return "\(copilotAmount(remaining, compact: compact, locale: locale)) / \(copilotAmount(entitlement, compact: compact, locale: locale))"
+    }
+
+    var percentageSummary: String? {
+        guard let remainingPercent, remainingPercent.isFinite else { return nil }
         return String(format: "%.1f%% used / %.1f%% remaining", 100 - remainingPercent, remainingPercent)
     }
+}
+
+func copilotAmount(_ amount: Double, compact: Bool = false, locale: Locale = .current) -> String {
+    let format = FloatingPointFormatStyle<Double>.number.locale(locale)
+    // Do not round a nearly exhausted balance up, or a small positive balance down to zero.
+    if amount > 0 && amount < 0.01 {
+        return "<" + 0.01.formatted(format.precision(.fractionLength(2)))
+    }
+    if compact && amount >= 1000 {
+        return amount.formatted(format.notation(.compactName).precision(.fractionLength(0...1)).rounded(rule: .down))
+    }
+    return amount.formatted(format.precision(.fractionLength(0...2)).rounded(rule: .down))
 }
 
 func copilotDate(_ value: String?) -> Date? {
