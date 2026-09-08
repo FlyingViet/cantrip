@@ -28,6 +28,8 @@ struct LauncherView: View {
     @State private var historySearch = ""
     @State private var historyEntries: [HistoryEntry] = []
     @State private var archivedSessions: [SessionManager.ArchivedSession] = []
+    @State private var renamingSession: ChatSession?
+    @State private var tabName = ""
     /// Instant caption for whichever toolbar icon is hovered.
     @State private var toolbarHint: String?
     /// Council seat column visibility (collapsible to a slim strip).
@@ -94,6 +96,28 @@ struct LauncherView: View {
                 .preference(key: ContentSizeKey.self, value: geo.size)
         })
         .coordinateSpace(name: "panel")
+        .alert("Rename Tab", isPresented: Binding(
+            get: { renamingSession != nil },
+            set: { if !$0 { renamingSession = nil } }
+        ), presenting: renamingSession) { chat in
+            TextField("Tab name", text: $tabName)
+            Button("Cancel", role: .cancel) { renamingSession = nil }
+            Button("Save") {
+                do { try chat.updateTab(name: tabName) }
+                catch { manager.tabActionError = error.localizedDescription }
+                renamingSession = nil
+            }
+        } message: { _ in
+            Text("Up to 80 characters. Leave blank to use the automatic name.")
+        }
+        .alert("Tab Protected", isPresented: Binding(
+            get: { manager.tabActionError != nil || session.tabActionError != nil },
+            set: { if !$0 { manager.tabActionError = nil; session.tabActionError = nil } }
+        )) {
+            Button("OK") { manager.tabActionError = nil; session.tabActionError = nil }
+        } message: {
+            Text(manager.tabActionError ?? session.tabActionError ?? "")
+        }
         // The floating dropdown lives at PANEL level, explicitly placed:
         // top edge at the composer's measured bottom, expanding downward
         // over whatever is beneath (Spotlight-style). Overlays draw above
@@ -589,12 +613,18 @@ struct LauncherView: View {
                             .font(.caption)
                             .lineLimit(1)
                             .frame(maxWidth: 140)
-                        Button(action: { manager.close(index) }) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.tertiary)
+                        if chat.isLocked {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 10))
+                                .help("Locked tab - unlock from the tab menu to close")
+                        } else {
+                            Button(action: { manager.close(index) }) {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
@@ -605,6 +635,19 @@ struct LauncherView: View {
                     .contentShape(Capsule())
                     .onTapGesture {
                         manager.select(index)
+                    }
+                    .contextMenu {
+                        Button("Rename Tab...") {
+                            tabName = chat.tabMetadata.customTitle ?? chat.title
+                            renamingSession = chat
+                        }
+                        Button(chat.isLocked ? "Unlock Tab" : "Lock Tab") {
+                            do { try chat.updateTab(isLocked: !chat.isLocked) }
+                            catch { manager.tabActionError = error.localizedDescription }
+                        }
+                        Divider()
+                        Button("Close Tab", role: .destructive) { manager.close(index) }
+                            .disabled(chat.isLocked)
                     }
                 }
 

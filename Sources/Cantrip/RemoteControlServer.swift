@@ -239,6 +239,27 @@ final class RemoteControlServer {
         }
 
         switch parts[1] {
+        case "metadata":
+            guard let body = request.json,
+                  !body.isEmpty,
+                  Set(body.keys).isSubset(of: ["customTitle", "isLocked"]),
+                  body["customTitle"] == nil || body["customTitle"] is String,
+                  body["isLocked"] == nil || (body["isLocked"] as? NSNumber).map({
+                      CFGetTypeID($0) == CFBooleanGetTypeID()
+                  }) == true else {
+                sendError(400, "Provide customTitle (string) and/or isLocked (boolean).", on: connection)
+                return
+            }
+            do {
+                try session.updateTab(name: body["customTitle"] as? String,
+                                      isLocked: body["isLocked"] as? Bool)
+                sendJSON(["session": snapshot(session)], on: connection)
+            } catch let error as SessionTabError {
+                sendError(400, error.localizedDescription, on: connection)
+            } catch {
+                Log.write("remote-control: tab metadata storage failed: \(error.localizedDescription)")
+                sendError(500, "Could not save the tab on the Mac.", on: connection)
+            }
         case "messages":
             guard let body = request.json,
                   let text = body["text"] as? String
@@ -291,6 +312,10 @@ final class RemoteControlServer {
             session.resumeInterrupted()
             sendJSON(["session": snapshot(session)], status: 202, on: connection)
         case "new-conversation":
+            guard !session.isLocked else {
+                sendError(409, SessionTabError.locked.localizedDescription, on: connection)
+                return
+            }
             guard !session.isStreaming else {
                 sendError(409, "stop the running session before resetting it", on: connection)
                 return
@@ -298,9 +323,16 @@ final class RemoteControlServer {
             session.newConversation()
             sendJSON(["session": snapshot(session)], on: connection)
         case "close":
+            guard !session.isLocked else {
+                sendError(409, SessionTabError.locked.localizedDescription, on: connection)
+                return
+            }
             manager.close(sessionIndex)
-            let replacementIndex = min(sessionIndex, manager.sessions.count - 1)
-            sendJSON(["session": snapshot(manager.sessions[replacementIndex])], on: connection)
+            let candidate = manager.sessions[min(sessionIndex, manager.sessions.count - 1)]
+            let replacement = candidate.isPrivate
+                ? manager.sessions.first(where: { !$0.isPrivate }) ?? manager.newSession()
+                : candidate
+            sendJSON(["session": snapshot(replacement)], on: connection)
         default:
             sendError(404, "action not found", on: connection)
         }
@@ -327,6 +359,9 @@ final class RemoteControlServer {
         var result: [String: Any] = [
             "id": session.id.uuidString,
             "title": session.title,
+            "customTitle": session.tabMetadata.customTitle ?? "",
+            "isLocked": session.isLocked,
+            "supportsTabMetadata": true,
             "workdir": session.workdir,
             "isStreaming": session.isStreaming,
             "canResume": session.canResume,
@@ -470,6 +505,7 @@ private extension RemoteControlServer {
     .step{margin:5px 0;border:1px solid var(--line);border-radius:7px;background:var(--surface)}.step>summary,.step-static{display:flex;align-items:center;gap:7px;padding:7px 9px;font-size:12px}.step>summary:after{content:"›";margin-left:auto;color:var(--tertiary);font-size:16px;transition:transform .12s}.step[open]>summary:after{transform:rotate(90deg)}.step-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tool-name{margin-left:auto;color:var(--tertiary);font:10px ui-monospace,SFMono-Regular,Menlo,monospace}.step>summary .tool-name{margin-left:8px}.step-details{display:grid;gap:8px;padding:0 9px 9px 30px}.detail-label{margin-bottom:4px;color:var(--secondary);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}.step-details pre{max-height:180px;margin:0;padding:8px;border-radius:5px;background:var(--surface);overflow:auto;white-space:pre-wrap;word-break:break-word;color:var(--secondary);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
     .run-status{display:flex;align-items:center;gap:7px;color:var(--secondary);font-size:13px}.spinner{width:12px;height:12px;border:1.5px solid rgba(255,255,255,.2);border-top-color:var(--secondary);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.empty{margin:auto;color:var(--tertiary)}
     #pair{width:min(calc(100% - 32px),430px);margin:18vh auto 0;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.2)}#pair h2{margin:0 0 7px;font-size:18px}#pair p{line-height:1.45}#pairControls{display:flex;gap:7px;margin-top:15px}#pair input{min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;outline:0;background:var(--surface)}#pair input:focus{border-color:var(--accent)}
+    #tabEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#tabEditor::backdrop{background:rgba(0,0,0,.35)}#tabEditor form{display:grid;gap:12px}#tabName{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}.tab-actions{display:flex;justify-content:flex-end;gap:8px}#tabError,#actionError{color:var(--orange);font-size:12px}#actionError:not(:empty){padding:8px 14px}.session-close:disabled{opacity:.65;cursor:default}.session-menu{border:0;background:transparent;color:var(--secondary);padding:2px 5px}
     @media(max-width:620px){.prompt-row{padding-inline:12px}.tools{padding-inline:10px}.connection-label{display:none}.session-tab{max-width:145px}.session-select{max-width:115px}#messages{padding:14px 12px 22px}}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
@@ -479,7 +515,13 @@ private extension RemoteControlServer {
     <div class="tools"><nav id="sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div></header>
-    <section id="messages"></section></main>
+    <div id="actionError" role="alert"></div><section id="messages"></section></main>
+    <dialog id="tabEditor" aria-labelledby="tabEditorTitle"><form id="tabForm">
+    <strong id="tabEditorTitle">Tab settings</strong><label>Tab name<input id="tabName" autocomplete="off"></label>
+    <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
+    <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
+    <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
+    </form></dialog>
     <script>
     const $=id=>document.getElementById(id);let token=localStorage.cantripToken||"",selected=null,timer=null,renderedSession=null,renderedPayload="",followOutput=true,suppressScroll=false;const expanded=new Set();
     function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false";const label=document.querySelector(".connection-label");if(label)label.textContent=active?"Connected":"Reconnecting…"}
@@ -501,7 +543,19 @@ private extension RemoteControlServer {
       })().finally(()=>{refreshTask=null});return refreshTask}
     function renderSessions(items){const nav=$("sessions");nav.replaceChildren();for(const item of items){const tab=document.createElement("span");tab.className=`session-tab ${item.id===selected?"active":""}`;
       const button=document.createElement("button");button.className="session-select";button.textContent=item.title;button.title=item.title;button.onclick=()=>{selected=item.id;renderedPayload="";refresh()};
-      const close=document.createElement("button");close.className="session-close";close.textContent="×";close.title=`Close ${item.title}`;close.setAttribute("aria-label",`Close ${item.title}`);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};tab.append(button,close);nav.append(tab)}}
+      const close=document.createElement("button");close.className="session-close";close.textContent=item.isLocked?"🔒":"×";close.disabled=Boolean(item.isLocked);close.title=item.isLocked?"Locked - unlock in tab settings":`Close ${item.title}`;close.setAttribute("aria-label",close.title);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};tab.append(button,close);
+      if(item.supportsTabMetadata){const menu=document.createElement("button");menu.className="session-menu";menu.textContent="…";menu.title=`Rename or lock ${item.title}`;menu.setAttribute("aria-label",menu.title);menu.onclick=()=>editTab(item);tab.append(menu)}nav.append(tab)}}
+    let editingTab=null,tabSaving=false;
+    function editTab(item){editingTab=item;$("tabName").value=item.customTitle||item.title;$("tabLocked").checked=Boolean(item.isLocked);$("tabError").textContent="";$("tabEditor").showModal();$("tabName").focus();$("tabName").select()}
+    $("tabCancel").onclick=()=>{$("tabEditor").close();editingTab=null};
+    $("tabEditor").addEventListener("cancel",event=>{if(tabSaving)event.preventDefault()});
+    $("tabForm").onsubmit=async event=>{event.preventDefault();if(!editingTab||tabSaving)return;const item=editingTab,body={};
+      if($("tabName").value!==(item.customTitle||item.title))body.customTitle=$("tabName").value;
+      if($("tabLocked").checked!==Boolean(item.isLocked))body.isLocked=$("tabLocked").checked;
+      if(!Object.keys(body).length){$("tabEditor").close();return}tabSaving=true;$("tabSave").disabled=true;$("tabCancel").disabled=true;
+      try{await api(`/api/v1/sessions/${item.id}/metadata`,{method:"POST",body:JSON.stringify(body)});$("tabEditor").close();editingTab=null;await refresh()}
+      catch(error){$("tabError").textContent=`${error.message} Refresh the session if the result is uncertain.`}
+      finally{tabSaving=false;$("tabSave").disabled=false;$("tabCancel").disabled=false}};
     function safeURL(raw,image=false){try{const url=new URL(raw,location.href);if(url.protocol==="https:"||url.protocol==="http:"||(!image&&url.protocol==="mailto:"))return url.href}catch{}return null}
     function appendInline(parent,source){source=source.replace(/<br\\s*\\/?\\s*>/gi,"\\n");let cursor=0,plain="";
       const flush=()=>{if(plain){parent.append(document.createTextNode(plain));plain=""}};
@@ -548,8 +602,8 @@ private extension RemoteControlServer {
         if(session.isStreaming||session.queuedCount){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
       requestAnimationFrame(()=>{root.scrollTop=shouldFollow?root.scrollHeight:Math.min(previousTop,Math.max(0,root.scrollHeight-root.clientHeight));followOutput=shouldFollow;suppressScroll=false})}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
-    async function closeSession(id){try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selected=data.session.id;renderedPayload="";await refresh()}
-      catch(error){connection(false);const label=document.querySelector(".connection-label");if(label)label.textContent=`Close failed: ${error.message}`}}
+    async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selected=data.session.id;renderedPayload="";await refresh()}
+      catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
     $("pairButton").onclick=async()=>{token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh();timer=setInterval(refresh,1500)}
       catch(error){$("pairError").textContent=error.message}};
     $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;$("send").disabled=true;try{await action("messages",{text,mode:$("mode").value});if($("draft").value.trim()===text)$("draft").value="";$("mode").value="auto"}catch(error){const label=document.querySelector(".connection-label");if(label)label.textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false}};

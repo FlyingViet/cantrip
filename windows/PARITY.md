@@ -17,7 +17,7 @@ using the same operating-system API.
 | Settings | Implemented for current features | Per-backend configuration, opacity, launch at login, action policy, shortcut status. |
 | In-app updates | Implemented; release bootstrap required | GitHub Releases checks, download progress, restart-to-install, tray controls, and release workflow. Repository and signed releases must be published. |
 | File search | Missing | Use Windows Search API, with optional Everything integration. |
-| Session tabs and history | Missing | Persist per-tab backend, workdir, transcript, and open/archive state. |
+| Session tabs and history | Missing | Persist per-tab backend, workdir, transcript, and open/archive state. macOS also supports persistent custom tab names and close/reset locks shared with Remote and AgentGateway. |
 | Durable run journal | Missing | Port macOS's append-only event log, queue claims, partial-output/tool replay, retention, and run inspection to the main process. |
 | Backend continuity | Missing | Capture backend session IDs and use Claude/Copilot/Codex resume flags. |
 | Persistent terminal | Missing | Use ConPTY (`node-pty`) per session with state/history/Ctrl-C. |
