@@ -132,4 +132,29 @@ final class CantripImageTransportTests: XCTestCase {
         _ = try await api().send("Hello", mode: .queue, sessionID: sessionID)
         XCTAssertEqual(requests, 1)
     }
+
+    func testQueuedSendAndRefreshReturnAuthoritativeQueue() async throws {
+        let queued = Data(
+            """
+            {"session":{"id":"\(sessionID)","title":"Test","workdir":"/tmp",
+            "isStreaming":true,"canResume":false,"councilMode":false,"queuedCount":2,
+            "queued":[{"id":"mac-prompt","text":"From the Mac"},
+                      {"id":"phone-prompt","text":"From the phone"}],"messages":[]}}
+            """.utf8
+        )
+        let drained = try snapshot(support: true)
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            XCTAssertEqual(request.url?.path.hasPrefix("/api/v1/sessions/\(self.sessionID)"), true)
+            return request.httpMethod == "POST" ? (202, queued) : (200, drained)
+        }
+        let client = try api()
+        let accepted = try await client.send("From the phone", mode: .queue, sessionID: sessionID)
+        XCTAssertEqual(accepted.queued?.map(\.id), ["mac-prompt", "phone-prompt"])
+        XCTAssertEqual(accepted.queuedCount, 2)
+        let refreshed = try await client.session(id: sessionID)
+        XCTAssertEqual(refreshed.queuedCount, 0)
+        XCTAssertEqual(methods, ["POST", "GET"], "Queue reads must not replay the send")
+    }
 }

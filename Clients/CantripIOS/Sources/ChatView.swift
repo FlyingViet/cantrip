@@ -9,6 +9,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var activeLane: ExecutionLane
     @Published private(set) var remoteIsStreaming = false
     @Published var remoteDeliveryMode: CantripDeliveryMode = .queue
+    @Published private(set) var scrollToLatestRequest = 0
 
     let env: HermesEnv
     let remote: CantripRemoteModel
@@ -98,6 +99,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
+        scrollToLatestRequest += 1
         turns.append(ChatTurn(role: .user, text: text, executionLane: lane))
         let assistant = ChatTurn(
             role: .assistant,
@@ -167,15 +169,20 @@ final class ChatViewModel: ObservableObject {
         speechTableHeader = nil
         if speakReply { voice.beginReply() }
 
-        let displayText = images.isEmpty ? text : text + "\n[\(images.count) image(s) attached]"
-        turns.append(ChatTurn(role: .user, text: displayText, executionLane: .cantrip))
-        turns.append(
-            ChatTurn(
-                role: .assistant,
-                streaming: true,
-                executionLane: .cantrip
+        scrollToLatestRequest += 1
+        let isQueuedSend = remoteDeliveryMode == .queue
+            && remote.selectedSession?.isStreaming == true
+        if !isQueuedSend {
+            let displayText = images.isEmpty ? text : text + "\n[\(images.count) image(s) attached]"
+            turns.append(ChatTurn(role: .user, text: displayText, executionLane: .cantrip))
+            turns.append(
+                ChatTurn(
+                    role: .assistant,
+                    streaming: true,
+                    executionLane: .cantrip
+                )
             )
-        )
+        }
         sending = true
         runStatusText = "Sending to Cantrip…"
 
@@ -189,7 +196,12 @@ final class ChatViewModel: ObservableObject {
         if sent {
             syncRemoteTranscript()
         } else {
-            if let index = turns.lastIndex(where: {
+            if isQueuedSend {
+                appendRemoteFailure(
+                    remote.errorMessage ?? "Cantrip did not accept the prompt.",
+                    for: text
+                )
+            } else if let index = turns.lastIndex(where: {
                 $0.role == .assistant && $0.streaming
             }) {
                 turns[index].streaming = false
@@ -998,6 +1010,8 @@ struct ChatView: View {
     @State private var showSettings = false
     @State private var showVoiceMode = false
     @State private var showSkills = false
+    @State private var showQueue = false
+    @FocusState private var composerFocused: Bool
     @State private var commands: [HermesCommand] = []
     /// When paused, the app sends nothing — guards against unintentional requests
     /// (stray taps, ambient voice) that would otherwise burn the agent's budget.
@@ -1027,9 +1041,11 @@ struct ChatView: View {
                 if vm.activeLane == .cantrip {
                     remoteControls
                         .disabled(vm.sending || importingImages || submittingRemote)
+                        .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
                     Divider()
                 }
                 transcriptList
+                    .id(transcriptIdentity)
                 inputBar
             }
             .navigationTitle("Hermes")
@@ -1082,6 +1098,11 @@ struct ChatView: View {
                 SkillsView(client: env.client) { skill in
                     showSkills = false
                     vm.send(skill.command)        // run it → returns to chat showing the interaction
+                }
+            }
+            .sheet(isPresented: $showQueue) {
+                if let sessionID = remote.selectedSessionID {
+                    CantripQueueView(remote: remote, sessionID: sessionID)
                 }
             }
             .fullScreenCover(
@@ -1317,6 +1338,10 @@ struct ChatView: View {
                 }
                 Text(session.title)
                     .lineLimit(1)
+                if session.queuedCount > 0 {
+                    Label("\(session.queuedCount)", systemImage: "clock")
+                        .accessibilityLabel("\(session.queuedCount) queued messages")
+                }
             }
             .font(.caption.weight(.medium))
             .padding(.horizontal, 11)
@@ -1353,26 +1378,27 @@ struct ChatView: View {
     }
 
     private var transcriptList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    if vm.turns.isEmpty { emptyState }
-                    ForEach(vm.turns) { turn in
-                        TurnView(
-                            turn: turn,
-                            onAction: { vm.send($0.command) },
-                            onApproval: { vm.approveRun($0, for: turn.id) }
-                        )
-                        .id(turn.id)
-                    }
-                }
-                .padding()
-            }
-            .defaultScrollAnchor(.bottom)   // open at the most recent message + stay pinned to newest
-            .onChange(of: vm.turns.last?.text) { _, _ in
-                if let id = vm.turns.last?.id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
+        ChatTranscriptScrollView(
+            scrollRequest: vm.scrollToLatestRequest,
+            dismissKeyboard: { composerFocused = false }
+        ) {
+            if vm.turns.isEmpty { emptyState }
+            ForEach(vm.turns) { turn in
+                TurnView(
+                    turn: turn,
+                    onAction: { vm.send($0.command) },
+                    onApproval: { vm.approveRun($0, for: turn.id) }
+                )
+                .id(turn.id)
             }
         }
+    }
+
+    private var transcriptIdentity: String {
+        if vm.activeLane == .cantrip {
+            return "cantrip:\(remote.selectedSessionID ?? "")"
+        }
+        return vm.activeLane.rawValue
     }
 
     @ViewBuilder private var emptyState: some View {
@@ -1424,6 +1450,15 @@ struct ChatView: View {
 
     private var inputBar: some View {
         VStack(spacing: 8) {
+            if vm.activeLane == .cantrip,
+               let session = remote.selectedSession,
+               session.id == remote.selectedSessionID,
+               session.queuedCount > 0 {
+                CantripQueueButton(session: session) {
+                    composerFocused = false
+                    showQueue = true
+                }
+            }
             if paused {
                 pausedBar
             } else {
@@ -1455,6 +1490,7 @@ struct ChatView: View {
                     axis: .vertical
                 )
                     .id(composerRevision)
+                    .focused($composerFocused)
                     .textFieldStyle(.plain).lineLimit(1...5)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Color(.secondarySystemBackground), in: Capsule())
@@ -1568,6 +1604,7 @@ struct ChatView: View {
         guard !paused, !importingImages, !submittingRemote, !vm.sending,
               destinationReady, !remote.isMutating,
               !text.isEmpty || hasImageDraft else { return }
+        composerFocused = false
         if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
             let images = imageDrafts[sessionID] ?? []
             let originalInput = input

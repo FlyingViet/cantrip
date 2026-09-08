@@ -43,6 +43,11 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     let activities: [CantripRemoteActivity]
 }
 
+struct CantripRemoteQueuedPrompt: Decodable, Equatable, Identifiable {
+    let id: String
+    let text: String
+}
+
 struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     let id: String
     let title: String
@@ -54,6 +59,7 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     let status: String?
     let messages: [CantripRemoteMessage]?
     let supportsImageAttachments: Bool?
+    let queued: [CantripRemoteQueuedPrompt]?
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
 }
@@ -823,6 +829,8 @@ final class CantripRemoteModel: ObservableObject {
     func selectSession(_ id: String) async {
         guard id != selectedSessionID || selectedSession?.id != id else { return }
         selectedSessionID = id
+        selectedSession = nil
+        transcriptRevision += 1
         do {
             let detail = try await performAuthenticated { api in
                 try await api.session(id: id)

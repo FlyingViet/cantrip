@@ -46,6 +46,18 @@ Remote-only controls above the transcript provide session selection, new
 sessions and conversations, queued/redirected/injected prompts, stop, and
 resume.
 
+When prompts are waiting, a **Queued messages** card above the composer shows
+the count and next prompt. Tap it to read the full queue in execution order;
+it refreshes with the session and clears as prompts start. This includes
+prompts queued on the Mac or another device. Queue contents require the
+matching Cantrip host update and relaunch; older hosts show the count and an
+explicit update notice instead.
+
+Tap the conversation or session controls to dismiss the keyboard, or drag the
+conversation to dismiss it interactively. Chat stays at the latest message
+while following a reply, but scrolling up lets you read earlier messages
+without being pulled back down. Tap **Latest** to resume following.
+
 Open the shared **Settings** screen and enter Cantrip's pairing token. On the
 same local network, AgentGateway discovers Cantrip with Bonjour and connects
 directly using forward-secret TLS with the pairing token as a pre-shared key.
