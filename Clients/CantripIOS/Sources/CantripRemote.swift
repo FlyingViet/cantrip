@@ -1443,46 +1443,37 @@ struct CantripRemoteView: View {
     }
 
     private var sessionPicker: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(model.sessions) { session in
-                    Button {
-                        Task { await model.selectSession(session.id) }
-                    } label: {
-                        HStack(spacing: 6) {
-                            if session.isLocked == true {
-                                Image(systemName: "lock.fill").accessibilityLabel("Locked tab")
-                            }
-                            if session.isStreaming {
-                                ProgressView().controlSize(.mini)
-                            }
-                            Text(session.title)
-                                .lineLimit(1)
-                        }
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 7)
-                        .background(
-                            session.id == model.selectedSessionID
-                                ? Color.accentColor.opacity(0.24)
-                                : Color(.secondarySystemBackground),
-                            in: Capsule()
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        CantripTabActions(model: model, session: session,
-                            onRename: { renamingSession = session },
-                            onClose: { Task { await model.closeSession(session.id) } })
-                    }
-                    .accessibilityAction(named: "Close Session") {
-                        Task { await model.closeSession(session.id) }
-                    }
+        HStack(spacing: 8) {
+            CantripSessionPicker(
+                sessions: model.sessions,
+                selectedSessionID: model.selectedSessionID
+            ) { id in
+                Task { await model.selectSession(id) }
+            }
+            .contextMenu {
+                if let session = model.selectedSession {
+                    sessionActions(session)
                 }
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
+            if let session = model.selectedSession {
+                Menu {
+                    sessionActions(session)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .disabled(model.isMutating)
+                .accessibilityLabel("Cantrip session actions")
+            }
         }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+    }
+
+    private func sessionActions(_ session: CantripRemoteSession) -> some View {
+        CantripTabActions(model: model, session: session,
+            onRename: { renamingSession = session },
+            onClose: { Task { await model.closeSession(session.id) } })
     }
 
     private var sessionControls: some View {

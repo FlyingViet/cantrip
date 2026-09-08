@@ -1354,7 +1354,7 @@ struct ChatView: View {
                 }
             }
 
-            remoteSessionTabs
+            remoteSessionPicker
 
             if remote.selectedSession != nil {
                 HStack(spacing: 8) {
@@ -1394,64 +1394,23 @@ struct ChatView: View {
         .background(.thinMaterial)
     }
 
-    @ViewBuilder
-    private var remoteSessionTabs: some View {
-        if remote.sessions.isEmpty {
-            Text("No sessions")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(remote.sessions) { session in
-                        remoteSessionTab(session)
-                    }
-                }
-            }
-        }
-    }
-
-    private func remoteSessionTab(_ session: CantripRemoteSession) -> some View {
-        Button {
+    private var remoteSessionPicker: some View {
+        CantripSessionPicker(
+            sessions: remote.sessions,
+            selectedSessionID: remote.selectedSessionID
+        ) { id in
+            composerFocused = false
             Task {
-                await remote.selectSession(session.id)
+                await remote.selectSession(id)
                 vm.syncRemoteTranscript()
             }
-        } label: {
-            HStack(spacing: 6) {
-                if session.isLocked == true {
-                    Image(systemName: "lock.fill").accessibilityLabel("Locked tab")
-                }
-                if session.isStreaming {
-                    ProgressView().controlSize(.mini)
-                }
-                Text(session.title)
-                    .lineLimit(1)
-                if session.queuedCount > 0 {
-                    Label("\(session.queuedCount)", systemImage: "clock")
-                        .accessibilityLabel("\(session.queuedCount) queued messages")
-                }
-            }
-            .font(.caption.weight(.medium))
-            .padding(.horizontal, 11)
-            .padding(.vertical, 7)
-            .background(
-                session.id == remote.selectedSessionID
-                    ? Color.accentColor.opacity(0.24)
-                    : Color(.secondarySystemBackground),
-                in: Capsule()
-            )
         }
-        .buttonStyle(.plain)
         .contextMenu {
-            CantripTabActions(model: remote, session: session,
-                onRename: { renamingRemoteSession = session },
-                onClose: { closeRemoteSession(session.id) })
-        }
-        .accessibilityHint("Long press for session actions")
-        .accessibilityAction(named: "Close Session") {
-            closeRemoteSession(session.id)
+            if let session = remote.selectedSession {
+                CantripTabActions(model: remote, session: session,
+                    onRename: { renamingRemoteSession = session },
+                    onClose: { closeRemoteSession(session.id) })
+            }
         }
     }
 

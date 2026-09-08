@@ -46,8 +46,14 @@ Remote-only controls above the transcript provide session selection, new
 sessions and conversations, queued/redirected/injected prompts, stop, and
 resume.
 
-Long-press a session tab, or open its **...** menu, to **Rename Tab** or
-**Lock Tab**. Names and locks are saved on the host Mac and sync with local
+Tap the large **tab dropdown** above the transcript to switch sessions instead
+of scrolling through small pills. The menu marks the selected tab with a
+checkmark and includes tab names, locks, working status, and queued counts.
+Locked tabs remain selectable. Use **+** to create another session.
+
+Long-press the dropdown, or open the **...** session-actions menu, to
+**Rename Tab**, **Lock Tab**, or close the selected session. Names and locks
+are saved on the host Mac and sync with local
 Cantrip, other Macs' Remote views, and browser clients. A lock icon marks
 protected tabs; unlock before closing a session or using New Conversation.
 Sending, stopping/resuming work, and queue removal remain available.
