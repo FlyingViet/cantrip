@@ -46,6 +46,20 @@ installation information.
 **Expected result:** the client reports a connection and shows the host
 session's live output. The work runs on the Mac, not on the iPhone/iPad.
 
+### See queued prompts in AgentGateway
+
+While a response is running, send with **Queue** to wait for the current work.
+The **Queued messages** card above the iOS composer shows the count and next
+prompt. Tap it for the full pending prompts in execution order, including
+those queued from the Mac or another device. A prompt leaves the queue when
+it starts and appears in the conversation.
+
+Both apps must be current: the Mac's authenticated session detail includes
+the ordered queue IDs and text. Older hosts provide only a count; AgentGateway
+shows an update notice rather than an empty queue. Update and relaunch Cantrip
+on the host to enable queue contents. Disconnected clients show the last
+known queue until they reconnect.
+
 ## 2b. Connect from another Mac
 
 1. Install and open Cantrip on the second Mac.

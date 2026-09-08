@@ -27,7 +27,7 @@ using the same operating-system API.
 | Selected-text capture | Missing | Windows UI Automation or guarded clipboard capture. |
 | Git actions/diffs/revert | Missing | Git status, staged-diff commit prompt, diff renderer, explicit revert. |
 | Notifications | Missing | Windows Action Center notifications for background completion. |
-| Mid-flight queue/redirect/inject | Missing | Queue and restart-with-context; Claude streaming input where supported. |
+| Mid-flight queue/redirect/inject | Missing | Queue and restart-with-context; Claude streaming input where supported. macOS also exposes ordered queued prompt IDs/text in authenticated Remote session details for AgentGateway. |
 | Memory and file RAG | Missing | Markdown vault plus Windows Search/local semantic retrieval. |
 | MCP and plugins | Partial | Compatible manifests, hash approvals, sandbox dashboards, bounded data sources, Claude/Codex MCP merge, and live reload are implemented. Local-model MCP client, Copilot injection, daily briefing, and in-window side panes remain. |
 | Council mode | Missing | Parallel read-only seats and one active chair synthesis. |
