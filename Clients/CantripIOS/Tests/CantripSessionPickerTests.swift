@@ -20,30 +20,27 @@ final class CantripSessionPickerTests: XCTestCase {
         )
     }
 
-    func testSelectionUsesIDsEvenWithDuplicateNamesAndLockedTabs() {
+    func testOpeningDrawerPreservesSelectionWithDuplicateNamesAndLockedTabs() {
         let first = session()
         let second = session(id: "second", locked: true, streaming: true)
-        var selectedIDs: [String] = []
+        var opened = false
         let picker = CantripSessionPicker(
             sessions: [first, second], selectedSessionID: second.id,
-            onSelect: { selectedIDs.append($0) }
+            onOpenTabs: { opened = true }
         )
         XCTAssertEqual(picker.selectedSession, second)
-        XCTAssertEqual(picker.selection.wrappedValue, second.id)
-        picker.selection.wrappedValue = first.id
-        picker.selection.wrappedValue = second.id
-        XCTAssertEqual(selectedIDs, [first.id, second.id])
+        picker.onOpenTabs()
+        XCTAssertTrue(opened)
+        XCTAssertEqual(picker.selectedSession?.id, second.id)
     }
 
     func testEmptyAndRemovedSelectionDoNotSelectAnUnrelatedTab() {
         for sessions in [[], [session()]] {
             let picker = CantripSessionPicker(
                 sessions: sessions, selectedSessionID: "removed",
-                onSelect: { _ in XCTFail("Rendering must not change the session") }
+                onOpenTabs: { XCTFail("Rendering must not open the drawer") }
             )
             XCTAssertNil(picker.selectedSession)
-            XCTAssertNil(picker.selection.wrappedValue)
-            picker.selection.wrappedValue = nil
         }
     }
 
@@ -76,7 +73,7 @@ final class CantripSessionPickerTests: XCTestCase {
         func render(streaming: Bool) throws -> Data {
             let tab = session(streaming: streaming)
             let picker = CantripSessionPicker(
-                sessions: [tab], selectedSessionID: tab.id, onSelect: { _ in }
+                sessions: [tab], selectedSessionID: tab.id, onOpenTabs: {}
             )
             .frame(width: 288)
             return try XCTUnwrap(ImageRenderer(content: picker).uiImage?.pngData())
@@ -92,14 +89,14 @@ final class CantripSessionPickerTests: XCTestCase {
         let renamed = session(title: "New name", locked: true, queued: 2)
         let picker = CantripSessionPicker(
             sessions: [session(id: "other"), renamed], selectedSessionID: renamed.id,
-            onSelect: { _ in XCTFail("Snapshot updates must not trigger navigation") }
+            onOpenTabs: { XCTFail("Snapshot updates must not trigger navigation") }
         )
-        XCTAssertEqual(picker.selection.wrappedValue, renamed.id)
+        XCTAssertEqual(picker.selectedSession?.id, renamed.id)
         XCTAssertEqual(picker.selectedSession?.title, "New name")
         XCTAssertEqual(picker.selectedSession?.queuedCount, 2)
     }
 
-    func testDropdownFillsAvailableWidthAndHasComfortableTapTarget() throws {
+    func testDrawerButtonFillsAvailableWidthAndHasComfortableTapTarget() throws {
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
@@ -109,7 +106,7 @@ final class CantripSessionPickerTests: XCTestCase {
         for width: CGFloat in [288, 720] {
             for size: DynamicTypeSize in [.large, .accessibility3, .accessibility5] {
                 let picker = CantripSessionPicker(
-                    sessions: [long], selectedSessionID: long.id, onSelect: { _ in }
+                    sessions: [long], selectedSessionID: long.id, onOpenTabs: {}
                 )
                 .environment(\.dynamicTypeSize, size)
                 let controller = UIHostingController(rootView: picker)
@@ -126,7 +123,7 @@ final class CantripSessionPickerTests: XCTestCase {
         }
     }
 
-    func testSessionAndDeliveryDropdownsFitTogetherForEveryMode() throws {
+    func testDrawerButtonAndDeliveryMenuFitTogetherForEveryMode() throws {
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
@@ -138,7 +135,7 @@ final class CantripSessionPickerTests: XCTestCase {
                 for mode in CantripDeliveryMode.allCases {
                     let bar = CantripSessionBar(
                         sessions: [busy], selectedSessionID: busy.id,
-                        deliveryMode: .constant(mode), isMutating: false, onSelect: { _ in }
+                        deliveryMode: .constant(mode), isMutating: false, onOpenTabs: {}
                     ) {
                         Button("Rename Tab") {}
                         Button("Unlock Tab") {}
@@ -167,7 +164,7 @@ final class CantripSessionPickerTests: XCTestCase {
         let tab = session()
         let picker = CantripSessionPicker(
             sessions: [tab], selectedSessionID: tab.id,
-            onSelect: { _ in XCTFail("Opening tab actions must not switch sessions") }
+            onOpenTabs: { XCTFail("Opening tab actions must not open the drawer") }
         )
         .contextMenu {
             Button("Rename Tab") {}

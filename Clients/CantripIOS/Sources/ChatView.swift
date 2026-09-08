@@ -1058,6 +1058,8 @@ struct ChatView: View {
     @State private var showVoiceMode = false
     @State private var showSkills = false
     @State private var showQueue = false
+    @State private var showGitHubBuilds = false
+    @State private var showRemoteTabs = false
     @State private var renamingRemoteSession: CantripRemoteSession?
     @State private var showRenameLocalTab = false
     @State private var tabName = ""
@@ -1121,6 +1123,9 @@ struct ChatView: View {
                     CantripQueueView(remote: remote, sessionID: sessionID)
                 }
             }
+            .sheet(isPresented: $showGitHubBuilds) {
+                GitHubBuildsView(remote: remote)
+            }
             .sheet(item: $renamingRemoteSession) { session in
                 CantripTabRenameSheet(model: remote, session: session)
             }
@@ -1157,6 +1162,19 @@ struct ChatView: View {
             } message: {
                 Text(imageSendError ?? "")
             }
+        }
+        .cantripTabDrawer(isPresented: $showRemoteTabs, isEnabled: remoteTabsEnabled) {
+            CantripSessionDrawer(
+                model: remote,
+                onDismiss: { showRemoteTabs = false },
+                onSelect: selectRemoteSession,
+                onCreate: createRemoteSession,
+                onRename: { renamingRemoteSession = $0 },
+                onClose: closeRemoteSession
+            )
+        }
+        .onChange(of: showRemoteTabs) { _, showing in
+            if showing { composerFocused = false }
         }
         .onAppear {
             voice.requestAuth()
@@ -1213,6 +1231,15 @@ struct ChatView: View {
         }
         ToolbarItem(placement: .topBarLeading) {
             Menu {
+                if vm.activeLane == .cantrip {
+                    Button {
+                        showRemoteTabs = true
+                    } label: {
+                        Label("Tabs", systemImage: "sidebar.left")
+                    }
+                    .disabled(!remoteTabsEnabled)
+                    Divider()
+                }
                 Button { paused.toggle() } label: {
                     Label(paused ? "Resume agent" : "Pause agent",
                           systemImage: paused ? "play.circle" : "pause.circle")
@@ -1222,6 +1249,12 @@ struct ChatView: View {
                     .disabled(paused || vm.activeLane == .cantrip)
                 Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
                     .disabled(paused || !destinationReady || hasImageDraft || importingImages)
+                Button {
+                    composerFocused = false
+                    showGitHubBuilds = true
+                } label: {
+                    Label("GitHub Builds", systemImage: "hammer")
+                }
                 Divider()
                 if vm.activeLane != .cantrip {
                     Button {
@@ -1324,12 +1357,7 @@ struct ChatView: View {
                 .disabled(!remote.isConfigured || remote.isRefreshing)
                 .accessibilityLabel("Refresh Cantrip sessions")
 
-                Button {
-                    Task {
-                        _ = await remote.createSession()
-                        vm.syncRemoteTranscript()
-                    }
-                } label: {
+                Button(action: createRemoteSession) {
                     Image(systemName: "plus")
                 }
                 .disabled(!remote.isConfigured || remote.isMutating)
@@ -1410,18 +1438,34 @@ struct ChatView: View {
             selectedSessionID: remote.selectedSessionID,
             deliveryMode: $vm.remoteDeliveryMode,
             isMutating: remote.isMutating
-        ) { id in
-            composerFocused = false
-            Task {
-                await remote.selectSession(id)
-                vm.syncRemoteTranscript()
-            }
+        ) {
+            showRemoteTabs = true
         } actions: {
             if let session = remote.selectedSession {
                 CantripTabActions(model: remote, session: session,
                     onRename: { renamingRemoteSession = session },
                     onClose: { closeRemoteSession(session.id) })
             }
+        }
+    }
+
+    private var remoteTabsEnabled: Bool {
+        vm.activeLane == .cantrip
+            && !vm.sending && !importingImages && !submittingRemote && !remote.isMutating
+    }
+
+    private func selectRemoteSession(_ id: String) {
+        composerFocused = false
+        Task {
+            await remote.selectSession(id)
+            vm.syncRemoteTranscript()
+        }
+    }
+
+    private func createRemoteSession() {
+        Task {
+            _ = await remote.createSession()
+            vm.syncRemoteTranscript()
         }
     }
 

@@ -54,14 +54,13 @@ Remote-only controls above the transcript provide session selection, new
 sessions and conversations, queued/redirected/injected prompts, stop, and
 resume.
 
-Tap the large **tab dropdown** above the transcript to switch sessions instead
-of scrolling through small pills. The menu marks the selected tab with a
-checkmark and includes tab names, locks, and queued counts. A blinking brain
-beside the tab name replaces the "Working" suffix in both the dropdown and
-its tab list, disappearing when work stops. With Reduce Motion enabled the
+The **Tabs** drawer marks the selected tab with a checkmark and includes tab
+names, locks, and queued counts. A blinking brain beside the tab name replaces
+the "Working" suffix in both the tab control and drawer, disappearing when
+work stops. With Reduce Motion enabled the
 brain stays still; VoiceOver continues to announce "Working".
 Locked tabs remain selectable. The **Auto** delivery dropdown sits beside the
-tab dropdown; choose a manual mode there for a one-message override.
+tab control; choose a manual mode there for a one-message override.
 Use **+** to create another session.
 
 While the selected tab is working, a red **Stop** button is visible beside
@@ -72,9 +71,17 @@ shows **Stopping...** while the request is pending and is disabled when
 disconnected or another request is in flight. A failed request is shown in
 the Remote error banner; it is never automatically retried.
 
-Touch and hold anywhere on the tab dropdown to **Rename Tab**, **Lock Tab** /
+Swipe right from the **left edge** to open the Cantrip **Tabs** drawer. You can
+also tap the current tab control or choose **hamburger menu > Tabs**. Select a
+tab to return to chat; swipe left, tap outside, or use **Close tabs** to dismiss
+without changing tabs. The drawer shows the selected tab, activity, locks, and
+queued counts, with a **New Tab** button at the bottom. Opening it dismisses the
+keyboard without clearing your draft. Auto and Stop stay beside the chat controls.
+
+Touch and hold anywhere on the tab control or a drawer row to **Rename Tab**, **Lock Tab** /
 **Unlock Tab**, or **Close Session** (delete the tab). A regular tap opens only
-the tab list. The shared chat's **...** menu also keeps these actions.
+the drawer from the tab control, or selects a tab from a drawer row. Each row's
+**...** menu and the shared chat's **...** menu also keep these actions.
 Names and locks
 are saved on the host Mac and sync with local
 Cantrip, other Macs' Remote views, and browser clients. A lock icon marks
@@ -176,6 +183,28 @@ them, using the same image-file tools as local Cantrip attachments. This does
 not capture or consume any context staged by the person at the Mac. Image
 attachments currently apply to **Cantrip Remote**, not the Hermes gateway's
 Copilot/Private Local lanes or shell/slash commands.
+
+### GitHub build queue
+
+Open **hamburger menu > GitHub Builds** from any chat lane to see builds
+across the Mac's configured app runners. **Building now**, **Queued / waiting**,
+and **Waiting workflows** distinguish assigned work from eligible jobs and
+workflows whose runner is not yet known. Each entry includes the app, workflow
+run/attempt, job/current step, branch/commit, elapsed time, and **Open in GitHub**.
+The runner list shows online/offline, busy/idle, and when each app was checked.
+
+This is read-only and separate from the chat's queued prompts. Waiting work
+is oldest-first, not a promised execution order. The screen refreshes while
+open and foregrounded; the Mac contacts GitHub at most once a minute.
+Pull-to-refresh reads the latest cached snapshot without bypassing that limit.
+Failures keep explicitly stale data rather than claiming the queue is empty.
+
+This feature requires an updated, reopened **Cantrip Mac host** as well as
+AgentGateway. It uses the existing Remote pairing and the Mac's `gh auth login`;
+no GitHub token is entered into or sent to the phone. The host's
+`~/.config/Cantrip/github-builds.json` lists app/repository/runner mappings.
+See [host setup and permissions](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md#see-github-builds-in-agentgateway).
+An older host displays an update notice.
 
 ---
 

@@ -97,6 +97,7 @@ enum CantripRemoteError: LocalizedError {
     case autoDeliveryUnsupported
     case queueRemovalUnsupported
     case tabMetadataUnsupported
+    case githubBuildsUnsupported
 
     static func isRouteFailure(_ error: Error) -> Bool {
         switch error {
@@ -135,6 +136,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to remove queued messages from AgentGateway."
         case .tabMetadataUnsupported:
             return "Update and reopen Cantrip on your Mac to rename or lock its tabs."
+        case .githubBuildsUnsupported:
+            return "Update and reopen Cantrip on your Mac to view GitHub builds."
         }
     }
 }
@@ -561,6 +564,14 @@ struct CantripRemoteAPI {
         return response.sessions
     }
 
+    func githubBuilds() async throws -> CantripBuildSnapshot {
+        do {
+            return try await request(path: "/api/v1/github/builds")
+        } catch CantripRemoteError.http(404, _) {
+            throw CantripRemoteError.githubBuildsUnsupported
+        }
+    }
+
     func session(id: String) async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(id)"
@@ -930,6 +941,15 @@ final class CantripRemoteModel: ObservableObject {
 
     func refreshNow() async {
         await refresh()
+    }
+
+    func githubBuilds() async throws -> CantripBuildSnapshot {
+        guard isConfigured else {
+            throw CantripRemoteError.transport("Configure Cantrip Remote in Settings and connect to your Mac to view GitHub builds.")
+        }
+        return try await performAuthenticated(allowFallback: true) { api in
+            try await api.githubBuilds()
+        }
     }
 
     func selectSession(_ id: String) async {
@@ -1349,6 +1369,8 @@ struct CantripRemoteView: View {
     @State private var draft = ""
     @State private var deliveryMode: CantripDeliveryMode = .auto
     @State private var renamingSession: CantripRemoteSession?
+    @State private var showTabs = false
+    @FocusState private var composerFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -1385,6 +1407,21 @@ struct CantripRemoteView: View {
             .sheet(item: $renamingSession) { session in
                 CantripTabRenameSheet(model: model, session: session)
             }
+        }
+        .cantripTabDrawer(
+            isPresented: $showTabs, isEnabled: model.isConfigured && !model.isMutating
+        ) {
+            CantripSessionDrawer(
+                model: model,
+                onDismiss: { showTabs = false },
+                onSelect: { id in Task { await model.selectSession(id) } },
+                onCreate: { Task { await model.createSession() } },
+                onRename: { renamingSession = $0 },
+                onClose: { id in Task { await model.closeSession(id) } }
+            )
+        }
+        .onChange(of: showTabs) { _, showing in
+            if showing { composerFocused = false }
         }
     }
 
@@ -1462,8 +1499,8 @@ struct CantripRemoteView: View {
             selectedSessionID: model.selectedSessionID,
             deliveryMode: $deliveryMode,
             isMutating: model.isMutating
-        ) { id in
-            Task { await model.selectSession(id) }
+        ) {
+            showTabs = true
         } actions: {
             if let session = model.selectedSession {
                 sessionActions(session)
@@ -1532,6 +1569,7 @@ struct CantripRemoteView: View {
             }
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Message Cantrip", text: $draft, axis: .vertical)
+                    .focused($composerFocused)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
                     .submitLabel(.send)
