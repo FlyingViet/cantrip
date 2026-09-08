@@ -94,8 +94,98 @@ struct SessionTabTests {
         precondition(preservedHistory == historyData, "Metadata changes must not truncate existing transcripts")
 
         try testWebTabControls()
+        try testPromptPaging()
+        try await testPromptPreparation()
         try await testHostProtection(manager: manager)
         print("Session tab persistence, protection, privacy, and web controls passed")
+    }
+
+    static func testPromptPaging() throws {
+        let text = String(repeating: "A long prompt 👩🏽‍💻 cafe\u{301}\n", count: 50_000)
+        let prompt = PromptText(text)
+        precondition(prompt.isLong && prompt.preview.count == PromptText.previewLimit)
+        var restored = ""
+        var start = text.startIndex
+        while start < text.endIndex {
+            let page = prompt.page(from: start)
+            precondition(page.text.count <= PromptText.pageLimit && page.end > start)
+            restored += page.text
+            start = page.end
+        }
+        precondition(restored == text, "Paging must preserve every Unicode character")
+        precondition(!PromptText(String(repeating: "x", count: 1_200)).isLong)
+        precondition(PromptText(String(repeating: "x", count: 1_201)).isLong)
+
+        let context = JSContext()!
+        context.exceptionHandler = { _, error in
+            fatalError("Prompt JavaScript failed: \(error?.toString() ?? "")")
+        }
+        let source = try String(contentsOfFile: "Sources/Cantrip/RemoteControlServer.swift", encoding: .utf8)
+        let from = source.range(of: "    function promptSlice")!
+        let to = source.range(of: "    function render(session)", range: from.upperBound..<source.endIndex)!
+        context.evaluateScript("""
+        const elements={};
+        function node(){return {textContent:"",children:[],append(...items){this.children.push(...items)},
+          addEventListener(){},showModal(){},close(){}}}
+        const $=id=>elements[id]||(elements[id]=node()),document={createElement:node};
+        \(source[from.lowerBound..<to.lowerBound])
+        const longText="x".repeat(1199)+"👩🏽‍💻"+"\\n**plain text**".repeat(100000);
+        const parent=node();appendPrompt(parent,longText);
+        if(parent.children[0].textContent.length>1200||parent.children.length!==2)throw Error("Unbounded preview");
+        parent.children[1].onclick();
+        let restored=$("promptPage").textContent;
+        while(!$("promptNext").disabled){$("promptNext").onclick();if($("promptPage").textContent.length>4000)throw Error("Unbounded page");restored+=$("promptPage").textContent}
+        if(restored!==longText)throw Error("Prompt data lost");
+        """)
+    }
+
+    @MainActor
+    static func testPromptPreparation() async throws {
+        let settings = AppSettings.shared
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let vault = home.appendingPathComponent("prompt-fixture")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let note = String(repeating: "swift actor network\n\n", count: 10_000)
+        try note.write(to: vault.appendingPathComponent("fixture.md"), atomically: true, encoding: .utf8)
+        settings.memoryPath = vault.path
+        settings.memoryEnabled = true
+        settings.backend = .copilot
+        settings.copilotPath = "/usr/bin/false"
+        settings.attachScreen = false
+        settings.shareCalendar = false
+        settings.fileRAGEnabled = false
+        settings.shareLocation = false
+
+        let text = String(repeating: "swift actor network ", count: 50_000) + "End."
+        let chat = ChatSession()
+        let start = Date()
+        chat.submitRemote(text)
+        precondition(Date().timeIntervalSince(start) < 0.5, "Submission must yield before memory retrieval")
+        precondition(chat.statusText == "Preparing context..." && chat.isStreaming)
+        precondition(chat.messages.first?.text == text)
+        chat.submitRemote("Additional details", mode: .inject)
+        precondition(chat.queued.first?.text == "Additional details")
+        chat.cancel()
+        let countAfterCancel = chat.messages.count
+
+        var ticks = 0
+        let heartbeat = Task { @MainActor in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 10_000_000) }
+                catch { return }
+                ticks += 1
+            }
+        }
+        let block = await MemoryStore.contextBlock(
+            query: text, path: vault.path, isPrivate: true, isLocal: false
+        )
+        heartbeat.cancel()
+        precondition(ticks > 0, "Main actor must remain responsive during memory preparation")
+        precondition(block.contains("fixture.md") && block.contains("READ-ONLY"))
+        precondition(!chat.isStreaming && chat.messages.count == countAfterCancel,
+                     "Cancelled preparation must not start a backend or append late events")
+        precondition(chat.queued.isEmpty)
+        precondition(MemoryStore.score("swift swift network", terms: ["swift", "network"]) == 3)
     }
 
     @MainActor
@@ -141,6 +231,17 @@ struct SessionTabTests {
         let detail = try await request(path, method: "GET").1["session"] as! [String: Any]
         precondition(detail["isLocked"] as? Bool == true && detail["customTitle"] as? String == "Renamed")
         precondition(detail["supportsTabMetadata"] as? Bool == true)
+        let longPrompt = String(repeating: "Long prompt 👩🏽‍💻\n", count: 30_000) + "End."
+        chat.isStreaming = true
+        let upload = try JSONSerialization.data(withJSONObject: ["text": longPrompt, "mode": "queue"])
+        let accepted = try await request(path + "/messages", body: String(decoding: upload, as: UTF8.self))
+        precondition(accepted.0 == 202 && chat.queued.last?.text == longPrompt)
+        let queued = (accepted.1["session"] as! [String: Any])["queued"] as! [[String: Any]]
+        precondition(queued.last?["text"] as? String == longPrompt,
+                     "Long prompts must round-trip intact through the live server")
+        let health = try await request("health", method: "GET", authenticated: false)
+        precondition(health.0 == 200)
+        chat.cancel()
         try await expectStatus(200, path + "/metadata", body: #"{"isLocked":false}"#)
         for other in manager.sessions where other.id != chat.id { other.isPrivate = true }
         try await expectStatus(200, path + "/close")

@@ -23,6 +23,8 @@ struct ConversationContextSelection: Equatable {
 enum ConversationContextBuilder {
     static let recentTurnCount = 3
     static let relatedTurnCount = 2
+    static let retrievalQueryLimit = 4_000
+    static let retrievalTermLimit = 32
 
     private static let userSnippetLimit = 600
     private static let assistantSnippetLimit = 1_000
@@ -46,9 +48,20 @@ enum ConversationContextBuilder {
     }
 
     static func terms(from query: String) -> [String] {
-        query.lowercased()
+        // Retrieval is a hint, not the prompt itself. Repeated words in a paste
+        // must not multiply the cost of scanning every memory file.
+        var seen = Set<String>()
+        var result: [String] = []
+        let prefix = query.prefix(retrievalQueryLimit + 1)
+        var words = prefix.prefix(retrievalQueryLimit).lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count >= 3 && !stopwords.contains($0) }
+        if prefix.count > retrievalQueryLimit { words.removeLast() }
+        for word in words where word.count >= 3 && !stopwords.contains(word) {
+            guard seen.insert(word).inserted else { continue }
+            result.append(word)
+            if result.count == retrievalTermLimit { break }
+        }
+        return result
     }
 
     static func select(
@@ -81,7 +94,7 @@ enum ConversationContextBuilder {
 
         var ranked: [RankedTurn] = []
         for (index, turn) in olderTurns.enumerated() {
-            let candidate = turn.user + "\n" + String(turn.assistant.prefix(1_200))
+            let candidate = String(turn.user.prefix(2_000)) + "\n" + String(turn.assistant.prefix(1_200))
             let candidateTerms = Set(terms(from: candidate))
             let overlap = queryTerms.intersection(candidateTerms).count
             let lexical = queryTerms.isEmpty

@@ -6,6 +6,13 @@ Remote control uses the **same live sessions on your Mac**. AgentGateway is
 an iPhone/iPad client; another Mac can use Cantrip's **Remote** tab. A browser
 can use the host's web client through Tailscale Serve.
 
+Long user prompts appear as compact plain-text previews. Choose **Read full
+prompt** to page through the complete text; the browser reader also offers
+**Download all**. Preview limits do not truncate submitted text. The host
+prepares memory context and encodes transcript responses off the UI thread.
+Requests remain single messages, and uncertain sends are still never
+automatically replayed.
+
 **You need:** a Mac with Cantrip running, an available backend on that Mac,
 and access to its Settings. Native clients on the same local network do not
 need Tailscale. Save a Tailscale URL for preferred access both at home and away.

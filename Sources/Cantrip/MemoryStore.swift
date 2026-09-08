@@ -4,15 +4,51 @@ import Foundation
 /// read before acting and update after learning a working procedure.
 final class MemoryStore {
     static let shared = MemoryStore()
-    private init() {}
+    private static let preparationQueue = DispatchQueue(label: "cantrip.memory-preparation", qos: .userInitiated)
+    private let directory: URL?
+    private init(directory: URL? = nil) { self.directory = directory }
 
     /// Hermes-style caps: small enough to inject on every query, hard
     /// enough to force consolidation instead of endless appending.
     static let memoryCap = 2200
     static let userCap = 1375
 
-    private var dirURL: URL { URL(fileURLWithPath: AppSettings.shared.memoryPath) }
+    private var dirURL: URL { directory ?? URL(fileURLWithPath: AppSettings.shared.memoryPath) }
     private var sessionsURL: URL { dirURL.appendingPathComponent("sessions") }
+
+    static func contextBlock(query: String, path: String, isPrivate: Bool, isLocal: Bool) async -> String {
+        await withCheckedContinuation { continuation in
+            preparationQueue.async {
+                let store = MemoryStore(directory: URL(fileURLWithPath: path))
+                if !isPrivate { store.ensureVault() }
+                let retrieved = store.retrieve(for: query, recordsUsage: !isPrivate).map {
+                    "\n\nRETRIEVED — memory snippets auto-matched to this query (verify before relying on them):\n\($0)"
+                } ?? ""
+                let result: String
+                if isLocal {
+                    result = "\n\n(Memory from previous sessions:\n\(store.coreMemoryBlock())\(retrieved))"
+                } else {
+                    result = """
+
+
+                    (Persistent memory — three layers, all in \(path):
+
+                    CORE — always loaded, maintain within caps:
+                    \(store.coreMemoryBlock())
+
+                    NOTES — procedures that worked; read relevant ones BEFORE acting: \(store.indexLine())
+
+                    SESSIONS — past conversations logged in \(path)/sessions/ as daily markdown; grep them when I reference something from before.\(retrieved)
+
+                    \(isPrivate
+                        ? "PRIVATE MODE: treat the memory vault as READ-ONLY this conversation. Do NOT create, update, or delete any notes, core memory files, or session logs, and don't record anything about this conversation anywhere."
+                        : "Maintain memory silently as you work: new environment facts/conventions → edit MEMORY.md; new facts or preferences about me → edit USER.md; both must stay under their caps, so consolidate rather than append. After a task that took trial-and-error, write/update a concise procedure note. Don't mention the vault unless asked."))
+                    """
+                }
+                continuation.resume(returning: result)
+            }
+        }
+    }
 
     func ensureVault() {
         let fm = FileManager.default
@@ -129,12 +165,21 @@ final class MemoryStore {
     }
 
     static func score(_ text: String, terms: [String]) -> Int {
-        terms.reduce(0) { $0 + text.components(separatedBy: $1).count - 1 }
+        terms.reduce(0) { total, term in
+            guard !term.isEmpty else { return total }
+            var count = 0
+            var start = text.startIndex
+            while let range = text.range(of: term, range: start..<text.endIndex) {
+                count += 1
+                start = range.upperBound
+            }
+            return total + count
+        }
     }
 
     /// Find the most relevant note/session snippets for a query and
     /// return them ready for injection. Nil when nothing matches.
-    func retrieve(for query: String, maxChars: Int = 2400) -> String? {
+    func retrieve(for query: String, maxChars: Int = 2400, recordsUsage: Bool = true) -> String? {
         let terms = Self.terms(from: query)
         guard !terms.isEmpty else { return nil }
 
@@ -152,9 +197,8 @@ final class MemoryStore {
             let fileScore = Self.score(text.lowercased(), terms: terms)
             guard fileScore > 0 else { continue }
             let paragraphs = text.components(separatedBy: "\n\n")
-            let best = paragraphs.max {
-                Self.score($0.lowercased(), terms: terms) < Self.score($1.lowercased(), terms: terms)
-            } ?? text
+            let best = paragraphs.map { ($0, Self.score($0.lowercased(), terms: terms)) }
+                .max { $0.1 < $1.1 }?.0 ?? text
             scored.append((url.lastPathComponent, fileScore,
                            String(best.prefix(800)),
                            !url.path.contains("/sessions/")))
@@ -167,7 +211,7 @@ final class MemoryStore {
             let entry = "— from \(hit.name):\n\(hit.chunk)\n"
             if out.count + entry.count > maxChars { break }
             out += entry
-            if hit.isNote { noteUsed(hit.name) }
+            if hit.isNote && recordsUsage { noteUsed(hit.name) }
         }
         return out.isEmpty ? nil : out
     }

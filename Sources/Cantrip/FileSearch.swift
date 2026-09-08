@@ -11,6 +11,10 @@ final class FileSearch: ObservableObject {
 
     func search(_ raw: String) {
         pending?.cancel()
+        guard raw.utf8.count <= AppSearchMatcher.maximumQueryBytes else {
+            clear()
+            return
+        }
         let query = raw.trimmingCharacters(in: .whitespaces)
         let words = query.split(separator: " ").count
         // Only for short, filename-ish queries — not sentences or commands.

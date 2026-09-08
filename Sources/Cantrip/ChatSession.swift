@@ -51,8 +51,14 @@ final class ChatSession: ObservableObject {
     /// Called when the whole run (including queue) completes; AppDelegate
     /// uses it for background notifications.
     var onRunFinished: (() -> Void)?
-    /// Orphans events from cancelled/superseded backend runs.
-    private var streamGeneration = 0
+    private var preparationTask: Task<Void, Never>?
+    /// Orphans events and preparation from cancelled/superseded backend runs.
+    private var streamGeneration = 0 {
+        didSet {
+            preparationTask?.cancel()
+            preparationTask = nil
+        }
+    }
     /// True when the last run died mid-task (timeout/failure) and can be
     /// picked up from the steps already taken. Shows the Resume button.
     @Published var canResume = false
@@ -715,7 +721,7 @@ final class ChatSession: ObservableObject {
             deliveryStatus = "Queued: commands, councils, and large messages run in order."
             return
         }
-        let supportsInjection = runningBackendKind == .claudeCode
+        let supportsInjection = runningBackendKind == .claudeCode && preparationTask == nil
         let snapshot = MessageRoutingSnapshot(
             message: text.trimmingCharacters(in: .whitespacesAndNewlines),
             currentTask: currentRunPrompt ?? "",
@@ -821,6 +827,10 @@ final class ChatSession: ObservableObject {
             return
         }
         if inject, !interrupt {
+            guard preparationTask == nil else {
+                enqueue(prompt, includesAmbientContext: includesAmbientContext)
+                return
+            }
             if activeBackend.injectMidTurn(prompt) {
                 appendRunMessage(ChatMessage(role: .user, text: prompt))
                 appendRunMessage(ChatMessage(role: .assistant, text: ""))
@@ -959,16 +969,47 @@ final class ChatSession: ObservableObject {
         armWatchdog()
         streamGeneration += 1
         let generation = streamGeneration
-        let request = BackendRequest(
-            prompt: backendPrompt,
-            userMessage: prompt,
-            previousTurns: previousTurns
-        )
-        backend(for: backendKind).send(request, workdir: workdir) { [weak self] event in
-            DispatchQueue.main.async {
-                guard let self, self.streamGeneration == generation else { return }
-                self.handle(event)
+        prepareMemory(onto: backendPrompt, query: prompt, backendKind: backendKind,
+                      generation: generation) { [weak self] prepared in
+            guard let self else { return }
+            let request = BackendRequest(
+                prompt: prepared,
+                userMessage: prompt,
+                previousTurns: previousTurns
+            )
+            self.backend(for: backendKind).send(request, workdir: self.workdir) { [weak self] event in
+                DispatchQueue.main.async {
+                    guard let self, self.streamGeneration == generation else { return }
+                    self.handle(event)
+                }
             }
+        }
+    }
+
+    private func prepareMemory(onto prompt: String, query: String, backendKind: BackendKind?,
+                               generation: Int, completion: @escaping (String) -> Void) {
+        guard settings.memoryEnabled else { completion(prompt); return }
+        let path = settings.memoryPath
+        let privacy = isPrivate
+        let directory = workdir
+        let configuredBackend = settings.backend
+        statusText = "Preparing context..."
+        preparationTask = Task { [weak self] in
+            let block = await MemoryStore.contextBlock(
+                query: query, path: path, isPrivate: privacy, isLocal: backendKind == .localModel
+            )
+            guard let self, !Task.isCancelled, self.streamGeneration == generation,
+                  self.isStreaming else { return }
+            self.preparationTask = nil
+            guard self.isPrivate == privacy, self.workdir == directory,
+                  self.settings.backend == configuredBackend,
+                  self.settings.memoryEnabled, self.settings.memoryPath == path else {
+                self.cancel(keepQueue: true)
+                self.deliveryStatus = "Preparation cancelled because session settings changed. Send again to use the new settings."
+                return
+            }
+            self.statusText = "Thinking…"
+            completion(prompt + block)
         }
     }
 
@@ -1026,32 +1067,6 @@ final class ChatSession: ObservableObject {
 
             x/y are fractions 0–1 of that screenshot's width/height (origin top-left), centered on the exact UI element; "display" is the screenshot's display number (omit for display 1); up to 5 entries; labels under 8 words. My launcher renders this block as numbered tooltips floating directly on my real screen, so refer to them by number (1, 2, …) in your text. NEVER describe tooltips in prose or write "Tooltip:" text — the block is the only way they appear. If the relevant app isn't visible in the screenshot, say so instead of guessing coordinates.)
             """
-        }
-        if settings.memoryEnabled {
-            MemoryStore.shared.ensureVault()
-            let retrieved = MemoryStore.shared.retrieve(for: query).map {
-                "\n\nRETRIEVED — memory snippets auto-matched to this query (verify before relying on them):\n\($0)"
-            } ?? ""
-            if backendKind == .localModel {
-                backendPrompt += "\n\n(Memory from previous sessions:\n\(MemoryStore.shared.coreMemoryBlock())\(retrieved))"
-            } else {
-                backendPrompt += """
-
-
-                (Persistent memory — three layers, all in \(settings.memoryPath):
-
-                CORE — always loaded, maintain within caps:
-                \(MemoryStore.shared.coreMemoryBlock())
-
-                NOTES — procedures that worked; read relevant ones BEFORE acting: \(MemoryStore.shared.indexLine())
-
-                SESSIONS — past conversations logged in \(settings.memoryPath)/sessions/ as daily markdown; grep them when I reference something from before.\(retrieved)
-
-                \(isPrivate
-                    ? "PRIVATE MODE: treat the memory vault as READ-ONLY this conversation. Do NOT create, update, or delete any notes, core memory files, or session logs, and don't record anything about this conversation anywhere."
-                    : "Maintain memory silently as you work: new environment facts/conventions → edit MEMORY.md; new facts or preferences about me → edit USER.md; both must stay under their caps, so consolidate rather than append. After a task that took trial-and-error, write/update a concise procedure note. Don't mention the vault unless asked."))
-                """
-            }
         }
         return backendPrompt
     }
@@ -1203,7 +1218,7 @@ final class ChatSession: ObservableObject {
                                       backendKind: nil,
                                       includesAmbientContext: includesAmbientContext,
                                       consumesStagedContext: consumesStagedContext)
-        let roundPrompt = composed + """
+        let councilInstructions = """
 
 
         (You are one of \(members.count) AI advisors — \(members.map(\.label).joined(separator: ", ")) — \
@@ -1220,22 +1235,27 @@ final class ChatSession: ObservableObject {
         streamGeneration += 1
         let generation = streamGeneration
 
-        for (index, member) in members.enumerated() {
-            let message = ChatMessage(role: .assistant, text: "", author: member.label)
-            let messageID = message.id
-            appendRunMessage(message)
-            councilAnswers.append((kind: member.kind ?? .claudeCode, messageID: messageID))
-            if let kind = member.kind { UsageTracker.shared.recordQuery(backend: kind) }
-            let request = BackendRequest(prompt: roundPrompt, userMessage: prompt,
-                                         previousTurns: previousTurns)
-            councilBackend(index: index, member: member)
-                .send(request, workdir: workdir) { [weak self] event in
-                    DispatchQueue.main.async {
-                        guard let self, self.streamGeneration == generation else { return }
-                        self.handleCouncilEvent(event, messageID: messageID,
-                                                prompt: prompt, generation: generation)
+        prepareMemory(onto: composed, query: prompt, backendKind: nil,
+                      generation: generation) { [weak self] prepared in
+            guard let self else { return }
+            self.statusText = "Council of \(members.count) deliberating…"
+            for (index, member) in members.enumerated() {
+                let message = ChatMessage(role: .assistant, text: "", author: member.label)
+                let messageID = message.id
+                self.appendRunMessage(message)
+                self.councilAnswers.append((kind: member.kind ?? .claudeCode, messageID: messageID))
+                if let kind = member.kind { UsageTracker.shared.recordQuery(backend: kind) }
+                let request = BackendRequest(prompt: prepared + councilInstructions, userMessage: prompt,
+                                             previousTurns: previousTurns)
+                self.councilBackend(index: index, member: member)
+                    .send(request, workdir: self.workdir) { [weak self] event in
+                        DispatchQueue.main.async {
+                            guard let self, self.streamGeneration == generation else { return }
+                            self.handleCouncilEvent(event, messageID: messageID,
+                                                    prompt: prompt, generation: generation)
+                        }
                     }
-                }
+            }
         }
     }
 

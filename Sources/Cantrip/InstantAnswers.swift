@@ -6,6 +6,7 @@ import Foundation
 /// through to the normal backend.
 enum InstantAnswers {
     static func answer(for query: String) -> String? {
+        guard query.utf8.count <= AppSearchMatcher.maximumQueryBytes else { return nil }
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if let math = evaluateMath(q) { return math }
         if let unit = convertUnits(q) { return unit }

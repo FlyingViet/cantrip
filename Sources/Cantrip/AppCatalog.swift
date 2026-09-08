@@ -37,6 +37,7 @@ final class AppCatalog {
 
     /// Top hit across exact, word, prefix, substring, and bounded fuzzy matches.
     func match(query raw: String) -> AppMatch? {
+        guard raw.utf8.count <= AppSearchMatcher.maximumQueryBytes else { return nil }
         let q = raw.trimmingCharacters(in: .whitespaces).lowercased()
         guard q.count >= 2, !q.isEmpty else { return nil }
         let running = runningApps()
