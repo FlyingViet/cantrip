@@ -98,6 +98,26 @@ second Mac.
 
 Use **Change server** to configure a different host.
 
+## Rename and protect remote tabs
+
+In the Mac Remote view or browser, click the **...** beside a session tab to
+edit its name and lock. In AgentGateway, long-press a session tab or open its
+**...** actions menu, then choose **Rename Tab**, **Lock Tab**, or **Unlock Tab**.
+Names and locks belong to the Mac session and appear on all connected clients.
+
+Locked sessions cannot be closed or reset, even by an older client with stale
+state. The host rejects these requests with HTTP 409. Normal sending, Stop,
+Resume, and queue removal still work. Unlock before closing or clearing.
+Update and reopen the host to enable these controls; updated AgentGateway
+checks the `supportsTabMetadata` capability before editing.
+
+Authenticated session snapshots include `customTitle` (empty for automatic
+naming), `isLocked`, and `supportsTabMetadata`. To edit, use
+`POST /api/v1/sessions/{sessionID}/metadata` with `customTitle` (string),
+`isLocked` (boolean), or both. Omitted fields are unchanged. Whitespace in
+names is normalized; blank restores automatic naming, and names over 80
+characters are rejected without applying any part of the update.
+
 ## Add access away from home
 
 Use **Tailscale Serve**, not Funnel and not a router port-forward.

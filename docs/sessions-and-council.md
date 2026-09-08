@@ -21,6 +21,20 @@ local sessions. Click tabs when more are open.
 
 ## Start over or return to an older session
 
+Right-click a local session tab for **Rename Tab** or **Lock Tab**. Names can
+contain up to 80 characters; leaving the name blank restores the automatic
+label. Names and locks survive restarts, including for empty tabs, and custom
+names appear in History.
+
+A locked tab shows a lock instead of its close button. **Command+W**,
+**Command+N**, and remote close/reset requests cannot close it or clear its
+conversation. Choose **Unlock Tab** first. Locking does not stop work, prevent
+new messages, or disable Stop, Resume, or queue removal. It is protection
+against accidental deletion, not an access-control password.
+
+Private tabs retain their name and lock only in memory; enabling private mode
+still scrubs saved data, and private tabs are never exposed remotely.
+
 | Goal | Action |
 |---|---|
 | Start a new task while keeping the current conversation | **Command+T** |

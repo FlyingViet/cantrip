@@ -96,8 +96,11 @@ final class ChatSession: ObservableObject {
 
     let settings = AppSettings.shared
     let id: UUID
-    /// Tab label — set from the first prompt.
-    @Published var title = "New chat"
+    @Published private var automaticTitle = "New chat"
+    @Published private(set) var tabMetadata = SessionTabMetadata()
+    @Published var tabActionError: String?
+    var title: String { tabMetadata.customTitle ?? automaticTitle }
+    var isLocked: Bool { tabMetadata.isLocked }
     /// Per-session working directory: backends, ! commands, and git
     /// actions all run here. A session becomes "the agent in this repo".
     @Published var workdir: String {
@@ -170,6 +173,7 @@ final class ChatSession: ObservableObject {
         shellObservation = shell.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
         loadTranscript()
+        tabMetadata = SessionTabMetadata.load(id: id)
         restoreDurableState()
     }
 
@@ -180,6 +184,7 @@ final class ChatSession: ObservableObject {
     }
 
     func deleteTranscript() {
+        SessionTabMetadata.remove(id: id)
         try? FileManager.default.removeItem(at: transcriptURL)
         do {
             try journal?.remove()
@@ -201,6 +206,7 @@ final class ChatSession: ObservableObject {
 
     private func persistTranscript() {
         guard !isPrivate else { return }
+        tabMetadata.save(id: id)
         // Thinking/activities don't persist, so assistant messages whose
         // only content was runtime-only would reload as invisible husks.
         let persistable = messages.filter {
@@ -217,9 +223,24 @@ final class ChatSession: ObservableObject {
               !restored.isEmpty else { return }
         messages = Array(restored.suffix(30))
         if let first = messages.first(where: { $0.role == .user }) {
-            title = String(first.text.prefix(34))
+            automaticTitle = String(first.text.prefix(34))
         }
         Log.write("transcript: restored \(messages.count) messages (\(id.uuidString.prefix(8)))")
+    }
+
+    func updateTab(name: String? = nil, isLocked: Bool? = nil) throws {
+        var updated = tabMetadata
+        if let name { try updated.rename(name) }
+        if let isLocked { updated.isLocked = isLocked }
+        if !isPrivate {
+            // New, empty tabs need a transcript file to participate in tab
+            // restoration. Renaming existing tabs must not rewrite their history.
+            if !FileManager.default.fileExists(atPath: transcriptURL.path) {
+                try JSONEncoder().encode(messages).write(to: transcriptURL, options: .atomic)
+            }
+            updated.save(id: id)
+        }
+        tabMetadata = updated
     }
 
     // MARK: - Durable run state
@@ -914,7 +935,7 @@ final class ChatSession: ObservableObject {
         runningBackendKind = backendKind
         let isFirstOfConversation = messages.isEmpty
         let previousTurns = completedConversationTurns()
-        if title == "New chat" { title = String(prompt.prefix(34)) }
+        if automaticTitle == "New chat" { automaticTitle = String(prompt.prefix(34)) }
         appendRunMessage(ChatMessage(role: .user, text: prompt))
         appendRunMessage(ChatMessage(role: .assistant, text: ""))
         isStreaming = true
@@ -1168,7 +1189,7 @@ final class ChatSession: ObservableObject {
         )
         let isFirstOfConversation = messages.isEmpty
         let previousTurns = completedConversationTurns()
-        if title == "New chat" { title = String(prompt.prefix(34)) }
+        if automaticTitle == "New chat" { automaticTitle = String(prompt.prefix(34)) }
         appendRunMessage(ChatMessage(role: .user, text: prompt))
         isStreaming = true
         councilRunning = true
@@ -1446,7 +1467,7 @@ final class ChatSession: ObservableObject {
             backend: nil,
             includesAmbientContext: false
         )
-        if title == "New chat" { title = "! " + String(command.prefix(30)) }
+        if automaticTitle == "New chat" { automaticTitle = "! " + String(command.prefix(30)) }
         appendRunMessage(ChatMessage(role: .user, text: "! " + command))
         let assistantID = appendRunMessage(ChatMessage(role: .assistant, text: "```\n"))
         isStreaming = true
@@ -1533,7 +1554,7 @@ final class ChatSession: ObservableObject {
             backend: nil,
             includesAmbientContext: false
         )
-        if title == "New chat" { title = "/" + command.name }
+        if automaticTitle == "New chat" { automaticTitle = "/" + command.name }
         appendRunMessage(ChatMessage(role: .user, text: displayPrompt))
         let assistantID = appendRunMessage(ChatMessage(role: .assistant, text: ""))
         isStreaming = true
@@ -1931,6 +1952,10 @@ final class ChatSession: ObservableObject {
     }
 
     func newConversation() {
+        guard !isLocked else {
+            tabActionError = SessionTabError.locked.localizedDescription
+            return
+        }
         invalidateRouting()
         deliveryStatus = nil
         // Continuity: stash a digest of this conversation for the next one.

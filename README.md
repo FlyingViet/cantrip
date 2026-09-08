@@ -32,7 +32,8 @@ The macOS app includes:
 - **Launcher and terminal:** open apps, search files through Spotlight,
   calculate, convert units, and run explicit shell commands.
 - **AI workspace:** streaming answers, file/screenshot attachments, voice,
-  session tabs, recoverable runs, and a terminal per session.
+  renameable, lockable session tabs, recoverable runs, and a terminal per session.
+  Names and close-protection locks sync to Cantrip Remote and AgentGateway.
 - **Automatic sending:** a separate, tool-free model call interprets busy-run
   messages as context, corrections, or follow-ups. Uncertain decisions queue
   safely; manual Queue/Redirect/Inject overrides remain available.

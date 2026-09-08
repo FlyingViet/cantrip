@@ -10,6 +10,7 @@ final class SessionManager: ObservableObject {
     @Published var activeIndex = 0
     @Published var showingRemote = false
     @Published private(set) var anyStreaming = false
+    @Published var tabActionError: String?
     /// Fires when any session's run completes (for notifications).
     var onAnyRunFinished: ((ChatSession) -> Void)?
     private var cancellables: Set<AnyCancellable> = []
@@ -162,6 +163,11 @@ final class SessionManager: ObservableObject {
     func close(_ index: Int) {
         guard sessions.indices.contains(index) else { return }
         let session = sessions[index]
+        do { try session.tabMetadata.requireUnlocked() }
+        catch {
+            tabActionError = error.localizedDescription
+            return
+        }
         session.cancel()
         if session.isPrivate { session.deleteTranscript() }
         sessions.remove(at: index)
@@ -190,9 +196,11 @@ final class SessionManager: ObservableObject {
             guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent),
                   !openIDs.contains(id),
                   let data = try? Data(contentsOf: file),
-                  let messages = try? JSONDecoder().decode([ChatMessage].self, from: data),
-                  !messages.isEmpty else { continue }
-            let title = messages.first(where: { $0.role == .user })
+                  let messages = try? JSONDecoder().decode([ChatMessage].self, from: data)
+            else { continue }
+            let metadata = SessionTabMetadata.load(id: id)
+            guard !messages.isEmpty || metadata.customTitle != nil || metadata.isLocked else { continue }
+            let title = metadata.customTitle ?? messages.first(where: { $0.role == .user })
                 .map { String($0.text.prefix(60)) } ?? "Untitled"
             let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey])
                 .contentModificationDate) ?? .distantPast
@@ -215,6 +223,11 @@ final class SessionManager: ObservableObject {
     }
 
     func deleteArchived(_ id: UUID) {
+        guard !sessions.contains(where: { $0.id == id }),
+              !SessionTabMetadata.load(id: id).isLocked else {
+            tabActionError = "Open tabs and locked tabs cannot be deleted from history."
+            return
+        }
         ChatSession(id: id).deleteTranscript()
     }
 }
