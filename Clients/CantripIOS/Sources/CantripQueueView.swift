@@ -35,6 +35,8 @@ struct CantripQueueView: View {
     @ObservedObject var remote: CantripRemoteModel
     let sessionID: String
     @Environment(\.dismiss) private var dismiss
+    @State private var removingPromptID: String?
+    @State private var removalError: String?
 
     private var session: CantripRemoteSession? {
         guard remote.selectedSession?.id == sessionID else { return nil }
@@ -72,6 +74,70 @@ struct CantripQueueView: View {
                     .padding()
                 }
             }
+            .alert("Could not remove message", isPresented: Binding(
+                get: { removalError != nil },
+                set: { if !$0 { removalError = nil } }
+            )) {
+                Button("OK", role: .cancel) { removalError = nil }
+            } message: {
+                Text(removalError ?? "")
+            }
+        }
+    }
+
+    private var canRemove: Bool {
+        remote.isConnected && !remote.isMutating && removingPromptID == nil
+            && session?.supportsQueueRemoval == true
+    }
+
+    private func remove(_ prompt: CantripRemoteQueuedPrompt) {
+        removingPromptID = prompt.id
+        Task {
+            let removed = await remote.removeQueuedPrompt(prompt.id, sessionID: sessionID)
+            if !removed {
+                removalError = remote.errorMessage
+                    ?? "Removal could not be confirmed. Check the queue before trying again."
+            }
+            removingPromptID = nil
+        }
+    }
+
+    private func queueRow(_ prompt: CantripRemoteQueuedPrompt, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(index == 0 ? "Next in queue" : "Queue position \(index + 1)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if removingPromptID == prompt.id {
+                    ProgressView()
+                        .accessibilityLabel("Removing queued message")
+                } else if session?.supportsQueueRemoval == true {
+                    Button(role: .destructive) { remove(prompt) } label: {
+                        Image(systemName: "trash")
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!canRemove)
+                    .accessibilityLabel("Remove queued message")
+                    .accessibilityHint(prompt.text)
+                }
+            }
+            Text(prompt.text)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 4)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if session?.supportsQueueRemoval == true {
+                // A destructive swipe role hides the row before the Mac confirms removal.
+                Button("Remove", systemImage: "trash") {
+                    remove(prompt)
+                }
+                .tint(.red)
+                .disabled(!canRemove)
+            }
         }
     }
 
@@ -81,18 +147,17 @@ struct CantripQueueView: View {
             List {
                 Section {
                     ForEach(Array(queued.enumerated()), id: \.element.id) { index, prompt in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(index == 0 ? "Next in queue" : "Queue position \(index + 1)")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            Text(prompt.text)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 4)
+                        queueRow(prompt, index: index)
                     }
                 } footer: {
-                    Text("These prompts are accepted by your Mac and run in order. They move into the conversation when they start.")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("These prompts are accepted by your Mac and run in order. They move into the conversation when they start.")
+                        if session.supportsQueueRemoval == true {
+                            Text("Remove a prompt with the trash button or swipe left. Removing a queued message does not stop the current task.")
+                        } else {
+                            Text("Update and reopen Cantrip on your Mac to remove queued messages here.")
+                        }
+                    }
                 }
             }
         } else {

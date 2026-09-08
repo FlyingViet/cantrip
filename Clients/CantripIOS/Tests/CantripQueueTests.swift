@@ -68,17 +68,20 @@ final class CantripQueueTests: XCTestCase {
         let legacy = try session(queue: "[]", count: 0)
         XCTAssertNil(legacy.supportsAutoDelivery)
         XCTAssertNil(legacy.deliveryStatus)
+        XCTAssertNil(legacy.supportsQueueRemoval)
     }
 
     func testRoutingFeedbackDecodesWithoutChangingTheTranscript() throws {
         let data = Data(#"""
         {"id":"session-a","title":"Chat","workdir":"/tmp","isStreaming":true,
          "canResume":false,"councilMode":false,"queuedCount":1,"messages":[],
-         "supportsAutoDelivery":true,"deliveryStatus":"Queued: this is a follow-up task."}
+         "supportsAutoDelivery":true,"deliveryStatus":"Queued: this is a follow-up task.",
+         "supportsQueueRemoval":true}
         """#.utf8)
         let decoded = try JSONDecoder().decode(CantripRemoteSession.self, from: data)
         XCTAssertEqual(decoded.supportsAutoDelivery, true)
         XCTAssertEqual(decoded.deliveryStatus, "Queued: this is a follow-up task.")
+        XCTAssertEqual(decoded.supportsQueueRemoval, true)
         XCTAssertTrue(decoded.transcript.isEmpty)
     }
 }

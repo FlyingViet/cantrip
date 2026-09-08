@@ -53,6 +53,12 @@ prompts queued on the Mac or another device. Queue contents require the
 matching Cantrip host update and relaunch; older hosts show the count and an
 explicit update notice instead.
 
+Use a queued prompt's **trash button**, or swipe left and tap **Remove**, to
+remove it from the Mac's queue without stopping the current task. Removal
+requires an updated, relaunched Cantrip host. Controls are disabled while
+disconnected or a request is pending; the queue changes only after the Mac
+confirms removal. If the prompt has already started, it is not cancelled.
+
 Tap the conversation or session controls to dismiss the keyboard, or drag the
 conversation to dismiss it interactively. Chat stays at the latest message
 while following a reply, but scrolling up lets you read earlier messages
@@ -65,10 +71,14 @@ Save Cantrip's Tailscale Serve HTTPS URL to prefer Tailscale both at home and
 away. The URL is stored in app preferences and the token is stored in Keychain.
 Automatic routing tries Tailscale first and never probes or switches to LAN
 while Tailscale works. If Tailscale fails, reads can fall back to LAN; independent
-read-only probes restore Tailscale only after a successful authenticated response,
-without blocking LAN refreshes. Tailscale failures back off for three seconds.
+read-only probes restore Tailscale after two consecutive authenticated successes,
+at least three seconds apart, without blocking LAN refreshes. Tailscale reads
+have a three-second total deadline; failed Tailscale routes back off for 15 seconds.
 LAN connection attempts and reads have a two-second deadline; failed LAN routes
-back off for 30 seconds. Discovery changes do not clear the backoff.
+back off for 30 seconds. Discovery changes do not clear the backoff. When all
+routes are cooling down, reads retry one route instead of locking out recovery.
+Late failures cannot displace a newer successful route. Longer mutation and
+image-upload deadlines are unchanged.
 
 Enable **Tailscale only (skip local network)** in Remote settings to bypass
 LAN discovery; this requires a saved Tailscale URL and Tailscale connectivity
@@ -79,7 +89,9 @@ sending again, since the host may already have accepted the request.
 
 A green dot beside the session picker means the app has recently
 completed an authenticated request; gray means the connection is unconfigured,
-unavailable, unauthenticated, paused in the background, or stale.
+unavailable, unauthenticated, paused in the background, or stale. Each successful
+list/detail request renews connectivity; the ten-second stale window allows a
+bounded failover plus the polling interval without flickering disconnected.
 
 **Auto** is the default for Cantrip typed and voice messages. A bounded,
 tool-free inference on the Mac distinguishes useful context, changes of

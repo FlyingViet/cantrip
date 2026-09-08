@@ -64,6 +64,7 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     let queued: [CantripRemoteQueuedPrompt]?
     var supportsAutoDelivery: Bool? = nil
     var deliveryStatus: String? = nil
+    var supportsQueueRemoval: Bool? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
 }
@@ -91,6 +92,7 @@ enum CantripRemoteError: LocalizedError {
     case invalidResponse
     case imagesUnsupported
     case autoDeliveryUnsupported
+    case queueRemovalUnsupported
 
     static func isRouteFailure(_ error: Error) -> Bool {
         switch error {
@@ -125,6 +127,8 @@ enum CantripRemoteError: LocalizedError {
             return "Image attachments require an updated Cantrip host using Claude, Copilot, or Codex. Your images have not been sent."
         case .autoDeliveryUnsupported:
             return "Update and reopen Cantrip on your Mac for Auto sending, or choose Queue, Redirect, or Inject. Your message has not been sent."
+        case .queueRemovalUnsupported:
+            return "Update and reopen Cantrip on your Mac to remove queued messages from AgentGateway."
         }
     }
 }
@@ -519,6 +523,15 @@ struct CantripRemoteAPI {
     let token: String
     var urlSession: URLSession?
 
+    private static let readSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 3
+        configuration.timeoutIntervalForResource = 3
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration)
+    }()
+
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -599,6 +612,18 @@ struct CantripRemoteAPI {
         try await action("close", sessionID: id)
     }
 
+    func removeQueuedPrompt(id: String, sessionID: String) async throws -> CantripRemoteSession {
+        let host = try await session(id: sessionID)
+        guard host.supportsQueueRemoval == true else {
+            throw CantripRemoteError.queueRemovalUnsupported
+        }
+        let response: CantripSessionResponse = try await request(
+            path: "/api/v1/sessions/\(sessionID)/queue/\(id)",
+            method: "DELETE"
+        )
+        return response.session
+    }
+
     private func request<Response: Decodable>(
         path: String,
         method: String = "GET",
@@ -621,7 +646,7 @@ struct CantripRemoteAPI {
         var request = URLRequest(
             url: url,
             cachePolicy: .reloadIgnoringLocalCacheData,
-            timeoutInterval: isImageUpload ? 60 : 12
+            timeoutInterval: method == "GET" ? 3 : (isImageUpload ? 60 : 12)
         )
         request.httpMethod = method
         request.httpBody = body
@@ -634,7 +659,7 @@ struct CantripRemoteAPI {
         let data: Data
         let response: URLResponse
         do {
-            let session = urlSession ?? (isImageUpload ? Self.imageSession : Self.session)
+            let session = urlSession ?? (method == "GET" ? Self.readSession : (isImageUpload ? Self.imageSession : Self.session))
             (data, response) = try await session.data(for: request)
         } catch is CancellationError {
             throw CancellationError()
@@ -744,7 +769,8 @@ final class CantripRemoteModel: ObservableObject {
 
     private static let endpointKey = "cantrip.remote.base-url"
     private static let tailscaleOnlyKey = "cantrip.remote.tailscale-only"
-    private static let staleInterval: Duration = .seconds(5)
+    // Allow a bounded HTTPS-to-LAN failover plus the polling interval.
+    private static let staleInterval: Duration = .seconds(10)
     private static let pollInterval: Duration = .milliseconds(1500)
 
     private var baseURL: URL?
@@ -932,6 +958,20 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     @discardableResult
+    func removeQueuedPrompt(_ id: String, sessionID: String) async -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish, then try removing the message again."
+            return false
+        }
+        guard let session = await mutate({ api in
+            try await api.removeQueuedPrompt(id: id, sessionID: sessionID)
+        }) else { return false }
+        guard selectedSessionID == sessionID else { return true }
+        apply(session)
+        return true
+    }
+
+    @discardableResult
     func resume() async -> Bool {
         await sessionAction("resume")
     }
@@ -1003,26 +1043,29 @@ final class CantripRemoteModel: ObservableObject {
 
         let requestedID = selectedSessionID
         do {
-            let result = try await performAuthenticated(allowFallback: true) { api in
-                let listed = try await api.sessions()
-                let chosenID = requestedID.flatMap { id in
-                    listed.contains(where: { $0.id == id }) ? id : nil
-                } ?? listed.first?.id
-                let detail: CantripRemoteSession?
-                if let chosenID {
-                    detail = try await api.session(id: chosenID)
-                } else {
-                    detail = nil
-                }
-                return (listed, chosenID, detail)
+            let generation = configurationGeneration
+            let listed = try await performAuthenticated(allowFallback: true) { api in
+                try await api.sessions()
             }
+            let chosenID = requestedID.flatMap { id in
+                listed.contains(where: { $0.id == id }) ? id : nil
+            } ?? listed.first?.id
+            let detail: CantripRemoteSession?
+            if let chosenID {
+                detail = try await performAuthenticated(allowFallback: true) { api in
+                    try await api.session(id: chosenID)
+                }
+            } else {
+                detail = nil
+            }
+            guard generation == configurationGeneration else { throw CancellationError() }
 
-            sessions = result.0
+            sessions = listed
             if selectedSessionID == requestedID || selectedSessionID == nil {
-                selectedSessionID = result.1
-                if let detail = result.2 {
+                selectedSessionID = chosenID
+                if let detail {
                     apply(detail)
-                } else if result.1 == nil {
+                } else if chosenID == nil {
                     selectedSession = nil
                     transcriptRevision += 1
                 }
@@ -1179,7 +1222,8 @@ final class CantripRemoteModel: ObservableObject {
             return false
         case CantripRemoteError.http:
             return false
-        case CantripRemoteError.imagesUnsupported, is ImageAttachmentError:
+        case CantripRemoteError.imagesUnsupported, CantripRemoteError.queueRemovalUnsupported,
+             is ImageAttachmentError:
             return false
         default:
             return true

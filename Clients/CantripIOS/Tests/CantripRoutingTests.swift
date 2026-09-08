@@ -94,6 +94,8 @@ final class CantripRoutingTests: XCTestCase {
 
     func testRecoveryProbeDoesNotBlockLANAndPromotesTailscaleOnlyAfterSuccess() async throws {
         let router = CantripRemoteRouter()
+        var now = Date()
+        router.now = { now }
         router.available = [lan]
         _ = try await router.perform(readOnly: true) { _ in 1 }
         router.available = [lan, remote]
@@ -114,6 +116,11 @@ final class CantripRoutingTests: XCTestCase {
         XCTAssertEqual(router.preferred, lan)
         resume?.resume()
         await probe?.value
+        XCTAssertEqual(router.preferred, lan, "One successful response is not stable recovery")
+        XCTAssertNil(router.recoverTailscale { _ in XCTFail("Space out recovery confirmations") })
+        now = now.addingTimeInterval(4)
+        let confirmation = router.recoverTailscale { _ in }
+        await confirmation?.value
         XCTAssertEqual(router.preferred, remote)
         _ = try await router.perform(readOnly: false) { route in
             XCTAssertEqual(route, self.remote)
@@ -134,11 +141,15 @@ final class CantripRoutingTests: XCTestCase {
             XCTAssertEqual(router.preferred, lan)
             let retry = router.recoverTailscale { _ in XCTFail("Must back off failed probe") }
             XCTAssertNil(retry)
-            now = now.addingTimeInterval(4)
+            now = now.addingTimeInterval(16)
             let recovered = router.recoverTailscale { route in
                 XCTAssertEqual(route, self.remote)
             }
             await recovered?.value
+            XCTAssertEqual(router.preferred, lan)
+            now = now.addingTimeInterval(4)
+            let confirmation = router.recoverTailscale { _ in }
+            await confirmation?.value
             XCTAssertEqual(router.preferred, remote)
         }
     }
@@ -203,6 +214,109 @@ final class CantripRoutingTests: XCTestCase {
         }
         let probe = router.recoverTailscale { _ in XCTFail("No Tailscale URL is saved") }
         XCTAssertNil(probe)
+    }
+
+    func testReadRetriesWhenEveryRouteIsCoolingDownButMutationDoesNot() async throws {
+        for routes in [[lan], [remote], [remote, lan]] {
+            let router = CantripRemoteRouter()
+            router.available = routes
+            do {
+                _ = try await router.perform(readOnly: true) { _ in
+                    throw CantripRemoteError.transport("Offline")
+                }
+                XCTFail("Both routes must fail")
+            } catch {}
+            do {
+                _ = try await router.perform(readOnly: false) { _ in
+                    XCTFail("Do not send on an unconfirmed failed route")
+                }
+                XCTFail("Mutation must wait for a healthy route")
+            } catch {}
+            _ = try await router.perform(readOnly: true) { route in
+                XCTAssertEqual(route, routes.first)
+                return 1
+            }
+            XCTAssertEqual(router.preferred, routes.first, "Do not lock LAN-only recovery out for 30 seconds")
+        }
+    }
+
+    func testIntermittentRecoveryRequiresConsecutiveSuccessfulProbes() async throws {
+        let router = CantripRemoteRouter()
+        var now = Date()
+        router.now = { now }
+        router.available = [lan]
+        _ = try await router.perform(readOnly: true) { _ in 1 }
+        router.available = [lan, remote]
+        for (index, succeeds) in [true, false, true, true].enumerated() {
+            let probe = router.recoverTailscale { _ in
+                if !succeeds { throw CantripRemoteError.transport("Intermittent") }
+            }
+            XCTAssertNotNil(probe)
+            await probe?.value
+            XCTAssertEqual(router.preferred, index == 3 ? remote : lan)
+            now = now.addingTimeInterval(16)
+        }
+        XCTAssertEqual(router.preferred, remote)
+    }
+
+    func testLateFailureCannotDemoteANewerSuccessfulRequest() async throws {
+        let router = CantripRemoteRouter()
+        router.available = [remote, lan]
+        let started = expectation(description: "Old request starts")
+        var resume: CheckedContinuation<Void, Never>?
+        let old = Task {
+            try await router.perform(readOnly: true) { route in
+                guard route == self.remote else {
+                    XCTFail("A stale failure must not start LAN fallback")
+                    throw CantripRemoteError.transport("Unexpected LAN request")
+                }
+                await withCheckedContinuation { continuation in
+                    resume = continuation
+                    started.fulfill()
+                }
+                throw CantripRemoteError.transport("Late failure")
+            }
+        }
+        await fulfillment(of: [started], timeout: 1)
+        _ = try await router.perform(readOnly: true) { _ in 1 }
+        resume?.resume()
+        do { _ = try await old.value; XCTFail("Old request is superseded") } catch is CancellationError {}
+        XCTAssertEqual(router.preferred, remote)
+        _ = try await router.perform(readOnly: false) { _ in 1 }
+    }
+
+    func testUnresponsiveHTTPSReadHasABoundedTotalDeadline() async throws {
+        let listener = try NWListener(using: .tcp)
+        let ready = expectation(description: "HTTPS blackhole ready")
+        let connections = RoutingTestConnections()
+        let queue = DispatchQueue(label: "cantrip-https-routing-test")
+        listener.newConnectionHandler = { connection in
+            connections.values.append(connection)
+            connection.start(queue: queue)
+        }
+        listener.stateUpdateHandler = { state in
+            if case .ready = state { ready.fulfill() }
+        }
+        listener.start(queue: queue)
+        defer {
+            listener.cancel()
+            queue.sync { connections.values.forEach { $0.cancel() } }
+        }
+        await fulfillment(of: [ready], timeout: 2)
+        let port = try XCTUnwrap(listener.port)
+        let start = Date()
+        do {
+            _ = try await CantripRemoteAPI(
+                transport: .remote(try XCTUnwrap(URL(string: "https://127.0.0.1:\(port)"))),
+                token: "test-token"
+            ).sessions()
+            XCTFail("Stalled HTTPS must fail")
+        } catch {
+            XCTAssertTrue(CantripRemoteError.isRouteFailure(error))
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertGreaterThanOrEqual(elapsed, 2.5, "Exercise the deadline, not an immediate setup failure")
+        XCTAssertLessThan(elapsed, 4.5)
     }
 
     func testUnresponsiveLANReadTimesOutBeforeConnectionStales() async throws {

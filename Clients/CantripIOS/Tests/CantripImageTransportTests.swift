@@ -85,10 +85,12 @@ final class CantripImageTransportTests: XCTestCase {
             methods.append(request.httpMethod ?? "")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-pairing-token")
             if request.httpMethod == "POST" {
+                XCTAssertEqual(request.timeoutInterval, 12, "Mutations retain their longer deadline")
                 XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.sessionID)/messages")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
                 return (202, response)
             }
+            XCTAssertEqual(request.timeoutInterval, 3, "Preflight reads use the bounded read deadline")
             return (200, response)
         }
         let result = try await api().send(
@@ -190,5 +192,130 @@ final class CantripImageTransportTests: XCTestCase {
         let refreshed = try await client.session(id: sessionID)
         XCTAssertEqual(refreshed.queuedCount, 0)
         XCTAssertEqual(methods, ["POST", "GET"], "Queue reads must not replay the send")
+    }
+
+    private func queueSnapshot(ids: [String], support: Bool? = true) throws -> Data {
+        var session: [String: Any] = [
+            "id": sessionID, "title": "Test", "workdir": "/tmp",
+            "isStreaming": true, "canResume": false, "councilMode": false,
+            "queuedCount": ids.count,
+            "queued": ids.map { ["id": $0, "text": "Continue"] },
+            "messages": [
+                ["id": "active-reply", "role": "assistant", "text": "Still working",
+                 "thinking": "", "activities": []] as [String: Any],
+            ],
+        ]
+        if let support { session["supportsQueueRemoval"] = support }
+        return try JSONSerialization.data(withJSONObject: ["session": session])
+    }
+
+    func testQueueRemovalUsesStableIDAndPreservesOtherPromptsAndActiveTask() async throws {
+        let ids = (1...3).map { String(format: "00000000-0000-0000-0000-%012d", $0) }
+        let before = try queueSnapshot(ids: ids)
+        let after = try queueSnapshot(ids: [ids[0], ids[2]])
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Authorization"),
+                "Bearer test-pairing-token"
+            )
+            if request.httpMethod == "DELETE" {
+                XCTAssertEqual(
+                    request.url?.path,
+                    "/api/v1/sessions/\(self.sessionID)/queue/\(ids[1])"
+                )
+                return (200, after)
+            }
+            XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.sessionID)")
+            return (200, before)
+        }
+        let result = try await api().removeQueuedPrompt(id: ids[1], sessionID: sessionID)
+        XCTAssertEqual(methods, ["GET", "DELETE"])
+        XCTAssertEqual(result.queued?.map(\.id), [ids[0], ids[2]])
+        XCTAssertEqual(result.queuedCount, 2)
+        XCTAssertTrue(result.isStreaming)
+        XCTAssertEqual(result.transcript.first?.text, "Still working")
+    }
+
+    func testRemovingLastPromptReturnsAnEmptyQueue() async throws {
+        let id = "00000000-0000-0000-0000-000000000002"
+        let before = try queueSnapshot(ids: [id])
+        let after = try queueSnapshot(ids: [])
+        ImageRequestProtocol.handler = { request in
+            (200, request.httpMethod == "DELETE" ? after : before)
+        }
+        let result = try await api().removeQueuedPrompt(id: id, sessionID: sessionID)
+        XCTAssertEqual(result.queuedCount, 0)
+        XCTAssertEqual(result.queued, [])
+        XCTAssertTrue(result.isStreaming)
+    }
+
+    func testLegacyHostsDoNotReceiveQueueRemovalMutations() async throws {
+        for support: Bool? in [nil, false] {
+            let response = try queueSnapshot(ids: ["pending"], support: support)
+            var methods: [String] = []
+            ImageRequestProtocol.handler = { request in
+                methods.append(request.httpMethod ?? "")
+                return (200, response)
+            }
+            do {
+                _ = try await api().removeQueuedPrompt(id: "pending", sessionID: sessionID)
+                XCTFail("An older host must show the update message")
+            } catch CantripRemoteError.queueRemovalUnsupported {}
+            XCTAssertEqual(methods, ["GET"])
+        }
+    }
+
+    func testQueueRemovalConflictAndHostErrorsSurfaceWithoutOtherMutations() async throws {
+        for status in [409, 500] {
+            let response = try queueSnapshot(ids: ["pending"])
+            var methods: [String] = []
+            ImageRequestProtocol.handler = { request in
+                methods.append(request.httpMethod ?? "")
+                if request.httpMethod == "DELETE" {
+                    return (status, Data(#"{"error":"Removal rejected by host"}"#.utf8))
+                }
+                return (200, response)
+            }
+            do {
+                _ = try await api().removeQueuedPrompt(id: "pending", sessionID: sessionID)
+                XCTFail("The host error must be surfaced without cancelling the task")
+            } catch CantripRemoteError.http(let actualStatus, let message) {
+                XCTAssertEqual(actualStatus, status)
+                XCTAssertEqual(message, "Removal rejected by host")
+            }
+            XCTAssertEqual(methods, ["GET", "DELETE"])
+        }
+    }
+
+    func testQueueRemovalLostResponseIsNotReplayed() async throws {
+        let response = try queueSnapshot(ids: ["pending"])
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            if request.httpMethod == "DELETE" {
+                throw URLError(.networkConnectionLost)
+            }
+            return (200, response)
+        }
+        do {
+            _ = try await api().removeQueuedPrompt(id: "pending", sessionID: sessionID)
+            XCTFail("Unconfirmed removal must not look successful")
+        } catch CantripRemoteError.transport {}
+        XCTAssertEqual(methods, ["GET", "DELETE"])
+    }
+
+    func testUnauthenticatedQueueRemovalNeverReachesTheMutation() async throws {
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            return (401, Data(#"{"error":"invalid pairing token"}"#.utf8))
+        }
+        do {
+            _ = try await api().removeQueuedPrompt(id: "pending", sessionID: sessionID)
+            XCTFail("Authentication errors must be surfaced")
+        } catch CantripRemoteError.authentication {}
+        XCTAssertEqual(methods, ["GET"])
     }
 }
