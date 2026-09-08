@@ -1851,7 +1851,7 @@ private struct TurnView: View {
         if turn.role == .user {
             HStack {
                 Spacer(minLength: 40)
-                Text(turn.text)
+                PromptTextView(text: turn.text)
                     .padding(.horizontal, 14).padding(.vertical, 9)
                     .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
                     .foregroundStyle(.white)

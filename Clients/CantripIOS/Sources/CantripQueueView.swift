@@ -15,7 +15,7 @@ struct CantripQueueButton: View {
                         .font(.caption)
                 }
                 if let next = session.queued?.first {
-                    Text(next.text)
+                    Text(verbatim: PromptText(next.text).preview)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -121,10 +121,10 @@ struct CantripQueueView: View {
                     .buttonStyle(.borderless)
                     .disabled(!canRemove)
                     .accessibilityLabel("Remove queued message")
-                    .accessibilityHint(prompt.text)
+                    .accessibilityHint(PromptText(prompt.text).preview)
                 }
             }
-            Text(prompt.text)
+            PromptTextView(text: prompt.text)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }

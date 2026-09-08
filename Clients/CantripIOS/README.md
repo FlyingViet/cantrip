@@ -79,6 +79,13 @@ conversation to dismiss it interactively. Chat stays at the latest message
 while following a reply, but scrolling up lets you read earlier messages
 without being pulled back down. Tap **Latest** to resume following.
 
+Long prompts use compact plain-text previews in all chat lanes and the Cantrip
+queue. Tap **Read full prompt** to read bounded pages or **Copy all** for the
+original text. This limits layout work, not the text sent to the agent.
+Replies continue streaming normally; prompts remain one complete message.
+For host-side responsiveness improvements, also update and reopen Cantrip on
+the Mac (memory preparation and transcript encoding now run off the UI thread).
+
 Open the shared **Settings** screen and enter Cantrip's pairing token. Without
 a saved URL, AgentGateway discovers Cantrip on the same local network with Bonjour and connects
 directly using forward-secret TLS with the pairing token as a pre-shared key.

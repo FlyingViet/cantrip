@@ -1656,7 +1656,11 @@ private struct CantripRemoteMessageBubble: View {
                     .font(.caption)
                 }
                 if !message.text.isEmpty {
-                    Markdown(message.text)
+                    if message.role == "user" {
+                        PromptTextView(text: message.text)
+                    } else {
+                        Markdown(message.text)
+                    }
                 }
                 ForEach(message.activities) { activity in
                     Label {

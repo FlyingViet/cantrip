@@ -10,6 +10,7 @@ private final class TranscriptLayoutModel: ObservableObject {
     @Published var viewportHeight: CGFloat = 500
     @Published var scrollRequest = 0
     @Published var markdown = ""
+    @Published var prompt = ""
 }
 
 private struct TranscriptLayoutHarness: View {
@@ -24,6 +25,9 @@ private struct TranscriptLayoutHarness: View {
             }
             if !model.markdown.isEmpty {
                 Markdown(model.markdown)
+            }
+            if !model.prompt.isEmpty {
+                PromptTextView(text: model.prompt)
             }
         }
         .frame(height: model.viewportHeight)
@@ -143,5 +147,38 @@ final class ChatTranscriptLayoutTests: XCTestCase {
         assertAtBottom(try await settle(controller))
         model.markdown = "**Done.**"
         assertAtBottom(try await settle(controller))
+    }
+
+    func testMegabytePromptKeepsTranscriptLayoutBounded() async throws {
+        let model = TranscriptLayoutModel()
+        model.heights = []
+        model.prompt = String(repeating: "Long prompt 👩🏽‍💻 cafe\u{301}\n", count: 50_000)
+        let (window, controller) = try host(model)
+        defer { window.isHidden = true }
+        let scroll = try await settle(controller)
+        XCTAssertLessThan(scroll.contentSize.height, 600, "Only the bounded preview should be laid out")
+        assertAtBottom(scroll)
+        model.heights = [80]
+        model.scrollRequest += 1
+        assertAtBottom(try await settle(controller))
+    }
+
+    func testPromptPagesPreserveFullUnicodeText() {
+        let text = String(repeating: "Long prompt 👩🏽‍💻 cafe\u{301}\n", count: 50_000)
+        let prompt = PromptText(text)
+        XCTAssertTrue(prompt.isLong)
+        XCTAssertEqual(prompt.preview.count, PromptText.previewLimit)
+        var start = text.startIndex
+        var restored = ""
+        while start < text.endIndex {
+            let page = prompt.page(from: start)
+            XCTAssertLessThanOrEqual(page.text.count, PromptText.pageLimit)
+            XCTAssertGreaterThan(page.end, start)
+            restored += page.text
+            start = page.end
+        }
+        XCTAssertEqual(restored, text)
+        XCTAssertFalse(PromptText(String(repeating: "x", count: 1_200)).isLong)
+        XCTAssertTrue(PromptText(String(repeating: "x", count: 1_201)).isLong)
     }
 }
