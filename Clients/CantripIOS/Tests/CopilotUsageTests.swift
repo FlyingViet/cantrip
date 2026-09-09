@@ -93,8 +93,8 @@ final class CopilotUsageTests: XCTestCase {
         XCTAssertEqual(model.headerText(at: Date()), "--")
         let snapshot = try JSONDecoder().decode(CopilotUsageSnapshot.self, from: fixture())
         await model.refresh { snapshot }
-        XCTAssertEqual(model.headerText(at: Date(), locale: Locale(identifier: "en_US")), "964.4K / 1M")
-        XCTAssertTrue(model.accessibilityValue(at: Date()).contains("AI credits remaining"))
+        XCTAssertEqual(model.headerText(at: Date(), locale: Locale(identifier: "en_US")), "35.5K / 1M")
+        XCTAssertTrue(model.accessibilityValue(at: Date()).contains("AI credits used"))
         await model.refresh { throw CantripRemoteError.transport("Offline") }
         XCTAssertEqual(model.headerText(at: Date()), "Stale")
         XCTAssertEqual(model.snapshot?.account?.primary?.remainingPercent, 96.44224)
@@ -153,6 +153,10 @@ final class CopilotUsageTests: XCTestCase {
         }
         let model = CopilotUsageModel()
         await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: fixture(remaining: 0, amount: 0)) }
+        XCTAssertEqual(model.headerText(at: now, locale: Locale(identifier: "en_US")), "1M / 1M")
+        await model.refresh {
+            try decoder.decode(CopilotUsageSnapshot.self, from: fixture(remaining: 100, amount: 1000000))
+        }
         XCTAssertEqual(model.headerText(at: now, locale: Locale(identifier: "en_US")), "0 / 1M")
         await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: fixture(remaining: nil, unlimited: true)) }
         XCTAssertEqual(model.headerText(at: now), "Unlimited")
@@ -167,8 +171,8 @@ final class CopilotUsageTests: XCTestCase {
         let decoder = JSONDecoder()
         let snapshot = try decoder.decode(CopilotUsageSnapshot.self, from: fixture())
         let bucket = try XCTUnwrap(snapshot.account?.primary)
-        XCTAssertEqual(bucket.amountRatio(locale: locale), "964,422.4 / 1,000,000")
-        XCTAssertTrue(bucket.summary.contains("AI credits remaining"))
+        XCTAssertEqual(bucket.amountRatio(locale: locale), "35,577.6 / 1,000,000")
+        XCTAssertTrue(bucket.summary.contains("AI credits used"))
         XCTAssertFalse(bucket.summary.contains("%"))
         XCTAssertEqual(bucket.percentageSummary, "3.6% used / 96.4% remaining")
         XCTAssertEqual(copilotAmount(999999.999, compact: true, locale: locale), "999.9K")
@@ -176,28 +180,44 @@ final class CopilotUsageTests: XCTestCase {
         XCTAssertEqual(copilotAmount(0, locale: locale), "0")
         XCTAssertEqual(copilotAmount(12.349, locale: Locale(identifier: "de_DE")), "12,34")
 
-        for data in [try fixture(amount: nil), try fixture(entitlement: nil), try fixture(amount: -1)] {
+        for data in [try fixture(amount: nil), try fixture(entitlement: nil), try fixture(amount: -1),
+                     try fixture(amount: 1000001), try fixture(entitlement: -1)] {
             await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: data) }
             XCTAssertEqual(model.headerText(at: Date()), "--")
             XCTAssertEqual(model.snapshot?.account?.primary?.summary, "AI-credit amounts unavailable")
             XCTAssertNotNil(model.snapshot?.account?.primary?.percentageSummary)
         }
         await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: fixture(remaining: nil)) }
-        XCTAssertEqual(model.headerText(at: Date(), locale: locale), "964.4K / 1M",
+        XCTAssertEqual(model.headerText(at: Date(), locale: locale), "35.5K / 1M",
                        "Amounts remain usable even when the percentage is absent")
         await model.refresh {
             try decoder.decode(CopilotUsageSnapshot.self,
-                from: fixture(remaining: 50, amount: 150, entitlement: 300, billingMode: "requests"))
+                from: fixture(remaining: 75, amount: 225, entitlement: 300, billingMode: "requests"))
         }
-        XCTAssertEqual(model.headerText(at: Date(), locale: locale), "150 / 300")
-        XCTAssertTrue(model.snapshot!.account!.primary!.summary.contains("requests remaining"))
+        XCTAssertEqual(model.headerText(at: Date(), locale: locale), "75 / 300")
+        XCTAssertTrue(model.snapshot!.account!.primary!.summary.contains("requests used"))
         XCTAssertFalse(model.snapshot!.account!.primary!.summary.contains("AI credits"))
         await model.refresh {
             try decoder.decode(CopilotUsageSnapshot.self,
-                from: fixture(remaining: 50, billingMode: "unknown"))
+                from: fixture(remaining: 80, billingMode: "unknown"))
         }
-        XCTAssertEqual(model.headerText(at: Date()), "50.0%")
+        XCTAssertEqual(model.headerText(at: Date()), "20.0%")
         XCTAssertNil(model.snapshot?.account?.primary?.amountRatio())
+    }
+
+    func testUsedAmountsPreserveDecimalPrecisionAndKeepOverageSeparate() throws {
+        let locale = Locale(identifier: "en_US")
+        for (remaining, expected) in [(100.0, "0 / 100"), (99.99, "0.01 / 100"),
+                                       (99.999, "<0.01 / 100"), (0.0, "100 / 100")] {
+            let bucket = CopilotQuotaBucket(id: "premium_interactions", billingMode: "credits",
+                isUnlimited: false, remainingPercent: nil, entitlement: 100, remaining: remaining,
+                overage: 25, overageAllowed: true, resetAt: nil, observedAt: nil)
+            XCTAssertEqual(bucket.amountRatio(locale: locale), expected)
+            XCTAssertTrue(bucket.summary.contains("AI credits used"))
+        }
+        let snapshot = try JSONDecoder().decode(CopilotUsageSnapshot.self,
+            from: fixture(amount: 0, entitlement: 0))
+        XCTAssertEqual(snapshot.account?.primary?.amountRatio(locale: locale), "0 / 0")
     }
 
     func testUsageTransportDoesNotChangeSelectedSessionOrChatLane() async throws {
@@ -251,14 +271,14 @@ final class CopilotUsageTests: XCTestCase {
         let measured = button.sizeThatFits(in: CGSize(width: 124, height: 44))
         XCTAssertEqual(measured.width, 124, accuracy: 1)
         XCTAssertEqual(measured.height, 44, accuracy: 1)
-        for text in ["964.4K / 1M", "<0.01 / 1M", "0 / 1M", "Unlimited", "Stale", "--"] {
+        for text in ["35.5K / 1M", "999.9K / 1M", "<0.01 / 1M", "0 / 1M", "1M / 1M", "Unlimited", "Stale", "--"] {
             for size: DynamicTypeSize in [.large, .accessibility3, .accessibility5] {
                 let label = UIHostingController(rootView: CopilotUsageButton.CopilotUsageButtonLabel(text: text)
                     .environment(\.dynamicTypeSize, size))
                 let measured = label.sizeThatFits(in: CGSize(width: 124, height: 44))
                 XCTAssertEqual(measured.width, 124, accuracy: 1)
                 XCTAssertEqual(measured.height, 44, accuracy: 1)
-                if text == "964.4K / 1M" && (size == .large || size == .accessibility5) {
+                if text == "35.5K / 1M" && (size == .large || size == .accessibility5) {
                     let renderer = ImageRenderer(content: label.rootView.padding()
                         .background(Color(uiColor: .systemBackground)))
                     renderer.scale = 3
@@ -303,7 +323,7 @@ final class CopilotUsageTests: XCTestCase {
                                     .menuIndicator(.hidden)
                                 } usage: {
                                     Button {} label: {
-                                        CopilotUsageButton.CopilotUsageButtonLabel(text: "964.4K / 1M")
+                                        CopilotUsageButton.CopilotUsageButtonLabel(text: "35.5K / 1M")
                                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                                                 usageFrame = $0
                                             }

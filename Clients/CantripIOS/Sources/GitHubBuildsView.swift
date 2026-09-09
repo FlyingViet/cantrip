@@ -15,6 +15,33 @@ struct CantripBuildSnapshot: Decodable {
         error == nil && !repositories.isEmpty
             && repositories.allSatisfy { !$0.isStale }
     }
+
+    func buildQueue(canEstimate: Bool = true) -> [CantripBuildQueueItem] {
+        let pending = entries.filter { !$0.job.isRunning && $0.job.status != "completed" }
+            .map { (entry: $0, readiness: $0.queueReadiness) }
+            .sorted {
+                ($0.readiness.rawValue, $0.entry.job.createdAt, $0.entry.id)
+                    < ($1.readiness.rawValue, $1.entry.job.createdAt, $1.entry.id)
+            }
+        let nextID = canEstimate && isComplete
+            ? pending.first(where: { $0.readiness.canStartNext })?.entry.id : nil
+        return pending.enumerated().map { index, item in
+            CantripBuildQueueItem(entry: item.entry, position: index + 1, isUpNext: item.entry.id == nextID)
+        }
+    }
+}
+
+enum CantripBuildQueueReadiness: Int {
+    case ready, runnerBusy, blocked, unknown
+
+    var canStartNext: Bool { self == .ready || self == .runnerBusy }
+}
+
+struct CantripBuildQueueItem: Identifiable {
+    let entry: CantripBuildEntry
+    let position: Int
+    let isUpNext: Bool
+    var id: String { entry.id }
 }
 
 struct CantripBuildRepository: Decodable, Identifiable {
@@ -68,6 +95,34 @@ struct CantripBuildEntry: Identifiable {
     let repository: CantripBuildRepository
     let job: CantripBuildJob
     var id: String { job.id }
+
+    var queueReadiness: CantripBuildQueueReadiness {
+        guard !repository.isStale else { return .unknown }
+        guard ["assigned", "eligible"].contains(job.assignment),
+              ["queued", "in_progress"].contains(job.status),
+              repository.runnerStatus == "online" else { return .blocked }
+        return repository.busy || repository.jobs.contains(where: \.isRunning) ? .runnerBusy : .ready
+    }
+
+    var queueReason: String {
+        switch queueReadiness {
+        case .ready:
+            return "Runner available: \(repository.runner)"
+        case .runnerBusy:
+            return "Waiting for \(repository.runner) to finish its current work"
+        case .unknown:
+            return "Queue position is provisional; runner data is stale or unavailable"
+        case .blocked:
+            if job.isWorkflowWait {
+                return "Waiting for workflow jobs; runner eligibility is not yet known"
+            }
+            if repository.runnerStatus != "online" {
+                return "Runner \(repository.runner) is \(repository.runnerStatus); cannot predict its start"
+            }
+            return "Waiting on GitHub; approval, concurrency, or dependencies may need to clear"
+        }
+    }
+
     var githubURL: URL? {
         guard let url = URL(string: job.url), url.scheme == "https",
               url.host == "github.com", url.user == nil, url.password == nil,
@@ -113,8 +168,7 @@ struct GitHubBuildsView: View {
                 if let snapshot = model.snapshot {
                     let entries = snapshot.entries
                     buildSection("Building now", entries: entries.filter { $0.job.isRunning })
-                    buildSection("Queued / waiting", entries: entries.filter { !$0.job.isRunning && !$0.job.isWorkflowWait })
-                    buildSection("Waiting workflows", entries: entries.filter { $0.job.isWorkflowWait })
+                    GitHubBuildQueueSection(snapshot: snapshot, hasLoadError: model.error != nil)
                     if entries.isEmpty && snapshot.isComplete && model.error == nil
                         && !snapshot.repositories.contains(where: \.busy) {
                         Section {
@@ -177,8 +231,6 @@ struct GitHubBuildsView: View {
             }
             Text("Read-only view across your apps. The Mac checks GitHub at most once a minute while this screen is open.")
                 .font(.caption).foregroundStyle(.secondary)
-            Text("Waiting work is oldest-first, not a guaranteed build order. Eligible jobs are not yet assigned; workflow waits may be for approval, concurrency, or dependencies.")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -229,15 +281,67 @@ struct GitHubBuildsView: View {
     }
 }
 
+struct GitHubBuildQueueSection: View {
+    let snapshot: CantripBuildSnapshot
+    var hasLoadError = false
+
+    var body: some View {
+        let queue = snapshot.buildQueue(canEstimate: !hasLoadError)
+        let isComplete = snapshot.isComplete && !hasLoadError
+        Section {
+            if !isComplete {
+                Label("Queue may be incomplete or out of date. Up next is unavailable.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if queue.isEmpty {
+                Text(isComplete ? "No queued builds reported across your apps."
+                     : "Waiting for a complete queue snapshot.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                if isComplete && !queue.contains(where: \.isUpNext) {
+                    Text("Up next is unknown until a runner is online and GitHub releases eligible work.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(queue) { item in
+                    GitHubBuildRow(entry: item.entry, queuePosition: item.position, isUpNext: item.isUpNext)
+                }
+            }
+        } header: {
+            Text("Build queue (\(queue.count))")
+        } footer: {
+            Text("One queue across all apps. Estimated order: available runners, busy runners, then other waits; oldest workflow first within each group. Numbers are estimated positions, not GitHub scheduling guarantees. Separate runners can start in parallel.")
+        }
+    }
+}
+
 struct GitHubBuildRow: View {
     let entry: CantripBuildEntry
+    var queuePosition: Int?
+    var isUpNext = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let queuePosition {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("#\(queuePosition)")
+                        .font(.subheadline.monospacedDigit().bold())
+                        .accessibilityLabel("Estimated queue position \(queuePosition)")
+                    if isUpNext {
+                        Text("Up next (estimated)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
             Text(entry.repository.app).font(.headline)
             Label(entry.job.statusTitle, systemImage: entry.job.isRunning ? "hammer.fill" : "clock")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(entry.job.isRunning ? Color.accentColor : Color.secondary)
+            if queuePosition != nil {
+                Text(entry.queueReason).font(.caption).foregroundStyle(.secondary)
+            }
             if entry.repository.isStale {
                 Label("Last known state - data is stale", systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.orange)

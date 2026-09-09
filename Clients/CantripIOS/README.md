@@ -199,8 +199,9 @@ Missing files or connection failures show a retry state, not a blank image.
 ### Copilot account usage
 
 The **usage gauge next to the Local/Remote antenna lane picker** shares its
-icon size and row beneath the chat title. It shows **AI credits remaining / total**
-in compact form (for example, `964.4K / 1M`). Tap it for the full credit amounts, a secondary percentage
+icon size and row beneath the chat title. It shows **AI credits used / total**
+in compact form (for example, `35.5K / 1M`). Used credits are total minus remaining;
+additional usage is reported separately. Tap it for the full credit amounts, a secondary percentage
 progress bar, the reset date/time, additional-usage status, account, and
 last-checked time. It works from every chat lane without switching sessions.
 
@@ -215,7 +216,7 @@ polling stops in the background. Pull-to-refresh reads the host cache without
 bypassing its throttle. Failed or old readings say **Stale**; unavailable data
 shows **--**, not zero or a full allowance. Re-pairing clears the old account.
 Credit amounts use the account's reported units directly, with up to two decimal
-places in details. Positive balances below `0.01` display as `<0.01`, not zero.
+places in details. Positive amounts below `0.01` display as `<0.01`, not zero.
 Missing amounts are explicitly unavailable; they are not estimated from rounded
 percentages. Legacy request plans retain request labels, and unlimited plans
 show **Unlimited**. Reset dates use your local time, and remaining budget does
@@ -224,14 +225,25 @@ not rule out short-term/model throttling.
 ### GitHub build queue
 
 Open **hamburger menu > GitHub Builds** from any chat lane to see builds
-across the Mac's configured app runners. **Building now**, **Queued / waiting**,
-and **Waiting workflows** distinguish assigned work from eligible jobs and
-workflows whose runner is not yet known. Each entry includes the app, workflow
-run/attempt, job/current step, branch/commit, elapsed time, and **Open in GitHub**.
+across the Mac's configured app runners. **Building now** shows active jobs,
+followed by one numbered **Build queue** across all apps, including workflows
+whose runner is not yet known. Each entry includes the app, workflow run/attempt,
+job/current step, branch/commit, elapsed time, and **Open in GitHub**.
 The runner list shows online/offline, busy/idle, and when each app was checked.
 
-This is read-only and separate from the chat's queued prompts. Waiting work
-is oldest-first, not a promised execution order. The screen refreshes while
+Queue positions are estimates: jobs with available runners come first, then
+jobs waiting for busy runners, then other workflow/offline waits, with stale
+entries last. Each group is ordered by workflow creation time, oldest first.
+**Up next (estimated)** marks the first eligible job on an online runner; each
+entry explains what it is waiting for. Blocked or unknown-eligibility workflows
+are not presented as up next. Incomplete, failed, or stale readings suppress
+the up-next estimate and never claim an empty queue.
+
+This is read-only and separate from the chat's queued prompts. It does not
+change build scheduling: GitHub does not expose a guaranteed cross-repository
+execution order, and separate runners can start in parallel.
+The aggregate queue uses the existing host endpoint; no additional Mac update
+is needed if GitHub Builds already works. The screen refreshes while
 open and foregrounded; the Mac contacts GitHub at most once a minute.
 Pull-to-refresh reads the latest cached snapshot without bypassing that limit.
 Failures keep explicitly stale data rather than claiming the queue is empty.
