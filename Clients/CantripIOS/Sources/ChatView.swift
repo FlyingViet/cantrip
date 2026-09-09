@@ -43,6 +43,7 @@ final class ChatViewModel: ObservableObject {
     let voice: VoiceController
     private var conversationID: String
     private var gatewayIdentity: String?
+    private var chatStorageID: UUID?
     private var pendingRun: PendingHermesRun?
     private var activeRun: ActiveHermesRun?
     private var observationTask: Task<Void, Never>?
@@ -67,7 +68,8 @@ final class ChatViewModel: ObservableObject {
         if activeLane == .cantrip {
             gatewayIdentity = nil
         } else {
-            let snapshot = ChatStore.load(for: activeLane)
+            chatStorageID = env.chatStorageID
+            let snapshot = ChatStore.load(for: activeLane, serverID: chatStorageID)
             turns = snapshot.turns
             gatewayIdentity = env.gatewayIdentity
             if let storedGateway = snapshot.gatewayIdentity,
@@ -361,7 +363,8 @@ final class ChatViewModel: ObservableObject {
             pendingRun: pendingRun,
             activeRun: activeRun,
             tabMetadata: tabMetadata,
-            for: lane
+            for: lane,
+            serverID: chatStorageID
         )
     }
 
@@ -644,7 +647,8 @@ final class ChatViewModel: ObservableObject {
             pendingRun: pendingRun,
             activeRun: activeRun,
             tabMetadata: tabMetadata,
-            for: activeLane
+            for: activeLane,
+            serverID: chatStorageID
         )
     }
 
@@ -950,7 +954,7 @@ final class ChatViewModel: ObservableObject {
         pendingRun = nil
         activeRun = nil
         tabMetadata = ChatTabMetadata()
-        ChatStore.clear(for: activeLane)
+        ChatStore.clear(for: activeLane, serverID: chatStorageID)
     }
 
     func switchLane(to lane: ExecutionLane) {
@@ -973,7 +977,8 @@ final class ChatViewModel: ObservableObject {
             syncRemoteTranscript()
             return
         }
-        let snapshot = ChatStore.load(for: lane)
+        chatStorageID = env.chatStorageID
+        let snapshot = ChatStore.load(for: lane, serverID: chatStorageID)
         turns = snapshot.turns
         gatewayIdentity = env.gatewayIdentity
         if let storedGateway = snapshot.gatewayIdentity,
@@ -999,15 +1004,24 @@ final class ChatViewModel: ObservableObject {
 
     func gatewayDidChange() {
         guard activeLane != .cantrip else { return }
-        guard !sending, gatewayIdentity != env.gatewayIdentity else { return }
-        turns.removeAll()
-        conversationID = UUID().uuidString
+        guard !sending,
+              gatewayIdentity != env.gatewayIdentity || chatStorageID != env.chatStorageID else { return }
+        persist()
+        cancelObservation()
+        leaveVoiceMode()
+        chatStorageID = env.chatStorageID
         gatewayIdentity = env.gatewayIdentity
-        pendingRun = nil
-        activeRun = nil
-        runStatusText = nil
-        tabMetadata = ChatTabMetadata()
-        ChatStore.clear(for: activeLane)
+        let snapshot = ChatStore.load(for: activeLane, serverID: chatStorageID)
+        let matchesGateway = snapshot.gatewayIdentity == nil
+            || snapshot.gatewayIdentity == gatewayIdentity
+        turns = matchesGateway ? snapshot.turns : []
+        conversationID = matchesGateway ? snapshot.conversationID ?? UUID().uuidString : UUID().uuidString
+        pendingRun = matchesGateway ? snapshot.pendingRun : nil
+        activeRun = matchesGateway ? snapshot.activeRun : nil
+        tabMetadata = matchesGateway ? snapshot.tabMetadata ?? ChatTabMetadata() : ChatTabMetadata()
+        sending = pendingRun != nil || activeRun != nil
+        runStatusText = sending ? "Reconnecting to the run on your Mac..." : nil
+        if sending { resumeActiveRun() }
     }
 
     private func apply(_ ev: HermesStreamEvent, to turnID: UUID) {
@@ -1052,6 +1066,7 @@ struct ChatView: View {
     @StateObject private var vm: ChatViewModel
     @ObservedObject private var router = AppRouter.shared
     @State private var input = ""
+    @State private var serverTextDrafts: [String: String] = [:]
     @State private var imageDrafts: [String: [ChatImageAttachment]] = [:]
     @State private var imageImportID: UUID?
     @State private var submittingRemote = false
@@ -1110,7 +1125,8 @@ struct ChatView: View {
                     reloadCommands()
                 }
             ) {
-                SettingsView(env: env, remote: remote, voice: voice)
+                SettingsView(env: env, remote: remote, voice: voice,
+                             canChangeGateway: !vm.sending)
             }
             .sheet(isPresented: $showSkills) {
                 SkillsView(client: env.client) { skill in
@@ -1178,6 +1194,28 @@ struct ChatView: View {
         }
         .onChange(of: showVoiceMode) { _, showing in
             if showing { composerFocused = false }
+        }
+        .onChange(of: showSettings) { _, showing in
+            if showing {
+                composerFocused = false
+                vm.leaveVoiceMode()
+            }
+        }
+        .onChange(of: env.selectedServerID) { old, new in
+            guard vm.activeLane != .cantrip else { return }
+            switchServerDraft(kind: .hermes, from: old, to: new)
+            vm.gatewayDidChange()
+            commands = []
+            reloadCommands()
+        }
+        .onChange(of: remote.selectedServerID) { old, new in
+            guard vm.activeLane == .cantrip else { return }
+            switchServerDraft(kind: .cantrip, from: old, to: new)
+            vm.leaveVoiceMode()
+            vm.syncRemoteTranscript()
+            vm.remoteDeliveryMode = .auto
+            showRemoteTabs = false
+            showQueue = false
         }
         .onAppear {
             voice.requestAuth()
@@ -1356,13 +1394,27 @@ struct ChatView: View {
             commands = []
             return
         }
+        let serverID = env.selectedServerID
+        let gateway = env.gatewayIdentity
         Task {
             if let c = await env.client?.commands(),
                !c.isEmpty,
+               serverID == env.selectedServerID,
+               gateway == env.gatewayIdentity,
                vm.activeLane != .cantrip {
                 commands = c
             }
         }
+    }
+
+    private func switchServerDraft(kind: ServerKind, from old: UUID?, to new: UUID?) {
+        serverTextDrafts["\(kind.rawValue)/\(old?.uuidString ?? "legacy")"] = input
+        input = serverTextDrafts["\(kind.rawValue)/\(new?.uuidString ?? "legacy")"] ?? ""
+        composerRevision = UUID()
+    }
+
+    private func remoteDraftKey(_ sessionID: String) -> String {
+        "\(remote.selectedServerID?.uuidString ?? remote.usageIdentity.uuidString)/\(sessionID)"
     }
 
     private var newConversationDisabled: Bool {
@@ -1440,9 +1492,10 @@ struct ChatView: View {
     }
 
     private func closeRemoteSession(_ id: String) {
+        let draftKey = remoteDraftKey(id)
         Task {
             if await remote.closeSession(id) {
-                imageDrafts.removeValue(forKey: id)
+                imageDrafts.removeValue(forKey: draftKey)
             }
             vm.syncRemoteTranscript()
         }
@@ -1468,9 +1521,9 @@ struct ChatView: View {
 
     private var transcriptIdentity: String {
         if vm.activeLane == .cantrip {
-            return "cantrip:\(remote.selectedSessionID ?? "")"
+            return "cantrip:\(remoteDraftKey(remote.selectedSessionID ?? ""))"
         }
-        return vm.activeLane.rawValue
+        return "\(vm.activeLane.rawValue):\(env.selectedServerID?.uuidString ?? "legacy")"
     }
 
     @ViewBuilder private var emptyState: some View {
@@ -1592,7 +1645,8 @@ struct ChatView: View {
     }
 
     private func imageDraft(for sessionID: String) -> Binding<[ChatImageAttachment]> {
-        Binding(get: { imageDrafts[sessionID] ?? [] }, set: { imageDrafts[sessionID] = $0 })
+        let key = remoteDraftKey(sessionID)
+        return Binding(get: { imageDrafts[key] ?? [] }, set: { imageDrafts[key] = $0 })
     }
 
     private var imagePickerDisabled: Bool {
@@ -1733,7 +1787,8 @@ struct ChatView: View {
               !text.isEmpty || hasImageDraft else { return }
         composerFocused = false
         if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
-            let images = imageDrafts[sessionID] ?? []
+            let draftKey = remoteDraftKey(sessionID)
+            let images = imageDrafts[draftKey] ?? []
             let originalInput = input
             submittingRemote = true
             Task { @MainActor in
@@ -1741,8 +1796,8 @@ struct ChatView: View {
                 let sent = await vm.sendRemote(text, images: images, sessionID: sessionID)
                 if sent {
                     let sentIDs = Set(images.map(\.id))
-                    imageDrafts[sessionID]?.removeAll { sentIDs.contains($0.id) }
-                    if remote.selectedSessionID == sessionID, input == originalInput {
+                    imageDrafts[draftKey]?.removeAll { sentIDs.contains($0.id) }
+                    if remoteDraftKey(remote.selectedSessionID ?? "") == draftKey, input == originalInput {
                         input = ""
                         composerRevision = UUID()
                     }
@@ -1760,7 +1815,7 @@ struct ChatView: View {
 
     private var hasImageDraft: Bool {
         guard vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID else { return false }
-        return !(imageDrafts[sessionID] ?? []).isEmpty
+        return !(imageDrafts[remoteDraftKey(sessionID)] ?? []).isEmpty
     }
 
     private var importingImages: Bool { imageImportID != nil }

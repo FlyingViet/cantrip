@@ -141,7 +141,28 @@ Replies continue streaming normally; prompts remain one complete message.
 For host-side responsiveness improvements, also update and reopen Cantrip on
 the Mac (memory preparation and transcript encoding now run off the UI thread).
 
-Open the shared **Settings** screen and enter Cantrip's pairing token. Without
+### Saved servers
+
+In **Settings**, use **Add Hermes Gateway** or **Add Cantrip Remote** to give
+each server an optional name, its URL, and its own API key or pairing token.
+Tap **Add Server** to save the configuration. The form clears only after a
+successful save, ready for another server; adding does not replace or switch
+your current connection. Tap a server in the saved list to select and connect.
+The selected server is marked with a checkmark and restored when the app reopens.
+
+You can save multiple servers of either type, with one Hermes gateway and one
+Cantrip Remote server selected at a time. Credentials are stored separately in
+Keychain. Existing configurations are automatically kept as saved servers.
+Hermes servers keep separate Copilot/Private Local histories, tab metadata,
+durable run state, and memory keys. Cantrip sessions remain on their owning Mac;
+switching clears the previous host's displayed sessions and cached images before
+loading the new host. Switching does not stop work on a Mac.
+
+Swipe or touch and hold a saved server to **Remove Server**, then confirm.
+Removing the active configuration disconnects it; it does not delete chats or
+cancel work on that server. A failed save keeps the form and shows the error.
+
+For Cantrip, enter the pairing token from the corresponding Mac. Without
 a saved URL, AgentGateway discovers Cantrip on the same local network with Bonjour and connects
 directly using forward-secret TLS with the pairing token as a pre-shared key.
 Save Cantrip's Tailscale Serve HTTPS URL to prefer Tailscale both at home and

@@ -5,8 +5,8 @@ struct SettingsView: View {
     @ObservedObject var env: HermesEnv
     @ObservedObject var remote: CantripRemoteModel
     let voice: VoiceController
+    var canChangeGateway = true
     @Environment(\.dismiss) private var dismiss
-    @State private var key = ""
     @State private var testing = false
     @ObservedObject private var parakeet = ParakeetSpeechEngine.shared
     @AppStorage("hermes.sttEngine") private var sttEngine = SpeechInputEngine.parakeet.rawValue
@@ -19,7 +19,7 @@ struct SettingsView: View {
             Form {
                 executionSection
                 gatewaySection
-                CantripRemoteSettingsSection(model: remote, allowsClearing: true)
+                CantripRemoteSettingsSection(model: remote)
                 speechRecognitionSection
 
                 Section {
@@ -65,7 +65,6 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .onAppear { key = env.apiKey }
             .task { await env.refreshGateway() }
         }
     }
@@ -98,7 +97,7 @@ struct SettingsView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(!env.isAvailable(lane))
+                .disabled(!env.isAvailable(lane) || !canChangeGateway || remote.isMutating)
             }
         } header: {
             Text("Execution")
@@ -121,30 +120,16 @@ struct SettingsView: View {
     }
 
     private var gatewaySection: some View {
-        Section {
-            TextField("https://your-private-gateway.example.com", text: $env.baseURL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-                .onChange(of: env.baseURL) { _, _ in env.invalidateGateway() }
-            SecureField("API key (API_SERVER_KEY)", text: $key)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .onChange(of: key) { _, value in env.setAPIKey(value) }
-            if let issue = env.transportIssue {
-                Label(issue, systemImage: "exclamationmark.shield.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else {
-                Label("Encrypted transport", systemImage: "lock.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            }
-        } header: {
-            Text("Hermes Gateway")
-        } footer: {
-            Text("Use HTTPS through a private network or authenticated tunnel. Plain LAN HTTP is blocked because it exposes prompts and the API key.")
-        }
+        ServerSettingsSections(
+            servers: env.servers,
+            canChangeSelection: canChangeGateway,
+            add: { try env.addServer($0) },
+            select: {
+                try env.selectServer($0)
+                await env.refreshGateway()
+            },
+            remove: env.removeServer
+        )
     }
 
     private var speechRecognitionSection: some View {
@@ -231,11 +216,12 @@ struct SettingsView: View {
                 Task { await test() }
             } label: {
                 HStack {
-                    Text("Test authenticated connection")
+                    Text("Test selected Hermes server")
                     Spacer()
                     connectionIndicator
                 }
             }
+            .disabled(env.client(for: .copilot) == nil || testing)
             if case .failed(let message) = env.connectionState {
                 Text(message)
                     .font(.caption)

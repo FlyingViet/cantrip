@@ -824,6 +824,8 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var isLocalNetworkAvailable = false
     @Published private(set) var tailscaleOnly: Bool
     @Published private(set) var usageIdentity = UUID()
+    let servers: ServerProfiles
+    @Published private(set) var selectedServerID: UUID?
 
     var isConnected: Bool { connectionState == .connected }
     var hasConfiguration: Bool { baseURL != nil || token != nil }
@@ -870,24 +872,70 @@ final class CantripRemoteModel: ObservableObject {
         return cache
     }()
 
-    init(urlSession: URLSession? = nil) {
+    init(urlSession: URLSession? = nil, servers: ServerProfiles? = nil) {
         self.urlSession = urlSession
+        self.servers = servers ?? ServerProfiles(kind: .cantrip)
         let storedURL = UserDefaults.standard.string(forKey: Self.endpointKey) ?? ""
         configuredURL = storedURL
         tailscaleOnly = UserDefaults.standard.bool(forKey: Self.tailscaleOnlyKey)
         token = CantripRemoteCredentials.loadToken()
         hasStoredToken = token != nil
         do {
-            baseURL = try Self.normalizedBaseURL(storedURL)
-            if baseURL == nil, !storedURL.isEmpty {
+            if !self.servers.hasSavedState, let token {
+                try self.servers.migrate(url: storedURL, credential: token, tailscaleOnly: tailscaleOnly)
+            }
+            if let server = self.servers.selected {
+                token = try self.servers.credential(for: server)
+                configuredURL = server.url
+                tailscaleOnly = server.tailscaleOnly
+                selectedServerID = server.id
+            } else if self.servers.hasSavedState {
+                configuredURL = ""
+                token = nil
+                tailscaleOnly = false
+            }
+            if let issue = self.servers.loadIssue {
+                throw ServerConfigurationError(message: issue)
+            }
+            hasStoredToken = token != nil
+            baseURL = try Self.normalizedBaseURL(configuredURL)
+            if baseURL == nil, !configuredURL.isEmpty {
                 errorMessage = "The saved Remote URL is invalid. Open settings and save it again."
             }
         } catch {
             baseURL = nil
-            if !storedURL.isEmpty {
-                errorMessage = error.localizedDescription
+            token = nil
+            hasStoredToken = false
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func addServer(_ draft: ServerDraft) throws {
+        try servers.add(draft)
+    }
+
+    func selectServer(_ server: SavedServer) async throws {
+        guard selectedServerID != server.id else { return }
+        let credential = try servers.credential(for: server)
+        guard await configure(
+            url: server.url, pairingToken: credential, tailscaleOnly: server.tailscaleOnly
+        ) else {
+            throw ServerConfigurationError(message: errorMessage ?? "Could not select the server.")
+        }
+        try servers.select(server)
+        selectedServerID = server.id
+    }
+
+    func removeServer(_ server: SavedServer) throws {
+        guard !isMutating else {
+            throw ServerConfigurationError(message: "Wait for the current request to finish before removing a server.")
+        }
+        if selectedServerID == server.id {
+            guard clearConfiguration() else {
+                throw ServerConfigurationError(message: errorMessage ?? "Could not disconnect the server.")
             }
         }
+        try servers.remove(server)
     }
 
     func setAppActive(_ active: Bool) {
@@ -907,6 +955,10 @@ final class CantripRemoteModel: ObservableObject {
         pairingToken rawToken: String,
         tailscaleOnly: Bool = false
     ) async -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish before switching servers."
+            return false
+        }
         do {
             let normalized = try Self.normalizedBaseURL(rawURL)
             guard !tailscaleOnly || normalized != nil else {
@@ -922,6 +974,7 @@ final class CantripRemoteModel: ObservableObject {
             }
 
             stopPolling()
+            lanBrowser.stop()
             configurationGeneration += 1
             usageIdentity = UUID()
             imageCache.removeAllObjects()
@@ -935,6 +988,10 @@ final class CantripRemoteModel: ObservableObject {
             activeTransport = nil
             lanEndpoints = []
             isLocalNetworkAvailable = false
+            sessions = []
+            selectedSessionID = nil
+            selectedSession = nil
+            transcriptRevision += 1
             if configuredURL.isEmpty {
                 UserDefaults.standard.removeObject(forKey: Self.endpointKey)
             } else {
@@ -955,7 +1012,12 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
-    func clearConfiguration() {
+    @discardableResult
+    func clearConfiguration() -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish before disconnecting."
+            return false
+        }
         do {
             try CantripRemoteCredentials.removeToken()
             stopPolling()
@@ -977,10 +1039,13 @@ final class CantripRemoteModel: ObservableObject {
             sessions = []
             selectedSessionID = nil
             selectedSession = nil
+            selectedServerID = nil
             errorMessage = nil
             transcriptRevision += 1
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -1209,6 +1274,7 @@ final class CantripRemoteModel: ObservableObject {
             let listed = try await performAuthenticated(allowFallback: true) { api in
                 try await api.sessions()
             }
+            guard generation == configurationGeneration else { throw CancellationError() }
             let chosenID = requestedID.flatMap { id in
                 listed.contains(where: { $0.id == id }) ? id : nil
             } ?? listed.first?.id
@@ -1328,7 +1394,8 @@ final class CantripRemoteModel: ObservableObject {
         }
         updateLANEndpoints([])
         lanBrowser.onEndpointsChanged = { [weak self] endpoints in
-            self?.updateLANEndpoints(endpoints)
+            guard let self, self.token == token else { return }
+            self.updateLANEndpoints(endpoints)
         }
         lanBrowser.start(token: token)
     }
@@ -1395,7 +1462,7 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
-    private static func normalizedBaseURL(_ rawValue: String) throws -> URL? {
+    static func normalizedBaseURL(_ rawValue: String) throws -> URL? {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -1426,6 +1493,7 @@ final class CantripRemoteModel: ObservableObject {
 
         components.scheme = scheme
         components.host = host
+        if components.port == (scheme == "https" ? 443 : 80) { components.port = nil }
         components.path = ""
         components.query = nil
         components.fragment = nil
@@ -1804,79 +1872,29 @@ private struct CantripRemoteSetupView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            CantripRemoteSettingsSection(model: model, allowsClearing: false)
+            CantripRemoteSettingsSection(model: model)
         }
     }
 }
 
 struct CantripRemoteSettingsSection: View {
     @ObservedObject var model: CantripRemoteModel
-    let allowsClearing: Bool
-
-    @State private var url = ""
-    @State private var token = ""
-    @State private var saving = false
-    @State private var saved = false
-    @State private var tailscaleOnly = false
 
     var body: some View {
-        Section {
-            TextField("Tailscale URL (optional, preferred when saved)", text: $url)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-            SecureField(model.hasStoredToken ? "Stored token (leave blank to keep)" : "Pairing token",
-                        text: $token)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            Toggle("Tailscale only (skip local network)", isOn: $tailscaleOnly)
-            Button(saved ? "Saved" : "Save and Connect") {
-                saving = true
-                saved = false
-                Task {
-                    saved = await model.configure(
-                        url: url, pairingToken: token, tailscaleOnly: tailscaleOnly
-                    )
-                    if saved {
-                        url = model.configuredURL
-                        token = ""
-                        tailscaleOnly = model.tailscaleOnly
-                    }
-                    saving = false
-                }
-            }
-            .disabled(
-                saving
-                    || (!model.hasStoredToken
-                        && token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            )
-
-            if saving {
-                ProgressView("Saving…")
-            }
-            if let error = model.errorMessage {
+        ServerSettingsSections(
+            servers: model.servers,
+            canChangeSelection: !model.isMutating,
+            add: { try model.addServer($0) },
+            select: { try await model.selectServer($0) },
+            remove: model.removeServer
+        )
+        if let error = model.errorMessage {
+            Section {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .textSelection(.enabled)
             }
-            if allowsClearing, model.hasConfiguration {
-                Button("Clear Remote Connection", role: .destructive) {
-                    model.clearConfiguration()
-                    url = ""
-                    token = ""
-                    tailscaleOnly = false
-                    saved = false
-                }
-            }
-        } header: {
-            Text("Cantrip Remote")
-        } footer: {
-            Text("Automatic mode prefers Tailscale and uses LAN only when needed. It never probes or switches to LAN while Tailscale is working. After falling back to LAN, read-only probes restore Tailscale without blocking refreshes. Tailscale only requires a saved URL. The pairing token remains in Keychain.")
-        }
-        .onAppear {
-            url = model.configuredURL
-            tailscaleOnly = model.tailscaleOnly
         }
     }
 }
@@ -1888,7 +1906,7 @@ private struct CantripRemoteSettingsSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                CantripRemoteSettingsSection(model: model, allowsClearing: true)
+                CantripRemoteSettingsSection(model: model)
             }
             .navigationTitle("Remote Settings")
             .navigationBarTitleDisplayMode(.inline)

@@ -19,8 +19,9 @@ enum ChatStore {
         return dir
     }
 
-    private static func fileURL(for lane: ExecutionLane) -> URL {
-        directoryURL.appendingPathComponent("hermes_chat_\(lane.rawValue).json")
+    private static func fileURL(for lane: ExecutionLane, serverID: UUID? = nil) -> URL {
+        let suffix = serverID.map { "_\($0.uuidString)" } ?? ""
+        return directoryURL.appendingPathComponent("hermes_chat_\(lane.rawValue)\(suffix).json")
     }
 
     private static var legacyFileURL: URL {
@@ -34,7 +35,8 @@ enum ChatStore {
         pendingRun: PendingHermesRun?,
         activeRun: ActiveHermesRun?,
         tabMetadata: ChatTabMetadata? = nil,
-        for lane: ExecutionLane
+        for lane: ExecutionLane,
+        serverID: UUID? = nil
     ) {
         let liveAssistantID = activeRun?.assistantTurnID ?? pendingRun?.assistantTurnID
         let cleaned = turns.map { turn -> ChatTurn in
@@ -52,12 +54,12 @@ enum ChatStore {
             tabMetadata: tabMetadata
         )
         guard let data = try? JSONEncoder().encode(snap) else { return }
-        try? data.write(to: fileURL(for: lane), options: .atomic)
+        try? data.write(to: fileURL(for: lane, serverID: serverID), options: .atomic)
     }
 
-    static func load(for lane: ExecutionLane) -> Snapshot {
-        migrateLegacyCopilotHistoryIfNeeded(for: lane)
-        guard let data = try? Data(contentsOf: fileURL(for: lane)),
+    static func load(for lane: ExecutionLane, serverID: UUID? = nil) -> Snapshot {
+        if serverID == nil { migrateLegacyCopilotHistoryIfNeeded(for: lane) }
+        guard let data = try? Data(contentsOf: fileURL(for: lane, serverID: serverID)),
               let snap = try? JSONDecoder().decode(Snapshot.self, from: data) else {
             return Snapshot(
                 turns: [],
@@ -71,8 +73,8 @@ enum ChatStore {
         return snap
     }
 
-    static func clear(for lane: ExecutionLane) {
-        try? FileManager.default.removeItem(at: fileURL(for: lane))
+    static func clear(for lane: ExecutionLane, serverID: UUID? = nil) {
+        try? FileManager.default.removeItem(at: fileURL(for: lane, serverID: serverID))
     }
 
     private static func migrateLegacyCopilotHistoryIfNeeded(for lane: ExecutionLane) {

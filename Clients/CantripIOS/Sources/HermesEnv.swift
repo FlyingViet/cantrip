@@ -44,15 +44,73 @@ final class HermesEnv: ObservableObject {
     @Published private(set) var executionLane: ExecutionLane
     @Published private(set) var availableModels: Set<String> = []
     @Published private(set) var connectionState: GatewayConnectionState = .notChecked
+    let servers: ServerProfiles
+    @Published private(set) var selectedServerID: UUID?
+    private var gatewayGeneration = 0
 
-    init() {
+    var chatStorageID: UUID? {
+        servers.selected?.usesLegacyHistory == true ? nil : selectedServerID
+    }
+
+    init(servers: ServerProfiles? = nil) {
+        self.servers = servers ?? ServerProfiles(kind: .hermes)
         let storedLane = UserDefaults.standard.string(forKey: "hermes.executionLane")
         executionLane = ExecutionLane(rawValue: storedLane ?? "") ?? .defaultLane
+        do {
+            if !self.servers.hasSavedState, !baseURL.isEmpty, !apiKey.isEmpty {
+                try self.servers.migrate(url: baseURL, credential: apiKey)
+            }
+            if let server = self.servers.selected {
+                let credential = try self.servers.credential(for: server)
+                baseURL = server.url
+                apiKey = credential
+                selectedServerID = server.id
+            } else if self.servers.hasSavedState {
+                baseURL = ""
+                apiKey = ""
+            }
+            if let issue = self.servers.loadIssue {
+                throw ServerConfigurationError(message: issue)
+            }
+        } catch {
+            // Never use another server's legacy credential when a saved profile cannot load.
+            apiKey = ""
+            connectionState = .failed(error.localizedDescription)
+        }
     }
 
     var sessionKey: String {
         if storedSessionKey.isEmpty { storedSessionKey = "ios-" + UUID().uuidString }
+        if let chatStorageID { return "\(storedSessionKey)-\(chatStorageID.uuidString)" }
         return storedSessionKey
+    }
+
+    func addServer(_ draft: ServerDraft) throws {
+        try servers.add(draft)
+    }
+
+    func selectServer(_ server: SavedServer) throws {
+        guard selectedServerID != server.id else { return }
+        let credential = try servers.credential(for: server)
+        try Keychain.saveCredential(credential, for: "hermes.apiKey")
+        try servers.select(server)
+        invalidateGateway()
+        selectedServerID = server.id
+        baseURL = server.url
+        apiKey = credential
+    }
+
+    func removeServer(_ server: SavedServer) throws {
+        if selectedServerID == server.id {
+            try Keychain.deleteCredential("hermes.apiKey")
+        }
+        try servers.remove(server)
+        if selectedServerID == server.id {
+            invalidateGateway()
+            selectedServerID = nil
+            baseURL = ""
+            apiKey = ""
+        }
     }
 
     var transportIssue: String? {
@@ -130,6 +188,10 @@ final class HermesEnv: ObservableObject {
 
     @discardableResult
     func refreshGateway() async -> GatewayConnectionState {
+        gatewayGeneration += 1
+        let generation = gatewayGeneration
+        let requestedURL = baseURL
+        let requestedKey = apiKey
         availableModels.removeAll()
         guard let probeClient = client(for: .copilot) else {
             let state = GatewayConnectionState.failed(
@@ -140,7 +202,10 @@ final class HermesEnv: ObservableObject {
         }
         connectionState = .checking
         do {
-            availableModels = try await probeClient.models()
+            let models = try await probeClient.models()
+            guard generation == gatewayGeneration, requestedURL == baseURL,
+                  requestedKey == apiKey, !Task.isCancelled else { return connectionState }
+            availableModels = models
             guard availableModels.contains(ExecutionLane.copilot.modelAlias) else {
                 let state = GatewayConnectionState.failed(
                     "Gateway is reachable, but the copilot-coding route is missing."
@@ -157,6 +222,8 @@ final class HermesEnv: ObservableObject {
             }
             connectionState = .connected
         } catch {
+            guard generation == gatewayGeneration, requestedURL == baseURL,
+                  requestedKey == apiKey, !Task.isCancelled else { return connectionState }
             connectionState = .failed(
                 (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             )
@@ -171,6 +238,7 @@ final class HermesEnv: ObservableObject {
     }
 
     func invalidateGateway() {
+        gatewayGeneration += 1
         availableModels.removeAll()
         connectionState = .notChecked
     }

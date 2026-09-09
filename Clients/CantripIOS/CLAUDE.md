@@ -51,5 +51,9 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
 
 ## Conventions
 - Keep SwiftUI `body` lean (extract subviews) — the type-checker chokes on long chains.
-- The API key lives in the Keychain (`hermes.apiKey`), never in the repo.
+- Saved servers live in `ServerProfiles`; each server's credential is stored
+  separately in Keychain. Legacy `hermes.apiKey`/Cantrip slots are migrated.
+  Settings uses blank add-server drafts, never live bindings to active credentials.
+- Hermes history, durable runs, and memory keys are scoped by server and lane.
+  The migrated server retains its original history and memory namespace.
 - The gateway URL defaults to empty so each user points at their own server.
