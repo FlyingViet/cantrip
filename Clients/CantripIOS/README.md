@@ -50,40 +50,42 @@ Tap the agent badge under the conversation title (the `</>` badge when Copilot i
 and choose **Cantrip Remote**. It attaches to Cantrip's existing session IDs
 rather than launching another agent. Cantrip then uses the same transcript,
 composer, microphone, hands-free voice mode, and spoken replies as Hermes.
-Remote-only controls above the transcript provide session selection, new
-sessions and conversations, queued/redirected/injected prompts, stop, and
-resume.
+The header, tab drawer, and composer provide session selection, new
+sessions and conversations, queued/redirected/injected prompts, stop, and resume.
 
 The **Tabs** drawer marks the selected tab with a checkmark and includes tab
 names, locks, and queued counts. A blinking brain beside the tab name replaces
-the "Working" suffix in both the tab control and drawer, disappearing when
+the "Working" suffix in both the header title and drawer, disappearing when
 work stops. With Reduce Motion enabled the
 brain stays still; VoiceOver continues to announce "Working".
-Locked tabs remain selectable. The **Auto** delivery dropdown sits beside the
-tab control; choose a manual mode there for a one-message override.
-Use **+** to create another session.
+Locked tabs remain selectable. The **Auto** delivery dropdown sits immediately
+to the right of the usage limit in the header; choose a manual mode there for
+a one-message override. The title appears only in the header, with extra
+clearance below the safe area/Dynamic Island. Use **New Tab** in the drawer
+to create another session.
 
-While the selected tab is working, a red **Stop** button is visible beside
-the session controls; there is no need to open the **...** menu. It stops
+While the selected tab is working, a compact red **Stop** icon is visible inside
+the right side of the message composer, beside Send/microphone. Send remains
+available for queued prompts; there is no need to open a menu to stop. It stops
 the prompt on the Mac and clears that tab's queued prompts, without deleting
 the tab or its conversation. Locked tabs can still be stopped. The button
-shows **Stopping...** while the request is pending and is disabled when
+shows a spinner while the request is pending and is disabled when
 disconnected or another request is in flight. A failed request is shown in
 the Remote error banner; it is never automatically retried.
 
 Swipe right from the **left edge** to open the Cantrip **Tabs** drawer. You can
-also tap the current tab control or choose **hamburger menu > Tabs**. Select a
+also tap the header title or choose **hamburger menu > Tabs**. Select a
 tab to return to chat; swipe left, tap outside, or use **Close tabs** to dismiss
 without changing tabs. The drawer shows the selected tab, activity, locks, and
 queued counts, with a **New Tab** button at the bottom. Opening it dismisses the
-keyboard without clearing your draft. Auto and a compact Stop stay beside the chat
-controls; Stop retains a full-size tap target. New Tab and tab actions live in the
+keyboard without clearing your draft. Stop and the circled **+** attachment icon
+retain 44-point tap targets. New Tab and tab actions live in the
 drawer rather than duplicate top-bar buttons. Resume (when available) and New
 conversation remain in the shared chat's hamburger menu.
 
-Touch and hold anywhere on the tab control or a drawer row to **Rename Tab**, **Lock Tab** /
+Touch and hold the header title or a drawer row to **Rename Tab**, **Lock Tab** /
 **Unlock Tab**, or **Close Session** (delete the tab). A regular tap opens only
-the drawer from the tab control, or selects a tab from a drawer row. Each row's
+the drawer from the title, or selects a tab from a drawer row. Each row's
 **...** menu also keeps these actions.
 Names and locks
 are saved on the host Mac and sync with local
@@ -169,7 +171,8 @@ The router uses Copilot Mini, Claude Haiku, or the configured local model;
 the local lane never falls back to a cloud provider. This changes Cantrip
 Remote only, not the Hermes gateway's own execution lanes.
 
-In a Cantrip session, tap **Attach images** to choose photos/screenshots from
+In a Cantrip session, tap the circled **+** on the left inside the composer
+(**Attach images** in VoiceOver) to choose photos/screenshots from
 Photos, select image files, or paste a copied image. Tap a draft thumbnail to
 view the full image, or use **x** to remove it before sending. Up to four images can be sent
 at once; each is oriented, resized to at most 2048 pixels per side, and

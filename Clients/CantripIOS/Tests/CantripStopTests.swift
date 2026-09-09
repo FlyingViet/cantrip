@@ -222,6 +222,59 @@ final class CantripStopTests: XCTestCase {
         XCTAssertEqual(model.selectedSession?.queuedCount, 1)
     }
 
+    func testSharedChatRendersWorkingAndPausedComposersWithoutMutations() async throws {
+        let model = try await model()
+        let env = HermesEnv()
+        let originalLane = env.executionLane
+        let originalPause = UserDefaults.standard.object(forKey: "hermes.paused")
+        env.select(.cantrip)
+        defer {
+            env.select(originalLane)
+            if let originalPause {
+                UserDefaults.standard.set(originalPause, forKey: "hermes.paused")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "hermes.paused")
+            }
+            model.clearConfiguration()
+            StopRequestProtocol.handler = nil
+        }
+        StopRequestProtocol.handler = { transport in
+            XCTAssertEqual(transport.request.httpMethod, "GET")
+            if transport.request.url?.path == "/api/v1/copilot/usage" {
+                try transport.respond(Data(#"{"isRefreshing":false}"#.utf8))
+            } else {
+                try transport.respond(self.snapshot(id: self.firstID, streaming: true))
+            }
+        }
+        await model.selectSession(firstID)
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        for paused in [false, true] {
+            UserDefaults.standard.set(paused, forKey: "hermes.paused")
+            let controller = UIHostingController(rootView: ChatView(env: env, remote: model))
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(300))
+            controller.view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = paused ? "shared-chat-paused" : "shared-chat-working"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            XCTAssertGreaterThan(image.size.height, 700)
+            XCTAssertEqual(model.selectedSessionID, firstID)
+            XCTAssertEqual(model.selectedSession?.isStreaming, true)
+            XCTAssertEqual(model.selectedSession?.queuedCount, 1)
+            XCTAssertFalse(model.isMutating)
+            XCTAssertEqual(env.executionLane, .cantrip)
+        }
+    }
+
     func testFailedStopSurfacesErrorWithoutReplayOrClearingWork() async throws {
         for networkFailure in [false, true] {
             let model = try await model()

@@ -291,7 +291,7 @@ final class CopilotUsageTests: XCTestCase {
         }
     }
 
-    func testHeaderIconsMatchAndShareOneRowInNavigationBar() throws {
+    func testHeaderFitsSafeAreaWithDeliveryToTheRightOfUsage() throws {
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
@@ -304,62 +304,99 @@ final class CopilotUsageTests: XCTestCase {
                 XCTAssertEqual(measured.height, 22, accuracy: 0.5)
             }
             for width: CGFloat in [320, 393, 768] {
-                var laneFrame = CGRect.zero
-                var usageFrame = CGRect.zero
-                let content = NavigationStack {
-                    Color(uiColor: .systemBackground)
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .principal) {
-                                ChatHeader(title: "Bass Compass", isLocked: true) {
-                                    Menu {
-                                        Button("Cantrip Remote") {}
-                                    } label: {
-                                        ExecutionLaneBadge(lane: .cantrip, iconOnly: true)
-                                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
-                                                laneFrame = $0
-                                            }
-                                    }
-                                    .menuIndicator(.hidden)
-                                } usage: {
-                                    Button {} label: {
-                                        CopilotUsageButton.CopilotUsageButtonLabel(text: "35.5K / 1M")
-                                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
-                                                usageFrame = $0
-                                            }
-                                    }
-                                }
-                            }
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button {} label: { Image(systemName: "line.3.horizontal") }
-                            }
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button {} label: { Image(systemName: "gearshape") }
-                            }
-                        }
+                for mode in CantripDeliveryMode.allCases {
+                    assertHeaderLayout(scene: scene, width: width, size: size, mode: mode)
                 }
-                .environment(\.dynamicTypeSize, size)
-                let controller = UIHostingController(rootView: content)
-                let window = UIWindow(windowScene: scene)
-                window.frame = CGRect(x: 0, y: 0, width: width, height: 700)
-                window.rootViewController = controller
-                window.makeKeyAndVisible()
-                defer { window.isHidden = true }
-                controller.view.layoutIfNeeded()
-                RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
-                XCTAssertEqual(laneFrame.height, 44, accuracy: 1)
-                XCTAssertEqual(usageFrame.height, 44, accuracy: 1)
-                XCTAssertEqual(laneFrame.midY, usageFrame.midY, accuracy: 0.5)
-                XCTAssertLessThanOrEqual(laneFrame.maxX, usageFrame.minX)
-                XCTAssertGreaterThanOrEqual(laneFrame.minX, 44)
-                XCTAssertLessThanOrEqual(usageFrame.maxX, width - 44)
-                let image = UIGraphicsImageRenderer(bounds: CGRect(x: 0, y: 0, width: width, height: 180))
-                    .image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
-                let attachment = XCTAttachment(image: image)
-                attachment.name = "aligned-header-\(Int(width))-\(size)"
-                attachment.lifetime = .keepAlways
-                add(attachment)
             }
+        }
+    }
+
+    private func assertHeaderLayout(
+        scene: UIWindowScene, width: CGFloat, size: DynamicTypeSize, mode: CantripDeliveryMode
+    ) {
+        var laneFrame = CGRect.zero
+        var usageFrame = CGRect.zero
+        var deliveryFrame = CGRect.zero
+        var titleFrame = CGRect.zero
+        var contentFrame = CGRect.zero
+        let content = NavigationStack {
+            VStack {
+                Spacer()
+                Text("Transcript").frame(maxWidth: .infinity)
+                Spacer()
+            }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                contentFrame = $0
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                ChatHeader {
+                    ChatHeaderTitle(
+                        title: "Bass Compass project with a long tab name",
+                        isLocked: true, isWorking: true
+                    )
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                        titleFrame = $0
+                    }
+                } lane: {
+                    Menu {
+                        Button("Cantrip Remote") {}
+                    } label: {
+                        ExecutionLaneBadge(lane: .cantrip, iconOnly: true)
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                                laneFrame = $0
+                            }
+                    }
+                    .menuIndicator(.hidden)
+                } usage: {
+                    Button {} label: {
+                        CopilotUsageButton.CopilotUsageButtonLabel(text: "35.5K / 1M")
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                                usageFrame = $0
+                            }
+                    }
+                } delivery: {
+                    CantripDeliveryPicker(deliveryMode: .constant(mode))
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                            deliveryFrame = $0
+                        }
+                } leading: {
+                    Button {} label: { Image(systemName: "line.3.horizontal") }
+                } trailing: {
+                    Button {} label: { Image(systemName: "gearshape") }
+                }
+            }
+        }
+        .environment(\.dynamicTypeSize, size)
+        let controller = UIHostingController(rootView: content)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: width, height: 700)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        controller.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(laneFrame.height, 44, accuracy: 1)
+        XCTAssertEqual(usageFrame.height, 44, accuracy: 1)
+        XCTAssertEqual(deliveryFrame.height, 44, accuracy: 1)
+        XCTAssertEqual(laneFrame.midY, usageFrame.midY, accuracy: 0.5)
+        XCTAssertEqual(usageFrame.midY, deliveryFrame.midY, accuracy: 0.5)
+        XCTAssertLessThanOrEqual(laneFrame.maxX, usageFrame.minX)
+        XCTAssertLessThanOrEqual(usageFrame.maxX, deliveryFrame.minX)
+        XCTAssertGreaterThanOrEqual(laneFrame.minX, 12)
+        XCTAssertLessThanOrEqual(deliveryFrame.maxX, width - 12)
+        XCTAssertGreaterThanOrEqual(titleFrame.minY, controller.view.safeAreaInsets.top + 8)
+        XCTAssertGreaterThanOrEqual(titleFrame.minX, 64)
+        XCTAssertLessThanOrEqual(titleFrame.maxX, width - 64)
+        XCTAssertLessThanOrEqual(titleFrame.maxY, usageFrame.minY)
+        XCTAssertGreaterThanOrEqual(contentFrame.minY, usageFrame.maxY + 4)
+        if mode == .auto {
+            let image = UIGraphicsImageRenderer(bounds: CGRect(x: 0, y: 0, width: width, height: 210))
+                .image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "aligned-header-\(Int(width))-\(size)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
         }
     }
 }

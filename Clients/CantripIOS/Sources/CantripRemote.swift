@@ -1600,14 +1600,6 @@ struct CantripRemoteView: View {
                     .buttonStyle(.bordered)
                     .disabled(model.isMutating)
                 }
-                CantripStopButton(
-                    session: session,
-                    isConnected: model.isConnected,
-                    isMutating: model.isMutating,
-                    isStopping: model.stoppingSessionID == session.id
-                ) { id in
-                    Task { await model.stop(sessionID: id) }
-                }
                 Button {
                     Task { await model.newConversation() }
                 } label: {
@@ -1636,6 +1628,16 @@ struct CantripRemoteView: View {
                     .lineLimit(1...5)
                     .submitLabel(.send)
                     .onSubmit { submit() }
+                CantripStopButton(
+                    session: model.selectedSession,
+                    isConnected: model.isConnected,
+                    isMutating: model.isMutating,
+                    isStopping: model.stoppingSessionID != nil
+                        && model.stoppingSessionID == model.selectedSessionID,
+                    iconOnly: true
+                ) { id in
+                    Task { await model.stop(sessionID: id) }
+                }
                 Button(action: submit) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)

@@ -5,6 +5,7 @@ struct CantripStopButton: View {
     let isConnected: Bool
     let isMutating: Bool
     let isStopping: Bool
+    var iconOnly = false
     let onStop: (String) -> Void
 
     var isVisible: Bool {
@@ -29,13 +30,16 @@ struct CantripStopButton: View {
                     } else {
                         Image(systemName: "stop.fill")
                     }
-                    Text(isStopping ? "Stopping..." : "Stop")
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.65)
+                    if !iconOnly {
+                        Text(isStopping ? "Stopping..." : "Stop")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.65)
+                    }
                 }
                 .font(.caption.weight(.semibold))
                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                .padding(.horizontal, 8)
+                .frame(width: iconOnly ? 24 : nil, height: iconOnly ? 24 : nil)
+                .padding(.horizontal, iconOnly ? 6 : 8)
                 .padding(.vertical, 6)
                 .background(.red.opacity(isEnabled ? 0.12 : 0.06), in: Capsule())
                 .frame(minWidth: 44, minHeight: 44)

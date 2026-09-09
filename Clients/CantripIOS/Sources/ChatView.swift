@@ -1103,9 +1103,8 @@ struct ChatView: View {
                     .id(transcriptIdentity)
                 inputBar
             }
-            .navigationTitle("Hermes")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { chatToolbar }
+            .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top, spacing: 0) { chatHeader }
             .sheet(
                 isPresented: $showSettings,
                 onDismiss: {
@@ -1219,82 +1218,119 @@ struct ChatView: View {
         }
     }
 
-    @ToolbarContentBuilder
-    private var chatToolbar: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            ChatHeader(title: vm.tabTitle, isLocked: vm.isTabLocked) {
-                ExecutionLanePicker(env: env, remote: remote)
-                    .disabled(vm.sending || importingImages || submittingRemote)
-            } usage: {
-                CopilotUsageButton(remote: remote) { composerFocused = false }
+    private var chatHeader: some View {
+        ChatHeader {
+            if vm.activeLane == .cantrip {
+                Button { showRemoteTabs = true } label: {
+                    ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
+                                    isWorking: remote.selectedSession?.isStreaming == true)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .disabled(!remoteTabsEnabled)
+                .accessibilityLabel("Switch tab")
+                .accessibilityValue([
+                    vm.tabTitle, vm.isTabLocked ? "Locked" : nil,
+                    remote.selectedSession?.isStreaming == true ? "Working" : nil
+                ].compactMap { $0 }.joined(separator: ", "))
+                .accessibilityHint("Opens the tab drawer. Touch and hold for tab actions.")
+                .contextMenu {
+                    if let session = remote.selectedSession {
+                        CantripTabActions(model: remote, session: session,
+                            onRename: { renamingRemoteSession = session },
+                            onClose: { closeRemoteSession(session.id) })
+                    }
+                }
+            } else {
+                ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
+                                isWorking: vm.isWorking)
             }
-        }
-        ToolbarItem(placement: .topBarLeading) {
-            Menu {
-                if vm.activeLane == .cantrip {
-                    Button {
-                        showRemoteTabs = true
-                    } label: {
-                        Label("Tabs", systemImage: "sidebar.left")
-                    }
-                    .disabled(!remoteTabsEnabled)
-                    if remote.selectedSession?.canResume == true {
-                        Button {
-                            Task {
-                                _ = await remote.resume()
-                                vm.syncRemoteTranscript()
-                            }
-                        } label: {
-                            Label("Resume", systemImage: "play")
-                        }
-                        .disabled(remote.isMutating)
-                    }
-                    Divider()
-                }
-                Button { paused.toggle() } label: {
-                    Label(paused ? "Resume agent" : "Pause agent",
-                          systemImage: paused ? "play.circle" : "pause.circle")
-                }
-                Divider()
-                Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
-                    .disabled(paused || vm.activeLane == .cantrip)
-                Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
-                    .disabled(paused || !destinationReady || hasImageDraft || importingImages)
-                Button {
-                    composerFocused = false
-                    showGitHubBuilds = true
-                } label: {
-                    Label("GitHub Builds", systemImage: "hammer")
-                }
-                Divider()
-                if vm.activeLane != .cantrip {
-                    Button {
-                        tabName = vm.tabMetadata.customTitle ?? vm.tabTitle
-                        showRenameLocalTab = true
-                    } label: {
-                        Label("Rename Tab", systemImage: "pencil")
-                    }
-                    Button {
-                        vm.setTabLocked(!vm.isTabLocked)
-                    } label: {
-                        Label(vm.isTabLocked ? "Unlock Tab" : "Lock Tab",
-                              systemImage: vm.isTabLocked ? "lock.open" : "lock")
-                    }
-                    Divider()
-                }
-                Button(role: .destructive) { vm.newConversation() } label: {
-                    Label("New conversation", systemImage: "square.and.pencil")
-                }
-                .disabled(newConversationDisabled)
-            } label: {
-                Image(systemName: paused ? "pause.circle.fill" : "line.3.horizontal")
-                    .foregroundStyle(paused ? Color.orange : Color.accentColor)
-            }
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-            Button { showSettings = true } label: { Image(systemName: "gearshape") }
+        } lane: {
+            ExecutionLanePicker(env: env, remote: remote)
                 .disabled(vm.sending || importingImages || submittingRemote)
+        } usage: {
+            CopilotUsageButton(remote: remote) { composerFocused = false }
+        } delivery: {
+            if vm.activeLane == .cantrip, remote.selectedSession != nil {
+                CantripDeliveryPicker(deliveryMode: $vm.remoteDeliveryMode)
+                    .disabled(remote.isMutating || vm.sending || importingImages || submittingRemote)
+            }
+        } leading: {
+            chatMenu
+        } trailing: {
+            Button { showSettings = true } label: {
+                Image(systemName: "gearshape").frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .disabled(vm.sending || importingImages || submittingRemote)
+            .accessibilityLabel("Settings")
         }
+    }
+
+    private var chatMenu: some View {
+        Menu {
+            if vm.activeLane == .cantrip {
+                Button {
+                    showRemoteTabs = true
+                } label: {
+                    Label("Tabs", systemImage: "sidebar.left")
+                }
+                .disabled(!remoteTabsEnabled)
+                if remote.selectedSession?.canResume == true {
+                    Button {
+                        Task {
+                            _ = await remote.resume()
+                            vm.syncRemoteTranscript()
+                        }
+                    } label: {
+                        Label("Resume", systemImage: "play")
+                    }
+                    .disabled(remote.isMutating)
+                }
+            }
+            Divider()
+            Button { paused.toggle() } label: {
+                Label(paused ? "Resume agent" : "Pause agent",
+                      systemImage: paused ? "play.circle" : "pause.circle")
+            }
+            Divider()
+            Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
+                .disabled(paused || vm.activeLane == .cantrip)
+            Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
+                .disabled(paused || !destinationReady || hasImageDraft || importingImages)
+            Button {
+                composerFocused = false
+                showGitHubBuilds = true
+            } label: {
+                Label("GitHub Builds", systemImage: "hammer")
+            }
+            Divider()
+            if vm.activeLane != .cantrip {
+                Button {
+                    tabName = vm.tabMetadata.customTitle ?? vm.tabTitle
+                    showRenameLocalTab = true
+                } label: {
+                    Label("Rename Tab", systemImage: "pencil")
+                }
+                Button {
+                    vm.setTabLocked(!vm.isTabLocked)
+                } label: {
+                    Label(vm.isTabLocked ? "Unlock Tab" : "Lock Tab",
+                          systemImage: vm.isTabLocked ? "lock.open" : "lock")
+                }
+                Divider()
+            }
+            Button(role: .destructive) { vm.newConversation() } label: {
+                Label("New conversation", systemImage: "square.and.pencil")
+            }
+            .disabled(newConversationDisabled)
+        } label: {
+            Image(systemName: paused ? "pause.circle.fill" : "line.3.horizontal")
+                .foregroundStyle(paused ? Color.orange : Color.accentColor)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Chat menu")
     }
 
     /// Load the command/skill menu for "/" suggestions. Only overwrites on a
@@ -1351,15 +1387,6 @@ struct ChatView: View {
 
                 Spacer(minLength: 0)
 
-                CantripStopButton(
-                    session: remote.selectedSession,
-                    isConnected: remote.isConnected,
-                    isMutating: remote.isMutating,
-                    isStopping: remote.stoppingSessionID != nil
-                        && remote.stoppingSessionID == remote.selectedSessionID,
-                    onStop: vm.stopRemote
-                )
-
                 Button {
                     Task { await remote.refreshNow() }
                 } label: {
@@ -1368,8 +1395,6 @@ struct ChatView: View {
                 .disabled(!remote.isConfigured || remote.isRefreshing)
                 .accessibilityLabel("Refresh Cantrip sessions")
             }
-
-            remoteSessionPicker
 
             if remote.selectedSession != nil {
                 if let status = remote.selectedSession?.status, !status.isEmpty {
@@ -1397,23 +1422,6 @@ struct ChatView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.thinMaterial)
-    }
-
-    private var remoteSessionPicker: some View {
-        CantripSessionBar(
-            sessions: remote.sessions,
-            selectedSessionID: remote.selectedSessionID,
-            deliveryMode: $vm.remoteDeliveryMode,
-            isMutating: remote.isMutating
-        ) {
-            showRemoteTabs = true
-        } actions: {
-            if let session = remote.selectedSession {
-                CantripTabActions(model: remote, session: session,
-                    onRename: { renamingRemoteSession = session },
-                    onClose: { closeRemoteSession(session.id) })
-            }
-        }
     }
 
     private var remoteTabsEnabled: Bool {
@@ -1483,7 +1491,7 @@ struct ChatView: View {
                     .padding(.top, 4)
             } else if vm.activeLane == .cantrip {
                 Text("Choose a Cantrip session").font(.title3.weight(.semibold))
-                Text("Select an existing session above or create a new one, then type or use voice as usual.")
+                Text("Open Tabs from the header or left edge to select a session, or create one, then type or use voice as usual.")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Button("Create Session") {
                     Task {
@@ -1531,63 +1539,117 @@ struct ChatView: View {
             if paused {
                 pausedBar
             } else {
-            if !suggestions.isEmpty { suggestionList }
-            voiceStatus
-            if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
-                ImageAttachmentPicker(
-                    attachments: Binding(
-                        get: { imageDrafts[sessionID] ?? [] },
-                        set: { imageDrafts[sessionID] = $0 }
-                    ),
-                    importID: $imageImportID,
-                    remote: remote,
-                    imageSupport: remote.selectedSession?.id == sessionID
-                        ? remote.selectedSession?.supportsImageAttachments : nil,
-                    disabled: !destinationReady || vm.sending || submittingRemote
-                        || remote.isMutating || voice.isListening
-                )
-                .id(sessionID)
-            }
-            HStack(spacing: 10) {
-                Button { showVoiceMode = true } label: { Image(systemName: "infinity") }
-                    .buttonStyle(.bordered)
-                    .disabled(!destinationReady || hasImageDraft || importingImages)
-                    .help("Voice mode")
-
-                TextField(
-                    vm.activeLane == .cantrip ? "Message Cantrip…" : "Message Hermes…",
-                    text: $input,
-                    axis: .vertical
-                )
-                    .id(composerRevision)
-                    .focused($composerFocused)
-                    .textFieldStyle(.plain).lineLimit(1...5)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Color(.secondarySystemBackground), in: Capsule())
-                    .disabled(!destinationReady || vm.sending || submittingRemote)
-                    .onSubmit(sendText)
-
-                if vm.sending, vm.activeLane != .cantrip {
-                    Button { vm.stop() } label: { Image(systemName: "stop.circle.fill").font(.title2) }
-                } else if vm.sending || submittingRemote || importingImages {
-                    ProgressView().controlSize(.small)
-                } else if input.isEmpty && !hasImageDraft {
-                    Button {
-                        if voice.isSpeaking { vm.interruptAndListen() } else { voice.toggleListening() }
-                    } label: {
-                        Image(systemName: voice.isListening ? "mic.fill" : "mic")
-                            .font(.title2).foregroundStyle(voice.isListening ? Color.red : Color.accentColor)
-                    }
-                    .disabled(!voice.authorized || !destinationReady)
-                } else {
-                    Button(action: sendText) { Image(systemName: "arrow.up.circle.fill").font(.title2) }
-                        .disabled(!destinationReady || remote.isMutating)
+                if !suggestions.isEmpty { suggestionList }
+                voiceStatus
+                if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
+                    ImageAttachmentPreviews(
+                        attachments: imageDraft(for: sessionID),
+                        remote: remote,
+                        disabled: imagePickerDisabled,
+                        isImporting: importingImages
+                    )
                 }
-            }
+                messageComposer
             }
         }
         .padding(.horizontal).padding(.vertical, 8)
         .background(.bar)
+    }
+
+    private var messageComposer: some View {
+        ChatComposer {
+            if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
+                ImageAttachmentPicker(
+                    attachments: imageDraft(for: sessionID),
+                    importID: $imageImportID,
+                    imageSupport: remote.selectedSession?.id == sessionID
+                        ? remote.selectedSession?.supportsImageAttachments : nil,
+                    disabled: imagePickerDisabled
+                )
+                .id(sessionID)
+            } else if vm.activeLane != .cantrip {
+                Button { showVoiceMode = true } label: {
+                    Image(systemName: "infinity").font(.system(size: 20))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .disabled(!destinationReady || hasImageDraft || importingImages)
+                .accessibilityLabel("Voice mode")
+            }
+        } message: {
+            TextField(
+                vm.activeLane == .cantrip ? "Message Cantrip…" : "Message Hermes…",
+                text: $input,
+                axis: .vertical
+            )
+            .id(composerRevision)
+            .focused($composerFocused)
+            .textFieldStyle(.plain).lineLimit(1...5)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .disabled(!destinationReady || vm.sending || submittingRemote)
+            .onSubmit(sendText)
+            .accessibilityIdentifier("chat.message")
+        } trailing: {
+            remoteStopButton
+            composerAction
+        }
+    }
+
+    private func imageDraft(for sessionID: String) -> Binding<[ChatImageAttachment]> {
+        Binding(get: { imageDrafts[sessionID] ?? [] }, set: { imageDrafts[sessionID] = $0 })
+    }
+
+    private var imagePickerDisabled: Bool {
+        !destinationReady || vm.sending || submittingRemote || remote.isMutating || voice.isListening
+    }
+
+    @ViewBuilder private var remoteStopButton: some View {
+        if vm.activeLane == .cantrip {
+            CantripStopButton(
+                session: remote.selectedSession,
+                isConnected: remote.isConnected,
+                isMutating: remote.isMutating,
+                isStopping: remote.stoppingSessionID != nil
+                    && remote.stoppingSessionID == remote.selectedSessionID,
+                iconOnly: true,
+                onStop: vm.stopRemote
+            )
+            .disabled(vm.sending || importingImages || submittingRemote)
+        }
+    }
+
+    private var composerAction: some View {
+        Group {
+            if vm.sending, vm.activeLane != .cantrip {
+                Button { vm.stop() } label: {
+                    Image(systemName: "stop.circle.fill").font(.system(size: 24))
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .accessibilityLabel("Stop current prompt")
+            } else if vm.sending || submittingRemote || importingImages {
+                ProgressView().controlSize(.small)
+            } else if input.isEmpty && !hasImageDraft {
+                Button {
+                    if voice.isSpeaking { vm.interruptAndListen() } else { voice.toggleListening() }
+                } label: {
+                    Image(systemName: voice.isListening ? "mic.fill" : "mic")
+                        .font(.system(size: 24)).foregroundStyle(voice.isListening ? Color.red : Color.accentColor)
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .disabled(!voice.authorized || !destinationReady)
+                .accessibilityLabel(voice.isListening ? "Stop listening" : "Start listening")
+            } else {
+                Button(action: sendText) {
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 24))
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .disabled(!destinationReady || remote.isMutating)
+                .accessibilityLabel("Send prompt")
+            }
+        }
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
     }
 
     /// Shown in place of the composer when paused — a clear "you're sending nothing"
@@ -1600,6 +1662,7 @@ struct ChatView: View {
                 Text("No requests will be sent.").font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
+            remoteStopButton
             Button("Resume") { paused = false }.buttonStyle(.borderedProminent)
         }
         .padding(.vertical, 4)
@@ -1709,26 +1772,77 @@ struct ChatView: View {
     private var importingImages: Bool { imageImportID != nil }
 }
 
-struct ChatHeader<Lane: View, Usage: View>: View {
-    let title: String
-    let isLocked: Bool
+struct ChatComposer<Leading: View, Message: View, Trailing: View>: View {
+    @ViewBuilder var leading: () -> Leading
+    @ViewBuilder var message: () -> Message
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 4) {
+            leading()
+            message()
+            trailing()
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24))
+        .accessibilityIdentifier("chat.composer")
+    }
+}
+
+struct ChatHeader<Title: View, Lane: View, Usage: View, Delivery: View, Leading: View, Trailing: View>: View {
+    @ViewBuilder var title: () -> Title
     @ViewBuilder var lane: () -> Lane
     @ViewBuilder var usage: () -> Usage
+    @ViewBuilder var delivery: () -> Delivery
+    @ViewBuilder var leading: () -> Leading
+    @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                if isLocked { Image(systemName: "lock.fill") }
-                Text(title).lineLimit(1)
+            HStack(spacing: 8) {
+                leading().frame(width: 44, height: 44)
+                title().frame(maxWidth: .infinity, minHeight: 44)
+                trailing().frame(width: 44, height: 44)
             }
-            .font(.headline)
             HStack(alignment: .center, spacing: 4) {
                 lane()
                 usage()
+                delivery()
             }
-            .buttonStyle(.plain)
         }
+        .buttonStyle(.plain)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+        .accessibilityIdentifier("chat.header")
+    }
+}
+
+struct ChatHeaderTitle: View {
+    let title: String
+    let isLocked: Bool
+    let isWorking: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if isLocked { Image(systemName: "lock.fill") }
+            Text(title).lineLimit(1).truncationMode(.tail)
+            if isWorking {
+                ThinkingView(size: 18).fixedSize().accessibilityHidden(true)
+            }
+        }
+        .font(.headline)
+        .foregroundStyle(.primary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue([isLocked ? "Locked" : nil, isWorking ? "Working" : nil]
+            .compactMap { $0 }.joined(separator: ", "))
+        .accessibilityIdentifier("chat.header.title")
     }
 }
 

@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 struct ImageAttachmentPicker: View {
     @Binding var attachments: [ChatImageAttachment]
     @Binding var importID: UUID?
-    @ObservedObject var remote: CantripRemoteModel
     let imageSupport: Bool?
     let disabled: Bool
 
@@ -19,39 +18,39 @@ struct ImageAttachmentPicker: View {
     private var isImporting: Bool { importID != nil }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !attachments.isEmpty { previews }
-            HStack(spacing: 8) {
-                Menu {
-                    if imageSupport == true {
-                        Button("Photo Library", systemImage: "photo.on.rectangle") {
-                            showPhotos = true
-                        }
-                        Button("Choose Image File", systemImage: "folder") {
-                            showFiles = true
-                        }
-                        Button("Paste Image", systemImage: "doc.on.clipboard", action: pasteImage)
-                    } else {
-                        Text(imageSupport == nil
-                            ? "Update Cantrip on your Mac to attach images."
-                            : "Choose a Claude, Copilot, or Codex backend on your Mac to attach images.")
-                    }
-                } label: {
-                    Label("Attach images", systemImage: "paperclip")
-                        .font(.callout)
+        Menu {
+            if imageSupport == true {
+                Button("Photo Library", systemImage: "photo.on.rectangle") {
+                    showPhotos = true
                 }
-                .disabled(disabled || isImporting
-                    || attachments.count >= ImageAttachmentProcessor.maximumCount)
+                Button("Choose Image File", systemImage: "folder") {
+                    showFiles = true
+                }
+                Button("Paste Image", systemImage: "doc.on.clipboard", action: pasteImage)
+            } else {
+                Text(imageSupport == nil
+                    ? "Update Cantrip on your Mac to attach images."
+                    : "Choose a Claude, Copilot, or Codex backend on your Mac to attach images.")
+            }
+        } label: {
+            Group {
                 if isImporting {
                     ProgressView().controlSize(.small)
-                    Text("Preparing images...").font(.caption).foregroundStyle(.secondary)
-                } else if !attachments.isEmpty {
-                    Text("\(attachments.count)/4")
-                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 24, weight: .regular))
                 }
-                Spacer(minLength: 0)
             }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .accessibilityLabel(isImporting ? "Preparing images" : "Attach images")
+        .accessibilityValue("\(attachments.count) of \(ImageAttachmentProcessor.maximumCount) images")
+        .accessibilityIdentifier("chat.attach-images")
+        .disabled(disabled || isImporting
+            || attachments.count >= ImageAttachmentProcessor.maximumCount)
         .photosPicker(
             isPresented: $showPhotos,
             selection: $selectedPhotos,
@@ -113,40 +112,13 @@ struct ImageAttachmentPicker: View {
         }
     }
 
-    private var previews: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                ForEach(Array(attachments.enumerated()), id: \.element.id) { index, attachment in
-                    ZStack(alignment: .topTrailing) {
-                        ChatImageThumbnail(
-                            source: ChatMessageImage(attachment), remote: remote,
-                            index: index, size: 76
-                        )
-                        Button {
-                            attachments.removeAll { $0.id == attachment.id }
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .symbolRenderingMode(.palette)
-                                .foregroundStyle(.white, .black.opacity(0.7))
-                                .font(.title3)
-                                .frame(width: 32, height: 32)
-                                .contentShape(Rectangle())
-                        }
-                        .disabled(disabled || isImporting)
-                        .accessibilityLabel("Remove image \(index + 1)")
-                    }
-                }
-            }
-        }
-        .frame(height: 80)
-    }
-
     private func pasteImage() {
         guard let image = UIPasteboard.general.image,
               let data = image.pngData() else {
             errorMessage = ImageAttachmentError.emptyClipboard.localizedDescription
             return
         }
+
         load {
             let attachment = try await Task.detached(priority: .userInitiated) {
                 try ImageAttachmentProcessor.prepare(data)
@@ -173,6 +145,50 @@ struct ImageAttachmentPicker: View {
                 return
             } catch {
                 errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+struct ImageAttachmentPreviews: View {
+    @Binding var attachments: [ChatImageAttachment]
+    @ObservedObject var remote: CantripRemoteModel
+    let disabled: Bool
+    let isImporting: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if !attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(Array(attachments.enumerated()), id: \.element.id) { index, attachment in
+                            ZStack(alignment: .topTrailing) {
+                                ChatImageThumbnail(
+                                    source: ChatMessageImage(attachment), remote: remote,
+                                    index: index, size: 76
+                                )
+                                Button {
+                                    attachments.removeAll { $0.id == attachment.id }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .symbolRenderingMode(.palette)
+                                        .foregroundStyle(.white, .black.opacity(0.7))
+                                        .font(.title3)
+                                        .frame(width: 32, height: 32)
+                                        .contentShape(Rectangle())
+                                }
+                                .disabled(disabled || isImporting)
+                                .accessibilityLabel("Remove image \(index + 1)")
+                            }
+                        }
+                    }
+                }
+                .frame(height: 80)
+            }
+            if isImporting {
+                Text("Preparing images...").font(.caption).foregroundStyle(.secondary)
+            } else if !attachments.isEmpty {
+                Text("\(attachments.count)/4").font(.caption).foregroundStyle(.secondary)
             }
         }
     }

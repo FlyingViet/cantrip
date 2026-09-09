@@ -17,35 +17,44 @@ struct CantripSessionBar<Actions: View>: View {
             .disabled(isMutating)
 
             if sessions.contains(where: { $0.id == selectedSessionID }) {
-                Menu {
-                    Picker("Delivery", selection: $deliveryMode) {
-                        ForEach(CantripDeliveryMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Text(deliveryMode.title)
-                        Image(systemName: "chevron.down")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: 120, minHeight: 52)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize(horizontal: true, vertical: false)
-                .disabled(isMutating)
-                .accessibilityIdentifier("cantrip-delivery-picker")
-                .accessibilityLabel("Cantrip delivery override")
-                .accessibilityValue(deliveryMode.title)
+                CantripDeliveryPicker(deliveryMode: $deliveryMode)
+                    .disabled(isMutating)
             }
         }
+    }
+}
+
+struct CantripDeliveryPicker: View {
+    @Binding var deliveryMode: CantripDeliveryMode
+
+    var body: some View {
+        Menu {
+            Picker("Delivery", selection: $deliveryMode) {
+                ForEach(CantripDeliveryMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(deliveryMode.title)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .font(.caption.weight(.semibold))
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .lineLimit(1)
+            .minimumScaleFactor(0.65)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.tint.opacity(0.12), in: Capsule())
+            .frame(width: 84, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .accessibilityIdentifier("cantrip-delivery-picker")
+        .accessibilityLabel("Cantrip delivery override")
+        .accessibilityValue(deliveryMode.title)
     }
 }
 
