@@ -191,10 +191,19 @@ trackpad, mouse wheel, or scrollbar to reach every tab. The list scrolls
 independently of the conversation, keeps its place during background refreshes,
 and brings selected or newly created tabs into view.
 
+Each Mac Remote tab shows a pulsing brain while working, the host's current
+activity, and any queued-message count. The selected tab's status also stays
+visible near the message box while you scroll through older output. Idle tabs
+show **Ready**, and interrupted tabs that can resume show **Paused**. Expand
+the existing tool steps in the conversation for inputs, outputs, and results.
+These are live activity indicators, not estimated completion percentages.
+During a disconnect, activity animations stop and status is marked **Last
+known** until the connection recovers. Reduce Motion disables the animations.
+
 The main Cantrip session tabs stay **across the top**. Ordinary browser clients
 also keep their horizontal tab strip with trackpad/mouse-wheel scrolling.
-Update and reopen the host, then reload the Mac Remote view to get the sidebar;
-no AgentGateway update is needed.
+Update and reopen the host, then reload the Mac Remote view to get the sidebar
+and progress indicators; no AgentGateway update is needed.
 
 Use **Change server** to configure a different host.
 

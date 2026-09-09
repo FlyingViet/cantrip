@@ -52,7 +52,9 @@ The macOS app includes:
 - **Remote control:** use the Mac's sessions from AgentGateway on iPhone/iPad,
   another Mac, or a browser. Mac Remote uses an expanded, vertically scrollable
   tab list on the left; main Cantrip and ordinary browser tabs stay across the
-  top. Remote tab lists keep their scroll position during refreshes.
+  top. Remote tab lists keep their scroll position during refreshes. Mac Remote
+  shows a pulsing brain, live activity and queued counts in the sidebar, with
+  the selected session's status pinned near the message box.
   AgentGateway includes tappable uploaded-image
   thumbnails and full-screen viewing. Native clients support paired LAN connections;
   a saved Tailscale Serve URL is preferred even on the local network. Automatic
