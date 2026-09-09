@@ -606,7 +606,7 @@ private extension RemoteControlServer {
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
     <main id="app" class="hidden"><header class="workspace">
     <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off"><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
-    <div class="tools"><nav id="sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><span class="tools-spacer"></span>
+    <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div></header>
     <div id="actionError" role="alert"></div><section id="messages"></section></main>
@@ -622,7 +622,7 @@ private extension RemoteControlServer {
     const $=id=>document.getElementById(id);let token=localStorage.cantripToken||"",selected=null,timer=null,renderedSession=null,renderedPayload="",followOutput=true,suppressScroll=false;const expanded=new Set();
     function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false";const label=document.querySelector(".connection-label");if(label)label.textContent=active?"Connected":"Reconnecting…"}
     function atBottom(){const root=document.scrollingElement||document.documentElement;return root.scrollHeight-root.clientHeight-root.scrollTop<=4}
-    addEventListener("wheel",event=>{if(event.deltaY<0)followOutput=false},{passive:true});
+    addEventListener("wheel",event=>{if(event.deltaY<0&&!event.target.closest("#sessions"))followOutput=false},{passive:true});
     addEventListener("scroll",()=>{if(!suppressScroll)followOutput=atBottom()},{passive:true});
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
       const controller=(!options.method||options.method==="GET")?new AbortController():null;
@@ -637,10 +637,28 @@ private extension RemoteControlServer {
           renderSessions(listed.sessions);const detailID=selected;if(detailID){const data=await api(`/api/v1/sessions/${detailID}`);if(token!==requestToken)continue;if(selected!==detailID){refreshRequested=true;continue}render(data.session)}else render(null);connection(true)}
         catch(error){if(token!==requestToken)continue;connection(false);if(error.message.includes("token")){refreshRequested=false;pair(true)}}}
       })().finally(()=>{refreshTask=null});return refreshTask}
-    function renderSessions(items){const nav=$("sessions");nav.replaceChildren();for(const item of items){const tab=document.createElement("span");tab.className=`session-tab ${item.id===selected?"active":""}`;
-      const button=document.createElement("button");button.className="session-select";button.textContent=item.title;button.title=item.title;button.onclick=()=>{selected=item.id;renderedPayload="";refresh()};
-      const close=document.createElement("button");close.className="session-close";close.textContent=item.isLocked?"🔒":"×";close.disabled=Boolean(item.isLocked);close.title=item.isLocked?"Locked - unlock in tab settings":`Close ${item.title}`;close.setAttribute("aria-label",close.title);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};tab.append(button,close);
-      if(item.supportsTabMetadata){const menu=document.createElement("button");menu.className="session-menu";menu.textContent="…";menu.title=`Rename or lock ${item.title}`;menu.setAttribute("aria-label",menu.title);menu.onclick=()=>editTab(item);tab.append(menu)}nav.append(tab)}}
+    function renderSessions(items){const nav=$("sessions"),previousLeft=nav.scrollLeft,selectionChanged=nav.dataset.selected!==(selected||"");
+      // Keep existing controls mounted so polling does not interrupt scrolling or keyboard focus.
+      const existing=new Map(Array.from(nav.children,tab=>[tab.dataset.sessionId,tab])),ids=new Set(items.map(item=>item.id));
+      for(const tab of Array.from(nav.children))if(!ids.has(tab.dataset.sessionId))tab.remove();
+      for(const [index,item] of items.entries()){let tab=existing.get(item.id);
+        if(!tab){tab=document.createElement("span");tab.dataset.sessionId=item.id;
+          const button=document.createElement("button");button.className="session-select";
+          const close=document.createElement("button");close.className="session-close";tab.append(button,close)}
+        tab.className=`session-tab ${item.id===selected?"active":""}`;
+        const button=tab.children[0];button.textContent=item.title;button.title=item.title;button.setAttribute("aria-current",item.id===selected?"true":"false");button.onclick=()=>{selected=item.id;renderedPayload="";refresh()};
+        const close=tab.children[1];close.textContent=item.isLocked?"🔒":"×";close.disabled=Boolean(item.isLocked);close.title=item.isLocked?"Locked - unlock in tab settings":`Close ${item.title}`;close.setAttribute("aria-label",close.title);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};
+        let menu=tab.children[2];if(item.supportsTabMetadata){if(!menu){menu=document.createElement("button");menu.className="session-menu";menu.textContent="…";tab.append(menu)}
+          menu.title=`Rename or lock ${item.title}`;menu.setAttribute("aria-label",menu.title);menu.onclick=()=>editTab(item)}else if(menu)menu.remove();
+        if(nav.children[index]!==tab)nav.insertBefore(tab,nav.children[index]||null)}
+      if(nav.scrollLeft!==previousLeft)nav.scrollLeft=previousLeft;nav.dataset.selected=selected||"";
+      if(selectionChanged){const active=nav.querySelector(".active");if(active){const bounds=active.getBoundingClientRect(),viewport=nav.getBoundingClientRect();
+        if(bounds.left<viewport.left||bounds.width>viewport.width)nav.scrollLeft+=bounds.left-viewport.left;
+        else if(bounds.right>viewport.right)nav.scrollLeft+=bounds.right-viewport.right}}}
+    $("sessions").addEventListener("wheel",event=>{const nav=$("sessions");
+      if(event.ctrlKey||event.shiftKey||Math.abs(event.deltaX)>=Math.abs(event.deltaY)||nav.scrollWidth<=nav.clientWidth)return;
+      event.preventDefault();const unit=event.deltaMode===1?16:event.deltaMode===2?nav.clientWidth:1;nav.scrollLeft+=event.deltaY*unit
+    },{passive:false});
     let editingTab=null,tabSaving=false;
     function editTab(item){editingTab=item;$("tabName").value=item.customTitle||item.title;$("tabLocked").checked=Boolean(item.isLocked);$("tabError").textContent="";$("tabEditor").showModal();$("tabName").focus();$("tabName").select()}
     $("tabCancel").onclick=()=>{$("tabEditor").close();editingTab=null};

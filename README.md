@@ -50,7 +50,9 @@ The macOS app includes:
   text stays intact. Memory retrieval uses bounded, deduplicated query terms
   and runs off the UI thread; large Remote responses are encoded off-thread.
 - **Remote control:** use the Mac's sessions from AgentGateway on iPhone/iPad,
-  another Mac, or a browser. AgentGateway includes tappable uploaded-image
+  another Mac, or a browser. Mac Remote and browser tabs scroll horizontally
+  with a trackpad or mouse wheel and keep their position during refreshes.
+  AgentGateway includes tappable uploaded-image
   thumbnails and full-screen viewing. Native clients support paired LAN connections;
   a saved Tailscale Serve URL is preferred even on the local network. Automatic
   routing uses LAN if Tailscale is unavailable and restores Tailscale with

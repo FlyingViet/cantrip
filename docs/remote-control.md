@@ -185,6 +185,10 @@ Remote tab's status indicator becomes green while the host responds.
 Remote sessions stay inside this view; they do not become local tabs on the
 second Mac.
 
+Scroll horizontally over the remote session tabs with a trackpad, or use a
+mouse wheel over the tab strip, to reach tabs that do not fit. Background
+refreshes keep your place; selecting or creating a tab brings it into view.
+
 Use **Change server** to configure a different host.
 
 ## Rename and protect remote tabs
