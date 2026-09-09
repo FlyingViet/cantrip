@@ -305,18 +305,67 @@ final class CopilotUsageTests: XCTestCase {
             }
             for width: CGFloat in [320, 393, 768] {
                 for mode in CantripDeliveryMode.allCases {
-                    assertHeaderLayout(scene: scene, width: width, size: size, mode: mode)
+                    let idle = assertHeaderLayout(scene: scene, width: width, size: size, mode: mode)
+                    let polling = assertHeaderLayout(scene: scene, width: width, size: size,
+                                                     mode: mode, isRefreshing: true)
+                    XCTAssertEqual(idle, polling, "Polling must not move header controls")
                 }
             }
         }
     }
 
+    func testHeaderKeepsConnectionAndRefreshAtTheEdgesWithoutASelectedTab() throws {
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        for width: CGFloat in [320, 393, 768] {
+            for host in ["Local network", "Not configured", "a-very-long-host.tailnet.example"] {
+                assertHeaderLayout(scene: scene, width: width, size: .accessibility5,
+                    mode: .auto, host: host, isConnected: false,
+                    isConfigured: host != "Not configured", hasSession: false)
+            }
+            for lane in [ExecutionLane.copilot, .local] {
+                assertHeaderLayout(scene: scene, width: width, size: .accessibility5,
+                                   mode: .auto, lane: lane)
+            }
+        }
+    }
+
+    func testConnectionStatusAndRefreshAvailabilityStayExplicit() {
+        for connected in [false, true] {
+            let indicator = ChatConnectionIndicator(host: "cantrip.example", isConnected: connected)
+            XCTAssertEqual(indicator.status, connected ? "Connected" : "Disconnected")
+        }
+        for configured in [false, true] {
+            for refreshing in [false, true] {
+                let button = ChatRefreshButton(isConfigured: configured, isRefreshing: refreshing) {}
+                XCTAssertEqual(button.isEnabled, configured && !refreshing)
+            }
+        }
+    }
+
+    func testNarrowHeaderCreditRatioLayouts() throws {
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        for text in ["999.9K / 999.9K", "Unlimited", "Stale"] {
+            assertHeaderLayout(scene: scene, width: 320, size: .accessibility5,
+                               mode: .auto, usageText: text)
+        }
+    }
+
+    @discardableResult
     private func assertHeaderLayout(
-        scene: UIWindowScene, width: CGFloat, size: DynamicTypeSize, mode: CantripDeliveryMode
-    ) {
+        scene: UIWindowScene, width: CGFloat, size: DynamicTypeSize, mode: CantripDeliveryMode,
+        lane: ExecutionLane = .cantrip, host: String = "cantrip-mac.tailnet.example",
+        isConnected: Bool = true, isConfigured: Bool = true, isRefreshing: Bool = false,
+        hasSession: Bool = true, usageText: String = "35.5K / 1M"
+    ) -> [CGRect] {
+        var connectionFrame = CGRect.zero
         var laneFrame = CGRect.zero
         var usageFrame = CGRect.zero
         var deliveryFrame = CGRect.zero
+        var refreshFrame = CGRect.zero
         var titleFrame = CGRect.zero
         var contentFrame = CGRect.zero
         let content = NavigationStack {
@@ -338,11 +387,18 @@ final class CopilotUsageTests: XCTestCase {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                         titleFrame = $0
                     }
+                } connection: {
+                    if lane == .cantrip {
+                        ChatConnectionIndicator(host: host, isConnected: isConnected)
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                                connectionFrame = $0
+                            }
+                    }
                 } lane: {
                     Menu {
                         Button("Cantrip Remote") {}
                     } label: {
-                        ExecutionLaneBadge(lane: .cantrip, iconOnly: true)
+                        ExecutionLaneBadge(lane: lane, iconOnly: true)
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                                 laneFrame = $0
                             }
@@ -350,16 +406,25 @@ final class CopilotUsageTests: XCTestCase {
                     .menuIndicator(.hidden)
                 } usage: {
                     Button {} label: {
-                        CopilotUsageButton.CopilotUsageButtonLabel(text: "35.5K / 1M")
+                        CopilotUsageButton.CopilotUsageButtonLabel(text: usageText)
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                                 usageFrame = $0
                             }
                     }
                 } delivery: {
-                    CantripDeliveryPicker(deliveryMode: .constant(mode))
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
-                            deliveryFrame = $0
-                        }
+                    if lane == .cantrip && hasSession {
+                        CantripDeliveryPicker(deliveryMode: .constant(mode), compact: true)
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                                deliveryFrame = $0
+                            }
+                    }
+                } refresh: {
+                    if lane == .cantrip {
+                        ChatRefreshButton(isConfigured: isConfigured, isRefreshing: isRefreshing) {}
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                                refreshFrame = $0
+                            }
+                    }
                 } leading: {
                     Button {} label: { Image(systemName: "line.3.horizontal") }
                 } trailing: {
@@ -378,25 +443,47 @@ final class CopilotUsageTests: XCTestCase {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
         XCTAssertEqual(laneFrame.height, 44, accuracy: 1)
         XCTAssertEqual(usageFrame.height, 44, accuracy: 1)
-        XCTAssertEqual(deliveryFrame.height, 44, accuracy: 1)
         XCTAssertEqual(laneFrame.midY, usageFrame.midY, accuracy: 0.5)
-        XCTAssertEqual(usageFrame.midY, deliveryFrame.midY, accuracy: 0.5)
         XCTAssertLessThanOrEqual(laneFrame.maxX, usageFrame.minX)
-        XCTAssertLessThanOrEqual(usageFrame.maxX, deliveryFrame.minX)
         XCTAssertGreaterThanOrEqual(laneFrame.minX, 12)
-        XCTAssertLessThanOrEqual(deliveryFrame.maxX, width - 12)
+        XCTAssertGreaterThanOrEqual(usageFrame.width, 92)
+        XCTAssertLessThanOrEqual(usageFrame.maxX, width - 12)
+        if lane == .cantrip {
+            XCTAssertEqual(connectionFrame.height, 44, accuracy: 1)
+            XCTAssertGreaterThanOrEqual(connectionFrame.width, 44)
+            XCTAssertEqual(refreshFrame.size, CGSize(width: 44, height: 44))
+            XCTAssertEqual(connectionFrame.midY, usageFrame.midY, accuracy: 0.5)
+            XCTAssertEqual(refreshFrame.midY, usageFrame.midY, accuracy: 0.5)
+            XCTAssertEqual(connectionFrame.minX, 12, accuracy: 0.5)
+            XCTAssertEqual(refreshFrame.maxX, width - 12, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(connectionFrame.maxX, laneFrame.minX)
+            XCTAssertLessThanOrEqual(usageFrame.maxX, refreshFrame.minX)
+            if hasSession {
+                XCTAssertEqual(deliveryFrame.size, CGSize(width: 64, height: 44))
+                XCTAssertEqual(usageFrame.midY, deliveryFrame.midY, accuracy: 0.5)
+                XCTAssertLessThanOrEqual(usageFrame.maxX, deliveryFrame.minX)
+                XCTAssertLessThanOrEqual(deliveryFrame.maxX, refreshFrame.minX)
+            } else {
+                XCTAssertEqual(deliveryFrame, .zero)
+            }
+        } else {
+            XCTAssertEqual(connectionFrame, .zero)
+            XCTAssertEqual(deliveryFrame, .zero)
+            XCTAssertEqual(refreshFrame, .zero)
+        }
         XCTAssertGreaterThanOrEqual(titleFrame.minY, controller.view.safeAreaInsets.top + 8)
         XCTAssertGreaterThanOrEqual(titleFrame.minX, 64)
         XCTAssertLessThanOrEqual(titleFrame.maxX, width - 64)
         XCTAssertLessThanOrEqual(titleFrame.maxY, usageFrame.minY)
         XCTAssertGreaterThanOrEqual(contentFrame.minY, usageFrame.maxY + 4)
-        if mode == .auto {
+        if mode == .auto || width == 320 {
             let image = UIGraphicsImageRenderer(bounds: CGRect(x: 0, y: 0, width: width, height: 210))
                 .image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
             let attachment = XCTAttachment(image: image)
-            attachment.name = "aligned-header-\(Int(width))-\(size)"
+            attachment.name = "aligned-header-\(Int(width))-\(size)-\(lane)-\(mode)-\(isRefreshing)-\(host)-\(usageText)"
             attachment.lifetime = .keepAlways
             add(attachment)
         }
+        return [connectionFrame, laneFrame, usageFrame, deliveryFrame, refreshFrame]
     }
 }

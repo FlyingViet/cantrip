@@ -26,6 +26,7 @@ struct CantripSessionBar<Actions: View>: View {
 
 struct CantripDeliveryPicker: View {
     @Binding var deliveryMode: CantripDeliveryMode
+    var compact = false
 
     var body: some View {
         Menu {
@@ -35,19 +36,19 @@ struct CantripDeliveryPicker: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: compact ? 2 : 4) {
                 Text(deliveryMode.title)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
             }
             .font(.caption.weight(.semibold))
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .dynamicTypeSize(...(compact ? DynamicTypeSize.large : DynamicTypeSize.xxxLarge))
             .lineLimit(1)
             .minimumScaleFactor(0.65)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, compact ? 4 : 8)
             .padding(.vertical, 5)
             .background(.tint.opacity(0.12), in: Capsule())
-            .frame(width: 84, height: 44)
+            .frame(width: compact ? 64 : 84, height: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

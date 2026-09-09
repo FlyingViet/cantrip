@@ -1094,10 +1094,8 @@ struct ChatView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if vm.activeLane == .cantrip {
-                    remoteControls
-                        .disabled(vm.sending || importingImages || submittingRemote)
+                    remoteNotices
                         .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
-                    Divider()
                 }
                 transcriptList
                     .id(transcriptIdentity)
@@ -1248,6 +1246,12 @@ struct ChatView: View {
                 ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
                                 isWorking: vm.isWorking)
             }
+        } connection: {
+            if vm.activeLane == .cantrip {
+                ChatConnectionIndicator(host: remote.endpointHost, isConnected: remote.isConnected) {
+                    composerFocused = false
+                }
+            }
         } lane: {
             ExecutionLanePicker(env: env, remote: remote)
                 .disabled(vm.sending || importingImages || submittingRemote)
@@ -1255,8 +1259,16 @@ struct ChatView: View {
             CopilotUsageButton(remote: remote) { composerFocused = false }
         } delivery: {
             if vm.activeLane == .cantrip, remote.selectedSession != nil {
-                CantripDeliveryPicker(deliveryMode: $vm.remoteDeliveryMode)
+                CantripDeliveryPicker(deliveryMode: $vm.remoteDeliveryMode, compact: true)
                     .disabled(remote.isMutating || vm.sending || importingImages || submittingRemote)
+            }
+        } refresh: {
+            if vm.activeLane == .cantrip {
+                ChatRefreshButton(isConfigured: remote.isConfigured, isRefreshing: remote.isRefreshing) {
+                    composerFocused = false
+                    Task { await remote.refreshNow() }
+                }
+                .disabled(vm.sending || importingImages || submittingRemote)
             }
         } leading: {
             chatMenu
@@ -1371,35 +1383,15 @@ struct ChatView: View {
         return env.isConfigured
     }
 
-    private var remoteControls: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(remote.isConnected ? Color.green : Color.gray)
-                    .frame(width: 8, height: 8)
-                Text(remote.endpointHost)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+    private var hasRemoteNotices: Bool {
+        remote.selectedSession?.status?.isEmpty == false
+            || remote.selectedSession?.deliveryStatus != nil
+            || remote.errorMessage != nil
+    }
 
-                // Reserve the indicator's space so polling never shifts the controls.
-                ProgressView()
-                    .controlSize(.small)
-                    .opacity(remote.isRefreshing ? 1 : 0)
-                    .accessibilityHidden(!remote.isRefreshing)
-
-                Spacer(minLength: 0)
-
-                Button {
-                    Task { await remote.refreshNow() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .disabled(!remote.isConfigured || remote.isRefreshing)
-                .accessibilityLabel("Refresh Cantrip sessions")
-            }
-
-            if remote.selectedSession != nil {
+    @ViewBuilder private var remoteNotices: some View {
+        if hasRemoteNotices {
+            VStack(spacing: 8) {
                 if let status = remote.selectedSession?.status, !status.isEmpty {
                     Text(status)
                         .font(.caption)
@@ -1413,18 +1405,18 @@ struct ChatView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                if let error = remote.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
-
-            if let error = remote.errorMessage {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.thinMaterial)
+            Divider()
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.thinMaterial)
     }
 
     private var remoteTabsEnabled: Bool {
@@ -1793,11 +1785,14 @@ struct ChatComposer<Leading: View, Message: View, Trailing: View>: View {
     }
 }
 
-struct ChatHeader<Title: View, Lane: View, Usage: View, Delivery: View, Leading: View, Trailing: View>: View {
+struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delivery: View,
+                  Refresh: View, Leading: View, Trailing: View>: View {
     @ViewBuilder var title: () -> Title
+    @ViewBuilder var connection: () -> Connection
     @ViewBuilder var lane: () -> Lane
     @ViewBuilder var usage: () -> Usage
     @ViewBuilder var delivery: () -> Delivery
+    @ViewBuilder var refresh: () -> Refresh
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var trailing: () -> Trailing
 
@@ -1808,10 +1803,12 @@ struct ChatHeader<Title: View, Lane: View, Usage: View, Delivery: View, Leading:
                 title().frame(maxWidth: .infinity, minHeight: 44)
                 trailing().frame(width: 44, height: 44)
             }
-            HStack(alignment: .center, spacing: 4) {
+            HStack(alignment: .center, spacing: 2) {
+                connection()
                 lane()
                 usage()
                 delivery()
+                refresh()
             }
         }
         .buttonStyle(.plain)
@@ -1822,6 +1819,91 @@ struct ChatHeader<Title: View, Lane: View, Usage: View, Delivery: View, Leading:
         .frame(maxWidth: .infinity)
         .background(.bar)
         .accessibilityIdentifier("chat.header")
+    }
+}
+
+struct ChatConnectionIndicator: View {
+    let host: String
+    let isConnected: Bool
+    var onOpen: () -> Void = {}
+    @State private var showDetails = false
+
+    var status: String { isConnected ? "Connected" : "Disconnected" }
+
+    var body: some View {
+        Button {
+            onOpen()
+            showDetails = true
+        } label: {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 4) {
+                    statusDot
+                    Text(host)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(minWidth: 60, maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 4)
+                HStack(spacing: 4) {
+                    Image(systemName: "desktopcomputer")
+                        .font(.system(size: 12))
+                    statusDot
+                }
+                .frame(width: 44)
+            }
+            .foregroundStyle(.secondary)
+            .frame(minWidth: 44, maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("chat.connection")
+        .accessibilityLabel("Cantrip server")
+        .accessibilityValue("\(status), \(host)")
+        .accessibilityHint("Shows the full server name and connection status")
+        .popover(isPresented: $showDetails) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(host).font(.headline).textSelection(.enabled)
+                Label(status, systemImage: isConnected ? "checkmark.circle" : "exclamationmark.circle")
+                    .foregroundStyle(isConnected ? Color.green : Color.secondary)
+            }
+            .padding()
+            .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var statusDot: some View {
+        Circle()
+            .fill(isConnected ? Color.green : Color.gray)
+            .frame(width: 8, height: 8)
+    }
+}
+
+struct ChatRefreshButton: View {
+    let isConfigured: Bool
+    let isRefreshing: Bool
+    let onRefresh: () -> Void
+
+    var isEnabled: Bool { isConfigured && !isRefreshing }
+
+    var body: some View {
+        Button(action: onRefresh) {
+            ZStack {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 14, weight: .semibold))
+                    .opacity(isRefreshing ? 0 : 1)
+                ProgressView()
+                    .controlSize(.small)
+                    .opacity(isRefreshing ? 1 : 0)
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .accessibilityIdentifier("chat.refresh")
+        .accessibilityLabel("Refresh Cantrip sessions")
+        .accessibilityValue(isRefreshing ? "Refreshing" : "Idle")
     }
 }
 

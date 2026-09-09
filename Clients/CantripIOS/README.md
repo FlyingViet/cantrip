@@ -71,6 +71,13 @@ a one-message override. The title appears only in the header, with extra
 clearance below the safe area/Dynamic Island. Use **New Tab** in the drawer
 to create another session.
 
+The connected-server indicator sits at the left end of the antenna/usage row,
+with **Refresh** at the right end and Auto still beside usage. On narrow screens
+the server name collapses to a computer/status icon; tap it for the full server
+name and connection state. Refresh shows polling progress in the same fixed
+space, without shifting the controls. Session status and errors remain below
+the header when present.
+
 While the selected tab is working, a compact red **Stop** icon is visible inside
 the right side of the message composer, beside Send/microphone. Send remains
 available for queued prompts; there is no need to open a menu to stop. It stops

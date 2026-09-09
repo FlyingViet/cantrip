@@ -200,16 +200,25 @@ struct CopilotUsageButton: View {
         var body: some View {
             HStack(spacing: 4) {
                 ChatHeaderIcon(systemName: "gauge.with.dots.needle.33percent")
-                Text(text)
-                    .font(.caption2.monospacedDigit())
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(width: 90, alignment: .leading)
+                ViewThatFits(in: .horizontal) {
+                    amountText.fixedSize()
+                    amountText
+                        .dynamicTypeSize(.large)
+                        .minimumScaleFactor(0.5)
+                }
+                .frame(minWidth: 58, idealWidth: 90, maxWidth: 90, alignment: .leading)
             }
             // The compact toolbar stays legible; full-size amounts remain in the accessible details sheet.
             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .frame(height: 44)
             .contentShape(Rectangle())
+        }
+
+        private var amountText: some View {
+            Text(text)
+                .font(.caption2.monospacedDigit())
+                .lineLimit(1)
+                .allowsTightening(true)
         }
     }
 
