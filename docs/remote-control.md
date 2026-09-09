@@ -185,9 +185,16 @@ Remote tab's status indicator becomes green while the host responds.
 Remote sessions stay inside this view; they do not become local tabs on the
 second Mac.
 
-Scroll horizontally over the remote session tabs with a trackpad, or use a
-mouse wheel over the tab strip, to reach tabs that do not fit. Background
-refreshes keep your place; selecting or creating a tab brings it into view.
+Remote sessions appear in an **expanded Tabs list on the left**, with **+**
+for a new tab and per-row close/name/lock controls. Scroll vertically with a
+trackpad, mouse wheel, or scrollbar to reach every tab. The list scrolls
+independently of the conversation, keeps its place during background refreshes,
+and brings selected or newly created tabs into view.
+
+The main Cantrip session tabs stay **across the top**. Ordinary browser clients
+also keep their horizontal tab strip with trackpad/mouse-wheel scrolling.
+Update and reopen the host, then reload the Mac Remote view to get the sidebar;
+no AgentGateway update is needed.
 
 Use **Change server** to configure a different host.
 
