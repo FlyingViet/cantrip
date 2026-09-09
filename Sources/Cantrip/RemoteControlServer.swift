@@ -601,10 +601,18 @@ private extension RemoteControlServer {
     #tabEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#tabEditor::backdrop{background:rgba(0,0,0,.35)}#tabEditor form{display:grid;gap:12px}#tabName{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}.tab-actions{display:flex;justify-content:flex-end;gap:8px}#tabError,#actionError{color:var(--orange);font-size:12px}#actionError:not(:empty){padding:8px 14px}.session-close:disabled{opacity:.65;cursor:default}.session-menu{border:0;background:transparent;color:var(--secondary);padding:2px 5px}
     .prompt-preview{white-space:pre-wrap}.prompt-preview.clipped{max-height:11.2em;overflow:hidden}#promptReader{width:min(calc(100% - 24px),680px);border:1px solid var(--line);border-radius:12px;background:Canvas;color:var(--text)}#promptReader::backdrop{background:rgba(0,0,0,.35)}#promptPage{height:55vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
     @media(max-width:620px){.prompt-row{padding-inline:12px}.tools{padding-inline:10px}.connection-label{display:none}.session-tab{max-width:145px}.session-select{max-width:115px}#messages{padding:14px 12px 22px}}
+    .remote-sidebar{--sidebar-width:clamp(136px,30vw,240px)}.remote-sidebar #app{padding-left:var(--sidebar-width)}
+    #sessionSidebar{position:fixed;inset:0 auto 0 0;z-index:5;display:flex;flex-direction:column;width:var(--sidebar-width);background:var(--chrome);border-right:1px solid var(--line)}
+    #sessionSidebarHeader{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;padding:12px;font-size:13px}
+    .remote-sidebar #sessions{flex:1;min-height:0;flex-direction:column;gap:4px;padding:0 8px 8px;overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain;scrollbar-width:thin}
+    .remote-sidebar #sessions::-webkit-scrollbar{display:initial;width:6px}.remote-sidebar #sessions::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+    .remote-sidebar .session-tab{width:100%;max-width:none;min-height:40px;border-radius:8px}.remote-sidebar .session-tab.active{background:var(--surface-2);box-shadow:inset 3px 0 var(--accent)}
+    .remote-sidebar .session-select{flex:1;max-width:none;padding:9px 6px 9px 9px;text-align:left;white-space:normal;overflow-wrap:anywhere;line-height:1.35}
+    .remote-sidebar .session-close{opacity:1}.remote-sidebar .session-menu{flex:none}.remote-sidebar .tools,.remote-sidebar .prompt-row{flex-wrap:wrap}.remote-sidebar .prompt-row input{flex:1 1 80px}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
-    <main id="app" class="hidden"><header class="workspace">
+    <main id="app" class="hidden"><aside id="sessionSidebar" class="hidden" aria-labelledby="sessionSidebarTitle"><div id="sessionSidebarHeader"><strong id="sessionSidebarTitle">Tabs</strong></div></aside><header class="workspace">
     <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off"><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
     <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
@@ -620,6 +628,9 @@ private extension RemoteControlServer {
     <pre id="promptPage"></pre><div class="tab-actions"><button id="promptPrevious" class="control">Previous</button><span id="promptNumber"></span><button id="promptNext" class="control">Next</button><button id="promptDownload" class="control">Download all</button><button id="promptDone" class="control">Done</button></div></dialog>
     <script>
     const $=id=>document.getElementById(id);let token=localStorage.cantripToken||"",selected=null,timer=null,renderedSession=null,renderedPayload="",followOutput=true,suppressScroll=false;const expanded=new Set();
+    // The native Mac embed exposes this bridge; ordinary browsers keep the top tab strip.
+    const sidebarLayout=Boolean(window.webkit?.messageHandlers?.cantripRemoteUnpair);
+    if(sidebarLayout){document.documentElement.classList.add("remote-sidebar");$("sessionSidebar").classList.remove("hidden");$("sessionSidebar").append($("sessions"));$("sessionSidebarHeader").append($("newSession"))}
     function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false";const label=document.querySelector(".connection-label");if(label)label.textContent=active?"Connected":"Reconnecting…"}
     function atBottom(){const root=document.scrollingElement||document.documentElement;return root.scrollHeight-root.clientHeight-root.scrollTop<=4}
     addEventListener("wheel",event=>{if(event.deltaY<0&&!event.target.closest("#sessions"))followOutput=false},{passive:true});
@@ -637,7 +648,7 @@ private extension RemoteControlServer {
           renderSessions(listed.sessions);const detailID=selected;if(detailID){const data=await api(`/api/v1/sessions/${detailID}`);if(token!==requestToken)continue;if(selected!==detailID){refreshRequested=true;continue}render(data.session)}else render(null);connection(true)}
         catch(error){if(token!==requestToken)continue;connection(false);if(error.message.includes("token")){refreshRequested=false;pair(true)}}}
       })().finally(()=>{refreshTask=null});return refreshTask}
-    function renderSessions(items){const nav=$("sessions"),previousLeft=nav.scrollLeft,selectionChanged=nav.dataset.selected!==(selected||"");
+    function renderSessions(items){const nav=$("sessions"),previousLeft=nav.scrollLeft,previousTop=nav.scrollTop,selectionChanged=nav.dataset.selected!==(selected||"");
       // Keep existing controls mounted so polling does not interrupt scrolling or keyboard focus.
       const existing=new Map(Array.from(nav.children,tab=>[tab.dataset.sessionId,tab])),ids=new Set(items.map(item=>item.id));
       for(const tab of Array.from(nav.children))if(!ids.has(tab.dataset.sessionId))tab.remove();
@@ -651,12 +662,14 @@ private extension RemoteControlServer {
         let menu=tab.children[2];if(item.supportsTabMetadata){if(!menu){menu=document.createElement("button");menu.className="session-menu";menu.textContent="…";tab.append(menu)}
           menu.title=`Rename or lock ${item.title}`;menu.setAttribute("aria-label",menu.title);menu.onclick=()=>editTab(item)}else if(menu)menu.remove();
         if(nav.children[index]!==tab)nav.insertBefore(tab,nav.children[index]||null)}
-      if(nav.scrollLeft!==previousLeft)nav.scrollLeft=previousLeft;nav.dataset.selected=selected||"";
+      if(nav.scrollLeft!==previousLeft)nav.scrollLeft=previousLeft;if(nav.scrollTop!==previousTop)nav.scrollTop=previousTop;nav.dataset.selected=selected||"";
       if(selectionChanged){const active=nav.querySelector(".active");if(active){const bounds=active.getBoundingClientRect(),viewport=nav.getBoundingClientRect();
-        if(bounds.left<viewport.left||bounds.width>viewport.width)nav.scrollLeft+=bounds.left-viewport.left;
+        if(sidebarLayout){if(bounds.top<viewport.top||bounds.height>viewport.height)nav.scrollTop+=bounds.top-viewport.top;
+          else if(bounds.bottom>viewport.bottom)nav.scrollTop+=bounds.bottom-viewport.bottom}
+        else if(bounds.left<viewport.left||bounds.width>viewport.width)nav.scrollLeft+=bounds.left-viewport.left;
         else if(bounds.right>viewport.right)nav.scrollLeft+=bounds.right-viewport.right}}}
     $("sessions").addEventListener("wheel",event=>{const nav=$("sessions");
-      if(event.ctrlKey||event.shiftKey||Math.abs(event.deltaX)>=Math.abs(event.deltaY)||nav.scrollWidth<=nav.clientWidth)return;
+      if(sidebarLayout||event.ctrlKey||event.shiftKey||Math.abs(event.deltaX)>=Math.abs(event.deltaY)||nav.scrollWidth<=nav.clientWidth)return;
       event.preventDefault();const unit=event.deltaMode===1?16:event.deltaMode===2?nav.clientWidth:1;nav.scrollLeft+=event.deltaY*unit
     },{passive:false});
     let editingTab=null,tabSaving=false;
