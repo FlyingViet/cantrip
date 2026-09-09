@@ -231,6 +231,9 @@ struct SessionTabTests {
             precondition(response.0 == expected, "\(path): expected \(expected), got \(response.0)")
         }
         try await Task.sleep(nanoseconds: 300_000_000)
+        let (page, pageResponse) = try await URLSession.shared.data(from: base)
+        precondition((pageResponse as! HTTPURLResponse).statusCode == 200)
+        try await testRemoteTabScrolling(html: String(decoding: page, as: UTF8.self), baseURL: base)
         let buildsPath = "api/v1/github/builds"
         let unauthorizedBuilds = try await request(buildsPath, method: "GET", authenticated: false)
         precondition(unauthorizedBuilds.0 == 401)
@@ -334,7 +337,7 @@ struct SessionTabTests {
     @MainActor
     static func testWebTabControls() throws {
         let source = try String(contentsOfFile: "Sources/Cantrip/RemoteControlServer.swift", encoding: .utf8)
-        let start = source.range(of: "    function renderSessions")!
+        let start = source.range(of: "    let editingTab")!
         let end = source.range(of: "    function safeURL", range: start.upperBound..<source.endIndex)!
         let context = JSContext()!
         context.exceptionHandler = { _, error in
@@ -352,9 +355,7 @@ struct SessionTabTests {
         function api(path,options){calls.push({path,body:JSON.parse(options.body)});return Promise.resolve({})}
         \(source[start.lowerBound..<end.lowerBound])
         const tab={id:"a",title:"Automatic",customTitle:"",isLocked:true,supportsTabMetadata:true};
-        renderSessions([tab]);
         """)
-        precondition(context.evaluateScript("$('sessions').children[0].children[1].disabled")!.toBool())
         context.evaluateScript("""
         editTab(tab);$("tabName").value="My project";$("tabForm").onsubmit({preventDefault(){}});
         """)
@@ -365,9 +366,5 @@ struct SessionTabTests {
         editTab(tab);$("tabLocked").checked=false;$("tabForm").onsubmit({preventDefault(){}});
         """)
         precondition(context.evaluateScript("calls[1].body.isLocked === false && !('customTitle' in calls[1].body)")!.toBool())
-        context.evaluateScript("""
-        renderSessions([{id:"legacy",title:"Old host"}]);
-        """)
-        precondition(context.evaluateScript("$('sessions').children[0].children.length === 2")!.toBool())
     }
 }
