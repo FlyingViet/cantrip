@@ -53,6 +53,13 @@ composer, microphone, hands-free voice mode, and spoken replies as Hermes.
 The header, tab drawer, and composer provide session selection, new
 sessions and conversations, queued/redirected/injected prompts, stop, and resume.
 
+**Tap the mic** for single-turn dictation, or **touch and hold it** for half a
+second to open full-screen **continuous voice mode**. Once open, release the
+mic and talk hands-free through the existing *listen → think → speak* loop.
+Close voice mode to end the loop. This works in Cantrip Remote, Copilot, and
+Private Local; **hamburger menu > Voice mode** remains available, and VoiceOver
+offers a **Continuous voice mode** action on the mic.
+
 The **Tabs** drawer marks the selected tab with a checkmark and includes tab
 names, locks, and queued counts. A blinking brain beside the tab name replaces
 the "Working" suffix in both the header title and drawer, disappearing when

@@ -1178,6 +1178,9 @@ struct ChatView: View {
         .onChange(of: showRemoteTabs) { _, showing in
             if showing { composerFocused = false }
         }
+        .onChange(of: showVoiceMode) { _, showing in
+            if showing { composerFocused = false }
+        }
         .onAppear {
             voice.requestAuth()
             vm.setAppActive(scenePhase == .active)
@@ -1504,7 +1507,7 @@ struct ChatView: View {
                 .padding(.top, 4)
             } else if env.isConfigured {
                 Text("Talk to Hermes").font(.title3.weight(.semibold))
-                Text("Type, or tap the mic to start a voice conversation. Toggle hands-free to keep the loop going.")
+                Text("Type, or tap the mic to dictate. Touch and hold the mic for continuous, hands-free voice.")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
             } else {
                 Text("Connect your gateway").font(.title3.weight(.semibold))
@@ -1630,15 +1633,14 @@ struct ChatView: View {
             } else if vm.sending || submittingRemote || importingImages {
                 ProgressView().controlSize(.small)
             } else if input.isEmpty && !hasImageDraft {
-                Button {
-                    if voice.isSpeaking { vm.interruptAndListen() } else { voice.toggleListening() }
-                } label: {
-                    Image(systemName: voice.isListening ? "mic.fill" : "mic")
-                        .font(.system(size: 24)).foregroundStyle(voice.isListening ? Color.red : Color.accentColor)
-                        .frame(width: 44, height: 44).contentShape(Rectangle())
-                }
-                .disabled(!voice.authorized || !destinationReady)
-                .accessibilityLabel(voice.isListening ? "Stop listening" : "Start listening")
+                ChatMicrophoneButton(
+                    isListening: voice.isListening,
+                    isEnabled: voice.authorized && destinationReady,
+                    onTap: {
+                        if voice.isSpeaking { vm.interruptAndListen() } else { voice.toggleListening() }
+                    },
+                    onContinuousVoice: { showVoiceMode = true }
+                )
             } else {
                 Button(action: sendText) {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 24))
