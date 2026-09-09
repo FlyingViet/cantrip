@@ -91,7 +91,7 @@ running task is affected.
 ### See Copilot account usage in AgentGateway
 
 Tap the **usage gauge beside the Local/Remote lane picker (antenna)** in
-AgentGateway's top header. It shows **AI credits remaining / total** in compact
+AgentGateway's top header. It shows **AI credits used / total** in compact
 form, with full amounts and a secondary percentage progress bar in the details.
 Details also include reset time, additional usage, and the Copilot account
 signed in on the Mac. It is available from every chat lane;

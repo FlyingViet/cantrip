@@ -54,12 +54,12 @@ struct CopilotQuotaBucket: Codable, Identifiable {
         if isUnlimited { return "Unlimited \(title.lowercased())" }
         if let amounts = amountSummary { return amounts }
         if billingMode == "credits" { return "AI-credit amounts unavailable" }
-        return percentageSummary ?? "\(title): remaining amount unavailable"
+        return percentageSummary ?? "\(title): used amount unavailable"
     }
 
     var amountSummary: String? {
         guard let ratio = amountRatio(), let unit else { return nil }
-        return "\(ratio) \(unit) remaining"
+        return "\(ratio) \(unit) used"
     }
 
     var unit: String? {
@@ -72,8 +72,13 @@ struct CopilotQuotaBucket: Codable, Identifiable {
 
     func amountRatio(compact: Bool = false, locale: Locale = .current) -> String? {
         guard !isUnlimited, unit != nil, let remaining, let entitlement,
-              remaining.isFinite, entitlement.isFinite, remaining >= 0, entitlement >= 0 else { return nil }
-        return "\(copilotAmount(remaining, compact: compact, locale: locale)) / \(copilotAmount(entitlement, compact: compact, locale: locale))"
+              remaining.isFinite, entitlement.isFinite, remaining >= 0, entitlement >= remaining,
+              let totalAmount = Decimal(string: String(entitlement), locale: Locale(identifier: "en_US_POSIX")),
+              let remainingAmount = Decimal(string: String(remaining), locale: Locale(identifier: "en_US_POSIX"))
+        else { return nil }
+        // Subtract decimal amounts so binary rounding cannot lose a hundredth when formatting down.
+        let used = NSDecimalNumber(decimal: totalAmount - remainingAmount).doubleValue
+        return "\(copilotAmount(used, compact: compact, locale: locale)) / \(copilotAmount(entitlement, compact: compact, locale: locale))"
     }
 
     var percentageSummary: String? {
@@ -84,7 +89,7 @@ struct CopilotQuotaBucket: Codable, Identifiable {
 
 func copilotAmount(_ amount: Double, compact: Bool = false, locale: Locale = .current) -> String {
     let format = FloatingPointFormatStyle<Double>.number.locale(locale)
-    // Do not round a nearly exhausted balance up, or a small positive balance down to zero.
+    // Keep compact values below the next unit and tiny nonzero amounts visible.
     if amount > 0 && amount < 0.01 {
         return "<" + 0.01.formatted(format.precision(.fractionLength(2)))
     }
