@@ -52,13 +52,13 @@ extension SessionTabTests {
         precondition(primary.overage == 0 && primary.overageAllowed == true)
         let locale = Locale(identifier: "en_US")
         precondition(primary.remaining == 964.1234 && primary.entitlement == 1000)
-        precondition(primary.amountRatio(locale: locale) == "964.12 / 1,000")
-        precondition(primary.amountRatio(compact: true, locale: locale) == "964.12 / 1K")
-        precondition(primary.summary.contains("AI credits remaining") && !primary.summary.contains("%"))
+        precondition(primary.amountRatio(locale: locale) == "35.87 / 1,000")
+        precondition(primary.amountRatio(compact: true, locale: locale) == "35.87 / 1K")
+        precondition(primary.summary.contains("AI credits used") && !primary.summary.contains("%"))
         precondition(primary.percentageSummary == "3.6% used / 96.4% remaining")
         let large = try projectQuota(["entitlement": 1000000, "quota_remaining": 964422.4])
-        precondition(large.primary!.amountRatio(locale: locale) == "964,422.4 / 1,000,000")
-        precondition(large.primary!.amountRatio(compact: true, locale: locale) == "964.4K / 1M")
+        precondition(large.primary!.amountRatio(locale: locale) == "35,577.6 / 1,000,000")
+        precondition(large.primary!.amountRatio(compact: true, locale: locale) == "35.5K / 1M")
         precondition(copilotAmount(999999.999, compact: true, locale: locale) == "999.9K")
         precondition(copilotAmount(0.001, locale: locale) == "<0.01")
         precondition(copilotAmount(0, locale: locale) == "0")
@@ -69,13 +69,22 @@ extension SessionTabTests {
         precondition(unlimited.primary!.amountRatio() == nil && unlimited.primary!.summary.hasPrefix("Unlimited"))
         let exhausted = try projectQuota(["entitlement": 100, "quota_remaining": 0, "overage_permitted": false])
         precondition(exhausted.primary!.remainingPercent == 0)
-        precondition(exhausted.primary!.amountRatio(locale: locale) == "0 / 100")
+        precondition(exhausted.primary!.amountRatio(locale: locale) == "100 / 100")
+        for (remaining, expected) in [(100.0, "0 / 100"), (99.99, "0.01 / 100"),
+                                       (99.999, "<0.01 / 100"), (0.0, "100 / 100")] {
+            let quota = try projectQuota(["entitlement": 100, "quota_remaining": remaining, "overage_count": 25])
+            precondition(quota.primary!.amountRatio(locale: locale) == expected,
+                         "Show included usage as total minus remaining, with overage separate")
+        }
+        let zeroTotal = try projectQuota(["entitlement": 0, "quota_remaining": 0])
+        precondition(zeroTotal.primary!.amountRatio(locale: locale) == "0 / 0")
         let unknown = try projectQuota([:], userFields: ["quota_reset_date_utc": "invalid"])
         precondition(unknown.primary!.remainingPercent == nil && unknown.primary!.resetAt == nil)
         precondition(unknown.primary!.summary == "AI-credit amounts unavailable")
         let requests = try projectQuota(["entitlement": 300, "remaining": 200, "token_based_billing": false])
         precondition(requests.primary!.billingMode == "requests")
-        precondition(requests.primary!.summary.contains("requests remaining"))
+        precondition(requests.primary!.amountRatio(locale: locale) == "100 / 300")
+        precondition(requests.primary!.summary.contains("requests used"))
         precondition(!requests.primary!.summary.contains("AI credits"))
         let fallback = try projectQuota([:], normalized: [
             "isUnlimitedEntitlement": false, "remainingPercentage": 50, "entitlementRequests": 300,
@@ -86,6 +95,8 @@ extension SessionTabTests {
         let missingTotal = try projectQuota(["quota_remaining": 50, "percent_remaining": 50])
         let negative = try projectQuota(["entitlement": 100, "quota_remaining": -1])
         precondition(missingTotal.primary!.amountRatio() == nil && negative.primary!.amountRatio() == nil)
+        let aboveTotal = try projectQuota(["entitlement": 100, "quota_remaining": 101])
+        precondition(aboveTotal.primary!.amountRatio() == nil, "Invalid balances must not show negative usage")
         let unknownUnits = try projectQuota(["entitlement": 100, "remaining": 50],
                                            userFields: ["token_based_billing": NSNull()])
         precondition(unknownUnits.primary!.amountRatio() == nil && unknownUnits.primary!.unit == nil)
