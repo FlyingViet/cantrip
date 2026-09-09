@@ -609,6 +609,12 @@ private extension RemoteControlServer {
     .remote-sidebar .session-tab{width:100%;max-width:none;min-height:40px;border-radius:8px}.remote-sidebar .session-tab.active{background:var(--surface-2);box-shadow:inset 3px 0 var(--accent)}
     .remote-sidebar .session-select{flex:1;max-width:none;padding:9px 6px 9px 9px;text-align:left;white-space:normal;overflow-wrap:anywhere;line-height:1.35}
     .remote-sidebar .session-close{opacity:1}.remote-sidebar .session-menu{flex:none}.remote-sidebar .tools,.remote-sidebar .prompt-row{flex-wrap:wrap}.remote-sidebar .prompt-row input{flex:1 1 80px}
+    .session-name{font-weight:600}.session-status{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--secondary);font-size:11px;font-weight:400}
+    .brain-indicator{display:inline-block;flex:none;width:16px;height:16px;margin-right:4px;vertical-align:-3px;color:var(--tertiary);visibility:hidden}
+    [data-streaming=true] .brain-indicator{visibility:visible;color:var(--accent);animation:pulse 1.1s ease-in-out infinite}
+    #sessionProgress{min-width:0;padding:0 14px 9px;font-size:12px}#sessionProgress .brain-indicator{margin:0}#sessionProgressText{display:-webkit-box;min-width:0;overflow:hidden;overflow-wrap:anywhere;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.35}
+    [data-cantrip-connected=false] .brain-indicator,[data-cantrip-connected=false].remote-sidebar .status-icon.running{animation:none;color:var(--tertiary)}
+    @media(prefers-reduced-motion:reduce){.brain-indicator,.spinner,.status-icon.running{animation:none}}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
@@ -616,7 +622,8 @@ private extension RemoteControlServer {
     <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off"><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
     <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
-    <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div></header>
+    <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
+    <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div></header>
     <div id="actionError" role="alert"></div><section id="messages"></section></main>
     <dialog id="tabEditor" aria-labelledby="tabEditorTitle"><form id="tabForm">
     <strong id="tabEditorTitle">Tab settings</strong><label>Tab name<input id="tabName" autocomplete="off"></label>
@@ -630,8 +637,16 @@ private extension RemoteControlServer {
     const $=id=>document.getElementById(id);let token=localStorage.cantripToken||"",selected=null,timer=null,renderedSession=null,renderedPayload="",followOutput=true,suppressScroll=false;const expanded=new Set();
     // The native Mac embed exposes this bridge; ordinary browsers keep the top tab strip.
     const sidebarLayout=Boolean(window.webkit?.messageHandlers?.cantripRemoteUnpair);
-    if(sidebarLayout){document.documentElement.classList.add("remote-sidebar");$("sessionSidebar").classList.remove("hidden");$("sessionSidebar").append($("sessions"));$("sessionSidebarHeader").append($("newSession"))}
-    function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false";const label=document.querySelector(".connection-label");if(label)label.textContent=active?"Connected":"Reconnecting…"}
+    if(sidebarLayout){document.documentElement.classList.add("remote-sidebar");$("sessionSidebar").classList.remove("hidden");$("sessionSidebar").append($("sessions"));$("sessionSidebarHeader").append($("newSession"));$("sessionProgress").prepend(brainIndicator())}
+    function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false";const label=document.querySelector(".connection-label");if(label)label.textContent=active?"Connected":"Reconnecting…";updateProgressConnection()}
+    function brainIndicator(){const icon=document.createElementNS("http://www.w3.org/2000/svg","svg");icon.setAttribute("class","brain-indicator");icon.setAttribute("viewBox","0 0 24 24");icon.setAttribute("aria-hidden","true");icon.setAttribute("focusable","false");
+      const path=document.createElementNS(icon.namespaceURI,"path");path.setAttribute("d","M12 5C12 1 6 1 6 5C3 5 2 8 4 10C1 12 2 16 5 17C4 21 10 23 12 19C14 23 20 21 19 17C22 16 23 12 20 10C22 8 21 5 18 5C18 1 12 1 12 5V19M6 5C6 8 9 7 9 10M4 10C7 10 8 12 6 14M5 17C8 16 10 17 10 19M18 5C18 8 15 7 15 10M20 10C17 10 16 12 18 14M19 17C16 16 14 17 14 19");path.setAttribute("fill","none");path.setAttribute("stroke","currentColor");path.setAttribute("stroke-width","1.5");path.setAttribute("stroke-linecap","round");path.setAttribute("stroke-linejoin","round");icon.append(path);return icon}
+    function setText(node,text){if(node.textContent!==text)node.textContent=text}
+    function progressSummary(session){const parts=[session.isStreaming?(session.status||"Working…"):(session.canResume?"Paused":"Ready")];if(session.queuedCount>0)parts.push(`${session.queuedCount} queued`);return parts.join(" · ")}
+    function updateProgressConnection(){if(!sidebarLayout)return;const connected=document.documentElement.dataset.cantripConnected==="true";
+      for(const button of $("sessions").querySelectorAll(".session-select")){const summary=connected?button.dataset.status:`Last known: ${button.dataset.status}`;setText(button.querySelector(".session-status"),summary);button.title=`${button.dataset.title} — ${summary}${button.dataset.locked==="true"?" · Locked":""}`;button.setAttribute("aria-label",button.title)}
+      const progress=$("sessionProgress");if(!progress.classList.contains("hidden")){const summary=connected?progress.dataset.status:`Reconnecting… Last known: ${progress.dataset.status}`;setText($("sessionProgressText"),summary);progress.title=summary}}
+    function renderProgress(session){if(!sidebarLayout)return;const progress=$("sessionProgress");progress.classList.toggle("hidden",!session);progress.dataset.streaming=String(Boolean(session?.isStreaming));progress.dataset.status=session?progressSummary(session):"";if(!session)setText($("sessionProgressText"),"");updateProgressConnection()}
     function atBottom(){const root=document.scrollingElement||document.documentElement;return root.scrollHeight-root.clientHeight-root.scrollTop<=4}
     addEventListener("wheel",event=>{if(event.deltaY<0&&!event.target.closest("#sessions"))followOutput=false},{passive:true});
     addEventListener("scroll",()=>{if(!suppressScroll)followOutput=atBottom()},{passive:true});
@@ -655,14 +670,16 @@ private extension RemoteControlServer {
       for(const [index,item] of items.entries()){let tab=existing.get(item.id);
         if(!tab){tab=document.createElement("span");tab.dataset.sessionId=item.id;
           const button=document.createElement("button");button.className="session-select";
+          if(sidebarLayout){const title=document.createElement("span"),status=document.createElement("span");title.className="session-name";status.className="session-status";button.append(brainIndicator(),title,status)}
           const close=document.createElement("button");close.className="session-close";tab.append(button,close)}
         tab.className=`session-tab ${item.id===selected?"active":""}`;
-        const button=tab.children[0];button.textContent=item.title;button.title=item.title;button.setAttribute("aria-current",item.id===selected?"true":"false");button.onclick=()=>{selected=item.id;renderedPayload="";refresh()};
+        const button=tab.children[0];if(sidebarLayout){setText(button.querySelector(".session-name"),item.title);tab.dataset.streaming=String(Boolean(item.isStreaming));button.dataset.title=item.title;button.dataset.status=progressSummary(item);button.dataset.locked=String(Boolean(item.isLocked))}else{button.textContent=item.title;button.title=item.title}
+        button.setAttribute("aria-current",item.id===selected?"true":"false");button.onclick=()=>{selected=item.id;renderedPayload="";renderProgress(item);refresh()};
         const close=tab.children[1];close.textContent=item.isLocked?"🔒":"×";close.disabled=Boolean(item.isLocked);close.title=item.isLocked?"Locked - unlock in tab settings":`Close ${item.title}`;close.setAttribute("aria-label",close.title);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};
         let menu=tab.children[2];if(item.supportsTabMetadata){if(!menu){menu=document.createElement("button");menu.className="session-menu";menu.textContent="…";tab.append(menu)}
           menu.title=`Rename or lock ${item.title}`;menu.setAttribute("aria-label",menu.title);menu.onclick=()=>editTab(item)}else if(menu)menu.remove();
         if(nav.children[index]!==tab)nav.insertBefore(tab,nav.children[index]||null)}
-      if(nav.scrollLeft!==previousLeft)nav.scrollLeft=previousLeft;if(nav.scrollTop!==previousTop)nav.scrollTop=previousTop;nav.dataset.selected=selected||"";
+      renderProgress(items.find(item=>item.id===selected));if(nav.scrollLeft!==previousLeft)nav.scrollLeft=previousLeft;if(nav.scrollTop!==previousTop)nav.scrollTop=previousTop;nav.dataset.selected=selected||"";
       if(selectionChanged){const active=nav.querySelector(".active");if(active){const bounds=active.getBoundingClientRect(),viewport=nav.getBoundingClientRect();
         if(sidebarLayout){if(bounds.top<viewport.top||bounds.height>viewport.height)nav.scrollTop+=bounds.top-viewport.top;
           else if(bounds.bottom>viewport.bottom)nav.scrollTop+=bounds.bottom-viewport.bottom}
@@ -730,14 +747,14 @@ private extension RemoteControlServer {
     $("promptDownload").onclick=()=>{const url=URL.createObjectURL(new Blob([readingPrompt],{type:"text/plain;charset=utf-8"})),link=document.createElement("a");link.href=url;link.download="cantrip-prompt.txt";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
     $("promptDone").onclick=()=>$("promptReader").close();
     $("promptReader").addEventListener("close",()=>{readingPrompt="";promptStarts=[0];$("promptPage").textContent=""});
-    function render(session){const box=$("messages"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
+    function render(session){renderProgress(session);const box=$("messages"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
       const root=document.scrollingElement||document.documentElement,sameSession=sessionID===renderedSession,shouldFollow=followOutput||!sameSession,previousTop=root.scrollTop;renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;box.replaceChildren();$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
       if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{for(const message of session.messages){const activities=message.activities||[];if(!message.text&&!message.thinking&&!activities.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
           appendThinking(row,message.thinking,message.id);if(message.text){if(message.role==="user")appendPrompt(row,message.text);else appendProse(row,message.text)}appendActivities(row,activities,message.id);box.append(row)}
         if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}
-        if(session.isStreaming||session.queuedCount){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
+        if(!sidebarLayout&&(session.isStreaming||session.queuedCount)){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
       requestAnimationFrame(()=>{root.scrollTop=shouldFollow?root.scrollHeight:Math.min(previousTop,Math.max(0,root.scrollHeight-root.clientHeight));followOutput=shouldFollow;suppressScroll=false})}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
     async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selected=data.session.id;renderedPayload="";await refresh()}

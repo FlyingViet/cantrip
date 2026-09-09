@@ -156,7 +156,7 @@ extension SessionTabTests {
             check(visible(nav.lastElementChild),"Newly created selection must scroll into view");
             window.renamed=added.map(tab=>({...tab,title:"Renamed remote project",isLocked:true}));
             renderSessions(renamed);
-            check(nav.children[10].children[0].textContent==="Renamed remote project","Existing titles update");
+            check((nav.children[10].querySelector(".session-name")||nav.children[10].children[0]).textContent==="Renamed remote project","Existing titles update");
             check(nav.children[10].children[1].disabled,"Existing locks update");
             nav[offset]=200;window.beforeRemove=nav[offset];
             renderSessions(renamed.filter(tab=>tab.id!==tabs[0].id));
@@ -192,7 +192,96 @@ extension SessionTabTests {
             }
             })();
             """)
+            try await testRemoteProgress(webView: webView)
         }
-        print("Remote tabs (\(sidebar ? "Mac sidebar" : "browser strip")): WebKit scrolling, polling, selection, focus, and controls passed at 320-1100pt widths and 340-700pt heights")
+        print("Remote tabs (\(sidebar ? "Mac sidebar" : "browser strip")): WebKit scrolling, progress, polling, selection, focus, and controls passed at 320-1100pt widths and 340-700pt heights")
+    }
+
+    @MainActor
+    private static func testRemoteProgress(webView: WKWebView) async throws {
+        _ = try await webView.callAsyncJavaScript("""
+        // Offscreen WebKit pauses animation frames; let disclosure/scroll events settle instead.
+        const settle=()=>new Promise(resolve=>setTimeout(resolve,50));
+        const running={id:"working",title:"Active project",isStreaming:true,status:"Running focused tests",
+          queuedCount:2,supportsTabMetadata:true,isLocked:true,messages:[
+            {id:"prompt",role:"user",text:"Update this project"},
+            {id:"reply",role:"assistant",text:"Preparing the update",thinking:"Inspecting the relevant code",
+             activities:[{id:"tool",toolName:"bash",title:"Running focused tests",state:"running",input:"make test"}]}
+          ]};
+        const ready={id:"ready",title:"Other project",isStreaming:false,queuedCount:0,messages:[]};
+        selected=running.id;connection(true);renderSessions([running,ready]);render(running);await settle();
+        const progress=$("sessionProgress"),label=$("sessionProgressText");
+        if(!sidebarLayout){
+          check(progress.classList.contains("hidden")&&!nav.querySelector(".brain-indicator"),"Browser keeps its existing tab presentation");
+          check($("messages").querySelector(".run-status .spinner"),"Browser retains its transcript progress indicator");
+        }else{
+          const tab=nav.firstElementChild,button=tab.children[0],brain=button.querySelector(".brain-indicator");
+          const status=button.querySelector(".session-status"),pinnedBrain=progress.querySelector(".brain-indicator");
+          check(label.textContent==="Running focused tests · 2 queued"&&status.textContent===label.textContent,"Host activity and queue count appear in the sidebar and pinned status");
+          check(button.getAttribute("aria-label").includes("Active project — Running focused tests · 2 queued · Locked"),"Tab accessibility includes title, activity, queue and lock");
+          check(progress.getAttribute("role")==="status"&&progress.getAttribute("aria-live")==="polite","Selected progress is announced accessibly");
+          check(brain.getAttribute("aria-hidden")==="true"&&brain.querySelector("path").getAttribute("d").length>0,"Brain graphic has a path without duplicating accessible status");
+          const reduced=matchMedia("(prefers-reduced-motion: reduce)").matches;
+          check(getComputedStyle(brain).animationName===(reduced?"none":"pulse"),"Active brain animates unless Reduce Motion is enabled");
+          check(getComputedStyle(pinnedBrain).visibility==="visible","Current progress has a visible brain");
+          check(!$("messages").querySelector(".run-status .spinner"),"Mac progress is pinned rather than duplicated at the transcript bottom");
+          check(!$("stop").classList.contains("hidden"),"Stop remains available while working");
+          const tool=$("messages").querySelector(".steps");
+          tool.open=true;await settle();
+          check(tool.querySelector(".status-icon.running")&&tool.textContent.includes("Running focused tests"),"Detailed tool activity stays available");
+          $("draft").value="Keep my draft";button.focus();
+          const textNode=status.firstChild,pinnedText=label.firstChild;
+          for(let index=0;index<10;index++){renderSessions([{...running},{...ready}]);render({...running})}
+          check(button===nav.firstElementChild.children[0]&&brain===button.querySelector(".brain-indicator"),"Polling preserves controls and running animation nodes");
+          check(status.firstChild===textNode&&label.firstChild===pinnedText,"Unchanged polls do not rewrite or reannounce progress text");
+          check(document.activeElement===button&&$("draft").value==="Keep my draft","Progress polling preserves focus and drafts");
+          check($("messages").querySelector(".steps").open,"Progress polling preserves open tool details");
+          $("messages").style.minHeight="2000px";document.scrollingElement.scrollTop=160;await settle();
+          const bounds=progress.getBoundingClientRect();
+          check(bounds.top>=0&&bounds.bottom<=innerHeight&&bounds.left>=$("sessionSidebar").getBoundingClientRect().right,"Pinned progress remains visible and separate from the sidebar while reading older output");
+          check(document.documentElement.scrollWidth<=innerWidth+1,"Progress must fit narrow windows");
+          connection(false);
+          check(label.textContent==="Reconnecting… Last known: Running focused tests · 2 queued","Disconnect labels stale progress explicitly");
+          check(status.textContent.startsWith("Last known:")&&button.getAttribute("aria-label").includes("Last known:"),"Background tab status also marks stale data");
+          check(getComputedStyle(brain).animationName==="none"&&getComputedStyle(pinnedBrain).animationName==="none","Disconnect pauses activity animation");
+          check(getComputedStyle(tool.querySelector(".status-icon.running")).animationName==="none","Stale tool activity must not keep animating");
+          render(running);connection(true);
+          check(label.textContent==="Running focused tests · 2 queued"&&!status.textContent.includes("Last known:"),"Reconnect restores identical snapshots without waiting for a transcript change");
+          const preparing={...running,status:"Preparing context...",queuedCount:0};
+          renderSessions([preparing,ready]);render(preparing);
+          check(label.textContent==="Preparing context..."&&status.textContent==="Preparing context...","Activity updates without a tab change");
+          const fallback={...running,status:"",queuedCount:0};
+          renderSessions([fallback,ready]);render(fallback);
+          check(label.textContent==="Working…","Streaming without a status still shows progress");
+          const literal={...running,status:"<img src=x onerror=alert(1)>",title:"<script>not markup</script>"};
+          renderSessions([literal,ready]);render(literal);
+          check(label.textContent.includes("<img")&&!progress.querySelector("img")&&!button.querySelector("script"),"Host titles and status stay plain text");
+          const longStatus={...running,status:"Processing a detailed project task ".repeat(30)};
+          renderSessions([longStatus,ready]);render(longStatus);
+          check(label.getBoundingClientRect().height<=parseFloat(getComputedStyle(label).lineHeight)*2+1,"Long status is capped at two lines rather than covering the conversation");
+          check(progress.title===longStatus.status+" · 2 queued","Full status remains available on hover and in accessible text");
+          for(const [session,expected] of [
+            [{...running,isStreaming:false,status:null,queuedCount:0},"Ready"],
+            [{...running,isStreaming:false,status:null,queuedCount:3},"Ready · 3 queued"],
+            [{...running,isStreaming:false,status:null,queuedCount:0,canResume:true},"Paused"]
+          ]){
+            renderSessions([session,ready]);render(session);
+            check(label.textContent===expected&&status.textContent===expected,"Completion, queued and resumable states stay accurate");
+            check(getComputedStyle(brain).visibility==="hidden"&&getComputedStyle(brain).animationName==="none","Finished work no longer animates");
+            check($("stop").classList.contains("hidden"),"Finished work removes Stop");
+          }
+          check(!$("resume").classList.contains("hidden"),"Paused work retains Resume");
+          renderSessions([running,ready]);
+          nav.children[1].children[0].click();
+          check(selected===ready.id&&label.textContent==="Ready","Selecting another tab immediately switches progress");
+          renderSessions([running,ready]);render(ready);
+          check(nav.firstElementChild.dataset.streaming==="true"&&progress.dataset.streaming==="false","Background work remains visible without marking the selected tab busy");
+          selected="legacy";renderSessions([{id:"legacy",title:"Older host"}]);
+          check(label.textContent==="Ready"&&!nav.firstElementChild.children[0].title.includes("undefined"),"Older host snapshots do not leak missing fields");
+          $("messages").style.minHeight="";document.scrollingElement.scrollTop=0;
+        }
+        selected=null;renderSessions([]);render(null);await settle();
+        check(progress.classList.contains("hidden")&&label.textContent==="","Removing every tab clears selected progress");
+        """, arguments: [:], in: nil, contentWorld: .page)
     }
 }
