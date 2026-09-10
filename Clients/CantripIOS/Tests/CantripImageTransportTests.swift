@@ -220,16 +220,15 @@ final class CantripImageTransportTests: XCTestCase {
         XCTAssertEqual(mutations, 1)
     }
 
-    func testTextOnlyStillWorksWithLegacyHostsWithoutPreflight() async throws {
+    func testTextOnlyConfirmsReachabilityWithoutRequiringNewHostCapabilities() async throws {
         let response = try snapshot(support: nil)
-        var requests = 0
+        var methods: [String] = []
         ImageRequestProtocol.handler = { request in
-            requests += 1
-            XCTAssertEqual(request.httpMethod, "POST")
+            methods.append(request.httpMethod ?? "")
             return (202, response)
         }
         _ = try await api().send("Hello", mode: .queue, sessionID: sessionID)
-        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(methods, ["GET", "POST"])
     }
 
     func testImageReadsAreAuthenticatedBoundedAndPinnedToTheirSession() async throws {
@@ -385,7 +384,7 @@ final class CantripImageTransportTests: XCTestCase {
         XCTAssertEqual(accepted.queuedCount, 2)
         let refreshed = try await client.session(id: sessionID)
         XCTAssertEqual(refreshed.queuedCount, 0)
-        XCTAssertEqual(methods, ["POST", "GET"], "Queue reads must not replay the send")
+        XCTAssertEqual(methods, ["GET", "POST", "GET"], "Preparation and queue reads must not replay the send")
     }
 
     private func queueSnapshot(ids: [String], support: Bool? = true) throws -> Data {

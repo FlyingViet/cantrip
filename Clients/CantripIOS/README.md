@@ -178,18 +178,27 @@ routes are cooling down, reads retry one route instead of locking out recovery.
 Late failures cannot displace a newer successful route. Longer mutation and
 image-upload deadlines are unchanged.
 
+Before sending or changing a session, the app performs an authenticated read
+to confirm reachability and any required host capabilities. This read can
+fall back to LAN and try cooling-down routes if necessary, without waiting
+for polling. The write is then sent once, on the exact route that passed
+preparation; a background route change cannot move it to an unchecked host.
+
 Enable **Tailscale only (skip local network)** in Remote settings to bypass
 LAN discovery; this requires a saved Tailscale URL and Tailscale connectivity
 when using a tailnet address. Automatic mode remains the default, and LAN-only
 use still works without a saved URL. Sends and other mutations are never
 automatically replayed after a connection failure: check the session before
-sending again, since the host may already have accepted the request.
+sending again, since the host may already have accepted the request. If route
+selection or the preparatory read fails, the error instead says the request
+was not sent; retrying it cannot duplicate a write from that attempt.
 
 A green dot beside the session picker means the app has recently
 completed an authenticated request; gray means the connection is unconfigured,
 unavailable, unauthenticated, paused in the background, or stale. Each successful
 list/detail request renews connectivity; the ten-second stale window allows a
 bounded failover plus the polling interval without flickering disconnected.
+The dot indicates recent connectivity, not acknowledgement of a particular send.
 
 **Auto** is the default for Cantrip typed and voice messages. A bounded,
 tool-free inference on the Mac distinguishes useful context, changes of

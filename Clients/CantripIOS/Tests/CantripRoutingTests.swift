@@ -76,6 +76,200 @@ final class CantripRoutingTests: XCTestCase {
         XCTAssertEqual(calls, [remote, lan])
     }
 
+    func testMutationPreparationFallsBackBeforeWritingOnlyToTheValidatedRoute() async throws {
+        let router = CantripRemoteRouter()
+        router.available = [lan, remote]
+        var reads: [CantripTransport] = []
+        var writes: [CantripTransport] = []
+        let result = try await router.performMutation(prepare: { route in
+            reads.append(route)
+            if route == self.remote { throw CantripRemoteError.transport("Offline") }
+            return route
+        }, operation: { route, prepared in
+            XCTAssertEqual(route, prepared)
+            writes.append(route)
+            return 42
+        })
+        XCTAssertEqual(result, 42)
+        XCTAssertEqual(reads, [remote, lan])
+        XCTAssertEqual(writes, [lan])
+        XCTAssertEqual(router.preferred, lan)
+    }
+
+    func testHealthyMutationPreparationNeverTouchesLAN() async throws {
+        let router = CantripRemoteRouter()
+        router.available = [lan, remote]
+        try await router.performMutation(prepare: { route in
+            XCTAssertEqual(route, self.remote)
+        }, operation: { route, _ in
+            XCTAssertEqual(route, self.remote)
+        })
+        XCTAssertEqual(router.preferred, remote)
+    }
+
+    func testMutationProbesCoolingRoutesWithoutWaitingForPolling() async throws {
+        for routes in [[lan], [remote], [remote, lan]] {
+            let router = CantripRemoteRouter()
+            router.available = routes
+            do {
+                _ = try await router.perform(readOnly: true) { _ in
+                    throw CantripRemoteError.transport("Offline")
+                }
+                XCTFail("Expected routes to enter cooldown")
+            } catch {}
+            var reads: [CantripTransport] = []
+            var writes: [CantripTransport] = []
+            try await router.performMutation(prepare: { route in
+                reads.append(route)
+                if routes.count > 1, route == self.remote {
+                    throw CantripRemoteError.transport("Still offline")
+                }
+            }, operation: { route, _ in
+                writes.append(route)
+            })
+            XCTAssertEqual(reads, routes)
+            XCTAssertEqual(writes, [routes.last!])
+        }
+    }
+
+    func testPreparationCanUseCoolingBackupAfterTheHealthyRouteFails() async throws {
+        let router = CantripRemoteRouter()
+        router.available = [lan]
+        do {
+            _ = try await router.perform(readOnly: true) { _ in
+                throw CantripRemoteError.transport("LAN was offline")
+            }
+            XCTFail("Expected cooldown")
+        } catch {}
+        router.available = [remote, lan]
+        var reads: [CantripTransport] = []
+        try await router.performMutation(prepare: { route in
+            reads.append(route)
+            if route == self.remote { throw CantripRemoteError.transport("Tailscale offline") }
+        }, operation: { route, _ in
+            XCTAssertEqual(route, self.lan)
+        })
+        XCTAssertEqual(reads, [remote, lan])
+    }
+
+    func testFailedPreparationAndMissingRoutesAreDefiniteNonDelivery() async throws {
+        for routes in [[], [remote, lan]] {
+            let router = CantripRemoteRouter()
+            router.available = routes
+            var reads: [CantripTransport] = []
+            do {
+                try await router.performMutation(prepare: { route in
+                    reads.append(route)
+                    throw CantripRemoteError.transport("Offline")
+                }, operation: { _, _ in
+                    XCTFail("Preparation did not succeed")
+                })
+                XCTFail("Expected not sent")
+            } catch CantripRemoteError.notSent(let reason) {
+                XCTAssertTrue(reason.contains(routes.isEmpty ? "No healthy route" : "Offline"))
+            }
+            XCTAssertEqual(reads, routes)
+        }
+    }
+
+    func testMutationHostRejectionsDoNotFallBackOrWrite() async throws {
+        let errors: [CantripRemoteError] = [
+            .authentication, .http(409, "Busy"), .decoding, .autoDeliveryUnsupported,
+            .imagesUnsupported, .tabMetadataUnsupported, .queueRemovalUnsupported
+        ]
+        for error in errors {
+            let router = CantripRemoteRouter()
+            router.available = [remote, lan]
+            var reads: [CantripTransport] = []
+            do {
+                try await router.performMutation(prepare: { route in
+                    reads.append(route)
+                    throw error
+                }, operation: { _, _ in
+                    XCTFail("Rejected preparation must not write")
+                })
+                XCTFail("Expected host rejection")
+            } catch let received as CantripRemoteError {
+                XCTAssertEqual(received.localizedDescription, error.localizedDescription)
+            }
+            XCTAssertEqual(reads, [remote])
+        }
+    }
+
+    func testPreparedMutationIsNeverReplayedAfterAnUncertainResponse() async throws {
+        for error in [CantripRemoteError.transport("Lost response"), .http(502, "Bad gateway"), .decoding] {
+            let router = CantripRemoteRouter()
+            router.available = [remote, lan]
+            var reads: [CantripTransport] = []
+            var writes: [CantripTransport] = []
+            do {
+                try await router.performMutation(prepare: { route in
+                    reads.append(route)
+                }, operation: { route, _ in
+                    writes.append(route)
+                    throw error
+                })
+                XCTFail("Expected write failure")
+            } catch let received as CantripRemoteError {
+                XCTAssertEqual(received.localizedDescription, error.localizedDescription)
+            }
+            XCTAssertEqual(reads, [remote])
+            XCTAssertEqual(writes, [remote])
+        }
+    }
+
+    func testPreparedMutationStaysPinnedWhenPreferredRouteChanges() async throws {
+        let router = CantripRemoteRouter()
+        router.available = [lan]
+        try await router.performMutation(prepare: { route in
+            XCTAssertEqual(route, self.lan)
+            router.available = [remote, lan]
+            _ = try await router.perform(readOnly: true) { recovered in
+                XCTAssertEqual(recovered, self.remote)
+                return 1
+            }
+        }, operation: { route, _ in
+            XCTAssertEqual(router.preferred, self.remote)
+            XCTAssertEqual(route, self.lan)
+        })
+        XCTAssertEqual(router.preferred, remote, "A pinned write must not undo confirmed recovery")
+    }
+
+    func testResetOrRouteRemovalDuringPreparationPreventsWriting() async throws {
+        for reset in [false, true] {
+            let router = CantripRemoteRouter()
+            router.available = [remote]
+            do {
+                try await router.performMutation(prepare: { _ in
+                    if reset { router.reset() } else { router.available = [] }
+                }, operation: { _, _ in
+                    XCTFail("Stale preparation must not write")
+                })
+                XCTFail("Expected stale preparation failure")
+            } catch is CancellationError {
+                XCTAssertTrue(reset)
+            } catch CantripRemoteError.notSent {
+                XCTAssertFalse(reset)
+            }
+        }
+    }
+
+    func testCancelledPreparationCannotWriteOrFallBack() async throws {
+        let router = CantripRemoteRouter()
+        router.available = [remote, lan]
+        var reads: [CantripTransport] = []
+        do {
+            try await router.performMutation(prepare: { route in
+                reads.append(route)
+                throw CancellationError()
+            }, operation: { _, _ in
+                XCTFail("Cancelled preparation must not write")
+            })
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {}
+        XCTAssertEqual(reads, [remote])
+    }
+
     func testAuthenticationAndApplicationErrorsDoNotSwitchRoutes() async throws {
         for error in [CantripRemoteError.authentication, .http(409, "Busy"), .decoding] {
             let router = CantripRemoteRouter()

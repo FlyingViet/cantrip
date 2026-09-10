@@ -21,12 +21,16 @@ private final class ProfileRequestProtocol: URLProtocol {
     }
 
     func respond(title: String) throws {
-        let data = Data("""
+        var data = Data("""
         {"session":{"id":"shared-id","title":"\(title)","workdir":"/tmp",
         "isStreaming":false,"canResume":false,"councilMode":false,"queuedCount":0,
         "messages":[{"id":"reply","role":"assistant","text":"\(title) reply",
         "thinking":"","activities":[]}]}}
         """.utf8)
+        if request.httpMethod == "GET", request.url?.path == "/api/v1/sessions" {
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            data = try JSONSerialization.data(withJSONObject: ["sessions": [try XCTUnwrap(object["session"])]])
+        }
         let response = try XCTUnwrap(HTTPURLResponse(
             url: try XCTUnwrap(request.url), statusCode: 200,
             httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"]
@@ -409,8 +413,12 @@ final class ServerProfilesTests: XCTestCase {
         let started = expectation(description: "Mutation started")
         var request: ProfileRequestProtocol?
         ProfileRequestProtocol.handler = {
-            request = $0
-            started.fulfill()
+            if $0.request.httpMethod == "GET" {
+                try $0.respond(title: "Home")
+            } else {
+                request = $0
+                started.fulfill()
+            }
         }
         try await model.selectServer(a)
         let task = Task { await model.createSession() }

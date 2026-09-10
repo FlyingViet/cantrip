@@ -40,21 +40,74 @@ final class CantripRemoteRouter {
         readOnly: Bool,
         operation: (CantripTransport) async throws -> T
     ) async throws -> T {
+        try await perform(
+            readOnly: readOnly, candidates: candidates(readOnly: readOnly),
+            operation: operation
+        )
+    }
+
+    func performMutation<Prepared, Result>(
+        prepare: (CantripTransport) async throws -> Prepared,
+        operation: (CantripTransport, Prepared) async throws -> Result
+    ) async throws -> Result {
         let generation = generation
+        let route: CantripTransport
+        let prepared: Prepared
+        do {
+            (route, prepared) = try await perform(
+                readOnly: true, candidates: candidates(readOnly: true, recoverAll: true)
+            ) { route in
+                (route, try await prepare(route))
+            }
+            try Task.checkCancellation()
+            guard generation == self.generation else { throw CancellationError() }
+            guard available.contains(route) else {
+                throw CantripRemoteError.transport("The route disappeared before sending.")
+            }
+        } catch {
+            if CantripRemoteError.isRouteFailure(error) {
+                throw CantripRemoteError.notSent(error.localizedDescription)
+            }
+            throw error
+        }
+        // Pin the write to the host whose authenticated preparation succeeded,
+        // even if an independent recovery probe changed the preferred route.
+        return try await perform(readOnly: false, candidates: [route]) { route in
+            try await operation(route, prepared)
+        }
+    }
+
+    private func candidates(readOnly: Bool, recoverAll: Bool = false) -> [CantripTransport] {
         var candidates = available.filter { (retryAfter[$0] ?? .distantPast) <= now() }
         // Cooldowns protect a working alternative, not a completely disconnected client.
-        if candidates.isEmpty, readOnly,
-           let route = available.min(by: { (retryAfter[$0] ?? .distantPast) < (retryAfter[$1] ?? .distantPast) }) {
-            candidates = [route]
+        if candidates.isEmpty, readOnly, !recoverAll {
+            let cooling = available.sorted {
+                (retryAfter[$0] ?? .distantPast) < (retryAfter[$1] ?? .distantPast)
+            }
+            candidates = Array(cooling.prefix(1))
         }
         candidates.sort { !isLAN($0) && isLAN($1) }
         if let preferred, let index = candidates.firstIndex(of: preferred) {
             candidates.insert(candidates.remove(at: index), at: 0)
         }
+        if recoverAll {
+            let cooling = available.filter { !candidates.contains($0) }
+                .sorted { !isLAN($0) && isLAN($1) }
+            candidates += cooling
+        }
         if !readOnly { candidates = Array(candidates.prefix(1)) }
+        return candidates
+    }
+
+    private func perform<T>(
+        readOnly: Bool,
+        candidates: [CantripTransport],
+        operation: (CantripTransport) async throws -> T
+    ) async throws -> T {
+        let generation = generation
         guard !candidates.isEmpty else {
             throw CantripRemoteError.transport(
-                "No healthy route is available. Retrying shortly; check the host and Tailscale URL."
+                "No healthy route is available. Check the host connection and Remote settings."
             )
         }
         var lastError: Error = CantripRemoteError.invalidResponse
@@ -71,7 +124,8 @@ final class CantripRemoteRouter {
                     routeRevisions[route, default: 0] += 1
                     recoverySuccesses[route] = nil
                     retryAfter[route] = nil
-                    if preferred == previousPreferred {
+                    if preferred == previousPreferred,
+                       readOnly || preferred == nil || preferred == route {
                         preferred = route
                     }
                 }

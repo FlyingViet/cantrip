@@ -98,6 +98,7 @@ enum CantripRemoteError: LocalizedError {
     case keychain(String)
     case authentication
     case transport(String)
+    case notSent(String)
     case http(Int, String)
     case decoding
     case invalidResponse
@@ -131,6 +132,8 @@ enum CantripRemoteError: LocalizedError {
             return "Cantrip rejected the pairing token. Open Remote settings and enter the current token."
         case .transport(let message):
             return "Could not reach Cantrip. \(message)"
+        case .notSent(let message):
+            return "\(message) The request was not sent. Check the connection and try again."
         case .http(let status, let message):
             return "Cantrip returned HTTP \(status): \(message)"
         case .decoding:
@@ -629,21 +632,29 @@ struct CantripRemoteAPI {
         images: [ChatImageAttachment] = []
     ) async throws
         -> CantripRemoteSession {
-        if !images.isEmpty || mode == .auto {
-            guard images.count <= ImageAttachmentProcessor.maximumCount else {
-                throw ImageAttachmentError.tooMany
-            }
-            // Check the same authenticated host used for the mutation. Older hosts
-            // ignore unknown JSON fields, which would silently send only the text.
-            let host = try await session(id: sessionID)
-            guard images.isEmpty || host.supportsImageAttachments == true else {
-                throw CantripRemoteError.imagesUnsupported
-            }
-            guard mode != .auto || host.supportsAutoDelivery == true else {
-                throw CantripRemoteError.autoDeliveryUnsupported
-            }
+        let body = try await prepareMessage(text, mode: mode, sessionID: sessionID, images: images)
+        return try await sendMessage(body, sessionID: sessionID)
+    }
+
+    fileprivate func prepareMessage(
+        _ text: String, mode: CantripDeliveryMode, sessionID: String,
+        images: [ChatImageAttachment]
+    ) async throws -> Data {
+        guard images.count <= ImageAttachmentProcessor.maximumCount else {
+            throw ImageAttachmentError.tooMany
         }
-        let body = try JSONEncoder().encode(CantripMessageBody(text: text, mode: mode, images: images))
+        // Confirm reachability and capabilities on the route that will receive the write.
+        let host = try await session(id: sessionID)
+        guard images.isEmpty || host.supportsImageAttachments == true else {
+            throw CantripRemoteError.imagesUnsupported
+        }
+        guard mode != .auto || host.supportsAutoDelivery == true else {
+            throw CantripRemoteError.autoDeliveryUnsupported
+        }
+        return try JSONEncoder().encode(CantripMessageBody(text: text, mode: mode, images: images))
+    }
+
+    fileprivate func sendMessage(_ body: Data, sessionID: String) async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(sessionID)/messages",
             method: "POST",
@@ -665,6 +676,11 @@ struct CantripRemoteAPI {
     }
 
     func updateTab(id: String, name: String? = nil, isLocked: Bool? = nil) async throws -> CantripRemoteSession {
+        let body = try await prepareTabUpdate(id: id, name: name, isLocked: isLocked)
+        return try await updateTab(id: id, body: body)
+    }
+
+    fileprivate func prepareTabUpdate(id: String, name: String?, isLocked: Bool?) async throws -> Data {
         struct Body: Encodable {
             var customTitle: String?
             var isLocked: Bool?
@@ -679,19 +695,31 @@ struct CantripRemoteAPI {
         guard host.supportsTabMetadata == true else {
             throw CantripRemoteError.tabMetadataUnsupported
         }
+        return try JSONEncoder().encode(Body(customTitle: validatedName, isLocked: isLocked))
+    }
+
+    fileprivate func updateTab(id: String, body: Data) async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(id)/metadata",
             method: "POST",
-            body: JSONEncoder().encode(Body(customTitle: validatedName, isLocked: isLocked))
+            body: body
         )
         return response.session
     }
 
     func removeQueuedPrompt(id: String, sessionID: String) async throws -> CantripRemoteSession {
+        try await prepareQueueRemoval(sessionID: sessionID)
+        return try await deleteQueuedPrompt(id: id, sessionID: sessionID)
+    }
+
+    fileprivate func prepareQueueRemoval(sessionID: String) async throws {
         let host = try await session(id: sessionID)
         guard host.supportsQueueRemoval == true else {
             throw CantripRemoteError.queueRemovalUnsupported
         }
+    }
+
+    fileprivate func deleteQueuedPrompt(id: String, sessionID: String) async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(sessionID)/queue/\(id)",
             method: "DELETE"
@@ -1135,8 +1163,10 @@ final class CantripRemoteModel: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !images.isEmpty,
               let sessionID = sessionID ?? selectedSessionID else { return false }
-        guard let session = await mutate({ api in
-            try await api.send(trimmed, mode: mode, sessionID: sessionID, images: images)
+        guard let session = await mutate(prepare: { api in
+            try await api.prepareMessage(trimmed, mode: mode, sessionID: sessionID, images: images)
+        }, { api, body in
+            try await api.sendMessage(body, sessionID: sessionID)
         }) else { return false }
         guard selectedSessionID == sessionID else { return true }
         apply(session)
@@ -1160,8 +1190,10 @@ final class CantripRemoteModel: ObservableObject {
             errorMessage = "Wait for the current request to finish, then try removing the message again."
             return false
         }
-        guard let session = await mutate({ api in
-            try await api.removeQueuedPrompt(id: id, sessionID: sessionID)
+        guard let session = await mutate(prepare: { api in
+            try await api.prepareQueueRemoval(sessionID: sessionID)
+        }, { api, _ in
+            try await api.deleteQueuedPrompt(id: id, sessionID: sessionID)
         }) else { return false }
         guard selectedSessionID == sessionID else { return true }
         apply(session)
@@ -1185,7 +1217,7 @@ final class CantripRemoteModel: ObservableObject {
             errorMessage = ChatTabError.locked.localizedDescription
             return false
         }
-        guard let replacement = await mutate({ api in
+        guard let replacement = await mutate(sessionID: id, { api in
             try await api.closeSession(id: id)
         }) else { return false }
 
@@ -1209,8 +1241,10 @@ final class CantripRemoteModel: ObservableObject {
             errorMessage = "Wait for the current request to finish before editing this tab."
             return false
         }
-        guard let session = await mutate({ api in
-            try await api.updateTab(id: id, name: name, isLocked: isLocked)
+        guard let session = await mutate(prepare: { api in
+            try await api.prepareTabUpdate(id: id, name: name, isLocked: isLocked)
+        }, { api, body in
+            try await api.updateTab(id: id, body: body)
         }) else { return false }
         if selectedSessionID == id {
             apply(session)
@@ -1226,7 +1260,7 @@ final class CantripRemoteModel: ObservableObject {
             errorMessage = ChatTabError.locked.localizedDescription
             return false
         }
-        guard let session = await mutate({ api in
+        guard let session = await mutate(sessionID: sessionID, { api in
             try await api.action(action, sessionID: sessionID)
         }) else { return false }
         if selectedSessionID == sessionID {
@@ -1238,14 +1272,48 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     private func mutate<T>(
+        sessionID: String? = nil,
         _ operation: @escaping (CantripRemoteAPI) async throws -> T
+    ) async -> T? {
+        await mutate(prepare: { api in
+            if let sessionID {
+                _ = try await api.session(id: sessionID)
+            } else {
+                _ = try await api.sessions()
+            }
+        }, { api, _ in
+            try await operation(api)
+        })
+    }
+
+    private func mutate<Prepared, T>(
+        prepare: @escaping (CantripRemoteAPI) async throws -> Prepared,
+        _ operation: @escaping (CantripRemoteAPI, Prepared) async throws -> T
     ) async -> T? {
         guard !isMutating else { return nil }
         mutationRevision += 1
         isMutating = true
         defer { isMutating = false }
         do {
-            let result = try await performAuthenticated(operation)
+            guard let token else { throw CantripRemoteError.missingToken }
+            let generation = configurationGeneration
+            let result = try await requestGate.withLock {
+                guard generation == self.configurationGeneration else { throw CancellationError() }
+                self.updateRoutes()
+                return try await self.router.performMutation(prepare: { transport in
+                    try await prepare(CantripRemoteAPI(
+                        transport: transport, token: token, urlSession: self.urlSession
+                    ))
+                }, operation: { transport, prepared in
+                    try await operation(CantripRemoteAPI(
+                        transport: transport, token: token, urlSession: self.urlSession
+                    ), prepared)
+                })
+            }
+            try Task.checkCancellation()
+            guard generation == configurationGeneration else { throw CancellationError() }
+            activeTransport = router.preferred
+            markAuthenticatedSuccess()
             errorMessage = nil
             return result
         } catch is CancellationError {
@@ -1310,7 +1378,7 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     private func performAuthenticated<T>(
-        allowFallback: Bool = false,
+        allowFallback: Bool,
         _ operation: @escaping (CantripRemoteAPI) async throws -> T
     ) async throws -> T {
         guard let token else {
@@ -1449,12 +1517,14 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     private func shouldDisconnect(for error: Error) -> Bool {
+        if CantripRemoteError.isRouteFailure(error) { return true }
         switch error {
         case is CancellationError:
             return false
         case CantripRemoteError.http:
             return false
         case CantripRemoteError.imagesUnsupported, CantripRemoteError.queueRemovalUnsupported,
+             CantripRemoteError.autoDeliveryUnsupported, CantripRemoteError.tabMetadataUnsupported,
              is ImageAttachmentError:
             return false
         default:
