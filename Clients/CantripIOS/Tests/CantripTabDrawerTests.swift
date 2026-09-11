@@ -105,7 +105,7 @@ final class CantripTabDrawerTests: XCTestCase {
         }
     }
 
-    func testReorderDropUsesStableIDsInBothDirectionsWithoutSelecting() {
+    func testNativeReorderUsesStableIDsInBothDirectionsWithoutSelecting() {
         let tabs = sessions()
         var moves: [(String, String, Bool)] = []
         let list = CantripTabList(
@@ -113,18 +113,26 @@ final class CantripTabDrawerTests: XCTestCase {
             onSelect: { _ in XCTFail("Reordering must not select or dismiss the drawer") },
             onMove: { moves.append(($0, $1, $2)) }, actions: { _ in EmptyView() }
         )
-        XCTAssertTrue(list.acceptDrop(["cantrip-tab:tab-0"], onto: "tab-39"))
+        XCTAssertTrue(list.move(fromOffsets: IndexSet(integer: 0), toOffset: 40))
         XCTAssertEqual(moves.last?.0, "tab-0")
         XCTAssertEqual(moves.last?.1, "tab-39")
         XCTAssertEqual(moves.last?.2, true)
-        XCTAssertTrue(list.acceptDrop(["cantrip-tab:tab-39"], onto: "tab-0"))
+        XCTAssertTrue(list.move(fromOffsets: IndexSet(integer: 39), toOffset: 0))
         XCTAssertEqual(moves.last?.2, false)
-        for items in [[], ["unrelated"], ["cantrip-tab:closed"], ["cantrip-tab:tab-0"],
-                      ["cantrip-tab:tab-1", "cantrip-tab:tab-2"]] {
-            XCTAssertFalse(list.acceptDrop(items, onto: "tab-0"))
+        XCTAssertTrue(list.move(fromOffsets: IndexSet(integer: 12), toOffset: 14))
+        XCTAssertEqual(moves.last?.0, "tab-12")
+        XCTAssertEqual(moves.last?.1, "tab-13")
+        XCTAssertEqual(moves.last?.2, true)
+        XCTAssertTrue(list.move(fromOffsets: IndexSet(integer: 12), toOffset: 11))
+        XCTAssertEqual(moves.last?.1, "tab-11")
+        XCTAssertEqual(moves.last?.2, false)
+        for offsets in [IndexSet(), IndexSet(integer: 40), IndexSet(integersIn: 1...2)] {
+            XCTAssertFalse(list.move(fromOffsets: offsets, toOffset: 0))
         }
-        XCTAssertFalse(list.acceptDrop(["cantrip-tab:tab-0"], onto: "closed"))
-        XCTAssertEqual(moves.count, 2)
+        for destination in [-1, 0, 1, 41] {
+            XCTAssertFalse(list.move(fromOffsets: IndexSet(integer: 0), toOffset: destination))
+        }
+        XCTAssertEqual(moves.count, 4)
         XCTAssertEqual(list.selectedSession?.id, tabs[12].id)
 
         var legacy = tabs
@@ -134,8 +142,43 @@ final class CantripTabDrawerTests: XCTestCase {
             onMove: { _, _, _ in XCTFail("Old hosts must not offer reordering") },
             actions: { _ in EmptyView() }
         )
-        XCTAssertFalse(oldHost.acceptDrop(["cantrip-tab:tab-0"], onto: "tab-1"))
-        XCTAssertFalse(oldHost.acceptDrop(["cantrip-tab:tab-1"], onto: "tab-0"))
+        XCTAssertFalse(oldHost.move(fromOffsets: IndexSet(integer: 0), toOffset: 2))
+        XCTAssertFalse(oldHost.move(fromOffsets: IndexSet(integer: 1), toOffset: 0))
+    }
+
+    func testNativeDragSlidesOtherRowsBeforeDropAndCommitsOnce() async throws {
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let state = ReorderingListState(tabs: Array(sessions().prefix(3)))
+        let controller = UIHostingController(rootView: ReorderingListHarness(state: state))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 349, height: 700)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(300))
+        controller.view.layoutIfNeeded()
+        let collection = try XCTUnwrap(scrollView(in: controller.view) as? UICollectionView)
+        let section = try XCTUnwrap((0..<collection.numberOfSections).first {
+            collection.numberOfItems(inSection: $0) == 3
+        })
+        let first = IndexPath(item: 0, section: section)
+        let last = IndexPath(item: 2, section: section)
+        let displacedCell = try XCTUnwrap(collection.cellForItem(at: first))
+        let originalFrame = displacedCell.frame
+        XCTAssertTrue(collection.beginInteractiveMovementForItem(at: last))
+        collection.updateInteractiveMovementTargetPosition(
+            CGPoint(x: originalFrame.midX, y: originalFrame.midY)
+        )
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertGreaterThan(displacedCell.frame.minY, originalFrame.minY + 10,
+                             "Neighboring tabs must visibly slide down before the dragged tab is dropped")
+        XCTAssertEqual(state.moves, 0, "Previewing a position must not send a move yet")
+        collection.endInteractiveMovement()
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(state.tabs.map(\.id), ["tab-2", "tab-0", "tab-1"])
+        XCTAssertEqual(state.moves, 1)
     }
 
     func testOverlayKeepsChatMountedAndClosesWhenSwitchingIsDisabled() throws {
@@ -168,6 +211,34 @@ final class CantripTabDrawerTests: XCTestCase {
     private func scrollView(in view: UIView) -> UIScrollView? {
         if let scroll = view as? UIScrollView { return scroll }
         return view.subviews.lazy.compactMap { self.scrollView(in: $0) }.first
+    }
+}
+
+@MainActor
+private final class ReorderingListState: ObservableObject {
+    @Published var tabs: [CantripRemoteSession]
+    var moves = 0
+
+    init(tabs: [CantripRemoteSession]) { self.tabs = tabs }
+}
+
+private struct ReorderingListHarness: View {
+    @ObservedObject var state: ReorderingListState
+
+    var body: some View {
+        CantripTabList(
+            sessions: state.tabs, selectedSessionID: "tab-0",
+            onSelect: { _ in XCTFail("Dragging must not select or dismiss") },
+            onMove: { id, targetID, after in
+                var tabs = state.tabs
+                let moved = tabs.remove(at: tabs.firstIndex { $0.id == id }!)
+                let target = tabs.firstIndex { $0.id == targetID }!
+                tabs.insert(moved, at: target + (after ? 1 : 0))
+                state.tabs = tabs
+                state.moves += 1
+            },
+            actions: { _ in EmptyView() }
+        )
     }
 }
 

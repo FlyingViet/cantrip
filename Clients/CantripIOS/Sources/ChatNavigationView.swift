@@ -5,6 +5,7 @@ struct ChatNavigationView<Sidebar: View, Content: View>: View {
     @Binding var isTabListPresented: Bool
     let hasTabs: Bool
     let canSelectTabs: Bool
+    var isReorderingTabs = false
     @ViewBuilder var sidebar: (_ isModal: Bool, _ dismiss: @escaping () -> Void) -> Sidebar
     @ViewBuilder var content: () -> Content
 
@@ -47,7 +48,7 @@ struct ChatNavigationView<Sidebar: View, Content: View>: View {
         .navigationSplitViewStyle(.balanced)
         .cantripTabDrawer(
             isPresented: drawerPresentation,
-            isEnabled: hasTabs && canSelectTabs && !usesSidebar
+            isEnabled: hasTabs && (canSelectTabs || isReorderingTabs) && !usesSidebar
         ) {
             sidebar(true, { isTabListPresented = false })
         }

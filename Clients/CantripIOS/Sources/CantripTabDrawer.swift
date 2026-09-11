@@ -60,6 +60,14 @@ private struct CantripTabDrawer<Panel: View>: ViewModifier {
                                 .ignoresSafeArea()
                                 .contentShape(Rectangle())
                                 .onTapGesture { isPresented = false }
+                                .gesture(
+                                    DragGesture(minimumDistance: 20)
+                                        .onEnded { value in
+                                            if CantripDrawerGesture.shouldClose(translation: value.translation) {
+                                                isPresented = false
+                                            }
+                                        }
+                                )
                                 .accessibilityHidden(true)
                                 .transition(.opacity)
                         }
@@ -76,14 +84,6 @@ private struct CantripTabDrawer<Panel: View>: ViewModifier {
                         }
                     }
                     .allowsHitTesting(isPresented)
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 20)
-                            .onEnded { value in
-                                if CantripDrawerGesture.shouldClose(translation: value.translation) {
-                                    isPresented = false
-                                }
-                            }
-                    )
                 }
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: isPresented)
@@ -118,6 +118,15 @@ struct CantripSessionDrawer: View {
                 .accessibilityLabel("Close tabs")
             }
             .padding(.horizontal)
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 20)
+                    .onEnded { value in
+                        if isModal, CantripDrawerGesture.shouldClose(translation: value.translation) {
+                            onDismiss()
+                        }
+                    }
+            )
 
             Divider()
             if model.sessions.isEmpty {
@@ -147,6 +156,15 @@ struct CantripSessionDrawer: View {
                 .disabled(model.isMutating)
             }
             Divider()
+            if let error = model.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("cantrip-tab-error")
+            }
             Button(action: {
                 if isModal { onDismiss() }
                 onCreate()
@@ -163,6 +181,7 @@ struct CantripSessionDrawer: View {
 }
 
 struct CantripTabList<Actions: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let sessions: [CantripRemoteSession]
     let selectedSessionID: String?
     let onSelect: (String) -> Void
@@ -175,15 +194,23 @@ struct CantripTabList<Actions: View>: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 4) {
-                    ForEach(sessions) { session in
-                        row(session)
-                            .id(session.id)
-                    }
+            List {
+                ForEach(sessions) { session in
+                    row(session)
+                        .id(session.id)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .moveDisabled(onMove == nil || session.supportsTabReordering != true || sessions.count < 2)
                 }
-                .padding(8)
+                .onMove { source, destination in
+                    move(fromOffsets: source, toOffset: destination)
+                }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.editMode, .constant(onMove == nil ? .inactive : .active))
+            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: sessions.map(\.id))
             .scrollBounceBehavior(.basedOnSize)
             .defaultScrollAnchor(.top)
             .onChange(of: selectedSessionID, initial: true) { _, _ in
@@ -230,38 +257,22 @@ struct CantripTabList<Actions: View>: View {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Actions for \(session.title)")
-
-            if onMove != nil, session.supportsTabReordering == true, sessions.count > 1 {
-                Image(systemName: "line.3.horizontal")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-                    .draggable("cantrip-tab:\(session.id)")
-                    .accessibilityLabel("Reorder \(session.title)")
-                    .accessibilityHint("Drag to another tab, or use Move Tab Up and Move Tab Down in tab actions.")
-                    .accessibilityIdentifier("cantrip-tab-drag-\(session.id)")
-            }
         }
         .background(
             session.id == selectedSessionID ? Color.accentColor.opacity(0.15) : Color.clear,
             in: RoundedRectangle(cornerRadius: 12)
         )
-        .dropDestination(for: String.self) { items, _ in
-            acceptDrop(items, onto: session.id)
-        }
     }
 
     @discardableResult
-    func acceptDrop(_ items: [String], onto targetID: String) -> Bool {
-        guard let onMove, items.count == 1, let value = items.first,
-              value.hasPrefix("cantrip-tab:") else { return false }
-        let id = String(value.dropFirst("cantrip-tab:".count))
-        guard id != targetID,
-              let source = sessions.firstIndex(where: { $0.id == id }),
-              let target = sessions.firstIndex(where: { $0.id == targetID }),
-              sessions[source].supportsTabReordering == true,
+    func move(fromOffsets offsets: IndexSet, toOffset destination: Int) -> Bool {
+        guard let onMove, offsets.count == 1, let source = offsets.first,
+              sessions.indices.contains(source), (0...sessions.count).contains(destination),
+              destination != source, destination != source + 1 else { return false }
+        let target = source < destination ? destination - 1 : destination
+        guard sessions[source].supportsTabReordering == true,
               sessions[target].supportsTabReordering == true else { return false }
-        onMove(id, targetID, source < target)
+        onMove(sessions[source].id, sessions[target].id, source < target)
         return true
     }
 }

@@ -869,6 +869,7 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var isMutating = false
+    @Published private(set) var isReorderingTabs = false
     @Published private(set) var stoppingSessionID: String?
     private var mutationRevision = 0
     @Published private(set) var transcriptRevision = 0
@@ -1300,17 +1301,27 @@ final class CantripRemoteModel: ObservableObject {
             errorMessage = "Wait for the current request to finish before reordering tabs."
             return false
         }
-        guard sessions.contains(where: { $0.id == id }),
-              sessions.contains(where: { $0.id == targetID }) else {
+        guard let source = sessions.firstIndex(where: { $0.id == id }),
+              let target = sessions.firstIndex(where: { $0.id == targetID }) else {
             errorMessage = "A tab is no longer open. Refresh the tabs and try again."
             return false
         }
         guard id != targetID else { return true }
+        let previousOrder = sessions
+        isReorderingTabs = true
+        defer { isReorderingTabs = false }
+        var preview = sessions
+        let moved = preview.remove(at: source)
+        preview.insert(moved, at: target - (source < target ? 1 : 0) + (after ? 1 : 0))
+        sessions = preview
         guard let reordered = await mutate(prepare: { api in
             try await api.prepareTabMove(id: id, targetID: targetID, after: after)
         }, { api, body in
             try await api.moveTab(id: id, body: body)
-        }) else { return false }
+        }) else {
+            sessions = previousOrder
+            return false
+        }
         // A list response has no transcript. Keep the selected detail and draft mounted.
         sessions = reordered
         return true
@@ -1665,7 +1676,8 @@ struct CantripRemoteView: View {
             }
         }
         .cantripTabDrawer(
-            isPresented: $showTabs, isEnabled: model.isConfigured && !model.isMutating
+            isPresented: $showTabs,
+            isEnabled: model.isConfigured && (!model.isMutating || model.isReorderingTabs)
         ) {
             CantripSessionDrawer(
                 model: model,

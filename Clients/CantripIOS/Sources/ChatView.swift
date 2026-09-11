@@ -1109,7 +1109,8 @@ struct ChatView: View {
         ChatNavigationView(
             isTabListPresented: $showRemoteTabs,
             hasTabs: vm.activeLane == .cantrip,
-            canSelectTabs: remoteTabsEnabled
+            canSelectTabs: remoteTabsEnabled,
+            isReorderingTabs: remote.isReorderingTabs
         ) { isModal, dismiss in
             CantripSessionDrawer(
                 model: remote,

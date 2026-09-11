@@ -1,9 +1,11 @@
 import Foundation
+import SwiftUI
+import UIKit
 import XCTest
 @testable import Hermes
 
 private final class MutationRequestProtocol: URLProtocol {
-    @MainActor static var handler: ((URLRequest) throws -> (Int, Data))?
+    @MainActor static var handler: ((URLRequest) async throws -> (Int, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -12,7 +14,8 @@ private final class MutationRequestProtocol: URLProtocol {
     override func startLoading() {
         Task { @MainActor in
             do {
-                let (status, data) = try XCTUnwrap(Self.handler)(request)
+                let handler = try XCTUnwrap(Self.handler)
+                let (status, data) = try await handler(request)
                 let response = try XCTUnwrap(HTTPURLResponse(
                     url: try XCTUnwrap(request.url), statusCode: status,
                     httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"]
@@ -109,6 +112,7 @@ final class CantripMutationTests: XCTestCase {
         XCTAssertFalse(model.errorMessage?.contains("may have reached") == true)
         XCTAssertFalse(model.isConnected)
         XCTAssertFalse(model.isMutating)
+        XCTAssertFalse(model.isReorderingTabs)
 
         let response = snapshot()
         MutationRequestProtocol.handler = { request in
@@ -222,6 +226,9 @@ final class CantripMutationTests: XCTestCase {
         var methods: [String] = []
         MutationRequestProtocol.handler = { request in
             methods.append(request.httpMethod ?? "")
+            XCTAssertTrue(model.isReorderingTabs)
+            XCTAssertEqual(model.sessions.map(\.id), [otherID, self.sessionID],
+                           "The list must show the dropped order while the host responds")
             if request.httpMethod == "GET" { return (200, self.snapshot(id: otherID)) }
             XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(otherID)/move")
             let data: Data
@@ -258,6 +265,7 @@ final class CantripMutationTests: XCTestCase {
         XCTAssertEqual(model.selectedSession, selected)
         XCTAssertEqual(model.transcriptRevision, revision)
         XCTAssertFalse(model.isMutating)
+        XCTAssertFalse(model.isReorderingTabs)
     }
 
     func testTabMoveRejectsOldHostsAndNeverReplaysAnUncertainWrite() async throws {
@@ -296,6 +304,7 @@ final class CantripMutationTests: XCTestCase {
                 XCTAssertTrue(model.errorMessage?.contains("may have reached") == true)
             }
             XCTAssertFalse(model.isMutating)
+            XCTAssertFalse(model.isReorderingTabs)
             model.clearConfiguration()
         }
     }
@@ -317,5 +326,82 @@ final class CantripMutationTests: XCTestCase {
         }
         let missing = await model.moveTab(sessionID, relativeTo: "closed", after: true)
         XCTAssertFalse(missing)
+    }
+
+    func testDrawerStaysOpenThroughDelayedReorderAndFailureRollback() async throws {
+        for fails in [false, true] {
+            let model = try await model()
+            let otherID = "00000000-0000-0000-0000-000000000002"
+            try await seedTabs(model, ids: [sessionID, otherID])
+            let state = ReorderDrawerState()
+            let controller = UIHostingController(rootView: ReorderDrawerHarness(model: model, state: state))
+            controller.traitOverrides.horizontalSizeClass = .compact
+            let scene = try XCTUnwrap(
+                UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+            )
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(300))
+            state.presented = true
+            try await Task.sleep(for: .milliseconds(300))
+            XCTAssertTrue(state.presented)
+            let selected = model.selectedSession
+            let revision = model.transcriptRevision
+            MutationRequestProtocol.handler = { request in
+                try await Task.sleep(for: .milliseconds(300))
+                XCTAssertTrue(model.isMutating)
+                XCTAssertTrue(model.isReorderingTabs)
+                XCTAssertTrue(state.presented, "Saving a reorder must not dismiss the drawer")
+                XCTAssertEqual(model.sessions.map(\.id), [otherID, self.sessionID])
+                if request.httpMethod == "GET" { return (200, self.snapshot(id: otherID)) }
+                if fails { return (404, Data(#"{"error":"session not found"}"#.utf8)) }
+                let tabs = try [otherID, self.sessionID].map { id -> Any in
+                    let payload = try XCTUnwrap(
+                        JSONSerialization.jsonObject(with: self.snapshot(id: id)) as? [String: Any]
+                    )
+                    return try XCTUnwrap(payload["session"])
+                }
+                return (200, try JSONSerialization.data(withJSONObject: ["sessions": tabs]))
+            }
+            let moved = await model.moveTab(otherID, offset: -1)
+            XCTAssertEqual(moved, !fails)
+            try await Task.sleep(for: .milliseconds(300))
+            XCTAssertTrue(state.presented)
+            XCTAssertEqual(model.sessions.map(\.id), fails ? [sessionID, otherID] : [otherID, sessionID])
+            XCTAssertEqual(model.selectedSession, selected)
+            XCTAssertEqual(model.transcriptRevision, revision)
+            XCTAssertEqual(state.chatAppearances, 1)
+            XCTAssertFalse(model.isReorderingTabs)
+            XCTAssertFalse(model.isMutating)
+            model.clearConfiguration()
+        }
+    }
+}
+
+@MainActor
+private final class ReorderDrawerState: ObservableObject {
+    @Published var presented = false
+    var chatAppearances = 0
+}
+
+private struct ReorderDrawerHarness: View {
+    @ObservedObject var model: CantripRemoteModel
+    @ObservedObject var state: ReorderDrawerState
+
+    var body: some View {
+        ChatNavigationView(
+            isTabListPresented: $state.presented, hasTabs: true,
+            canSelectTabs: !model.isMutating, isReorderingTabs: model.isReorderingTabs
+        ) { modal, dismiss in
+            CantripSessionDrawer(
+                model: model, isModal: modal, onDismiss: dismiss,
+                onSelect: { _ in XCTFail("Moving must not select") },
+                onCreate: {}, onRename: { _ in }, onClose: { _ in }
+            )
+        } content: {
+            Text("Existing conversation").onAppear { state.chatAppearances += 1 }
+        }
     }
 }

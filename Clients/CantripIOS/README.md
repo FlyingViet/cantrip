@@ -89,7 +89,8 @@ the Remote error banner; it is never automatically retried.
 
 Swipe right from the **left edge** to open the Cantrip **Tabs** drawer. You can
 also tap the header title or choose **hamburger menu > Tabs**. Select a
-tab to return to chat; swipe left, tap outside, or use **Close tabs** to dismiss
+tab to return to chat; swipe left on the drawer header or backdrop, tap outside,
+or use **Close tabs** to dismiss
 without changing tabs. The drawer shows the selected tab, activity, locks, and
 queued counts, with a **New Tab** button at the bottom. Opening it dismisses the
 keyboard without clearing your draft. Stop and the circled **+** attachment icon
@@ -109,10 +110,14 @@ Touch and hold the header title or a drawer row to **Rename Tab**, **Lock Tab** 
 **Unlock Tab**, or **Close Session** (delete the tab). A regular tap opens only
 the drawer from the title, or selects a tab from a drawer row. Each row's
 **...** menu also keeps these actions.
-To reorder tabs, drag a row's **three-line handle** onto another tab, or use
+To reorder tabs, drag a row's **three-line handle** to its new position, or use
 **Move Tab Up** / **Move Tab Down** in its actions menu. This works in both the
 compact drawer and the wide sidebar, including locked or working tabs, without
-switching the selected conversation or clearing the draft. Order is saved on
+switching the selected conversation or clearing the draft. The native list
+slides neighboring tabs out of the way and scrolls at its edges while dragging.
+The drawer stays open after a drop, showing the new order while it saves.
+Failed moves restore the previous order and show the error inside the tab panel.
+Order is saved on
 the host Mac, survives its restart, and syncs to Cantrip and other Remote clients.
 Update and reopen the host first: these controls require `supportsTabReordering`.
 Moves use an authenticated read-only preflight and a single write; an uncertain
