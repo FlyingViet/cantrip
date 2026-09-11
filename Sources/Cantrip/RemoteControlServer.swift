@@ -9,7 +9,10 @@ final class RemoteControlServer {
 
     private weak var manager: SessionManager?
     private let queue = DispatchQueue(label: "com.brian.cantrip.remote-control")
-    private let encodingQueue = DispatchQueue(label: "cantrip.remote-encoding", qos: .userInitiated)
+    private let encodingQueue: DispatchQueue
+    private let requestLog: (String) -> Void
+    private let sendTimeout: TimeInterval
+    private static let healthBody = Data(#"{"status":"ok"}"#.utf8)
     private var listener: NWListener?
     private var lanListener: NWListener?
     private var activePort: Int?
@@ -19,10 +22,16 @@ final class RemoteControlServer {
     private let maximumRequestBytes = RemoteImageAttachments.maximumRequestBytes
 
     init(manager: SessionManager, buildMonitor: GitHubBuildMonitor = GitHubBuildMonitor(),
-         usage: UsageTracker = .shared) {
+         usage: UsageTracker = .shared,
+         encodingQueue: DispatchQueue = DispatchQueue(label: "cantrip.remote-encoding", qos: .userInitiated),
+         sendTimeout: TimeInterval = 15,
+         requestLog: @escaping (String) -> Void = Log.write) {
         self.manager = manager
         self.buildMonitor = buildMonitor
         self.usage = usage
+        self.encodingQueue = encodingQueue
+        self.sendTimeout = sendTimeout
+        self.requestLog = requestLog
     }
 
     func start(port: Int, token: String) {
@@ -130,17 +139,19 @@ final class RemoteControlServer {
     }
 
     private func accept(_ connection: NWConnection) {
-        connection.start(queue: queue)
-        receiveRequest(on: connection, buffer: Data())
+        let request = RemoteRequestConnection(socket: connection, queue: queue,
+                                              sendTimeout: sendTimeout, log: requestLog)
+        request.start()
+        receiveRequest(on: request, buffer: Data())
     }
 
-    private func receiveRequest(on connection: NWConnection, buffer: Data) {
-        connection.receive(
+    private func receiveRequest(on connection: RemoteRequestConnection, buffer: Data) {
+        connection.socket.receive(
             minimumIncompleteLength: 1,
             maximumLength: 64 * 1024
         ) { [weak self] data, _, isComplete, error in
             guard let self else {
-                connection.cancel()
+                connection.socket.cancel()
                 return
             }
             var next = buffer
@@ -150,8 +161,17 @@ final class RemoteControlServer {
                 return
             }
             if let request = HTTPRequest.parse(next) {
+                connection.trace.identify(request)
+                connection.trace.enter(.parse)
+                if request.method == "GET", request.path == "/health" {
+                    self.send(status: 200, contentType: "application/json; charset=utf-8",
+                              body: Self.healthBody, on: connection)
+                    return
+                }
                 let json = authorized(request.headers["authorization"]) ? request.json : nil
+                connection.trace.enter(.mainWait)
                 Task { @MainActor [weak self] in
+                    connection.trace.enter(.handler)
                     self?.route(request, json: json, on: connection)
                 }
             } else if !HTTPRequest.needsMoreData(next) {
@@ -165,7 +185,7 @@ final class RemoteControlServer {
     }
 
     @MainActor
-    private func route(_ request: HTTPRequest, json: [String: Any]?, on connection: NWConnection) {
+    private func route(_ request: HTTPRequest, json: [String: Any]?, on connection: RemoteRequestConnection) {
         if request.method == "GET", request.path == "/" {
             send(
                 status: 200,
@@ -175,11 +195,8 @@ final class RemoteControlServer {
             )
             return
         }
-        if request.method == "GET", request.path == "/health" {
-            sendJSON(["status": "ok"], on: connection)
-            return
-        }
         guard request.path == "/api/v1/sessions"
+                || request.path == "/api/v1/ready"
                 || request.path.hasPrefix("/api/v1/sessions/")
                 || request.path == "/api/v1/github/builds"
                 || request.path == "/api/v1/copilot/usage" else {
@@ -196,12 +213,8 @@ final class RemoteControlServer {
                 return
             }
             usage.refreshQuotas()
-            do {
-                let data = try JSONEncoder().encode(usage.copilotUsage)
-                send(status: 200, contentType: "application/json; charset=utf-8", body: data, on: connection)
-            } catch {
-                sendError(500, "usage snapshot encoding failed", on: connection)
-            }
+            let snapshot = usage.copilotUsage
+            sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
             return
         }
         if request.path == "/api/v1/github/builds" {
@@ -211,13 +224,7 @@ final class RemoteControlServer {
             }
             Task {
                 let snapshot = await buildMonitor.snapshot()
-                do {
-                    let data = try JSONEncoder().encode(snapshot)
-                    send(status: 200, contentType: "application/json; charset=utf-8", body: data, on: connection)
-                } catch {
-                    Log.write("remote-control: build snapshot encoding failed: \(error.localizedDescription)")
-                    sendError(500, "build snapshot encoding failed", on: connection)
-                }
+                sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
             }
             return
         }
@@ -226,16 +233,26 @@ final class RemoteControlServer {
             return
         }
 
+        if request.path == "/api/v1/ready" {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            let sessions = manager.sessions.filter { !$0.isPrivate }
+                .map { snapshot($0, includeMessages: false, on: connection) }
+            sendJSON(["status": "ready", "sessions": sessions], on: connection)
+            return
+        }
         if request.path == "/api/v1/sessions" {
             switch request.method {
             case "GET":
                 let sessions = manager.sessions
                     .filter { !$0.isPrivate }
-                    .map { snapshot($0, includeMessages: false) }
+                    .map { snapshot($0, includeMessages: false, on: connection) }
                 sendJSON(["sessions": sessions], on: connection)
             case "POST":
                 let session = manager.newSession()
-                sendJSON(["session": snapshot(session)], status: 201, on: connection)
+                sendSession(session, status: 201, on: connection)
             default:
                 sendError(405, "method not allowed", on: connection)
             }
@@ -293,7 +310,7 @@ final class RemoteControlServer {
             return
         }
         if parts.count == 1, request.method == "GET" {
-            sendJSON(["session": snapshot(session)], on: connection)
+            sendJSON(["session": snapshot(session, on: connection)], on: connection)
             return
         }
         if parts.count == 3, parts[1] == "queue", request.method == "DELETE" {
@@ -307,7 +324,7 @@ final class RemoteControlServer {
             }
             // Resolve and remove on the main actor without yielding to queue draining.
             session.removeQueued(at: index)
-            sendJSON(["session": snapshot(session)], on: connection)
+            sendSession(session, on: connection)
             return
         }
         guard request.method == "POST", parts.count == 2 else {
@@ -330,7 +347,7 @@ final class RemoteControlServer {
             do {
                 try session.updateTab(name: body["customTitle"] as? String,
                                       isLocked: body["isLocked"] as? Bool)
-                sendJSON(["session": snapshot(session)], on: connection)
+                sendSession(session, on: connection)
             } catch let error as SessionTabError {
                 sendError(400, error.localizedDescription, on: connection)
             } catch {
@@ -377,17 +394,17 @@ final class RemoteControlServer {
                 sendError(500, "Could not save the attached images on the Mac.", on: connection)
                 return
             }
-            sendJSON(["session": snapshot(session)], status: 202, on: connection)
+            sendSession(session, status: 202, on: connection)
         case "cancel":
             session.cancel()
-            sendJSON(["session": snapshot(session)], on: connection)
+            sendSession(session, on: connection)
         case "resume":
             guard session.canResume, !session.isStreaming else {
                 sendError(409, "session is not resumable", on: connection)
                 return
             }
             session.resumeInterrupted()
-            sendJSON(["session": snapshot(session)], status: 202, on: connection)
+            sendSession(session, status: 202, on: connection)
         case "new-conversation":
             guard !session.isLocked else {
                 sendError(409, SessionTabError.locked.localizedDescription, on: connection)
@@ -398,7 +415,7 @@ final class RemoteControlServer {
                 return
             }
             session.newConversation()
-            sendJSON(["session": snapshot(session)], on: connection)
+            sendSession(session, on: connection)
         case "close":
             guard !session.isLocked else {
                 sendError(409, SessionTabError.locked.localizedDescription, on: connection)
@@ -409,9 +426,29 @@ final class RemoteControlServer {
             let replacement = candidate.isPrivate
                 ? manager.sessions.first(where: { !$0.isPrivate }) ?? manager.newSession()
                 : candidate
-            sendJSON(["session": snapshot(replacement)], on: connection)
+            sendSession(replacement, afterJournal: session, on: connection)
         default:
             sendError(404, "action not found", on: connection)
+        }
+    }
+
+    @MainActor
+    private func sendSession(_ session: ChatSession, status: Int = 200,
+                             afterJournal journalSession: ChatSession? = nil,
+                             on connection: RemoteRequestConnection) {
+        connection.trace.enter(.journalWait)
+        Task {
+            do {
+                try await (journalSession ?? session).flushJournal()
+                guard !session.isPrivate else {
+                    sendError(404, "session not found", on: connection)
+                    return
+                }
+                sendJSON(["session": snapshot(session, on: connection)], status: status, on: connection)
+            } catch {
+                requestLog("remote-request: id=\(connection.trace.id) outcome=journal_error")
+                sendError(500, "The action may have applied, but run history could not be saved. Check the session before retrying.", on: connection)
+            }
         }
     }
 
@@ -431,8 +468,11 @@ final class RemoteControlServer {
     @MainActor
     private func snapshot(
         _ session: ChatSession,
-        includeMessages: Bool = true
+        includeMessages: Bool = true,
+        on connection: RemoteRequestConnection
     ) -> [String: Any] {
+        connection.trace.enter(.snapshot)
+        defer { connection.trace.enter(.handler) }
         var result: [String: Any] = [
             "id": session.id.uuidString,
             "title": session.title,
@@ -509,13 +549,22 @@ final class RemoteControlServer {
     private func sendJSON(
         _ object: [String: Any],
         status: Int = 200,
-        on connection: NWConnection
+        on connection: RemoteRequestConnection
     ) {
         // Only the immutable snapshot is captured; encoding large transcripts
         // must not monopolize the main actor or the socket receive queue.
+        sendEncoded(status: status, on: connection) {
+            try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        }
+    }
+
+    private func sendEncoded(status: Int = 200, on connection: RemoteRequestConnection,
+                             encode: @escaping () throws -> Data) {
+        connection.trace.enter(.encodeWait)
         encodingQueue.async {
+            connection.trace.enter(.encode)
             do {
-                let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+                let data = try encode()
                 self.send(
                     status: status,
                     contentType: "application/json; charset=utf-8",
@@ -523,13 +572,15 @@ final class RemoteControlServer {
                     on: connection
                 )
             } catch {
-                Log.write("remote-control: response serialization failed: \(error.localizedDescription)")
-                self.sendError(500, "response serialization failed", on: connection)
+                self.requestLog("remote-request: id=\(connection.trace.id) outcome=encoding_error")
+                self.send(status: 500, contentType: "application/json; charset=utf-8",
+                          body: Data(#"{"error":"response serialization failed"}"#.utf8),
+                          on: connection)
             }
         }
     }
 
-    private func sendError(_ status: Int, _ message: String, on connection: NWConnection) {
+    private func sendError(_ status: Int, _ message: String, on connection: RemoteRequestConnection) {
         sendJSON(["error": message], status: status, on: connection)
     }
 
@@ -537,7 +588,7 @@ final class RemoteControlServer {
         status: Int,
         contentType: String,
         body: Data,
-        on connection: NWConnection
+        on connection: RemoteRequestConnection
     ) {
         let reason: String
         switch status {
@@ -559,6 +610,7 @@ final class RemoteControlServer {
         Content-Length: \(body.count)\r
         Cache-Control: no-store\r
         X-Content-Type-Options: nosniff\r
+        X-Cantrip-Request-ID: \(connection.trace.id)\r
         Content-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' https: data:; frame-ancestors 'none'\r
         Connection: close\r
         \r
@@ -566,9 +618,7 @@ final class RemoteControlServer {
         """
         var response = Data(header.utf8)
         response.append(body)
-        connection.send(content: response, completion: .contentProcessed { _ in
-            connection.cancel()
-        })
+        connection.send(response, status: status, bodyBytes: body.count)
     }
 }
 

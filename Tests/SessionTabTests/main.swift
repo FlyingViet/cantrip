@@ -107,6 +107,8 @@ struct SessionTabTests {
         try testPromptPaging()
         try await testPromptPreparation()
         try await testCopilotUsage()
+        try await testRemoteRequestIsolation()
+        try await testJournalDelivery()
         try await testHostProtection(manager: manager)
         print("Session tab persistence, protection, privacy, and web controls passed")
     }

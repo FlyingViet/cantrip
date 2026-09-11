@@ -111,6 +111,26 @@ work. Resume is not a guarantee that an external command can continue at the
 exact CPU instruction where it stopped. Private sessions do not have this
 durable recovery.
 
+Journal events are immutable snapshots submitted to an ordered background writer;
+streamed-event encoding, file writes, and `fsync` no longer run on MainActor.
+The writer synchronizes at durable boundaries and at least once per second
+while processing unsynchronized output. Backend starts, completion notifications,
+automatic queue advancement, and successful Remote mutation replies wait for the
+relevant writes. **Saving run...** means completion is waiting for storage,
+not that the agent is still working. Stop/redirect remains immediate, and a late
+disk callback cannot finish a newer run.
+
+Write/encoding/synchronization errors stop further writes to that journal,
+surface a visible run-history error, suppress success notification and automatic
+queue advancement, and make affected Remote mutations report uncertainty rather
+than success. The CLI also waits for durable terminal events before `done`.
+Unacknowledged output still queued in memory can be lost in a crash; replay
+retains complete records and repairs a truncated tail before appending again.
+Normal exit drains pending journal writes. Opening/restoring journals and
+privacy deletion retain synchronous ordering barriers; deletion cannot be undone
+by an older queued write. This change does not move every other app persistence
+operation off MainActor.
+
 For a text timeline in Terminal:
 
 ```sh

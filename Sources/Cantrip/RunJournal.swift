@@ -1,8 +1,8 @@
 import Foundation
 
 /// Append-only, crash-tolerant state for a session's runs. Each event is one
-/// JSON line so a process exit can lose at most a partial tail record; replay
-/// ignores that record and preserves every complete event before it.
+/// JSON line; replay ignores a partial tail and preserves complete records.
+/// Unacknowledged events still waiting on the writer can be lost in a crash.
 final class RunJournal {
     enum EventKind: String, Codable {
         case turnStarted = "turn_started"
@@ -158,15 +158,32 @@ final class RunJournal {
     let sessionID: UUID
     let fileURL: URL
 
-    private let lock = NSLock()
+    private static let writer = DispatchQueue(label: "cantrip.run-journal", qos: .utility)
+    private final class WeakJournal {
+        weak var value: RunJournal?
+        init(_ value: RunJournal) { self.value = value }
+    }
+    private static var openJournals: [WeakJournal] = []
     private var handle: FileHandle?
-    private var nextSequence: Int
-    private var lastSynchronization = Date.distantPast
+    private var nextSequence = 1
+    private var failure: Error?
+    private var lastSynchronization: UInt64 = 0
+    private var needsSynchronization = false
+    private let synchronize: (FileHandle) throws -> Void
 
-    init(sessionID: UUID, directory: URL = RunJournal.defaultDirectory) throws {
+    init(sessionID: UUID, directory: URL = RunJournal.defaultDirectory,
+         synchronize: @escaping (FileHandle) throws -> Void = { try $0.synchronize() }) throws {
         self.sessionID = sessionID
         fileURL = directory.appendingPathComponent("\(sessionID.uuidString).jsonl")
+        self.synchronize = synchronize
+        try Self.writer.sync {
+            try open(directory: directory)
+            Self.openJournals.removeAll { $0.value == nil }
+            Self.openJournals.append(WeakJournal(self))
+        }
+    }
 
+    private func open(directory: URL) throws {
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true,
@@ -194,50 +211,124 @@ final class RunJournal {
         let events = Self.loadEvents(from: fileURL)
         nextSequence = (events.map(\.sequence).max() ?? 0) + 1
         handle = try FileHandle(forWritingTo: fileURL)
+        // A crashed partial line must not absorb the next complete event.
+        // Discard only the incomplete tail, retaining all complete records.
+        let data = try Data(contentsOf: fileURL)
+        if !data.isEmpty, data.last != 0x0A {
+            let end = data.lastIndex(of: 0x0A).map { $0 + 1 } ?? 0
+            try handle?.truncate(atOffset: UInt64(end))
+            needsSynchronization = true
+        }
         try handle?.seekToEnd()
     }
 
     deinit {
-        try? handle?.close()
+        let handle = handle
+        Self.writer.async {
+            do { try handle?.close() }
+            catch { NSLog("run-journal: close failed (code %ld)", (error as NSError).code) }
+        }
     }
 
-    /// Boundary events use `durable`: fsync before returning. High-volume
-    /// stream deltas remain ordered but rely on the kernel's write cache,
-    /// which survives an app-process crash without stalling every token.
+    /// Synchronous barriers are for restoration/tests, not streamed events.
     func append(_ event: Event, durable: Bool = false) throws {
-        lock.lock()
-        defer { lock.unlock() }
+        try Self.writer.sync { try write(event, durable: durable) }
+    }
 
+    /// Accepts an immutable value; encoding, writes and fsync run in FIFO order.
+    /// A durable completion acknowledges fsync, not merely enqueueing the event.
+    func enqueue(_ event: Event, durable: Bool = false,
+                 completion: @escaping (Result<Void, Error>) -> Void) {
+        Self.writer.async {
+            completion(Result { try self.write(event, durable: durable) })
+        }
+    }
+
+    private func write(_ event: Event, durable: Bool) throws {
+        if let failure { throw failure }
+        do {
+            try writeRecord(event, durable: durable)
+        } catch {
+            // Never append a terminal success after a missing/partial event.
+            failure = error
+            throw error
+        }
+    }
+
+    private func writeRecord(_ event: Event, durable: Bool) throws {
         guard let handle else { throw CocoaError(.fileNoSuchFile) }
         var stamped = event
         stamped.sequence = nextSequence
-        nextSequence += 1
         var data = try Self.encoder.encode(stamped)
         data.append(0x0A)
         try handle.write(contentsOf: data)
-        let now = Date()
-        if durable || now.timeIntervalSince(lastSynchronization) >= 1 {
-            try handle.synchronize()
-            lastSynchronization = now
+        needsSynchronization = true
+        nextSequence += 1
+        let now = DispatchTime.now().uptimeNanoseconds
+        if durable || now - lastSynchronization >= 1_000_000_000 {
+            try flushOnWriter()
+        }
+    }
+
+    func flush(completion: @escaping (Result<Void, Error>) -> Void) {
+        Self.writer.async {
+            completion(Result { try self.flushOnWriter() })
+        }
+    }
+
+    func flush() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            flush { continuation.resume(with: $0) }
+        }
+    }
+
+    private func flushOnWriter() throws {
+        if let failure { throw failure }
+        guard let handle else { throw CocoaError(.fileNoSuchFile) }
+        guard needsSynchronization else { return }
+        do {
+            try synchronize(handle)
+            needsSynchronization = false
+            lastSynchronization = DispatchTime.now().uptimeNanoseconds
+        } catch {
+            failure = error
+            throw error
+        }
+    }
+
+    /// Exit is the one global synchronous drain: no queued records are abandoned.
+    static func drainForTermination() -> [Error] {
+        writer.sync {
+            openJournals.compactMap { entry in
+                guard let journal = entry.value, journal.handle != nil else { return nil }
+                do { try journal.flushOnWriter(); return nil }
+                catch { return error }
+            }
         }
     }
 
     func recoveryState() -> RecoveryState? {
-        Self.recoveryState(from: Self.loadEvents(from: fileURL))
+        Self.writer.sync {
+            Self.recoveryState(from: Self.loadEvents(from: fileURL))
+        }
     }
 
     func remove() throws {
-        lock.lock()
-        defer { lock.unlock() }
-        try handle?.close()
-        handle = nil
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            try FileManager.default.removeItem(at: fileURL)
+        // Privacy/deletion must wait for earlier writes; they cannot recreate
+        // the file after this barrier returns.
+        try Self.writer.sync {
+            try handle?.close()
+            handle = nil
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                try FileManager.default.removeItem(at: fileURL)
+            }
         }
     }
 
     static func loadEvents(from url: URL) -> [Event] {
         guard let data = try? Data(contentsOf: url), !data.isEmpty else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
         return data.split(separator: 0x0A).compactMap { line in
             try? decoder.decode(Event.self, from: Data(line))
         }
@@ -406,9 +497,4 @@ final class RunJournal {
         return encoder
     }()
 
-    private static let decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }()
 }

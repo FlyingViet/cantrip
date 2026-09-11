@@ -80,6 +80,8 @@ final class ChatSession: ObservableObject {
     private var activityStartedAt: [String: Date] = [:]
     private var recordedArtifacts: Set<String> = []
     private var journal: RunJournal?
+    private let makeJournal: (UUID) throws -> RunJournal
+    @Published private(set) var journalError: String?
     /// Council mode: fan each prompt out to several backends in parallel,
     /// then have a chair synthesize the joint answer.
     @Published var councilMode = false {
@@ -119,12 +121,14 @@ final class ChatSession: ObservableObject {
         didSet {
             if isPrivate {
                 deleteTranscript()   // scrub anything already written
+                journalError = nil
                 Log.write("session \(id.uuidString.prefix(8)): private mode ON")
             } else {
                 do {
-                    journal = try RunJournal(sessionID: id)
+                    journal = try makeJournal(id)
+                    journalError = nil
                 } catch {
-                    Log.write("run-journal: could not reopen \(id.uuidString.prefix(8)): \(error.localizedDescription)")
+                    reportJournalFailure(error)
                 }
                 persistTranscript()
             }
@@ -165,16 +169,17 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    init(id: UUID = UUID()) {
+    init(id: UUID = UUID(), makeJournal: @escaping (UUID) throws -> RunJournal = { try RunJournal(sessionID: $0) }) {
         self.id = id
+        self.makeJournal = makeJournal
         self.workdir = UserDefaults.standard.string(forKey: "workdir-\(id.uuidString)")
             ?? AppSettings.shared.claudeWorkdir
         self.claudeCode = ClaudeCodeBackend(persistKey: "claudeSessionID-\(id.uuidString)")
         self.codex = CodexBackend(persistKey: "codexSessionID-\(id.uuidString)")
         do {
-            journal = try RunJournal(sessionID: id)
+            journal = try makeJournal(id)
         } catch {
-            Log.write("run-journal: could not open \(id.uuidString.prefix(8)): \(error.localizedDescription)")
+            reportJournalFailure(error)
         }
         shellObservation = shell.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -253,10 +258,34 @@ final class ChatSession: ObservableObject {
 
     private func appendRunEvent(_ event: RunJournal.Event, durable: Bool = false) {
         guard !isPrivate else { return }
-        do {
-            try journal?.append(event, durable: durable)
-        } catch {
-            Log.write("run-journal: append failed for \(id.uuidString.prefix(8)): \(error.localizedDescription)")
+        guard let journal else {
+            reportJournalFailure(CocoaError(.fileNoSuchFile))
+            return
+        }
+        journal.enqueue(event, durable: durable) { [weak self, weak journal] result in
+            guard case .failure(let error) = result else { return }
+            Task { @MainActor in
+                guard let self, self.journal === journal, !self.isPrivate else { return }
+                self.reportJournalFailure(error)
+            }
+        }
+    }
+
+    private func reportJournalFailure(_ error: Error) {
+        guard journalError == nil else { return }
+        Log.write("run-journal: write failed code=\((error as NSError).code)")
+        let message = "Run history could not be saved on the Mac. Recovery may be incomplete; queued work will not start automatically."
+        journalError = message
+        messages.append(ChatMessage(role: .error, text: message))
+    }
+
+    func flushJournal() async throws {
+        guard !isPrivate else { return }
+        guard let journal else { throw CocoaError(.fileNoSuchFile) }
+        do { try await journal.flush() }
+        catch {
+            if self.journal === journal, !isPrivate { reportJournalFailure(error) }
+            throw error
         }
     }
 
@@ -743,6 +772,17 @@ final class ChatSession: ObservableObject {
         routingItemID = item.id
         deliveryStatus = "Deciding how to deliver your message..."
         routingTask = Task { [weak self] in
+            guard let self else { return }
+            do { try await self.flushJournal() }
+            catch {
+                guard self.routingRevision == revision else { return }
+                self.reportJournalFailure(error)
+                self.invalidateRouting()
+                self.deliveryStatus = "Queued: run history could not be saved."
+                return
+            }
+            guard !Task.isCancelled, self.routingRevision == revision,
+                  self.streamGeneration == generation else { return }
             let resolution: MessageRoutingResolution
             do {
                 let decision = try await MessageRouter.classify(snapshot, provider: provider)
@@ -755,7 +795,7 @@ final class ChatSession: ObservableObject {
                 resolution = .queued(error.localizedDescription)
                 Log.write("message-router: \(error.localizedDescription)")
             }
-            guard let self, !Task.isCancelled, self.routingRevision == revision else { return }
+            guard !Task.isCancelled, self.routingRevision == revision else { return }
             self.routingTask = nil
             self.routingItemID = nil
             guard self.settings.backend == originalBackend, self.workdir == originalWorkdir,
@@ -847,7 +887,7 @@ final class ChatSession: ObservableObject {
             finalizeRunningActivities(as: .cancelled)
             statusText = nil
             cancelRun(reason: "redirected by user")
-            finishStream(dequeue: false)
+            finishStream(dequeue: false, notify: false, waitForJournal: false)
             councilMode
                 ? sendCouncil(prompt, includesAmbientContext: includesAmbientContext,
                               consumesStagedContext: consumesStagedContext, queuedItem: queuedItem)
@@ -874,7 +914,7 @@ final class ChatSession: ObservableObject {
                 interruptContext = "(Context — steps my interrupted request had already taken:\n\(steps))"
             }
             cancelRun(reason: "redirected by user")
-            finishStream(dequeue: false)
+            finishStream(dequeue: false, notify: false, waitForJournal: false)
             if councilMode {
                 sendCouncil(prompt, includesAmbientContext: includesAmbientContext,
                             consumesStagedContext: consumesStagedContext, queuedItem: queuedItem)
@@ -988,22 +1028,30 @@ final class ChatSession: ObservableObject {
 
     private func prepareMemory(onto prompt: String, query: String, backendKind: BackendKind?,
                                generation: Int, completion: @escaping (String) -> Void) {
-        guard settings.memoryEnabled else { completion(prompt); return }
+        let memoryEnabled = settings.memoryEnabled
         let path = settings.memoryPath
         let privacy = isPrivate
         let directory = workdir
         let configuredBackend = settings.backend
         statusText = "Preparing context..."
         preparationTask = Task { [weak self] in
-            let block = await MemoryStore.contextBlock(
+            guard let self else { return }
+            do { try await self.flushJournal() }
+            catch {
+                guard self.streamGeneration == generation else { return }
+                self.reportJournalFailure(error)
+                self.finishStream(dequeue: false, notify: false, waitForJournal: false)
+                return
+            }
+            let block = memoryEnabled ? await MemoryStore.contextBlock(
                 query: query, path: path, isPrivate: privacy, isLocal: backendKind == .localModel
-            )
-            guard let self, !Task.isCancelled, self.streamGeneration == generation,
+            ) : ""
+            guard !Task.isCancelled, self.streamGeneration == generation,
                   self.isStreaming else { return }
             self.preparationTask = nil
             guard self.isPrivate == privacy, self.workdir == directory,
                   self.settings.backend == configuredBackend,
-                  self.settings.memoryEnabled, self.settings.memoryPath == path else {
+                  self.settings.memoryEnabled == memoryEnabled, self.settings.memoryPath == path else {
                 self.cancel(keepQueue: true)
                 self.deliveryStatus = "Preparation cancelled because session settings changed. Send again to use the new settings."
                 return
@@ -1547,16 +1595,8 @@ final class ChatSession: ObservableObject {
             }
         }
 
-        do {
-            try p.run()
-            shellProcess = p
-        } catch {
-            let errorText = "Failed to run: \(error.localizedDescription)"
-            appendRunMessage(ChatMessage(role: .error, text: errorText))
-            shellProcess = nil
-            completeRun(status: "failed", summary: errorText)
-            finishStream(dequeue: false)
-        }
+        startJournaledProcess(p, output: pipe.fileHandleForReading, generation: generation,
+                              failurePrefix: "Failed to run")
     }
 
     /// `/name args` — run a skill script, streaming stdout into the
@@ -1633,14 +1673,36 @@ final class ChatSession: ObservableObject {
                 self.finishStream()
             }
         }
-        do {
-            try p.run()
-            shellProcess = p
-        } catch {
-            let errorText = "Failed to run /\(command.name): \(error.localizedDescription)"
-            appendRunMessage(ChatMessage(role: .error, text: errorText))
-            completeRun(status: "failed", summary: errorText)
-            finishStream(dequeue: false)
+        startJournaledProcess(p, output: pipe.fileHandleForReading, generation: generation,
+                              failurePrefix: "Failed to run /\(command.name)")
+    }
+
+    private func startJournaledProcess(_ process: Process, output: FileHandle,
+                                       generation: Int, failurePrefix: String) {
+        Task { [weak self] in
+            guard let self else { output.readabilityHandler = nil; return }
+            do { try await self.flushJournal() }
+            catch {
+                output.readabilityHandler = nil
+                guard self.streamGeneration == generation else { return }
+                self.reportJournalFailure(error)
+                self.finishStream(dequeue: false, notify: false, waitForJournal: false)
+                return
+            }
+            guard self.streamGeneration == generation, self.isStreaming else {
+                output.readabilityHandler = nil
+                return
+            }
+            do {
+                try process.run()
+                self.shellProcess = process
+            } catch {
+                output.readabilityHandler = nil
+                let errorText = "\(failurePrefix): \(error.localizedDescription)"
+                self.appendRunMessage(ChatMessage(role: .error, text: errorText))
+                self.completeRun(status: "failed", summary: errorText)
+                self.finishStream(dequeue: false)
+            }
         }
     }
 
@@ -1743,19 +1805,22 @@ final class ChatSession: ObservableObject {
             autoResumeSpent = true
             // Queue waits for the resumed run; no notification/speech for
             // an interruption we're about to retry silently.
-            finishStream(dequeue: false, notify: false)
             Log.write("resume: run interrupted — auto-resuming")
-            scheduleAutoResume()
+            finishStream(dequeue: false, notify: false) { [weak self] in
+                self?.scheduleAutoResume()
+            }
         } else {
-            finishStream(dequeue: false) // hold queue; notify — needs attention
             // Surface the Resume button only after the SIGTERM → SIGKILL
             // escalation window, so a fast click can't relaunch the CLI
             // session while the hung process is still dying.
-            let generation = streamGeneration
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
-                guard let self, !self.isStreaming,
-                      self.streamGeneration == generation else { return }
-                self.canResume = true
+            finishStream(dequeue: false) { [weak self] in
+                guard let self else { return }
+                let generation = self.streamGeneration
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
+                    guard let self, !self.isStreaming,
+                          self.streamGeneration == generation else { return }
+                    self.canResume = true
+                }
             }
         }
     }
@@ -1866,7 +1931,33 @@ final class ChatSession: ObservableObject {
         if let hints { OverlayController.shared.show(hints) }
     }
 
-    private func finishStream(dequeue: Bool = true, notify: Bool = true) {
+    private func finishStream(dequeue: Bool = true, notify: Bool = true,
+                              waitForJournal: Bool = true, then: (() -> Void)? = nil) {
+        watchdog?.invalidate()
+        watchdog = nil
+        streamGeneration += 1
+        let generation = streamGeneration
+        guard waitForJournal, !isPrivate else {
+            finishStreamAfterJournal(dequeue: dequeue, notify: notify)
+            then?()
+            return
+        }
+        statusText = "Saving run..."
+        Task { [weak self] in
+            guard let self else { return }
+            do { try await self.flushJournal() }
+            catch {
+                guard self.streamGeneration == generation else { return }
+                self.reportJournalFailure(error)
+            }
+            guard self.streamGeneration == generation else { return }
+            self.finishStreamAfterJournal(dequeue: dequeue && self.journalError == nil,
+                                          notify: notify && self.journalError == nil)
+            if self.journalError == nil { then?() }
+        }
+    }
+
+    private func finishStreamAfterJournal(dequeue: Bool, notify: Bool) {
         if routingItemID != nil {
             invalidateRouting()
             deliveryStatus = "Queued: the task ended before routing finished."
@@ -1926,7 +2017,7 @@ final class ChatSession: ObservableObject {
     }
 
     private func drainQueue() {
-        guard !isStreaming, let next = queued.first else { return }
+        guard !isStreaming, journalError == nil, let next = queued.first else { return }
         councilMode
             ? sendCouncil(next.text, includesAmbientContext: next.includesAmbientContext,
                           consumesStagedContext: false, queuedItem: next)
@@ -1968,7 +2059,9 @@ final class ChatSession: ObservableObject {
         if !keepQueue { clearQueue() } // only explicit Stop aborts the whole queue
         finalizeRunningActivities(as: .cancelled)
         cancelRun(reason: "cancelled by user")
-        finishStream(dequeue: false, notify: !keepQueue)
+        // Stop/redirect takes effect immediately. Its remote acknowledgement
+        // still waits for the journal, and no success notification is emitted.
+        finishStream(dequeue: false, notify: false, waitForJournal: false)
     }
 
     func newConversation() {

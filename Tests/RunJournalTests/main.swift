@@ -239,6 +239,112 @@ do {
         !FileManager.default.fileExists(atPath: oldJournal.fileURL.path),
         "retention should remove expired journals"
     )
+
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let acknowledged = DispatchSemaphore(value: 0)
+    var blockNextSync = true
+    let backgroundID = UUID()
+    let background = try RunJournal(sessionID: backgroundID, directory: directory) { handle in
+        if blockNextSync {
+            blockNextSync = false
+            entered.signal()
+            guard release.wait(timeout: .now() + 5) == .success else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+        }
+        try handle.synchronize()
+    }
+    let backgroundStart = RunJournal.Event(sessionID: backgroundID, runID: UUID(), kind: .turnStarted)
+    background.enqueue(backgroundStart, durable: true) { result in
+        if case .failure = result { fatalError("Unexpected background write failure") }
+        acknowledged.signal()
+    }
+    expect(entered.wait(timeout: .now() + 2) == .success, "writer should reach fsync")
+    let enqueueStart = Date()
+    for index in 0..<100 {
+        var delta = RunJournal.Event(sessionID: backgroundID, runID: backgroundStart.runID, kind: .output)
+        delta.text = "delta-\(index)"
+        background.enqueue(delta) { result in
+            if case .failure = result { fatalError("Unexpected delta failure") }
+        }
+    }
+    expect(Date().timeIntervalSince(enqueueStart) < 0.1,
+           "enqueueing streamed events must not wait on blocked disk I/O")
+    expect(acknowledged.wait(timeout: .now() + 0.05) == .timedOut,
+           "durable completion must not acknowledge before fsync")
+    let flushed = DispatchSemaphore(value: 0)
+    background.flush { result in
+        if case .failure = result { fatalError("Unexpected flush failure") }
+        flushed.signal()
+    }
+    expect(flushed.wait(timeout: .now() + 0.05) == .timedOut, "flush must wait for pending records")
+    release.signal()
+    expect(acknowledged.wait(timeout: .now() + 2) == .success, "fsync should acknowledge after release")
+    expect(flushed.wait(timeout: .now() + 2) == .success, "flush should drain queued output")
+    let ordered = RunJournal.loadEvents(from: background.fileURL)
+    expect(ordered.map(\.sequence) == Array(1...101), "background records must have contiguous FIFO sequences")
+    expect(ordered.dropFirst().compactMap(\.text) == (0..<100).map { "delta-\($0)" },
+           "all output must retain submission order")
+
+    let brokenID = UUID()
+    let broken = try RunJournal(sessionID: brokenID, directory: directory) { _ in
+        throw CocoaError(.fileWriteOutOfSpace)
+    }
+    let failedWrite = DispatchSemaphore(value: 0)
+    broken.enqueue(RunJournal.Event(sessionID: brokenID, runID: runID, kind: .turnStarted),
+                   durable: true) { result in
+        guard case .failure = result else { fatalError("fsync failure must be explicit") }
+        failedWrite.signal()
+    }
+    expect(failedWrite.wait(timeout: .now() + 2) == .success, "fsync failure should reach the caller")
+    do {
+        try broken.append(RunJournal.Event(sessionID: brokenID, runID: runID, kind: .result), durable: true)
+        expect(false, "a failed journal must reject later terminal results")
+    } catch {}
+    expect(!RunJournal.loadEvents(from: broken.fileURL).contains { $0.kind == .result },
+           "a write failure cannot be hidden by a later successful result")
+    let failedFlush = DispatchSemaphore(value: 0)
+    broken.flush { result in
+        guard case .failure = result else { fatalError("flush must retain a prior failure") }
+        failedFlush.signal()
+    }
+    expect(failedFlush.wait(timeout: .now() + 2) == .success, "flush must surface the sticky failure")
+
+    let malformedID = UUID()
+    let malformed = try RunJournal(sessionID: malformedID, directory: directory)
+    var invalid = RunJournal.Event(sessionID: malformedID, runID: runID, kind: .usage)
+    invalid.usage = RunJournal.Usage(backend: "fixture", inputTokens: 0, outputTokens: 0, costUSD: .nan)
+    do {
+        try malformed.append(invalid)
+        expect(false, "encoding errors must propagate")
+    } catch {}
+    expect(RunJournal.loadEvents(from: malformed.fileURL).isEmpty, "invalid events must not write partial JSON")
+
+    let tailID = UUID()
+    let tailJournal = try RunJournal(sessionID: tailID, directory: directory)
+    try tailJournal.append(RunJournal.Event(sessionID: tailID, runID: runID, kind: .turnStarted))
+    let truncatedHandle = try FileHandle(forWritingTo: tailJournal.fileURL)
+    try truncatedHandle.seekToEnd()
+    try truncatedHandle.write(contentsOf: Data(#"{"partial":"#.utf8))
+    try truncatedHandle.close()
+    let repaired = try RunJournal(sessionID: tailID, directory: directory)
+    try repaired.append(RunJournal.Event(sessionID: tailID, runID: runID, kind: .result), durable: true)
+    expect(RunJournal.loadEvents(from: repaired.fileURL).map(\.kind) == [.turnStarted, .result],
+           "reopening after a partial tail must not swallow the first new event")
+
+    let deletionID = UUID()
+    let deletion = try RunJournal(sessionID: deletionID, directory: directory)
+    for _ in 0..<20 {
+        deletion.enqueue(RunJournal.Event(sessionID: deletionID, runID: runID, kind: .output)) { result in
+            if case .failure = result { fatalError("Unexpected pre-deletion write failure") }
+        }
+    }
+    try deletion.remove()
+    expect(!FileManager.default.fileExists(atPath: deletion.fileURL.path),
+           "privacy deletion must drain queued writes without recreating the journal")
+    expect(!RunJournal.drainForTermination().isEmpty,
+           "exit drain must surface the injected failed journals")
 } catch {
     failures += 1
     fputs("FAIL: unexpected error: \(error)\n", stderr)

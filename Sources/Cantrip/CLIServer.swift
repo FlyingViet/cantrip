@@ -58,6 +58,7 @@ final class CLIServer {
             return nil
         }
     }()
+    private var journalFailureReported = false
     private init() {
         let key = "cliRunJournalSessionID"
         if let raw = UserDefaults.standard.string(forKey: key),
@@ -76,6 +77,7 @@ final class CLIServer {
     }
 
     func start() {
+        _ = runJournal
         try? FileManager.default.removeItem(atPath: Self.socketPath)
         do {
             let params = NWParameters()
@@ -138,111 +140,117 @@ final class CLIServer {
             workdir: cwd
         )
 
-        DispatchQueue.main.async { [weak self] in
+        flushJournal { [weak self] result in
             guard let self else { return }
-            let backend = self.backend(for: kind)
-            let request = BackendRequest(prompt: text, userMessage: text,
-                                         previousTurns: [])
-            backend.send(request, workdir: cwd) { [weak self] event in
-                guard let self, latch.acceptsEvent() else { return }
-                switch event {
-                case .textDelta(let delta):
-                    latch.appendOutput(delta)
-                    var output = RunJournal.Event(
-                        sessionID: self.journalSessionID,
-                        runID: runID,
-                        kind: .output
-                    )
-                    output.messageID = assistantMessageID
-                    output.role = "assistant"
-                    output.channel = "text"
-                    output.text = delta
-                    self.appendRunEvent(output)
-                    self.send(["delta": delta], on: connection, close: false)
-                case .thinkingDelta:
-                    break // reasoning isn't part of the CLI's output contract
-                case .status(let status):
-                    self.send(["status": status], on: connection, close: false)
-                case .activity(let activity):
-                    self.recordActivity(
-                        activity,
-                        messageID: assistantMessageID,
-                        runID: runID,
-                        latch: latch
-                    )
-                    if activity.state == .running {
-                        self.send(["status": activity.title], on: connection, close: false)
-                    }
-                case .usage(let usage):
-                    if let backend = BackendKind(rawValue: usage.backend) {
-                        UsageTracker.shared.recordCost(
-                            backend: backend,
-                            costUSD: usage.costUSD,
-                            inputTokens: usage.inputTokens,
-                            outputTokens: usage.outputTokens
-                        )
-                    }
-                    var usageEvent = RunJournal.Event(
-                        sessionID: self.journalSessionID,
-                        runID: runID,
-                        kind: .usage
-                    )
-                    usageEvent.usage = RunJournal.Usage(
-                        backend: usage.backend,
+            guard case .success = result else {
+                self.send(["error": "Run history could not be saved; the request was not started."],
+                          on: connection, close: true)
+                return
+            }
+            DispatchQueue.main.async { [self] in
+                self.startBackend(kind: kind, text: text, cwd: cwd, runID: runID,
+                                  assistantMessageID: assistantMessageID, startedAt: startedAt,
+                                  latch: latch, connection: connection)
+            }
+        }
+    }
+
+    private func startBackend(kind: BackendKind, text: String, cwd: String, runID: UUID,
+                              assistantMessageID: UUID, startedAt: Date, latch: CLIRunLatch,
+                              connection: NWConnection) {
+        let backend = self.backend(for: kind)
+        let request = BackendRequest(prompt: text, userMessage: text, previousTurns: [])
+        backend.send(request, workdir: cwd) { [weak self] event in
+            guard let self, latch.acceptsEvent() else { return }
+            switch event {
+            case .textDelta(let delta):
+                latch.appendOutput(delta)
+                var output = RunJournal.Event(
+                    sessionID: self.journalSessionID,
+                    runID: runID,
+                    kind: .output
+                )
+                output.messageID = assistantMessageID
+                output.role = "assistant"
+                output.channel = "text"
+                output.text = delta
+                self.appendRunEvent(output)
+                self.send(["delta": delta], on: connection, close: false)
+            case .thinkingDelta:
+                break // reasoning isn't part of the CLI's output contract
+            case .status(let status):
+                self.send(["status": status], on: connection, close: false)
+            case .activity(let activity):
+                self.recordActivity(activity, messageID: assistantMessageID, runID: runID, latch: latch)
+                if activity.state == .running {
+                    self.send(["status": activity.title], on: connection, close: false)
+                }
+            case .usage(let usage):
+                if let backend = BackendKind(rawValue: usage.backend) {
+                    UsageTracker.shared.recordCost(
+                        backend: backend,
+                        costUSD: usage.costUSD,
                         inputTokens: usage.inputTokens,
-                        outputTokens: usage.outputTokens,
-                        costUSD: usage.costUSD
+                        outputTokens: usage.outputTokens
                     )
-                    self.appendRunEvent(usageEvent, durable: true)
-                case .approval(let approval):
-                    var approvalEvent = RunJournal.Event(
-                        sessionID: self.journalSessionID,
-                        runID: runID,
-                        kind: .approval
-                    )
-                    approvalEvent.tool = approval.tool
-                    approvalEvent.decision = approval.decision
-                    approvalEvent.decidedBy = approval.decidedBy
-                    self.appendRunEvent(approvalEvent, durable: true)
-                    self.send([
-                        "status": "\(approval.decision.capitalized): \(approval.tool)"
-                    ], on: connection, close: false)
-                case .done:
-                    guard latch.claimTerminal() else { return }
-                    self.recordTerminal(
-                        runID: runID,
-                        status: "succeeded",
-                        startedAt: startedAt,
-                        summary: latch.outputSummary()
-                    )
-                    self.send(["done": true], on: connection, close: true)
-                case .failure(let message):
-                    guard latch.claimTerminal() else { return }
-                    var interruption = RunJournal.Event(
-                        sessionID: self.journalSessionID,
-                        runID: runID,
-                        kind: .interruption
-                    )
-                    interruption.reason = message
-                    self.appendRunEvent(interruption, durable: true)
-                    self.recordTerminal(
-                        runID: runID,
-                        status: "failed",
-                        startedAt: startedAt,
-                        summary: message
-                    )
-                    self.send(["error": message], on: connection, close: true)
+                }
+                var usageEvent = RunJournal.Event(sessionID: self.journalSessionID, runID: runID, kind: .usage)
+                usageEvent.usage = RunJournal.Usage(
+                    backend: usage.backend, inputTokens: usage.inputTokens,
+                    outputTokens: usage.outputTokens, costUSD: usage.costUSD
+                )
+                self.appendRunEvent(usageEvent, durable: true)
+            case .approval(let approval):
+                var approvalEvent = RunJournal.Event(sessionID: self.journalSessionID, runID: runID, kind: .approval)
+                approvalEvent.tool = approval.tool
+                approvalEvent.decision = approval.decision
+                approvalEvent.decidedBy = approval.decidedBy
+                self.appendRunEvent(approvalEvent, durable: true)
+                self.send(["status": "\(approval.decision.capitalized): \(approval.tool)"],
+                          on: connection, close: false)
+            case .done:
+                guard latch.claimTerminal() else { return }
+                self.recordTerminal(runID: runID, status: "succeeded", startedAt: startedAt,
+                                    summary: latch.outputSummary()) { result in
+                    if case .success = result {
+                        self.send(["done": true], on: connection, close: true)
+                    } else {
+                        self.send(["error": "The task finished, but run history could not be saved. Recovery may be incomplete."],
+                                  on: connection, close: true)
+                    }
+                }
+            case .failure(let message):
+                guard latch.claimTerminal() else { return }
+                var interruption = RunJournal.Event(sessionID: self.journalSessionID, runID: runID, kind: .interruption)
+                interruption.reason = message
+                self.appendRunEvent(interruption, durable: true)
+                self.recordTerminal(runID: runID, status: "failed", startedAt: startedAt,
+                                    summary: message) { result in
+                    let error: String
+                    if case .success = result { error = message }
+                    else { error = message + "\nRun history could not be saved; recovery may be incomplete." }
+                    self.send(["error": error], on: connection, close: true)
                 }
             }
         }
     }
 
     private func appendRunEvent(_ event: RunJournal.Event, durable: Bool = false) {
-        do {
-            try runJournal?.append(event, durable: durable)
-        } catch {
-            Log.write("cli: run journal append failed: \(error.localizedDescription)")
+        guard let runJournal else { return } // Startup and request failure are surfaced separately.
+        runJournal.enqueue(event, durable: durable) { result in
+            if case .failure(let error) = result, !self.journalFailureReported {
+                self.journalFailureReported = true
+                Log.write("cli: run journal write failed code=\((error as NSError).code)")
+            }
         }
+    }
+
+    private func flushJournal(completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let runJournal else {
+            completion(.failure(CocoaError(.fileNoSuchFile)))
+            return
+        }
+        runJournal.flush(completion: completion)
     }
 
     private func recordRunStart(
@@ -339,7 +347,8 @@ final class CLIServer {
         runID: UUID,
         status: String,
         startedAt: Date,
-        summary: String = ""
+        summary: String = "",
+        completion: @escaping (Result<Void, Error>) -> Void
     ) {
         var result = RunJournal.Event(
             sessionID: journalSessionID,
@@ -350,6 +359,7 @@ final class CLIServer {
         result.durationMS = max(0, Int(Date().timeIntervalSince(startedAt) * 1_000))
         result.summaryDigest = RunJournal.digest(summary)
         appendRunEvent(result, durable: true)
+        flushJournal(completion: completion)
     }
 
     private func backend(for kind: BackendKind) -> Backend {
