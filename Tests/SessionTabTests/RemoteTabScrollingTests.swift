@@ -194,7 +194,69 @@ extension SessionTabTests {
             """)
             try await testRemoteProgress(webView: webView)
         }
+        try await testRemoteTabReordering(webView: webView)
         print("Remote tabs (\(sidebar ? "Mac sidebar" : "browser strip")): WebKit scrolling, progress, polling, selection, focus, and controls passed at 320-1100pt widths and 340-700pt heights")
+    }
+
+    @MainActor
+    private static func testRemoteTabReordering(webView: WKWebView) async throws {
+        _ = try await webView.callAsyncJavaScript("""
+        const originalAPI=api,originalRefresh=refresh;
+        const settle=()=>new Promise(resolve=>setTimeout(resolve,20));
+        let serverTabs=["a","b","c"].map(id=>({id,title:"Duplicate title",supportsTabMetadata:true,
+          supportsTabReordering:true,isLocked:true,isStreaming:true,queuedCount:2}));
+        let calls=[],release=null,fail=false;
+        refresh=()=>Promise.resolve();
+        api=(path,options)=>{
+          calls.push({path,...JSON.parse(options.body)});
+          return new Promise((resolve,reject)=>{release=()=>{
+            if(fail){reject(Error("Connection lost"));return}
+            const {targetID,placement}=JSON.parse(options.body),id=path.split("/")[4];
+            const source=serverTabs.findIndex(s=>s.id===id),moved=serverTabs.splice(source,1)[0];
+            const target=serverTabs.findIndex(s=>s.id===targetID);
+            serverTabs.splice(target+(placement==="after"?1:0),0,moved);
+            resolve({sessions:serverTabs.map(s=>({...s}))});
+          }});
+        };
+        try{
+          selected="b";renderSessions(serverTabs);$("draft").value="Unsent draft";
+          const originalButton=nav.children[1].children[0];
+          const transfer=new DataTransfer();
+          nav.children[2].dispatchEvent(new DragEvent("dragstart",{bubbles:true,cancelable:true,dataTransfer:transfer}));
+          check(draggedTabID==="c"&&transfer.getData("text/plain")==="cantrip-tab:c","Drag uses stable session IDs");
+          renderSessions([...serverTabs].reverse());
+          check(nav.firstElementChild.dataset.sessionId==="a","Polling does not rearrange targets during a drag");
+          const target=nav.children[0],over=new DragEvent("dragover",{bubbles:true,cancelable:true,dataTransfer:transfer});
+          target.dispatchEvent(over);
+          check(over.defaultPrevented&&target.classList.contains("drop-target"),"Valid drop targets are highlighted");
+          target.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer:transfer}));
+          check(calls.length===1&&calls[0].path==="/api/v1/sessions/c/move"&&calls[0].targetID==="a"&&calls[0].placement==="before","Drop sends one relative move");
+          renderSessions([...serverTabs].reverse());
+          check(nav.firstElementChild.dataset.sessionId==="a","Pending writes do not show an optimistic or stale order");
+          release();await settle();
+          check(Array.from(nav.children,s=>s.dataset.sessionId).join()==="c,a,b","Host response determines tab order");
+          check(selected==="b"&&$("draft").value==="Unsent draft"&&nav.children[2].children[0]===originalButton,"Moving retains the selected tab, draft and existing controls");
+          check(nav.children[0].draggable&&nav.children[0].children[1].disabled,"Locked working tabs can move but not close");
+
+          editTab(serverTabs[0]);$("tabName").value="Unsaved name";
+          check($("tabMoveEarlier").disabled&&!$("tabMoveLater").disabled,"Move actions respect list boundaries");
+          $("tabMoveLater").click();release();await settle();
+          check(serverTabs.map(s=>s.id).join()==="a,c,b"&&$("tabName").value==="Unsaved name","Settings moves preserve unsaved name edits");
+          $("tabCancel").click();
+          const key=sidebarLayout?"ArrowDown":"ArrowRight";
+          nav.firstElementChild.children[0].dispatchEvent(new KeyboardEvent("keydown",{key,altKey:true,bubbles:true,cancelable:true}));
+          release();await settle();
+          check(serverTabs.map(s=>s.id).join()==="c,a,b","Keyboard moves use the visible list orientation");
+
+          fail=true;const previous=calls.length;
+          moveTabBy("b",-1);release();await settle();
+          check(calls.length===previous+1&&!movingTab,"Uncertain moves are never replayed");
+          check(Array.from(nav.children,s=>s.dataset.sessionId).join()==="c,a,b","Failed moves retain the confirmed order");
+          check($("actionError").textContent.includes("may have reached"),"Uncertain moves report an actionable error");
+          renderSessions([{id:"legacy",title:"Old host"}]);
+          check(!nav.firstElementChild.draggable,"Older hosts do not advertise drag reordering");
+        }finally{api=originalAPI;refresh=originalRefresh;draggedTabID=null;movingTab=false;selected=null;renderSessions([])}
+        """, arguments: [:], in: nil, contentWorld: .page)
     }
 
     @MainActor

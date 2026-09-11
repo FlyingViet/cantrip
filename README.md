@@ -45,8 +45,11 @@ The macOS app includes:
 - **Launcher and terminal:** open apps, search files through Spotlight,
   calculate, convert units, and run explicit shell commands.
 - **AI workspace:** streaming answers, file/screenshot attachments, voice,
-  renameable, lockable session tabs, recoverable runs, and a terminal per session.
-  Names and close-protection locks sync to Cantrip Remote and AgentGateway.
+  renameable, lockable, reorderable session tabs, recoverable runs, and a terminal per session.
+  Names, close-protection locks, and tab order sync to Cantrip Remote and AgentGateway.
+  Drag a session tab onto another to move it, or use **Move Tab Left/Right** in
+  its right-click menu. The Remote connection tab stays pinned first.
+  Order survives restarts without switching conversations or interrupting work.
 - **Automatic sending:** a separate, tool-free model call interprets busy-run
   messages as context, corrections, or follow-ups. Uncertain decisions queue
   safely; manual Queue/Redirect/Inject overrides remain available.
@@ -64,6 +67,12 @@ The macOS app includes:
   another Mac, or a browser. Mac Remote uses an expanded, vertically scrollable
   tab list on the left; main Cantrip and ordinary browser tabs stay across the
   top. Remote tab lists keep their scroll position during refreshes. Mac Remote
+  and browser tabs support drag reordering, move buttons in tab settings, and
+  Option/Alt + arrow keys (up/down in the sidebar, left/right in the top strip).
+  AgentGateway's drawer/sidebar provides drag handles and **Move Tab Up/Down**
+  actions. Reordering requires the updated host's `supportsTabReordering`
+  capability; private tabs remain hidden from Remote.
+  Mac Remote
   shows a pulsing brain, live activity and queued counts in the sidebar, with
   the selected session's status pinned near the message box.
   AgentGateway includes tappable uploaded-image

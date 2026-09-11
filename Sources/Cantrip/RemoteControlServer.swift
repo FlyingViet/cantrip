@@ -272,6 +272,34 @@ final class RemoteControlServer {
         }
         let session = manager.sessions[sessionIndex]
 
+        if parts.count == 2, parts[1] == "move" {
+            guard request.method == "POST" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            guard let json, Set(json.keys) == ["targetID", "placement"],
+                  let rawTarget = json["targetID"] as? String,
+                  let targetID = UUID(uuidString: rawTarget),
+                  let placement = json["placement"] as? String,
+                  ["before", "after"].contains(placement) else {
+                sendError(400, "targetID must be a UUID and placement must be before or after", on: connection)
+                return
+            }
+            guard manager.sessions.contains(where: { $0.id == targetID && !$0.isPrivate }) else {
+                sendError(404, "session not found", on: connection)
+                return
+            }
+            do {
+                try manager.moveSession(id, relativeTo: targetID, after: placement == "after")
+                let sessions = manager.sessions.filter { !$0.isPrivate }
+                    .map { snapshot($0, includeMessages: false, on: connection) }
+                sendJSON(["sessions": sessions], on: connection)
+            } catch {
+                sendError(409, error.localizedDescription, on: connection)
+            }
+            return
+        }
+
         if parts.count >= 2, parts[1] == "attachments" {
             guard request.method == "GET" else {
                 sendError(405, "method not allowed", on: connection)
@@ -479,6 +507,7 @@ final class RemoteControlServer {
             "customTitle": session.tabMetadata.customTitle ?? "",
             "isLocked": session.isLocked,
             "supportsTabMetadata": true,
+            "supportsTabReordering": true,
             "workdir": session.workdir,
             "isStreaming": session.isStreaming,
             "canResume": session.canResume,
@@ -665,6 +694,7 @@ private extension RemoteControlServer {
     #sessionProgress{min-width:0;padding:0 14px 9px;font-size:12px}#sessionProgress .brain-indicator{margin:0}#sessionProgressText{display:-webkit-box;min-width:0;overflow:hidden;overflow-wrap:anywhere;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.35}
     [data-cantrip-connected=false] .brain-indicator,[data-cantrip-connected=false].remote-sidebar .status-icon.running{animation:none;color:var(--tertiary)}
     @media(prefers-reduced-motion:reduce){.brain-indicator,.spinner,.status-icon.running{animation:none}}
+    .session-tab[draggable=true]{cursor:grab}.session-tab.drop-target{outline:2px solid var(--accent);outline-offset:-2px}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
@@ -679,6 +709,7 @@ private extension RemoteControlServer {
     <strong id="tabEditorTitle">Tab settings</strong><label>Tab name<input id="tabName" autocomplete="off"></label>
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
+    <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
     <dialog id="promptReader" aria-labelledby="promptTitle"><strong id="promptTitle">Full prompt</strong>
@@ -705,15 +736,16 @@ private extension RemoteControlServer {
       const deadline=controller?setTimeout(()=>controller.abort(),8000):null;if(controller)options.signal=controller.signal;
       try{const response=await fetch(path,options);const data=await response.json();if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}finally{if(deadline!==null)clearTimeout(deadline)}}
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
-    let refreshTask=null,refreshRequested=false;
+    let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,movingTab=false,tabOrderRevision=0;
     function refresh(){refreshRequested=true;if(refreshTask)return refreshTask;
-      refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token;
-        try{const listed=await api("/api/v1/sessions");if(token!==requestToken)continue;if(selected!==requestedID){refreshRequested=true;continue}
+      refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision;
+        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;if(selected!==requestedID){refreshRequested=true;continue}
           if(!selected||!listed.sessions.some(s=>s.id===selected))selected=listed.sessions[0]?.id||null;
           renderSessions(listed.sessions);const detailID=selected;if(detailID){const data=await api(`/api/v1/sessions/${detailID}`);if(token!==requestToken)continue;if(selected!==detailID){refreshRequested=true;continue}render(data.session)}else render(null);connection(true)}
         catch(error){if(token!==requestToken)continue;connection(false);if(error.message.includes("token")){refreshRequested=false;pair(true)}}}
       })().finally(()=>{refreshTask=null});return refreshTask}
     function renderSessions(items){const nav=$("sessions"),previousLeft=nav.scrollLeft,previousTop=nav.scrollTop,selectionChanged=nav.dataset.selected!==(selected||"");
+      if(draggedTabID||movingTab)return;sessionItems=items;
       // Keep existing controls mounted so polling does not interrupt scrolling or keyboard focus.
       const existing=new Map(Array.from(nav.children,tab=>[tab.dataset.sessionId,tab])),ids=new Set(items.map(item=>item.id));
       for(const tab of Array.from(nav.children))if(!ids.has(tab.dataset.sessionId))tab.remove();
@@ -723,11 +755,21 @@ private extension RemoteControlServer {
           if(sidebarLayout){const title=document.createElement("span"),status=document.createElement("span");title.className="session-name";status.className="session-status";button.append(brainIndicator(),title,status)}
           const close=document.createElement("button");close.className="session-close";tab.append(button,close)}
         tab.className=`session-tab ${item.id===selected?"active":""}`;
+        tab.draggable=Boolean(item.supportsTabReordering);
+        tab.ondragstart=event=>{if(movingTab||!item.supportsTabReordering){event.preventDefault();return}draggedTabID=item.id;event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("text/plain",`cantrip-tab:${item.id}`)};
+        tab.ondragend=()=>{draggedTabID=null;for(const row of nav.children)row.classList.remove("drop-target");refresh()};
+        tab.ondragover=event=>{if(draggedTabID&&draggedTabID!==item.id&&item.supportsTabReordering&&!movingTab){event.preventDefault();event.dataTransfer.dropEffect="move";tab.classList.add("drop-target")}};
+        tab.ondragleave=()=>tab.classList.remove("drop-target");
+        tab.ondrop=event=>{event.preventDefault();tab.classList.remove("drop-target");const id=draggedTabID;draggedTabID=null;
+          const source=sessionItems.findIndex(s=>s.id===id),target=sessionItems.findIndex(s=>s.id===item.id);
+          if(id&&id!==item.id&&source>=0&&target>=0&&item.supportsTabReordering)moveTab(id,item.id,source<target)};
+        tab.onkeydown=event=>{if(!event.altKey||!item.supportsTabReordering)return;const earlier=sidebarLayout?"ArrowUp":"ArrowLeft",later=sidebarLayout?"ArrowDown":"ArrowRight";
+          if(event.key===earlier||event.key===later){event.preventDefault();moveTabBy(item.id,event.key===earlier?-1:1)}};
         const button=tab.children[0];if(sidebarLayout){setText(button.querySelector(".session-name"),item.title);tab.dataset.streaming=String(Boolean(item.isStreaming));button.dataset.title=item.title;button.dataset.status=progressSummary(item);button.dataset.locked=String(Boolean(item.isLocked))}else{button.textContent=item.title;button.title=item.title}
         button.setAttribute("aria-current",item.id===selected?"true":"false");button.onclick=()=>{selected=item.id;renderedPayload="";renderProgress(item);refresh()};
         const close=tab.children[1];close.textContent=item.isLocked?"🔒":"×";close.disabled=Boolean(item.isLocked);close.title=item.isLocked?"Locked - unlock in tab settings":`Close ${item.title}`;close.setAttribute("aria-label",close.title);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};
         let menu=tab.children[2];if(item.supportsTabMetadata){if(!menu){menu=document.createElement("button");menu.className="session-menu";menu.textContent="…";tab.append(menu)}
-          menu.title=`Rename or lock ${item.title}`;menu.setAttribute("aria-label",menu.title);menu.onclick=()=>editTab(item)}else if(menu)menu.remove();
+          menu.title=`Settings for ${item.title}${item.supportsTabReordering?" - drag tabs to reorder":""}`;menu.setAttribute("aria-label",menu.title);menu.onclick=()=>editTab(item)}else if(menu)menu.remove();
         if(nav.children[index]!==tab)nav.insertBefore(tab,nav.children[index]||null)}
       renderProgress(items.find(item=>item.id===selected));if(nav.scrollLeft!==previousLeft)nav.scrollLeft=previousLeft;if(nav.scrollTop!==previousTop)nav.scrollTop=previousTop;nav.dataset.selected=selected||"";
       if(selectionChanged){const active=nav.querySelector(".active");if(active){const bounds=active.getBoundingClientRect(),viewport=nav.getBoundingClientRect();
@@ -740,16 +782,29 @@ private extension RemoteControlServer {
       event.preventDefault();const unit=event.deltaMode===1?16:event.deltaMode===2?nav.clientWidth:1;nav.scrollLeft+=event.deltaY*unit
     },{passive:false});
     let editingTab=null,tabSaving=false;
-    function editTab(item){editingTab=item;$("tabName").value=item.customTitle||item.title;$("tabLocked").checked=Boolean(item.isLocked);$("tabError").textContent="";$("tabEditor").showModal();$("tabName").focus();$("tabName").select()}
+    function editTab(item){editingTab=item;$("tabName").value=item.customTitle||item.title;$("tabLocked").checked=Boolean(item.isLocked);$("tabError").textContent="";updateTabMoveControls();$("tabEditor").showModal();$("tabName").focus();$("tabName").select()}
+    function updateTabMoveControls(){const index=sessionItems.findIndex(s=>s.id===editingTab?.id);
+      $("tabMoveControls").classList.toggle("hidden",!editingTab?.supportsTabReordering);
+      $("tabMoveEarlier").textContent=sidebarLayout?"Move up":"Move left";$("tabMoveLater").textContent=sidebarLayout?"Move down":"Move right";
+      $("tabMoveEarlier").disabled=movingTab||tabSaving||index<=0;$("tabMoveLater").disabled=movingTab||tabSaving||index<0||index>=sessionItems.length-1}
+    $("tabMoveEarlier").onclick=()=>{if(editingTab)moveTabBy(editingTab.id,-1)};
+    $("tabMoveLater").onclick=()=>{if(editingTab)moveTabBy(editingTab.id,1)};
     $("tabCancel").onclick=()=>{$("tabEditor").close();editingTab=null};
-    $("tabEditor").addEventListener("cancel",event=>{if(tabSaving)event.preventDefault()});
-    $("tabForm").onsubmit=async event=>{event.preventDefault();if(!editingTab||tabSaving)return;const item=editingTab,body={};
+    $("tabEditor").addEventListener("cancel",event=>{if(tabSaving||movingTab)event.preventDefault()});
+    $("tabForm").onsubmit=async event=>{event.preventDefault();if(!editingTab||tabSaving||movingTab)return;const item=editingTab,body={};
       if($("tabName").value!==(item.customTitle||item.title))body.customTitle=$("tabName").value;
       if($("tabLocked").checked!==Boolean(item.isLocked))body.isLocked=$("tabLocked").checked;
-      if(!Object.keys(body).length){$("tabEditor").close();return}tabSaving=true;$("tabSave").disabled=true;$("tabCancel").disabled=true;
+      if(!Object.keys(body).length){$("tabEditor").close();return}tabSaving=true;$("tabSave").disabled=true;$("tabCancel").disabled=true;updateTabMoveControls();
       try{await api(`/api/v1/sessions/${item.id}/metadata`,{method:"POST",body:JSON.stringify(body)});$("tabEditor").close();editingTab=null;await refresh()}
       catch(error){$("tabError").textContent=`${error.message} Refresh the session if the result is uncertain.`}
-      finally{tabSaving=false;$("tabSave").disabled=false;$("tabCancel").disabled=false}};
+      finally{tabSaving=false;$("tabSave").disabled=false;$("tabCancel").disabled=false;updateTabMoveControls()}};
+    function moveTabBy(id,offset){const index=sessionItems.findIndex(s=>s.id===id),target=sessionItems[index+offset];if(index>=0&&target)moveTab(id,target.id,offset>0)}
+    async function moveTab(id,targetID,after){if(movingTab||tabSaving)return;movingTab=true;tabOrderRevision++;const requestToken=token;
+      $("actionError").textContent="";$("tabError").textContent="";$("tabSave").disabled=true;$("tabCancel").disabled=true;updateTabMoveControls();
+      try{const data=await api(`/api/v1/sessions/${id}/move`,{method:"POST",body:JSON.stringify({targetID,placement:after?"after":"before"})});
+        if(token===requestToken){movingTab=false;renderSessions(data.sessions)}}
+      catch(error){if(token===requestToken){const message=`${error.message} Refresh the tabs before trying again; the move may have reached Cantrip.`;$("actionError").textContent=message;$("tabError").textContent=message}}
+      finally{movingTab=false;$("tabSave").disabled=false;$("tabCancel").disabled=false;updateTabMoveControls();refresh()}}
     function safeURL(raw,image=false){try{const url=new URL(raw,location.href);if(url.protocol==="https:"||url.protocol==="http:"||(!image&&url.protocol==="mailto:"))return url.href}catch{}return null}
     function appendInline(parent,source){source=source.replace(/<br\\s*\\/?\\s*>/gi,"\\n");let cursor=0,plain="";
       const flush=()=>{if(plain){parent.append(document.createTextNode(plain));plain=""}};

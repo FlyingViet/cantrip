@@ -3,11 +3,13 @@ import Foundation
 enum SessionTabError: LocalizedError {
     case nameTooLong
     case locked
+    case unavailable
 
     var errorDescription: String? {
         switch self {
         case .nameTooLong: return "Tab names must be 80 characters or fewer."
         case .locked: return "Unlock this tab before closing it or clearing its conversation."
+        case .unavailable: return "A tab is no longer open. Refresh the tabs and try again."
         }
     }
 }

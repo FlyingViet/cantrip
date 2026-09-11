@@ -104,6 +104,7 @@ struct SessionTabTests {
         precondition(preservedHistory == historyData, "Metadata changes must not truncate existing transcripts")
 
         try testWebTabControls()
+        try await testTabReordering()
         try testPromptPaging()
         try await testPromptPreparation()
         try await testCopilotUsage()
@@ -348,10 +349,12 @@ struct SessionTabTests {
         context.evaluateScript("""
         const elements={};
         function node(){return {children:[],value:"",checked:false,disabled:false,
+          classList:{toggle(){}},
           append(...items){this.children.push(...items)},replaceChildren(){this.children=[]},
           setAttribute(){},addEventListener(){},showModal(){this.open=true},close(){this.open=false},focus(){},select(){}}}
         const $=id=>elements[id]||(elements[id]=node());
         const document={createElement:node};let selected="a",renderedPayload="",calls=[];
+        let sessionItems=[],movingTab=false,tabOrderRevision=0,token="test",sidebarLayout=false;
         function refresh(){return Promise.resolve()}
         function closeSession(id){calls.push({close:id})}
         function api(path,options){calls.push({path,body:JSON.parse(options.body)});return Promise.resolve({})}
