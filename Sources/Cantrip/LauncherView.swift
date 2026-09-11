@@ -145,7 +145,7 @@ struct LauncherView: View {
         .onChange(of: session.isStreaming) {
             onKeepVisibleChange(pinned || session.isStreaming)
         }
-        .onChange(of: manager.activeIndex) {
+        .onChange(of: session.id) {
             terminalCommand = ""
             resetTerminalHistoryNavigation()
         }
@@ -619,7 +619,7 @@ struct LauncherView: View {
                                 .font(.system(size: 10))
                                 .help("Locked tab - unlock from the tab menu to close")
                         } else {
-                            Button(action: { manager.close(index) }) {
+                            Button(action: { manager.close(chat.id) }) {
                                 Image(systemName: "xmark")
                                     .font(.system(size: 8, weight: .bold))
                                     .foregroundStyle(.tertiary)
@@ -635,8 +635,19 @@ struct LauncherView: View {
                                 in: Capsule())
                     .contentShape(Capsule())
                     .onTapGesture {
-                        manager.select(index)
+                        manager.select(chat.id)
                     }
+                    .draggable("cantrip-tab:\(chat.id.uuidString)")
+                    .dropDestination(for: String.self) { items, _ in
+                        guard items.count == 1, let value = items.first,
+                              value.hasPrefix("cantrip-tab:"),
+                              let id = UUID(uuidString: String(value.dropFirst("cantrip-tab:".count))),
+                              let source = manager.sessions.firstIndex(where: { $0.id == id }),
+                              let target = manager.sessions.firstIndex(where: { $0.id == chat.id }),
+                              id != chat.id else { return false }
+                        return moveTab(id, relativeTo: chat.id, after: source < target)
+                    }
+                    .help("Drag to reorder. Right-click for tab actions.")
                     .contextMenu {
                         Button("Rename Tab...") {
                             tabName = chat.tabMetadata.customTitle ?? chat.title
@@ -647,7 +658,16 @@ struct LauncherView: View {
                             catch { manager.tabActionError = error.localizedDescription }
                         }
                         Divider()
-                        Button("Close Tab", role: .destructive) { manager.close(index) }
+                        Button("Move Tab Left") {
+                            moveTab(chat.id, offset: -1)
+                        }
+                        .disabled(index == 0)
+                        Button("Move Tab Right") {
+                            moveTab(chat.id, offset: 1)
+                        }
+                        .disabled(index == manager.sessions.count - 1)
+                        Divider()
+                        Button("Close Tab", role: .destructive) { manager.close(chat.id) }
                             .disabled(chat.isLocked)
                     }
                 }
@@ -664,6 +684,26 @@ struct LauncherView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
+        }
+    }
+
+    private func moveTab(_ id: UUID, offset: Int) {
+        guard let index = manager.sessions.firstIndex(where: { $0.id == id }),
+              manager.sessions.indices.contains(index + offset) else {
+            manager.tabActionError = SessionTabError.unavailable.localizedDescription
+            return
+        }
+        moveTab(id, relativeTo: manager.sessions[index + offset].id, after: offset > 0)
+    }
+
+    @discardableResult
+    private func moveTab(_ id: UUID, relativeTo targetID: UUID, after: Bool) -> Bool {
+        do {
+            try manager.moveSession(id, relativeTo: targetID, after: after)
+            return true
+        } catch {
+            manager.tabActionError = error.localizedDescription
+            return false
         }
     }
 

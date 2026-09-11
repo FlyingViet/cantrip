@@ -122,8 +122,35 @@ final class SessionManager: ObservableObject {
         persistOpenSessions()
     }
 
+    func select(_ id: UUID) {
+        guard let index = sessions.firstIndex(where: { $0.id == id }) else {
+            tabActionError = SessionTabError.unavailable.localizedDescription
+            return
+        }
+        select(index)
+    }
+
     func selectRemote() {
         showingRemote = true
+    }
+
+    func moveSession(_ id: UUID, relativeTo targetID: UUID, after: Bool) throws {
+        guard let source = sessions.firstIndex(where: { $0.id == id }),
+              sessions.contains(where: { $0.id == targetID }) else {
+            throw SessionTabError.unavailable
+        }
+        guard id != targetID else { return }
+        let selectedID = active.id
+        var reordered = sessions
+        let moved = reordered.remove(at: source)
+        guard let target = reordered.firstIndex(where: { $0.id == targetID }) else {
+            throw SessionTabError.unavailable
+        }
+        reordered.insert(moved, at: target + (after ? 1 : 0))
+        guard reordered.map(\.id) != sessions.map(\.id) else { return }
+        sessions = reordered
+        activeIndex = reordered.firstIndex(where: { $0.id == selectedID })!
+        persistOpenSessions()
     }
 
     func selectPrevious() {
@@ -160,6 +187,14 @@ final class SessionManager: ObservableObject {
 
     /// Closing a tab ARCHIVES it — the transcript stays on disk and the
     /// session can be reopened from the history view's session list.
+    func close(_ id: UUID) {
+        guard let index = sessions.firstIndex(where: { $0.id == id }) else {
+            tabActionError = SessionTabError.unavailable.localizedDescription
+            return
+        }
+        close(index)
+    }
+
     func close(_ index: Int) {
         guard sessions.indices.contains(index) else { return }
         let session = sessions[index]
@@ -168,11 +203,12 @@ final class SessionManager: ObservableObject {
             tabActionError = error.localizedDescription
             return
         }
+        let selectedID = active.id
         session.cancel()
         if session.isPrivate { session.deleteTranscript() }
         sessions.remove(at: index)
         if sessions.isEmpty { adopt(ChatSession()) }
-        activeIndex = min(activeIndex, sessions.count - 1)
+        activeIndex = sessions.firstIndex(where: { $0.id == selectedID }) ?? min(index, sessions.count - 1)
         anyStreaming = sessions.contains { $0.isStreaming }
         persistOpenSessions()
     }
