@@ -1,19 +1,23 @@
 APP_NAME = Cantrip
-BUILD_DIR = .build/release
+BUILD_FLAGS = -c release --arch arm64 --arch x86_64
+BUILD_DIR = $(shell swift build $(BUILD_FLAGS) --show-bin-path)
 APP_BUNDLE = $(APP_NAME).app
 APP_STAGING = .$(APP_NAME).app.staging
 APP_BACKUP = .$(APP_NAME).app.previous
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds cert artwork icon app run clean
+.PHONY: all build test test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds cert artwork icon app run clean
 
 all: app
 
 build:
-	swift build -c release
+	swift build $(BUILD_FLAGS)
 
-test: test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds
+test: test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds
+
+test-architectures:
+	@bash Tests/ArchitectureTests/run.sh
 
 test-github-builds:
 	@BIN="/tmp/cantrip-github-build-tests-$$$$"; \
@@ -110,6 +114,7 @@ app: build cert icon
 	plutil -replace CantripBuildIdentity -string "$$BUILD_ID" "$$STAGING/Contents/Info.plist"; \
 	plutil -replace CantripBuildDate -string "$$BUILD_DATE" "$$STAGING/Contents/Info.plist"; \
 	if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$$STAGING/Contents/Resources/"; fi; \
+	bash Scripts/verify-macos-architectures.sh "$$STAGING"; \
 	IDENT=$$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' \
 		'/"$(CERT_NAME)"/ { print $$2; found=1; exit } /^[[:space:]]*[0-9]+\)/ && first == "" { first=$$2 } END { if (!found && first != "") print first }'); \
 	[ -n "$$IDENT" ] || IDENT="-"; \

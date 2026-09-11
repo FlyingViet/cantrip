@@ -7,6 +7,14 @@ using the same operating-system API.
 
 ## Current status
 
+macOS packaging builds Universal `arm64` + `x86_64` binaries and rejects
+incompatible bundled native components before replacing the app, avoiding a
+Rosetta dependency on Apple silicon. The gate also checks each slice's macOS
+deployment target against the bundle metadata and preserves macOS 14 support.
+macOS 26 is supported; Xcode 27 builds retain that minimum, with macOS 27 runtime
+confirmation pending. This does not change the Windows x64
+target or certify separately installed backend runtimes on either platform.
+
 | Subsystem | Status | Windows implementation / remaining gap |
 |---|---|---|
 | Global summon shortcut | Partial | Alt+Space with conflict reporting, Ctrl+Space fallback, and retry. Selected-text shortcut remains. |

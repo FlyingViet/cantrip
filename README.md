@@ -22,6 +22,17 @@ or your own model server. Provider charges and usage limits still apply.
 | macOS | macOS 14+, Xcode Command Line Tools | Full Swift app; open with **Option+Space** |
 | Windows | Windows 10/11 x64; Node.js 20.19+ for source builds | Electron app; open with **Alt+Space** |
 
+Mac builds are Universal (`arm64` + `x86_64`): Cantrip runs natively on Apple
+silicon without Rosetta and retains Intel Mac support. Packaging rejects native
+bundled components missing either architecture or requiring a newer macOS than
+the app declares. The minimum remains macOS 14; it is not a maximum version.
+macOS 26 is supported, and builds with Xcode 27 retain that same minimum for
+macOS 27 readiness. macOS 27 runtime compatibility still needs confirmation on
+that OS; see [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27-support).
+Separately installed AI CLIs,
+their runtimes, MCP tools, and local model servers must also support your Mac;
+see [Rosetta compatibility](docs/updating-and-troubleshooting.md#intel-app-or-rosetta-compatibility-warning).
+
 Windows supports app launching, math, Claude/Copilot/Codex, screen capture,
 and plugins. It does **not** yet support local models, persistent session
 tabs, memory, voice, council, or Cantrip Remote. See the
