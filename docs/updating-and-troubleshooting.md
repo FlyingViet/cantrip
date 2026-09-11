@@ -81,6 +81,66 @@ On Mac, if it works in Terminal but is not detected in Cantrip, use
 `command -v` to find its executable and fill in the backend path in Settings.
 Do not paste a login token into the path or model field.
 
+## macOS 26 and 27 support
+
+Cantrip's deployment target is **macOS 14.0 or later**, not macOS 14 only.
+The same Universal app supports macOS 26 without requiring an OS upgrade.
+Building with Xcode 27 does not make macOS 27 the minimum, and an older minimum
+does not prevent the app from running on newer macOS versions.
+
+The release build succeeds with Xcode 27 on macOS 26. macOS 27 readiness is
+currently build-level, not a claim of completed runtime testing on macOS 27.
+Before treating a new OS release as fully supported, exercise the launcher,
+typing/paste, voice, screen capture, permissions, login startup, Remote
+connections, and each configured backend on a Mac running that OS.
+
+Packaging checks both native architecture slices and their actual Mach-O
+deployment targets, including bundled helpers/libraries, against the app's
+`LSMinimumSystemVersion`. It also rejects app metadata that drops macOS 14
+support. Newer SDKs and OS-specific features must retain availability guards
+and fallbacks; the optional Apple Intelligence message summaries already check
+macOS 26 and model availability. Intel support applies only to macOS versions
+that Apple supports on that hardware.
+
+Use the active Xcode's SDK for builds; a newer SDK does not need to be installed
+on Macs that only run the packaged app. To package without interrupting sessions,
+run `make app`, then quit and reopen Cantrip once active work is finished.
+The checks below cover the app bundle, not external backend dependencies.
+
+## Intel app or Rosetta compatibility warning
+
+[Apple is ending general Rosetta support after macOS 27](https://support.apple.com/en-us/102527).
+Cantrip's `make app` (also used by the installer and updater) builds Universal
+`arm64` + `x86_64` code, so the app runs natively on Apple silicon and still
+supports Intel Macs on macOS 14 or later. Its Swift package uses Apple's system
+frameworks, with no third-party package dependencies.
+
+Before signing or replacing the existing app, packaging checks every bundled
+Mach-O executable/library for both architectures and compatible macOS minimums.
+An incompatible component stops the update and leaves the previous app in
+place. To repeat that check:
+
+```sh
+cd ~/Coding/Cantrip
+bash Scripts/verify-macos-architectures.sh Cantrip.app
+```
+
+This checks the app bundle, **not separately installed tools**. Claude, Copilot,
+Codex, Node/Python runtimes, MCP servers, plugins' external commands, and local
+model servers may have their own native dependencies. Update the particular
+component named in macOS's warning to its **Apple silicon** or **Universal**
+release; rebuilding Cantrip does not update those installations.
+
+For a CLI, inspect the path configured in Cantrip Settings, or use
+`command -v <tool>` in Terminal when no path is configured. `file -L /path/to/tool`
+identifies a native binary's architecture; scripts require checking their
+interpreter and any native addons too. A script or a directory named `arm64`
+alone is not proof that all its dependencies are native.
+On Apple silicon, use native installations (Homebrew normally lives at
+`/opt/homebrew`, not Intel Homebrew's `/usr/local`) and reinstall native addons
+with that runtime. Do not delete working backends or change permissions just
+to suppress the warning. Restart Cantrip only after finishing active sessions.
+
 ## A model, effort, or context tier is rejected
 
 Return to **Default** where offered and retry a short text question. Use only
