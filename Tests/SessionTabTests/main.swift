@@ -104,6 +104,7 @@ struct SessionTabTests {
         precondition(preservedHistory == historyData, "Metadata changes must not truncate existing transcripts")
 
         try testWebTabControls()
+        try testNativeTabDragging()
         try await testTabReordering()
         try testPromptPaging()
         try await testPromptPreparation()

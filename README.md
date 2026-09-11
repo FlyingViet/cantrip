@@ -72,6 +72,8 @@ The macOS app includes:
   AgentGateway's drawer/sidebar provides drag handles and **Move Tab Up/Down**
   actions. Reordering requires the updated host's `supportsTabReordering`
   capability; private tabs remain hidden from Remote.
+  Native Mac tab labels use dedicated mouse handling, so dragging a tab does
+  not move the launcher window; dragging the window background still works.
   Mac Remote
   shows a pulsing brain, live activity and queued counts in the sidebar, with
   the selected session's status pinned near the message box.
