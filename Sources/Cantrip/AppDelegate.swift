@@ -237,6 +237,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_ notification: Notification) {
         remoteControlServer?.stop()
+        for error in RunJournal.drainForTermination() {
+            Log.write("run-journal: exit flush failed code=\((error as NSError).code)")
+        }
         CrashRecovery.markCleanExit()
     }
 

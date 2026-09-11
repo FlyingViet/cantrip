@@ -62,6 +62,11 @@ The macOS app includes:
   two confirmed read-only probes. Bounded reads and coalesced web refreshes avoid
   stalled request backlogs, without switching healthy Tailscale connections to LAN or replaying sends;
   Tailscale-only mode is also available. AgentGateway can display and remove queued prompts.
+  Host diagnostics separate lightweight `/health` liveness from authenticated
+  session readiness, with content-free request timings and bounded response writes.
+- **Durable runs:** journal encoding, writes, and synchronization use an ordered
+  background writer. Run completion and Remote mutation acknowledgements wait
+  for saved events; storage failures are surfaced instead of reporting success.
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a
   `cantrip` command for asking questions from Terminal.
 

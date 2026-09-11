@@ -13,6 +13,48 @@ prepares memory context and encodes transcript responses off the UI thread.
 Requests remain single messages, and uncertain sends are still never
 automatically replayed.
 
+## Liveness, readiness, and stall diagnostics
+
+`GET /health` returns the pre-encoded `{"status":"ok"}` response on the host's
+network queue, without waiting for MainActor or transcript JSON encoding.
+It requires no HTTP bearer token (the native LAN transport still requires its
+TLS pairing key). This is **liveness only**, not proof that sessions are usable.
+
+Pairing-authenticated `GET /api/v1/ready` exercises the same MainActor session
+snapshots and JSON queue as `GET /api/v1/sessions`. It returns `status: "ready"`
+and the non-private session summaries, or 503 if the session manager is absent.
+It is a read-only snapshot check, not a backend/provider or disk-durability
+check. A blocked session handler/encoder delays readiness even when health is
+fast. Both native clients continue to use authenticated session reads for
+route recovery; neither promotes a connection based on `/health`.
+
+The Mac log's `remote-request:` entries contain generated request IDs,
+allowlisted route/method labels, status, response bytes, outcome, and monotonic
+millisecond timings for receiving/parsing, MainActor wait, handler work,
+snapshots, journal wait, JSON queue wait/encoding, and response sending.
+Responses include `X-Cantrip-Request-ID` for correlation. These entries contain
+no pairing tokens, session IDs, raw paths, request/response bodies, or chat text.
+Other existing app log categories may contain sensitive information; do not
+share the entire log unredacted.
+
+Requests still pending after one second log their current stage, then every
+five seconds. Response writes have a 15-second deadline and log numeric network
+errors or `send_timeout` before closing the socket. `sent` means Network.framework
+processed the bytes, not that the remote client received or displayed them.
+This does not change client read budgets or make timed-out mutations safe to
+replay. A mutation's successful response waits for its pending journal writes;
+a storage failure returns an explicit HTTP 500 warning that the action may
+already have applied.
+
+For another stall, compare timestamp-aligned host loopback and HTTPS health
+**and readiness**, alongside client HTTPS and authenticated TLS-PSK LAN session
+reads. Fast health with slow readiness identifies session-path contention;
+fast host loopback with slow HTTPS points beyond that handler. Host-only probes
+cannot establish what happened on the remote client's tunnel/network path.
+These changes require updating and reopening the Mac host, not an AgentGateway
+release. Packaging with `make app` alone does not interrupt or update the running
+process.
+
 **You need:** a Mac with Cantrip running, an available backend on that Mac,
 and access to its Settings. Native clients on the same local network do not
 need Tailscale. Save a Tailscale URL for preferred access both at home and away.
