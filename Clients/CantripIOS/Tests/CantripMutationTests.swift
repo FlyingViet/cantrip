@@ -31,12 +31,13 @@ private final class MutationRequestProtocol: URLProtocol {
 final class CantripMutationTests: XCTestCase {
     private let sessionID = "00000000-0000-0000-0000-000000000001"
 
-    private func snapshot(capabilities: Bool = true, list: Bool = false) -> Data {
+    private func snapshot(capabilities: Bool = true, list: Bool = false, id: String? = nil) -> Data {
         let session = """
-        {"id":"\(sessionID)","title":"Test","workdir":"/tmp",
+        {"id":"\(id ?? sessionID)","title":"Test","workdir":"/tmp",
          "isStreaming":true,"canResume":true,"councilMode":false,"queuedCount":1,
          "supportsAutoDelivery":\(capabilities),"supportsImageAttachments":\(capabilities),
          "supportsTabMetadata":\(capabilities),"supportsQueueRemoval":\(capabilities),
+         "supportsTabReordering":\(capabilities),"isLocked":true,
          "messages":[]}
         """
         return Data((list ? "{\"sessions\":[\(session)]}" : "{\"session\":\(session)}").utf8)
@@ -199,5 +200,122 @@ final class CantripMutationTests: XCTestCase {
             XCTAssertEqual(methods, ["GET", method])
             model.clearConfiguration()
         }
+    }
+
+    private func seedTabs(_ model: CantripRemoteModel, ids: [String]) async throws {
+        for id in ids {
+            MutationRequestProtocol.handler = { request in
+                (200, self.snapshot(list: request.httpMethod == "GET", id: id))
+            }
+            let created = await model.createSession()
+            XCTAssertTrue(created, model.errorMessage ?? "Could not create fixture tab")
+        }
+    }
+
+    func testTabMoveAppliesAuthoritativeOrderWithoutChangingSelectionOrTranscript() async throws {
+        let model = try await model()
+        let otherID = "00000000-0000-0000-0000-000000000002"
+        let addedID = "00000000-0000-0000-0000-000000000003"
+        try await seedTabs(model, ids: [sessionID, otherID])
+        let selected = model.selectedSession
+        let revision = model.transcriptRevision
+        var methods: [String] = []
+        MutationRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            if request.httpMethod == "GET" { return (200, self.snapshot(id: otherID)) }
+            XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(otherID)/move")
+            let data: Data
+            if let body = request.httpBody {
+                data = body
+            } else {
+                let stream = try XCTUnwrap(request.httpBodyStream)
+                stream.open()
+                defer { stream.close() }
+                var bytes = [UInt8](repeating: 0, count: 1024)
+                var body = Data()
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&bytes, maxLength: bytes.count)
+                    guard count > 0 else { break }
+                    body.append(contentsOf: bytes.prefix(count))
+                }
+                data = body
+            }
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+            XCTAssertEqual(body, ["targetID": self.sessionID, "placement": "before"])
+            let sessions = try [otherID, self.sessionID, addedID].map { id -> [String: Any] in
+                let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: self.snapshot(id: id)) as? [String: Any])
+                var session = try XCTUnwrap(payload["session"] as? [String: Any])
+                session.removeValue(forKey: "messages")
+                return session
+            }
+            return (200, try JSONSerialization.data(withJSONObject: ["sessions": sessions]))
+        }
+        let moved = await model.moveTab(otherID, offset: -1)
+        XCTAssertTrue(moved, model.errorMessage ?? "Expected reorder")
+        XCTAssertEqual(methods, ["GET", "POST"])
+        XCTAssertEqual(model.sessions.map(\.id), [otherID, sessionID, addedID])
+        XCTAssertEqual(model.selectedSessionID, otherID)
+        XCTAssertEqual(model.selectedSession, selected)
+        XCTAssertEqual(model.transcriptRevision, revision)
+        XCTAssertFalse(model.isMutating)
+    }
+
+    func testTabMoveRejectsOldHostsAndNeverReplaysAnUncertainWrite() async throws {
+        let otherID = "00000000-0000-0000-0000-000000000002"
+        for failure in ["legacy", "offline", "post", "closed"] {
+            let model = try await model()
+            try await seedTabs(model, ids: [sessionID, otherID])
+            let order = model.sessions.map(\.id)
+            var methods: [String] = []
+            MutationRequestProtocol.handler = { request in
+                methods.append(request.httpMethod ?? "")
+                if failure == "offline" || request.httpMethod == "POST" {
+                    if failure == "closed" { return (404, Data(#"{"error":"session not found"}"#.utf8)) }
+                    throw URLError(.networkConnectionLost)
+                }
+                var data = self.snapshot(id: otherID)
+                if failure == "legacy" {
+                    var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                    var session = try XCTUnwrap(payload["session"] as? [String: Any])
+                    session.removeValue(forKey: "supportsTabReordering")
+                    payload["session"] = session
+                    data = try JSONSerialization.data(withJSONObject: payload)
+                }
+                return (200, data)
+            }
+            let moved = await model.moveTab(otherID, offset: -1)
+            XCTAssertFalse(moved)
+            XCTAssertEqual(methods, failure == "legacy" || failure == "offline" ? ["GET"] : ["GET", "POST"])
+            XCTAssertEqual(model.sessions.map(\.id), order, "Failed moves must not leave an optimistic order")
+            XCTAssertEqual(model.selectedSessionID, otherID)
+            if failure == "legacy" {
+                XCTAssertTrue(model.errorMessage?.contains("reorder") == true)
+            } else if failure == "offline" {
+                XCTAssertTrue(model.errorMessage?.contains("was not sent") == true)
+            } else if failure == "post" {
+                XCTAssertTrue(model.errorMessage?.contains("may have reached") == true)
+            }
+            XCTAssertFalse(model.isMutating)
+            model.clearConfiguration()
+        }
+    }
+
+    func testInvalidTabMoveDoesNotMakeRequests() async throws {
+        let model = try await model()
+        let otherID = "00000000-0000-0000-0000-000000000002"
+        try await seedTabs(model, ids: [sessionID, otherID])
+        MutationRequestProtocol.handler = { _ in
+            XCTFail("Invalid or self moves must not send a request")
+            throw URLError(.badURL)
+        }
+        let selfMove = await model.moveTab(sessionID, relativeTo: sessionID, after: false)
+        XCTAssertTrue(selfMove)
+        for (id, offset) in [(sessionID, -1), (otherID, 1), ("closed", 1)] {
+            let moved = await model.moveTab(id, offset: offset)
+            XCTAssertFalse(moved)
+            XCTAssertNotNil(model.errorMessage)
+        }
+        let missing = await model.moveTab(sessionID, relativeTo: "closed", after: true)
+        XCTAssertFalse(missing)
     }
 }

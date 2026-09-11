@@ -55,7 +55,7 @@ final class CantripTabDrawerTests: XCTestCase {
                 workdir: "/tmp", isStreaming: index.isMultiple(of: 2),
                 canResume: false, councilMode: false, queuedCount: index,
                 status: nil, messages: nil, supportsImageAttachments: nil, queued: nil,
-                isLocked: index.isMultiple(of: 3)
+                isLocked: index.isMultiple(of: 3), supportsTabReordering: true
             )
         }
     }
@@ -86,7 +86,8 @@ final class CantripTabDrawerTests: XCTestCase {
             for size: DynamicTypeSize in [.large, .accessibility5] {
                 let list = CantripTabList(
                     sessions: sessions(), selectedSessionID: "tab-0",
-                    onSelect: { _ in }, actions: { _ in Button("Rename Tab") {} }
+                    onSelect: { _ in }, onMove: { _, _, _ in },
+                    actions: { _ in Button("Rename Tab") {} }
                 )
                 .environment(\.dynamicTypeSize, size)
                 let controller = UIHostingController(rootView: list)
@@ -102,6 +103,39 @@ final class CantripTabDrawerTests: XCTestCase {
                 XCTAssertLessThanOrEqual(scroll.contentSize.width, width + 1)
             }
         }
+    }
+
+    func testReorderDropUsesStableIDsInBothDirectionsWithoutSelecting() {
+        let tabs = sessions()
+        var moves: [(String, String, Bool)] = []
+        let list = CantripTabList(
+            sessions: tabs, selectedSessionID: tabs[12].id,
+            onSelect: { _ in XCTFail("Reordering must not select or dismiss the drawer") },
+            onMove: { moves.append(($0, $1, $2)) }, actions: { _ in EmptyView() }
+        )
+        XCTAssertTrue(list.acceptDrop(["cantrip-tab:tab-0"], onto: "tab-39"))
+        XCTAssertEqual(moves.last?.0, "tab-0")
+        XCTAssertEqual(moves.last?.1, "tab-39")
+        XCTAssertEqual(moves.last?.2, true)
+        XCTAssertTrue(list.acceptDrop(["cantrip-tab:tab-39"], onto: "tab-0"))
+        XCTAssertEqual(moves.last?.2, false)
+        for items in [[], ["unrelated"], ["cantrip-tab:closed"], ["cantrip-tab:tab-0"],
+                      ["cantrip-tab:tab-1", "cantrip-tab:tab-2"]] {
+            XCTAssertFalse(list.acceptDrop(items, onto: "tab-0"))
+        }
+        XCTAssertFalse(list.acceptDrop(["cantrip-tab:tab-0"], onto: "closed"))
+        XCTAssertEqual(moves.count, 2)
+        XCTAssertEqual(list.selectedSession?.id, tabs[12].id)
+
+        var legacy = tabs
+        legacy[0].supportsTabReordering = nil
+        let oldHost = CantripTabList(
+            sessions: legacy, selectedSessionID: nil, onSelect: { _ in },
+            onMove: { _, _, _ in XCTFail("Old hosts must not offer reordering") },
+            actions: { _ in EmptyView() }
+        )
+        XCTAssertFalse(oldHost.acceptDrop(["cantrip-tab:tab-0"], onto: "tab-1"))
+        XCTAssertFalse(oldHost.acceptDrop(["cantrip-tab:tab-1"], onto: "tab-0"))
     }
 
     func testOverlayKeepsChatMountedAndClosesWhenSwitchingIsDisabled() throws {

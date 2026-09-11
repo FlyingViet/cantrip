@@ -76,6 +76,7 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var customTitle: String? = nil
     var isLocked: Bool? = nil
     var supportsTabMetadata: Bool? = nil
+    var supportsTabReordering: Bool? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
 }
@@ -106,6 +107,7 @@ enum CantripRemoteError: LocalizedError {
     case autoDeliveryUnsupported
     case queueRemovalUnsupported
     case tabMetadataUnsupported
+    case tabReorderingUnsupported
     case githubBuildsUnsupported
     case copilotUsageUnsupported
 
@@ -148,6 +150,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to remove queued messages from AgentGateway."
         case .tabMetadataUnsupported:
             return "Update and reopen Cantrip on your Mac to rename or lock its tabs."
+        case .tabReorderingUnsupported:
+            return "Update and reopen Cantrip on your Mac to reorder its tabs."
         case .githubBuildsUnsupported:
             return "Update and reopen Cantrip on your Mac to view GitHub builds."
         case .copilotUsageUnsupported:
@@ -705,6 +709,25 @@ struct CantripRemoteAPI {
             body: body
         )
         return response.session
+    }
+
+    fileprivate func prepareTabMove(id: String, targetID: String, after: Bool) async throws -> Data {
+        let host = try await session(id: id)
+        guard host.supportsTabReordering == true else {
+            throw CantripRemoteError.tabReorderingUnsupported
+        }
+        struct Body: Encodable {
+            let targetID: String
+            let placement: String
+        }
+        return try JSONEncoder().encode(Body(targetID: targetID, placement: after ? "after" : "before"))
+    }
+
+    fileprivate func moveTab(id: String, body: Data) async throws -> [CantripRemoteSession] {
+        let response: CantripSessionsResponse = try await request(
+            path: "/api/v1/sessions/\(id)/move", method: "POST", body: body
+        )
+        return response.sessions
     }
 
     func removeQueuedPrompt(id: String, sessionID: String) async throws -> CantripRemoteSession {
@@ -1271,6 +1294,38 @@ final class CantripRemoteModel: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func moveTab(_ id: String, relativeTo targetID: String, after: Bool) async -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish before reordering tabs."
+            return false
+        }
+        guard sessions.contains(where: { $0.id == id }),
+              sessions.contains(where: { $0.id == targetID }) else {
+            errorMessage = "A tab is no longer open. Refresh the tabs and try again."
+            return false
+        }
+        guard id != targetID else { return true }
+        guard let reordered = await mutate(prepare: { api in
+            try await api.prepareTabMove(id: id, targetID: targetID, after: after)
+        }, { api, body in
+            try await api.moveTab(id: id, body: body)
+        }) else { return false }
+        // A list response has no transcript. Keep the selected detail and draft mounted.
+        sessions = reordered
+        return true
+    }
+
+    @discardableResult
+    func moveTab(_ id: String, offset: Int) async -> Bool {
+        guard let index = sessions.firstIndex(where: { $0.id == id }),
+              [-1, 1].contains(offset), sessions.indices.contains(index + offset) else {
+            errorMessage = "The tab cannot move farther in that direction. Refresh the tabs and try again."
+            return false
+        }
+        return await moveTab(id, relativeTo: sessions[index + offset].id, after: offset > 0)
+    }
+
     private func mutate<T>(
         sessionID: String? = nil,
         _ operation: @escaping (CantripRemoteAPI) async throws -> T
@@ -1525,6 +1580,7 @@ final class CantripRemoteModel: ObservableObject {
             return false
         case CantripRemoteError.imagesUnsupported, CantripRemoteError.queueRemovalUnsupported,
              CantripRemoteError.autoDeliveryUnsupported, CantripRemoteError.tabMetadataUnsupported,
+             CantripRemoteError.tabReorderingUnsupported,
              is ImageAttachmentError:
             return false
         default:

@@ -22,6 +22,23 @@ struct CantripTabActions: View {
             Text("Update and reopen Cantrip to rename or lock tabs.")
         }
         Divider()
+        if session.supportsTabReordering == true {
+            Button {
+                Task { await model.moveTab(session.id, offset: -1) }
+            } label: {
+                Label("Move Tab Up", systemImage: "arrow.up")
+            }
+            .disabled(model.isMutating || model.sessions.first?.id == session.id)
+            Button {
+                Task { await model.moveTab(session.id, offset: 1) }
+            } label: {
+                Label("Move Tab Down", systemImage: "arrow.down")
+            }
+            .disabled(model.isMutating || model.sessions.last?.id == session.id)
+        } else {
+            Text("Update and reopen Cantrip to reorder tabs.")
+        }
+        Divider()
         Button(role: .destructive, action: onClose) {
             Label("Close Session", systemImage: "xmark")
         }

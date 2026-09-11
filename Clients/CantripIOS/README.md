@@ -109,6 +109,15 @@ Touch and hold the header title or a drawer row to **Rename Tab**, **Lock Tab** 
 **Unlock Tab**, or **Close Session** (delete the tab). A regular tap opens only
 the drawer from the title, or selects a tab from a drawer row. Each row's
 **...** menu also keeps these actions.
+To reorder tabs, drag a row's **three-line handle** onto another tab, or use
+**Move Tab Up** / **Move Tab Down** in its actions menu. This works in both the
+compact drawer and the wide sidebar, including locked or working tabs, without
+switching the selected conversation or clearing the draft. Order is saved on
+the host Mac, survives its restart, and syncs to Cantrip and other Remote clients.
+Update and reopen the host first: these controls require `supportsTabReordering`.
+Moves use an authenticated read-only preflight and a single write; an uncertain
+write is not replayed automatically.
+
 Names and locks
 are saved on the host Mac and sync with local
 Cantrip, other Macs' Remote views, and browser clients. A lock icon marks

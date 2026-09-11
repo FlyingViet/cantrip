@@ -130,6 +130,9 @@ struct CantripSessionDrawer: View {
                     onSelect: { id in
                         if isModal { onDismiss() }
                         onSelect(id)
+                    },
+                    onMove: { id, targetID, after in
+                        Task { await model.moveTab(id, relativeTo: targetID, after: after) }
                     }
                 ) { session in
                     CantripTabActions(
@@ -163,6 +166,7 @@ struct CantripTabList<Actions: View>: View {
     let sessions: [CantripRemoteSession]
     let selectedSessionID: String?
     let onSelect: (String) -> Void
+    var onMove: ((String, String, Bool) -> Void)? = nil
     @ViewBuilder var actions: (CantripRemoteSession) -> Actions
 
     var selectedSession: CantripRemoteSession? {
@@ -226,10 +230,38 @@ struct CantripTabList<Actions: View>: View {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Actions for \(session.title)")
+
+            if onMove != nil, session.supportsTabReordering == true, sessions.count > 1 {
+                Image(systemName: "line.3.horizontal")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+                    .draggable("cantrip-tab:\(session.id)")
+                    .accessibilityLabel("Reorder \(session.title)")
+                    .accessibilityHint("Drag to another tab, or use Move Tab Up and Move Tab Down in tab actions.")
+                    .accessibilityIdentifier("cantrip-tab-drag-\(session.id)")
+            }
         }
         .background(
             session.id == selectedSessionID ? Color.accentColor.opacity(0.15) : Color.clear,
             in: RoundedRectangle(cornerRadius: 12)
         )
+        .dropDestination(for: String.self) { items, _ in
+            acceptDrop(items, onto: session.id)
+        }
+    }
+
+    @discardableResult
+    func acceptDrop(_ items: [String], onto targetID: String) -> Bool {
+        guard let onMove, items.count == 1, let value = items.first,
+              value.hasPrefix("cantrip-tab:") else { return false }
+        let id = String(value.dropFirst("cantrip-tab:".count))
+        guard id != targetID,
+              let source = sessions.firstIndex(where: { $0.id == id }),
+              let target = sessions.firstIndex(where: { $0.id == targetID }),
+              sessions[source].supportsTabReordering == true,
+              sessions[target].supportsTabReordering == true else { return false }
+        onMove(id, targetID, source < target)
+        return true
     }
 }
