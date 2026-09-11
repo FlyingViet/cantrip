@@ -11,6 +11,8 @@ Native SwiftUI iOS client for a self-hosted **Hermes agent** (`~/.hermes`) — v
 - The `.xcodeproj` is generated (git-ignored); regenerate after editing `project.yml`.
 - iOS 26+, universal (`TARGETED_DEVICE_FAMILY "1,2"`). Set your own bundle id +
   signing team in `project.yml` before building to a device.
+- Use the selected Xcode SDK without raising the iOS 26 deployment target.
+  Duo-specific simulation/reserved-region APIs require Xcode/iOS 27.1.
 
 ## How it connects
 - Talks to the Hermes gateway's **OpenAI-compatible API server** adapter
@@ -51,6 +53,9 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
 
 ## Conventions
 - Keep SwiftUI `body` lean (extract subviews) — the type-checker chokes on long chains.
+- `ChatNavigationView` keeps one split-navigation detail across resizing:
+  regular-width Cantrip tabs use a sidebar; compact windows keep the drawer.
+  Keep drafts, voice, and run ownership outside size-dependent branches.
 - Saved servers live in `ServerProfiles`; each server's credential is stored
   separately in Keychain. Legacy `hermes.apiKey`/Cantrip slots are migrated.
   Settings uses blank add-server drafts, never live bindings to active credentials.

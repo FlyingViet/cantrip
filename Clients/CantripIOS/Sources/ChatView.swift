@@ -1106,7 +1106,21 @@ struct ChatView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        ChatNavigationView(
+            isTabListPresented: $showRemoteTabs,
+            hasTabs: vm.activeLane == .cantrip,
+            canSelectTabs: remoteTabsEnabled
+        ) { isModal, dismiss in
+            CantripSessionDrawer(
+                model: remote,
+                isModal: isModal,
+                onDismiss: dismiss,
+                onSelect: selectRemoteSession,
+                onCreate: createRemoteSession,
+                onRename: { renamingRemoteSession = $0 },
+                onClose: closeRemoteSession
+            )
+        } content: {
             VStack(spacing: 0) {
                 if vm.activeLane == .cantrip {
                     remoteNotices
@@ -1178,16 +1192,6 @@ struct ChatView: View {
             } message: {
                 Text(imageSendError ?? "")
             }
-        }
-        .cantripTabDrawer(isPresented: $showRemoteTabs, isEnabled: remoteTabsEnabled) {
-            CantripSessionDrawer(
-                model: remote,
-                onDismiss: { showRemoteTabs = false },
-                onSelect: selectRemoteSession,
-                onCreate: createRemoteSession,
-                onRename: { renamingRemoteSession = $0 },
-                onClose: closeRemoteSession
-            )
         }
         .onChange(of: showRemoteTabs) { _, showing in
             if showing { composerFocused = false }
@@ -1272,7 +1276,7 @@ struct ChatView: View {
                     vm.tabTitle, vm.isTabLocked ? "Locked" : nil,
                     remote.selectedSession?.isStreaming == true ? "Working" : nil
                 ].compactMap { $0 }.joined(separator: ", "))
-                .accessibilityHint("Opens the tab drawer. Touch and hold for tab actions.")
+                .accessibilityHint("Shows tabs. Touch and hold for tab actions.")
                 .contextMenu {
                     if let session = remote.selectedSession {
                         CantripTabActions(model: remote, session: session,

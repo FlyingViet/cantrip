@@ -97,6 +97,14 @@ retain 44-point tap targets. New Tab and tab actions live in the
 drawer rather than duplicate top-bar buttons. Resume (when available) and New
 conversation remain in the shared chat's hamburger menu.
 
+In regular-width layouts, **Tabs** becomes a native sidebar beside the chat.
+Selecting, creating, or renaming a tab leaves this sidebar open; **Close tabs**
+hides it, and tapping the header title or the menu's **Tabs** action brings it
+back. Compact layouts retain the left-edge drawer. Resizing uses the same
+detail navigation hierarchy, preserving the composer and conversation rather
+than rebuilding them. Tab switching remains disabled during sends and image
+imports.
+
 Touch and hold the header title or a drawer row to **Rename Tab**, **Lock Tab** /
 **Unlock Tab**, or **Close Session** (delete the tab). A regular tap opens only
 the drawer from the title, or selects a tab from a drawer row. Each row's
@@ -307,7 +315,7 @@ An older host displays an update notice.
 ## Prerequisites
 
 - A running **Hermes agent** (`~/.hermes`) on a machine you control (Mac, Linux box, etc.).
-- **Xcode 16+** on a Mac to build the app, and an **Apple ID** to run it on your device (a free account works for personal use).
+- **Xcode 26+** on a Mac to build the app, an **iOS 26+** device, and an **Apple ID** to run it on your device (a free account works for personal use).
 - An HTTPS path to the gateway, using a private network such as Tailscale/WireGuard
   or an authenticated HTTPS tunnel.
 
@@ -435,6 +443,30 @@ open Hermes.xcodeproj
 ```
 
 In Xcode: select the **Hermes** target → **Signing & Capabilities** → set your **Team** and a unique **Bundle Identifier** (e.g. `com.yourname.hermes`) → pick your iPhone → **Run** (⌘R). Trust the developer profile on the phone if prompted (Settings → General → VPN & Device Management).
+
+### Adaptive layouts and iPhone Duo preparation
+
+The app supports portrait and both landscape orientations on iPhone, plus all
+orientations on iPad. Navigation uses the window's size class rather than a
+device-model check or main-screen dimensions. Interactive content stays within
+the system safe area, including asymmetric insets. Voice mode moves its
+microphone beside the reply in wide, short windows without restarting the
+conversation; its close button retains a 44-point target.
+
+The deployment target stays **iOS 26**. The project uses the selected Xcode's
+SDK, so installing another Xcode alone does not change command-line builds:
+check `xcodebuild -version` and `xcodebuild -showsdks` in the build environment.
+Build with Xcode 27 to link against the iOS 27 SDK. These adaptive changes also
+compile with Xcode 26; they do not by themselves constitute an iOS 27 build.
+
+Apple's [Duo preparation guide](https://developer.apple.com/videos/play/tech-talks/111461/)
+recommends native split navigation and size-class/safe-area-based layouts.
+The Duo simulator, reserved-region APIs, and arrangement containers described
+in [adaptive layouts on Duo](https://developer.apple.com/videos/play/tech-talks/111463/)
+require **Xcode/iOS 27.1**. This app does not yet adopt custom fold-region
+placement. Before a Duo-specific release, run it with that toolchain across
+open/closed, rotated, partially folded, and Split View configurations, including
+an active reply, an unsent image/text draft, the keyboard, and large text.
 
 ### Configure
 

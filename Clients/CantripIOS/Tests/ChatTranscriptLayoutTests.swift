@@ -8,6 +8,7 @@ import XCTest
 private final class TranscriptLayoutModel: ObservableObject {
     @Published var heights: [CGFloat] = [120, 900, 80, 600]
     @Published var viewportHeight: CGFloat = 500
+    @Published var viewportWidth: CGFloat?
     @Published var scrollRequest = 0
     @Published var markdown = ""
     @Published var prompt = ""
@@ -30,7 +31,7 @@ private struct TranscriptLayoutHarness: View {
                 PromptTextView(text: model.prompt)
             }
         }
-        .frame(height: model.viewportHeight)
+        .frame(width: model.viewportWidth, height: model.viewportHeight)
     }
 }
 
@@ -111,6 +112,21 @@ final class ChatTranscriptLayoutTests: XCTestCase {
         assertAtBottom(try await settle(controller))
         model.viewportHeight = 600
         assertAtBottom(try await settle(controller))
+    }
+
+    func testWindowWidthChangesReflowStreamingMarkdownAndKeepLatestVisible() async throws {
+        let model = TranscriptLayoutModel()
+        model.markdown = String(repeating: "A **streaming reply** that wraps with the window. ", count: 180)
+        let (window, controller) = try host(model)
+        defer { window.isHidden = true }
+        for width: CGFloat in [320, 744, 480, 320] {
+            model.viewportWidth = width
+            model.markdown += "\n\nMore output from the running agent."
+            let scroll = try await settle(controller)
+            XCTAssertEqual(scroll.bounds.width, width, accuracy: 1)
+            XCTAssertLessThanOrEqual(scroll.contentSize.width, width + 1)
+            assertAtBottom(scroll)
+        }
     }
 
     func testExplicitSendReturnsToLatestMessage() async throws {

@@ -95,6 +95,7 @@ private struct CantripTabDrawer<Panel: View>: ViewModifier {
 
 struct CantripSessionDrawer: View {
     @ObservedObject var model: CantripRemoteModel
+    var isModal = true
     let onDismiss: () -> Void
     let onSelect: (String) -> Void
     let onCreate: () -> Void
@@ -127,14 +128,14 @@ struct CantripSessionDrawer: View {
                     sessions: model.sessions,
                     selectedSessionID: model.selectedSessionID,
                     onSelect: { id in
-                        onDismiss()
+                        if isModal { onDismiss() }
                         onSelect(id)
                     }
                 ) { session in
                     CantripTabActions(
                         model: model, session: session,
                         onRename: {
-                            onDismiss()
+                            if isModal { onDismiss() }
                             onRename(session)
                         },
                         onClose: { onClose(session.id) }
@@ -144,7 +145,7 @@ struct CantripSessionDrawer: View {
             }
             Divider()
             Button(action: {
-                onDismiss()
+                if isModal { onDismiss() }
                 onCreate()
             }) {
                 Label("New Tab", systemImage: "plus")
@@ -154,7 +155,7 @@ struct CantripSessionDrawer: View {
             .disabled(!model.isConfigured || model.isMutating)
             .padding()
         }
-        .onAppear { titleFocused = true }
+        .onAppear { titleFocused = isModal }
     }
 }
 
@@ -181,7 +182,7 @@ struct CantripTabList<Actions: View>: View {
             }
             .scrollBounceBehavior(.basedOnSize)
             .defaultScrollAnchor(.top)
-            .onAppear {
+            .onChange(of: selectedSessionID, initial: true) { _, _ in
                 if let selectedSession { proxy.scrollTo(selectedSession.id, anchor: .center) }
             }
         }

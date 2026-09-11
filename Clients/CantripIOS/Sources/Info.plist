@@ -29,14 +29,14 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Hermes uses the microphone for voice conversations with your agent.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>AgentGateway discovers and connects securely to your paired Cantrip on the local network.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_cantrip-remote._tcp</string>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>AgentGateway discovers and connects securely to your paired Cantrip on the local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hermes uses the microphone for voice conversations with your agent.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Hermes transcribes your speech on-device so you can talk to your agent hands-free.</string>
 	<key>UIBackgroundModes</key>
@@ -48,6 +48,8 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
