@@ -603,41 +603,54 @@ struct LauncherView: View {
                       : "Connect to sessions on another Cantrip")
 
                 ForEach(Array(manager.sessions.enumerated()), id: \.element.id) { index, chat in
-                    HStack(spacing: 5) {
-                        if chat.isStreaming {
-                            ProgressView().controlSize(.mini)
+                    HStack(spacing: 0) {
+                        HStack(spacing: 5) {
+                            if chat.isStreaming {
+                                ProgressView().controlSize(.mini)
+                            }
+                            if index < 8 {
+                                shortcutBadge(index + 2)
+                            }
+                            Text(chat.title)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .frame(maxWidth: 140)
+                            if chat.isLocked {
+                                Image(systemName: "lock.fill")
+                                    .font(.system(size: 10))
+                                    .help("Locked tab - unlock from the tab menu to close")
+                            }
                         }
-                        if index < 8 {
-                            shortcutBadge(index + 2)
+                        .padding(.leading, 10)
+                        .padding(.trailing, chat.isLocked ? 10 : 0)
+                        .padding(.vertical, 4)
+                        .overlay {
+                            SessionTabDragHandle(id: chat.id, title: chat.title) {
+                                manager.select(chat.id)
+                            }
                         }
-                        Text(chat.title)
-                            .font(.caption)
-                            .lineLimit(1)
-                            .frame(maxWidth: 140)
-                        if chat.isLocked {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: 10))
-                                .help("Locked tab - unlock from the tab menu to close")
-                        } else {
+                        .accessibilityElement(children: .combine)
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAction { manager.select(chat.id) }
+                        if !chat.isLocked {
                             Button(action: { manager.close(chat.id) }) {
                                 Image(systemName: "xmark")
                                     .font(.system(size: 8, weight: .bold))
                                     .foregroundStyle(.tertiary)
+                                    .frame(width: 24)
+                                    .frame(maxHeight: .infinity)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Close \(chat.title)")
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
+                    .fixedSize(horizontal: false, vertical: true)
                     .background(!manager.showingRemote && index == manager.activeIndex
                                 ? AnyShapeStyle(.quaternary)
                                 : AnyShapeStyle(.clear),
                                 in: Capsule())
                     .contentShape(Capsule())
-                    .onTapGesture {
-                        manager.select(chat.id)
-                    }
-                    .draggable("cantrip-tab:\(chat.id.uuidString)")
                     .dropDestination(for: String.self) { items, _ in
                         guard items.count == 1, let value = items.first,
                               value.hasPrefix("cantrip-tab:"),
