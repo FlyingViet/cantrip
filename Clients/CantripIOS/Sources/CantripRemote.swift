@@ -387,7 +387,7 @@ private final class CantripLANRequest: @unchecked Sendable {
         self.endpoint = endpoint
         self.token = token
         let payload = body ?? Data()
-        timeout = method == "GET" ? (path.contains("/messages/") ? 20 : 2)
+        timeout = method == "GET" ? (CantripRemoteAPI.isHistoryRead(method: method, path: path) ? 20 : 2)
             : (payload.count > 256 * 1024 ? 60 : 12)
         let header = """
         \(method) \(path) HTTP/1.1\r
@@ -563,6 +563,12 @@ struct CantripRemoteAPI {
     let transport: CantripTransport
     let token: String
     var urlSession: URLSession?
+
+    static func isHistoryRead(method: String, path: String) -> Bool {
+        let parts = (URLComponents(string: path)?.path ?? "").split(separator: "/")
+        return method == "GET" && parts.starts(with: ["api", "v1", "sessions"])
+            && (parts.count == 4 || (parts.count == 6 && parts[4] == "messages"))
+    }
 
     private static let readSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
@@ -822,11 +828,11 @@ struct CantripRemoteAPI {
         }
         let url = try endpoint(path: path, baseURL: baseURL)
         let isImageUpload = (body?.count ?? 0) > 256 * 1024
-        let isFullMessage = method == "GET" && target.path.contains("/messages/")
+        let isHistoryRead = Self.isHistoryRead(method: method, path: path)
         var request = URLRequest(
             url: url,
             cachePolicy: .reloadIgnoringLocalCacheData,
-            timeoutInterval: method == "GET" ? (isFullMessage ? 20 : 3) : (isImageUpload ? 60 : 12)
+            timeoutInterval: method == "GET" ? (isHistoryRead ? 20 : 3) : (isImageUpload ? 60 : 12)
         )
         request.httpMethod = method
         request.httpBody = body
@@ -839,7 +845,7 @@ struct CantripRemoteAPI {
         let data: Data
         let response: URLResponse
         do {
-            let session = urlSession ?? (method == "GET" && !isFullMessage
+            let session = urlSession ?? (method == "GET" && !isHistoryRead
                 ? Self.readSession : (isImageUpload ? Self.imageSession : Self.session))
             (data, response) = try await session.data(for: request)
         } catch is CancellationError {
@@ -935,6 +941,7 @@ final class CantripRemoteModel: ObservableObject {
     private var cacheOrder: [String] = []
     private var expandedHistory: Set<String> = []
     private var selectionRevision = 0
+    private var selectingSessionID: String?
     private var mutationRevision = 0
     @Published private(set) var transcriptRevision = 0
     @Published private(set) var isLocalNetworkAvailable = false
@@ -984,6 +991,9 @@ final class CantripRemoteModel: ObservableObject {
     private var token: String?
     private var appIsActive = false
     private var pollingTask: Task<Void, Never>?
+    private var detailRefreshTask: Task<Void, Never>?
+    private var detailRefreshKey: String?
+    private var detailRefreshID = UUID()
     private var staleTask: Task<Void, Never>?
     private var lastAuthenticatedAt: Date?
     private var configurationGeneration = 0
@@ -1180,6 +1190,7 @@ final class CantripRemoteModel: ObservableObject {
 
     func refreshNow() async {
         await refresh()
+        await detailRefreshTask?.value
     }
 
     func githubBuilds() async throws -> CantripBuildSnapshot {
@@ -1221,15 +1232,20 @@ final class CantripRemoteModel: ObservableObject {
 
     func selectSession(_ id: String) async {
         guard id != selectedSessionID || selectedSession?.id != id else { return }
+        cancelDetailRefresh()
         selectionRevision += 1
         let selection = selectionRevision
         let revision = mutationRevision
+        selectingSessionID = id
+        defer {
+            if selection == selectionRevision { selectingSessionID = nil }
+        }
         selectedSessionID = id
         selectedSession = detailCache[id]
         detailError = nil
         transcriptRevision += 1
         do {
-            let detail = try await performAuthenticated(allowFallback: true) { api in
+            let detail = try await performHistoryRead { api in
                 try await api.session(id: id)
             }
             guard selectedSessionID == id, selection == selectionRevision,
@@ -1255,7 +1271,7 @@ final class CantripRemoteModel: ObservableObject {
         isLoadingHistory = true
         defer { isLoadingHistory = false }
         do {
-            let page = try await performAuthenticated(allowFallback: true) { api in
+            let page = try await performHistoryRead { api in
                 try await api.olderMessages(id: current.id, before: before)
             }
             guard revision == mutationRevision, selection == selectionRevision,
@@ -1281,19 +1297,25 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     func fullMessage(sessionID: String, messageID: String) async throws -> CantripRemoteMessage {
+        try await performHistoryRead { api in
+            try await api.fullMessage(sessionID: sessionID, messageID: messageID)
+        }
+    }
+
+    private func performHistoryRead<T>(
+        _ operation: (CantripRemoteAPI) async throws -> T
+    ) async throws -> T {
         guard let token else { throw CantripRemoteError.missingToken }
         let generation = configurationGeneration
         updateRoutes()
-        // Explicit large downloads must not hold the polling/mutation request gate.
-        let reader = CantripRemoteRouter()
-        reader.available = router.available
-        let message = try await reader.perform(readOnly: true) { transport in
-            try await CantripRemoteAPI(transport: transport, token: token, urlSession: urlSession)
-                .fullMessage(sessionID: sessionID, messageID: messageID)
+        // Large history downloads must not hold the polling/mutation request gate.
+        let reader = router.independentReader()
+        let result = try await reader.perform(readOnly: true) { transport in
+            try await operation(CantripRemoteAPI(transport: transport, token: token, urlSession: urlSession))
         }
         try Task.checkCancellation()
         guard generation == configurationGeneration else { throw CancellationError() }
-        return message
+        return result
     }
 
     @discardableResult
@@ -1538,7 +1560,6 @@ final class CantripRemoteModel: ObservableObject {
         let requestedID = selectedSessionID
         let revision = mutationRevision
         let selection = selectionRevision
-        var listedSuccessfully = false
         do {
             let generation = configurationGeneration
             let listed = try await performAuthenticated(allowFallback: true) { api in
@@ -1547,7 +1568,6 @@ final class CantripRemoteModel: ObservableObject {
             guard generation == configurationGeneration else { throw CancellationError() }
             guard revision == mutationRevision else { return }
             sessions = listed
-            listedSuccessfully = true
             errorMessage = nil
             let publicIDs = Set(listed.map(\.id))
             detailCache = detailCache.filter { publicIDs.contains($0.key) }
@@ -1562,46 +1582,70 @@ final class CantripRemoteModel: ObservableObject {
                 selectedSession = chosenID.flatMap { detailCache[$0] }
                 transcriptRevision += 1
             }
-            let detail: CantripRemoteSession?
+            if let chosenID, selectingSessionID == chosenID {
+                recoverTailscale()
+                return
+            }
             if let chosenID {
                 let cachedRevision = selectedSession?.historyRevision
                 let listedRevision = listed.first { $0.id == chosenID }?.historyRevision
                 if let cachedRevision, cachedRevision == listedRevision {
-                    detail = nil
+                    detailError = nil
                 } else {
-                    detail = try await performAuthenticated(allowFallback: true) { api in
-                        try await api.sessionUpdate(id: chosenID, revision: cachedRevision)
+                    let key = "\(generation):\(revision):\(selection):\(chosenID)"
+                    if detailRefreshKey != key {
+                        cancelDetailRefresh()
+                        detailRefreshKey = key
+                        let requestID = detailRefreshID
+                        detailRefreshTask = Task { [weak self] in
+                            guard let self else { return }
+                            defer {
+                                if self.detailRefreshID == requestID {
+                                    self.detailRefreshTask = nil
+                                    self.detailRefreshKey = nil
+                                }
+                            }
+                            do {
+                                let detail = try await self.performHistoryRead { api in
+                                    try await api.sessionUpdate(id: chosenID, revision: cachedRevision)
+                                }
+                                guard !Task.isCancelled, generation == self.configurationGeneration,
+                                      revision == self.mutationRevision, selection == self.selectionRevision,
+                                      self.selectedSessionID == chosenID else { return }
+                                if let detail { self.apply(detail) }
+                                self.detailError = nil
+                            } catch is CancellationError {
+                                return
+                            } catch {
+                                guard self.detailRefreshID == requestID,
+                                      generation == self.configurationGeneration,
+                                      revision == self.mutationRevision, selection == self.selectionRevision,
+                                      self.selectedSessionID == chosenID else { return }
+                                self.detailError = "Could not update this conversation. \(error.localizedDescription)"
+                                self.handleReadFailure(error, detailOnly: true)
+                            }
+                        }
                     }
                 }
             } else {
-                detail = nil
+                cancelDetailRefresh()
+                detailError = nil
             }
-            guard generation == configurationGeneration else { throw CancellationError() }
-            guard revision == mutationRevision, selection == selectionRevision else { return }
-
-            if selectedSessionID == chosenID {
-                selectedSessionID = chosenID
-                if let detail {
-                    apply(detail)
-                } else if chosenID == nil {
-                    selectedSession = nil
-                    transcriptRevision += 1
-                }
-            }
-            errorMessage = nil
-            detailError = nil
             recoverTailscale()
         } catch is CancellationError {
             return
         } catch {
             guard revision == mutationRevision, selection == selectionRevision else { return }
-            if listedSuccessfully {
-                detailError = "Could not update this conversation. \(error.localizedDescription)"
-            } else {
-                errorMessage = error.localizedDescription
-            }
-            handleReadFailure(error, detailOnly: listedSuccessfully)
+            errorMessage = error.localizedDescription
+            handleReadFailure(error, detailOnly: false)
         }
+    }
+
+    private func cancelDetailRefresh() {
+        detailRefreshTask?.cancel()
+        detailRefreshTask = nil
+        detailRefreshKey = nil
+        detailRefreshID = UUID()
     }
 
     private func performAuthenticated<T>(
@@ -1737,6 +1781,7 @@ final class CantripRemoteModel: ObservableObject {
     private func stopPolling() {
         pollingTask?.cancel()
         pollingTask = nil
+        cancelDetailRefresh()
         staleTask?.cancel()
         staleTask = nil
         router.cancelProbe()
@@ -1768,11 +1813,13 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     private func resetHistory() {
+        cancelDetailRefresh()
         detailCache.removeAll()
         cacheOrder.removeAll()
         expandedHistory.removeAll()
         detailError = nil
         selectionRevision += 1
+        selectingSessionID = nil
         historyPrependAnchor = nil
     }
 

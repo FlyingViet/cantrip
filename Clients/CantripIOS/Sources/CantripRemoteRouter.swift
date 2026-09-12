@@ -36,6 +36,15 @@ final class CantripRemoteRouter {
         probeTask = nil
     }
 
+    func independentReader() -> CantripRemoteRouter {
+        let reader = CantripRemoteRouter()
+        reader.available = available
+        reader.preferred = preferred
+        reader.retryAfter = retryAfter
+        reader.now = now
+        return reader
+    }
+
     func perform<T>(
         readOnly: Bool,
         operation: (CantripTransport) async throws -> T

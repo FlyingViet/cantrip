@@ -226,10 +226,13 @@ The dot indicates recent connectivity, not acknowledgement of a particular send.
 
 With an updated Cantrip host, the app loads up to 30 recent messages first.
 Tap **Load older messages** at the top of the transcript to page backward while
-keeping your reading position. Long messages, reasoning, and tool activity use
-bounded previews; **Load full message and details** retrieves the complete
-message on demand. The host retains its live history, and submitted/queued
-prompts are not truncated.
+keeping your reading position. Every loaded message includes complete text,
+reasoning, and all tool input/output by default; there is no separate detail
+download on updated hosts. Older pages are loaded only when requested, never
+prefetched. Pages target 192 KiB, but always include at least one whole message
+even if it exceeds that soft budget. The host retains its live history, and
+submitted/queued prompts are not truncated. The full-details button remains
+available for older hosts that still send previews.
 
 The tab list publishes independently of conversation downloads. If a detail
 read times out, cached messages remain visible with a separate retry notice;
@@ -241,9 +244,11 @@ Unchanged session revisions skip conversation downloads entirely. Foreground
 polling waits 1.5 seconds while any tab is working/queued or recovering, and
 5 seconds while idle. Unattended transcripts retain a rolling 120-message
 window, with up to five tabs cached; explicit older-history loading may expand
-that window. Normal 3-second HTTPS / 2-second LAN deadlines and single-send
-mutation routing are unchanged. Explicit full-message downloads allow up to
-20 seconds without blocking normal polling or mutations.
+that window. Lightweight reads retain 3-second HTTPS / 2-second LAN deadlines.
+Conversation pages and full-message downloads allow up to 20 seconds without
+blocking the polling/mutation gate; tab polling continues during slow recent-page
+loads. LAN connection establishment still has a 2-second deadline, and uncertain
+mutations are never replayed.
 
 These changes need both the updated phone app and an updated, reopened Mac
 host. Older hosts remain readable but still return full snapshots. Older

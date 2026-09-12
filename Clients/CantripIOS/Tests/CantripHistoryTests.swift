@@ -38,7 +38,7 @@ final class CantripHistoryTests: XCTestCase {
 
     private func session(revision: String = "r1", start: String = "start", values: [Int] = [3, 4],
                          older: Bool = true, list: Bool = false, title: String = "Tab",
-                         legacy: Bool = false) throws -> Data {
+                         legacy: Bool = false, fullContent: Bool = false) throws -> Data {
         var session: [String: Any] = [
             "id": id, "title": title, "workdir": "/tmp", "isStreaming": false,
             "canResume": false, "councilMode": false, "queuedCount": 0,
@@ -53,8 +53,13 @@ final class CantripHistoryTests: XCTestCase {
         }
         if !list {
             session["messages"] = values.map { value in
-                ["id": messageID(value), "role": "assistant", "text": "Reply \(value)",
-                 "thinking": "", "activities": []] as [String: Any]
+                ["id": messageID(value), "role": "assistant",
+                 "text": fullContent ? String(repeating: "Reply \(value)\n", count: 4000) : "Reply \(value)",
+                 "thinking": fullContent ? String(repeating: "Reasoning\n", count: 1000) : "",
+                 "activities": fullContent ? (0..<60).map {
+                     ["id": "tool-\($0)", "title": "Step \($0)", "toolName": "bash",
+                      "state": "succeeded", "input": "Input \($0)", "output": "Output \($0)"]
+                 } : []] as [String: Any]
             }
         }
         return try JSONSerialization.data(withJSONObject: list ? ["sessions": [session]] : ["session": session])
@@ -86,14 +91,15 @@ final class CantripHistoryTests: XCTestCase {
         XCTFail(model.errorMessage ?? model.detailError ?? "No conversation loaded")
     }
 
-    func testBoundedQueriesConditionalRefreshAndLegacyFallback() async throws {
+    func testPagedQueriesConditionalRefreshAndLegacyFallback() async throws {
         let model = try await model()
         var paths: [String] = []
         HistoryRequestProtocol.handler = { request in
             paths.append(request.url!.path)
             let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
             XCTAssertTrue(items.contains(URLQueryItem(name: "history", value: "recent")))
-            XCTAssertEqual(request.timeoutInterval, 3, "Keep fast dead-route detection")
+            XCTAssertEqual(request.timeoutInterval, request.url!.path == "/api/v1/sessions" ? 3 : 20,
+                           "Only conversation reads receive a larger download budget")
             return (200, try self.session(list: request.url!.path == "/api/v1/sessions"))
         }
         model.setAppActive(true)
@@ -120,6 +126,138 @@ final class CantripHistoryTests: XCTestCase {
         await model.refreshNow()
         XCTAssertEqual(model.selectedSession?.transcript.count, 4)
         XCTAssertNil(model.selectedSession?.hasOlderMessages)
+    }
+
+    func testFullContentLoadsByDefaultAndOlderPagesRequireExplicitRequest() async throws {
+        let model = try await model()
+        var olderReads = 0
+        HistoryRequestProtocol.handler = { request in
+            let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            XCTAssertFalse(request.url!.path.contains("/messages/"), "No per-message detail request is needed")
+            let older = items.contains { $0.name == "before" }
+            if older {
+                olderReads += 1
+                XCTAssertEqual(items.first { $0.name == "before" }?.value, self.messageID(3))
+            }
+            return (200, try self.session(values: older ? [1, 2] : [3, 4], older: !older,
+                                          list: request.url!.path == "/api/v1/sessions", fullContent: true))
+        }
+        model.setAppActive(true)
+        try await waitForRefresh(model)
+        await model.refreshNow()
+        XCTAssertEqual(olderReads, 0)
+        let recent = try XCTUnwrap(model.selectedSession?.transcript.last)
+        XCTAssertEqual(recent.text, String(repeating: "Reply 4\n", count: 4000))
+        XCTAssertEqual(recent.thinking, String(repeating: "Reasoning\n", count: 1000))
+        XCTAssertEqual(recent.activities.count, 60)
+        XCTAssertEqual(recent.activities.first?.input, "Input 0")
+        XCTAssertEqual(recent.activities.last?.output, "Output 59")
+        XCTAssertNotEqual(recent.isPreview, true)
+        let env = HermesEnv()
+        env.select(.cantrip)
+        let vm = ChatViewModel(env: env, remote: model, voice: VoiceController())
+        vm.syncRemoteTranscript()
+        XCTAssertEqual(vm.turns.last?.text, recent.text)
+        XCTAssertEqual(vm.turns.last?.thinking, recent.thinking)
+        XCTAssertEqual(vm.turns.last?.tools.first?.arguments, "Step 0\nInput 0")
+        XCTAssertEqual(vm.turns.last?.tools.last?.output, "Output 59")
+        await model.loadOlderMessages()
+        XCTAssertEqual(olderReads, 1)
+        let oldest = try XCTUnwrap(model.selectedSession?.transcript.first)
+        XCTAssertEqual(oldest.text, String(repeating: "Reply 1\n", count: 4000))
+        XCTAssertEqual(oldest.thinking, recent.thinking)
+        XCTAssertEqual(oldest.activities, recent.activities)
+        XCTAssertEqual(model.selectedSession?.transcript.count, 4)
+        await model.refreshNow()
+        XCTAssertEqual(olderReads, 1, "Refresh never prefetches more old history")
+    }
+
+    func testSlowRecentPageKeepsPollingAndDoesNotBlockMutations() async throws {
+        let model = try await model()
+        let started = expectation(description: "Conversation download started")
+        let polled = expectation(description: "Tabs refreshed during conversation download")
+        var release: CheckedContinuation<Void, Never>?
+        var lists = 0
+        var details = 0
+        HistoryRequestProtocol.handler = { request in
+            let list = request.url!.path == "/api/v1/sessions" && request.httpMethod == "GET"
+            if list {
+                lists += 1
+                if lists == 2 { polled.fulfill() }
+            } else if request.httpMethod == "GET" {
+                details += 1
+                started.fulfill()
+                await withCheckedContinuation { release = $0 }
+            }
+            return (200, try self.session(list: list))
+        }
+        model.setAppActive(true)
+        await fulfillment(of: [started, polled], timeout: 7)
+        XCTAssertEqual(details, 1, "Polling must not duplicate an in-flight conversation download")
+        XCTAssertTrue(model.isConnected)
+        let created = expectation(description: "Mutation finished before history")
+        let mutation = Task {
+            let success = await model.createSession()
+            XCTAssertTrue(success)
+            created.fulfill()
+        }
+        await fulfillment(of: [created], timeout: 1)
+        release?.resume()
+        await mutation.value
+        await model.refreshNow()
+    }
+
+    func testOlderPageDownloadDoesNotBlockTabRefresh() async throws {
+        let model = try await model()
+        var release: CheckedContinuation<Void, Never>?
+        HistoryRequestProtocol.handler = { request in
+            if request.url!.query!.contains("before=") {
+                await withCheckedContinuation { release = $0 }
+                return (200, try self.session(values: [1, 2], older: false))
+            }
+            return (200, try self.session(list: request.url!.path == "/api/v1/sessions"))
+        }
+        model.setAppActive(true)
+        try await waitForRefresh(model)
+        let download = Task { await model.loadOlderMessages() }
+        for _ in 0..<100 {
+            if release != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(release)
+        let refreshed = expectation(description: "Lightweight refresh finishes while older page is loading")
+        let refresh = Task { await model.refreshNow(); refreshed.fulfill() }
+        await fulfillment(of: [refreshed], timeout: 1)
+        release?.resume()
+        await download.value
+        await refresh.value
+        XCTAssertEqual(model.selectedSession?.transcript.count, 4)
+    }
+
+    func testPollingDoesNotDuplicateAnExplicitTabLoad() async throws {
+        let model = try await model()
+        var release: CheckedContinuation<Void, Never>?
+        var details = 0
+        HistoryRequestProtocol.handler = { request in
+            let list = request.url!.path == "/api/v1/sessions"
+            if !list {
+                details += 1
+                await withCheckedContinuation { release = $0 }
+            }
+            return (200, try self.session(list: list))
+        }
+        let selection = Task { await model.selectSession(id) }
+        for _ in 0..<100 {
+            if release != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(release)
+        model.setAppActive(true)
+        await model.refreshNow()
+        XCTAssertEqual(details, 1)
+        release?.resume()
+        await selection.value
+        XCTAssertEqual(model.selectedSession?.transcript.count, 2)
     }
 
     func testSlowDetailPublishesTabsAndKeepsConnectionAndCachedTranscript() async throws {

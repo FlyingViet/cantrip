@@ -80,7 +80,7 @@ final class CantripMutationTests: XCTestCase {
                         XCTAssertEqual(request.timeoutInterval, 12)
                     } else {
                         XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.sessionID)")
-                        XCTAssertEqual(request.timeoutInterval, 3)
+                        XCTAssertEqual(request.timeoutInterval, 20)
                     }
                     return (200, response)
                 }

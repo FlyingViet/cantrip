@@ -294,13 +294,13 @@ final class ChatViewModel: ObservableObject {
                 id: id,
                 role: message.role == "user" ? .user : .assistant,
                 text: isError ? "" : message.presentedText,
-                tools: message.activities.map {
+                tools: message.activities.map { activity in
                     ToolActivity(
-                        id: $0.id,
-                        name: $0.toolName,
-                        arguments: $0.title,
-                        output: $0.state == "running" ? nil : $0.state.capitalized,
-                        done: $0.state != "running"
+                        id: activity.id,
+                        name: activity.toolName,
+                        arguments: [activity.title, activity.input].compactMap { $0 }.joined(separator: "\n"),
+                        output: activity.output ?? (activity.state == "running" ? nil : activity.state.capitalized),
+                        done: activity.state != "running"
                     )
                 },
                 streaming: session?.isStreaming == true
@@ -2186,7 +2186,8 @@ private struct TurnView: View {
                     IntermediateStepsView(
                         thinking: turn.thinking,
                         tools: turn.tools,
-                        streaming: turn.streaming
+                        streaming: turn.streaming,
+                        fullToolOutput: turn.executionLane == .cantrip
                     )
                 }
                 if !turn.text.isEmpty {
@@ -2268,6 +2269,7 @@ private struct IntermediateStepsView: View {
     let thinking: String?
     let tools: [ToolActivity]
     let streaming: Bool
+    let fullToolOutput: Bool
     @State private var expanded = false
 
     private var hasThinking: Bool {
@@ -2300,7 +2302,7 @@ private struct IntermediateStepsView: View {
                         in: RoundedRectangle(cornerRadius: 10)
                     )
                 }
-                ForEach(tools) { ToolRow(tool: $0) }
+                ForEach(tools) { ToolRow(tool: $0, fullOutput: fullToolOutput) }
             }
             .padding(.top, 6)
         } label: {
@@ -2326,6 +2328,7 @@ private struct IntermediateStepsView: View {
 /// Collapsible tool/skill activity row — the "see Hermes working" surface.
 private struct ToolRow: View {
     let tool: ToolActivity
+    let fullOutput: Bool
     @State private var expanded = false
 
     var body: some View {
@@ -2348,7 +2351,7 @@ private struct ToolRow: View {
                 }
                 if let out = tool.output, !out.isEmpty {
                     Text(out).font(.caption2.monospaced()).foregroundStyle(.secondary)
-                        .lineLimit(12)
+                        .lineLimit(fullOutput ? nil : 12)
                 }
             }
         }

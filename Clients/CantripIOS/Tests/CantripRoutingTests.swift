@@ -76,6 +76,28 @@ final class CantripRoutingTests: XCTestCase {
         XCTAssertEqual(calls, [remote, lan])
     }
 
+    func testIndependentHistoryReaderKeepsHealthyRouteAndIsolatesFailures() async throws {
+        let router = CantripRemoteRouter()
+        router.available = [lan, remote]
+        _ = try await router.perform(readOnly: true) { route in
+            if route == self.remote { throw CantripRemoteError.transport("Offline") }
+            return 1
+        }
+        let reader = router.independentReader()
+        XCTAssertEqual(reader.preferred, lan)
+        do {
+            _ = try await reader.perform(readOnly: true) { route in
+                XCTAssertEqual(route, self.lan, "Do not retry a known-failing Tailscale route for every history page")
+                throw CantripRemoteError.transport("Large page timed out")
+            }
+            XCTFail("A failed history download must surface its error")
+        } catch CantripRemoteError.transport {}
+        _ = try await router.perform(readOnly: true) { route in
+            XCTAssertEqual(route, self.lan, "A large history failure must not demote the working polling route")
+            return 1
+        }
+    }
+
     func testMutationPreparationFallsBackBeforeWritingOnlyToTheValidatedRoute() async throws {
         let router = CantripRemoteRouter()
         router.available = [lan, remote]

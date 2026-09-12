@@ -187,7 +187,7 @@ final class CantripImageTransportTests: XCTestCase {
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
                 return (202, response)
             }
-            XCTAssertEqual(request.timeoutInterval, 3, "Preflight reads use the bounded read deadline")
+            XCTAssertEqual(request.timeoutInterval, 20, "Session reads include complete message content")
             return (200, response)
         }
         let result = try await api().send(
