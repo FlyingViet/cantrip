@@ -34,14 +34,20 @@ struct QueuedPrompt: Identifiable, Equatable {
 /// accumulates streamed output, and exposes state to the UI.
 @MainActor
 final class ChatSession: ObservableObject {
-    @Published var messages: [ChatMessage] = []
+    @Published var messages: [ChatMessage] = [] {
+        didSet { remoteMessageRevision = UUID() }
+    }
+    private(set) var remoteMessageRevision = UUID()
+    private(set) var remoteQueueRevision = UUID()
     @Published var isStreaming = false
     @Published var statusText: String?
     @Published var focusRequested = false
     /// Image file paths pasted (⌘V) to attach to the next query.
     @Published var attachments: [String] = []
     /// Messages queued while a response is streaming (run in order after).
-    @Published private(set) var queued: [QueuedPrompt] = []
+    @Published private(set) var queued: [QueuedPrompt] = [] {
+        didSet { remoteQueueRevision = UUID() }
+    }
     @Published private(set) var deliveryStatus: String?
     private var routingTask: Task<Void, Never>?
     private var routingItemID: UUID?

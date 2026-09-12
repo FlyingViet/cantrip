@@ -250,12 +250,13 @@ actor RemoteRouteClient {
                 throw RemoteRouteError.invalidResponse
             }
             components.path = request.path
-            components.query = nil
+            components.queryItems = request.queryItems.isEmpty ? nil : request.queryItems
             components.fragment = nil
             guard let url = components.url else { throw RemoteRouteError.invalidResponse }
             var forwarded = URLRequest(
                 url: url, cachePolicy: .reloadIgnoringLocalCacheData,
-                timeoutInterval: request.method == "GET" ? 3 : (request.body.count > 256 * 1024 ? 60 : 12)
+                timeoutInterval: request.method == "GET" ? (request.path.contains("/messages/") ? 20 : 3)
+                    : (request.body.count > 256 * 1024 ? 60 : 12)
             )
             forwarded.httpMethod = request.method
             if !request.body.isEmpty { forwarded.httpBody = request.body }
@@ -263,7 +264,8 @@ actor RemoteRouteClient {
                 forwarded.setValue(request.headers[name], forHTTPHeaderField: name)
             }
             do {
-                let session = request.method == "GET" ? fallbackReadSession : fallbackSession
+                let session = request.method == "GET" && !request.path.contains("/messages/")
+                    ? fallbackReadSession : fallbackSession
                 let (data, response) = try await session.data(for: forwarded)
                 guard let response = response as? HTTPURLResponse, data.count <= 32 << 20 else {
                     throw RemoteRouteError.invalidResponse
@@ -353,9 +355,7 @@ private final class RemoteLANRequest: @unchecked Sendable {
             switch state {
             case .ready:
                 self.connected = true
-                var components = URLComponents()
-                components.path = self.request.path
-                var header = "\(self.request.method) \(components.percentEncodedPath) HTTP/1.1\r\nHost: cantrip.local\r\n"
+                var header = "\(self.request.method) \(self.request.target) HTTP/1.1\r\nHost: cantrip.local\r\n"
                 for name in ["authorization", "content-type", "accept"] {
                     if let value = self.request.headers[name] { header += "\(name): \(value)\r\n" }
                 }
@@ -379,7 +379,9 @@ private final class RemoteLANRequest: @unchecked Sendable {
             guard let self, !self.connected else { return }
             self.finish(.failure(RemoteRouteError.transport("The local connection timed out.")))
         }
-        let timeout: TimeInterval = request.method == "GET" ? 2 : (request.body.count > 256 * 1024 ? 60 : 12)
+        let timeout: TimeInterval = request.method == "GET"
+            ? (request.path.contains("/messages/") ? 20 : 2)
+            : (request.body.count > 256 * 1024 ? 60 : 12)
         queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
             self?.finish(.failure(RemoteRouteError.transport("The local connection timed out.")))
         }

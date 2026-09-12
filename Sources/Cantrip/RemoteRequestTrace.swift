@@ -19,6 +19,7 @@ final class RemoteRequestTrace {
     private var finished = false
     private var status = 0
     private var bytes = 0
+    private(set) var usesPagedHistory = false
     let id = UUID().uuidString
     private let log: (String) -> Void
 
@@ -29,6 +30,7 @@ final class RemoteRequestTrace {
     func identify(_ request: HTTPRequest) {
         lock.lock()
         defer { lock.unlock() }
+        usesPagedHistory = request.query("history") == "recent"
         method = ["GET", "POST", "DELETE"].contains(request.method) ? request.method : "other"
         switch request.path {
         case "/": route = "web"

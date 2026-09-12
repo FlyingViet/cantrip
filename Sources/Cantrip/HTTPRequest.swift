@@ -5,6 +5,18 @@ struct HTTPRequest {
     let path: String
     let headers: [String: String]
     let body: Data
+    var queryItems: [URLQueryItem] = []
+
+    var target: String {
+        var components = URLComponents()
+        components.path = path
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
+        return components.string ?? path
+    }
+
+    func query(_ name: String) -> String? {
+        queryItems.first { $0.name == name }?.value
+    }
 
     var json: [String: Any]? {
         guard !body.isEmpty else { return [:] }
@@ -41,7 +53,8 @@ struct HTTPRequest {
             method: String(requestParts[0]).uppercased(),
             path: components.path,
             headers: headers,
-            body: data.subdata(in: bodyStart..<(bodyStart + contentLength))
+            body: data.subdata(in: bodyStart..<(bodyStart + contentLength)),
+            queryItems: components.queryItems ?? []
         )
     }
 

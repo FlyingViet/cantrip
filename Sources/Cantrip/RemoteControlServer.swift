@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import CryptoKit
 
 /// Authenticated HTTP control plane for the live sessions owned by the app.
 /// Loopback HTTP remains available for Tailscale Serve. A separate Bonjour
@@ -10,6 +11,7 @@ final class RemoteControlServer {
     private weak var manager: SessionManager?
     private let queue = DispatchQueue(label: "com.brian.cantrip.remote-control")
     private let encodingQueue: DispatchQueue
+    private let detailEncodingQueue = DispatchQueue(label: "cantrip.remote-details", qos: .utility)
     private let requestLog: (String) -> Void
     private let sendTimeout: TimeInterval
     private static let healthBody = Data(#"{"status":"ok"}"#.utf8)
@@ -272,6 +274,18 @@ final class RemoteControlServer {
         }
         let session = manager.sessions[sessionIndex]
 
+        if parts.count == 3, parts[1] == "messages", request.method == "GET" {
+            guard let messageID = UUID(uuidString: String(parts[2])),
+                  let message = session.messages.first(where: { $0.id == messageID }) else {
+                sendError(404, "message no longer available", on: connection)
+                return
+            }
+            let object = messageSnapshot(message, sessionID: id, compact: false)
+            sendEncoded(on: connection, queue: detailEncodingQueue) {
+                try JSONSerialization.data(withJSONObject: ["message": object], options: [.sortedKeys])
+            }
+            return
+        }
         if parts.count == 2, parts[1] == "move" {
             guard request.method == "POST" else {
                 sendError(405, "method not allowed", on: connection)
@@ -338,6 +352,29 @@ final class RemoteControlServer {
             return
         }
         if parts.count == 1, request.method == "GET" {
+            if connection.trace.usesPagedHistory {
+                let summary = snapshot(session, includeMessages: false, on: connection)
+                if request.query("before") == nil,
+                   request.query("revision") == summary["historyRevision"] as? String {
+                    sendJSON(["unchanged": true], on: connection)
+                    return
+                }
+                var end = session.messages.endIndex
+                if let before = request.query("before") {
+                    guard let cursor = UUID(uuidString: before),
+                          let index = session.messages.firstIndex(where: { $0.id == cursor }) else {
+                        sendError(409, "History changed. Refresh the conversation before loading older messages.", on: connection)
+                        return
+                    }
+                    end = index
+                }
+                do {
+                    sendJSON(["session": try pagedSnapshot(session, summary: summary, end: end)], on: connection)
+                } catch {
+                    sendError(500, "Could not encode conversation history.", on: connection)
+                }
+                return
+            }
             sendJSON(["session": snapshot(session, on: connection)], on: connection)
             return
         }
@@ -472,7 +509,14 @@ final class RemoteControlServer {
                     sendError(404, "session not found", on: connection)
                     return
                 }
-                sendJSON(["session": snapshot(session, on: connection)], status: status, on: connection)
+                if connection.trace.usesPagedHistory {
+                    let summary = snapshot(session, includeMessages: false, on: connection)
+                    sendJSON(["session": try pagedSnapshot(session, summary: summary,
+                                                          end: session.messages.endIndex)],
+                             status: status, on: connection)
+                } else {
+                    sendJSON(["session": snapshot(session, on: connection)], status: status, on: connection)
+                }
             } catch {
                 requestLog("remote-request: id=\(connection.trace.id) outcome=journal_error")
                 sendError(500, "The action may have applied, but run history could not be saved. Check the session before retrying.", on: connection)
@@ -516,9 +560,19 @@ final class RemoteControlServer {
             "supportsImageAttachments": session.supportsRemoteImages,
             "supportsAutoDelivery": true,
             "supportsQueueRemoval": true,
+            "supportsPagedHistory": true,
         ]
         if let status = session.statusText { result["status"] = status }
         if let status = session.deliveryStatus { result["deliveryStatus"] = status }
+        // Hash only small metadata and mutation tokens, never the full transcript.
+        var hasher = SHA256()
+        for key in result.keys.sorted() {
+            let value = String(describing: result[key]!)
+            hasher.update(data: Data("\(key.utf8.count):\(key)\(value.utf8.count):\(value)".utf8))
+        }
+        hasher.update(data: Data(session.remoteMessageRevision.uuidString.utf8))
+        hasher.update(data: Data(session.remoteQueueRevision.uuidString.utf8))
+        result["historyRevision"] = hasher.finalize().map { String(format: "%02x", $0) }.joined()
         if includeMessages {
             result["queued"] = session.queued.map { prompt in
                 let presentation = RemoteImageAttachments.presentation(prompt.text, sessionID: session.id)
@@ -532,47 +586,53 @@ final class RemoteControlServer {
                 }
                 return object
             }
-            result["messages"] = session.messages.map { message in
-                var object: [String: Any] = [
-                    "id": message.id.uuidString,
-                    "role": message.role.rawValue,
-                    "text": message.text,
-                    "thinking": message.thinking,
-                    "activities": message.activities.map(activitySnapshot),
-                ]
-                if message.role == .user {
-                    let presentation = RemoteImageAttachments.presentation(message.text, sessionID: session.id)
-                    if !presentation.imageIDs.isEmpty {
-                        object["displayText"] = presentation.text
-                        object["images"] = presentation.imageIDs.map { ["id": $0] }
-                    }
-                }
-                if let author = message.author { object["author"] = author }
-                return object
+            result["messages"] = session.messages.map {
+                messageSnapshot($0, sessionID: session.id, compact: false)
             }
         }
         return result
     }
 
-    private func activitySnapshot(_ activity: ToolActivity) -> [String: Any] {
-        var object: [String: Any] = [
-            "id": activity.id,
-            "title": activity.title,
-            "toolName": activity.toolName,
-            "state": activityState(activity.state),
-        ]
-        if let input = activity.input { object["input"] = input }
-        if let output = activity.output { object["output"] = output }
+    private func messageSnapshot(_ message: ChatMessage, sessionID: UUID, compact: Bool) -> [String: Any] {
+        var object = RemoteHistory.message(message, compact: compact)
+        if message.role == .user {
+            let presentation = RemoteImageAttachments.presentation(message.text, sessionID: sessionID)
+            if !presentation.imageIDs.isEmpty {
+                object["displayText"] = compact
+                    ? RemoteHistory.preview(presentation.text, bytes: 16 * 1024) : presentation.text
+                object["images"] = presentation.imageIDs.map { ["id": $0] }
+            }
+        }
         return object
     }
 
-    private func activityState(_ state: ToolActivityState) -> String {
-        switch state {
-        case .running: return "running"
-        case .succeeded: return "succeeded"
-        case .failed: return "failed"
-        case .cancelled: return "cancelled"
+    @MainActor
+    private func pagedSnapshot(_ session: ChatSession, summary: [String: Any], end: Int) throws -> [String: Any] {
+        var result = summary
+        var messages: [[String: Any]] = []
+        var bytes = 0
+        var start = end
+        for index in (max(0, end - RemoteHistory.pageSize)..<end).reversed() {
+            let message = messageSnapshot(session.messages[index], sessionID: session.id, compact: true)
+            let size = try JSONSerialization.data(withJSONObject: message).count
+            if !messages.isEmpty, bytes + size > RemoteHistory.pageBytes { break }
+            messages.insert(message, at: 0)
+            bytes += size
+            start = index
         }
+        result["messages"] = messages
+        result["historyStartID"] = session.messages.first?.id.uuidString ?? "empty"
+        result["hasOlderMessages"] = start > 0
+        result["queued"] = session.queued.map { prompt -> [String: Any] in
+            let presentation = RemoteImageAttachments.presentation(prompt.text, sessionID: session.id)
+            return [
+                "id": prompt.id.uuidString,
+                "text": prompt.text,
+                "displayText": presentation.text,
+                "images": presentation.imageIDs.map { ["id": $0] },
+            ]
+        }
+        return result
     }
 
     private func sendJSON(
@@ -588,9 +648,10 @@ final class RemoteControlServer {
     }
 
     private func sendEncoded(status: Int = 200, on connection: RemoteRequestConnection,
+                             queue: DispatchQueue? = nil,
                              encode: @escaping () throws -> Data) {
         connection.trace.enter(.encodeWait)
-        encodingQueue.async {
+        (queue ?? encodingQueue).async {
             connection.trace.enter(.encode)
             do {
                 let data = try encode()
@@ -704,7 +765,7 @@ private extension RemoteControlServer {
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div></header>
-    <div id="actionError" role="alert"></div><section id="messages"></section></main>
+    <div id="actionError" role="alert"></div><div id="historyError" role="alert"></div><button id="olderMessages" class="control hidden">Load older messages</button><section id="messages"></section></main>
     <dialog id="tabEditor" aria-labelledby="tabEditorTitle"><form id="tabForm">
     <strong id="tabEditorTitle">Tab settings</strong><label>Tab name<input id="tabName" autocomplete="off"></label>
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
@@ -732,18 +793,53 @@ private extension RemoteControlServer {
     addEventListener("wheel",event=>{if(event.deltaY<0&&!event.target.closest("#sessions"))followOutput=false},{passive:true});
     addEventListener("scroll",()=>{if(!suppressScroll)followOutput=atBottom()},{passive:true});
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
+      path+=(path.includes("?")?"&":"?")+"history=recent";
       const controller=(!options.method||options.method==="GET")?new AbortController():null;
-      const deadline=controller?setTimeout(()=>controller.abort(),8000):null;if(controller)options.signal=controller.signal;
-      try{const response=await fetch(path,options);const data=await response.json();if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data}finally{if(deadline!==null)clearTimeout(deadline)}}
+      const deadline=controller?setTimeout(()=>controller.abort(),path.includes("/messages/")?20000:8000):null;if(controller)options.signal=controller.signal;
+      try{const response=await fetch(path,options);const data=await response.json();if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;throw error}return data}finally{if(deadline!==null)clearTimeout(deadline)}}
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
-    let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,movingTab=false,tabOrderRevision=0;
+    let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;
+    const historyCache=new Map(),expandedHistory=new Set();
+    function cacheSession(session,merge=true){const previous=historyCache.get(session.id);
+      if(previous?.historyStartID!==session.historyStartID)expandedHistory.delete(session.id);
+      if(merge&&session.historyStartID&&previous?.historyStartID===session.historyStartID){
+        const overlap=previous.messages.findIndex(m=>m.id===session.messages[0]?.id);
+        if(overlap>=0)session={...session,messages:[...previous.messages.slice(0,overlap),...session.messages],hasOlderMessages:previous.hasOlderMessages}}
+      if(!expandedHistory.has(session.id)&&session.supportsPagedHistory&&session.messages.length>120)session={...session,messages:session.messages.slice(-120),hasOlderMessages:true};
+      historyCache.delete(session.id);historyCache.set(session.id,session);while(historyCache.size>5){const id=historyCache.keys().next().value;historyCache.delete(id);expandedHistory.delete(id)}return session}
+    function scheduleRefresh(){if(timer)clearTimeout(timer);timer=null;if(!token||document.hidden)return;
+      const busy=sessionItems.some(s=>s.isStreaming||s.queuedCount)||$("historyError").textContent||document.documentElement.dataset.cantripConnected!=="true";
+      timer=setTimeout(refresh,busy?1500:5000)}
     function refresh(){refreshRequested=true;if(refreshTask)return refreshTask;
       refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision;
-        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;if(selected!==requestedID){refreshRequested=true;continue}
+        let listedSuccessfully=false,requestSelection=requestedID;
+        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;
+          for(const id of historyCache.keys())if(!listed.sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id)}
+          if(selected!==requestedID){refreshRequested=true;continue}
           if(!selected||!listed.sessions.some(s=>s.id===selected))selected=listed.sessions[0]?.id||null;
-          renderSessions(listed.sessions);const detailID=selected;if(detailID){const data=await api(`/api/v1/sessions/${detailID}`);if(token!==requestToken)continue;if(selected!==detailID){refreshRequested=true;continue}render(data.session)}else render(null);connection(true)}
-        catch(error){if(token!==requestToken)continue;connection(false);if(error.message.includes("token")){refreshRequested=false;pair(true)}}}
-      })().finally(()=>{refreshTask=null});return refreshTask}
+          requestSelection=selected;
+          renderSessions(listed.sessions);const detailID=selected;if(detailID){const cached=historyCache.get(detailID),summary=listed.sessions.find(s=>s.id===detailID);
+            if(cached)render(cached);else if(renderedSession!==detailID)render(null);
+            if(!cached?.historyRevision||cached.historyRevision!==summary.historyRevision){
+              const suffix=cached?.historyRevision?`?revision=${encodeURIComponent(cached.historyRevision)}`:"";
+              const data=await api(`/api/v1/sessions/${detailID}${suffix}`);if(token!==requestToken||orderRevision!==tabOrderRevision)continue;if(selected!==detailID){refreshRequested=true;continue}
+              if(data.session)render(cacheSession(data.session));else if(!data.unchanged||!cached)throw new Error("Invalid conversation update")}
+          }else render(null);$("historyError").textContent=""}
+        catch(error){if(token!==requestToken||selected!==requestSelection)continue;
+          if(!listedSuccessfully||error.status===401)connection(false);
+          $("historyError").textContent=`${listedSuccessfully?"Could not update this conversation":"Could not refresh tabs"}: ${error.message}. Retrying...`;
+          if(error.status===401){refreshRequested=false;pair(true)}}}
+      })().finally(()=>{refreshTask=null;scheduleRefresh()});return refreshTask}
+    async function loadOlderMessages(){const current=historyCache.get(selected),before=current?.messages[0]?.id;if(loadingHistory||!current?.hasOlderMessages||!before)return;
+      const requestToken=token,orderRevision=tabOrderRevision;loadingHistory=true;$("olderMessages").disabled=true;$("olderMessages").textContent="Loading older messages...";
+      try{const data=await api(`/api/v1/sessions/${current.id}?before=${encodeURIComponent(before)}`),latest=historyCache.get(current.id);
+        if(token!==requestToken||selected!==current.id||orderRevision!==tabOrderRevision||latest?.historyStartID!==data.session.historyStartID||latest?.messages[0]?.id!==before)return;
+        const ids=new Set(latest.messages.map(m=>m.id)),page=data.session;expandedHistory.add(current.id);
+        render(cacheSession({...latest,messages:[...page.messages.filter(m=>!ids.has(m.id)),...latest.messages],hasOlderMessages:page.hasOlderMessages},false),true);$("historyError").textContent=""}
+      catch(error){if(token===requestToken&&selected===current.id)$("historyError").textContent=`Could not load older messages: ${error.message}. Try again.`}
+      finally{loadingHistory=false;$("olderMessages").disabled=false;$("olderMessages").textContent="Load older messages"}}
+    $("olderMessages").onclick=loadOlderMessages;
+    document.addEventListener("visibilitychange",()=>{if(document.hidden){if(timer)clearTimeout(timer);timer=null}else if(token)refresh()});
     function renderSessions(items){const nav=$("sessions"),previousLeft=nav.scrollLeft,previousTop=nav.scrollTop,selectionChanged=nav.dataset.selected!==(selected||"");
       if(draggedTabID||movingTab)return;sessionItems=items;
       // Keep existing controls mounted so polling does not interrupt scrolling or keyboard focus.
@@ -846,30 +942,35 @@ private extension RemoteControlServer {
       if(long){const button=document.createElement("button");button.className="control quiet";button.textContent="Read full prompt";button.onclick=()=>readPrompt(text);parent.append(button)}}
     let readingPrompt="",promptStarts=[0],promptEnd=0;
     function renderPromptPage(){const page=promptSlice(readingPrompt,promptStarts[promptStarts.length-1],4000);promptEnd=page.end;$("promptPage").textContent=page.text;$("promptPage").scrollTop=0;$("promptNumber").textContent=`Page ${promptStarts.length}`;$("promptPrevious").disabled=promptStarts.length===1;$("promptNext").disabled=promptEnd===readingPrompt.length}
-    function readPrompt(text){readingPrompt=text;promptStarts=[0];renderPromptPage();$("promptReader").showModal()}
+    function readPrompt(text){readingPrompt=text;promptStarts=[0];$("promptTitle").textContent="Full prompt";renderPromptPage();$("promptReader").showModal()}
     $("promptPrevious").onclick=()=>{if(promptStarts.length>1){promptStarts.pop();renderPromptPage()}};
     $("promptNext").onclick=()=>{if(promptEnd<readingPrompt.length){promptStarts.push(promptEnd);renderPromptPage()}};
     $("promptDownload").onclick=()=>{const url=URL.createObjectURL(new Blob([readingPrompt],{type:"text/plain;charset=utf-8"})),link=document.createElement("a");link.href=url;link.download="cantrip-prompt.txt";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
     $("promptDone").onclick=()=>$("promptReader").close();
     $("promptReader").addEventListener("close",()=>{readingPrompt="";promptStarts=[0];$("promptPage").textContent=""});
-    function render(session){renderProgress(session);const box=$("messages"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
-      const root=document.scrollingElement||document.documentElement,sameSession=sessionID===renderedSession,shouldFollow=followOutput||!sameSession,previousTop=root.scrollTop;renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;box.replaceChildren();$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
+    function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight;
+      renderProgress(session);$("olderMessages").classList.toggle("hidden",!session?.hasOlderMessages);const box=$("messages"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
+      const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession);renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;box.replaceChildren();$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
       if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{for(const message of session.messages){const activities=message.activities||[];if(!message.text&&!message.thinking&&!activities.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
-          appendThinking(row,message.thinking,message.id);if(message.text){if(message.role==="user")appendPrompt(row,message.text);else appendProse(row,message.text)}appendActivities(row,activities,message.id);box.append(row)}
+          appendThinking(row,message.thinking,message.id);if(message.text){if(message.role==="user")appendPrompt(row,message.text);else appendProse(row,message.text)}appendActivities(row,activities,message.id);
+          if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
+            const requestToken=token;button.disabled=true;try{const data=await api(`/api/v1/sessions/${session.id}/messages/${message.id}`);if(token!==requestToken||selected!==session.id)return;
+              const full=data.message,parts=[full.text];if(full.thinking)parts.push("Reasoning\\n"+full.thinking);for(const step of full.activities||[])parts.push([step.title,step.input,step.output].filter(Boolean).join("\\n"));readPrompt(parts.join("\\n\\n"));$("promptTitle").textContent="Message details"}
+            catch(error){if(token===requestToken)$("historyError").textContent=`Could not load message details: ${error.message}`}finally{button.disabled=false}};row.append(button)}box.append(row)}
         if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}
         if(!sidebarLayout&&(session.isStreaming||session.queuedCount)){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
-      requestAnimationFrame(()=>{root.scrollTop=shouldFollow?root.scrollHeight:Math.min(previousTop,Math.max(0,root.scrollHeight-root.clientHeight));followOutput=shouldFollow;suppressScroll=false})}
+      requestAnimationFrame(()=>{root.scrollTop=shouldFollow?root.scrollHeight:Math.min(previousTop+(prepend?root.scrollHeight-previousHeight:0),Math.max(0,root.scrollHeight-root.clientHeight));followOutput=shouldFollow;suppressScroll=false})}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
     async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selected=data.session.id;renderedPayload="";await refresh()}
       catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
-    $("pairButton").onclick=async()=>{token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh();timer=setInterval(refresh,1500)}
+    $("pairButton").onclick=async()=>{historyCache.clear();expandedHistory.clear();token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
       catch(error){$("pairError").textContent=error.message}};
     $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;$("send").disabled=true;try{await action("messages",{text,mode:$("mode").value});if($("draft").value.trim()===text)$("draft").value="";$("mode").value="auto"}catch(error){const label=document.querySelector(".connection-label");if(label)label.textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false}};
     $("draft").onkeydown=event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selected=data.session.id;refresh()};
-    $("forget").onclick=()=>{localStorage.removeItem("cantripToken");token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null)};if(token){pair(false);refresh();timer=setInterval(refresh,1500)}else pair(true);
+    $("forget").onclick=()=>{localStorage.removeItem("cantripToken");historyCache.clear();expandedHistory.clear();token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null)};if(token){pair(false);refresh()}else pair(true);
     </script></body></html>
     """
 }
