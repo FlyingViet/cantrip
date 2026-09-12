@@ -10,10 +10,13 @@ extension SessionTabTests {
         chat.messages[99].text = largeText
         chat.messages[99].thinking = largeText
         chat.messages[99].activities = (0..<100).map {
-            ToolActivity(id: "tool-\($0)", title: "Tool \($0)", toolName: "bash",
-                         state: .succeeded, input: largeText, output: largeText,
+            ToolActivity(id: "tool-\($0)", title: "Tool \($0) " + String(repeating: "x", count: 600), toolName: "bash",
+                         state: .succeeded, input: "Input \($0)", output: $0 == 0 ? largeText : "Output \($0)",
                          fileChanges: [], terminalCommand: nil)
         }
+        chat.messages[50].text = largeText
+        chat.messages[50].thinking = largeText
+        chat.messages[50].activities = chat.messages[99].activities
         let original = chat.messages
         let server = RemoteControlServer(manager: manager)
         let port = Int.random(in: 49152...65535)
@@ -37,14 +40,22 @@ extension SessionTabTests {
         let (status, response, bytes) = try await request("?history=recent")
         let recent = response["session"] as! [String: Any]
         let messages = recent["messages"] as! [[String: Any]]
-        precondition(status == 200 && messages.count == 30)
-        precondition(bytes < 192 * 1024, "A huge live turn must not dominate automatic history loads")
+        precondition(status == 200 && messages.count == 1)
+        precondition(bytes > RemoteHistory.pageBytes, "A complete message may exceed the soft page budget")
         precondition(recent["hasOlderMessages"] as? Bool == true)
-        precondition(messages.last?["isPreview"] as? Bool == true)
-        precondition((messages.last?["text"] as! String).utf8.count <= 16 * 1024)
-        precondition((messages.last?["thinking"] as! String).utf8.count <= 4 * 1024)
-        let activities = messages.last?["activities"] as! [[String: Any]]
-        precondition(activities.count == 40 && activities.allSatisfy { $0["output"] == nil && $0["input"] == nil })
+        func expectFull(_ payload: [String: Any], original: ChatMessage) {
+            precondition(payload["isPreview"] as? Bool != true)
+            precondition(payload["text"] as? String == original.text)
+            precondition(payload["thinking"] as? String == original.thinking)
+            let activities = payload["activities"] as! [[String: Any]]
+            precondition(activities.count == original.activities.count)
+            for (activity, original) in zip(activities, original.activities) {
+                precondition(activity["title"] as? String == original.title)
+                precondition(activity["input"] as? String == original.input)
+                precondition(activity["output"] as? String == original.output)
+            }
+        }
+        expectFull(messages[0], original: original[99])
         precondition(chat.messages == original, "Remote paging must never prune host history")
         let revision = recent["historyRevision"] as! String
         let (_, unchanged, unchangedBytes) = try await request("?history=recent&revision=\(revision)")
@@ -57,17 +68,19 @@ extension SessionTabTests {
             let page = response["session"] as! [String: Any]
             let older = page["messages"] as! [[String: Any]]
             precondition(older.count <= 30 && !older.isEmpty)
+            let encodedBytes = try older.reduce(0) { try $0 + JSONSerialization.data(withJSONObject: $1).count }
+            precondition(older.count == 1 || encodedBytes <= RemoteHistory.pageBytes)
+            for message in older {
+                expectFull(message, original: original.first { $0.id.uuidString == message["id"] as? String }!)
+            }
             ids = older.map { $0["id"] as! String } + ids
             hasOlder = page["hasOlderMessages"] as! Bool
         }
         precondition(ids == original.map { $0.id.uuidString }, "Paging must restore all messages once, in order")
 
-        // Keep the explicit-detail fixture small enough for the transport's existing 32 MiB ceiling.
-        chat.messages[99].activities = Array(chat.messages[99].activities.prefix(1))
         let (_, full, _) = try await request("/messages/\(original[99].id)")
         let fullMessage = full["message"] as! [String: Any]
-        precondition(fullMessage["text"] as? String == largeText)
-        precondition((fullMessage["activities"] as! [[String: Any]])[0]["output"] as? String == largeText)
+        expectFull(fullMessage, original: original[99])
         let (_, legacy, _) = try await request("")
         precondition((legacy["session"] as! [String: Any])["messages"] is [[String: Any]])
         precondition(((legacy["session"] as! [String: Any])["messages"] as! [[String: Any]]).count == 100)
@@ -95,8 +108,6 @@ extension SessionTabTests {
         let (_, emptyResponse, _) = try await request("?history=recent")
         let empty = emptyResponse["session"] as! [String: Any]
         precondition(empty["hasOlderMessages"] as? Bool == false && (empty["messages"] as! [Any]).isEmpty)
-        let unicode = String(repeating: "\u{1F680}", count: 10)
-        precondition(RemoteHistory.preview(unicode, bytes: 7) == "\u{1F680}")
-        print("Remote history: bounded previews, conditional reads, complete paging, legacy and private access passed")
+        print("Remote history: complete messages, soft page budgets, conditional reads, complete paging, legacy and private access passed")
     }
 }

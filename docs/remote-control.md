@@ -18,15 +18,18 @@ automatically replayed.
 Updated AgentGateway and Mac/browser Remote load recent messages first instead
 of repeatedly downloading the entire live transcript. **Load older messages**
 pages backward without discarding host history or jumping away from the message
-you were reading. Large messages use compact previews; **Load full message and
-details** fetches their complete text, reasoning, and tool input/output only
-when requested. Submitted prompts and queued prompt contents are unchanged.
+you were reading. Every loaded message includes its complete text, reasoning,
+and tool input/output by default. Older pages are fetched only when you choose
+**Load older messages**, not prefetched. Reasoning/tool disclosures and long-prompt
+readers use content already downloaded; they do not require another message fetch.
+Older hosts that return previews retain the **Load full message and details** fallback.
 
 Automatic reads request `?history=recent`, including mutation acknowledgements.
 The host returns up to 30 recent messages, targeting a 192 KiB encoded message
-page (at least one message). Compact messages cap text at 16 KiB, reasoning at
-4 KiB, and activity summaries at the last 40 steps; omitted detail is marked
-with `isPreview`. This page budget excludes metadata and the ordered queue.
+page (at least one complete message). A single large message may exceed this soft
+budget; messages are never truncated to fit it. The same rules apply to requested
+older pages. This page budget excludes metadata and the ordered queue.
+Page sizing and encoding run off the main actor and the lightweight tab-list queue.
 Unattended clients keep a rolling 120-message window and cache up to five tabs;
 explicit older-history loading can expand that window.
 
@@ -39,13 +42,15 @@ and conversation resets. A missing cursor returns 409, prompting a refresh.
 Authenticated `GET /api/v1/sessions/{id}/messages/{messageID}` returns full
 message details, using a separate host encoding queue.
 
-Polling remains single-flight: about 1.5 seconds between active/error refreshes,
+Tab-list polling remains single-flight: about 1.5 seconds between active/error refreshes,
 5 seconds while idle, and paused while the client is inactive/hidden. A
 successful tab-list read is applied immediately. A failed conversation read
 keeps cached messages and reports a separate error, rather than treating a
-reachable host as disconnected. Routine native HTTPS/LAN read deadlines remain
-3/2 seconds. Explicit full-message downloads get a longer budget and do not
-hold AgentGateway's polling/mutation gate; uncertain writes are never replayed.
+reachable host as disconnected. Lightweight native HTTPS/LAN read deadlines remain
+3/2 seconds; conversation pages and full-message reads allow 20 seconds, while
+LAN connection establishment still times out after 2 seconds. AgentGateway history
+downloads do not hold its polling/mutation gate, and tab polling continues during
+a slow recent-page download. Uncertain writes are never replayed.
 
 Update both apps and reopen the host when active work has finished to enable
 this behavior. Old clients retain the full-snapshot API, and new clients can

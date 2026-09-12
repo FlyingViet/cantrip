@@ -116,6 +116,16 @@ private func runTests() async throws {
                            headers: ["authorization": "Bearer test-token"], body: Data())
     let write = HTTPRequest(method: "POST", path: "/api/v1/sessions",
                             headers: read.headers, body: Data())
+    for path in ["/api/v1/sessions/tab", "/api/v1/sessions/tab/messages/message"] {
+        expect(HTTPRequest(method: "GET", path: path, headers: [:], body: Data()).isHistoryRead,
+               "complete history reads get the longer response budget")
+        expect(!HTTPRequest(method: "POST", path: path, headers: [:], body: Data()).isHistoryRead,
+               "history read budgets must not change mutation routing")
+    }
+    for path in ["/api/v1/sessions", "/api/v1/sessions/tab/attachments/image/thumbnail", "/health"] {
+        expect(!HTTPRequest(method: "GET", path: path, headers: [:], body: Data()).isHistoryRead,
+               "lightweight reads retain fast failure deadlines")
+    }
     let stub = Stub()
     let clock = Clock()
     let client = RemoteRouteClient(token: "test-token", now: { clock.value }, send: { route, request in
@@ -509,6 +519,10 @@ private func runTests() async throws {
                "web read timeout aborts the fetch and cleans up its timer")
         context.evaluateScript(#"api("/api/v1/sessions",{method:"POST"}).catch(()=>{})"#)
         expect(context.evaluateScript("deadlines.length")!.toInt32() == 1, "web mutations retain their longer response lifetime")
+        context.evaluateScript(#"fetches.at(-1).resolve({ok:true,json:async()=>({})})"#)
+        context.evaluateScript(#"api("/api/v1/sessions/tab?before=message").catch(()=>{})"#)
+        expect(context.evaluateScript("deadlines.at(-1).ms")!.toInt32() == 20000,
+               "web recent and older pages allow complete messages to finish downloading")
         context.evaluateScript(#"fetches.at(-1).resolve({ok:true,json:async()=>({})})"#)
     }
 }
