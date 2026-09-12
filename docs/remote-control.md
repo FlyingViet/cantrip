@@ -13,6 +13,45 @@ prepares memory context and encodes transcript responses off the UI thread.
 Requests remain single messages, and uncertain sends are still never
 automatically replayed.
 
+## Loading long conversations
+
+Updated AgentGateway and Mac/browser Remote load recent messages first instead
+of repeatedly downloading the entire live transcript. **Load older messages**
+pages backward without discarding host history or jumping away from the message
+you were reading. Large messages use compact previews; **Load full message and
+details** fetches their complete text, reasoning, and tool input/output only
+when requested. Submitted prompts and queued prompt contents are unchanged.
+
+Automatic reads request `?history=recent`, including mutation acknowledgements.
+The host returns up to 30 recent messages, targeting a 192 KiB encoded message
+page (at least one message). Compact messages cap text at 16 KiB, reasoning at
+4 KiB, and activity summaries at the last 40 steps; omitted detail is marked
+with `isPreview`. This page budget excludes metadata and the ordered queue.
+Unattended clients keep a rolling 120-message window and cache up to five tabs;
+explicit older-history loading can expand that window.
+
+Session summaries advertise `supportsPagedHistory` and `historyRevision`.
+Unchanged summaries need no detail download. A conditional detail read with
+`revision=<historyRevision>` returns `{"unchanged":true}` if still current,
+without constructing the message payload. `before=<first-message-UUID>` requests
+the previous page; `hasOlderMessages` and `historyStartID` identify pagination
+and conversation resets. A missing cursor returns 409, prompting a refresh.
+Authenticated `GET /api/v1/sessions/{id}/messages/{messageID}` returns full
+message details, using a separate host encoding queue.
+
+Polling remains single-flight: about 1.5 seconds between active/error refreshes,
+5 seconds while idle, and paused while the client is inactive/hidden. A
+successful tab-list read is applied immediately. A failed conversation read
+keeps cached messages and reports a separate error, rather than treating a
+reachable host as disconnected. Routine native HTTPS/LAN read deadlines remain
+3/2 seconds. Explicit full-message downloads get a longer budget and do not
+hold AgentGateway's polling/mutation gate; uncertain writes are never replayed.
+
+Update both apps and reopen the host when active work has finished to enable
+this behavior. Old clients retain the full-snapshot API, and new clients can
+still read older hosts without pagination. Paging covers history currently
+available in the live host session; it does not restore archived disk history.
+
 ## Liveness, readiness, and stall diagnostics
 
 `GET /health` returns the pre-encoded `{"status":"ok"}` response on the host's

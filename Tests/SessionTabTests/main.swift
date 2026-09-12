@@ -110,6 +110,7 @@ struct SessionTabTests {
         try await testPromptPreparation()
         try await testCopilotUsage()
         try await testRemoteRequestIsolation()
+        try await testRemoteHistory()
         try await testJournalDelivery()
         try await testHostProtection(manager: manager)
         print("Session tab persistence, protection, privacy, and web controls passed")
@@ -137,7 +138,7 @@ struct SessionTabTests {
         }
         let source = try String(contentsOfFile: "Sources/Cantrip/RemoteControlServer.swift", encoding: .utf8)
         let from = source.range(of: "    function promptSlice")!
-        let to = source.range(of: "    function render(session)", range: from.upperBound..<source.endIndex)!
+        let to = source.range(of: "    function render(session,", range: from.upperBound..<source.endIndex)!
         context.evaluateScript("""
         const elements={};
         function node(){return {textContent:"",children:[],append(...items){this.children.push(...items)},

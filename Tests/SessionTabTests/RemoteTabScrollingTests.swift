@@ -195,7 +195,54 @@ extension SessionTabTests {
             try await testRemoteProgress(webView: webView)
         }
         try await testRemoteTabReordering(webView: webView)
+        try await testRemoteHistoryNavigation(webView: webView)
         print("Remote tabs (\(sidebar ? "Mac sidebar" : "browser strip")): WebKit scrolling, progress, polling, selection, focus, and controls passed at 320-1100pt widths and 340-700pt heights")
+    }
+
+    @MainActor
+    private static func testRemoteHistoryNavigation(webView: WKWebView) async throws {
+        _ = try await webView.callAsyncJavaScript("""
+        const originalAPI=api,originalToken=token,originalFrame=requestAnimationFrame;
+        const settle=()=>new Promise(resolve=>setTimeout(resolve,100));
+        // A hidden WebKit page otherwise defers the render's scroll restoration indefinitely.
+        window.requestAnimationFrame=callback=>setTimeout(callback,0);
+        const message=id=>({id,role:"assistant",text:("Message "+id+" with full paragraphs. ").repeat(600),activities:[]});
+        let current={id:"history",title:"History",historyRevision:"r1",historyStartID:"start",
+          supportsPagedHistory:true,hasOlderMessages:true,messages:[message("3"),{...message("4"),isPreview:true}]};
+        try{
+          token="history-test";selected=current.id;historyCache.clear();expandedHistory.clear();
+          renderSessions([current]);render(cacheSession(current));await settle();
+          const root=document.scrollingElement;root.scrollTop=0;followOutput=false;await settle();
+          const previous=$("messages").querySelector("article").getBoundingClientRect().top;
+          api=async path=>{
+            check(path.includes("before=3"),"Older messages use the stable first-message cursor");
+            return {session:{...current,messages:[message("1"),message("2")],hasOlderMessages:false}};
+          };
+          await loadOlderMessages();await settle();
+          check(historyCache.get(selected).messages.map(m=>m.id).join()==="1,2,3,4","History loads once in chronological order");
+          const restored=$("messages").querySelectorAll("article")[2].getBoundingClientRect().top;
+          check(Math.abs(restored-previous)<3,`Prepending history retains the visible message position: ${previous} -> ${restored}, scroll ${root.scrollTop}`);
+          check(!followOutput&&$("olderMessages").classList.contains("hidden"),"Reading old history must not jump to latest");
+          api=async()=>({message:{id:"4",text:"Full downloadable message",thinking:"Full reasoning",
+            activities:[{title:"Tool",output:"Complete tool output"}]}});
+          const details=Array.from($("messages").querySelectorAll("button")).find(b=>b.textContent==="Load full message and details");
+          check(details,"Compact messages expose full details on demand");details.click();await settle();
+          check($("promptReader").open&&$("promptPage").textContent.includes("Complete tool output"),"Full details remain readable");
+          $("promptDone").click();
+          api=async path=>{
+            if(path==="/api/v1/sessions")return {sessions:[{...current,title:"Renamed",historyRevision:"r2"}]};
+            throw Error("Detail timeout");
+          };
+          await refresh();
+          check(document.documentElement.dataset.cantripConnected==="true","A healthy tab list keeps connection status independent");
+          check($("historyError").textContent.includes("conversation"),"Detail failures are visible");
+          check(historyCache.get(selected).messages.length===4,"A failed detail load retains already loaded history");
+        }finally{
+          api=originalAPI;token=originalToken;window.requestAnimationFrame=originalFrame;
+          if(timer)clearTimeout(timer);timer=null;historyCache.clear();expandedHistory.clear();
+          $("historyError").textContent="";selected=null;render(null);renderSessions([]);
+        }
+        """, arguments: [:], in: nil, contentWorld: .page)
     }
 
     @MainActor

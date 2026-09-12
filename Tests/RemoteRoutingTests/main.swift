@@ -90,7 +90,9 @@ private final class TestServer: @unchecked Sendable {
                 let authorized = request.headers["authorization"] == "Bearer test-token"
                 let response = RemoteHTTPResponse(
                     status: authorized ? 200 : 401, contentType: "application/json",
-                    body: Data((authorized ? #"{"sessions":[]}"# : #"{"error":"Unauthorized"}"#).utf8)
+                    body: Data((authorized
+                        ? (request.path == "/echo" ? request.target : #"{"sessions":[]}"#)
+                        : #"{"error":"Unauthorized"}"#).utf8)
                 )
                 connection.send(content: response.data, completion: .contentProcessed { _ in connection.cancel() })
             } else if !complete && error == nil {
@@ -355,6 +357,12 @@ private func runTests() async throws {
     let response = try await live.request(read)
     expect(response.status == 200, "Tailscale HTTP is used ahead of stalled LAN")
     expect(Date().timeIntervalSince(start) < 1, "initial read never waits for stalled LAN")
+    let historyRequest = HTTPRequest(method: "GET", path: "/echo", headers: read.headers, body: Data(),
+                                    queryItems: [URLQueryItem(name: "history", value: "recent"),
+                                                 URLQueryItem(name: "before", value: UUID().uuidString),
+                                                 URLQueryItem(name: "revision", value: "safe&encoded")])
+    expect(String(decoding: try await live.request(historyRequest).body, as: UTF8.self) == historyRequest.target,
+           "HTTPS forwarding must preserve and encode history cursors and revisions")
     await live.update(endpoints: [blackholeEndpoint], fallback: nil)
     let lanStart = Date()
     do {
@@ -387,6 +395,8 @@ private func runTests() async throws {
     let secure = RemoteRouteClient(token: "test-token")
     await secure.update(endpoints: [tlsEndpoint], fallback: nil)
     expect(try await secure.request(read).status == 200, "real authenticated TLS-PSK request succeeds")
+    expect(String(decoding: try await secure.request(historyRequest).body, as: UTF8.self) == historyRequest.target,
+           "TLS-PSK forwarding must preserve history query parameters")
     await secure.stop()
 
     let bridge = RemoteLANBridge(token: "test-token")
@@ -424,16 +434,18 @@ private func runTests() async throws {
 
     try await MainActor.run {
         let source = try String(contentsOfFile: "Sources/Cantrip/RemoteControlServer.swift", encoding: .utf8)
-        let start = source.range(of: "    let refreshTask=null,refreshRequested=false;")!
+        let start = source.range(of: "    let refreshTask=null,refreshRequested=false,")!
         let end = source.range(of: "    function renderSessions", range: start.upperBound..<source.endIndex)!
         let refresh = String(source[start.lowerBound..<end.lowerBound])
         let context = JSContext()!
         context.exceptionHandler = { _, error in expect(false, "web refresh JavaScript: \(error?.toString() ?? "unknown")") }
         context.evaluateScript("""
-        let token="test",selected="a",pending=[],rendered=[],connections=[];
+        let token="test",selected="a",pending=[],rendered=[],connections=[],timer=null,renderedSession="a";
+        const elements=new Map(),document={hidden:true,addEventListener(){}};
+        const $=id=>{if(!elements.has(id))elements.set(id,{textContent:""});return elements.get(id)};
         function api(path){return new Promise((resolve,reject)=>pending.push({path,resolve,reject}))}
         function renderSessions(items){}
-        function render(session){rendered.push(session.id)}
+        function render(session){if(session)rendered.push(session.id)}
         function connection(active){connections.push(active)}
         function pair(show){}
         \(refresh)
@@ -451,6 +463,29 @@ private func runTests() async throws {
         context.evaluateScript(#"refresh();pending.shift().reject(new Error("Offline"))"#)
         expect(context.evaluateScript("refreshTask === null && connections.at(-1) === false")!.toBool() == true,
                "failed refresh releases the single-flight gate and reports disconnection")
+        context.evaluateScript(#"refresh();pending.shift().resolve({sessions:[{id:"b",title:"Updated"}]})"#)
+        context.evaluateScript(#"pending.shift().reject(new Error("Large detail timed out"))"#)
+        expect(context.evaluateScript("connections.at(-1) === true")!.toBool(),
+               "a detail failure must not hide a successful authenticated list refresh")
+        expect(context.evaluateScript("$('historyError').textContent.includes('conversation')")!.toBool(),
+               "detail failures need a separate visible error")
+        context.evaluateScript("""
+        historyCache.clear();
+        cacheSession({id:"b",historyStartID:"start",messages:[{id:"3"},{id:"4"}],hasOlderMessages:true});
+        cacheSession({id:"b",historyStartID:"start",messages:[{id:"1"},{id:"2"},{id:"3"},{id:"4"}],hasOlderMessages:false},false);
+        cacheSession({id:"b",historyStartID:"start",messages:[{id:"4"},{id:"5"}],hasOlderMessages:true});
+        """)
+        expect(context.evaluateScript("historyCache.get('b').messages.map(m=>m.id).join(',')")!.toString() == "1,2,3,4,5",
+               "latest windows merge with manually loaded history without duplicates")
+        context.evaluateScript(#"cacheSession({id:"b",historyStartID:"reset",messages:[{id:"6"}],hasOlderMessages:false})"#)
+        expect(context.evaluateScript("historyCache.get('b').messages.length")!.toInt32() == 1,
+               "conversation resets cannot retain unrelated older messages")
+        context.evaluateScript("""
+        cacheSession({id:"b",historyStartID:"reset",supportsPagedHistory:true,
+          messages:Array.from({length:150},(_,id)=>({id:String(id)})),hasOlderMessages:false},false);
+        """)
+        expect(context.evaluateScript("historyCache.get('b').messages.length")!.toInt32() == 120,
+               "unattended browser history remains bounded")
 
         let apiStart = source.range(of: "    async function api(")!
         let apiEnd = source.range(of: "    function pair(", range: apiStart.upperBound..<source.endIndex)!
