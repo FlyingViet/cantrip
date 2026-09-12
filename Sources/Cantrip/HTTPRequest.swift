@@ -18,6 +18,12 @@ struct HTTPRequest {
         queryItems.first { $0.name == name }?.value
     }
 
+    var isHistoryRead: Bool {
+        let parts = path.split(separator: "/")
+        return method == "GET" && parts.starts(with: ["api", "v1", "sessions"])
+            && (parts.count == 4 || (parts.count == 6 && parts[4] == "messages"))
+    }
+
     var json: [String: Any]? {
         guard !body.isEmpty else { return [:] }
         return try? JSONSerialization.jsonObject(with: body) as? [String: Any]

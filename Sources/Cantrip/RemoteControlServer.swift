@@ -280,7 +280,7 @@ final class RemoteControlServer {
                 sendError(404, "message no longer available", on: connection)
                 return
             }
-            let object = messageSnapshot(message, sessionID: id, compact: false)
+            let object = messageSnapshot(message, sessionID: id)
             sendEncoded(on: connection, queue: detailEncodingQueue) {
                 try JSONSerialization.data(withJSONObject: ["message": object], options: [.sortedKeys])
             }
@@ -368,11 +368,7 @@ final class RemoteControlServer {
                     }
                     end = index
                 }
-                do {
-                    sendJSON(["session": try pagedSnapshot(session, summary: summary, end: end)], on: connection)
-                } catch {
-                    sendError(500, "Could not encode conversation history.", on: connection)
-                }
+                sendPagedSession(session, summary: summary, end: end, on: connection)
                 return
             }
             sendJSON(["session": snapshot(session, on: connection)], on: connection)
@@ -511,9 +507,8 @@ final class RemoteControlServer {
                 }
                 if connection.trace.usesPagedHistory {
                     let summary = snapshot(session, includeMessages: false, on: connection)
-                    sendJSON(["session": try pagedSnapshot(session, summary: summary,
-                                                          end: session.messages.endIndex)],
-                             status: status, on: connection)
+                    sendPagedSession(session, summary: summary, end: session.messages.endIndex,
+                                     status: status, on: connection)
                 } else {
                     sendJSON(["session": snapshot(session, on: connection)], status: status, on: connection)
                 }
@@ -587,19 +582,18 @@ final class RemoteControlServer {
                 return object
             }
             result["messages"] = session.messages.map {
-                messageSnapshot($0, sessionID: session.id, compact: false)
+                messageSnapshot($0, sessionID: session.id)
             }
         }
         return result
     }
 
-    private func messageSnapshot(_ message: ChatMessage, sessionID: UUID, compact: Bool) -> [String: Any] {
-        var object = RemoteHistory.message(message, compact: compact)
+    private func messageSnapshot(_ message: ChatMessage, sessionID: UUID) -> [String: Any] {
+        var object = RemoteHistory.message(message)
         if message.role == .user {
             let presentation = RemoteImageAttachments.presentation(message.text, sessionID: sessionID)
             if !presentation.imageIDs.isEmpty {
-                object["displayText"] = compact
-                    ? RemoteHistory.preview(presentation.text, bytes: 16 * 1024) : presentation.text
+                object["displayText"] = presentation.text
                 object["images"] = presentation.imageIDs.map { ["id": $0] }
             }
         }
@@ -607,32 +601,39 @@ final class RemoteControlServer {
     }
 
     @MainActor
-    private func pagedSnapshot(_ session: ChatSession, summary: [String: Any], end: Int) throws -> [String: Any] {
-        var result = summary
-        var messages: [[String: Any]] = []
-        var bytes = 0
-        var start = end
-        for index in (max(0, end - RemoteHistory.pageSize)..<end).reversed() {
-            let message = messageSnapshot(session.messages[index], sessionID: session.id, compact: true)
-            let size = try JSONSerialization.data(withJSONObject: message).count
-            if !messages.isEmpty, bytes + size > RemoteHistory.pageBytes { break }
-            messages.insert(message, at: 0)
-            bytes += size
-            start = index
+    private func sendPagedSession(_ session: ChatSession, summary: [String: Any], end: Int,
+                                  status: Int = 200, on connection: RemoteRequestConnection) {
+        let sessionID = session.id
+        let candidates = Array(session.messages[max(0, end - RemoteHistory.pageSize)..<end])
+        let historyStartID = session.messages.first?.id.uuidString ?? "empty"
+        let queued = session.queued
+        // Full-message sizing and encoding belong off the main actor and tab-list queue.
+        sendEncoded(status: status, on: connection, queue: detailEncodingQueue) {
+            var result = summary
+            var messages: [[String: Any]] = []
+            var bytes = 0
+            for candidate in candidates.reversed() {
+                let message = self.messageSnapshot(candidate, sessionID: sessionID)
+                let size = try JSONSerialization.data(withJSONObject: message).count
+                if !messages.isEmpty, bytes + size > RemoteHistory.pageBytes { break }
+                messages.insert(message, at: 0)
+                bytes += size
+                if bytes >= RemoteHistory.pageBytes { break }
+            }
+            result["messages"] = messages
+            result["historyStartID"] = historyStartID
+            result["hasOlderMessages"] = end > messages.count
+            result["queued"] = queued.map { prompt -> [String: Any] in
+                let presentation = RemoteImageAttachments.presentation(prompt.text, sessionID: sessionID)
+                return [
+                    "id": prompt.id.uuidString,
+                    "text": prompt.text,
+                    "displayText": presentation.text,
+                    "images": presentation.imageIDs.map { ["id": $0] },
+                ]
+            }
+            return try JSONSerialization.data(withJSONObject: ["session": result], options: [.sortedKeys])
         }
-        result["messages"] = messages
-        result["historyStartID"] = session.messages.first?.id.uuidString ?? "empty"
-        result["hasOlderMessages"] = start > 0
-        result["queued"] = session.queued.map { prompt -> [String: Any] in
-            let presentation = RemoteImageAttachments.presentation(prompt.text, sessionID: session.id)
-            return [
-                "id": prompt.id.uuidString,
-                "text": prompt.text,
-                "displayText": presentation.text,
-                "images": presentation.imageIDs.map { ["id": $0] },
-            ]
-        }
-        return result
     }
 
     private func sendJSON(
@@ -795,7 +796,8 @@ private extension RemoteControlServer {
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
       path+=(path.includes("?")?"&":"?")+"history=recent";
       const controller=(!options.method||options.method==="GET")?new AbortController():null;
-      const deadline=controller?setTimeout(()=>controller.abort(),path.includes("/messages/")?20000:8000):null;if(controller)options.signal=controller.signal;
+      const segments=path.split("?")[0].split("/").filter(Boolean),historyRead=segments.slice(0,3).join("/")==="api/v1/sessions"&&(segments.length===4||(segments.length===6&&segments[4]==="messages"));
+      const deadline=controller?setTimeout(()=>controller.abort(),historyRead?20000:8000):null;if(controller)options.signal=controller.signal;
       try{const response=await fetch(path,options);const data=await response.json();if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;throw error}return data}finally{if(deadline!==null)clearTimeout(deadline)}}
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
     let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;

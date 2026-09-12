@@ -64,7 +64,9 @@ The macOS app includes:
   text stays intact. Memory retrieval uses bounded, deduplicated query terms
   and runs off the UI thread; large Remote responses are encoded off-thread.
 - **Remote control:** use the Mac's sessions from AgentGateway on iPhone/iPad,
-  another Mac, or a browser. Mac Remote uses an expanded, vertically scrollable
+  another Mac, or a browser. Recent messages load with full text and tool details;
+  older history is paginated and fetched only through **Load older messages**.
+  Mac Remote uses an expanded, vertically scrollable
   tab list on the left; main Cantrip and ordinary browser tabs stay across the
   top. Remote tab lists keep their scroll position during refreshes. Mac Remote
   and browser tabs support drag reordering, move buttons in tab settings, and

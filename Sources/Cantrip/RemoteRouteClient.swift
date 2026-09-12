@@ -255,7 +255,7 @@ actor RemoteRouteClient {
             guard let url = components.url else { throw RemoteRouteError.invalidResponse }
             var forwarded = URLRequest(
                 url: url, cachePolicy: .reloadIgnoringLocalCacheData,
-                timeoutInterval: request.method == "GET" ? (request.path.contains("/messages/") ? 20 : 3)
+                timeoutInterval: request.method == "GET" ? (request.isHistoryRead ? 20 : 3)
                     : (request.body.count > 256 * 1024 ? 60 : 12)
             )
             forwarded.httpMethod = request.method
@@ -264,8 +264,8 @@ actor RemoteRouteClient {
                 forwarded.setValue(request.headers[name], forHTTPHeaderField: name)
             }
             do {
-                let session = request.method == "GET" && !request.path.contains("/messages/")
-                    ? fallbackReadSession : fallbackSession
+                let session = request.isHistoryRead ? fallbackHistorySession
+                    : (request.method == "GET" ? fallbackReadSession : fallbackSession)
                 let (data, response) = try await session.data(for: forwarded)
                 guard let response = response as? HTTPURLResponse, data.count <= 32 << 20 else {
                     throw RemoteRouteError.invalidResponse
@@ -293,6 +293,14 @@ actor RemoteRouteClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 3
         configuration.timeoutIntervalForResource = 3
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration, delegate: RemoteNoRedirectDelegate(), delegateQueue: nil)
+    }()
+
+    private static let fallbackHistorySession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForResource = 20
         configuration.waitsForConnectivity = false
         return URLSession(configuration: configuration, delegate: RemoteNoRedirectDelegate(), delegateQueue: nil)
     }()
@@ -380,7 +388,7 @@ private final class RemoteLANRequest: @unchecked Sendable {
             self.finish(.failure(RemoteRouteError.transport("The local connection timed out.")))
         }
         let timeout: TimeInterval = request.method == "GET"
-            ? (request.path.contains("/messages/") ? 20 : 2)
+            ? (request.isHistoryRead ? 20 : 2)
             : (request.body.count > 256 * 1024 ? 60 : 12)
         queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
             self?.finish(.failure(RemoteRouteError.transport("The local connection timed out.")))

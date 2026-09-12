@@ -212,6 +212,9 @@ extension SessionTabTests {
         try{
           token="history-test";selected=current.id;historyCache.clear();expandedHistory.clear();
           renderSessions([current]);render(cacheSession(current));await settle();
+          const recentRows=$("messages").querySelectorAll("article");
+          check(recentRows[0].querySelector(".prose").textContent===message("3").text.trim(),"Recent messages render their complete text without a detail fetch");
+          check(!Array.from(recentRows[0].querySelectorAll("button")).some(b=>b.textContent==="Load full message and details"),"Complete messages need no download button");
           const root=document.scrollingElement;root.scrollTop=0;followOutput=false;await settle();
           const previous=$("messages").querySelector("article").getBoundingClientRect().top;
           api=async path=>{
@@ -226,7 +229,7 @@ extension SessionTabTests {
           api=async()=>({message:{id:"4",text:"Full downloadable message",thinking:"Full reasoning",
             activities:[{title:"Tool",output:"Complete tool output"}]}});
           const details=Array.from($("messages").querySelectorAll("button")).find(b=>b.textContent==="Load full message and details");
-          check(details,"Compact messages expose full details on demand");details.click();await settle();
+          check(details,"Older hosts' compact messages retain a full-details fallback");details.click();await settle();
           check($("promptReader").open&&$("promptPage").textContent.includes("Complete tool output"),"Full details remain readable");
           $("promptDone").click();
           api=async path=>{
