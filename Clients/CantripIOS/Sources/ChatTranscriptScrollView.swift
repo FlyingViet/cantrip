@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ChatTranscriptScrollView<Content: View>: View {
     var scrollRequest = 0
+    var prependRevision = 0
+    var prependAnchor: UUID?
     var dismissKeyboard: () -> Void = {}
     @ViewBuilder var content: () -> Content
 
@@ -14,6 +16,7 @@ struct ChatTranscriptScrollView<Content: View>: View {
             // Lazy height estimates drift with long Markdown replies and replaced
             // optimistic messages. Measure the transcript before anchoring its end.
             VStack(alignment: .leading, spacing: 14, content: content)
+                .scrollTargetLayout()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
         }
@@ -46,6 +49,11 @@ struct ChatTranscriptScrollView<Content: View>: View {
         }
         .onChange(of: scrollRequest) { _, _ in
             scrollToLatest()
+        }
+        .onChange(of: prependRevision) { _, _ in
+            guard let prependAnchor else { return }
+            followsBottom = false
+            position.scrollTo(id: prependAnchor, anchor: .top)
         }
         .overlay(alignment: .bottomTrailing) {
             if !followsBottom {

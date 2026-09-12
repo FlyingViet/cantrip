@@ -261,6 +261,14 @@ final class ChatViewModel: ObservableObject {
         )
     }
 
+    func remoteMessage(for turnID: UUID) -> CantripRemoteMessage? {
+        remote.selectedSession?.transcript.first { remoteMessageIDs[$0.id] == turnID }
+    }
+
+    var historyPrependAnchor: UUID? {
+        remote.historyPrependAnchor.flatMap { remoteMessageIDs[$0] }
+    }
+
     func syncRemoteTranscript() {
         guard activeLane == .cantrip else { return }
         let session = remote.selectedSession
@@ -1291,7 +1299,8 @@ struct ChatView: View {
             }
         } connection: {
             if vm.activeLane == .cantrip {
-                ChatConnectionIndicator(host: remote.endpointHost, isConnected: remote.isConnected) {
+                ChatConnectionIndicator(host: remote.endpointHost, isConnected: remote.isConnected,
+                                        statusOverride: remote.connectionLabel) {
                     composerFocused = false
                 }
             }
@@ -1444,6 +1453,7 @@ struct ChatView: View {
         remote.selectedSession?.status?.isEmpty == false
             || remote.selectedSession?.deliveryStatus != nil
             || remote.errorMessage != nil
+            || remote.detailError != nil
     }
 
     @ViewBuilder private var remoteNotices: some View {
@@ -1468,6 +1478,7 @@ struct ChatView: View {
                         .foregroundStyle(.orange)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                CantripDetailNotice(model: remote)
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
@@ -1509,8 +1520,13 @@ struct ChatView: View {
     private var transcriptList: some View {
         ChatTranscriptScrollView(
             scrollRequest: vm.scrollToLatestRequest,
+            prependRevision: remote.historyPrependRevision,
+            prependAnchor: vm.historyPrependAnchor,
             dismissKeyboard: { composerFocused = false }
         ) {
+            if vm.activeLane == .cantrip {
+                CantripHistoryControls(model: remote)
+            }
             if vm.turns.isEmpty { emptyState }
             ForEach(vm.turns) { turn in
                 TurnView(
@@ -1520,6 +1536,11 @@ struct ChatView: View {
                     onApproval: { vm.approveRun($0, for: turn.id) }
                 )
                 .id(turn.id)
+                if vm.activeLane == .cantrip, let message = vm.remoteMessage(for: turn.id),
+                   message.isPreview == true {
+                    CantripMessageDetailsButton(model: remote, message: message,
+                                                sessionID: remote.selectedSessionID ?? "")
+                }
             }
         }
     }
@@ -1885,10 +1906,11 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
 struct ChatConnectionIndicator: View {
     let host: String
     let isConnected: Bool
+    var statusOverride: String? = nil
     var onOpen: () -> Void = {}
     @State private var showDetails = false
 
-    var status: String { isConnected ? "Connected" : "Disconnected" }
+    var status: String { statusOverride ?? (isConnected ? "Connected" : "Disconnected") }
 
     var body: some View {
         Button {

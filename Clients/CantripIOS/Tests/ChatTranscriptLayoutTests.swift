@@ -12,13 +12,29 @@ private final class TranscriptLayoutModel: ObservableObject {
     @Published var scrollRequest = 0
     @Published var markdown = ""
     @Published var prompt = ""
+    @Published var history: [HistoryRow] = []
+    @Published var prependRevision = 0
+    var prependAnchor: UUID?
+
+    struct HistoryRow: Identifiable {
+        let id = UUID()
+        let height: CGFloat
+    }
 }
 
 private struct TranscriptLayoutHarness: View {
     @ObservedObject var model: TranscriptLayoutModel
 
     var body: some View {
-        ChatTranscriptScrollView(scrollRequest: model.scrollRequest) {
+        ChatTranscriptScrollView(scrollRequest: model.scrollRequest,
+                                 prependRevision: model.prependRevision,
+                                 prependAnchor: model.prependAnchor) {
+            ForEach(model.history) { row in
+                Text("History message")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: row.height)
+                    .id(row.id)
+            }
             ForEach(model.heights.indices, id: \.self) { index in
                 Text("Message \(index)")
                     .frame(maxWidth: .infinity)
@@ -137,6 +153,27 @@ final class ChatTranscriptLayoutTests: XCTestCase {
         scroll.setContentOffset(.zero, animated: false)
         model.scrollRequest += 1
         assertAtBottom(try await settle(controller))
+    }
+
+    func testPrependingOlderMessagesKeepsPreviousFirstMessageAtTop() async throws {
+        let model = TranscriptLayoutModel()
+        model.heights = []
+        model.history = [.init(height: 300), .init(height: 800), .init(height: 200)]
+        let (window, controller) = try host(model)
+        defer { window.isHidden = true }
+        let scroll = try await settle(controller)
+        scroll.setContentOffset(.zero, animated: false)
+        model.prependAnchor = model.history.first?.id
+        model.history.insert(contentsOf: [.init(height: 120), .init(height: 450)], at: 0)
+        model.prependRevision += 1
+        let updated = try await settle(controller)
+        XCTAssertEqual(updated.contentOffset.y + updated.adjustedContentInset.top, 16 + 120 + 14 + 450 + 14,
+                       accuracy: 3, "History should stay anchored to the previously visible message")
+        let offset = updated.contentOffset.y
+        model.history.append(.init(height: 600))
+        let streaming = try await settle(controller)
+        XCTAssertEqual(streaming.contentOffset.y, offset, accuracy: 2,
+                       "New output must not pull someone reading older history back to the bottom")
     }
 
     func testLongMarkdownCanGrowAndCollapseWithoutTrailingBlankSpace() async throws {

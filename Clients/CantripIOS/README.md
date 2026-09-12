@@ -192,7 +192,7 @@ away. The URL is stored in app preferences and the token is stored in Keychain.
 Automatic routing tries Tailscale first and never probes or switches to LAN
 while Tailscale works. If Tailscale fails, reads can fall back to LAN; independent
 read-only probes restore Tailscale after two consecutive authenticated successes,
-at least three seconds apart, without blocking LAN refreshes. Tailscale reads
+at least three seconds apart, without blocking LAN refreshes. Routine Tailscale reads
 have a three-second total deadline; failed Tailscale routes back off for 15 seconds.
 LAN connection attempts and reads have a two-second deadline; failed LAN routes
 back off for 30 seconds. Discovery changes do not clear the backoff. When all
@@ -221,6 +221,33 @@ unavailable, unauthenticated, paused in the background, or stale. Each successfu
 list/detail request renews connectivity; the ten-second stale window allows a
 bounded failover plus the polling interval without flickering disconnected.
 The dot indicates recent connectivity, not acknowledgement of a particular send.
+
+### Long conversations and unreliable connections
+
+With an updated Cantrip host, the app loads up to 30 recent messages first.
+Tap **Load older messages** at the top of the transcript to page backward while
+keeping your reading position. Long messages, reasoning, and tool activity use
+bounded previews; **Load full message and details** retrieves the complete
+message on demand. The host retains its live history, and submitted/queued
+prompts are not truncated.
+
+The tab list publishes independently of conversation downloads. If a detail
+read times out, cached messages remain visible with a separate retry notice;
+a successful tab-list read still counts as a working connection. Failed
+connection reads show **Reconnecting...**. Cached conversations are scoped to
+the selected server and cleared when its configuration changes.
+
+Unchanged session revisions skip conversation downloads entirely. Foreground
+polling waits 1.5 seconds while any tab is working/queued or recovering, and
+5 seconds while idle. Unattended transcripts retain a rolling 120-message
+window, with up to five tabs cached; explicit older-history loading may expand
+that window. Normal 3-second HTTPS / 2-second LAN deadlines and single-send
+mutation routing are unchanged. Explicit full-message downloads allow up to
+20 seconds without blocking normal polling or mutations.
+
+These changes need both the updated phone app and an updated, reopened Mac
+host. Older hosts remain readable but still return full snapshots. Older
+history paging covers messages currently available in the live session.
 
 **Auto** is the default for Cantrip typed and voice messages. A bounded,
 tool-free inference on the Mac distinguishes useful context, changes of
