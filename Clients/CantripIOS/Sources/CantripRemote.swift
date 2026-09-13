@@ -1711,8 +1711,16 @@ final class CantripRemoteModel: ObservableObject {
         }
         if !expandedHistory.contains(session.id), session.supportsPagedHistory == true,
            session.transcript.count > 120 {
-            session.messages = Array(session.transcript.suffix(120))
-            session.hasOlderMessages = true
+            let messages = session.transcript
+            var start = messages.count - 120
+            if messages[start].role != "user",
+               let prompt = messages[..<start].lastIndex(where: { $0.role == "user" }) {
+                start = prompt
+            }
+            if start > 0 {
+                session.messages = Array(messages[start...])
+                session.hasOlderMessages = true
+            }
         }
         detailCache[session.id] = session
         cacheOrder.removeAll { $0 == session.id }

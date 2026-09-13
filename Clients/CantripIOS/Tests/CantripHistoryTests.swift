@@ -38,7 +38,8 @@ final class CantripHistoryTests: XCTestCase {
 
     private func session(revision: String = "r1", start: String = "start", values: [Int] = [3, 4],
                          older: Bool = true, list: Bool = false, title: String = "Tab",
-                         legacy: Bool = false, fullContent: Bool = false) throws -> Data {
+                         legacy: Bool = false, fullContent: Bool = false,
+                         prompts: Set<Int> = []) throws -> Data {
         var session: [String: Any] = [
             "id": id, "title": title, "workdir": "/tmp", "isStreaming": false,
             "canResume": false, "councilMode": false, "queuedCount": 0,
@@ -53,7 +54,7 @@ final class CantripHistoryTests: XCTestCase {
         }
         if !list {
             session["messages"] = values.map { value in
-                ["id": messageID(value), "role": "assistant",
+                ["id": messageID(value), "role": prompts.contains(value) ? "user" : "assistant",
                  "text": fullContent ? String(repeating: "Reply \(value)\n", count: 4000) : "Reply \(value)",
                  "thinking": fullContent ? String(repeating: "Reasoning\n", count: 1000) : "",
                  "activities": fullContent ? (0..<60).map {
@@ -417,5 +418,59 @@ final class CantripHistoryTests: XCTestCase {
         await model.loadOlderMessages()
         XCTAssertEqual(model.selectedSession?.transcript.count, 130,
                        "Only explicit older-history loading expands the rolling memory window")
+    }
+
+    func testRollingHistoryRetainsPromptAtBoundaryAndPagesBeforeIt() async throws {
+        let model = try await model()
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(values: Array(0..<122),
+                                  list: request.url!.path == "/api/v1/sessions", prompts: [0, 1, 4]))
+        }
+        model.setAppActive(true)
+        try await waitForRefresh(model)
+        XCTAssertEqual(model.selectedSession?.transcript.count, 121)
+        XCTAssertEqual(model.selectedSession?.transcript.first?.id, messageID(1))
+        XCTAssertEqual(model.selectedSession?.transcript.first?.role, "user")
+        XCTAssertEqual(model.selectedSession?.hasOlderMessages, true)
+
+        HistoryRequestProtocol.handler = { request in
+            XCTAssertTrue(request.url!.query!.contains("before=\(self.messageID(1))"))
+            return (200, try self.session(values: [0], older: false, prompts: [0]))
+        }
+        await model.loadOlderMessages()
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (0..<122).map(messageID))
+        XCTAssertEqual(model.historyPrependAnchor, messageID(1))
+        XCTAssertEqual(model.selectedSession?.hasOlderMessages, false)
+
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(revision: "r2", values: Array(4..<124),
+                                  list: request.url!.path == "/api/v1/sessions", prompts: [4]))
+        }
+        await model.refreshNow()
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (0..<124).map(messageID),
+                       "Refreshing must preserve explicitly loaded prompts and their responses")
+    }
+
+    func testSingleLongTurnAndResetKeepPromptWithoutInventingOlderHistory() async throws {
+        let model = try await model()
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(values: Array(0..<130), older: false,
+                                  list: request.url!.path == "/api/v1/sessions", prompts: [0]))
+        }
+        model.setAppActive(true)
+        try await waitForRefresh(model)
+        XCTAssertEqual(model.selectedSession?.transcript.count, 130)
+        XCTAssertEqual(model.selectedSession?.transcript.first?.role, "user")
+        XCTAssertEqual(model.selectedSession?.hasOlderMessages, false)
+
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(revision: "reset", start: "new", values: [200, 201],
+                                  older: false, list: request.url!.path == "/api/v1/sessions",
+                                  prompts: [200]))
+        }
+        await model.refreshNow()
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), [200, 201].map(messageID))
+        XCTAssertEqual(model.selectedSession?.transcript.first?.role, "user")
+        XCTAssertEqual(model.selectedSession?.hasOlderMessages, false)
     }
 }
