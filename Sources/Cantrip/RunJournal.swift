@@ -14,6 +14,7 @@ final class RunJournal {
         case queueRemoved = "queue_removed"
         case queueCleared = "queue_cleared"
         case messageRouted = "message_routed"
+        case steeringDelivery = "steering_delivery"
         case attempt
         case usage
         case interruption
@@ -92,6 +93,7 @@ final class RunJournal {
         var artifact: Artifact?
         var queueItem: QueueItem?
         var queueItemID: UUID?
+        var nativeMessageID: String?
         var attemptNumber: Int?
         var reason: String?
         var usage: Usage?

@@ -1,191 +1,298 @@
 import Foundation
 
-/// Runs queries through GitHub Copilot CLI in programmatic mode:
-///   copilot -p "<prompt>" -s --output-format json --stream on
-///     [--allow-all-tools] [--model M] [--context TIER]
-/// Copilot's headless mode has no session resume, so conversation
-/// continuity uses a bounded window of raw recent and related turns.
+/// One SDK session per tab, with native immediate delivery during an active turn.
+/// A stopped/crashed runtime is rebuilt from Cantrip's journal and recent history,
+/// never by replaying possibly accepted session.send requests.
 final class CopilotBackend: Backend {
-    private var process: Process?
-    /// Per-instance model override (council members run models different
-    /// from the session's setting). Nil = use the configured model.
     var modelOverride: String?
-    /// Read-only instance (council advisors): tools are never allowed,
-    /// regardless of global autonomy.
     var readOnly = false
     private let settings = AppSettings.shared
     private let queue = DispatchQueue(label: "copilot-backend")
+    private var process: Process?
+    private var input: FileHandle?
+    private var buffer = Data()
+    private var parser = CopilotJSONStreamParser()
+    private var configuration: Configuration?
+    private var runID: String?
+    private var onEvent: ((BackendEvent) -> Void)?
+    private let availabilityLock = NSLock()
+    private var injectionAvailable = false
+    private var ready = false {
+        didSet { availabilityLock.withLock { injectionAvailable = ready } }
+    }
+    private var idle = false
+    private var deliveries: [String: (MidTurnDelivery) -> Void] = [:]
+    private let bridgeScript: String
 
-    func send(
-        _ request: BackendRequest,
-        workdir: String,
-        onEvent: @escaping (BackendEvent) -> Void
-    ) {
+    struct Configuration: Equatable {
+        let command: String
+        let workdir: String
+        let model: String
+        let effort: String
+        let contextTier: String
+        let allowTools: Bool
+        let readOnly: Bool
+
+        var json: [String: Any] {
+            ["command": command, "workdir": workdir, "model": model,
+             "effort": effort, "contextTier": contextTier,
+             "allowTools": allowTools, "readOnly": readOnly]
+        }
+    }
+
+    init(bridgeScript: String = CopilotSessionBridge.script) {
+        self.bridgeScript = bridgeScript
+    }
+
+    deinit {
+        input?.closeFile()
+        if let process { Self.terminate(process) }
+    }
+
+    var supportsMidTurnInjection: Bool {
+        availabilityLock.withLock { injectionAvailable }
+    }
+
+    func send(_ request: BackendRequest, workdir: String,
+              onEvent: @escaping (BackendEvent) -> Void) {
+        let config = Configuration(
+            command: settings.copilotPath.trimmingCharacters(in: .whitespaces).isEmpty
+                ? "copilot" : settings.copilotPath,
+            workdir: workdir,
+            model: modelOverride ?? settings.copilotModel,
+            effort: settings.copilotEffort,
+            contextTier: settings.copilotContextTier,
+            allowTools: settings.copilotAllowTools || settings.allowActions,
+            readOnly: readOnly
+        )
+        let suffix = settings.copilotDiscourageSubagents
+            ? "\n\n(Work directly in this session; avoid spawning subagents or delegating tasks unless strictly necessary.)"
+            : ""
         queue.async { [weak self] in
-            self?.run(request: request, workdir: workdir, onEvent: onEvent)
+            guard let self else { return }
+            guard self.runID == nil else {
+                onEvent(.failure("Copilot already has a running turn. Queue this message instead."))
+                return
+            }
+            if self.configuration != config || self.process?.isRunning != true {
+                self.teardown()
+            }
+            self.onEvent = onEvent
+            let id = UUID().uuidString
+            self.runID = id
+            self.ready = false
+            self.idle = false
+            self.parser = CopilotJSONStreamParser()
+            do {
+                var command: [String: Any] = [
+                    "kind": "start", "runID": id, "config": config.json, "prompt": request.prompt + suffix
+                ]
+                if self.process == nil {
+                    command["initialPrompt"] = ConversationContextBuilder.composePrompt(
+                        currentPrompt: request.prompt, query: request.userMessage, turns: request.previousTurns
+                    ) + suffix
+                    try self.launch(config)
+                }
+                onEvent(.status("Connecting to Copilot"))
+                try self.write(command)
+                self.queue.asyncAfter(deadline: .now() + 45) { [weak self] in
+                    guard let self, self.runID == id, !self.ready else { return }
+                    self.fail("Copilot session startup timed out. Update the CLI and check its sign-in.")
+                }
+            } catch {
+                self.fail("Could not start Copilot: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func injectMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void) {
+        queue.async { [weak self] in
+            guard let self, self.ready, let runID = self.runID,
+                  self.process?.isRunning == true else {
+                completion(.notSent)
+                return
+            }
+            let id = UUID().uuidString
+            self.deliveries[id] = completion
+            do {
+                try self.write(["kind": "inject", "runID": runID, "id": id, "text": text])
+            } catch {
+                self.deliveries.removeValue(forKey: id)?(.uncertain(
+                    "Copilot's input channel failed; delivery could not be confirmed."
+                ))
+                self.fail("Copilot's input channel failed: \(error.localizedDescription)")
+                return
+            }
+            self.queue.asyncAfter(deadline: .now() + 30) { [weak self] in
+                guard let self else { return }
+                self.deliveries.removeValue(forKey: id)?(.uncertain(
+                    "Copilot did not acknowledge the context in time. It was not resent."
+                ))
+                self.finishIfIdle()
+            }
         }
     }
 
     func cancel() {
-        guard let p = process else { return }
-        process = nil
-        p.terminate()
-        // Escalate to SIGKILL if it ignores SIGTERM.
-        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-            if p.isRunning {
-                Log.write("cancel: escalating to SIGKILL (pid \(p.processIdentifier))")
-                kill(p.processIdentifier, SIGKILL)
-            }
-        }
+        availabilityLock.withLock { injectionAvailable = false }
+        queue.async { [weak self] in self?.teardown() }
     }
+    func reset() { cancel() }
 
-    func reset() {
-        cancel()
-    }
-
-    // MARK: - Internals
-
-    private func run(
-        request: BackendRequest,
-        workdir: String,
-        onEvent: @escaping (BackendEvent) -> Void
-    ) {
-        // Run through the user's login shell so copilot resolves with the
-        // exact same PATH / node environment as their terminal. Arguments
-        // are passed positionally ("$@") so no shell-quoting issues.
-        let configured = settings.copilotPath.trimmingCharacters(in: .whitespaces)
-        let command = configured.isEmpty ? "copilot" : configured
-
-        var composed = ConversationContextBuilder.composePrompt(
-            currentPrompt: request.prompt,
-            query: request.userMessage,
-            turns: request.previousTurns
-        )
-        if settings.copilotDiscourageSubagents {
-            composed += "\n\n(Work directly in this session; avoid spawning subagents or delegating tasks unless strictly necessary — delegation is slow in this environment.)"
-        }
-        var copilotArgs = [
-            "-p", composed,
-            "-s",
-            "--output-format", "json",
-            "--stream", "on"
-        ]
-        if (settings.copilotAllowTools || settings.allowActions), !readOnly {
-            copilotArgs.append("--allow-all-tools")
-        }
-        let model = (modelOverride ?? settings.copilotModel).trimmingCharacters(in: .whitespaces)
-        if !model.isEmpty { copilotArgs += ["--model", model] }
-        let effort = settings.copilotEffort.trimmingCharacters(in: .whitespaces)
-        if !effort.isEmpty { copilotArgs += ["--reasoning-effort", effort] }
-        let contextTier = settings.copilotContextTier.trimmingCharacters(in: .whitespaces)
-        if !contextTier.isEmpty { copilotArgs += ["--context", contextTier] }
-
-        Log.write("launching \(command) via login shell, workdir=\(workdir)")
-
+    private func launch(_ config: Configuration) throws {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-l", "-c", "exec \"$0\" \"$@\"", command] + copilotArgs
-        p.currentDirectoryURL = URL(fileURLWithPath: workdir)
-        var env = ProcessInfo.processInfo.environment
-        // Discourage ANSI decoration in output.
-        env["NO_COLOR"] = "1"
-        env["TERM"] = "dumb"
-        p.environment = env
-
-        let stdout = Pipe()
-        let stderr = Pipe()
+        p.arguments = ["-l", "-c", "exec node --input-type=module -e \"$1\"", "cantrip-copilot", bridgeScript]
+        p.currentDirectoryURL = URL(fileURLWithPath: config.workdir)
+        var environment = ProcessInfo.processInfo.environment
+        environment["NO_COLOR"] = "1"
+        environment["TERM"] = "dumb"
+        p.environment = environment
+        let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
+        let outputLock = NSLock()
+        p.standardInput = stdin
         p.standardOutput = stdout
         p.standardError = stderr
-        p.standardInput = FileHandle.nullDevice
-
-        var errData = Data()
-        stderr.fileHandleForReading.readabilityHandler = { handle in
-            errData.append(handle.availableData)
-        }
-
-        let output = CopilotJSONOutputCollector()
-        let stdoutLock = NSLock()
-        stdout.fileHandleForReading.readabilityHandler = { handle in
-            stdoutLock.withLock {
+        stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            outputLock.withLock {
                 let data = handle.availableData
-                guard !data.isEmpty else { return }
-                for event in output.consume(data) {
-                    onEvent(event)
+                self?.queue.async { [weak self] in
+                    guard let self, self.process === p else { return }
+                    self.consume(data)
                 }
             }
         }
-
+        // Drain stderr without exposing SDK authentication payloads in logs/Remote.
+        stderr.fileHandleForReading.readabilityHandler = { handle in _ = handle.availableData }
         p.terminationHandler = { [weak self] proc in
-            Log.write("copilot exited, status=\(proc.terminationStatus), reason=\(proc.terminationReason.rawValue)")
             stdout.fileHandleForReading.readabilityHandler = nil
             stderr.fileHandleForReading.readabilityHandler = nil
-            stdoutLock.withLock {
-                for event in output.consume(stdout.fileHandleForReading.readDataToEndOfFile()) {
-                    onEvent(event)
-                }
-                for event in output.finish() {
-                    onEvent(event)
+            outputLock.withLock {
+                let tail = stdout.fileHandleForReading.readDataToEndOfFile()
+                self?.queue.async { [weak self] in
+                    guard let self, self.process === proc else { return }
+                    self.consume(tail)
+                    guard self.process === proc else { return }
+                    if self.runID != nil {
+                        self.fail("Copilot session disconnected (status \(proc.terminationStatus)). Check Node.js, the Copilot CLI version, and CLI sign-in on the Mac.")
+                    } else { self.teardown() }
                 }
             }
-            if proc.terminationStatus != 0 {
-                errData.append(stderr.fileHandleForReading.readDataToEndOfFile())
-                let errText = String(data: errData, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                if proc.terminationReason == .uncaughtSignal {
-                    onEvent(.done) // cancelled by user
-                } else {
-                    onEvent(.failure(errText.isEmpty ? "copilot exited with status \(proc.terminationStatus)" : errText))
-                }
-            } else {
-                onEvent(.done)
-            }
-            // Don't clobber a successor run's process handle when a
-            // cancelled process finally dies (SIGKILL escalation).
-            if self?.process === proc { self?.process = nil }
         }
-
-        do {
-            try p.run()
-            process = p
-            Log.write("copilot started, pid=\(p.processIdentifier)")
-        } catch {
-            Log.write("copilot launch failed: \(error.localizedDescription)")
-            onEvent(.failure("Failed to launch copilot: \(error.localizedDescription)"))
-        }
-    }
-}
-
-private final class CopilotJSONOutputCollector {
-    private let lock = NSLock()
-    private var parser = CopilotJSONStreamParser()
-
-    func consume(_ data: Data) -> [BackendEvent] {
-        lock.withLock {
-            parser.consume(data) { error, line in
-                Self.logMalformedLine(error, line: line)
-            }
-        }
+        try p.run()
+        process = p
+        input = stdin.fileHandleForWriting
+        configuration = config
+        Log.write("copilot: native session bridge started, pid=\(p.processIdentifier)")
     }
 
-    func finish() -> [BackendEvent] {
-        lock.withLock {
-            parser.finish { error, line in
-                Self.logMalformedLine(error, line: line)
+    private func write(_ object: [String: Any]) throws {
+        guard let input else { throw CocoaError(.fileWriteUnknown) }
+        var data = try JSONSerialization.data(withJSONObject: object)
+        data.append(0x0A)
+        try input.write(contentsOf: data)
+    }
+
+    private func consume(_ data: Data) {
+        buffer.append(data)
+        while let newline = buffer.firstIndex(of: 0x0A) {
+            let line = buffer.subdata(in: buffer.startIndex..<newline)
+            buffer.removeSubrange(buffer.startIndex...newline)
+            do {
+                guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any],
+                      let kind = object["kind"] as? String else {
+                    throw CocoaError(.coderReadCorrupt)
+                }
+                guard let current = runID, object["runID"] as? String == current else { continue }
+                switch kind {
+                case "started":
+                    ready = true
+                    onEvent?(.status("Thinking..."))
+                case "delivery":
+                    guard let id = object["id"] as? String,
+                          let completion = deliveries.removeValue(forKey: id) else { continue }
+                    switch object["status"] as? String {
+                    case "accepted":
+                        completion(.accepted(messageID: object["messageID"] as? String))
+                    case "notSent": completion(.notSent)
+                    default: completion(.uncertain(
+                        object["message"] as? String ?? "Copilot context delivery is uncertain."
+                    ))
+                    }
+                    finishIfIdle()
+                case "event":
+                    guard let event = object["event"] as? [String: Any] else {
+                        throw CocoaError(.coderReadCorrupt)
+                    }
+                    var encoded = try JSONSerialization.data(withJSONObject: event)
+                    encoded.append(0x0A)
+                    let events = parser.consume(encoded) { error, _ in
+                        Log.write("copilot: \(error.localizedDescription)")
+                    }
+                    for event in events { onEvent?(event) }
+                case "approval":
+                    onEvent?(.approval(BackendApproval(
+                        tool: object["tool"] as? String ?? "tool",
+                        decision: object["decision"] as? String ?? "denied", decidedBy: "Cantrip"
+                    )))
+                case "done":
+                    idle = true
+                    ready = false
+                    finishIfIdle()
+                case "failure":
+                    fail(object["message"] as? String ?? "Copilot session failed.")
+                default:
+                    throw CocoaError(.coderReadCorrupt)
+                }
+            } catch {
+                fail("Invalid response from Copilot session bridge: \(error.localizedDescription)")
+                return
             }
         }
     }
 
-    private static func logMalformedLine(
-        _ error: CopilotJSONStreamParserError,
-        line: Data
-    ) {
-        let previewLimit = 240
-        let preview = String(decoding: line.prefix(previewLimit), as: UTF8.self)
-            .replacingOccurrences(of: "\t", with: "\\t")
-        let suffix = line.count > previewLimit ? "..." : ""
-        Log.write(
-            "copilot: skipped malformed JSONL event: \(error.localizedDescription); "
-                + "bytes=\(line.count), preview=\(preview)\(suffix)"
-        )
+    private func finishIfIdle() {
+        guard idle, runID != nil, deliveries.isEmpty else { return }
+        let sink = onEvent
+        runID = nil
+        onEvent = nil
+        sink?(.done)
+    }
+
+    private func resolveUncertainDeliveries() {
+        let callbacks = deliveries.values
+        deliveries.removeAll()
+        for callback in callbacks {
+            callback(.uncertain("Copilot disconnected before acknowledging context. It was not resent."))
+        }
+    }
+
+    private func fail(_ message: String) {
+        let sink = onEvent
+        teardown()
+        sink?(.failure(message))
+    }
+
+    private func teardown() {
+        resolveUncertainDeliveries()
+        let old = process
+        process = nil
+        input?.closeFile()
+        input = nil
+        buffer.removeAll()
+        runID = nil
+        ready = false
+        idle = false
+        onEvent = nil
+        configuration = nil
+        if let old { Self.terminate(old) }
+    }
+
+    private static func terminate(_ process: Process) {
+        guard process.isRunning else { return }
+        process.terminate()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
     }
 }

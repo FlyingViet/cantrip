@@ -10,7 +10,7 @@
 | **Option+Shift+Space** | Capture selected text from the front app and open Cantrip |
 | **Return** | Launch the selected app suggestion, or submit a prompt; while busy, use Auto unless a delivery override is selected |
 | **Command+Return** | Send to AI instead of the app suggestion; while busy, interrupt and redirect |
-| **Option+Return** | Inject a follow-up into an active Claude Code turn |
+| **Option+Return** | Inject context into an active local Copilot or Claude Code task |
 | **Command+T** | New local session |
 | **Command+N** | Reset the current local conversation |
 | **Command+W** | Close the current local tab |

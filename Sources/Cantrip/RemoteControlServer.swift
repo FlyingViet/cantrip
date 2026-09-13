@@ -604,7 +604,12 @@ final class RemoteControlServer {
     private func sendPagedSession(_ session: ChatSession, summary: [String: Any], end: Int,
                                   status: Int = 200, on connection: RemoteRequestConnection) {
         let sessionID = session.id
-        let candidates = Array(session.messages[max(0, end - RemoteHistory.pageSize)..<end])
+        var candidateStart = max(0, end - RemoteHistory.pageSize)
+        if candidateStart < end, session.messages[candidateStart].role != .user,
+           let prompt = session.messages[..<candidateStart].lastIndex(where: { $0.role == .user }) {
+            candidateStart = prompt
+        }
+        let candidates = Array(session.messages[candidateStart..<end])
         let historyStartID = session.messages.first?.id.uuidString ?? "empty"
         let queued = session.queued
         // Full-message sizing and encoding belong off the main actor and tab-list queue.
@@ -612,13 +617,21 @@ final class RemoteControlServer {
             var result = summary
             var messages: [[String: Any]] = []
             var bytes = 0
-            for candidate in candidates.reversed() {
+            for candidate in candidates.suffix(RemoteHistory.pageSize).reversed() {
                 let message = self.messageSnapshot(candidate, sessionID: sessionID)
                 let size = try JSONSerialization.data(withJSONObject: message).count
                 if !messages.isEmpty, bytes + size > RemoteHistory.pageBytes { break }
                 messages.insert(message, at: 0)
                 bytes += size
                 if bytes >= RemoteHistory.pageBytes { break }
+            }
+            let start = candidates.count - messages.count
+            // Soft limits must not separate a response (including council bubbles) from its prompt.
+            if start < candidates.count, candidates[start].role != .user,
+               let prompt = candidates[..<start].lastIndex(where: { $0.role == .user }) {
+                messages = candidates[prompt..<start].map {
+                    self.messageSnapshot($0, sessionID: sessionID)
+                } + messages
             }
             result["messages"] = messages
             result["historyStartID"] = historyStartID
@@ -807,7 +820,10 @@ private extension RemoteControlServer {
       if(merge&&session.historyStartID&&previous?.historyStartID===session.historyStartID){
         const overlap=previous.messages.findIndex(m=>m.id===session.messages[0]?.id);
         if(overlap>=0)session={...session,messages:[...previous.messages.slice(0,overlap),...session.messages],hasOlderMessages:previous.hasOlderMessages}}
-      if(!expandedHistory.has(session.id)&&session.supportsPagedHistory&&session.messages.length>120)session={...session,messages:session.messages.slice(-120),hasOlderMessages:true};
+      if(!expandedHistory.has(session.id)&&session.supportsPagedHistory&&session.messages.length>120){
+        let start=session.messages.length-120;
+        if(session.messages[start].role!=="user"){const prompt=session.messages.slice(0,start).findLastIndex(m=>m.role==="user");if(prompt>=0)start=prompt}
+        if(start>0)session={...session,messages:session.messages.slice(start),hasOlderMessages:true}}
       historyCache.delete(session.id);historyCache.set(session.id,session);while(historyCache.size>5){const id=historyCache.keys().next().value;historyCache.delete(id);expandedHistory.delete(id)}return session}
     function scheduleRefresh(){if(timer)clearTimeout(timer);timer=null;if(!token||document.hidden)return;
       const busy=sessionItems.some(s=>s.isStreaming||s.queuedCount)||$("historyError").textContent||document.documentElement.dataset.cantripConnected!=="true";

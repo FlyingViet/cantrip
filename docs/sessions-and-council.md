@@ -57,14 +57,36 @@ archived for later recovery.
 | Send naturally | Type a message, then **Return** | Auto decides from the message and current task |
 | Always do this next | Choose **Queue**, then **Return** | Adds it to the queue without classification |
 | Stop this approach and do something else | Type new instructions, then **Command+Return** | Interrupts and redirects the active run |
-| Add information without interrupting | **Option+Return** with Claude Code | Injects into the current turn |
+| Add information without interrupting | **Option+Return** with local Copilot or Claude Code | Sends context without stopping the current task |
 | Cancel without sending a new prompt | Click **Stop** | Cancels the active run |
 
 Check the visible queue before walking away. Remove unwanted queued items
 with their remove control. Hiding the panel does not cancel the task.
 Manual delivery choices apply to one message, then return to **Auto**.
-Inject is a Claude-specific behavior; other backends queue added context
-instead of interrupting just to deliver it.
+Inject uses local Copilot's native `session.send` immediate mode or Claude's
+streaming input. Other backends (including Copilot Remote/ACP), council runs,
+and sessions still preparing their context queue the message instead.
+
+Copilot applies steering before its next model request, after any already
+committed tool calls. If that opportunity has passed, Copilot processes the
+context immediately after the current turn. **Accepted** means Copilot received
+the message, not that the model has already consumed it. Queue still means
+"do this next"; Redirect and Stop remain explicit interruptions.
+
+Each local Copilot tab keeps its own native SDK session across successful
+turns. Node.js and a recent Copilot CLI with a matching bundled SDK/runtime
+are required (exercised with CLI 1.0.83). A missing/incompatible runtime is
+reported rather than silently replaying the task with another transport.
+Changing model, effort, context tier, action policy, or working directory takes
+effect on the next request by starting a fresh runtime with recent conversation
+context. Stop/reset closes the runtime; checkpoint recovery remains Cantrip's
+safety net after an interruption.
+
+Non-private injections are journaled before submission and sent in order.
+Acknowledgements and native message IDs are saved. An uncertain delivery stays
+visible in the transcript and is not automatically resent. Recovery retains
+the added instructions and steps from before the injection; it must still
+verify which external actions completed.
 
 ### How Auto decides
 

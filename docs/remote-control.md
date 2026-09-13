@@ -13,6 +13,21 @@ prepares memory context and encodes transcript responses off the UI thread.
 Requests remain single messages, and uncertain sends are still never
 automatically replayed.
 
+## Send context during a task
+
+Choose **Inject** in AgentGateway or Mac/browser Remote to add instructions
+to a running local Copilot or Claude Code task without stopping it. **Auto**
+also uses injection for messages classified as helpful same-task context.
+The existing clients use the host's delivery path, so this behavior requires
+the updated Mac host but no new phone API. **Queue**, **Redirect**, and **Stop**
+keep their separate meanings.
+
+The delivery status distinguishes pending submission, acceptance, and
+uncertainty. Copilot consumes accepted steering at its next available model
+request, not during an already committed tool call. Uncertain context sends
+are not automatically replayed; the journal retains them for recovery.
+Copilot Remote/ACP and unsupported backends continue to queue instead.
+
 ## Loading long conversations
 
 Updated AgentGateway and Mac/browser Remote load recent messages first instead
@@ -25,13 +40,16 @@ readers use content already downloaded; they do not require another message fetc
 Older hosts that return previews retain the **Load full message and details** fallback.
 
 Automatic reads request `?history=recent`, including mutation acknowledgements.
-The host returns up to 30 recent messages, targeting a 192 KiB encoded message
-page (at least one complete message). A single large message may exceed this soft
-budget; messages are never truncated to fit it. The same rules apply to requested
-older pages. This page budget excludes metadata and the ordered queue.
+The host targets 30 recent messages and a 192 KiB encoded message page (at least
+one complete message), then extends the start back to the first response's user
+prompt when available. A large response or multi-response turn may exceed these
+soft limits so its prompt stays visible before its output; messages are never
+truncated to fit. The same rules apply to requested older pages. This page budget
+excludes metadata and the ordered queue.
 Page sizing and encoding run off the main actor and the lightweight tab-list queue.
-Unattended clients keep a rolling 120-message window and cache up to five tabs;
-explicit older-history loading can expand that window.
+Unattended clients target a rolling 120-message window and cache up to five tabs,
+also retaining the prompt and responses at the start of the window. Explicit
+older-history loading can expand that window.
 
 Session summaries advertise `supportsPagedHistory` and `historyRevision`.
 Unchanged summaries need no detail download. A conditional detail read with

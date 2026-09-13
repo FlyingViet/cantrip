@@ -8,6 +8,7 @@ struct CopilotJSONStreamParser {
     private(set) var answer = ""
     /// Whether reasoning streamed as deltas (skip the aggregate block).
     private var reasoningDeltaSeen = false
+    private var streamedMessageIDs: Set<String> = []
 
     mutating func consume(
         _ data: Data,
@@ -97,6 +98,7 @@ struct CopilotJSONStreamParser {
             let delta = separator + content
             answer += delta
             lastMessageID = messageID
+            streamedMessageIDs.insert(messageID)
             return [.textDelta(delta)]
 
         case "assistant.reasoning_delta", "assistant.reasoning":
@@ -119,10 +121,20 @@ struct CopilotJSONStreamParser {
             return reasoningDeltaSeen ? [] : [.thinkingDelta(text)]
 
         case "assistant.message":
-            guard let requests = eventData?["toolRequests"] as? [[String: Any]] else {
-                return []
+            var events: [BackendEvent] = []
+            if object["agentId"] as? String == nil,
+               eventData?["parentToolCallId"] as? String == nil,
+               let messageID = eventData?["messageId"] as? String,
+               !streamedMessageIDs.contains(messageID),
+               let content = eventData?["content"] as? String, !content.isEmpty {
+                let delta = (!answer.isEmpty && lastMessageID != messageID ? "\n\n" : "") + content
+                answer += delta
+                lastMessageID = messageID
+                streamedMessageIDs.insert(messageID)
+                events.append(.textDelta(delta))
             }
-            return requests.compactMap { request in
+            let requests = eventData?["toolRequests"] as? [[String: Any]] ?? []
+            events += requests.compactMap { request in
                 guard let id = request["toolCallId"] as? String,
                       let name = request["name"] as? String else {
                     return nil
@@ -136,6 +148,14 @@ struct CopilotJSONStreamParser {
                 activities[id] = activity
                 return .activity(activity)
             }
+            return events
+
+        case "assistant.usage":
+            return [.usage(BackendUsage(
+                backend: "copilot", costUSD: 0,
+                inputTokens: eventData?["inputTokens"] as? Int ?? 0,
+                outputTokens: eventData?["outputTokens"] as? Int ?? 0
+            ))]
 
         case "tool.execution_start":
             guard let id = eventData?["toolCallId"] as? String,

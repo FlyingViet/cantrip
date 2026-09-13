@@ -63,12 +63,7 @@ enum QuotaFetcher {
 
     // Only this allowlisted projection crosses the process boundary. No chat
     // session is created, and the SDK owns a separate, short-lived runtime.
-    static let script = #"""
-    import { existsSync, readdirSync, realpathSync } from 'node:fs';
-    import { homedir } from 'node:os';
-    import { join, dirname } from 'node:path';
-    import { pathToFileURL } from 'node:url';
-
+    static let script = CopilotRuntime.discoveryScript + "\n" + #"""
     const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
     const bool = value => typeof value === 'boolean' ? value : undefined;
     const text = value => typeof value === 'string' ? value.slice(0, 100) : undefined;
@@ -113,26 +108,10 @@ enum QuotaFetcher {
       return { login: text(auth.authInfo.login), plan: text(user.copilot_plan), buckets };
     }
     async function main() {
-      const roots = [];
-      for (const directory of (process.env.PATH ?? '').split(':').filter(Boolean)) {
-        const command = join(directory, 'copilot');
-        if (existsSync(command)) {
-          const root = dirname(realpathSync(command));
-          roots.push(root, dirname(root));
-        }
-      }
-      const cache = join(homedir(), 'Library/Caches/copilot/pkg', `darwin-${process.arch}`);
-      if (existsSync(cache)) {
-        const versions = readdirSync(cache).filter(v => /^\d+\.\d+\.\d+$/.test(v))
-          .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-        roots.push(...versions.map(v => join(cache, v)));
-      }
-      const root = roots.find(root => existsSync(join(root, 'copilot-sdk/index.js'))
-        && existsSync(join(root, 'prebuilds', `darwin-${process.arch}`, 'copilot-runtime')));
-      if (!root) throw new Error('unavailable');
-      const { CopilotClient, RuntimeConnection } = await import(pathToFileURL(join(root, 'copilot-sdk/index.js')).href);
+      const paths = resolveCopilotRuntime();
+      const { CopilotClient, RuntimeConnection } = await import(paths.sdk);
       client = new CopilotClient({
-        connection: RuntimeConnection.forStdio({ path: join(root, 'prebuilds', `darwin-${process.arch}`, 'copilot-runtime') }),
+        connection: RuntimeConnection.forStdio({ path: paths.runtime }),
         logLevel: 'none', useLoggedInUser: true, workingDirectory: homedir()
       });
       await client.start();
