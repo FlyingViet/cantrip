@@ -52,6 +52,9 @@ final class ChatSession: ObservableObject {
     private var routingTask: Task<Void, Never>?
     private var routingItemID: UUID?
     private var routingRevision = 0
+    private var injectionTask: Task<Void, Never>?
+    private var pendingInjections: Set<UUID> = []
+    private var deferredInjectionDone = false
     /// Text grabbed from another app via ⌥⇧Space, attached to next query.
     @Published var selectionContext: SelectionContext?
     /// Called when the whole run (including queue) completes; AppDelegate
@@ -63,6 +66,10 @@ final class ChatSession: ObservableObject {
         didSet {
             preparationTask?.cancel()
             preparationTask = nil
+            injectionTask?.cancel()
+            injectionTask = nil
+            pendingInjections.removeAll()
+            deferredInjectionDone = false
         }
     }
     /// True when the last run died mid-task (timeout/failure) and can be
@@ -145,7 +152,7 @@ final class ChatSession: ObservableObject {
     private let inactivityLimit: TimeInterval = 900
     private var watchdog: Timer?
     private let claudeCode: ClaudeCodeBackend
-    private let copilot = CopilotBackend()
+    private let copilot: Backend
     private let copilotRemote = CopilotACPBackend()
     private let codex: CodexBackend
     private let localModel = OpenAICompatibleBackend()
@@ -175,8 +182,10 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    init(id: UUID = UUID(), makeJournal: @escaping (UUID) throws -> RunJournal = { try RunJournal(sessionID: $0) }) {
+    init(id: UUID = UUID(), copilotBackend: Backend = CopilotBackend(),
+         makeJournal: @escaping (UUID) throws -> RunJournal = { try RunJournal(sessionID: $0) }) {
         self.id = id
+        self.copilot = copilotBackend
         self.makeJournal = makeJournal
         self.workdir = UserDefaults.standard.string(forKey: "workdir-\(id.uuidString)")
             ?? AppSettings.shared.claudeWorkdir
@@ -756,7 +765,7 @@ final class ChatSession: ObservableObject {
             deliveryStatus = "Queued: commands, councils, and large messages run in order."
             return
         }
-        let supportsInjection = runningBackendKind == .claudeCode && preparationTask == nil
+        let supportsInjection = activeBackend.supportsMidTurnInjection && preparationTask == nil
         let snapshot = MessageRoutingSnapshot(
             message: text.trimmingCharacters(in: .whitespacesAndNewlines),
             currentTask: currentRunPrompt ?? "",
@@ -828,14 +837,7 @@ final class ChatSession: ObservableObject {
             case .queue:
                 break
             case .inject:
-                if self.activeBackend.injectMidTurn(item.text) {
-                    self.appendRunMessage(ChatMessage(role: .user, text: item.text), queueItemID: item.id)
-                    self.appendRunMessage(ChatMessage(role: .assistant, text: ""))
-                    self.removeQueued(item)
-                    self.persistTranscript()
-                } else {
-                    self.deliveryStatus = "Queued: the backend's live input channel was unavailable."
-                }
+                self.injectQueued(item)
             case .redirect:
                 self.submit(item.text, interrupt: true, inject: false,
                             includesAmbientContext: item.includesAmbientContext,
@@ -873,15 +875,12 @@ final class ChatSession: ObservableObject {
             return
         }
         if inject, !interrupt {
+            let item = enqueue(prompt, includesAmbientContext: includesAmbientContext)
             guard preparationTask == nil else {
-                enqueue(prompt, includesAmbientContext: includesAmbientContext)
+                deliveryStatus = "Queued: context preparation is still running."
                 return
             }
-            if activeBackend.injectMidTurn(prompt) {
-                appendRunMessage(ChatMessage(role: .user, text: prompt))
-                appendRunMessage(ChatMessage(role: .assistant, text: ""))
-                persistTranscript()
-            } else { enqueue(prompt, includesAmbientContext: includesAmbientContext) }
+            injectQueued(item)
             return
         }
         if interrupt, councilRunning {
@@ -916,8 +915,11 @@ final class ChatSession: ObservableObject {
             // log into the redirect so partial progress isn't lost.
             // Compute BEFORE finishStream/send mutate the transcript.
             var interruptContext: String?
-            if !backendKeepsSession, let steps = interruptedStepSummary() {
-                interruptContext = "(Context — steps my interrupted request had already taken:\n\(steps))"
+            if !backendKeepsSession {
+                let context = [interruptedStepSummary(), interruptedUserContext()].compactMap { $0 }
+                if !context.isEmpty {
+                    interruptContext = "(Context — my interrupted request:\n\(context.joined(separator: "\n\n")))"
+                }
             }
             cancelRun(reason: "redirected by user")
             finishStream(dequeue: false, notify: false, waitForJournal: false)
@@ -932,6 +934,98 @@ final class ChatSession: ObservableObject {
         } else {
             enqueue(prompt, includesAmbientContext: includesAmbientContext)
         }
+    }
+
+    private func injectQueued(_ item: QueuedPrompt) {
+        guard activeBackend.supportsMidTurnInjection, currentRunMode == .single else {
+            deliveryStatus = "Queued: the backend's live input channel is unavailable."
+            return
+        }
+        let generation = streamGeneration
+        let privacy = isPrivate
+        let predecessor = injectionTask
+        pendingInjections.insert(item.id)
+        deliveryStatus = "Saving context before delivery..."
+        injectionTask = Task { [weak self] in
+            await predecessor?.value
+            guard let self else { return }
+            var claimed = false
+            var dispatched = false
+            var queueIndex = 0
+            defer {
+                self.pendingInjections.remove(item.id)
+                if self.streamGeneration == generation, self.pendingInjections.isEmpty,
+                   self.deferredInjectionDone {
+                    self.deferredInjectionDone = false
+                    self.handle(.done)
+                }
+            }
+            do {
+                try await self.flushJournal()
+                guard !Task.isCancelled, self.streamGeneration == generation,
+                      self.isPrivate == privacy, self.isStreaming,
+                      self.queued.contains(where: { $0.id == item.id }) else { return }
+                guard self.activeBackend.supportsMidTurnInjection else {
+                    self.deliveryStatus = "Queued: the task finished before context could be sent."
+                    return
+                }
+                // The durable message claims the queue ID before crossing the process
+                // boundary. Recovery keeps the context, but cannot blindly send it twice.
+                queueIndex = self.queued.firstIndex(where: { $0.id == item.id }) ?? 0
+                claimed = true
+                self.appendRunMessage(ChatMessage(role: .user, text: item.text), queueItemID: item.id)
+                self.appendRunMessage(ChatMessage(role: .assistant, text: ""))
+                self.removeQueued(item)
+                self.recordInjection(item, status: "submitting")
+                try await self.flushJournal()
+                guard !Task.isCancelled, self.streamGeneration == generation,
+                      self.isPrivate == privacy, self.isStreaming else { return }
+                self.deliveryStatus = "Sending context to the current task..."
+                dispatched = true
+                let result = await withCheckedContinuation { continuation in
+                    self.activeBackend.injectMidTurn(item.text) { result in
+                        continuation.resume(returning: result)
+                    }
+                }
+                guard self.streamGeneration == generation, self.isPrivate == privacy else { return }
+                switch result {
+                case .accepted(let messageID):
+                    self.recordInjection(item, status: "accepted", nativeMessageID: messageID)
+                    self.deliveryStatus = "Context accepted; it will be applied at the next opportunity."
+                case .notSent:
+                    self.recordInjection(item, status: "not_sent")
+                    self.queued.insert(item, at: min(queueIndex, self.queued.count))
+                    self.recordQueueEvent(.queueAdded, item: item)
+                    self.deliveryStatus = "Queued: the task finished before context could be sent."
+                case .uncertain(let message):
+                    self.recordInjection(item, status: "uncertain", reason: message)
+                    let notice = "Context delivery uncertain; not resent. \(message)"
+                    self.deliveryStatus = notice
+                    self.appendRunMessage(ChatMessage(role: .error, text: notice))
+                }
+                self.persistTranscript()
+                try await self.flushJournal()
+            } catch {
+                guard self.streamGeneration == generation else { return }
+                if claimed, !dispatched, !self.queued.contains(where: { $0.id == item.id }) {
+                    self.queued.insert(item, at: min(queueIndex, self.queued.count))
+                    self.recordQueueEvent(.queueAdded, item: item)
+                }
+                self.reportJournalFailure(error)
+                self.deliveryStatus = "Context delivery paused: run history could not be saved."
+            }
+        }
+    }
+
+    private func recordInjection(_ item: QueuedPrompt, status: String,
+                                 nativeMessageID: String? = nil, reason: String? = nil) {
+        guard let runID = currentRunID else { return }
+        var event = RunJournal.Event(sessionID: id, runID: runID, kind: .steeringDelivery)
+        event.queueItemID = item.id
+        event.status = status
+        event.nativeMessageID = nativeMessageID
+        event.reason = reason
+        appendRunEvent(event, durable: true)
     }
 
     private func send(_ text: String, interrupted: Bool = false,
@@ -1765,7 +1859,7 @@ final class ChatSession: ObservableObject {
         case .activity(let activity):
             updateActivity(activity)
             shell.mirror(activity)
-            if let message = messages.last(where: { $0.role == .assistant }) {
+            if let message = messages.last(where: { $0.activities.contains { $0.id == activity.id } }) {
                 recordActivity(activity, messageID: message.id)
             }
             statusText = currentActivity?.title ?? "Thinking…"
@@ -1774,6 +1868,10 @@ final class ChatSession: ObservableObject {
         case .approval(let approval):
             recordApproval(approval)
         case .done:
+            if !pendingInjections.isEmpty {
+                deferredInjectionDone = true
+                return
+            }
             finalizeRunningActivities(as: .succeeded)
             let summary = messages.last(where: { $0.role == .assistant })?.text ?? ""
             completeRun(status: "succeeded", summary: summary)
@@ -1835,10 +1933,10 @@ final class ChatSession: ObservableObject {
     /// text). A run that died before doing anything isn't "resumable" —
     /// there are no previous steps to pick up from.
     private var lastRunHadProgress: Bool {
-        guard let message = messages.last(where: { $0.role == .assistant }) else {
-            return false
+        messages.contains { message in
+            message.runID == currentRunID && message.role == .assistant
+                && (!message.activities.isEmpty || !message.text.isEmpty)
         }
-        return !message.activities.isEmpty || !message.text.isEmpty
     }
 
     /// Delay so the killed backend process fully dies before the
@@ -1866,6 +1964,7 @@ final class ChatSession: ObservableObject {
         if let steps = interruptedStepSummary() {
             preamble += "\nSteps already taken before the interruption:\n\(steps)"
         }
+        if let context = interruptedUserContext() { preamble += "\n\n\(context)" }
         preamble += "\nResume that task from where it left off: verify which steps already completed, then continue — don't redo finished work or start over.)"
         Log.write("resume: \(auto ? "auto" : "manual") resume of interrupted run")
         recordResumeAttempt(reason: auto ? "automatic-resume" : "manual-resume")
@@ -1896,12 +1995,22 @@ final class ChatSession: ObservableObject {
     private func interruptedStepSummary() -> String? {
         // Only the interrupted turn itself — an earlier turn's steps
         // would misrepresent what "was already done" for this task.
-        guard let message = messages.last(where: { $0.role == .assistant }),
-              !message.activities.isEmpty else { return nil }
-        let lines = message.activities.suffix(30).map { activity in
+        let activities = messages.filter {
+            $0.runID == currentRunID && $0.role == .assistant
+        }.flatMap(\.activities)
+        let lines = activities.suffix(30).map { activity in
             "- [\(stateLabel(activity.state))] \(activity.toolName): \(activity.title)"
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    private func interruptedUserContext() -> String? {
+        let instructions = messages.filter { $0.runID == currentRunID && $0.role == .user }
+            .dropFirst().map(\.text)
+        guard !instructions.isEmpty else { return nil }
+        return "Additional user context recorded during this run (delivery may already have occurred; "
+            + "verify completed work instead of replaying instructions):\n"
+            + instructions.joined(separator: "\n\n")
     }
 
     private func stateLabel(_ state: ToolActivityState) -> String {
@@ -2122,7 +2231,9 @@ final class ChatSession: ObservableObject {
     }
 
     private func updateActivity(_ activity: ToolActivity) {
-        guard let messageIndex = messages.lastIndex(where: { $0.role == .assistant }) else {
+        guard let messageIndex = messages.lastIndex(where: {
+            $0.activities.contains { $0.id == activity.id }
+        }) ?? messages.lastIndex(where: { $0.role == .assistant }) else {
             return
         }
         if let activityIndex = messages[messageIndex].activities.firstIndex(

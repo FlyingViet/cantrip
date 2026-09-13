@@ -65,6 +65,10 @@ final class ClaudeCodeBackend: Backend {
     /// Claude-style mid-turn injection: append a user message into the
     /// RUNNING turn's context without interrupting it. Returns false when
     /// no live process exists (caller should queue instead).
+    var supportsMidTurnInjection: Bool {
+        process?.isRunning == true && stdinHandle != nil && turnInFlight
+    }
+
     func injectMidTurn(_ text: String) -> Bool {
         guard process?.isRunning == true, stdinHandle != nil else { return false }
         queue.async { [weak self] in self?.writeUserMessage(text) }

@@ -102,12 +102,57 @@ extension SessionTabTests {
         let (hidden, _, _) = try await request("/messages/\(original[99].id)")
         precondition(hidden == 404)
         chat.isPrivate = false
+        let oversized = String(repeating: "Complete output\n", count: 20_000)
+        let paired = [
+            ChatMessage(role: .user, text: "Earlier prompt"),
+            ChatMessage(role: .assistant, text: oversized),
+            ChatMessage(role: .user, text: "Current prompt"),
+            ChatMessage(role: .assistant, text: oversized),
+        ]
+        let council = [ChatMessage(role: .user, text: "Compare these answers")]
+            + (0..<35).map { ChatMessage(role: .assistant, text: "Council answer \($0)") }
+        let countBoundary = (0..<11).flatMap { index in [
+            ChatMessage(role: .user, text: "Prompt \(index)"),
+            ChatMessage(role: .assistant, text: "First answer \(index)"),
+            ChatMessage(role: .assistant, text: "Second answer \(index)"),
+        ] } + [ChatMessage(role: .user, text: "Pending prompt")]
+        let hugePrompt = [
+            ChatMessage(role: .user, text: oversized),
+            ChatMessage(role: .assistant, text: "Answer to a large prompt"),
+        ]
+        for (fixture, expectedRecentCount) in [(paired, 2), (council, 36), (countBoundary, 31),
+                                               (hugePrompt, 2)] {
+            chat.messages = fixture
+            var loadedIDs: [String] = []
+            var before = ""
+            repeat {
+                let (pageStatus, response, _) = try await request("?history=recent\(before)")
+                precondition(pageStatus == 200)
+                let page = response["session"] as! [String: Any]
+                let messages = page["messages"] as! [[String: Any]]
+                precondition(messages.first?["role"] as? String == "user",
+                             "Every response group must include its prompt, even across size/count limits")
+                if before.isEmpty {
+                    precondition(messages.count == expectedRecentCount)
+                }
+                for message in messages {
+                    expectFull(message, original: fixture.first { $0.id.uuidString == message["id"] as? String }!)
+                }
+                let pageIDs = messages.map { $0["id"] as! String }
+                loadedIDs = pageIDs + loadedIDs
+                precondition(page["hasOlderMessages"] as? Bool == (loadedIDs.count < fixture.count))
+                before = "&before=\(pageIDs.first!)"
+            } while loadedIDs.count < fixture.count
+            precondition(loadedIDs == fixture.map { $0.id.uuidString },
+                         "Prompt-aligned cursors must not skip or duplicate messages")
+            precondition(chat.messages == fixture)
+        }
         chat.messages = []
         let (resetStatus, _, _) = try await request("?history=recent&before=\(original[70].id)")
         precondition(resetStatus == 409)
         let (_, emptyResponse, _) = try await request("?history=recent")
         let empty = emptyResponse["session"] as! [String: Any]
         precondition(empty["hasOlderMessages"] as? Bool == false && (empty["messages"] as! [Any]).isEmpty)
-        print("Remote history: complete messages, soft page budgets, conditional reads, complete paging, legacy and private access passed")
+        print("Remote history: complete prompt-aligned pages, soft budgets, conditional reads, complete paging, legacy and private access passed")
     }
 }

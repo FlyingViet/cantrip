@@ -58,6 +58,12 @@ struct BackendRequest {
     let previousTurns: [ConversationTurn]
 }
 
+enum MidTurnDelivery {
+    case accepted(messageID: String?)
+    case notSent
+    case uncertain(String)
+}
+
 protocol Backend {
     /// Send a query, executing in `workdir`. Events arrive on an arbitrary
     /// queue; the caller hops to main. Continuity is the backend's job.
@@ -74,6 +80,9 @@ protocol Backend {
     /// without interrupting. Returns false if unsupported/no live turn
     /// (caller should queue instead).
     func injectMidTurn(_ text: String) -> Bool
+    var supportsMidTurnInjection: Bool { get }
+    /// Completion confirms transport acceptance, not model consumption.
+    func injectMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void)
     /// Gracefully abort the CURRENT turn in-band, keeping the process and
     /// session alive for the next message (Claude control protocol).
     /// Returns false if unsupported/no live process (caller should
@@ -83,6 +92,10 @@ protocol Backend {
 
 extension Backend {
     func injectMidTurn(_ text: String) -> Bool { false }
+    var supportsMidTurnInjection: Bool { false }
+    func injectMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void) {
+        completion(injectMidTurn(text) ? .accepted(messageID: nil) : .notSent)
+    }
     func interruptTurn() -> Bool { false }
 }
 

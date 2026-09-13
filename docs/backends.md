@@ -9,7 +9,7 @@ not sign in its CLI**.
 | Choice | What you need |
 |---|---|
 | Claude Code | Installed `claude` CLI and an authorized account |
-| Copilot | Installed `copilot` CLI and an account with Copilot CLI access |
+| Copilot | Installed `copilot` CLI and an account with Copilot CLI access; macOS also needs Node.js and the CLI's bundled SDK/runtime |
 | Codex | Installed `codex` CLI and an authorized account |
 | Local Model (Mac only) | A running OpenAI-compatible server and its exact model ID |
 
@@ -41,6 +41,16 @@ On Mac, the backend's **path (blank = auto)** field normally stays blank.
 If automatic detection fails, run `command -v claude`, `command -v copilot`,
 or `command -v codex` in Terminal and paste the returned executable path into
 the matching field.
+
+On macOS, local Copilot runs through a persistent native SDK session, not a
+one-shot prompt process. Use a recent CLI with its bundled SDK and runtime
+(exercised with 1.0.83), and ensure `node` is available in your login shell.
+Cantrip resolves both from the configured CLI installation/version; it does
+not substitute another cached version when a custom path is invalid.
+This enables [live context injection](sessions-and-council.md#send-instructions-while-the-agent-is-busy).
+Without action permissions the native adapter exposes only read/search tools;
+read-only council advisors receive no tools. Permission requests that cannot
+be approved by the current action policy are denied rather than left hanging.
 
 ## Choose a model, effort, or context window
 

@@ -240,6 +240,33 @@ extension SessionTabTests {
           check(document.documentElement.dataset.cantripConnected==="true","A healthy tab list keeps connection status independent");
           check($("historyError").textContent.includes("conversation"),"Detail failures are visible");
           check(historyCache.get(selected).messages.length===4,"A failed detail load retains already loaded history");
+          const shortMessage=index=>({id:String(index),role:[0,1,4].includes(index)?"user":"assistant",
+            text:`Prompt or response ${index}`,activities:[]});
+          current={...current,id:"prompt-boundary",messages:Array.from({length:122},(_,index)=>shortMessage(index))};
+          $("historyError").textContent="";
+          selected=current.id;renderSessions([current]);render(cacheSession(current));await settle();
+          check(historyCache.get(selected).messages.length===121&&historyCache.get(selected).messages[0].id==="1","Rolling cache retains the prompt preceding its cutoff");
+          const firstRow=$("messages").querySelector("article");
+          check(firstRow.classList.contains("user")&&firstRow.textContent.includes("Prompt or response 1"),"The boundary prompt renders before its response");
+          root.scrollTop=0;followOutput=false;await settle();
+          const promptTop=firstRow.getBoundingClientRect().top;
+          let olderReads=0;
+          api=async path=>{
+            olderReads++;check(path.includes("before=1"),"Older history pages before the retained prompt");
+            return {session:{...current,messages:[shortMessage(0)],hasOlderMessages:false}};
+          };
+          check(olderReads===0,"Rendering never fetches earlier output");
+          await loadOlderMessages();await settle();
+          check(olderReads===1&&historyCache.get(selected).messages.map(m=>m.id).join()===Array.from({length:122},(_,i)=>String(i)).join(),"Explicit paging restores the preceding history exactly once");
+          const restoredPromptTop=$("messages").querySelectorAll("article")[1].getBoundingClientRect().top;
+          check(Math.abs(restoredPromptTop-promptTop)<3,`Paging preserves the retained prompt's scroll anchor: ${promptTop} -> ${restoredPromptTop}, scroll ${root.scrollTop}`);
+          const updated=cacheSession({...current,messages:Array.from({length:120},(_,i)=>shortMessage(i+4))});
+          check(updated.messages.length===124&&updated.messages[0].id==="0","Polling retains explicitly loaded prompts");
+          const longTurn={...current,id:"long-turn",hasOlderMessages:false,messages:Array.from({length:130},(_,index)=>({...shortMessage(index),role:index===0?"user":"assistant"}))};
+          const retained=cacheSession(longTurn);
+          check(retained.messages.length===130&&retained.messages[0].role==="user"&&!retained.hasOlderMessages,"One long turn retains its prompt without inventing older history");
+          const reset=cacheSession({...longTurn,historyStartID:"reset",messages:[{...shortMessage(200),role:"user"},shortMessage(201)]});
+          check(reset.messages.length===2&&reset.messages[0].id==="200","Reset removes stale prompts");
         }finally{
           api=originalAPI;token=originalToken;window.requestAnimationFrame=originalFrame;
           if(timer)clearTimeout(timer);timer=null;historyCache.clear();expandedHistory.clear();

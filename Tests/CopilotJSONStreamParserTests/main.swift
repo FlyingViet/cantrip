@@ -66,12 +66,30 @@ private func testMalformedFinalLineIsReportedAndSkipped() {
     expect(errorCount == 1, "an incomplete final line should be reported")
 }
 
+private func testSDKMessagesAndUsage() {
+    var parser = CopilotJSONStreamParser()
+    let events = parser.consume(Data("""
+    {"type":"assistant.message_delta","id":"d1","data":{"messageId":"m1","deltaContent":"Streamed"}}
+    {"type":"assistant.message","id":"a1","data":{"messageId":"m1","content":"Streamed"}}
+    {"type":"assistant.message","id":"a2","data":{"messageId":"m2","content":"Aggregate only"}}
+    {"type":"assistant.message","id":"subagent","agentId":"child","data":{"messageId":"m3","content":"Hidden"}}
+    {"type":"assistant.usage","id":"u1","data":{"inputTokens":100,"outputTokens":20,"cost":6.5}}
+
+    """.utf8)) { _, _ in expect(false, "SDK messages should parse") }
+    expect(text(from: events) == "Streamed\n\nAggregate only", "SDK aggregates must not duplicate streamed content")
+    let usages = events.compactMap { if case .usage(let usage) = $0 { return usage }; return nil }
+    expect(usages.count == 1 && usages[0].inputTokens == 100 && usages[0].outputTokens == 20,
+           "SDK token usage should reach the journal")
+    expect(usages.first?.costUSD == 0, "Copilot model multipliers are not dollar costs")
+}
+
 testMalformedLineDoesNotAbortBatch()
 testMalformedEventDoesNotPoisonLaterChunks()
 testMalformedFinalLineIsReportedAndSkipped()
+testSDKMessagesAndUsage()
 
 if failures > 0 {
     fputs("\(failures) Copilot parser test(s) failed\n", stderr)
     exit(1)
 }
-print("All 3 Copilot parser tests passed")
+print("All 4 Copilot parser tests passed")

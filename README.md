@@ -53,6 +53,11 @@ The macOS app includes:
 - **Automatic sending:** a separate, tool-free model call interprets busy-run
   messages as context, corrections, or follow-ups. Uncertain decisions queue
   safely; manual Queue/Redirect/Inject overrides remain available.
+- **Live context:** local Copilot and Claude Code can accept **Inject** messages
+  without stopping their current work, including from AgentGateway and Mac/browser
+  Remote. Copilot uses a persistent native SDK session per tab; accepted context is
+  never blindly resent if its acknowledgement is lost. Requires Node.js and a
+  recent Copilot CLI with its matching bundled SDK/runtime.
 - **Agent actions:** commands and file edits with backend-specific
   permissions; inspect tool activity and file diffs.
 - **Memory and council:** editable Markdown memory and multi-model answers.
@@ -66,6 +71,8 @@ The macOS app includes:
 - **Remote control:** use the Mac's sessions from AgentGateway on iPhone/iPad,
   another Mac, or a browser. Recent messages load with full text and tool details;
   older history is paginated and fetched only through **Load older messages**.
+  Page and cache boundaries retain the prompt before its responses, even when
+  a large answer exceeds the soft page limits.
   Mac Remote uses an expanded, vertically scrollable
   tab list on the left; main Cantrip and ordinary browser tabs stay across the
   top. Remote tab lists keep their scroll position during refreshes. Mac Remote
