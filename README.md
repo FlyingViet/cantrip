@@ -70,7 +70,10 @@ The macOS app includes:
   and runs off the UI thread; large Remote responses are encoded off-thread.
 - **Remote control:** use the Mac's sessions from AgentGateway on iPhone/iPad,
   another Mac, or a browser. Recent messages load with full text and tool details;
-  older history is paginated and fetched only through **Load older messages**.
+  scrolling up automatically pages back through ten earlier prompt-response
+  groups, counting those already loaded. Beyond that, **Load more messages**
+  retrieves earlier history. Opening a tab or polling never prefetches history;
+  failed automatic loads pause for manual retry.
   Page and cache boundaries retain the prompt before its responses, even when
   a large answer exceeds the soft page limits.
   Mac Remote uses an expanded, vertically scrollable
