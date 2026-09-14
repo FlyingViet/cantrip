@@ -940,6 +940,12 @@ final class CantripRemoteModel: ObservableObject {
     private var detailCache: [String: CantripRemoteSession] = [:]
     private var cacheOrder: [String] = []
     private var expandedHistory: Set<String> = []
+    private var automaticHistoryRemaining: [String: Int] = [:]
+    private static let automaticHistoryLimit = 10
+    var canAutomaticallyLoadHistory: Bool {
+        guard let session = selectedSession, session.hasOlderMessages == true else { return false }
+        return (automaticHistoryRemaining[session.id] ?? 0) > 0
+    }
     private var selectionRevision = 0
     private var selectingSessionID: String?
     private var mutationRevision = 0
@@ -1262,7 +1268,8 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
-    func loadOlderMessages() async {
+    func loadOlderMessages(automatically: Bool = false) async {
+        guard !automatically || canAutomaticallyLoadHistory else { return }
         guard !isLoadingHistory, !isMutating,
               let current = selectedSession, current.hasOlderMessages == true,
               let before = current.transcript.first?.id else { return }
@@ -1280,8 +1287,19 @@ final class CantripRemoteModel: ObservableObject {
                   latest.historyStartID == page.historyStartID,
                   latest.transcript.first?.id == before else { return }
             let existing = Set(latest.transcript.map(\.id))
-            latest.messages = page.transcript.filter { !existing.contains($0.id) } + latest.transcript
-            latest.hasOlderMessages = page.hasOlderMessages
+            let received = page.transcript.filter { !existing.contains($0.id) }
+            guard !received.isEmpty || page.hasOlderMessages == false else {
+                throw CantripRemoteError.invalidResponse
+            }
+            let added = automatically
+                ? Self.historySuffix(received, groups: automaticHistoryRemaining[current.id] ?? 0)
+                : received
+            latest.messages = added + latest.transcript
+            latest.hasOlderMessages = added.count < received.count || page.hasOlderMessages == true
+            automaticHistoryRemaining[current.id] = automatically
+                ? max(0, (automaticHistoryRemaining[current.id] ?? 0)
+                      - max(1, added.filter { $0.role == "user" }.count))
+                : 0
             expandedHistory.insert(current.id)
             historyPrependAnchor = before
             apply(latest, mergeHistory: false)
@@ -1291,6 +1309,7 @@ final class CantripRemoteModel: ObservableObject {
             return
         } catch {
             guard selection == selectionRevision else { return }
+            automaticHistoryRemaining[current.id] = 0
             detailError = "Could not load older messages. \(error.localizedDescription)"
             handleReadFailure(error, detailOnly: true)
         }
@@ -1573,6 +1592,7 @@ final class CantripRemoteModel: ObservableObject {
             detailCache = detailCache.filter { publicIDs.contains($0.key) }
             cacheOrder.removeAll { !publicIDs.contains($0) }
             expandedHistory.formIntersection(publicIDs)
+            automaticHistoryRemaining = automaticHistoryRemaining.filter { publicIDs.contains($0.key) }
             guard selection == selectionRevision else { return }
             let chosenID = requestedID.flatMap { id in
                 listed.contains(where: { $0.id == id }) ? id : nil
@@ -1701,6 +1721,7 @@ final class CantripRemoteModel: ObservableObject {
         var session = incoming
         if detailCache[session.id]?.historyStartID != session.historyStartID {
             expandedHistory.remove(session.id)
+            automaticHistoryRemaining.removeValue(forKey: session.id)
         }
         if mergeHistory, let previous = detailCache[session.id],
            let start = session.historyStartID, start == previous.historyStartID,
@@ -1708,6 +1729,13 @@ final class CantripRemoteModel: ObservableObject {
            let overlap = previous.transcript.firstIndex(where: { $0.id == first }) {
             session.messages = Array(previous.transcript.prefix(overlap)) + session.transcript
             session.hasOlderMessages = previous.hasOlderMessages
+        }
+        if !expandedHistory.contains(session.id), session.supportsPagedHistory == true {
+            let bounded = Self.historySuffix(session.transcript, groups: Self.automaticHistoryLimit + 1)
+            if bounded.count < session.transcript.count {
+                session.messages = bounded
+                session.hasOlderMessages = true
+            }
         }
         if !expandedHistory.contains(session.id), session.supportsPagedHistory == true,
            session.transcript.count > 120 {
@@ -1722,6 +1750,13 @@ final class CantripRemoteModel: ObservableObject {
                 session.hasOlderMessages = true
             }
         }
+        if !expandedHistory.contains(session.id) {
+            let pastGroups = max(0, session.transcript.filter { $0.role == "user" }.count - 1)
+            automaticHistoryRemaining[session.id] = min(
+                automaticHistoryRemaining[session.id] ?? Self.automaticHistoryLimit,
+                max(0, Self.automaticHistoryLimit - pastGroups)
+            )
+        }
         detailCache[session.id] = session
         cacheOrder.removeAll { $0 == session.id }
         cacheOrder.append(session.id)
@@ -1729,6 +1764,7 @@ final class CantripRemoteModel: ObservableObject {
             let removed = cacheOrder.removeFirst()
             detailCache.removeValue(forKey: removed)
             expandedHistory.remove(removed)
+            automaticHistoryRemaining.removeValue(forKey: removed)
         }
         if selectedSession != session {
             selectedSession = session
@@ -1737,6 +1773,13 @@ final class CantripRemoteModel: ObservableObject {
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             sessions[index] = session
         }
+    }
+
+    private static func historySuffix(_ messages: [CantripRemoteMessage], groups: Int) -> [CantripRemoteMessage] {
+        guard groups > 0 else { return [] }
+        let prompts = messages.indices.filter { messages[$0].role == "user" }
+        guard prompts.count > groups else { return messages }
+        return Array(messages[prompts[prompts.count - groups]...])
     }
 
     private func startPolling() {
@@ -1825,6 +1868,7 @@ final class CantripRemoteModel: ObservableObject {
         detailCache.removeAll()
         cacheOrder.removeAll()
         expandedHistory.removeAll()
+        automaticHistoryRemaining.removeAll()
         detailError = nil
         selectionRevision += 1
         selectingSessionID = nil
@@ -2161,6 +2205,9 @@ private struct CantripRemoteTranscript: View {
         .scrollPosition($scrollPosition)
         .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
+        .onUpwardHistoryScroll {
+            Task { await model.loadOlderMessages(automatically: true) }
+        }
         .onScrollGeometryChange(for: Bool.self) { geometry in
             geometry.contentSize.height - geometry.visibleRect.maxY < 72
         } action: { _, isNearBottom in
@@ -2191,10 +2238,13 @@ private struct CantripRemoteTranscript: View {
                 scrollPosition.scrollTo(edge: .bottom)
             }
         }
-        .onChange(of: model.historyPrependRevision) { _, _ in
-            guard let anchor = model.historyPrependAnchor else { return }
+        .onScrollGeometryChange(for: HistoryScrollGeometry.self) { geometry in
+            HistoryScrollGeometry(geometry, prependRevision: model.historyPrependRevision)
+        } action: { previous, current in
+            guard previous.prependRevision != current.prependRevision,
+                  model.historyPrependAnchor != nil else { return }
             followsBottom = false
-            scrollPosition.scrollTo(id: anchor, anchor: .top)
+            scrollPosition.scrollTo(y: max(0, previous.offset + current.height - previous.height))
         }
     }
 }
@@ -2205,16 +2255,28 @@ struct CantripHistoryControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if model.selectedSession?.hasOlderMessages == true {
-                Button {
-                    Task { await model.loadOlderMessages() }
-                } label: {
+                if model.canAutomaticallyLoadHistory {
                     HStack {
                         if model.isLoadingHistory { ProgressView() }
-                        Text(model.isLoadingHistory ? "Loading older messages..." : "Load older messages")
+                        Text(model.isLoadingHistory ? "Loading older messages..." : "Scroll up for older messages")
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityAction(named: Text("Load older messages")) {
+                        Task { await model.loadOlderMessages(automatically: true) }
+                    }
+                } else {
+                    Button {
+                        Task { await model.loadOlderMessages() }
+                    } label: {
+                        HStack {
+                            if model.isLoadingHistory { ProgressView() }
+                            Text(model.isLoadingHistory ? "Loading older messages..." : "Load more messages")
+                        }
+                    }
+                    .disabled(model.isLoadingHistory || model.isMutating)
+                    .accessibilityIdentifier("cantrip.loadOlderMessages")
                 }
-                .disabled(model.isLoadingHistory || model.isMutating)
-                .accessibilityIdentifier("cantrip.loadOlderMessages")
             }
         }
     }

@@ -10,6 +10,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var remoteIsStreaming = false
     @Published var remoteDeliveryMode: CantripDeliveryMode = .auto
     @Published private(set) var scrollToLatestRequest = 0
+    @Published private(set) var historyPrependRevision = 0
     @Published private(set) var tabMetadata = ChatTabMetadata()
     @Published var tabActionError: String?
 
@@ -312,6 +313,8 @@ final class ChatViewModel: ObservableObject {
                 images: message.images?.map { $0.inSession(session?.id ?? "") }
             )
         }
+        // Publish prepends with the mapped turns, not a frame before their layout.
+        historyPrependRevision = remote.historyPrependRevision
 
         remoteIsStreaming = session?.isStreaming ?? false
         if remoteIsStreaming {
@@ -1520,9 +1523,13 @@ struct ChatView: View {
     private var transcriptList: some View {
         ChatTranscriptScrollView(
             scrollRequest: vm.scrollToLatestRequest,
-            prependRevision: remote.historyPrependRevision,
+            prependRevision: vm.historyPrependRevision,
             prependAnchor: vm.historyPrependAnchor,
-            dismissKeyboard: { composerFocused = false }
+            dismissKeyboard: { composerFocused = false },
+            loadOlder: {
+                guard vm.activeLane == .cantrip else { return }
+                Task { await remote.loadOlderMessages(automatically: true) }
+            }
         ) {
             if vm.activeLane == .cantrip {
                 CantripHistoryControls(model: remote)

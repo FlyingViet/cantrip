@@ -224,12 +224,16 @@ The dot indicates recent connectivity, not acknowledgement of a particular send.
 
 ### Long conversations and unreliable connections
 
-With an updated Cantrip host, the app targets 30 recent messages first.
-Tap **Load older messages** at the top of the transcript to page backward while
-keeping your reading position. Every loaded message includes complete text,
+With an updated Cantrip host, the app targets 30 recent messages first, capped
+at the current prompt and ten earlier prompt-response groups. Scrolling upward
+near the top automatically loads older history up to that ten-group limit,
+including groups already loaded. Then tap **Load more messages** to page further
+back while keeping your reading position. Every loaded message includes complete text,
 reasoning, and all tool input/output by default; there is no separate detail
-download on updated hosts. Older pages are loaded only when requested, never
-prefetched. Pages target 192 KiB, but always include at least one whole message
+download on updated hosts. Opening a tab or polling never prefetches older pages.
+Automatic loading pauses on failure and offers a manual retry. The allowance is
+per cached tab and resets when its history is reset or its cache is cleared.
+Pages target 192 KiB, but always include at least one whole message
 and extend back to its user prompt when available. Large answers or
 multi-response turns can exceed the soft count/size limits so the prompt stays
 visible before its output. The host retains its live history, and
@@ -246,7 +250,7 @@ Unchanged session revisions skip conversation downloads entirely. Foreground
 polling waits 1.5 seconds while any tab is working/queued or recovering, and
 5 seconds while idle. Unattended transcripts target a rolling 120-message
 window, retaining the prompt and responses at its start, with up to five tabs
-cached; explicit older-history loading may expand that window. Lightweight
+cached; scroll-triggered or manual older-history loading may expand that window. Lightweight
 reads retain 3-second HTTPS / 2-second LAN deadlines.
 Conversation pages and full-message downloads allow up to 20 seconds without
 blocking the polling/mutation gate; tab polling continues during slow recent-page

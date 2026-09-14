@@ -14,6 +14,7 @@ private final class TranscriptLayoutModel: ObservableObject {
     @Published var prompt = ""
     @Published var history: [HistoryRow] = []
     @Published var prependRevision = 0
+    var historyRequests = 0
     var prependAnchor: UUID?
 
     struct HistoryRow: Identifiable {
@@ -28,7 +29,8 @@ private struct TranscriptLayoutHarness: View {
     var body: some View {
         ChatTranscriptScrollView(scrollRequest: model.scrollRequest,
                                  prependRevision: model.prependRevision,
-                                 prependAnchor: model.prependAnchor) {
+                                 prependAnchor: model.prependAnchor,
+                                 loadOlder: { model.historyRequests += 1 }) {
             ForEach(model.history) { row in
                 Text("History message")
                     .frame(maxWidth: .infinity)
@@ -95,6 +97,44 @@ final class ChatTranscriptLayoutTests: XCTestCase {
         let (window, controller) = try host(model)
         defer { window.isHidden = true }
         assertAtBottom(try await settle(controller))
+        XCTAssertEqual(model.historyRequests, 0)
+    }
+
+    func testHistoryTriggerRequiresUpwardUserScrollNearTop() {
+        XCTAssertTrue(HistoryScrollTrigger.shouldLoad(previous: 140, current: 110, userIsScrolling: true))
+        XCTAssertTrue(HistoryScrollTrigger.shouldLoad(previous: 0, current: -20, userIsScrolling: true))
+        XCTAssertFalse(HistoryScrollTrigger.shouldLoad(previous: 110, current: 140, userIsScrolling: true))
+        XCTAssertFalse(HistoryScrollTrigger.shouldLoad(previous: 500, current: 400, userIsScrolling: true))
+        XCTAssertFalse(HistoryScrollTrigger.shouldLoad(previous: 110, current: 110, userIsScrolling: true))
+        XCTAssertFalse(HistoryScrollTrigger.shouldLoad(previous: 500, current: 0, userIsScrolling: false))
+    }
+
+    func testProgrammaticScrollAndLayoutChangesNeverLoadHistory() async throws {
+        let model = TranscriptLayoutModel()
+        let (window, controller) = try host(model)
+        defer { window.isHidden = true }
+        let scroll = try await settle(controller)
+        scroll.setContentOffset(.zero, animated: false)
+        _ = try await settle(controller)
+        model.heights[0] += 200
+        model.viewportHeight = 300
+        _ = try await settle(controller)
+        XCTAssertEqual(model.historyRequests, 0)
+    }
+
+    func testUserScrollNearTopInvokesHistoryLoader() async throws {
+        let model = TranscriptLayoutModel()
+        let (window, controller) = try host(model)
+        defer { window.isHidden = true }
+        let scroll = try await settle(controller)
+        scroll.setContentOffset(CGPoint(x: 0, y: 240), animated: false)
+        _ = try await settle(controller)
+        scroll.delegate?.scrollViewWillBeginDragging?(scroll)
+        _ = try await settle(controller)
+        scroll.setContentOffset(CGPoint(x: 0, y: 60), animated: false)
+        _ = try await settle(controller)
+        XCTAssertGreaterThan(model.historyRequests, 0)
+        scroll.delegate?.scrollViewDidEndDragging?(scroll, willDecelerate: false)
     }
 
     func testStreamingGrowthFollowsActualContentWithoutAnimatedOvershoot() async throws {
@@ -163,17 +203,36 @@ final class ChatTranscriptLayoutTests: XCTestCase {
         defer { window.isHidden = true }
         let scroll = try await settle(controller)
         scroll.setContentOffset(.zero, animated: false)
+        _ = try await settle(controller)
         model.prependAnchor = model.history.first?.id
         model.history.insert(contentsOf: [.init(height: 120), .init(height: 450)], at: 0)
         model.prependRevision += 1
         let updated = try await settle(controller)
-        XCTAssertEqual(updated.contentOffset.y + updated.adjustedContentInset.top, 16 + 120 + 14 + 450 + 14,
+        XCTAssertEqual(updated.contentOffset.y + updated.adjustedContentInset.top, 120 + 14 + 450 + 14,
                        accuracy: 3, "History should stay anchored to the previously visible message")
         let offset = updated.contentOffset.y
         model.history.append(.init(height: 600))
         let streaming = try await settle(controller)
         XCTAssertEqual(streaming.contentOffset.y, offset, accuracy: 2,
                        "New output must not pull someone reading older history back to the bottom")
+    }
+
+    func testAutomaticPrependPreservesPartiallyScrolledPromptOffset() async throws {
+        let model = TranscriptLayoutModel()
+        model.heights = []
+        model.history = [.init(height: 300), .init(height: 800), .init(height: 200)]
+        let (window, controller) = try host(model)
+        defer { window.isHidden = true }
+        let scroll = try await settle(controller)
+        scroll.setContentOffset(CGPoint(x: 0, y: 100), animated: false)
+        _ = try await settle(controller)
+        let offset = scroll.contentOffset.y
+        let height = scroll.contentSize.height
+        model.prependAnchor = model.history.first?.id
+        model.history.insert(contentsOf: [.init(height: 120), .init(height: 450)], at: 0)
+        model.prependRevision += 1
+        let updated = try await settle(controller)
+        XCTAssertEqual(updated.contentOffset.y, offset + updated.contentSize.height - height, accuracy: 3)
     }
 
     func testLongMarkdownCanGrowAndCollapseWithoutTrailingBlankSpace() async throws {
