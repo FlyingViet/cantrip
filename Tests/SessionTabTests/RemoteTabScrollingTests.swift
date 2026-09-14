@@ -196,7 +196,87 @@ extension SessionTabTests {
         }
         try await testRemoteTabReordering(webView: webView)
         try await testRemoteHistoryNavigation(webView: webView)
+        try await testAutomaticHistoryNavigation(webView: webView)
         print("Remote tabs (\(sidebar ? "Mac sidebar" : "browser strip")): WebKit scrolling, progress, polling, selection, focus, and controls passed at 320-1100pt widths and 340-700pt heights")
+    }
+
+    @MainActor
+    private static func testAutomaticHistoryNavigation(webView: WKWebView) async throws {
+        _ = try await webView.callAsyncJavaScript("""
+        const originalAPI=api,originalToken=token,originalFrame=requestAnimationFrame;
+        const settle=()=>new Promise(resolve=>setTimeout(resolve,100));
+        window.requestAnimationFrame=callback=>setTimeout(callback,0);
+        const root=document.scrollingElement;
+        const message=i=>({id:String(i),role:i%2===0?"user":"assistant",text:("Message "+i+" full content. ").repeat(i%2===0?1:200),activities:[]});
+        const session={id:"automatic",title:"Automatic",historyRevision:"r1",historyStartID:"start",
+          supportsPagedHistory:true,hasOlderMessages:true,messages:[message(28),message(29),message(30),message(31)]};
+        let reads=0,release;
+        try{
+          token="auto-test";selected=session.id;historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();
+          api=async path=>{
+            reads++;
+            check(path.includes("before="+(reads===1?"28":"10")),"Automatic/manual loads keep a stable group cursor");
+            if(reads===1)await new Promise(resolve=>release=resolve);
+            return {session:{...session,messages:Array.from({length:reads===1?28:10},(_,i)=>message(i)),hasOlderMessages:false}};
+          };
+          renderSessions([session]);render(cacheSession(session));await settle();
+          check(reads===0&&canAutomaticallyLoadHistory(historyCache.get(selected)),"Opening a conversation never prefetches history");
+          root.scrollTop=0;await settle();
+          check(reads===0,"Programmatic positioning does not download history");
+          readPrompt("Full prompt text. ".repeat(200));
+          $("promptPage").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
+          await settle();check(reads===0,"Scrolling a dialog never downloads the underlying conversation");
+          $("promptDone").click();await settle();
+          const anchor=$("messages").firstElementChild.getBoundingClientRect().top;
+          $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:20}));
+          await settle();check(reads===0,"Scrolling downward does not load older history");
+          $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
+          await settle();check(reads===1&&loadingHistory,"Upward scrolling triggers a history download");
+          $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
+          await settle();check(reads===1,"Repeated scroll events coalesce while downloading");
+          release();await settle();
+          const loaded=historyCache.get(selected);
+          check(loaded.messages.filter(m=>m.role==="user").length===11&&loaded.messages[0].id==="10","Current prompt plus exactly ten past groups, not ten pages");
+          check(loaded.hasOlderMessages&&!canAutomaticallyLoadHistory(loaded),"Extra groups from a large page stay behind the manual boundary");
+          check(!$("olderMessages").disabled&&$("olderMessages").textContent==="Load more messages","Manual control appears at the ten-group boundary");
+          const restored=$("messages").children[18].getBoundingClientRect().top;
+          check(Math.abs(restored-anchor)<3,"Automatic loading preserves the visible prompt's position");
+          root.scrollTop=0;await settle();
+          $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
+          await settle();check(reads===1,"Further scrolling cannot bypass the cap");
+          $("olderMessages").click();await settle();
+          check(reads===2&&historyCache.get(selected).messages.length===32,"Manual loading retrieves remaining history without gaps");
+          check($("olderMessages").classList.contains("hidden"),"No control remains at the oldest message");
+
+          const initial=cacheSession({...session,id:"initial",messages:Array.from({length:32},(_,i)=>message(i)),hasOlderMessages:false});
+          check(initial.messages.length===22&&initial.messages[0].id==="10"&&initial.hasOlderMessages,"Even an oversized initial page respects ten prior groups");
+          check(!canAutomaticallyLoadHistory(initial),"Already loaded past groups consume the allowance");
+          const reset=cacheSession({...initial,historyStartID:"reset",messages:[message(30),message(31)],hasOlderMessages:true});
+          check(canAutomaticallyLoadHistory(reset),"Reset restores the automatic allowance");
+
+          selected="failure";const failed={...session,id:selected,messages:[message(30),message(31)]};
+          renderSessions([failed]);render(cacheSession(failed));await settle();
+          let failures=0;api=async()=>{failures++;throw Error("Timeout")};
+          root.scrollTop=0;await settle();
+          $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));await settle();
+          check(failures===1&&$("historyError").textContent.includes("Timeout"),"Automatic failures are visible");
+          $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));await settle();
+          check(failures===1&&!$("olderMessages").disabled,"Failure pauses automatic retries and leaves manual retry");
+          api=async()=>({session:{...failed,messages:[message(28),message(29)],hasOlderMessages:false}});
+          $("olderMessages").click();await settle();
+          check(historyCache.get(selected).messages.length===4&&!$("historyError").textContent,"Manual retry recovers");
+
+          selected="incremental";const incremental={...session,id:selected,messages:[message(30),message(31)]};
+          cacheSession(incremental);let pages=0;
+          api=async()=>{pages++;return {session:{...incremental,messages:[message(30-pages*2),message(31-pages*2)]}}};
+          for(let i=0;i<12;i++){await loadOlderMessages(true);await settle()}
+          check(pages===10&&historyCache.get(selected).messages.length===22,"Ten single-group downloads stop exactly at the boundary");
+        }finally{
+          api=originalAPI;token=originalToken;window.requestAnimationFrame=originalFrame;
+          if(timer)clearTimeout(timer);timer=null;historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();
+          $("historyError").textContent="";selected=null;render(null);renderSessions([]);
+        }
+        """, arguments: [:], in: nil, contentWorld: .page)
     }
 
     @MainActor

@@ -779,7 +779,7 @@ private extension RemoteControlServer {
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div></header>
-    <div id="actionError" role="alert"></div><div id="historyError" role="alert"></div><button id="olderMessages" class="control hidden">Load older messages</button><section id="messages"></section></main>
+    <div id="actionError" role="alert"></div><div id="historyError" role="alert"></div><button id="olderMessages" class="control hidden">Load more messages</button><section id="messages"></section></main>
     <dialog id="tabEditor" aria-labelledby="tabEditorTitle"><form id="tabForm">
     <strong id="tabEditorTitle">Tab settings</strong><label>Tab name<input id="tabName" autocomplete="off"></label>
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
@@ -804,8 +804,14 @@ private extension RemoteControlServer {
       const progress=$("sessionProgress");if(!progress.classList.contains("hidden")){const summary=connected?progress.dataset.status:`Reconnecting… Last known: ${progress.dataset.status}`;setText($("sessionProgressText"),summary);progress.title=summary}}
     function renderProgress(session){if(!sidebarLayout)return;const progress=$("sessionProgress");progress.classList.toggle("hidden",!session);progress.dataset.streaming=String(Boolean(session?.isStreaming));progress.dataset.status=session?progressSummary(session):"";if(!session)setText($("sessionProgressText"),"");updateProgressConnection()}
     function atBottom(){const root=document.scrollingElement||document.documentElement;return root.scrollHeight-root.clientHeight-root.scrollTop<=4}
-    addEventListener("wheel",event=>{if(event.deltaY<0&&!event.target.closest("#sessions"))followOutput=false},{passive:true});
-    addEventListener("scroll",()=>{if(!suppressScroll)followOutput=atBottom()},{passive:true});
+    let historyScrollIntent=false,lastHistoryScrollTop=0,historyTouchY=null;
+    function requestHistoryOnScroll(){if(historyScrollIntent&&!suppressScroll&&!document.querySelector("dialog[open]")&&(document.scrollingElement||document.documentElement).scrollTop<=120)loadOlderMessages(true)}
+    addEventListener("wheel",event=>{if(event.target.closest("#sessions"))return;historyScrollIntent=event.deltaY<0;if(historyScrollIntent){followOutput=false;requestHistoryOnScroll()}},{passive:true});
+    addEventListener("touchstart",event=>{historyTouchY=event.touches[0]?.clientY??null;historyScrollIntent=false},{passive:true});
+    addEventListener("touchmove",event=>{const y=event.touches[0]?.clientY;if(y!==undefined&&historyTouchY!==null&&!event.target.closest("#sessions")){historyScrollIntent=y>historyTouchY;if(historyScrollIntent){followOutput=false;requestHistoryOnScroll()}}historyTouchY=y??null},{passive:true});
+    addEventListener("keydown",event=>{if(event.target.closest("input,textarea,select,[contenteditable],#sessions")||document.querySelector("dialog[open]"))return;
+      historyScrollIntent=["ArrowUp","PageUp","Home"].includes(event.key)||(event.key===" "&&event.shiftKey);if(historyScrollIntent){followOutput=false;requestHistoryOnScroll()}});
+    addEventListener("scroll",()=>{const top=(document.scrollingElement||document.documentElement).scrollTop;if(!suppressScroll){followOutput=atBottom();if(top<lastHistoryScrollTop)requestHistoryOnScroll()}lastHistoryScrollTop=top},{passive:true});
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
       path+=(path.includes("?")?"&":"?")+"history=recent";
       const controller=(!options.method||options.method==="GET")?new AbortController():null;
@@ -814,17 +820,24 @@ private extension RemoteControlServer {
       try{const response=await fetch(path,options);const data=await response.json();if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;throw error}return data}finally{if(deadline!==null)clearTimeout(deadline)}}
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
     let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;
-    const historyCache=new Map(),expandedHistory=new Set();
+    const historyCache=new Map(),expandedHistory=new Set(),automaticHistoryRemaining=new Map(),automaticHistoryLimit=10;
+    function historySuffix(messages,groups){if(groups<=0)return [];const prompts=messages.flatMap((m,i)=>m.role==="user"?[i]:[]);return prompts.length>groups?messages.slice(prompts[prompts.length-groups]):messages}
+    function canAutomaticallyLoadHistory(session){return Boolean(session?.hasOlderMessages&&(automaticHistoryRemaining.get(session.id)||0)>0)}
+    function updateHistoryControls(session){const button=$("olderMessages"),automatic=canAutomaticallyLoadHistory(session);button.classList.toggle("hidden",!session?.hasOlderMessages);
+      button.disabled=loadingHistory||automatic;button.textContent=loadingHistory?"Loading older messages...":automatic?"Scroll up for older messages":"Load more messages"}
     function cacheSession(session,merge=true){const previous=historyCache.get(session.id);
-      if(previous?.historyStartID!==session.historyStartID)expandedHistory.delete(session.id);
+      if(previous?.historyStartID!==session.historyStartID){expandedHistory.delete(session.id);automaticHistoryRemaining.delete(session.id)}
       if(merge&&session.historyStartID&&previous?.historyStartID===session.historyStartID){
         const overlap=previous.messages.findIndex(m=>m.id===session.messages[0]?.id);
         if(overlap>=0)session={...session,messages:[...previous.messages.slice(0,overlap),...session.messages],hasOlderMessages:previous.hasOlderMessages}}
+      if(!expandedHistory.has(session.id)&&session.supportsPagedHistory){const bounded=historySuffix(session.messages,automaticHistoryLimit+1);
+        if(bounded.length<session.messages.length)session={...session,messages:bounded,hasOlderMessages:true}}
       if(!expandedHistory.has(session.id)&&session.supportsPagedHistory&&session.messages.length>120){
         let start=session.messages.length-120;
         if(session.messages[start].role!=="user"){const prompt=session.messages.slice(0,start).findLastIndex(m=>m.role==="user");if(prompt>=0)start=prompt}
         if(start>0)session={...session,messages:session.messages.slice(start),hasOlderMessages:true}}
-      historyCache.delete(session.id);historyCache.set(session.id,session);while(historyCache.size>5){const id=historyCache.keys().next().value;historyCache.delete(id);expandedHistory.delete(id)}return session}
+      if(!expandedHistory.has(session.id)){const pastGroups=Math.max(0,session.messages.filter(m=>m.role==="user").length-1);automaticHistoryRemaining.set(session.id,Math.min(automaticHistoryRemaining.get(session.id)??automaticHistoryLimit,Math.max(0,automaticHistoryLimit-pastGroups)))}
+      historyCache.delete(session.id);historyCache.set(session.id,session);while(historyCache.size>5){const id=historyCache.keys().next().value;historyCache.delete(id);expandedHistory.delete(id);automaticHistoryRemaining.delete(id)}return session}
     function scheduleRefresh(){if(timer)clearTimeout(timer);timer=null;if(!token||document.hidden)return;
       const busy=sessionItems.some(s=>s.isStreaming||s.queuedCount)||$("historyError").textContent||document.documentElement.dataset.cantripConnected!=="true";
       timer=setTimeout(refresh,busy?1500:5000)}
@@ -832,7 +845,7 @@ private extension RemoteControlServer {
       refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision;
         let listedSuccessfully=false,requestSelection=requestedID;
         try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;
-          for(const id of historyCache.keys())if(!listed.sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id)}
+          for(const id of historyCache.keys())if(!listed.sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);automaticHistoryRemaining.delete(id)}
           if(selected!==requestedID){refreshRequested=true;continue}
           if(!selected||!listed.sessions.some(s=>s.id===selected))selected=listed.sessions[0]?.id||null;
           requestSelection=selected;
@@ -848,15 +861,18 @@ private extension RemoteControlServer {
           $("historyError").textContent=`${listedSuccessfully?"Could not update this conversation":"Could not refresh tabs"}: ${error.message}. Retrying...`;
           if(error.status===401){refreshRequested=false;pair(true)}}}
       })().finally(()=>{refreshTask=null;scheduleRefresh()});return refreshTask}
-    async function loadOlderMessages(){const current=historyCache.get(selected),before=current?.messages[0]?.id;if(loadingHistory||!current?.hasOlderMessages||!before)return;
-      const requestToken=token,orderRevision=tabOrderRevision;loadingHistory=true;$("olderMessages").disabled=true;$("olderMessages").textContent="Loading older messages...";
+    async function loadOlderMessages(automatically=false){const current=historyCache.get(selected),before=current?.messages[0]?.id;if(loadingHistory||!current?.hasOlderMessages||!before||(automatically&&!canAutomaticallyLoadHistory(current)))return;
+      const requestToken=token,orderRevision=tabOrderRevision;loadingHistory=true;updateHistoryControls(current);
       try{const data=await api(`/api/v1/sessions/${current.id}?before=${encodeURIComponent(before)}`),latest=historyCache.get(current.id);
         if(token!==requestToken||selected!==current.id||orderRevision!==tabOrderRevision||latest?.historyStartID!==data.session.historyStartID||latest?.messages[0]?.id!==before)return;
-        const ids=new Set(latest.messages.map(m=>m.id)),page=data.session;expandedHistory.add(current.id);
-        render(cacheSession({...latest,messages:[...page.messages.filter(m=>!ids.has(m.id)),...latest.messages],hasOlderMessages:page.hasOlderMessages},false),true);$("historyError").textContent=""}
-      catch(error){if(token===requestToken&&selected===current.id)$("historyError").textContent=`Could not load older messages: ${error.message}. Try again.`}
-      finally{loadingHistory=false;$("olderMessages").disabled=false;$("olderMessages").textContent="Load older messages"}}
-    $("olderMessages").onclick=loadOlderMessages;
+        const ids=new Set(latest.messages.map(m=>m.id)),page=data.session,received=page.messages.filter(m=>!ids.has(m.id));
+        if(!received.length&&page.hasOlderMessages!==false)throw Error("Invalid history page");
+        const added=automatically?historySuffix(received,automaticHistoryRemaining.get(current.id)||0):received;
+        automaticHistoryRemaining.set(current.id,automatically?Math.max(0,(automaticHistoryRemaining.get(current.id)||0)-Math.max(1,added.filter(m=>m.role==="user").length)):0);expandedHistory.add(current.id);
+        render(cacheSession({...latest,messages:[...added,...latest.messages],hasOlderMessages:added.length<received.length||page.hasOlderMessages===true},false),true);$("historyError").textContent=""}
+      catch(error){if(token===requestToken&&selected===current.id){automaticHistoryRemaining.set(current.id,0);$("historyError").textContent=`Could not load older messages: ${error.message}. Try again.`}}
+      finally{loadingHistory=false;updateHistoryControls(historyCache.get(selected))}}
+    $("olderMessages").onclick=()=>loadOlderMessages();
     document.addEventListener("visibilitychange",()=>{if(document.hidden){if(timer)clearTimeout(timer);timer=null}else if(token)refresh()});
     function renderSessions(items){const nav=$("sessions"),previousLeft=nav.scrollLeft,previousTop=nav.scrollTop,selectionChanged=nav.dataset.selected!==(selected||"");
       if(draggedTabID||movingTab)return;sessionItems=items;
@@ -967,8 +983,8 @@ private extension RemoteControlServer {
     $("promptDone").onclick=()=>$("promptReader").close();
     $("promptReader").addEventListener("close",()=>{readingPrompt="";promptStarts=[0];$("promptPage").textContent=""});
     function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight;
-      renderProgress(session);$("olderMessages").classList.toggle("hidden",!session?.hasOlderMessages);const box=$("messages"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
-      const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession);renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;box.replaceChildren();$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
+      renderProgress(session);updateHistoryControls(session);const box=$("messages"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
+      const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession);renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;box.replaceChildren();$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
       if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{for(const message of session.messages){const activities=message.activities||[];if(!message.text&&!message.thinking&&!activities.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
@@ -983,7 +999,7 @@ private extension RemoteControlServer {
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
     async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selected=data.session.id;renderedPayload="";await refresh()}
       catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
-    $("pairButton").onclick=async()=>{historyCache.clear();expandedHistory.clear();token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
+    $("pairButton").onclick=async()=>{historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
       catch(error){$("pairError").textContent=error.message}};
     $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;$("send").disabled=true;try{await action("messages",{text,mode:$("mode").value});if($("draft").value.trim()===text)$("draft").value="";$("mode").value="auto"}catch(error){const label=document.querySelector(".connection-label");if(label)label.textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false}};
     $("draft").onkeydown=event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
