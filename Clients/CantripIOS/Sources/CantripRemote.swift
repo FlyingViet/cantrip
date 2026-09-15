@@ -122,6 +122,7 @@ enum CantripRemoteError: LocalizedError {
     case tabMetadataUnsupported
     case tabReorderingUnsupported
     case githubBuildsUnsupported
+    case memoryUnsupported
     case copilotUsageUnsupported
 
     static func isRouteFailure(_ error: Error) -> Bool {
@@ -167,6 +168,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to reorder its tabs."
         case .githubBuildsUnsupported:
             return "Update and reopen Cantrip on your Mac to view GitHub builds."
+        case .memoryUnsupported:
+            return "Update and reopen Cantrip on your Mac to view its saved memory."
         case .copilotUsageUnsupported:
             return "Update and reopen Cantrip on your Mac to view Copilot account usage."
         }
@@ -387,7 +390,7 @@ private final class CantripLANRequest: @unchecked Sendable {
         self.endpoint = endpoint
         self.token = token
         let payload = body ?? Data()
-        timeout = method == "GET" ? (CantripRemoteAPI.isHistoryRead(method: method, path: path) ? 20 : 2)
+        timeout = method == "GET" ? (CantripRemoteAPI.isContentRead(method: method, path: path) ? 20 : 2)
             : (payload.count > 256 * 1024 ? 60 : 12)
         let header = """
         \(method) \(path) HTTP/1.1\r
@@ -564,10 +567,13 @@ struct CantripRemoteAPI {
     let token: String
     var urlSession: URLSession?
 
-    static func isHistoryRead(method: String, path: String) -> Bool {
+    static func isContentRead(method: String, path: String) -> Bool {
         let parts = (URLComponents(string: path)?.path ?? "").split(separator: "/")
-        return method == "GET" && parts.starts(with: ["api", "v1", "sessions"])
-            && (parts.count == 4 || (parts.count == 6 && parts[4] == "messages"))
+        return method == "GET" && (
+            parts == ["api", "v1", "memory"] || parts == ["api", "v1", "memory", "document"]
+                || (parts.starts(with: ["api", "v1", "sessions"])
+                    && (parts.count == 4 || (parts.count == 6 && parts[4] == "messages")))
+        )
     }
 
     private static let readSession: URLSession = {
@@ -616,6 +622,32 @@ struct CantripRemoteAPI {
         } catch CantripRemoteError.http(404, _) {
             throw CantripRemoteError.copilotUsageUnsupported
         }
+    }
+
+    func memoryCatalog(query: String, after: String?) async throws -> CantripMemoryCatalog {
+        var target = URLComponents()
+        target.path = "/api/v1/memory"
+        target.queryItems = [URLQueryItem(name: "q", value: query)]
+        if let after { target.queryItems?.append(URLQueryItem(name: "after", value: after)) }
+        guard let path = target.string else { throw CantripRemoteError.invalidResponse }
+        do {
+            return try await request(path: path)
+        } catch CantripRemoteError.http(404, _) {
+            throw CantripRemoteError.memoryUnsupported
+        }
+    }
+
+    func memoryDocument(id: String, offset: Int, revision: String?) async throws -> CantripMemoryPage {
+        var target = URLComponents()
+        target.path = "/api/v1/memory/document"
+        target.queryItems = [URLQueryItem(name: "id", value: id), URLQueryItem(name: "offset", value: String(offset))]
+        if let revision { target.queryItems?.append(URLQueryItem(name: "revision", value: revision)) }
+        guard let path = target.string else { throw CantripRemoteError.invalidResponse }
+        let page: CantripMemoryPage = try await request(path: path)
+        guard page.document.id == id, page.offset == offset,
+              page.nextOffset.map({ $0 > offset && $0 <= page.document.bytes }) ?? true,
+              revision == nil || revision == page.revision else { throw CantripRemoteError.invalidResponse }
+        return page
     }
 
     func imageData(sessionID: String, imageID: String, thumbnail: Bool) async throws -> Data {
@@ -828,11 +860,11 @@ struct CantripRemoteAPI {
         }
         let url = try endpoint(path: path, baseURL: baseURL)
         let isImageUpload = (body?.count ?? 0) > 256 * 1024
-        let isHistoryRead = Self.isHistoryRead(method: method, path: path)
+        let isContentRead = Self.isContentRead(method: method, path: path)
         var request = URLRequest(
             url: url,
             cachePolicy: .reloadIgnoringLocalCacheData,
-            timeoutInterval: method == "GET" ? (isHistoryRead ? 20 : 3) : (isImageUpload ? 60 : 12)
+            timeoutInterval: method == "GET" ? (isContentRead ? 20 : 3) : (isImageUpload ? 60 : 12)
         )
         request.httpMethod = method
         request.httpBody = body
@@ -845,7 +877,7 @@ struct CantripRemoteAPI {
         let data: Data
         let response: URLResponse
         do {
-            let session = urlSession ?? (method == "GET" && !isHistoryRead
+            let session = urlSession ?? (method == "GET" && !isContentRead
                 ? Self.readSession : (isImageUpload ? Self.imageSession : Self.session))
             (data, response) = try await session.data(for: request)
         } catch is CancellationError {
@@ -1206,6 +1238,17 @@ final class CantripRemoteModel: ObservableObject {
         return try await performAuthenticated(allowFallback: true) { api in
             try await api.githubBuilds()
         }
+    }
+
+    func memoryCatalog(query: String, after: String?) async throws -> CantripMemoryCatalog {
+        guard isConfigured else {
+            throw CantripRemoteError.transport("Configure Cantrip Remote in Settings and connect to your Mac to view its saved memory.")
+        }
+        return try await performHistoryRead { try await $0.memoryCatalog(query: query, after: after) }
+    }
+
+    func memoryDocument(id: String, offset: Int, revision: String?) async throws -> CantripMemoryPage {
+        try await performHistoryRead { try await $0.memoryDocument(id: id, offset: offset, revision: revision) }
     }
 
     func copilotUsage() async throws -> CopilotUsageSnapshot {

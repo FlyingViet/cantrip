@@ -1088,6 +1088,7 @@ struct ChatView: View {
     @State private var showSkills = false
     @State private var showQueue = false
     @State private var showGitHubBuilds = false
+    @State private var showCantripMemory = false
     @State private var showRemoteTabs = false
     @State private var renamingRemoteSession: CantripRemoteSession?
     @State private var showRenameLocalTab = false
@@ -1167,6 +1168,9 @@ struct ChatView: View {
             }
             .sheet(isPresented: $showGitHubBuilds) {
                 GitHubBuildsView(remote: remote)
+            }
+            .sheet(isPresented: $showCantripMemory) {
+                CantripMemoryView(remote: remote)
             }
             .sheet(item: $renamingRemoteSession) { session in
                 CantripTabRenameSheet(model: remote, session: session)
@@ -1374,6 +1378,13 @@ struct ChatView: View {
             } label: {
                 Label("GitHub Builds", systemImage: "hammer")
             }
+            Button {
+                composerFocused = false
+                showCantripMemory = true
+            } label: {
+                Label("Cantrip Memory", systemImage: "brain")
+            }
+            .accessibilityIdentifier("chat.cantripMemory")
             Divider()
             if vm.activeLane != .cantrip {
                 Button {

@@ -330,6 +330,32 @@ percentages. Legacy request plans retain request labels, and unlimited plans
 show **Unlimited**. Reset dates use your local time, and remaining budget does
 not rule out short-term/model throttling.
 
+### Cantrip memory
+
+Open **hamburger menu > Cantrip Memory** to browse the connected Mac's saved
+environment/conventions (`MEMORY.md`), preferences (`USER.md`), procedure notes,
+and daily session history. The list shows filenames, sizes, and last-updated
+times; search filters filenames across the vault, not just the loaded page.
+Core files also show their character usage and configured cap when opened.
+
+This is read-only: it does not edit files, create a memory folder, record
+retrieval usage, or send a prompt to an agent. Saved files remain readable when
+memory is disabled on the Mac. Only regular Markdown files in the configured
+memory folder and its `sessions` directory are exposed; hidden files, symlinks,
+hard links, and other directories are excluded.
+
+The list loads 50 files at a time; **Load more files** fetches the next page.
+Opening a file requests one UTF-8-safe 16 KiB page; **Previous** and **Next**
+read the rest without downloading the entire folder. Text is displayed as
+saved, with selection enabled and no external Markdown resources loaded.
+If a file changes between pages, **Reload file** starts with its current
+contents rather than joining different versions. Refresh/retry failures are
+visible, and changing the paired server clears the viewer's state.
+
+Requires updated AgentGateway and an updated, reopened Cantrip host. Older
+hosts show an update notice. Uses existing paired LAN/Tailscale access; memory
+reads have a 20-second content deadline and do not block chat polling or sends.
+
 ### GitHub build queue
 
 Open **hamburger menu > GitHub Builds** from any chat lane to see builds
