@@ -61,6 +61,8 @@ The macOS app includes:
 - **Agent actions:** commands and file edits with backend-specific
   permissions; inspect tool activity and file diffs.
 - **Memory and council:** editable Markdown memory and multi-model answers.
+  AgentGateway's **Cantrip Memory** menu browses saved facts, preferences, notes,
+  and session logs read-only, with search and paged file contents.
 - **Copilot usage:** account-wide AI credits used / total, reset date, and additional
   usage in the Mac's **Usage** panel and AgentGateway's header beside the lane picker.
   Reads your existing Copilot login without sending a prompt; credentials stay on the Mac.
