@@ -12,6 +12,7 @@ final class RemoteControlServer {
     private let queue = DispatchQueue(label: "com.brian.cantrip.remote-control")
     private let encodingQueue: DispatchQueue
     private let detailEncodingQueue = DispatchQueue(label: "cantrip.remote-details", qos: .utility)
+    private let memoryQueue = DispatchQueue(label: "cantrip.remote-memory", qos: .utility)
     private let requestLog: (String) -> Void
     private let sendTimeout: TimeInterval
     private static let healthBody = Data(#"{"status":"ok"}"#.utf8)
@@ -201,12 +202,28 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/ready"
                 || request.path.hasPrefix("/api/v1/sessions/")
                 || request.path == "/api/v1/github/builds"
+                || request.path == "/api/v1/memory"
+                || request.path == "/api/v1/memory/document"
                 || request.path == "/api/v1/copilot/usage" else {
             sendError(404, "not found", on: connection)
             return
         }
         guard authorized(request.headers["authorization"]) else {
             sendError(401, "invalid pairing token", on: connection)
+            return
+        }
+        if request.path == "/api/v1/memory" || request.path == "/api/v1/memory/document" {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            let path = AppSettings.shared.memoryPath
+            guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                sendError(503, "Configure a Cantrip memory folder on the Mac first.", on: connection)
+                return
+            }
+            serveMemory(request, directory: URL(fileURLWithPath: path),
+                        enabled: AppSettings.shared.memoryEnabled, on: connection)
             return
         }
         if request.path == "/api/v1/copilot/usage" {
@@ -649,6 +666,37 @@ final class RemoteControlServer {
         }
     }
 
+    private func serveMemory(_ request: HTTPRequest, directory: URL, enabled: Bool,
+                             on connection: RemoteRequestConnection) {
+        let memory = RemoteMemory(directory: directory)
+        connection.trace.enter(.encodeWait)
+        memoryQueue.async {
+            connection.trace.enter(.encode)
+            do {
+                let data: Data
+                if request.path == "/api/v1/memory" {
+                    data = try JSONEncoder().encode(memory.catalog(
+                        enabled: enabled, query: request.query("q") ?? "", after: request.query("after")
+                    ))
+                } else {
+                    guard let id = request.query("id"),
+                          let offset = Int(request.query("offset") ?? "0") else {
+                        throw RemoteMemoryError(status: 400, message: "Invalid memory file or page.")
+                    }
+                    data = try JSONEncoder().encode(memory.document(
+                        id: id, offset: offset, revision: request.query("revision")
+                    ))
+                }
+                self.send(status: 200, contentType: "application/json; charset=utf-8", body: data, on: connection)
+            } catch let error as RemoteMemoryError {
+                self.sendError(error.status, error.message, on: connection)
+            } catch {
+                self.requestLog("remote-memory: id=\(connection.trace.id) error=\(error.localizedDescription)")
+                self.sendError(500, "Could not read Cantrip memory. Check file access on the Mac.", on: connection)
+            }
+        }
+    }
+
     private func sendJSON(
         _ object: [String: Any],
         status: Int = 200,
@@ -705,6 +753,7 @@ final class RemoteControlServer {
         case 405: reason = "Method Not Allowed"
         case 409: reason = "Conflict"
         case 413: reason = "Payload Too Large"
+        case 422: reason = "Unprocessable Content"
         case 503: reason = "Service Unavailable"
         default: reason = "Internal Server Error"
         }

@@ -39,6 +39,8 @@ final class RemoteRequestTrace {
         case "/api/v1/sessions": route = "sessions"
         case "/api/v1/copilot/usage": route = "usage"
         case "/api/v1/github/builds": route = "builds"
+        case "/api/v1/memory": route = "memory"
+        case "/api/v1/memory/document": route = "memory_document"
         default:
             route = request.path.hasPrefix("/api/v1/sessions/") ? "session" : "unknown"
         }

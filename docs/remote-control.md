@@ -133,7 +133,8 @@ need Tailscale. Save a Tailscale URL for preferred access both at home and away.
 **Expected result:** no Remote error is shown in Settings. Native clients
 can discover the host and authenticate using the token.
 
-The token authorizes access to non-private sessions and their controls.
+The token authorizes access to non-private sessions and their controls, plus
+read-only access to saved Cantrip memory.
 Do not put it in a screenshot, shared note, issue, URL, or source repository.
 Remote prompts use the host's configured backend and action permissions.
 
@@ -191,6 +192,36 @@ The authenticated `DELETE /api/v1/sessions/{sessionID}/queue/{promptID}` endpoin
 uses the stable prompt ID and the same durable removal as the Mac UI. A prompt
 that has already started or been removed returns HTTP 409; no other prompt or
 running task is affected.
+
+### Browse saved memory in AgentGateway
+
+Open **hamburger menu > Cantrip Memory** to see core facts/conventions,
+preferences, saved procedure notes, and daily session logs on the connected
+Mac. Filenames, sizes, and modification times appear in categorized sections.
+Search finds matching filenames throughout the memory folder. Opening a core
+file also shows its character cap and usage when the whole file fits on a page.
+
+Update AgentGateway and reopen an updated Cantrip host first. The viewer uses
+existing paired LAN/Tailscale access and never edits or creates memory files,
+records retrieval usage, or invokes an agent. Disabling memory for conversations
+does not prevent viewing previously saved files.
+
+Authenticated `GET /api/v1/memory?q=<filename-search>&after=<cursor>` returns
+`enabled`, `exists`, up to 50 `documents`, and an optional `nextCursor`.
+Entries contain `id`, `category`, byte size, modification time (Unix seconds),
+and an optional core `characterLimit`. `GET /api/v1/memory/document?id=<id>`
+returns the selected file's metadata, saved text, `offset`, `nextOffset`, and
+`revision`. Subsequent reads supply `offset` and the same `revision`; a changed
+file returns 409 so the reader can reload instead of mixing versions.
+File pages are at most 16 KiB and preserve UTF-8 boundaries.
+
+Only regular, non-hidden `.md` files directly in the configured memory folder
+or its `sessions` directory are exposed. Symlinked entries and hard links
+are excluded, and client paths cannot escape that scope. All writes return
+405. Disk reads use a separate utility queue; mobile requests use the 20-second
+content deadline without holding the chat polling/mutation gate. No file text
+is prefetched or persisted as a mobile offline copy. Server changes reset the
+viewer, and old hosts show an update notice rather than an empty memory list.
 
 ### See Copilot account usage in AgentGateway
 
