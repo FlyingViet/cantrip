@@ -31,7 +31,7 @@ final class RemoteRequestTrace {
         lock.lock()
         defer { lock.unlock() }
         usesPagedHistory = request.query("history") == "recent"
-        method = ["GET", "POST", "DELETE"].contains(request.method) ? request.method : "other"
+        method = ["GET", "POST", "PUT", "DELETE"].contains(request.method) ? request.method : "other"
         switch request.path {
         case "/": route = "web"
         case "/health": route = "health"

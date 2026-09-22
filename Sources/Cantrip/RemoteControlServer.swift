@@ -291,6 +291,65 @@ final class RemoteControlServer {
         }
         let session = manager.sessions[sessionIndex]
 
+        if parts.count >= 2, parts[1] == "videos" {
+            guard session.supportsRemoteImages else {
+                sendError(409, "Choose a Claude, Copilot, or Codex backend to analyze videos.", on: connection)
+                return
+            }
+            guard (parts.count == 3 || (parts.count == 4 && parts[3] == "prepare")),
+                  let uploadID = UUID(uuidString: String(parts[2])) else {
+                sendError(400, "invalid video upload ID", on: connection)
+                return
+            }
+            let method = request.method
+            guard (parts.count == 3 && ["GET", "PUT"].contains(method))
+                    || (parts.count == 4 && method == "POST") else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            Task {
+                do {
+                    let upload: RemoteVideoUpload?
+                    if method == "GET" {
+                        upload = try await RemoteVideoAttachments.shared.status(sessionID: id, uploadID: uploadID)
+                    } else if method == "PUT" {
+                        guard let offset = request.query("offset").flatMap(Int.init),
+                              let total = request.query("totalBytes").flatMap(Int.init),
+                              let format = request.query("format"), let name = request.query("name"),
+                              let sha256 = request.query("sha256") else {
+                            throw RemoteVideoError(status: 400, message: "Video upload metadata is required.")
+                        }
+                        upload = try await RemoteVideoAttachments.shared.receive(
+                            sessionID: id, uploadID: uploadID, offset: offset,
+                            upload: RemoteVideoUpload(totalBytes: total, format: format, name: name,
+                                                      sha256: sha256, receivedBytes: 0),
+                            data: request.body
+                        )
+                    } else {
+                        try await RemoteVideoAttachments.shared.prepare(sessionID: id, uploadID: uploadID)
+                        upload = nil
+                    }
+                    guard manager.sessions.contains(where: { $0.id == id && !$0.isPrivate }) else {
+                        sendError(404, "session not found", on: connection)
+                        return
+                    }
+                    if let upload {
+                        sendEncoded(on: connection) {
+                            try JSONEncoder().encode(["upload": upload])
+                        }
+                    } else {
+                        sendJSON(["ready": true], on: connection)
+                    }
+                } catch let error as RemoteVideoError {
+                    sendError(error.status, error.message, on: connection)
+                } catch {
+                    Log.write("remote-control: video preparation failed: \(error.localizedDescription)")
+                    sendError(422, "Could not save or decode this video on the Mac. Choose a playable MOV or MP4 and check disk space.", on: connection)
+                }
+            }
+            return
+        }
+
         if parts.count == 3, parts[1] == "messages", request.method == "GET" {
             guard let messageID = UUID(uuidString: String(parts[2])),
                   let message = session.messages.first(where: { $0.id == messageID }) else {
@@ -446,6 +505,42 @@ final class RemoteControlServer {
             }
             do {
                 let images = try RemoteImageAttachments.decode(body["images"])
+                if let value = body["videoID"] {
+                    guard let rawID = value as? String, let uploadID = UUID(uuidString: rawID),
+                          images.isEmpty else {
+                        sendError(400, "Attach one video or up to four images, not both.", on: connection)
+                        return
+                    }
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard session.supportsRemoteImages else {
+                        sendError(409, "The selected backend does not support video analysis.", on: connection)
+                        return
+                    }
+                    guard !trimmed.hasPrefix("!"), !trimmed.hasPrefix("/") else {
+                        sendError(400, "Attach videos to an agent prompt, not a shell or slash command.", on: connection)
+                        return
+                    }
+                    Task {
+                        do {
+                            let video = try await RemoteVideoAttachments.shared.claim(sessionID: id, uploadID: uploadID)
+                            guard manager.sessions.contains(where: { $0 === session && !$0.isPrivate }),
+                                  session.supportsRemoteImages else {
+                                sendError(409, "The session changed before the video could be sent.", on: connection)
+                                return
+                            }
+                            let prompt = (trimmed.isEmpty ? "Please analyze the attached video." : trimmed)
+                                + "\n\n" + video
+                            session.submitRemote(prompt, mode: mode)
+                            sendSession(session, status: 202, on: connection)
+                        } catch let error as RemoteVideoError {
+                            sendError(error.status, error.message, on: connection)
+                        } catch {
+                            Log.write("remote-control: video claim failed: \(error.localizedDescription)")
+                            sendError(500, "Could not retain the video for this session.", on: connection)
+                        }
+                    }
+                    return
+                }
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         || !images.isEmpty else {
                     sendError(400, "message text or images are required", on: connection)
@@ -570,6 +665,7 @@ final class RemoteControlServer {
             "councilMode": session.councilMode,
             "queuedCount": session.queued.count,
             "supportsImageAttachments": session.supportsRemoteImages,
+            "supportsVideoAttachments": session.supportsRemoteImages,
             "supportsAutoDelivery": true,
             "supportsQueueRemoval": true,
             "supportsPagedHistory": true,

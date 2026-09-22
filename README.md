@@ -71,8 +71,10 @@ The macOS app includes:
   text stays intact. Memory retrieval uses bounded, deduplicated query terms
   and runs off the UI thread; large Remote responses are encoded off-thread.
 - **Remote control:** use the Mac's sessions from AgentGateway on iPhone/iPad,
-  another Mac, or a browser. Recent messages load with full text and tool details;
-  scrolling up automatically pages back through ten earlier prompt-response
+  another Mac, or a browser. Recent messages load with full text and tool details.
+  AgentGateway can send one MOV/MP4 video (100 MB / five minutes) for analysis,
+  preserving the original and providing four timestamped preview frames.
+  Scrolling up automatically pages back through ten earlier prompt-response
   groups, counting those already loaded. Beyond that, **Load more messages**
   retrieves earlier history. Opening a tab or polling never prefetches history;
   failed automatic loads pause for manual retry.

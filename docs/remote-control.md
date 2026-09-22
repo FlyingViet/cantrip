@@ -439,9 +439,9 @@ advertises image support. Use a Claude, Copilot, or Codex backend on the Mac,
 not Local Model. Updating only AgentGateway is not enough.
 
 1. In AgentGateway, choose **Cantrip Remote** and select a session.
-2. Tap **Attach images** beside the chat composer.
+2. Tap the **+** (**Attach images or video**) beside the chat composer.
 3. Choose **Photo Library**, **Choose Image File**, or **Paste Image**.
-4. Wait for **Preparing images...** to finish.
+4. Wait for **Preparing attachment...** to finish.
 5. Tap a thumbnail to view the full image, or its **x** to remove it.
 6. Add a question if desired, then send. An image-only message is allowed.
 
@@ -484,6 +484,48 @@ user messages or queue are available, never arbitrary filesystem paths.
 Image reads and downsampling run off the main actor. AgentGateway keeps a
 bounded in-memory cache, clears it on pairing changes, and uses the same
 Tailscale-first/LAN-fallback routing as other read-only requests.
+
+## Send a video for analysis from AgentGateway
+
+With both apps updated and the host reopened, use **+ > Video Library** or
+**Choose Video File**. Attach one standard MOV/MP4, up to **100 MB and five
+minutes**, instead of images. Preview it locally, add a question or send it
+alone, and use the preparation/upload progress and Cancel controls as needed.
+Videos need a Claude, Copilot, or Codex backend and cannot be sent with shell
+or slash commands.
+
+Cantrip retains the exact original, including audio and metadata, under
+`~/.cache/Cantrip/remote-videos/{sessionID}/{uploadID}/`. SHA256 verification
+and AVFoundation decoding precede prompt delivery. Four oriented JPEG frames
+and their actual timestamps provide a sparse visual overview; the agent
+receives the original path for deeper tool-based analysis. This does **not**
+pretend to watch every frame or automatically transcribe audio. Sent/queued
+messages include the description and existing tappable image thumbnails.
+
+Session snapshots advertise `supportsVideoAttachments`. Paired
+`GET /api/v1/sessions/{id}/videos/{uploadID}` reads the confirmed upload offset.
+`PUT` to the same path uploads at most 1 MiB of binary data, with query metadata
+`offset`, `totalBytes`, `format`, `name`, and `sha256`. Repeated offsets must
+contain identical bytes; holes, conflicting metadata, and oversized chunks
+are rejected. The manifest acknowledges only synchronized bytes, allowing
+safe retry/failover and recovery across a host restart.
+`POST .../videos/{uploadID}/prepare` verifies the original and creates the
+durable preview once. These calls never send a prompt. The final one-shot
+`POST .../messages` includes `videoID`, `text`, and `mode`; normal queue,
+Auto, redirect, and injection behavior applies. Private/other-session uploads
+are not accessible.
+
+Video transfers use an independent route reader because their operations are
+idempotent; they do not hold the polling/mutation gate. Final prompt mutations
+are never blindly replayed. Upload writes/preparation allow 60 seconds per
+request; existing lightweight connection budgets are unchanged.
+Mobile drafts remain available after a failure/cancel while the app is alive.
+Pausing/backgrounding cancels an unfinished upload; no background-delivery
+promise or persistent mobile outbox is implied.
+
+Sent originals and frames remain for queued/recovered work. Unsubmitted
+uploads reserve at most 500 MB; abandoned uploads older than 24 hours are
+reclaimed when starting a new upload. These limits do not truncate videos.
 
 ## Understand what is available remotely
 
