@@ -116,6 +116,7 @@ struct SessionTabTests {
         try await testRemoteRequestIsolation()
         try await testRemoteHistory()
         try await testRemoteMemory()
+        try await testRemoteVideos()
         try await testJournalDelivery()
         try await testCopilotSteering()
         try await testHostProtection(manager: manager)
