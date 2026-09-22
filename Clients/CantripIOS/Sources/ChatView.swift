@@ -173,13 +173,14 @@ final class ChatViewModel: ObservableObject {
         _ text: String,
         spoken: Bool = false,
         images: [ChatImageAttachment] = [],
+        video: ChatVideoAttachment? = nil,
         sessionID: String? = nil
     ) async -> Bool {
         guard activeLane == .cantrip,
               !UserDefaults.standard.bool(forKey: "hermes.paused"),
               !sending, !remote.isMutating else { return false }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !images.isEmpty else { return false }
+                || !images.isEmpty || video != nil else { return false }
         guard remote.isConfigured else {
             appendRemoteFailure("Configure Cantrip Remote in Settings.", for: text)
             return false
@@ -205,7 +206,7 @@ final class ChatViewModel: ObservableObject {
             && remote.selectedSession?.isStreaming == true
         if !isQueuedSend {
             turns.append(ChatTurn(
-                role: .user, text: text, executionLane: .cantrip,
+                role: .user, text: text + (video.map { "\n\nVideo: \($0.name)" } ?? ""), executionLane: .cantrip,
                 images: images.map(ChatMessageImage.init)
             ))
             turns.append(
@@ -223,6 +224,7 @@ final class ChatViewModel: ObservableObject {
             text,
             mode: remoteDeliveryMode,
             images: images,
+            video: video,
             sessionID: targetSessionID
         )
         sending = false
@@ -1079,6 +1081,7 @@ struct ChatView: View {
     @State private var input = ""
     @State private var serverTextDrafts: [String: String] = [:]
     @State private var imageDrafts: [String: [ChatImageAttachment]] = [:]
+    @State private var videoDrafts: [String: ChatVideoAttachment] = [:]
     @State private var imageImportID: UUID?
     @State private var submittingRemote = false
     @State private var imageSendError: String?
@@ -1250,6 +1253,7 @@ struct ChatView: View {
         }
         .onChange(of: paused) { _, isPaused in
             if isPaused {                              // halt anything that could fire a request
+                remote.cancelVideoUpload()
                 voice.stopListening(finalize: false)
                 voice.stopSpeaking()
                 showVoiceMode = false
@@ -1526,6 +1530,7 @@ struct ChatView: View {
         Task {
             if await remote.closeSession(id) {
                 imageDrafts.removeValue(forKey: draftKey)
+                videoDrafts.removeValue(forKey: draftKey)
             }
             vm.syncRemoteTranscript()
         }
@@ -1640,6 +1645,24 @@ struct ChatView: View {
                         disabled: imagePickerDisabled,
                         isImporting: importingImages
                     )
+                    if let video = videoDraft(for: sessionID).wrappedValue {
+                        VideoAttachmentPreview(video: video, disabled: imagePickerDisabled || importingImages) {
+                            videoDraft(for: sessionID).wrappedValue = nil
+                        }
+                    }
+                    if importingImages {
+                        Button("Cancel attachment preparation") { imageImportID = nil }
+                            .frame(minHeight: 44)
+                    }
+                    if let progress = remote.videoUploadProgress {
+                        VStack(alignment: .leading) {
+                            ProgressView(value: progress.fraction)
+                            Text(progress.label).font(.caption).foregroundStyle(.secondary)
+                            Button("Cancel video upload") { remote.cancelVideoUpload() }
+                                .frame(minHeight: 44)
+                        }
+                        .accessibilityElement(children: .contain)
+                    }
                 }
                 messageComposer
             }
@@ -1656,7 +1679,10 @@ struct ChatView: View {
                     importID: $imageImportID,
                     imageSupport: remote.selectedSession?.id == sessionID
                         ? remote.selectedSession?.supportsImageAttachments : nil,
-                    disabled: imagePickerDisabled
+                    disabled: imagePickerDisabled,
+                    video: videoDraft(for: sessionID),
+                    videoSupport: remote.selectedSession?.id == sessionID
+                        ? remote.selectedSession?.supportsVideoAttachments : nil
                 )
                 .id(sessionID)
             } else if vm.activeLane != .cantrip {
@@ -1691,6 +1717,11 @@ struct ChatView: View {
     private func imageDraft(for sessionID: String) -> Binding<[ChatImageAttachment]> {
         let key = remoteDraftKey(sessionID)
         return Binding(get: { imageDrafts[key] ?? [] }, set: { imageDrafts[key] = $0 })
+    }
+
+    private func videoDraft(for sessionID: String) -> Binding<ChatVideoAttachment?> {
+        let key = remoteDraftKey(sessionID)
+        return Binding(get: { videoDrafts[key] }, set: { videoDrafts[key] = $0 })
     }
 
     private var imagePickerDisabled: Bool {
@@ -1833,14 +1864,16 @@ struct ChatView: View {
         if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
             let draftKey = remoteDraftKey(sessionID)
             let images = imageDrafts[draftKey] ?? []
+            let video = videoDrafts[draftKey]
             let originalInput = input
             submittingRemote = true
             Task { @MainActor in
                 defer { submittingRemote = false }
-                let sent = await vm.sendRemote(text, images: images, sessionID: sessionID)
+                let sent = await vm.sendRemote(text, images: images, video: video, sessionID: sessionID)
                 if sent {
                     let sentIDs = Set(images.map(\.id))
                     imageDrafts[draftKey]?.removeAll { sentIDs.contains($0.id) }
+                    if videoDrafts[draftKey]?.id == video?.id { videoDrafts.removeValue(forKey: draftKey) }
                     if remoteDraftKey(remote.selectedSessionID ?? "") == draftKey, input == originalInput {
                         input = ""
                         composerRevision = UUID()
@@ -1860,6 +1893,7 @@ struct ChatView: View {
     private var hasImageDraft: Bool {
         guard vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID else { return false }
         return !(imageDrafts[remoteDraftKey(sessionID)] ?? []).isEmpty
+            || videoDrafts[remoteDraftKey(sessionID)] != nil
     }
 
     private var importingImages: Bool { imageImportID != nil }

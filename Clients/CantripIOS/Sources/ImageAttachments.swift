@@ -104,14 +104,16 @@ struct CantripMessageBody: Encodable {
     let text: String
     let mode: String
     let images: [ImageUpload]?
+    let videoID: String?
 
     struct ImageUpload: Encodable {
         let data: Data
     }
 
-    init(text: String, mode: CantripDeliveryMode, images: [ChatImageAttachment]) {
+    init(text: String, mode: CantripDeliveryMode, images: [ChatImageAttachment], videoID: String? = nil) {
         self.text = text
         self.mode = mode.rawValue
         self.images = images.isEmpty ? nil : images.map { ImageUpload(data: $0.data) }
+        self.videoID = videoID
     }
 }

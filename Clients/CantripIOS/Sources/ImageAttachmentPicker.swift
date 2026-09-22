@@ -5,17 +5,29 @@ import UniformTypeIdentifiers
 struct ImageAttachmentPicker: View {
     @Binding var attachments: [ChatImageAttachment]
     @Binding var importID: UUID?
+    @Binding var video: ChatVideoAttachment?
     let imageSupport: Bool?
+    let videoSupport: Bool?
     let disabled: Bool
 
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var showPhotos = false
     @State private var showFiles = false
+    @State private var choosingVideoFile = false
+    @State private var showVideos = false
+    @State private var selectedVideo: PhotosPickerItem?
     @State private var errorMessage: String?
     @State private var importTask: Task<Void, Never>?
     @State private var activeImportID: UUID?
 
     private var isImporting: Bool { importID != nil }
+
+    init(attachments: Binding<[ChatImageAttachment]>, importID: Binding<UUID?>,
+         imageSupport: Bool?, disabled: Bool, video: Binding<ChatVideoAttachment?> = .constant(nil),
+         videoSupport: Bool? = nil) {
+        _attachments = attachments; _importID = importID; _video = video
+        self.imageSupport = imageSupport; self.disabled = disabled; self.videoSupport = videoSupport
+    }
 
     var body: some View {
         Menu {
@@ -23,14 +35,31 @@ struct ImageAttachmentPicker: View {
                 Button("Photo Library", systemImage: "photo.on.rectangle") {
                     showPhotos = true
                 }
+                .disabled(video != nil)
                 Button("Choose Image File", systemImage: "folder") {
+                    choosingVideoFile = false
                     showFiles = true
                 }
+                .disabled(video != nil)
                 Button("Paste Image", systemImage: "doc.on.clipboard", action: pasteImage)
+                    .disabled(video != nil)
             } else {
                 Text(imageSupport == nil
                     ? "Update Cantrip on your Mac to attach images."
                     : "Choose a Claude, Copilot, or Codex backend on your Mac to attach images.")
+            }
+            Divider()
+            if videoSupport == true {
+                Button("Video Library", systemImage: "video") { showVideos = true }
+                    .disabled(video != nil || !attachments.isEmpty)
+                Button("Choose Video File", systemImage: "film") {
+                    choosingVideoFile = true
+                    showFiles = true
+                }
+                .disabled(video != nil || !attachments.isEmpty)
+                Text("One MOV/MP4, up to 100 MB and five minutes.")
+            } else {
+                Text("Update Cantrip and choose a Claude, Copilot, or Codex backend to attach videos.")
             }
         } label: {
             Group {
@@ -46,8 +75,8 @@ struct ImageAttachmentPicker: View {
         }
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .accessibilityLabel(isImporting ? "Preparing images" : "Attach images")
-        .accessibilityValue("\(attachments.count) of \(ImageAttachmentProcessor.maximumCount) images")
+        .accessibilityLabel(isImporting ? "Preparing attachment" : "Attach images or video")
+        .accessibilityValue(video == nil ? "\(attachments.count) of \(ImageAttachmentProcessor.maximumCount) images" : "One video attached")
         .accessibilityIdentifier("chat.attach-images")
         .disabled(disabled || isImporting
             || attachments.count >= ImageAttachmentProcessor.maximumCount)
@@ -76,13 +105,33 @@ struct ImageAttachmentPicker: View {
             }
             selectedPhotos = []
         }
+        .photosPicker(isPresented: $showVideos, selection: $selectedVideo, matching: .videos,
+                      preferredItemEncoding: .current)
+        .onChange(of: selectedVideo) { _, item in
+            guard let item else { return }
+            loadVideo {
+                guard let imported = try await item.loadTransferable(type: ImportedVideo.self) else {
+                    throw VideoAttachmentError.invalid
+                }
+                return imported.attachment
+            }
+            selectedVideo = nil
+        }
         .fileImporter(
             isPresented: $showFiles,
-            allowedContentTypes: [.image],
-            allowsMultipleSelection: true
+            allowedContentTypes: choosingVideoFile ? [.mpeg4Movie, .quickTimeMovie] : [.image],
+            allowsMultipleSelection: !choosingVideoFile
         ) { result in
             switch result {
             case .success(let urls):
+                if choosingVideoFile {
+                    guard let url = urls.first, urls.count == 1 else {
+                        errorMessage = VideoAttachmentError.invalid.localizedDescription
+                        return
+                    }
+                    loadVideo { try await VideoAttachmentProcessor.importFile(url) }
+                    return
+                }
                 guard urls.count + attachments.count <= ImageAttachmentProcessor.maximumCount else {
                     errorMessage = ImageAttachmentError.tooMany.localizedDescription
                     return
@@ -98,7 +147,7 @@ struct ImageAttachmentPicker: View {
                 errorMessage = error.localizedDescription
             }
         }
-        .alert("Image attachment", isPresented: Binding(
+        .alert("Attachment", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
         )) {
@@ -109,6 +158,9 @@ struct ImageAttachmentPicker: View {
         .onDisappear {
             importTask?.cancel()
             if importID == activeImportID { importID = nil }
+        }
+        .onChange(of: importID) { _, id in
+            if id == nil { importTask?.cancel() }
         }
     }
 
@@ -128,6 +180,27 @@ struct ImageAttachmentPicker: View {
     }
 
     private func load(_ operation: @escaping () async throws -> [ChatImageAttachment]) {
+        performImport {
+            let imported = try await operation()
+            try Task.checkCancellation()
+            guard video == nil else { throw VideoAttachmentError.mixedAttachments }
+            guard attachments.count + imported.count <= ImageAttachmentProcessor.maximumCount else {
+                throw ImageAttachmentError.tooMany
+            }
+            attachments.append(contentsOf: imported)
+        }
+    }
+
+    private func loadVideo(_ operation: @escaping () async throws -> ChatVideoAttachment) {
+        performImport {
+            guard attachments.isEmpty, video == nil else { throw VideoAttachmentError.mixedAttachments }
+            let imported = try await operation()
+            try Task.checkCancellation()
+            video = imported
+        }
+    }
+
+    private func performImport(_ operation: @escaping () async throws -> Void) {
         guard !isImporting, !disabled else { return }
         let id = UUID()
         activeImportID = id
@@ -135,15 +208,11 @@ struct ImageAttachmentPicker: View {
         importTask = Task { @MainActor in
             defer { if importID == id { importID = nil } }
             do {
-                let imported = try await operation()
-                try Task.checkCancellation()
-                guard attachments.count + imported.count <= ImageAttachmentProcessor.maximumCount else {
-                    throw ImageAttachmentError.tooMany
-                }
-                attachments.append(contentsOf: imported)
+                try await operation()
             } catch is CancellationError {
                 return
             } catch {
+                guard !Task.isCancelled else { return }
                 errorMessage = error.localizedDescription
             }
         }
@@ -186,7 +255,7 @@ struct ImageAttachmentPreviews: View {
                 .frame(height: 80)
             }
             if isImporting {
-                Text("Preparing images...").font(.caption).foregroundStyle(.secondary)
+                Text("Preparing attachment...").font(.caption).foregroundStyle(.secondary)
             } else if !attachments.isEmpty {
                 Text("\(attachments.count)/4").font(.caption).foregroundStyle(.secondary)
             }

@@ -82,6 +82,7 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsTabMetadata: Bool? = nil
     var supportsTabReordering: Bool? = nil
     var supportsPagedHistory: Bool? = nil
+    var supportsVideoAttachments: Bool? = nil
     var historyRevision: String? = nil
     var historyStartID: String? = nil
     var hasOlderMessages: Bool? = nil
@@ -117,6 +118,7 @@ enum CantripRemoteError: LocalizedError {
     case decoding
     case invalidResponse
     case imagesUnsupported
+    case videosUnsupported
     case autoDeliveryUnsupported
     case queueRemovalUnsupported
     case tabMetadataUnsupported
@@ -158,6 +160,8 @@ enum CantripRemoteError: LocalizedError {
             return "Cantrip returned an invalid HTTP response."
         case .imagesUnsupported:
             return "Image attachments require an updated Cantrip host using Claude, Copilot, or Codex. Your images have not been sent."
+        case .videosUnsupported:
+            return "Video analysis requires an updated Cantrip host using Claude, Copilot, or Codex. Your video has not been sent."
         case .autoDeliveryUnsupported:
             return "Update and reopen Cantrip on your Mac for Auto sending, or choose Queue, Redirect, or Inject. Your message has not been sent."
         case .queueRemovalUnsupported:
@@ -391,13 +395,13 @@ private final class CantripLANRequest: @unchecked Sendable {
         self.token = token
         let payload = body ?? Data()
         timeout = method == "GET" ? (CantripRemoteAPI.isContentRead(method: method, path: path) ? 20 : 2)
-            : (payload.count > 256 * 1024 ? 60 : 12)
+            : (payload.count > 256 * 1024 || path.contains("/videos/") ? 60 : 12)
         let header = """
         \(method) \(path) HTTP/1.1\r
         Host: cantrip.local\r
         Authorization: Bearer \(token)\r
         Accept: application/json\r
-        Content-Type: application/json\r
+        Content-Type: \(method == "PUT" && path.contains("/videos/") ? "application/octet-stream" : "application/json")\r
         Content-Length: \(payload.count)\r
         Connection: close\r
         \r
@@ -728,7 +732,7 @@ struct CantripRemoteAPI {
 
     fileprivate func prepareMessage(
         _ text: String, mode: CantripDeliveryMode, sessionID: String,
-        images: [ChatImageAttachment]
+        images: [ChatImageAttachment], videoID: String? = nil
     ) async throws -> Data {
         guard images.count <= ImageAttachmentProcessor.maximumCount else {
             throw ImageAttachmentError.tooMany
@@ -738,10 +742,50 @@ struct CantripRemoteAPI {
         guard images.isEmpty || host.supportsImageAttachments == true else {
             throw CantripRemoteError.imagesUnsupported
         }
+        guard videoID == nil || host.supportsVideoAttachments == true else {
+            throw CantripRemoteError.videosUnsupported
+        }
+        guard videoID == nil || images.isEmpty else { throw VideoAttachmentError.mixedAttachments }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard videoID == nil || (!trimmed.hasPrefix("/") && !trimmed.hasPrefix("!")) else {
+            throw VideoAttachmentError.command
+        }
         guard mode != .auto || host.supportsAutoDelivery == true else {
             throw CantripRemoteError.autoDeliveryUnsupported
         }
-        return try JSONEncoder().encode(CantripMessageBody(text: text, mode: mode, images: images))
+        return try JSONEncoder().encode(CantripMessageBody(text: text, mode: mode, images: images, videoID: videoID))
+    }
+
+    func videoStatus(sessionID: String, uploadID: UUID) async throws -> CantripVideoUploadStatus? {
+        struct Response: Decodable { let upload: CantripVideoUploadStatus }
+        do {
+            let response: Response = try await request(path: "/api/v1/sessions/\(sessionID)/videos/\(uploadID)")
+            return response.upload
+        } catch CantripRemoteError.http(404, _) { return nil }
+    }
+
+    func uploadVideoChunk(_ data: Data, video: ChatVideoAttachment, sessionID: String,
+                          offset: Int) async throws -> CantripVideoUploadStatus {
+        var target = URLComponents()
+        target.path = "/api/v1/sessions/\(sessionID)/videos/\(video.id)"
+        target.queryItems = [
+            URLQueryItem(name: "offset", value: String(offset)),
+            URLQueryItem(name: "totalBytes", value: String(video.bytes)),
+            URLQueryItem(name: "format", value: video.format),
+            URLQueryItem(name: "name", value: video.name),
+            URLQueryItem(name: "sha256", value: video.sha256),
+        ]
+        guard let path = target.string else { throw CantripRemoteError.invalidResponse }
+        struct Response: Decodable { let upload: CantripVideoUploadStatus }
+        let response: Response = try await request(path: path, method: "PUT", body: data)
+        return response.upload
+    }
+
+    func prepareVideo(sessionID: String, uploadID: UUID) async throws {
+        struct Response: Decodable { let ready: Bool }
+        let response: Response = try await request(path: "/api/v1/sessions/\(sessionID)/videos/\(uploadID)/prepare",
+                                                   method: "POST")
+        guard response.ready else { throw CantripRemoteError.invalidResponse }
     }
 
     fileprivate func sendMessage(_ body: Data, sessionID: String) async throws -> CantripRemoteSession {
@@ -859,7 +903,7 @@ struct CantripRemoteAPI {
             throw CantripRemoteError.invalidResponse
         }
         let url = try endpoint(path: path, baseURL: baseURL)
-        let isImageUpload = (body?.count ?? 0) > 256 * 1024
+        let isImageUpload = (body?.count ?? 0) > 256 * 1024 || (method != "GET" && path.contains("/videos/"))
         let isContentRead = Self.isContentRead(method: method, path: path)
         var request = URLRequest(
             url: url,
@@ -871,7 +915,8 @@ struct CantripRemoteAPI {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if body != nil {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(method == "PUT" && path.contains("/videos/") ? "application/octet-stream" : "application/json",
+                             forHTTPHeaderField: "Content-Type")
         }
 
         let data: Data
@@ -963,6 +1008,9 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var isMutating = false
+    @Published private(set) var videoUploadProgress: VideoUploadProgress?
+    private var videoUploadTask: Task<Void, Error>?
+    var isUploadingVideo: Bool { videoUploadTask != nil }
     @Published private(set) var isReorderingTabs = false
     @Published private(set) var stoppingSessionID: String?
     @Published private(set) var detailError: String?
@@ -1102,7 +1150,7 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     func removeServer(_ server: SavedServer) throws {
-        guard !isMutating else {
+        guard !isMutating, !isUploadingVideo else {
             throw ServerConfigurationError(message: "Wait for the current request to finish before removing a server.")
         }
         if selectedServerID == server.id {
@@ -1120,6 +1168,7 @@ final class CantripRemoteModel: ObservableObject {
             startLANDiscovery()
             startPolling()
         } else {
+            videoUploadTask?.cancel()
             lanBrowser.stop()
             stopPolling()
         }
@@ -1130,7 +1179,7 @@ final class CantripRemoteModel: ObservableObject {
         pairingToken rawToken: String,
         tailscaleOnly: Bool = false
     ) async -> Bool {
-        guard !isMutating else {
+        guard !isMutating, !isUploadingVideo else {
             errorMessage = "Wait for the current request to finish before switching servers."
             return false
         }
@@ -1190,7 +1239,7 @@ final class CantripRemoteModel: ObservableObject {
 
     @discardableResult
     func clearConfiguration() -> Bool {
-        guard !isMutating else {
+        guard !isMutating, !isUploadingVideo else {
             errorMessage = "Wait for the current request to finish before disconnecting."
             return false
         }
@@ -1400,19 +1449,80 @@ final class CantripRemoteModel: ObservableObject {
         _ text: String,
         mode: CantripDeliveryMode,
         images: [ChatImageAttachment] = [],
+        video: ChatVideoAttachment? = nil,
         sessionID: String? = nil
     ) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !images.isEmpty,
+        guard !trimmed.isEmpty || !images.isEmpty || video != nil,
               let sessionID = sessionID ?? selectedSessionID else { return false }
+        if let video {
+            guard await uploadVideo(video, text: trimmed, mode: mode, images: images, sessionID: sessionID) else { return false }
+        }
         guard let session = await mutate(prepare: { api in
-            try await api.prepareMessage(trimmed, mode: mode, sessionID: sessionID, images: images)
+            try await api.prepareMessage(trimmed, mode: mode, sessionID: sessionID, images: images, videoID: video?.id.uuidString)
         }, { api, body in
             try await api.sendMessage(body, sessionID: sessionID)
         }) else { return false }
         guard selectedSessionID == sessionID else { return true }
         apply(session)
         return true
+    }
+
+    func cancelVideoUpload() { videoUploadTask?.cancel() }
+
+    private func uploadVideo(_ video: ChatVideoAttachment, text: String, mode: CantripDeliveryMode,
+                             images: [ChatImageAttachment], sessionID: String) async -> Bool {
+        guard !isMutating, !isUploadingVideo else {
+            errorMessage = "Wait for the current request to finish."
+            return false
+        }
+        let generation = configurationGeneration
+        videoUploadProgress = VideoUploadProgress(fraction: 0, isPreparing: false)
+        let task = Task {
+            _ = try await self.performHistoryRead {
+                try await $0.prepareMessage(text, mode: mode, sessionID: sessionID, images: images, videoID: video.id.uuidString)
+            }
+            var offset = 0
+            if let status = try await self.performHistoryRead({ try await $0.videoStatus(sessionID: sessionID, uploadID: video.id) }) {
+                guard status.totalBytes == video.bytes, status.sha256 == video.sha256,
+                      (0...video.bytes).contains(status.receivedBytes) else { throw CantripRemoteError.invalidResponse }
+                offset = status.receivedBytes
+            }
+            while offset < video.bytes {
+                try Task.checkCancellation()
+                let start = offset
+                let data = try await Task.detached(priority: .userInitiated) {
+                    try VideoAttachmentProcessor.chunk(video, offset: start)
+                }.value
+                // Chunk PUTs verify repeated bytes, and preparation is idempotent.
+                // Only these transfers may fail over/retry; the final prompt never does.
+                let status = try await self.performHistoryRead {
+                    try await $0.uploadVideoChunk(data, video: video, sessionID: sessionID, offset: start)
+                }
+                guard status.totalBytes == video.bytes, status.sha256 == video.sha256,
+                      status.receivedBytes >= start + data.count, status.receivedBytes <= video.bytes else {
+                    throw CantripRemoteError.invalidResponse
+                }
+                offset = status.receivedBytes
+                self.videoUploadProgress = VideoUploadProgress(fraction: Double(offset) / Double(video.bytes), isPreparing: false)
+            }
+            self.videoUploadProgress = VideoUploadProgress(fraction: 1, isPreparing: true)
+            try await self.performHistoryRead { try await $0.prepareVideo(sessionID: sessionID, uploadID: video.id) }
+            try Task.checkCancellation()
+            guard generation == self.configurationGeneration else { throw CancellationError() }
+        }
+        videoUploadTask = task
+        defer { videoUploadTask = nil; videoUploadProgress = nil }
+        do {
+            try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+            return true
+        } catch is CancellationError {
+            errorMessage = "Video upload cancelled. No prompt was sent; your draft has been kept."
+            return false
+        } catch {
+            errorMessage = "Video was not sent. \(error.localizedDescription) Retry to resume the upload."
+            return false
+        }
     }
 
     @discardableResult
@@ -1574,7 +1684,10 @@ final class CantripRemoteModel: ObservableObject {
         prepare: @escaping (CantripRemoteAPI) async throws -> Prepared,
         _ operation: @escaping (CantripRemoteAPI, Prepared) async throws -> T
     ) async -> T? {
-        guard !isMutating else { return nil }
+        guard !isMutating, !isUploadingVideo else {
+            errorMessage = "Wait for the current request to finish."
+            return nil
+        }
         mutationRevision += 1
         isMutating = true
         defer { isMutating = false }
@@ -1933,10 +2046,10 @@ final class CantripRemoteModel: ObservableObject {
             return false
         case CantripRemoteError.http:
             return false
-        case CantripRemoteError.imagesUnsupported, CantripRemoteError.queueRemovalUnsupported,
+        case CantripRemoteError.imagesUnsupported, CantripRemoteError.videosUnsupported, CantripRemoteError.queueRemovalUnsupported,
              CantripRemoteError.autoDeliveryUnsupported, CantripRemoteError.tabMetadataUnsupported,
              CantripRemoteError.tabReorderingUnsupported,
-             is ImageAttachmentError:
+             is ImageAttachmentError, is VideoAttachmentError:
             return false
         default:
             return true

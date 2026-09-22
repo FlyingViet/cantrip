@@ -277,7 +277,7 @@ the local lane never falls back to a cloud provider. This changes Cantrip
 Remote only, not the Hermes gateway's own execution lanes.
 
 In a Cantrip session, tap the circled **+** on the left inside the composer
-(**Attach images** in VoiceOver) to choose photos/screenshots from
+(**Attach images or video** in VoiceOver) to choose photos/screenshots from
 Photos, select image files, or paste a copied image. Tap a draft thumbnail to
 view the full image, or use **x** to remove it before sending. Up to four images can be sent
 at once; each is oriented, resized to at most 2048 pixels per side, and
@@ -303,6 +303,41 @@ This requires the updated Cantrip host as well as AgentGateway; older hosts
 retain their text-only attachment display. Downloads use the existing paired
 Tailscale/LAN connection, with an in-memory cache cleared when pairing changes.
 Missing files or connection failures show a retry state, not a blank image.
+
+### Video analysis
+
+Use the composer's **+ > Video Library** or **Choose Video File** to attach
+one MOV/MP4 clip, up to **100 MB and five minutes**, instead of images. Tap its
+preview to play it locally, or remove it before sending. Add a question if
+desired; a video-only message asks the agent to analyze the clip.
+
+The original video is uploaded to your paired Mac, including its **audio and
+metadata**. Cantrip verifies its SHA256 and decodes four oriented, timestamped
+preview frames for an initial visual overview. These are sparse samples, not
+continuous video understanding. The agent also receives the original file path
+so it can inspect motion, additional frames, or audio with its available tools.
+**Audio is not automatically transcribed or analyzed.** Sent/queued messages
+show the video description, sample times, and tappable frame thumbnails.
+
+Preparation/upload progress and cancellation appear above the composer.
+Transfers use confirmed, idempotent 1 MiB chunks; retrying a retained draft
+resumes from the Mac's confirmed offset. Tab polling continues during upload.
+No agent prompt is submitted until uploading and preview preparation succeed.
+The final message is still a one-shot mutation: if its acknowledgement is lost,
+check the session before resending. Pausing or backgrounding the app cancels a
+pending video upload, keeping the draft for retry while the app remains alive.
+
+Originals live in `~/.cache/Cantrip/remote-videos/` on the Mac; preview images
+use the existing image attachment store. Sent videos remain available to
+queued/recovered work. Unsubmitted uploads reserve at most 500 MB total;
+uploads older than 24 hours are reclaimed when starting another upload.
+Drafts are temporary and scoped to the selected server/session; this is not a
+background upload service or a persistent offline outbox.
+
+Both apps must be updated, and the Mac host reopened. A Claude, Copilot, or
+Codex backend is required (`supportsVideoAttachments`). Legacy hosts are
+blocked before uploading; videos cannot accompany shell/slash commands or
+image attachments. The browser/Mac Remote composer remains text-only.
 
 ### Copilot account usage
 
