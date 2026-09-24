@@ -20,6 +20,7 @@ struct SettingsView: View {
                 executionSection
                 gatewaySection
                 CantripRemoteSettingsSection(model: remote)
+                CantripNotificationSettingsSection(remote: remote)
                 speechRecognitionSection
 
                 Section {

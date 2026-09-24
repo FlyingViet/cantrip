@@ -612,6 +612,14 @@ struct CantripRemoteAPI {
         return response.sessions
     }
 
+    func completionNotifications(method: String = "GET", body: Data? = nil) async throws -> CantripPushStatus {
+        do {
+            return try await request(path: "/api/v1/notifications", method: method, body: body)
+        } catch CantripRemoteError.http(404, _) {
+            throw ServerConfigurationError(message: "Update and reopen Cantrip on the Mac to enable completion alerts.")
+        }
+    }
+
     func githubBuilds() async throws -> CantripBuildSnapshot {
         do {
             return try await request(path: "/api/v1/github/builds")
@@ -1035,6 +1043,13 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var usageIdentity = UUID()
     let servers: ServerProfiles
     @Published private(set) var selectedServerID: UUID?
+    @Published private(set) var notificationStatus: String?
+    @Published private(set) var isUpdatingNotifications = false
+    @Published private(set) var notificationNavigationID = UUID()
+    private var notificationRegistrationTask: Task<Void, Never>?
+    private let completionAlerts: CantripNotifications
+    private var notificationRegistrationSucceeded = false
+    private var notificationRegistrationAttempt: Date?
 
     var isConnected: Bool { connectionState == .connected }
     var connectionLabel: String {
@@ -1095,8 +1110,10 @@ final class CantripRemoteModel: ObservableObject {
         return cache
     }()
 
-    init(urlSession: URLSession? = nil, servers: ServerProfiles? = nil) {
+    init(urlSession: URLSession? = nil, servers: ServerProfiles? = nil,
+         completionAlerts: CantripNotifications? = nil) {
         self.urlSession = urlSession
+        self.completionAlerts = completionAlerts ?? .shared
         self.servers = servers ?? ServerProfiles(kind: .cantrip)
         let storedURL = UserDefaults.standard.string(forKey: Self.endpointKey) ?? ""
         configuredURL = storedURL
@@ -1147,9 +1164,17 @@ final class CantripRemoteModel: ObservableObject {
         }
         try servers.select(server)
         selectedServerID = server.id
+        notificationStatus = nil
+        refreshCompletionNotificationRegistration(force: true)
     }
 
     func removeServer(_ server: SavedServer) throws {
+        guard !isUpdatingNotifications else {
+            throw ServerConfigurationError(message: "Wait for notification settings to finish updating.")
+        }
+        guard !completionAlerts.hasSubscription(serverID: server.id) else {
+            throw ServerConfigurationError(message: "Select this Mac and turn off its completion alerts before removing it.")
+        }
         guard !isMutating, !isUploadingVideo else {
             throw ServerConfigurationError(message: "Wait for the current request to finish before removing a server.")
         }
@@ -1167,10 +1192,94 @@ final class CantripRemoteModel: ObservableObject {
         if active {
             startLANDiscovery()
             startPolling()
+            refreshCompletionNotificationRegistration(force: true)
         } else {
             videoUploadTask?.cancel()
             lanBrowser.stop()
             stopPolling()
+        }
+    }
+
+    func completionNotificationStatus() async throws -> CantripPushStatus {
+        try await performAuthenticated(allowFallback: true) { try await $0.completionNotifications() }
+    }
+
+    func setCompletionNotifications(enabled: Bool) async throws {
+        guard !isUpdatingNotifications else {
+            throw ServerConfigurationError(message: "Wait for notification settings to finish updating.")
+        }
+        guard let serverID = selectedServerID, let token else {
+            throw ServerConfigurationError(message: "Save and select a Cantrip server first.")
+        }
+        isUpdatingNotifications = true
+        defer { isUpdatingNotifications = false }
+        let identity = usageIdentity
+        let notifications = completionAlerts
+        var body: [String: String] = ["installationID": notifications.installationID.uuidString,
+                                      "serverID": serverID.uuidString]
+        if enabled {
+            let status = try await completionNotificationStatus()
+            guard status.configured else { throw ServerConfigurationError(message: status.message) }
+            body["deviceToken"] = try await notifications.register()
+            guard let environment = Bundle.main.object(forInfoDictionaryKey: "CantripPushEnvironment") as? String,
+                  ["development", "production"].contains(environment) else {
+                throw ServerConfigurationError(message: "This build has no valid Apple push environment.")
+            }
+            body["environment"] = environment
+        }
+        guard usageIdentity == identity, selectedServerID == serverID else { throw CancellationError() }
+        let data = try JSONSerialization.data(withJSONObject: body)
+        if enabled {
+            notifications.prepareRegistration(serverID: serverID, fingerprint: CantripLANProtocol.tokenFingerprint(token))
+        }
+        // Registration/removal are idempotent, so an uncertain response can
+        // safely retry over the other authenticated route.
+        _ = try await performAuthenticated(allowFallback: true) {
+            try await $0.completionNotifications(method: enabled ? "POST" : "DELETE", body: data)
+        }
+        guard usageIdentity == identity, selectedServerID == serverID else { throw CancellationError() }
+        notifications.save(serverID: serverID, fingerprint: enabled ? CantripLANProtocol.tokenFingerprint(token) : nil)
+        notificationStatus = nil
+        notificationRegistrationSucceeded = enabled
+    }
+
+    func refreshCompletionNotificationRegistration(force: Bool = false) {
+        if force {
+            notificationRegistrationSucceeded = false
+            notificationRegistrationAttempt = nil
+        }
+        guard appIsActive, isConfigured, !isUpdatingNotifications, notificationRegistrationTask == nil,
+              !notificationRegistrationSucceeded,
+              notificationRegistrationAttempt.map({ Date().timeIntervalSince($0) >= 60 }) ?? true,
+              completionAlerts.hasSubscription(serverID: selectedServerID) else { return }
+        notificationRegistrationAttempt = Date()
+        let identity = usageIdentity
+        notificationRegistrationTask = Task { [weak self] in
+            guard let self else { return }
+            defer { notificationRegistrationTask = nil }
+            do { try await setCompletionNotifications(enabled: true) }
+            catch is CancellationError {}
+            catch {
+                if usageIdentity == identity { notificationStatus = error.localizedDescription }
+            }
+        }
+    }
+
+    func openCompletionNotification(_ target: CantripNotificationTarget) async {
+        do {
+            await notificationRegistrationTask?.value
+            guard let server = servers.servers.first(where: { $0.id == target.serverID }),
+                  CantripLANProtocol.tokenFingerprint(try servers.credential(for: server)) == target.fingerprint else {
+                throw ServerConfigurationError(message: "This notification belongs to a removed or re-paired Cantrip server.")
+            }
+            try await selectServer(server)
+            guard !isMutating, !isUploadingVideo else {
+                throw ServerConfigurationError(message: "Finish the current upload or request before opening this notification.")
+            }
+            await selectSession(target.sessionID.uuidString)
+            notificationNavigationID = UUID()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -1179,7 +1288,7 @@ final class CantripRemoteModel: ObservableObject {
         pairingToken rawToken: String,
         tailscaleOnly: Bool = false
     ) async -> Bool {
-        guard !isMutating, !isUploadingVideo else {
+        guard !isMutating, !isUploadingVideo, !isUpdatingNotifications else {
             errorMessage = "Wait for the current request to finish before switching servers."
             return false
         }
@@ -1239,7 +1348,7 @@ final class CantripRemoteModel: ObservableObject {
 
     @discardableResult
     func clearConfiguration() -> Bool {
-        guard !isMutating, !isUploadingVideo else {
+        guard !isMutating, !isUploadingVideo, !isUpdatingNotifications else {
             errorMessage = "Wait for the current request to finish before disconnecting."
             return false
         }
@@ -2003,6 +2112,7 @@ final class CantripRemoteModel: ObservableObject {
         let completedAt = Date()
         lastAuthenticatedAt = completedAt
         connectionState = .connected
+        refreshCompletionNotificationRegistration()
         staleTask?.cancel()
         staleTask = Task { [weak self] in
             do {

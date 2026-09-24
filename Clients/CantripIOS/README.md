@@ -391,6 +391,31 @@ Requires updated AgentGateway and an updated, reopened Cantrip host. Older
 hosts show an update notice. Uses existing paired LAN/Tailscale access; memory
 reads have a 20-second content deadline and do not block chat polling or sends.
 
+### Cantrip completion alerts
+
+Select a saved Mac, then enable **Settings > Cantrip completion alerts > Notify
+when a tab finishes**. Successful completion of a tab's entire queue sends its
+name and a brief final-answer excerpt. Tap the notification to reopen the
+correct saved Mac and conversation. Private, stopped and failed runs do not
+generate success notifications. This does not apply to the Hermes gateway.
+
+Alerts use **Apple push from the Mac**, not background polling. They require
+the updated host with an APNs signing key configured at
+`~/.config/Cantrip/apns.json` (see the Cantrip remote-control guide), the Apple
+Push Notifications capability/provisioning for `com.itzhoang.hermbot`, and a new
+signed AgentGateway build. Debug uses sandbox APNs; Release/TestFlight uses
+production. An App Store Connect upload key is not an APNs key.
+
+The setting is per saved Mac, persists while the phone is locked or another
+Mac is selected, and requires a connection to disable it before removing that
+server. **Check notification setup** shows missing configuration/provider
+errors rather than pretending alerts are ready. Mac and phone need internet;
+opening the tab still requires your paired LAN/Tailscale connection. The Mac
+must remain running with Remote enabled. Apple delivery and Focus/Lock Screen
+settings determine when the alert appears; delivery is not guaranteed.
+The tab title and preview pass through Apple and can appear on your Lock Screen.
+There is no extra AI summarization request or third-party notification relay.
+
 ### GitHub build queue
 
 Open **hamburger menu > GitHub Builds** from any chat lane to see builds

@@ -1269,6 +1269,17 @@ struct ChatView: View {
         .onChange(of: remote.selectedSessionID) { _, _ in
             vm.syncRemoteTranscript()
         }
+        .onChange(of: remote.notificationNavigationID) { _, _ in
+            showSettings = false
+            showRemoteTabs = false
+            showQueue = false
+            showGitHubBuilds = false
+            showCantripMemory = false
+            showVoiceMode = false
+            composerFocused = false
+            vm.leaveVoiceMode()
+            vm.syncRemoteTranscript()
+        }
         .onChange(of: scenePhase) { _, phase in
             vm.setAppActive(phase == .active)
             if phase == .active, showVoiceMode {
