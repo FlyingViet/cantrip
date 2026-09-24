@@ -159,6 +159,12 @@ by default. Private mode suppresses Cantrip conversation persistence, but
 does not prevent tool writes, image caches, or backend/provider logging.
 Read [permissions, privacy, and memory](docs/privacy-and-memory.md).
 
+AgentGateway can opt in to per-Mac completion alerts with a short final-answer
+preview and tap-to-tab navigation, including while the phone is locked.
+[Apple push setup](docs/remote-control.md#agentgateway-completion-notifications)
+and new native phone/host builds are required; ordinary Remote polling is not
+a background notification service.
+
 ## Learn more
 
 | Task | Guide |

@@ -22,16 +22,21 @@ final class RemoteControlServer {
     private var token = ""
     private let buildMonitor: GitHubBuildMonitor
     private let usage: UsageTracker
+    private let notifications: RemoteNotifications
+    private let notificationLifecycleLock = NSLock()
+    private var notificationLifecycleTask: Task<Void, Never>?
     private let maximumRequestBytes = RemoteImageAttachments.maximumRequestBytes
 
     init(manager: SessionManager, buildMonitor: GitHubBuildMonitor = GitHubBuildMonitor(),
          usage: UsageTracker = .shared,
+         notifications: RemoteNotifications = RemoteNotifications(),
          encodingQueue: DispatchQueue = DispatchQueue(label: "cantrip.remote-encoding", qos: .userInitiated),
          sendTimeout: TimeInterval = 15,
          requestLog: @escaping (String) -> Void = Log.write) {
         self.manager = manager
         self.buildMonitor = buildMonitor
         self.usage = usage
+        self.notifications = notifications
         self.encodingQueue = encodingQueue
         self.sendTimeout = sendTimeout
         self.requestLog = requestLog
@@ -80,6 +85,7 @@ final class RemoteControlServer {
             self.listener = listener
             activePort = port
             self.token = token
+            updateNotificationActivation(fingerprint: RemoteLANProtocol.tokenFingerprint(token))
             listener.start(queue: queue)
             startLANListener(token: token)
         } catch {
@@ -89,6 +95,7 @@ final class RemoteControlServer {
     }
 
     func stop() {
+        updateNotificationActivation(fingerprint: nil)
         listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
@@ -97,6 +104,29 @@ final class RemoteControlServer {
         lanListener = nil
         activePort = nil
         token = ""
+    }
+
+    @MainActor
+    func notifyCompletion(for session: ChatSession) {
+        guard !token.isEmpty, !session.isPrivate, !session.isStreaming, session.queued.isEmpty,
+              let completion = session.remoteCompletion else { return }
+        notificationLifecycleLock.lock()
+        let activation = notificationLifecycleTask
+        notificationLifecycleLock.unlock()
+        Task {
+            await activation?.value
+            await notifications.enqueue(completion)
+        }
+    }
+
+    private func updateNotificationActivation(fingerprint: String?) {
+        notificationLifecycleLock.lock()
+        defer { notificationLifecycleLock.unlock() }
+        let previous = notificationLifecycleTask
+        notificationLifecycleTask = Task {
+            await previous?.value
+            await notifications.activate(fingerprint: fingerprint)
+        }
     }
 
     private func startLANListener(token: String) {
@@ -204,12 +234,49 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/github/builds"
                 || request.path == "/api/v1/memory"
                 || request.path == "/api/v1/memory/document"
+                || request.path == "/api/v1/notifications"
                 || request.path == "/api/v1/copilot/usage" else {
             sendError(404, "not found", on: connection)
             return
         }
         guard authorized(request.headers["authorization"]) else {
             sendError(401, "invalid pairing token", on: connection)
+            return
+        }
+        if request.path == "/api/v1/notifications" {
+            let fingerprint = RemoteLANProtocol.tokenFingerprint(token)
+            guard ["GET", "POST", "DELETE"].contains(request.method) else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            guard request.body.count <= 4096 else {
+                sendError(413, "notification registration is too large", on: connection)
+                return
+            }
+            Task {
+                do {
+                    if request.method == "POST" {
+                        let registration: RemotePushRegistration
+                        do { registration = try JSONDecoder().decode(RemotePushRegistration.self, from: request.body) }
+                        catch { throw RemotePushError(status: 400, message: "Invalid notification registration.") }
+                        try await notifications.register(registration, fingerprint: fingerprint)
+                    } else if request.method == "DELETE" {
+                        struct Removal: Decodable { let installationID: UUID; let serverID: UUID }
+                        let removal: Removal
+                        do { removal = try JSONDecoder().decode(Removal.self, from: request.body) }
+                        catch { throw RemotePushError(status: 400, message: "Invalid notification removal.") }
+                        try await notifications.unregister(installationID: removal.installationID,
+                                                           serverID: removal.serverID, fingerprint: fingerprint)
+                    }
+                    let status = await notifications.status()
+                    sendEncoded(on: connection) { try JSONEncoder().encode(status) }
+                } catch let error as RemotePushError {
+                    sendError(error.status, error.message, on: connection)
+                } catch {
+                    Log.write("remote-notifications: request failed: \(error.localizedDescription)")
+                    sendError(500, "Could not update notification registration on the Mac.", on: connection)
+                }
+            }
             return
         }
         if request.path == "/api/v1/memory" || request.path == "/api/v1/memory/document" {

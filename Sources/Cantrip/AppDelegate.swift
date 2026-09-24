@@ -143,6 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Notify when any session's run finishes while the panel is hidden.
         manager.onAnyRunFinished = { [weak self] finished in
             self?.notifyIfHidden(for: finished)
+            self?.remoteControlServer?.notifyCompletion(for: finished)
         }
 
         // Unix-socket server for the `cantrip` CLI.

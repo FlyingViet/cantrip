@@ -60,6 +60,7 @@ final class ChatSession: ObservableObject {
     /// Called when the whole run (including queue) completes; AppDelegate
     /// uses it for background notifications.
     var onRunFinished: (() -> Void)?
+    private(set) var remoteCompletion: RemoteCompletion?
     private var preparationTask: Task<Void, Never>?
     /// Orphans events and preparation from cancelled/superseded backend runs.
     private var streamGeneration = 0 {
@@ -317,6 +318,7 @@ final class ChatSession: ObservableObject {
             cancelRun(reason: "superseded by a new run")
         }
         let runID = UUID()
+        remoteCompletion = nil
         currentRunID = runID
         lastJournalRunID = runID
         currentRunStartedAt = Date()
@@ -472,6 +474,7 @@ final class ChatSession: ObservableObject {
     }
 
     private func recordInterruption(_ reason: String) {
+        remoteCompletion = nil
         guard let runID = currentRunID else { return }
         var event = RunJournal.Event(
             sessionID: id,
@@ -485,6 +488,10 @@ final class ChatSession: ObservableObject {
 
     private func completeRun(status: String, summary: String = "") {
         guard let runID = currentRunID else { return }
+        remoteCompletion = status == "succeeded" && !isPrivate
+            ? RemoteCompletion(id: runID, sessionID: id, title: title,
+                               summary: RemoteCompletion.preview(summary), completedAt: Date())
+            : nil
         var event = RunJournal.Event(
             sessionID: id,
             runID: runID,
@@ -500,6 +507,7 @@ final class ChatSession: ObservableObject {
     }
 
     private func cancelRun(reason: String) {
+        remoteCompletion = nil
         guard let runID = currentRunID else { return }
         var event = RunJournal.Event(
             sessionID: id,

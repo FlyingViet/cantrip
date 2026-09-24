@@ -13,6 +13,61 @@ prepares memory context and encodes transcript responses off the UI thread.
 Requests remain single messages, and uncertain sends are still never
 automatically replayed.
 
+## AgentGateway completion notifications
+
+On iPhone/iPad, select a saved Mac and enable **Settings > Cantrip completion
+alerts > Notify when a tab finishes**. After a successful run and all queued
+prompts finish, the Mac sends an Apple push notification with the tab name and
+a short, Markdown-cleaned excerpt of the final answer. It does not ask another
+model to summarize the conversation. Tap an alert to open that saved server and
+tab. A removed/re-paired server is rejected; opening a notification never sends
+a prompt. Private tabs, failures, Stop, redirects and intermediate automatic
+recovery do not send success alerts.
+
+This needs **updated native AgentGateway and Mac builds**, plus Apple Push
+Notification service (APNs) configuration on the Mac. Foreground polling cannot
+deliver alerts while iOS suspends the app. Enable the Push Notifications
+capability for `com.itzhoang.hermbot` in the Apple Developer account and regenerate
+its provisioning profiles before the next signed upload. Debug uses APNs
+development; Release/TestFlight uses production.
+
+Create an APNs signing key authorized for that bundle ID/environment in the
+same Apple Developer team. Keep its `.p8` on the Mac, outside the repository,
+and create `~/.config/Cantrip/apns.json`:
+
+```json
+{
+  "keyID": "YOURKEYID1",
+  "teamID": "YOURTEAM01",
+  "privateKeyPath": "/absolute/private/path/AuthKey_YOURKEYID1.p8"
+}
+```
+
+Restrict the key and configuration to the Mac user (file mode `600`). Use an
+**APNs key**, not an App Store Connect API key. Configuration is reread without
+restarting Cantrip. **Check notification setup** validates local configuration
+and shows the latest provider error; it does not prove that Apple accepted the
+key or displayed an alert. Actual signed-device delivery still needs an
+end-to-end check after provisioning.
+
+Registration/removal uses paired `GET/POST/DELETE /api/v1/notifications`.
+Opt-in is per saved Mac and survives switching tabs/servers and locking the
+phone. Turn it off while connected to that Mac before removing the server.
+Subscriptions expire after 90 days without renewal; reopening the app renews
+the selected Mac's registration. Rotating the Mac pairing token invalidates
+old registrations. The Mac stores registrations and a bounded durable delivery
+queue in `~/.cache/Cantrip/notifications/state.json` in a user-only directory.
+Repeated completion callbacks are deduplicated; transient delivery failures
+retry with backoff, and invalid Apple device tokens are removed. Alerts expire
+after an hour. APNs acceptance is not proof of device delivery, and a lost
+acknowledgement can still cause a repeated presentation despite collapse IDs.
+
+The Mac must stay running with Remote enabled and internet access to Apple;
+the phone needs connectivity for push and LAN/Tailscale access to open the
+conversation. Focus, notification settings and OS scheduling affect presentation.
+The tab title and preview travel through Apple and may appear on the Lock Screen.
+No full transcript, pairing secret or APNs signing key goes to a relay service.
+
 ## Send context during a task
 
 Choose **Inject** in AgentGateway or Mac/browser Remote to add instructions
