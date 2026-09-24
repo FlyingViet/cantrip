@@ -21,6 +21,14 @@ struct SettingsView: View {
                 gatewaySection
                 CantripRemoteSettingsSection(model: remote)
                 CantripNotificationSettingsSection(remote: remote)
+                Section("Cantrip Mac") {
+                    NavigationLink {
+                        CantripMaintenanceView(remote: remote)
+                    } label: {
+                        Label("Update & Rebuild Cantrip", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(!remote.isConfigured)
+                }
                 speechRecognitionSection
 
                 Section {

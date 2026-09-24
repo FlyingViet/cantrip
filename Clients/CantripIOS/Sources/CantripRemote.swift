@@ -125,6 +125,7 @@ enum CantripRemoteError: LocalizedError {
     case tabReorderingUnsupported
     case githubBuildsUnsupported
     case memoryUnsupported
+    case maintenanceUnsupported
     case copilotUsageUnsupported
 
     static func isRouteFailure(_ error: Error) -> Bool {
@@ -174,6 +175,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to view GitHub builds."
         case .memoryUnsupported:
             return "Update and reopen Cantrip on your Mac to view its saved memory."
+        case .maintenanceUnsupported:
+            return "Update and reopen Cantrip on the Mac once to enable remote updates and rebuilds."
         case .copilotUsageUnsupported:
             return "Update and reopen Cantrip on your Mac to view Copilot account usage."
         }
@@ -574,7 +577,8 @@ struct CantripRemoteAPI {
     static func isContentRead(method: String, path: String) -> Bool {
         let parts = (URLComponents(string: path)?.path ?? "").split(separator: "/")
         return method == "GET" && (
-            parts == ["api", "v1", "memory"] || parts == ["api", "v1", "memory", "document"]
+            parts == ["api", "v1", "maintenance"]
+                || parts == ["api", "v1", "memory"] || parts == ["api", "v1", "memory", "document"]
                 || (parts.starts(with: ["api", "v1", "sessions"])
                     && (parts.count == 4 || (parts.count == 6 && parts[4] == "messages")))
         )
@@ -625,6 +629,16 @@ struct CantripRemoteAPI {
             return try await request(path: "/api/v1/github/builds")
         } catch CantripRemoteError.http(404, _) {
             throw CantripRemoteError.githubBuildsUnsupported
+        }
+    }
+
+    func maintenance(_ action: CantripMaintenanceRequest? = nil) async throws -> CantripMaintenanceSnapshot {
+        do {
+            return try await request(path: "/api/v1/maintenance",
+                method: action == nil ? "GET" : "POST",
+                body: try action.map { try JSONEncoder().encode($0) })
+        } catch CantripRemoteError.http(404, _) {
+            throw CantripRemoteError.maintenanceUnsupported
         }
     }
 
@@ -1403,6 +1417,25 @@ final class CantripRemoteModel: ObservableObject {
             throw CantripRemoteError.transport("Configure Cantrip Remote in Settings and connect to your Mac to view its saved memory.")
         }
         return try await performHistoryRead { try await $0.memoryCatalog(query: query, after: after) }
+    }
+
+    func maintenanceStatus() async throws -> CantripMaintenanceSnapshot {
+        try await performHistoryRead { try await $0.maintenance() }
+    }
+
+    func startMaintenance(_ request: CantripMaintenanceRequest) async throws -> CantripMaintenanceSnapshot {
+        guard let token else { throw CantripRemoteError.missingToken }
+        let generation = configurationGeneration
+        updateRoutes()
+        let reader = router.independentReader()
+        let result = try await reader.performMutation { transport in
+            try await CantripRemoteAPI(transport: transport, token: token, urlSession: urlSession).maintenance()
+        } operation: { transport, _ in
+            guard generation == self.configurationGeneration else { throw CancellationError() }
+            return try await CantripRemoteAPI(transport: transport, token: token, urlSession: urlSession).maintenance(request)
+        }
+        guard generation == configurationGeneration else { throw CancellationError() }
+        return result
     }
 
     func memoryDocument(id: String, offset: Int, revision: String?) async throws -> CantripMemoryPage {

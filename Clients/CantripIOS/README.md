@@ -391,6 +391,33 @@ Requires updated AgentGateway and an updated, reopened Cantrip host. Older
 hosts show an update notice. Uses existing paired LAN/Tailscale access; memory
 reads have a 20-second content deadline and do not block chat polling or sends.
 
+### Update and rebuild the Cantrip Mac
+
+Open **Settings > Cantrip Mac > Update & Rebuild Cantrip** for the selected
+saved Mac. The screen shows running/installed build identities, source branch,
+local edits, newer commits after **Check for Updates**, and live build output.
+
+**Update & Rebuild** fetches `origin/main`, fast-forwards a clean `main` checkout,
+and runs the Mac's existing signed `make app` packaging. It refuses dirty or
+diverged source rather than stashing, resetting, or rebasing your work.
+**Rebuild Current Source** builds local edits without pulling. Both leave the
+current Mac app running; use the separately confirmed **Restart Cantrip** to
+activate the installed build and reconnect.
+
+Builds and restart require every Mac tab, queue, and shell command to be idle,
+including private tabs. Restart checks again just before quitting; no work is
+automatically stopped. The Mac owns the job, so closing or backgrounding
+AgentGateway does not cancel a build. Reopen this screen to recover progress.
+If an acknowledgement is lost, **Retry Pending Request** reuses the saved request
+ID, not a new build. Status from the previous connection remains labeled stale
+until a refresh succeeds.
+
+Requires a one-time update of both apps and reopening the Mac host to enable
+the maintenance API. `Cantrip.app` must run from its source checkout with
+Git access, Xcode tools, and signing already configured on the Mac. Commands and
+paths are fixed by the host, not supplied by the phone. This does not install
+AgentGateway updates or upload TestFlight builds.
+
 ### Cantrip completion alerts
 
 Select a saved Mac, then enable **Settings > Cantrip completion alerts > Notify
