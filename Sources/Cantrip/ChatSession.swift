@@ -201,6 +201,7 @@ final class ChatSession: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
         loadTranscript()
         tabMetadata = SessionTabMetadata.load(id: id)
+        applyModelSelection()
         restoreDurableState()
     }
 
@@ -259,6 +260,24 @@ final class ChatSession: ObservableObject {
         var updated = tabMetadata
         if let name { try updated.rename(name) }
         if let isLocked { updated.isLocked = isLocked }
+        try saveTabMetadata(updated)
+    }
+
+    func saveModelSelection(_ selection: SessionModelSelection?) throws {
+        var updated = tabMetadata
+        updated.modelSettings = selection
+        try saveTabMetadata(updated)
+        applyModelSelection()
+    }
+
+    private func applyModelSelection() {
+        guard let backend = copilot as? CopilotBackend else { return }
+        backend.modelOverride = tabMetadata.modelSettings?.model
+        backend.effortOverride = tabMetadata.modelSettings?.effort
+        backend.contextTierOverride = tabMetadata.modelSettings?.contextTier
+    }
+
+    private func saveTabMetadata(_ updated: SessionTabMetadata) throws {
         if !isPrivate {
             // New, empty tabs need a transcript file to participate in tab
             // restoration. Renaming existing tabs must not rewrite their history.

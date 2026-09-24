@@ -168,7 +168,7 @@ extension SessionTabTests {
             $("tabCancel").click();
             selected="legacy";renderSessions([{id:"legacy",title:"Old host"}]);
             check(nav.firstElementChild.children.length===2,"Legacy tabs omit unsupported metadata controls");
-            check(nav[offset]===0&&!wheel({deltaY:80}).defaultPrevented,"A short list does not consume wheel events");
+            check(nav[offset]===0&&!wheel({deltaY:80}).defaultPrevented,`A short list does not consume wheel events (${innerWidth}pt, sidebar=${sidebarLayout}, offset=${nav[offset]}, scroll=${nav.scrollWidth}, client=${nav.clientWidth})`);
             selected=null;renderSessions([]);
             check(nav.children.length===0&&nav[offset]===0,"Empty lists reset safely");
             if(sidebarLayout){

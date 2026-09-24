@@ -113,6 +113,8 @@ struct SessionTabTests {
         try testPromptPaging()
         try await testPromptPreparation()
         try await testCopilotUsage()
+        try await testCopilotModels()
+        try await testSessionModelSettings()
         try await testRemoteRequestIsolation()
         try await testRemoteHistory()
         try await testRemoteMemory()

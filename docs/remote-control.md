@@ -13,6 +13,35 @@ prepares memory context and encodes transcript responses off the UI thread.
 Requests remain single messages, and uncertain sends are still never
 automatically replayed.
 
+## Per-tab model, effort and context window
+
+Choose **Model Settings** in the Mac/browser Remote tab's settings menu
+(the three dots). AgentGateway exposes the same controls in the chat menu and
+tab actions. On the host Mac, right-click a local tab and choose **Model
+Settings**. These controls currently apply to the Mac's **Copilot** backend
+with Council mode off; they do not reconfigure Claude, Codex or ACP servers.
+
+Turn off **Use Mac defaults** to save a model, reasoning effort and context tier
+for just that tab. The choices come from the paired Mac's Copilot model catalog,
+not the phone's account. Unsupported effort/context combinations cannot be saved.
+**Refresh models** refreshes account metadata only; **Reload settings** discards
+the form's draft and reads the current tab settings. Catalog failures retain the
+cached options and display the error. Standard/Long numbers are input budgets;
+the separately labeled advertised maximum is not a promise of total context
+for each tier. Long context can have different costs.
+
+Save only when the tab, its queue and persistent shell are idle. The host
+rechecks at save time and rejects stale revisions, so another device's changes
+cannot be overwritten by an old form. Other tabs and the Mac's global defaults
+are unchanged. Settings survive reopening the tab/app. Returning to **Use Mac
+defaults** removes the tab override.
+
+The next prompt uses the new settings. The visible transcript is preserved;
+Copilot starts a fresh runtime using Cantrip's recent-history continuity, not
+the old model's entire internal context. No running prompt is stopped or
+replayed. Both apps need updated builds; the Mac must be reopened to activate
+the paired `GET/POST /api/v1/sessions/{id}/model-settings` endpoint.
+
 ## AgentGateway completion notifications
 
 On iPhone/iPad, select a saved Mac and enable **Settings > Cantrip completion

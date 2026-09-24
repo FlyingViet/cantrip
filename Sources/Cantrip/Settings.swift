@@ -26,26 +26,6 @@ struct CouncilMember: Codable, Equatable, Identifiable {
     }
 }
 
-/// Per-model metadata for the Copilot pickers. Populated from the Copilot
-/// models API when reachable (accurate); discovery fallbacks fill only `id`.
-struct CopilotModelInfo: Codable, Equatable, Identifiable {
-    let id: String
-    var contextWindow: Int?
-    var maxOutputTokens: Int?
-    var reasoningEfforts: [String]?
-
-    /// "1M" / "264k" style label, nil when unknown.
-    var contextLabel: String? {
-        guard let contextWindow, contextWindow >= 1000 else { return nil }
-        if contextWindow >= 1_000_000 {
-            let millions = Double(contextWindow) / 1_000_000
-            return millions == millions.rounded()
-                ? "\(Int(millions))M" : String(format: "%.1fM", millions)
-        }
-        return "\(contextWindow / 1000)k"
-    }
-}
-
 /// UserDefaults-backed settings.
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
@@ -145,7 +125,10 @@ final class AppSettings: ObservableObject {
     ]
     /// Path to the `copilot` binary. Empty = auto-detect.
     @Published var copilotPath: String {
-        didSet { d.set(copilotPath, forKey: "copilotPath") }
+        didSet {
+            d.set(copilotPath, forKey: "copilotPath")
+            copilotCatalogUpdatedAt = nil
+        }
     }
     /// host:port of a Copilot CLI ACP server (`copilot --acp --port N`).
     /// It binds loopback by default, so remote instances are reached via
@@ -171,7 +154,10 @@ final class AppSettings: ObservableObject {
         ("low", "Low — fast & cheap"),
         ("medium", "Medium"),
         ("high", "High — deeper reasoning"),
-        ("xhigh", "XHigh — hardest (supported models)"),
+        ("xhigh", "XHigh — very high reasoning"),
+        ("max", "Max — maximum reasoning"),
+        ("none", "None — no reasoning"),
+        ("minimal", "Minimal"),
     ]
     /// Context tier passed as --context. Empty = ~/.copilot/settings.json default.
     @Published var copilotContextTier: String {
@@ -182,18 +168,22 @@ final class AppSettings: ObservableObject {
     @Published var copilotDiscourageSubagents: Bool {
         didSet { d.set(copilotDiscourageSubagents, forKey: "copilotDiscourageSubagents") }
     }
-    /// Cached model list discovered from `copilot help`.
+    /// Cached account model list from the configured Copilot runtime.
     @Published var copilotAvailableModels: [String] {
         didSet { d.set(copilotAvailableModels, forKey: "copilotAvailableModels") }
     }
-    /// Per-model metadata (context window, reasoning efforts) matching
-    /// copilotAvailableModels; entries may be id-only for fallback sources.
+    /// Per-model metadata matching copilotAvailableModels.
     @Published var copilotModelCatalog: [CopilotModelInfo] {
         didSet {
             if let data = try? JSONEncoder().encode(copilotModelCatalog) {
                 d.set(data, forKey: "copilotModelCatalog")
             }
         }
+    }
+    @Published private(set) var copilotRefreshInFlight = false
+    @Published private(set) var copilotModelRefreshError: String?
+    @Published private(set) var copilotCatalogUpdatedAt: Date? {
+        didSet { d.set(copilotCatalogUpdatedAt, forKey: "copilotCatalogUpdatedAt") }
     }
 
     func copilotModelInfo(_ id: String) -> CopilotModelInfo? {
@@ -212,11 +202,11 @@ final class AppSettings: ObservableObject {
     @Published var councilScope: String {
         didSet { d.set(councilScope, forKey: "councilScope") }
     }
-    /// Allowed --reasoning-effort values parsed from `copilot help`.
+    /// Union of the account models' advertised reasoning efforts.
     @Published var copilotEffortChoices: [String] {
         didSet { d.set(copilotEffortChoices, forKey: "copilotEffortChoices") }
     }
-    /// Allowed --context tier values parsed from `copilot help`.
+    /// Union of the account models' advertised context tiers.
     @Published var copilotContextTierChoices: [String] {
         didSet { d.set(copilotContextTierChoices, forKey: "copilotContextTierChoices") }
     }
@@ -309,274 +299,50 @@ final class AppSettings: ObservableObject {
         return override.isEmpty ? copilotFileContextTier : override
     }
 
-    /// Discover valid --model values by parsing `copilot help`
-    /// (the official docs point to the --model description as the
-    /// canonical list of model strings for your subscription).
-    /// True while a discovery pipeline is running (prevents overlapping
-    /// refreshes racing each other's results). Main-thread only.
-    private var copilotRefreshInFlight = false
-
-    func refreshCopilotModels() {
+    func refreshCopilotModels(
+        using loader: (String, @escaping (Result<[CopilotModelInfo], Error>) -> Void) -> Void = CopilotModelFetcher.fetch
+    ) {
         guard !copilotRefreshInFlight else { return }
         copilotRefreshInFlight = true
+        copilotModelRefreshError = nil
         let configured = copilotPath.trimmingCharacters(in: .whitespaces)
         let command = configured.isEmpty ? "copilot" : configured
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            // Help text serves two jobs: a model-list fallback, and the
-            // authoritative list of allowed --reasoning-effort/--context
-            // values for the pickers.
-            let helpText = Self.shellOutput("\(command.shellQuoted) help 2>&1",
-                                            timeout: 15) ?? ""
-            let effortChoices = Self.parseFlagChoices(
-                fromHelp: helpText, flag: "--reasoning-effort")
-                .filter { ["none", "minimal", "low", "medium", "high",
-                           "xhigh", "max"].contains($0) }
-            let tierChoices = Self.parseFlagChoices(
-                fromHelp: helpText, flag: "--context")
-                .filter { $0 == "default" || $0.contains("context") }
-
-            // A: Copilot's own models API — the source editors use; returns
-            // the account's actual entitled models WITH metadata (context
-            // windows, reasoning efforts). Internal but stable-ish.
-            var catalog = Self.copilotAPICatalog()
-            var source = "copilot API"
-            // B: model lists cached in ~/.copilot JSON state (ids only).
-            if catalog.count < 2 {
-                catalog = Self.parseModelTokens(from: Self.shellOutput(
-                    "cat ~/.copilot/*.json 2>/dev/null", timeout: 5) ?? "")
-                    .map { CopilotModelInfo(id: $0) }
-                source = "state files"
-            }
-            // C: legacy help-text parse (older CLIs listed models there).
-            if catalog.count < 2 {
-                catalog = Self.parseModels(fromHelp: helpText)
-                    .map { CopilotModelInfo(id: $0) }
-                source = "help text"
-            }
-            // D: ask the CLI itself — one headless turn requesting strict
-            // JSON. It's an LLM's self-report, so ids are validated
-            // against known family prefixes; last resort before the
-            // hardcoded list because it can be slow and imperfect.
-            // Skipped when the binary is missing (would waste the timeout).
-            if catalog.count < 2,
-               Self.shellOutput("command -v \(command.shellQuoted)", timeout: 5)?
-                   .trimmingCharacters(in: .whitespacesAndNewlines)
-                   .isEmpty == false {
-                catalog = Self.selfReportedCatalog(command: command)
-                source = "copilot self-report"
-            }
-            // E: curated baseline — kept current in the repo; a model
-            // your plan lacks simply errors visibly in the panel.
-            if catalog.count < 2 {
-                // Top/current models only — one per family tier.
-                catalog = ["auto",
-                           "gpt-5.6-sol", "gpt-5.6-luna",
-                           "claude-opus-4.8", "claude-sonnet-4.6",
-                           "claude-haiku-4.5",
-                           "gemini-2.5-pro"].map { CopilotModelInfo(id: $0) }
-                source = "curated list"
-            }
-            Log.write("model discovery: found \(catalog.count) models via \(source)"
-                + (effortChoices.isEmpty ? "" : "; efforts: \(effortChoices.joined(separator: "/"))")
-                + (tierChoices.isEmpty ? "" : "; context tiers: \(tierChoices.joined(separator: "/"))"))
-            DispatchQueue.main.async {
-                self?.copilotRefreshInFlight = false
-                if !effortChoices.isEmpty { self?.copilotEffortChoices = effortChoices }
-                if !tierChoices.isEmpty { self?.copilotContextTierChoices = tierChoices }
-                guard !catalog.isEmpty else { return }
-                self?.copilotModelCatalog = catalog
-                self?.copilotAvailableModels = catalog.map(\.id)
+        loader(command) { [weak self] result in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.copilotRefreshInFlight = false
+                guard self.copilotPath.trimmingCharacters(in: .whitespaces) == configured else {
+                    self.copilotModelRefreshError = "Copilot path changed during refresh. Refresh again for the new installation."
+                    return
+                }
+                switch result {
+                case .success(let catalog) where !catalog.isEmpty:
+                    self.copilotModelCatalog = catalog
+                    self.copilotAvailableModels = catalog.map(\.id)
+                    self.copilotEffortChoices = CopilotModelInfo.choices(
+                        supported: nil, fallback: catalog.flatMap { $0.reasoningEfforts ?? [] }, selected: "")
+                    self.copilotContextTierChoices = CopilotModelInfo.choices(
+                        supported: nil, fallback: catalog.flatMap { $0.contextTiers ?? [] }, selected: "")
+                    self.copilotCatalogUpdatedAt = Date()
+                    Log.write("model discovery: found \(catalog.count) entries via Copilot runtime")
+                case .success, .failure:
+                    let error: CopilotModelError
+                    if case .failure(let failure) = result {
+                        error = (failure as? CopilotModelError) ?? .runtime
+                    } else {
+                        error = .response
+                    }
+                    self.copilotModelRefreshError = error.localizedDescription
+                    Log.write("model discovery failed: \(error.rawValue); keeping cached catalog")
+                }
             }
         }
     }
 
-    /// Allowed values for a CLI flag, parsed from help text: quoted
-    /// choices ("low", "medium", …) or <a|b|c>-style alternations near
-    /// the flag name. Lenient — returns [] when the format isn't found.
-    static func parseFlagChoices(fromHelp text: String, flag: String) -> [String] {
-        guard let range = text.range(of: flag) else { return [] }
-        let section = String(text[range.upperBound...].prefix(300))
-        var seen = Set<String>()
-        var choices: [String] = []
-        func add(_ token: String) {
-            let t = token.trimmingCharacters(in: .whitespaces).lowercased()
-            guard t.count >= 2, t.count <= 20,
-                  t.range(of: "^[a-z][a-z0-9_-]*$",
-                          options: .regularExpression) != nil,
-                  seen.insert(t).inserted else { return }
-            choices.append(t)
+    func refreshCopilotModelsIfNeeded() {
+        if copilotCatalogUpdatedAt.map({ Date().timeIntervalSince($0) < 6 * 60 * 60 }) != true {
+            refreshCopilotModels()
         }
-        let ns = section as NSString
-        if let quoted = try? NSRegularExpression(pattern: "\"([a-z][a-z0-9_-]+)\"") {
-            for match in quoted.matches(
-                in: section, range: NSRange(location: 0, length: ns.length)) {
-                add(ns.substring(with: match.range(at: 1)))
-            }
-        }
-        if choices.count < 2,
-           let alternation = try? NSRegularExpression(
-               pattern: "[<(\\[]([a-z0-9_-]+(?:\\s*\\|\\s*[a-z0-9_-]+)+)[>)\\]]"),
-           let match = alternation.matches(
-               in: section, range: NSRange(location: 0, length: ns.length)).first {
-            ns.substring(with: match.range(at: 1))
-                .components(separatedBy: "|")
-                .forEach(add)
-        }
-        return choices
-    }
-
-    /// The account's entitled Copilot models, via the same internal API
-    /// editor integrations use (gh token → Copilot session token → /models).
-    /// Parses per-model metadata leniently — payload fields shift between
-    /// releases, so every lookup is optional.
-    private static func copilotAPICatalog() -> [CopilotModelInfo] {
-        let cmd = """
-        OAUTH=$(cat ~/.config/github-copilot/apps.json ~/.config/github-copilot/hosts.json ~/.copilot/*.json 2>/dev/null \
-          | grep -o '"oauth_token"[^,}]*' | head -1 | grep -o '[A-Za-z0-9_]*$'); \
-        [ -z "$OAUTH" ] && OAUTH=$(gh auth token 2>/dev/null); \
-        TOKEN=$(curl -sf --max-time 10 https://api.github.com/copilot_internal/v2/token \
-          -H "Authorization: token $OAUTH" | grep -o '"token":"[^"]*"' | cut -d'"' -f4); \
-        [ -n "$TOKEN" ] && curl -sf --max-time 10 https://api.githubcopilot.com/models \
-          -H "Authorization: Bearer $TOKEN" \
-          -H "Copilot-Integration-Id: vscode-chat" \
-          -H "Editor-Version: vscode/1.99.0"
-        """
-        guard let out = shellOutput(cmd, timeout: 25),
-              let data = out.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let list = obj["data"] as? [[String: Any]] else { return [] }
-        var seen = Set<String>()
-        var catalog: [CopilotModelInfo] = []
-        for item in list {
-            guard let id = item["id"] as? String, !id.isEmpty,
-                  !seen.contains(id) else { continue }
-            // Respect the picker flag when present (hides dupes/aliases).
-            if let pickerEnabled = item["model_picker_enabled"] as? Bool,
-               !pickerEnabled { continue }
-            seen.insert(id)
-            let capabilities = item["capabilities"] as? [String: Any]
-            let limits = capabilities?["limits"] as? [String: Any]
-            // Cast each candidate separately so a JSON null (NSNull) in
-            // the preferred key doesn't mask the fallback key.
-            let contextWindow = (limits?["max_context_window_tokens"] as? Int)
-                ?? (limits?["max_prompt_tokens"] as? Int)
-            let maxOutput = limits?["max_output_tokens"] as? Int
-            let supports = capabilities?["supports"] as? [String: Any]
-            let efforts = (item["supported_reasoning_efforts"] as? [String])
-                ?? (capabilities?["supported_reasoning_efforts"] as? [String])
-                ?? (supports?["reasoning_efforts"] as? [String])
-            catalog.append(CopilotModelInfo(
-                id: id,
-                contextWindow: contextWindow,
-                maxOutputTokens: maxOutput,
-                reasoningEfforts: efforts))
-        }
-        return catalog
-    }
-
-    /// Ask the Copilot CLI itself for its model list — a single headless
-    /// `copilot -p` turn constrained to strict JSON. The answer comes from
-    /// a model, not an API, so ids are whitelisted by family prefix and
-    /// must contain a digit; metadata is taken as advisory.
-    private static func selfReportedCatalog(command: String) -> [CopilotModelInfo] {
-        let prompt = """
-        Reply with ONLY a JSON array, no prose and no code fences. List the \
-        model ids available to GitHub Copilot CLI on this account, one object \
-        per model: {"id":"<model-id>","context_window":<input context window \
-        in tokens, or null if unsure>,"reasoning_efforts":["low","medium",\
-        "high"] or null if the model has no effort setting}. Only include \
-        ids you are certain exist. Do not run any tools.
-        """
-        guard let out = shellOutput(
-            "\(command.shellQuoted) -p \(prompt.shellQuoted) 2>/dev/null",
-            timeout: 60),
-            let start = out.firstIndex(of: "["),
-            let end = out.lastIndex(of: "]"), start < end,
-            let data = String(out[start...end]).data(using: .utf8),
-            let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-        else { return [] }
-        let families = ["gpt-", "claude-", "gemini-", "o1-", "o3-", "o4-",
-                        "grok-", "llama-", "codex-"]
-        var seen = Set<String>()
-        var catalog: [CopilotModelInfo] = []
-        for item in list {
-            guard let id = (item["id"] as? String)?.lowercased(),
-                  id.rangeOfCharacter(from: .decimalDigits) != nil,
-                  families.contains(where: { id.hasPrefix($0) }),
-                  !seen.contains(id) else { continue }
-            seen.insert(id)
-            catalog.append(CopilotModelInfo(
-                id: id,
-                contextWindow: item["context_window"] as? Int,
-                maxOutputTokens: nil,
-                reasoningEfforts: item["reasoning_efforts"] as? [String]))
-        }
-        return catalog
-    }
-
-    /// Run a login-shell command and capture combined output.
-    private static func shellOutput(_ command: String, timeout: TimeInterval) -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-l", "-c", command]
-        p.standardInput = FileHandle.nullDevice
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = pipe
-        var env = ProcessInfo.processInfo.environment
-        env["NO_COLOR"] = "1"
-        env["TERM"] = "dumb"
-        p.environment = env
-        do { try p.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(timeout)
-        while p.isRunning && Date() < deadline { usleep(100_000) }
-        if p.isRunning { p.terminate() }
-        return String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                      encoding: .utf8)
-    }
-
-    /// Extract model IDs from arbitrary text, whitelisted by family prefix
-    /// so flags, versions, and other junk can't reach the dropdown.
-    static func parseModelTokens(from text: String) -> [String] {
-        guard let regex = try? NSRegularExpression(
-            pattern: "\\b[a-z][a-z0-9]*(?:-[a-z0-9.]+)+\\b") else { return [] }
-        let families = ["gpt-", "claude-", "gemini-", "o1-", "o3-", "o4-",
-                        "grok-", "llama-", "codex-"]
-        let ns = text.lowercased() as NSString
-        var seen = Set<String>()
-        var models: [String] = []
-        for match in regex.matches(in: text.lowercased(),
-                                   range: NSRange(location: 0, length: ns.length)) {
-            let token = ns.substring(with: match.range)
-            guard token.rangeOfCharacter(from: .decimalDigits) != nil,
-                  token.count >= 4,
-                  families.contains(where: { token.hasPrefix($0) }),
-                  !seen.contains(token) else { continue }
-            seen.insert(token)
-            models.append(token)
-        }
-        return models
-    }
-
-    /// Extract model-ID-looking tokens (e.g. claude-sonnet-4.6, gpt-5.2)
-    /// from the text following the --model flag in the help output.
-    static func parseModels(fromHelp text: String) -> [String] {
-        guard let r = text.range(of: "--model") else { return [] }
-        let section = String(text[r.upperBound...].prefix(1200))
-        guard let regex = try? NSRegularExpression(
-            pattern: "[a-z][a-z0-9]*(?:[.-][a-z0-9.]+)+") else { return [] }
-        let ns = section as NSString
-        var seen = Set<String>()
-        var models: [String] = []
-        for match in regex.matches(in: section, range: NSRange(location: 0, length: ns.length)) {
-            let token = ns.substring(with: match.range)
-            // Real model IDs contain a digit; skips words like "premium-request".
-            guard token.rangeOfCharacter(from: .decimalDigits) != nil,
-                  !seen.contains(token) else { continue }
-            seen.insert(token)
-            models.append(token)
-        }
-        return models
     }
 
     /// Backend + current model, for pickers and badges.
@@ -767,6 +533,7 @@ final class AppSettings: ObservableObject {
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
         copilotModelCatalog = (d.data(forKey: "copilotModelCatalog")
             .flatMap { try? JSONDecoder().decode([CopilotModelInfo].self, from: $0) }) ?? []
+        copilotCatalogUpdatedAt = d.object(forKey: "copilotCatalogUpdatedAt") as? Date
         copilotEffortChoices = d.stringArray(forKey: "copilotEffortChoices") ?? []
         copilotContextTierChoices = d.stringArray(forKey: "copilotContextTierChoices") ?? []
         councilMembers = (d.data(forKey: "councilMembers")
