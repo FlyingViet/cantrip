@@ -391,6 +391,27 @@ Requires updated AgentGateway and an updated, reopened Cantrip host. Older
 hosts show an update notice. Uses existing paired LAN/Tailscale access; memory
 reads have a 20-second content deadline and do not block chat polling or sends.
 
+### Per-tab model settings
+
+Open **Chat menu > Model Settings**, or use **Model Settings** in a tab's
+actions, to change its model, reasoning effort and context window. The paired
+Mac provides its Copilot catalog and supported choices. Turn off **Use Mac
+defaults** to create a persistent override for this tab only; turn it back on
+to inherit the Mac's defaults again.
+
+This requires the Mac's **Copilot backend with Council mode off** and updated
+AgentGateway/Mac builds. Save while the tab, queue and shell are idle. The Mac
+rejects stale or busy changes, and uncertain writes are never automatically
+replayed. Reload settings before retrying an uncertain result. Switching servers
+closes the editor and cannot apply its draft to another Mac.
+
+The next prompt uses the saved options without clearing the visible transcript.
+Copilot rebuilds its runtime with recent conversation history, rather than
+transferring the previous model's full internal context. Standard/Long labels
+show input budgets; the advertised maximum is shown separately. Long context
+may cost more. **Refresh models** reads account metadata without sending a
+prompt; errors retain the cached catalog.
+
 ### Update and rebuild the Cantrip Mac
 
 Open **Settings > Cantrip Mac > Update & Rebuild Cantrip** for the selected

@@ -1178,6 +1178,9 @@ struct ChatView: View {
             .sheet(item: $renamingRemoteSession) { session in
                 CantripTabRenameSheet(model: remote, session: session)
             }
+            .sheet(item: $remote.modelSettingsSession) { session in
+                CantripModelSettingsView(model: remote, session: session, identity: remote.usageIdentity)
+            }
             .alert("Rename Tab", isPresented: $showRenameLocalTab) {
                 TextField("Tab name", text: $tabName)
                 Button("Cancel", role: .cancel) {}
@@ -1359,6 +1362,15 @@ struct ChatView: View {
     private var chatMenu: some View {
         Menu {
             if vm.activeLane == .cantrip {
+                if let session = remote.selectedSession {
+                    Button {
+                        composerFocused = false
+                        remote.modelSettingsSession = session
+                    } label: {
+                        Label("Model Settings", systemImage: "slider.horizontal.3")
+                    }
+                    .disabled(remote.isMutating)
+                }
                 Button {
                     showRemoteTabs = true
                 } label: {

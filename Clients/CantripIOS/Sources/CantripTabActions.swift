@@ -7,6 +7,12 @@ struct CantripTabActions: View {
     let onClose: () -> Void
 
     var body: some View {
+        Button {
+            model.modelSettingsSession = session
+        } label: {
+            Label("Model Settings", systemImage: "slider.horizontal.3")
+        }
+        .disabled(model.isMutating)
         Button(action: onRename) {
             Label("Rename Tab", systemImage: "pencil")
         }

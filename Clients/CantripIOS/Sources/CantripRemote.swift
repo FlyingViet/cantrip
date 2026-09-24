@@ -86,6 +86,8 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var historyRevision: String? = nil
     var historyStartID: String? = nil
     var hasOlderMessages: Bool? = nil
+    var supportsModelSettings: Bool? = nil
+    var modelSettingsRevision: String? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
 }
@@ -127,6 +129,7 @@ enum CantripRemoteError: LocalizedError {
     case memoryUnsupported
     case maintenanceUnsupported
     case copilotUsageUnsupported
+    case modelSettingsUnsupported
 
     static func isRouteFailure(_ error: Error) -> Bool {
         switch error {
@@ -179,6 +182,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on the Mac once to enable remote updates and rebuilds."
         case .copilotUsageUnsupported:
             return "Update and reopen Cantrip on your Mac to view Copilot account usage."
+        case .modelSettingsUnsupported:
+            return "Update and reopen Cantrip on your Mac to change a tab's model, effort and context window."
         }
     }
 }
@@ -831,6 +836,30 @@ struct CantripRemoteAPI {
         try await action("close", sessionID: id)
     }
 
+    func modelSettings(id: String, refreshModels: Bool = false) async throws -> CantripModelSettings {
+        do {
+            return try await request(path: "/api/v1/sessions/\(id)/model-settings"
+                                     + (refreshModels ? "?refresh=true" : ""))
+        } catch CantripRemoteError.http(let status, _) where status == 404 || status == 405 {
+            let host = try await session(id: id)
+            guard host.supportsModelSettings == true else { throw CantripRemoteError.modelSettingsUnsupported }
+            throw CantripRemoteError.http(status, "This tab's model settings are no longer available.")
+        }
+    }
+
+    fileprivate func prepareModelSettings(id: String, change: CantripModelSettingsChange) async throws -> Data {
+        let current = try await modelSettings(id: id)
+        guard current.revision == change.revision else {
+            throw CantripRemoteError.http(409, "Model settings changed on another device. Reload before saving.")
+        }
+        if let reason = current.unavailableReason { throw CantripRemoteError.http(409, reason) }
+        return try JSONEncoder().encode(change)
+    }
+
+    fileprivate func updateModelSettings(id: String, body: Data) async throws -> CantripModelSettings {
+        try await request(path: "/api/v1/sessions/\(id)/model-settings", method: "POST", body: body)
+    }
+
     func updateTab(id: String, name: String? = nil, isLocked: Bool? = nil) async throws -> CantripRemoteSession {
         let body = try await prepareTabUpdate(id: id, name: name, isLocked: isLocked)
         return try await updateTab(id: id, body: body)
@@ -1021,6 +1050,7 @@ struct CantripRemoteAPI {
 
 @MainActor
 final class CantripRemoteModel: ObservableObject {
+    @Published var modelSettingsSession: CantripRemoteSession?
     @Published private(set) var connectionState: CantripRemoteConnectionState = .disconnected
     @Published private(set) var configuredURL: String
     @Published private(set) var hasStoredToken: Bool
@@ -1569,6 +1599,23 @@ final class CantripRemoteModel: ObservableObject {
         try Task.checkCancellation()
         guard generation == configurationGeneration else { throw CancellationError() }
         return result
+    }
+
+    func modelSettings(id: String, refreshModels: Bool = false) async throws -> CantripModelSettings {
+        try await performHistoryRead { try await $0.modelSettings(id: id, refreshModels: refreshModels) }
+    }
+
+    func updateModelSettings(id: String, change: CantripModelSettingsChange, identity: UUID) async -> Bool {
+        guard identity == usageIdentity else {
+            errorMessage = "The connected Mac changed. Reopen model settings before saving."
+            return false
+        }
+        let result = await mutate(prepare: { api in
+            try await api.prepareModelSettings(id: id, change: change)
+        }, { api, body in
+            try await api.updateModelSettings(id: id, body: body)
+        })
+        return result != nil
     }
 
     @discardableResult
@@ -2273,6 +2320,9 @@ struct CantripRemoteView: View {
             }
             .sheet(item: $renamingSession) { session in
                 CantripTabRenameSheet(model: model, session: session)
+            }
+            .sheet(item: $model.modelSettingsSession) { session in
+                CantripModelSettingsView(model: model, session: session, identity: model.usageIdentity)
             }
         }
         .cantripTabDrawer(
