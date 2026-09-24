@@ -39,6 +39,7 @@ target or certify separately installed backend runtimes on either platform.
 | Selected-text capture | Missing | Windows UI Automation or guarded clipboard capture. |
 | Git actions/diffs/revert | Missing | Git status, staged-diff commit prompt, diff renderer, explicit revert. |
 | Notifications | Missing | Windows Action Center notifications for background completion. |
+| AgentGateway completion push | Missing | macOS provides opt-in paired device registration, durable completion dedup/queue and direct APNs delivery of final-answer previews. Requires a host APNs key and newly provisioned AgentGateway build; no success alerts for private, cancelled or failed runs. |
 | Mid-flight queue/redirect/inject | Missing | Mac: persistent native Copilot SDK sessions with immediate steering, Claude streaming input, separate queue/redirect/stop, durable ordered context delivery and no blind resend after lost acknowledgements. Existing AgentGateway/Mac/browser Remote Inject controls share the host implementation. Ordered queued prompt IDs/text and durable stable-ID removal remain available. |
 | Content-aware Auto sending | Missing | macOS defaults to a bounded, tool-free message classifier for Copilot, Claude and local models. Conservative queue fallback, manual overrides, and shared Remote/iOS decisions; no Windows router yet. |
 | Memory and file RAG | Missing | Markdown vault plus Windows Search/local semantic retrieval. |
