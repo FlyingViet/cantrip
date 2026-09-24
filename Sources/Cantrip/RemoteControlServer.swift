@@ -23,6 +23,7 @@ final class RemoteControlServer {
     private let buildMonitor: GitHubBuildMonitor
     private let usage: UsageTracker
     private let notifications: RemoteNotifications
+    private var maintenance: RemoteMaintenance?
     private let notificationLifecycleLock = NSLock()
     private var notificationLifecycleTask: Task<Void, Never>?
     private let maximumRequestBytes = RemoteImageAttachments.maximumRequestBytes
@@ -30,6 +31,7 @@ final class RemoteControlServer {
     init(manager: SessionManager, buildMonitor: GitHubBuildMonitor = GitHubBuildMonitor(),
          usage: UsageTracker = .shared,
          notifications: RemoteNotifications = RemoteNotifications(),
+         maintenance: RemoteMaintenance? = nil,
          encodingQueue: DispatchQueue = DispatchQueue(label: "cantrip.remote-encoding", qos: .userInitiated),
          sendTimeout: TimeInterval = 15,
          requestLog: @escaping (String) -> Void = Log.write) {
@@ -37,6 +39,7 @@ final class RemoteControlServer {
         self.buildMonitor = buildMonitor
         self.usage = usage
         self.notifications = notifications
+        self.maintenance = maintenance
         self.encodingQueue = encodingQueue
         self.sendTimeout = sendTimeout
         self.requestLog = requestLog
@@ -235,12 +238,48 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/memory"
                 || request.path == "/api/v1/memory/document"
                 || request.path == "/api/v1/notifications"
+                || request.path == "/api/v1/maintenance"
                 || request.path == "/api/v1/copilot/usage" else {
             sendError(404, "not found", on: connection)
             return
         }
         guard authorized(request.headers["authorization"]) else {
             sendError(401, "invalid pairing token", on: connection)
+            return
+        }
+        if request.path == "/api/v1/maintenance" {
+            guard ["GET", "POST"].contains(request.method) else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            guard let manager else {
+                sendError(503, "session manager unavailable", on: connection)
+                return
+            }
+            let maintenance = self.maintenance ?? RemoteMaintenance(manager: manager)
+            self.maintenance = maintenance
+            do {
+                let value: RemoteMaintenanceSnapshot
+                if request.method == "POST" {
+                    guard request.body.count <= 1024, let json,
+                          Set(json.keys) == ["id", "action", "revision"],
+                          let action = try? JSONDecoder().decode(RemoteMaintenanceRequest.self, from: request.body) else {
+                        sendError(400, "Provide UUID id and revision values, and one action: check, update, rebuild, or restart.", on: connection)
+                        return
+                    }
+                    value = try maintenance.start(action)
+                } else {
+                    value = maintenance.snapshot()
+                }
+                sendEncoded(status: request.method == "POST" ? 202 : 200, on: connection) {
+                    try JSONEncoder().encode(value)
+                }
+            } catch let error as RemoteMaintenanceError {
+                sendError(error.status, error.message, on: connection)
+            } catch {
+                Log.write("remote-maintenance: request failed: \(error.localizedDescription)")
+                sendError(500, "Could not save maintenance state on the Mac. No new operation was started.", on: connection)
+            }
             return
         }
         if request.path == "/api/v1/notifications" {
