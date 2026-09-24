@@ -278,6 +278,48 @@ content deadline without holding the chat polling/mutation gate. No file text
 is prefetched or persisted as a mobile offline copy. Server changes reset the
 viewer, and old hosts show an update notice rather than an empty memory list.
 
+### Update and rebuild this Mac from AgentGateway
+
+Use **Settings > Cantrip Mac > Update & Rebuild Cantrip** in an updated
+AgentGateway. The host needs this API installed and reopened once first.
+The app must run as `Cantrip.app` beside its source checkout's `.git` and
+`Makefile`; existing Git authentication, Xcode, and signing configuration
+remain on the Mac.
+
+**Check for Updates** fetches `origin/main` and reports the branch, local edits,
+and newer commit count. **Update & Rebuild** requires clean `main`, uses a
+fast-forward-only merge, and runs `make app`. **Rebuild Current Source** skips
+pulling and includes local edits, but refuses unresolved merge conflicts.
+No action stashes, resets, rebases, or discards work. Build output is limited
+to its latest 16,000 characters; errors remain visible.
+
+Building leaves the current app running. **Restart Cantrip** is separate and
+explicitly confirmed, verifies the installed signature, flushes session
+journals, rechecks for active work, then quits cleanly and reopens that exact
+bundle. Builds and restart refuse busy tabs, queues, and persistent shell
+commands, including private sessions; they never cancel a run. New work that
+starts during a build is left alone and blocks a subsequent restart.
+
+Pairing-authenticated `GET /api/v1/maintenance` returns build identities,
+availability, an opaque `revision`, aggregate busy-tab count, latest operation,
+and accepted request IDs. `POST` accepts exactly `id` (UUID), `revision` (from
+the latest status), and `action` (`check`, `update`, `rebuild`, `restart`);
+it returns 202 while the Mac continues independently of the phone. It accepts
+no client-specified shell commands, repository paths, or branches.
+
+The latest job and 64 request receipts persist in user-only
+`~/.cache/Cantrip/maintenance/state.json`. Retrying an accepted ID does not
+rerun it; reusing an ID for a different request fails. Every accepted operation
+rotates the revision, so even an old retry whose receipt was evicted cannot
+start work again. A lost mobile acknowledgement retains the same pending
+request per saved Mac; polling reconciles it without repeating the mutation.
+Only foreground status polling pauses when iOS backgrounds.
+
+If the Mac app exits during a build, the next host reports it interrupted,
+not successful; inspect the checkout before retrying. Restart errors are
+logged to `~/Library/Logs/Cantrip-restart.log`. This updates only the selected
+Mac, not other hosts or the iPhone app.
+
 ### See Copilot account usage in AgentGateway
 
 Tap the **usage gauge beside the Local/Remote lane picker (antenna)** in
