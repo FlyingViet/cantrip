@@ -468,6 +468,48 @@ final class RemoteControlServer {
             }
             return
         }
+        if parts.count == 2, parts[1] == "model-settings" {
+            do {
+                if request.method == "GET" {
+                    if request.query("refresh") == "true" {
+                        session.settings.refreshCopilotModels()
+                    } else if session.settings.copilotModelRefreshError == nil {
+                        session.settings.refreshCopilotModelsIfNeeded()
+                    }
+                } else if request.method == "POST" {
+                    guard let json, let revision = json["revision"] as? String,
+                          let inherit = json["usesDefaults"] as? NSNumber,
+                          CFGetTypeID(inherit) == CFBooleanGetTypeID() else {
+                        throw SessionModelSettingsError(400, "Provide revision and usesDefaults.")
+                    }
+                    let selection: SessionModelSelection?
+                    if inherit.boolValue {
+                        guard Set(json.keys) == ["revision", "usesDefaults"] else {
+                            throw SessionModelSettingsError(400, "Do not include overrides when using Mac defaults.")
+                        }
+                        selection = nil
+                    } else {
+                        guard Set(json.keys) == ["revision", "usesDefaults", "model", "effort", "contextTier"],
+                              let model = json["model"] as? String, let effort = json["effort"] as? String,
+                              let tier = json["contextTier"] as? String else {
+                            throw SessionModelSettingsError(400, "Provide model, effort and contextTier strings.")
+                        }
+                        selection = SessionModelSelection(model: model, effort: effort, contextTier: tier)
+                    }
+                    try session.updateModelSettings(selection, revision: revision)
+                } else {
+                    throw SessionModelSettingsError(405, "method not allowed")
+                }
+                let data = try JSONEncoder().encode(session.modelSettingsSnapshot)
+                send(status: 200, contentType: "application/json; charset=utf-8", body: data, on: connection)
+            } catch let error as SessionModelSettingsError {
+                sendError(error.status, error.message, on: connection)
+            } catch {
+                Log.write("remote-control: model settings failed: \(error.localizedDescription)")
+                sendError(500, "Could not save model settings on the Mac. Reload before retrying.", on: connection)
+            }
+            return
+        }
         if parts.count == 2, parts[1] == "move" {
             guard request.method == "POST" else {
                 sendError(405, "method not allowed", on: connection)
@@ -765,6 +807,8 @@ final class RemoteControlServer {
             "isLocked": session.isLocked,
             "supportsTabMetadata": true,
             "supportsTabReordering": true,
+            "supportsModelSettings": true,
+            "modelSettingsRevision": session.modelSettingsRevision,
             "workdir": session.workdir,
             "isStreaming": session.isStreaming,
             "canResume": session.canResume,
@@ -1021,6 +1065,11 @@ private extension RemoteControlServer {
     [data-cantrip-connected=false] .brain-indicator,[data-cantrip-connected=false].remote-sidebar .status-icon.running{animation:none;color:var(--tertiary)}
     @media(prefers-reduced-motion:reduce){.brain-indicator,.spinner,.status-icon.running{animation:none}}
     .session-tab[draggable=true]{cursor:grab}.session-tab.drop-target{outline:2px solid var(--accent);outline-offset:-2px}
+    #modelEditor{width:min(calc(100% - 24px),480px);max-height:90vh;overflow:auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
+    #modelEditor::backdrop{background:rgba(0,0,0,.35)}#modelForm{display:grid;gap:14px}#modelForm label{display:grid;gap:6px}
+    #modelForm select{width:100%;max-width:none;min-height:44px;border:1px solid var(--line);font-size:14px;color:var(--text)}
+    #modelEditor button{min-height:44px}#modelForm select:focus-visible,#modelEditor button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    #modelError{color:var(--text);font-size:13px}#modelForm .tab-actions{flex-wrap:wrap}#modelForm input{width:24px;height:24px}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
@@ -1035,9 +1084,20 @@ private extension RemoteControlServer {
     <strong id="tabEditorTitle">Tab settings</strong><label>Tab name<input id="tabName" autocomplete="off"></label>
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
+    <button id="tabModelSettings" type="button" class="control">Model Settings</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
+    <dialog id="modelEditor" aria-labelledby="modelTitle"><form id="modelForm">
+    <strong id="modelTitle">Model Settings</strong><span id="modelTabTitle"></span>
+    <label><input id="modelDefaults" type="checkbox">Use Mac defaults</label>
+    <label>Model<select id="modelChoice"></select></label><label>Effort<select id="modelEffort"></select></label>
+    <label>Context window<select id="modelContext"></select></label><span id="modelBudget" class="muted"></span>
+    <p class="muted">Only this tab changes. Save while idle; the next prompt uses the new settings. The conversation stays visible, but Copilot rebuilds its runtime with recent history. Long context may cost more.</p>
+    <div id="modelError" role="alert"></div><div class="tab-actions">
+    <button id="modelReload" type="button" class="control">Reload settings</button><button id="modelRefresh" type="button" class="control">Refresh models</button>
+    <button id="modelCancel" type="button" class="control">Cancel</button><button id="modelSave" type="submit" class="control primary">Save</button>
+    </div></form></dialog>
     <dialog id="promptReader" aria-labelledby="promptTitle"><strong id="promptTitle">Full prompt</strong>
     <pre id="promptPage"></pre><div class="tab-actions"><button id="promptPrevious" class="control">Previous</button><span id="promptNumber"></span><button id="promptNext" class="control">Next</button><button id="promptDownload" class="control">Download all</button><button id="promptDone" class="control">Done</button></div></dialog>
     <script>
@@ -1162,6 +1222,56 @@ private extension RemoteControlServer {
       if(sidebarLayout||event.ctrlKey||event.shiftKey||Math.abs(event.deltaX)>=Math.abs(event.deltaY)||nav.scrollWidth<=nav.clientWidth)return;
       event.preventDefault();const unit=event.deltaMode===1?16:event.deltaMode===2?nav.clientWidth:1;nav.scrollLeft+=event.deltaY*unit
     },{passive:false});
+    let modelEditorState=null;
+    function modelInfo(state){return state.data?.models.find(m=>m.id===(state.draft.model||state.data.fileDefaultModel))}
+    function modelValidation(state){if(state.usesDefaults)return "";const info=modelInfo(state),draft=state.draft;
+      if(draft.model&&!info)return "This model is no longer in the Mac's catalog.";
+      if(draft.effort&&!info?.reasoningEfforts?.includes(draft.effort))return "Choose a supported effort or Model default.";
+      if(draft.contextTier&&!info?.contextTiers?.includes(draft.contextTier))return "Choose a supported context window or CLI default.";return ""}
+    function modelTokens(value){return `${Number((value/(value>=1000000?1000000:value>=1000?1000:1)).toFixed(3))}${value>=1000000?"M":value>=1000?"k":""}`}
+    function modelOptions(id,values,current,defaultLabel,label=value=>value){const select=$(id);select.replaceChildren();
+      for(const value of [...new Set(["",...(values||[]),current])]){const option=document.createElement("option");option.value=value;option.textContent=value?label(value):defaultLabel;
+        option.disabled=Boolean(value)&&!values?.includes(value);select.append(option)}select.value=current}
+    function renderModelSettings(){const state=modelEditorState;if(!state)return;const info=state.data&&modelInfo(state),disabled=state.loading||state.saving,reason=state.data?.unavailableReason;
+      $("modelDefaults").checked=state.usesDefaults;$("modelDefaults").disabled=disabled||!state.data||Boolean(reason);
+      if(state.data){modelOptions("modelChoice",state.data.models.map(m=>m.id),state.draft.model,`CLI default (${state.data.fileDefaultModel||"Auto"})`);
+        modelOptions("modelEffort",info?.reasoningEfforts,state.draft.effort,"Model default");
+        modelOptions("modelContext",info?.contextTiers,state.draft.contextTier,"CLI default",tier=>{const name=tier==="default"?"Standard":tier==="long_context"?"Long":tier;
+          const budget=tier==="default"?info?.defaultContextPromptTokens:tier==="long_context"?info?.longContextPromptTokens:null;return budget?`${name} - ${modelTokens(budget)} input`:name})}
+      for(const id of ["modelChoice","modelEffort","modelContext"])$(id).disabled=disabled||!state.data||state.usesDefaults||Boolean(reason);
+      $("modelBudget").textContent=info?.contextWindow?`Advertised maximum: ${modelTokens(info.contextWindow)} tokens. Tier values are input budgets, not total context.`:"";
+      $("modelError").textContent=state.loading?"Loading model options...":state.error||reason||(state.data&&modelValidation(state))||state.data?.catalogError||"";
+      $("modelSave").disabled=disabled||!state.data||Boolean(reason)||Boolean(state.data&&modelValidation(state))||state.needsReload;
+      $("modelReload").disabled=disabled;$("modelRefresh").disabled=disabled;$("modelCancel").disabled=state.saving}
+    function editModelSettings(item){if(!item)return;modelEditorState={id:item.id,token,data:null,draft:null,usesDefaults:true,loading:false,saving:false,error:"",needsReload:false};
+      $("modelTabTitle").textContent=item.title;$("modelEditor").showModal();loadModelSettings(true)}
+    async function loadModelSettings(replaceDraft=false,refreshModels=false){const state=modelEditorState;if(!state||state.loading||state.saving)return;state.loading=true;renderModelSettings();
+      const current=()=>modelEditorState===state&&token===state.token;
+      try{let data=await api(`/api/v1/sessions/${state.id}/model-settings${refreshModels?"?refresh=true":""}`);if(!current())return;
+        const revision=replaceDraft?data.revision:state.data?.revision||data.revision;
+        for(let attempt=0;data.isRefreshing&&attempt<30;attempt++){await new Promise(resolve=>setTimeout(resolve,1000));if(!current())return;
+          data=await api(`/api/v1/sessions/${state.id}/model-settings`);if(!current())return}
+        if(data.revision!==revision)throw Error("Model settings changed on another device. Reload before saving.");
+        if(data.isRefreshing)throw Error("Model lookup is still running. Reload in a moment.");
+        state.data=data;if(replaceDraft){state.draft={...data.selection};state.usesDefaults=data.usesDefaults}state.error="";state.needsReload=false}
+      catch(error){if(current()){state.error=`${error.message} Reload settings before saving.`;state.needsReload=true}}
+      finally{if(current()){state.loading=false;renderModelSettings()}}}
+    $("modelCancel").onclick=()=>{if(modelEditorState?.saving)return;$("modelEditor").close();modelEditorState=null};
+    $("modelEditor").addEventListener("cancel",event=>{if(modelEditorState?.saving)event.preventDefault();else modelEditorState=null});
+    $("modelReload").onclick=()=>loadModelSettings(true);$("modelRefresh").onclick=()=>loadModelSettings(!modelEditorState?.data,true);
+    $("modelDefaults").onchange=()=>{const state=modelEditorState;if(!state?.data)return;state.usesDefaults=$("modelDefaults").checked;if(state.usesDefaults)state.draft={...state.data.defaults};renderModelSettings()};
+    $("modelChoice").onchange=()=>{const state=modelEditorState;if(!state?.data)return;state.draft.model=$("modelChoice").value;state.draft.effort="";
+      state.draft.contextTier=modelInfo(state)?.contextTiers?.includes("default")?"default":"";renderModelSettings()};
+    $("modelEffort").onchange=()=>{if(modelEditorState?.draft){modelEditorState.draft.effort=$("modelEffort").value;renderModelSettings()}};
+    $("modelContext").onchange=()=>{if(modelEditorState?.draft){modelEditorState.draft.contextTier=$("modelContext").value;renderModelSettings()}};
+    $("modelForm").onsubmit=async event=>{event.preventDefault();const state=modelEditorState;
+      if(!state?.data||state.loading||state.saving||state.needsReload||modelValidation(state)||token!==state.token)return;
+      const body={revision:state.data.revision,usesDefaults:state.usesDefaults,...(state.usesDefaults?{}:state.draft)};
+      state.saving=true;renderModelSettings();
+      try{await api(`/api/v1/sessions/${state.id}/model-settings`,{method:"POST",body:JSON.stringify(body)});
+        if(modelEditorState===state&&token===state.token){$("modelEditor").close();modelEditorState=null;await refresh()}}
+      catch(error){if(modelEditorState===state){state.error=`${error.message} The change may have reached Cantrip. Reload settings before retrying.`;state.needsReload=true}}
+      finally{if(modelEditorState===state){state.saving=false;renderModelSettings()}}};
     let editingTab=null,tabSaving=false;
     function editTab(item){editingTab=item;$("tabName").value=item.customTitle||item.title;$("tabLocked").checked=Boolean(item.isLocked);$("tabError").textContent="";updateTabMoveControls();$("tabEditor").showModal();$("tabName").focus();$("tabName").select()}
     function updateTabMoveControls(){const index=sessionItems.findIndex(s=>s.id===editingTab?.id);
@@ -1170,6 +1280,7 @@ private extension RemoteControlServer {
       $("tabMoveEarlier").disabled=movingTab||tabSaving||index<=0;$("tabMoveLater").disabled=movingTab||tabSaving||index<0||index>=sessionItems.length-1}
     $("tabMoveEarlier").onclick=()=>{if(editingTab)moveTabBy(editingTab.id,-1)};
     $("tabMoveLater").onclick=()=>{if(editingTab)moveTabBy(editingTab.id,1)};
+    $("tabModelSettings").onclick=()=>{if(editingTab&&!tabSaving&&!movingTab){const item=editingTab;$("tabEditor").close();editingTab=null;editModelSettings(item)}};
     $("tabCancel").onclick=()=>{$("tabEditor").close();editingTab=null};
     $("tabEditor").addEventListener("cancel",event=>{if(tabSaving||movingTab)event.preventDefault()});
     $("tabForm").onsubmit=async event=>{event.preventDefault();if(!editingTab||tabSaving||movingTab)return;const item=editingTab,body={};

@@ -29,6 +29,7 @@ struct LauncherView: View {
     @State private var historyEntries: [HistoryEntry] = []
     @State private var archivedSessions: [SessionManager.ArchivedSession] = []
     @State private var renamingSession: ChatSession?
+    @State private var modelSettingsSession: ChatSession?
     @State private var tabName = ""
     /// Instant caption for whichever toolbar icon is hovered.
     @State private var toolbarHint: String?
@@ -96,6 +97,14 @@ struct LauncherView: View {
                 .preference(key: ContentSizeKey.self, value: geo.size)
         })
         .coordinateSpace(name: "panel")
+        .sheet(isPresented: Binding(
+            get: { modelSettingsSession != nil },
+            set: { if !$0 { modelSettingsSession = nil } }
+        )) {
+            if let chat = modelSettingsSession {
+                SessionModelSettingsView(session: chat)
+            }
+        }
         .alert("Rename Tab", isPresented: Binding(
             get: { renamingSession != nil },
             set: { if !$0 { renamingSession = nil } }
@@ -662,6 +671,7 @@ struct LauncherView: View {
                     }
                     .help("Drag to reorder. Right-click for tab actions.")
                     .contextMenu {
+                        Button("Model Settings...") { modelSettingsSession = chat }
                         Button("Rename Tab...") {
                             tabName = chat.tabMetadata.customTitle ?? chat.title
                             renamingSession = chat
@@ -2736,9 +2746,15 @@ struct SettingsView: View {
                     Picker("", selection: $settings.copilotEffort) {
                         ForEach(copilotEffortOptions, id: \.value) { level in
                             Text(level.label).tag(level.value)
+                                .disabled(!level.value.isEmpty && selectedCopilotModelInfo?.reasoningEfforts?.contains(level.value) == false)
                         }
                     }
                     .labelsHidden()
+                    if !settings.copilotEffort.isEmpty,
+                       selectedCopilotModelInfo?.reasoningEfforts?.contains(settings.copilotEffort) == false {
+                        Text("The saved effort is not supported by this model. Choose Default or a supported level.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Context window").font(.caption).foregroundStyle(.secondary)
@@ -2746,9 +2762,15 @@ struct SettingsView: View {
                         Text("Default (\(settings.copilotFileContextTier ?? "standard"))").tag("")
                         ForEach(copilotContextTierOptions, id: \.self) { tier in
                             Text(contextTierLabel(tier)).tag(tier)
+                                .disabled(selectedCopilotModelInfo?.contextTiers?.contains(tier) == false)
                         }
                     }
                     .labelsHidden()
+                    if let tier = settings.effectiveCopilotContextTier,
+                       selectedCopilotModelInfo?.contextTiers?.contains(tier) == false {
+                        Text("The saved context tier is not supported by this model. Choose Standard.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 labeledField("Working directory", text: $settings.claudeWorkdir, prompt: NSHomeDirectory())
                 Toggle("Allow all tools (--allow-all-tools) — lets Copilot run commands unprompted", isOn: $settings.copilotAllowTools)
@@ -2886,70 +2908,44 @@ struct SettingsView: View {
         return options
     }
 
-    /// Context window per model: exact figure from the discovered model
-    /// catalog when available, else an approximate per-family guess.
+    private var selectedCopilotModelInfo: CopilotModelInfo? {
+        settings.effectiveCopilotModel.flatMap { settings.copilotModelInfo($0) }
+    }
+
     private func contextHint(for model: String) -> String? {
-        let m = model.lowercased()
-        if m == "auto" { return nil }
-        // The CLI's long_context tier overrides the model's standard
-        // window, so it must win over the catalog figure.
-        if m == "gpt-5.6-sol",
-           settings.effectiveCopilotContextTier == "long_context" { return "~1M" }
-        if let label = settings.copilotModelInfo(model)?.contextLabel {
-            return label
-        }
-        if m.contains("haiku") { return "~200k" }
-        if m.contains("claude") || m.contains("gemini") { return "~1M" }
-        if m.contains("gpt") { return "~400k" }
-        return nil
+        settings.copilotModelInfo(model)?.contextLabel.map { "\($0) max" }
     }
 
-    /// Effort options: the UNION of what the selected model advertises,
-    /// what `copilot help` says the flag accepts, and the static
-    /// defaults — options are never silently hidden, and the current
-    /// selection is always present.
     private var copilotEffortOptions: [(value: String, label: String)] {
-        var seen = Set<String>()
-        var values: [String] = []
-        func add(_ value: String) {
-            guard !value.isEmpty, seen.insert(value).inserted else { return }
-            values.append(value)
-        }
-        if let model = settings.effectiveCopilotModel {
-            settings.copilotModelInfo(model)?.reasoningEfforts?.forEach(add)
-        }
-        settings.copilotEffortChoices.forEach(add)
-        AppSettings.copilotEffortLevels.map(\.value).forEach(add)
-        add(settings.copilotEffort)
-        return [("", "Default")] + values.map { value in
+        let supported = selectedCopilotModelInfo?.reasoningEfforts
+        let values = CopilotModelInfo.choices(
+            supported: supported, fallback: settings.copilotEffortChoices, selected: settings.copilotEffort)
+        let defaultLabel = supported == [] ? "Default (effort not supported)" : "Default"
+        return [("", defaultLabel)] + values.map { value in
             (value,
-             AppSettings.copilotEffortLevels.first { $0.value == value }?.label
-                ?? value.capitalized)
+             (AppSettings.copilotEffortLevels.first { $0.value == value }?.label ?? value.capitalized)
+                + (supported?.contains(value) == false ? " (not supported)" : ""))
         }
     }
 
-    /// Context-tier options: values discovered from `copilot help` plus
-    /// the known baseline, with the current selection always present.
     private var copilotContextTierOptions: [String] {
-        var seen = Set<String>()
-        var tiers: [String] = []
-        func add(_ tier: String) {
-            guard !tier.isEmpty, seen.insert(tier).inserted else { return }
-            tiers.append(tier)
-        }
-        settings.copilotContextTierChoices.forEach(add)
-        ["default", "long_context"].forEach(add)
-        add(settings.copilotContextTier)
-        return tiers
+        CopilotModelInfo.choices(
+            supported: selectedCopilotModelInfo?.contextTiers,
+            fallback: settings.copilotContextTierChoices, selected: settings.copilotContextTier)
     }
 
     private func contextTierLabel(_ tier: String) -> String {
+        let name: String
         switch tier {
-        case "default": return "Standard"
-        case "long_context": return "Long · up to 1M"
-        default:
-            return tier.replacingOccurrences(of: "_", with: " ").capitalized
+        case "default": name = "Standard"
+        case "long_context": name = "Long"
+        default: name = tier.replacingOccurrences(of: "_", with: " ").capitalized
         }
+        if selectedCopilotModelInfo?.contextTiers?.contains(tier) == false {
+            return "\(name) (not supported)"
+        }
+        guard let tokens = selectedCopilotModelInfo?.promptTokens(for: tier) else { return name }
+        return "\(name) · \(CopilotModelInfo.tokenLabel(tokens)) input"
     }
 
     private func copilotModelLabel(_ model: String) -> String {
@@ -2982,13 +2978,22 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Re-discover available models and their context windows (Copilot API → CLI state → asking the CLI itself)")
+                .disabled(settings.copilotRefreshInFlight)
+                .accessibilityLabel("Refresh Copilot models")
+                .help("Refresh models, supported efforts, and context limits from the signed-in Copilot CLI. No chat or model request is made.")
+            }
+            if settings.copilotRefreshInFlight {
+                Text("Refreshing Copilot models…").font(.caption).foregroundStyle(.secondary)
+            } else if let error = settings.copilotModelRefreshError {
+                Text("\(error) Previously cached models are unchanged.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if let date = settings.copilotCatalogUpdatedAt {
+                Text("Catalog refreshed \(date.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .onAppear {
-            if settings.copilotAvailableModels.isEmpty {
-                settings.refreshCopilotModels()
-            }
+            settings.refreshCopilotModelsIfNeeded()
         }
     }
 

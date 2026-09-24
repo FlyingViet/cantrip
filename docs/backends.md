@@ -63,9 +63,23 @@ be approved by the current action policy are denied rather than left hanging.
 5. Apply the choice to your next request; changing a picker does not rewrite
    an answer already being generated.
 
-On macOS, backend/model settings are shared app settings, not independent
-saved selections for every tab. Working directories and conversations are
-per-session.
+On macOS, the backend and its defaults are shared app settings. Copilot tabs
+can override the model, effort and context tier through **Model Settings** in
+the tab's context menu, Mac/browser Remote or AgentGateway. Overrides persist
+per tab, require idle work and Council mode off, and can be removed with
+**Use Mac defaults**. Working directories and conversations are also per-session.
+
+On Mac, the refresh button beside the Copilot model picker reads the signed-in
+CLI's live account catalog, including each model's supported efforts and context
+tiers. It does not create a chat or invoke a model. Opening the picker refreshes
+catalogs older than six hours; lookup failures leave the previous catalog intact
+and show an error rather than substituting guessed models.
+
+The model label shows the API's advertised **maximum context**. Context-tier
+labels separately show the API's **input-token budget**, when available; these
+are not interchangeable with total context or maximum output tokens. Unsupported
+saved effort/tier values remain visible with a warning, without changing active
+sessions or silently resetting your preferences.
 
 ## Connect a local model
 

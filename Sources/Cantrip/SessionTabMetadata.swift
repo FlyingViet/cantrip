@@ -17,6 +17,7 @@ enum SessionTabError: LocalizedError {
 struct SessionTabMetadata: Equatable {
     private(set) var customTitle: String?
     var isLocked = false
+    var modelSettings: SessionModelSelection?
 
     mutating func rename(_ name: String) throws {
         let normalized = name.split(whereSeparator: \.isWhitespace).joined(separator: " ")
@@ -30,13 +31,23 @@ struct SessionTabMetadata: Equatable {
 
     static func load(id: UUID, defaults: UserDefaults = .standard) -> Self {
         let value = defaults.dictionary(forKey: key(id)) ?? [:]
-        return Self(customTitle: value["customTitle"] as? String,
-                    isLocked: value["isLocked"] as? Bool ?? false)
+        var result = Self(customTitle: value["customTitle"] as? String,
+                          isLocked: value["isLocked"] as? Bool ?? false)
+        if let selection = value["modelSettings"] as? [String: String],
+           let model = selection["model"], let effort = selection["effort"],
+           let contextTier = selection["contextTier"] {
+            result.modelSettings = SessionModelSelection(model: model, effort: effort, contextTier: contextTier)
+        }
+        return result
     }
 
     func save(id: UUID, defaults: UserDefaults = .standard) {
         var value: [String: Any] = ["isLocked": isLocked]
         if let customTitle { value["customTitle"] = customTitle }
+        if let modelSettings {
+            value["modelSettings"] = ["model": modelSettings.model, "effort": modelSettings.effort,
+                                      "contextTier": modelSettings.contextTier]
+        }
         defaults.set(value, forKey: Self.key(id))
     }
 

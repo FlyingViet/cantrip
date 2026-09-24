@@ -5,6 +5,8 @@ import Foundation
 /// never by replaying possibly accepted session.send requests.
 final class CopilotBackend: Backend {
     var modelOverride: String?
+    var effortOverride: String?
+    var contextTierOverride: String?
     var readOnly = false
     private let settings = AppSettings.shared
     private let queue = DispatchQueue(label: "copilot-backend")
@@ -60,8 +62,8 @@ final class CopilotBackend: Backend {
                 ? "copilot" : settings.copilotPath,
             workdir: workdir,
             model: modelOverride ?? settings.copilotModel,
-            effort: settings.copilotEffort,
-            contextTier: settings.copilotContextTier,
+            effort: effortOverride ?? settings.copilotEffort,
+            contextTier: contextTierOverride ?? settings.copilotContextTier,
             allowTools: settings.copilotAllowTools || settings.allowActions,
             readOnly: readOnly
         )
