@@ -14,9 +14,9 @@ struct CantripTabActions: View {
         }
         if session.supportsInputRequests == true {
             Button {
-                model.inputRequestsSession = session
+                Task { await model.showInputRequests(sessionID: session.id) }
             } label: {
-                Label("Review Input Requests", systemImage: "person.crop.circle.badge.questionmark")
+                Label("View Questions in Chat", systemImage: "person.crop.circle.badge.questionmark")
             }
             if session.isLocalPrivate != true {
                 Button {

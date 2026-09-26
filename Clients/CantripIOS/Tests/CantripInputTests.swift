@@ -35,11 +35,11 @@ final class CantripInputTests: XCTestCase {
         ]]])
     }
 
-    private func model() async throws -> CantripRemoteModel {
+    private func model(authorize: @escaping (String) async throws -> Void = { _ in }) async throws -> CantripRemoteModel {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [InputRequestProtocol.self]
         let client = URLSession(configuration: config)
-        let model = CantripRemoteModel(urlSession: client, authorizeSensitiveAction: { _ in })
+        let model = CantripRemoteModel(urlSession: client, authorizeSensitiveAction: authorize)
         let configured = await model.configure(url: "https://input.example", pairingToken: "input-fixture", tailscaleOnly: true)
         XCTAssertTrue(configured, model.errorMessage ?? "")
         addTeardownBlock { @MainActor in
@@ -47,6 +47,137 @@ final class CantripInputTests: XCTestCase {
             client.invalidateAndCancel(); InputRequestProtocol.handler = nil
         }
         return model
+    }
+
+    private func sessionData(pending: Bool = true, chatReplies: Bool = true) throws -> Data {
+        let input = try JSONSerialization.jsonObject(with: data(kind: "question")) as! [String: Any]
+        var session: [String: Any] = [
+            "id": sessionID, "title": "Work", "workdir": "/tmp", "isStreaming": true,
+            "canResume": false, "councilMode": false, "queuedCount": 0, "messages": [],
+            "supportsInputRequests": true, "supportsImageAttachments": true, "supportsAutoDelivery": true,
+            "pendingInputCount": pending ? 1 : 0, "supportsChatInputReplies": chatReplies
+        ]
+        if chatReplies { session["pendingInputs"] = pending ? input["requests"] : [] }
+        return try JSONSerialization.data(withJSONObject: ["session": session])
+    }
+
+    private func body(_ request: URLRequest) throws -> [String: Any] {
+        var data = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                guard count > 0 else { break }
+                data.append(contentsOf: buffer.prefix(count))
+            }
+        }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    func testChatReplyPinsQuestionAndPreservesImageWithoutBiometrics() async throws {
+        let model = try await model { _ in XCTFail("Ordinary chat questions do not need Face ID") }
+        var paths: [String] = []
+        let image = ChatImageAttachment(data: Data("fixture-image".utf8))
+        InputRequestProtocol.handler = { request in
+            paths.append(request.url!.path)
+            if request.httpMethod == "GET" { return (200, try self.sessionData()) }
+            let body = try self.body(request)
+            XCTAssertEqual(body["inputRequestID"] as? String, self.id.uuidString)
+            XCTAssertEqual(body["text"] as? String, "Here is the error")
+            let images = try XCTUnwrap(body["images"] as? [[String: String]])
+            XCTAssertEqual(images.first?["data"], image.data.base64EncodedString())
+            return (202, try self.sessionData(pending: false))
+        }
+        await model.selectSession(sessionID)
+        paths = []
+        let sent = await model.send("Here is the error", mode: .auto, images: [image])
+        XCTAssertTrue(sent, model.errorMessage ?? "")
+        XCTAssertEqual(paths, ["/api/v1/sessions/\(sessionID)", "/api/v1/sessions/\(sessionID)/messages"])
+        XCTAssertNil(model.chatInputRequest)
+        XCTAssertEqual(model.selectedSession?.queuedCount, 0)
+    }
+
+    func testResolvedQuestionDoesNotRetargetOrQueueReply() async throws {
+        let model = try await model { _ in XCTFail("No biometric prompt for a question") }
+        InputRequestProtocol.handler = { _ in (200, try self.sessionData()) }
+        await model.selectSession(sessionID)
+        var requests = 0
+        InputRequestProtocol.handler = { request in
+            requests += 1
+            XCTAssertEqual(request.httpMethod, "GET", "Never POST a stale reply as a new task")
+            return (200, try self.sessionData(pending: false))
+        }
+        let sent = await model.send("stale reply", mode: .auto)
+        XCTAssertFalse(sent)
+        XCTAssertEqual(requests, 1)
+        XCTAssertTrue(model.errorMessage?.contains("already answered") == true)
+    }
+
+    func testLegacyHostQuestionUsesInputAPIAndRejectsAttachments() async throws {
+        let model = try await model { _ in XCTFail("No biometric prompt for a question") }
+        InputRequestProtocol.handler = { _ in (200, try self.sessionData(chatReplies: false)) }
+        await model.selectSession(sessionID)
+        let requests = try JSONDecoder().decode([String: [CantripInputRequest]].self, from: data(kind: "question"))["requests"]!
+        model.inputContext = .init(identity: model.usageIdentity, sessionID: sessionID, requests: requests)
+        InputRequestProtocol.handler = { _ in XCTFail("Old host cannot safely receive attached question replies"); return (200, Data()) }
+        let attached = await model.send("screenshot", mode: .auto, images: [.init(data: Data([1]))])
+        XCTAssertFalse(attached)
+        var paths: [String] = []
+        InputRequestProtocol.handler = { request in
+            paths.append(request.url!.path)
+            if request.httpMethod == "GET" { return (200, try self.data(kind: "question")) }
+            XCTAssertEqual(try self.body(request)["text"] as? String, "answer in chat")
+            return (200, Data(#"{"accepted":true}"#.utf8))
+        }
+        let sent = await model.send("answer in chat", mode: .auto)
+        XCTAssertTrue(sent, model.errorMessage ?? "")
+        XCTAssertEqual(paths, ["/api/v1/sessions/\(sessionID)/input", "/api/v1/sessions/\(sessionID)/input/\(id)"])
+    }
+
+    func testQuestionOnlyRouteCannotSubmitPassword() async throws {
+        let model = try await model { _ in XCTFail("Question route must reject a secret rather than authorize it") }
+        InputRequestProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (200, try self.data(kind: "secret"))
+        }
+        let sent = await model.respondToInput(sessionID: sessionID, id: id,
+            answer: .init(decision: "submit", text: "not-a-chat-answer"), identity: model.usageIdentity, questionOnly: true)
+        XCTAssertFalse(sent)
+    }
+
+    func testQuestionsStayOutOfSecureModalAndInlineHasNoAnswerField() async throws {
+        let model = try await model { _ in XCTFail("Rendering questions must not authenticate") }
+        InputRequestProtocol.handler = { request in
+            if request.url?.path.hasSuffix("/input") == true { return (200, try self.data(kind: "question")) }
+            return (200, try self.sessionData())
+        }
+        await model.selectSession(sessionID)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let session = try XCTUnwrap(model.selectedSession)
+        func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
+        for modal in [false, true] {
+            let view = modal ? AnyView(CantripInputRequestsView(model: model, session: session))
+                : AnyView(ScrollView { CantripInputTranscript(model: model) })
+            let controller = UIHostingController(rootView: view)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 320, height: 700)
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true; window.rootViewController = nil }
+            try await Task.sleep(for: .milliseconds(350))
+            controller.view.layoutIfNeeded()
+            XCTAssertFalse(descendants(controller.view).contains { $0 is UITextField || ($0 as? UITextView)?.isEditable == true },
+                           "Ordinary replies use the normal chat composer, not another answer form")
+            let attachment = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            })
+            attachment.name = modal ? "Secure modal excludes question" : "Inline chat question"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertNil(model.inputRequestsSession)
     }
 
     func testResponsePreflightsOriginalChallengeAndNeverUsesChat() async throws {

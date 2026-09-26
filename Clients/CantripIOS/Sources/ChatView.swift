@@ -1605,6 +1605,9 @@ struct ChatView: View {
                                                 sessionID: remote.selectedSessionID ?? "")
                 }
             }
+            if vm.activeLane == .cantrip {
+                CantripInputTranscript(model: remote, focusComposer: { composerFocused = true })
+            }
         }
     }
 

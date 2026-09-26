@@ -18,21 +18,89 @@ struct CantripInputAnswer: Encodable {
     var text: String? = nil
 }
 
+struct CantripInputContext {
+    let identity: UUID
+    let sessionID: String
+    let requests: [CantripInputRequest]
+}
+
+extension CantripRemoteModel {
+    var pendingInputRequests: [CantripInputRequest] {
+        if let requests = selectedSession?.pendingInputs { return requests }
+        guard let inputContext, inputContext.identity == usageIdentity,
+              inputContext.sessionID == selectedSessionID else { return [] }
+        return inputContext.requests
+    }
+
+    var chatInputRequest: CantripInputRequest? {
+        pendingInputRequests.first { $0.kind == "question" && $0.id == inputReplyID }
+            ?? pendingInputRequests.first { $0.kind == "question" }
+    }
+}
+
 struct CantripInputBanner: View {
     @ObservedObject var model: CantripRemoteModel
 
     var body: some View {
-        if let session = model.sessions.first(where: { $0.id == model.selectedSessionID }),
-           (session.pendingInputCount ?? 0) > 0 {
-            Button {
-                model.inputRequestsSession = session
-            } label: {
-                Label("Your input is needed (\(session.pendingInputCount ?? 0))", systemImage: "person.crop.circle.badge.questionmark")
-                    .font(.callout.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
-            }
-            .buttonStyle(.bordered)
+        if let question = model.chatInputRequest {
+            Text("Question waiting: \(question.title). Use Auto to reply.")
+                .font(.caption).foregroundStyle(.secondary)
             .padding(.horizontal)
             .accessibilityIdentifier("cantrip.input.banner")
+        }
+    }
+}
+
+struct CantripInputTranscript: View {
+    @ObservedObject var model: CantripRemoteModel
+    var focusComposer: () -> Void = {}
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let error { Text(error).foregroundStyle(.orange) }
+            if let session = model.selectedSession {
+                ForEach(model.pendingInputRequests) { request in
+                    if request.kind == "secret" {
+                        Button {
+                            model.inputRequestsSession = session
+                        } label: {
+                            Label("Enter password or passphrase securely", systemImage: "lock.shield")
+                                .frame(minHeight: 44)
+                        }.buttonStyle(.bordered)
+                    } else {
+                        CantripInputCard(request: request, busy: model.isMutating, reply: {
+                            model.inputReplyID = request.id
+                            focusComposer()
+                        }) { answer in
+                            let identity = model.usageIdentity
+                            Task {
+                                if await model.respondToInput(sessionID: session.id, id: request.id, answer: answer,
+                                    identity: identity, questionOnly: request.kind == "question") {
+                                    await model.refreshNow()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .accessibilityIdentifier("cantrip.input.inline")
+        .task(id: "\(model.usageIdentity)/\(model.selectedSession?.id ?? "")/\(model.selectedSession?.supportsInputRequests == true)") {
+            guard let session = model.selectedSession, session.supportsInputRequests == true,
+                  session.pendingInputs == nil else { return }
+            let identity = model.usageIdentity
+            while !Task.isCancelled {
+                do {
+                    let requests = try await model.inputRequests(sessionID: session.id)
+                    guard identity == model.usageIdentity, session.id == model.selectedSessionID else { return }
+                    model.inputContext = .init(identity: identity, sessionID: session.id, requests: requests)
+                    error = nil
+                } catch is CancellationError { return }
+                catch { self.error = error.localizedDescription }
+                do { try await Task.sleep(for: .seconds(2)) }
+                catch { return }
+            }
         }
     }
 }
@@ -58,13 +126,13 @@ struct CantripInputRequestsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(session.title).font(.headline)
-                    Text("Face ID or Touch ID confirms affirmative responses. It does not authorize protected macOS dialogs.")
+                    Text("Use this secure form only for passwords and passphrases. Questions and approvals appear in chat.")
                         .font(.footnote).foregroundStyle(.secondary)
                     NavigationLink("Mac Permissions & View Mac") { CantripMacAccessView(remote: model) }
                     if loading { ProgressView("Loading pending requests...") }
                     if let error { Text(error).foregroundStyle(.orange).accessibilityIdentifier("cantrip.input.error") }
                     if !loading, requests.isEmpty {
-                        Text("No pending input. The request may have been answered, cancelled or expired.")
+                        Text("No password is pending. Return to chat for questions and other actions.")
                     }
                     ForEach(requests) { request in
                         CantripInputCard(request: request, busy: submitting) { answer in
@@ -82,7 +150,7 @@ struct CantripInputRequestsView: View {
                     }
                 }.padding()
             }
-            .navigationTitle("Input Needed").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Secure Input").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.disabled(submitting) }
                 ToolbarItem(placement: .primaryAction) { Button("Reload") { Task { await load() } }.disabled(submitting) }
@@ -104,7 +172,7 @@ struct CantripInputRequestsView: View {
         do {
             let value = try await model.inputRequests(sessionID: session.id)
             guard identity == model.usageIdentity else { return }
-            requests = value
+            requests = value.filter { $0.kind == "secret" }
         } catch is CancellationError {
             return
         } catch { self.error = error.localizedDescription }
@@ -115,6 +183,7 @@ struct CantripInputRequestsView: View {
 private struct CantripInputCard: View {
     let request: CantripInputRequest
     let busy: Bool
+    var reply: () -> Void = {}
     let send: (CantripInputAnswer) -> Void
     @State private var text = ""
 
@@ -131,17 +200,16 @@ private struct CantripInputCard: View {
                 Text("Sent only to the verified waiting program on the Mac. Not added to chat or saved by Cantrip.")
                     .font(.footnote).foregroundStyle(.secondary)
             } else if request.kind == "question" {
-                if !request.choices.isEmpty {
-                    Picker("Response", selection: $text) {
-                        Text("Choose a response").tag("")
-                        ForEach(request.choices, id: \.self) { Text($0).tag($0) }
+                ForEach(request.choices, id: \.self) { choice in
+                    Button(choice) {
+                        send(.init(decision: "submit", text: choice))
                     }
-                    .pickerStyle(.menu)
+                    .buttonStyle(.bordered).frame(minHeight: 44)
                 }
                 if request.allowsFreeform {
-                    TextField("Answer", text: $text, axis: .vertical).lineLimit(2...8)
+                    Button("Reply in chat", action: reply).frame(minHeight: 44)
+                    Text("Use the normal chat composer, including attachments. Do not enter passwords here.").font(.footnote)
                 }
-                Text("This answer is shared with the agent. Do not enter passwords here.").font(.footnote)
             }
             if let raw = request.url, let url = URL(string: raw), url.scheme == "https" {
                 if let code = request.code { Text("Device code: \(code)").monospaced().textSelection(.enabled) }
@@ -165,9 +233,9 @@ private struct CantripInputCard: View {
         if request.kind == "approval" {
             Button("Deny", role: .destructive) { answer("deny") }.frame(minHeight: 44)
             Button("Approve once") { answer("approve") }.buttonStyle(.borderedProminent).frame(minHeight: 44)
-        } else if ["question", "secret"].contains(request.kind) {
+        } else if request.kind == "secret" {
             Button("Submit") { answer("submit") }.buttonStyle(.borderedProminent).disabled(text.isEmpty).frame(minHeight: 44)
-        } else {
+        } else if request.kind != "question" {
             Button(request.kind == "login" ? "I've signed in" : "Done on Mac") { answer("approve") }.frame(minHeight: 44)
         }
     }

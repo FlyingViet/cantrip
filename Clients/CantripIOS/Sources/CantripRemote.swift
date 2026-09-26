@@ -93,6 +93,8 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsPrivateLocalSettings: Bool? = nil
     var supportsInputRequests: Bool? = nil
     var pendingInputCount: Int? = nil
+    var supportsChatInputReplies: Bool? = nil
+    var pendingInputs: [CantripInputRequest]? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
 }
@@ -767,13 +769,23 @@ struct CantripRemoteAPI {
 
     fileprivate func prepareMessage(
         _ text: String, mode: CantripDeliveryMode, sessionID: String,
-        images: [ChatImageAttachment], videoID: String? = nil
+        images: [ChatImageAttachment], videoID: String? = nil, inputRequestID: UUID? = nil
     ) async throws -> Data {
         guard images.count <= ImageAttachmentProcessor.maximumCount else {
             throw ImageAttachmentError.tooMany
         }
         // Confirm reachability and capabilities on the route that will receive the write.
         let host = try await session(id: sessionID)
+        if let inputRequestID {
+            guard mode == .auto, host.supportsChatInputReplies == true else {
+                throw ServerConfigurationError(message: "Update and reopen Cantrip on the Mac to send chat replies with attachments.")
+            }
+            guard host.pendingInputs?.contains(where: {
+                $0.id == inputRequestID && $0.kind == "question" && $0.expiresAt > Date().timeIntervalSince1970
+            }) == true else {
+                throw CantripRemoteError.http(409, "This question was already answered, cancelled or expired. Your reply was not queued.")
+            }
+        }
         guard images.isEmpty || host.supportsImageAttachments == true else {
             throw CantripRemoteError.imagesUnsupported
         }
@@ -788,7 +800,8 @@ struct CantripRemoteAPI {
         guard mode != .auto || host.supportsAutoDelivery == true else {
             throw CantripRemoteError.autoDeliveryUnsupported
         }
-        return try JSONEncoder().encode(CantripMessageBody(text: text, mode: mode, images: images, videoID: videoID))
+        return try JSONEncoder().encode(CantripMessageBody(text: text, mode: mode, images: images,
+                                                         videoID: videoID, inputRequestID: inputRequestID))
     }
 
     func videoStatus(sessionID: String, uploadID: UUID) async throws -> CantripVideoUploadStatus? {
@@ -908,9 +921,12 @@ struct CantripRemoteAPI {
         guard response.stopped else { throw CantripRemoteError.invalidResponse }
     }
 
-    fileprivate func prepareInput(sessionID: String, id: UUID, answer: CantripInputAnswer) async throws -> Data {
+    fileprivate func prepareInput(sessionID: String, id: UUID, answer: CantripInputAnswer,
+                                  questionOnly: Bool = false) async throws -> Data {
         let current = try await inputRequests(sessionID: sessionID)
-        guard current.contains(where: { $0.id == id && $0.expiresAt > Date().timeIntervalSince1970 }) else {
+        guard current.contains(where: {
+            $0.id == id && $0.expiresAt > Date().timeIntervalSince1970 && (!questionOnly || $0.kind == "question")
+        }) else {
             throw CantripRemoteError.http(409, "This request was already answered, cancelled or expired.")
         }
         return try JSONEncoder().encode(answer)
@@ -1149,6 +1165,8 @@ struct CantripRemoteAPI {
 final class CantripRemoteModel: ObservableObject {
     @Published var modelSettingsSession: CantripRemoteSession?
     @Published var inputRequestsSession: CantripRemoteSession?
+    @Published var inputContext: CantripInputContext?
+    @Published var inputReplyID: UUID?
     @Published var showingMacAccess = false
     @Published private(set) var connectionState: CantripRemoteConnectionState = .disconnected
     @Published private(set) var configuredURL: String
@@ -1425,9 +1443,9 @@ final class CantripRemoteModel: ObservableObject {
                 throw ServerConfigurationError(message: "Finish the current upload or request before opening this notification.")
             }
             await selectSession(target.sessionID.uuidString)
-            if target.kind == "input", let session = selectedSession {
+            if target.kind == "input" {
                 showingMacAccess = false
-                inputRequestsSession = session
+                inputRequestsSession = nil
             }
             if target.kind == "macAttention" {
                 inputRequestsSession = nil
@@ -1742,6 +1760,12 @@ final class CantripRemoteModel: ObservableObject {
         try await performHistoryRead { try await $0.inputRequests(sessionID: sessionID) }
     }
 
+    func showInputRequests(sessionID: String) async {
+        await selectSession(sessionID)
+        inputRequestsSession = nil
+        notificationNavigationID = UUID()
+    }
+
     func macAccess() async throws -> CantripMacAccess {
         try await performHistoryRead { try await $0.macAccess() }
     }
@@ -1788,12 +1812,13 @@ final class CantripRemoteModel: ObservableObject {
         try await performHistoryRead { try await $0.stopDesktop(lease: lease) }
     }
 
-    func respondToInput(sessionID: String, id: UUID, answer: CantripInputAnswer, identity: UUID) async -> Bool {
+    func respondToInput(sessionID: String, id: UUID, answer: CantripInputAnswer, identity: UUID,
+                        questionOnly: Bool = false) async -> Bool {
         guard usageIdentity == identity else {
             errorMessage = "The connected Mac changed. Reopen the input request before responding."
             return false
         }
-        if answer.decision == "approve" || answer.decision == "submit" {
+        if !questionOnly && (answer.decision == "approve" || answer.decision == "submit") {
             do {
                 try await authorizeSensitiveAction("Confirm your response to the pending Cantrip request.")
                 try Task.checkCancellation()
@@ -1807,7 +1832,7 @@ final class CantripRemoteModel: ObservableObject {
             }
         }
         let accepted = await mutate(prepare: { api in
-            try await api.prepareInput(sessionID: sessionID, id: id, answer: answer)
+            try await api.prepareInput(sessionID: sessionID, id: id, answer: answer, questionOnly: questionOnly)
         }, { api, data in
             try await api.respondToInput(sessionID: sessionID, id: id, body: data)
         })
@@ -1853,11 +1878,21 @@ final class CantripRemoteModel: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !images.isEmpty || video != nil,
               let sessionID = sessionID ?? selectedSessionID else { return false }
+        let question = mode == .auto && sessionID == selectedSessionID ? chatInputRequest : nil
+        if let question, selectedSession?.supportsChatInputReplies != true {
+            guard images.isEmpty, video == nil else {
+                errorMessage = "Update and reopen Cantrip on the Mac to attach files to this chat reply."
+                return false
+            }
+            return await respondToInput(sessionID: sessionID, id: question.id,
+                answer: .init(decision: "submit", text: trimmed), identity: usageIdentity, questionOnly: true)
+        }
         if let video {
             guard await uploadVideo(video, text: trimmed, mode: mode, images: images, sessionID: sessionID) else { return false }
         }
         guard let session = await mutate(prepare: { api in
-            try await api.prepareMessage(trimmed, mode: mode, sessionID: sessionID, images: images, videoID: video?.id.uuidString)
+            try await api.prepareMessage(trimmed, mode: mode, sessionID: sessionID, images: images,
+                                         videoID: video?.id.uuidString, inputRequestID: question?.id)
         }, { api, body in
             try await api.sendMessage(body, sessionID: sessionID)
         }) else { return false }
@@ -2760,6 +2795,7 @@ private struct CantripRemoteTranscript: View {
                                                     sessionID: model.selectedSession?.id ?? "")
                     }
                 }
+                CantripInputTranscript(model: model)
                 Color.clear
                     .frame(height: 1)
                     .id("remote-transcript-bottom")

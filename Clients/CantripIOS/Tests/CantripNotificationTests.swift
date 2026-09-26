@@ -227,4 +227,29 @@ final class CantripNotificationTests: XCTestCase {
         XCTAssertTrue(model.showingMacAccess)
         XCTAssertNil(model.inputRequestsSession)
     }
+
+    func testInputNotificationOpensChatWithoutQuestionModal() async throws {
+        let (model, _, a, _, _) = try fixture()
+        let sessionID = UUID(), requestID = UUID()
+        let navigation = model.notificationNavigationID
+        NotificationTestProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (200, Data("""
+            {"session":{"id":"\(sessionID)","title":"Needs input","workdir":"/tmp","isStreaming":true,
+             "canResume":false,"councilMode":false,"queuedCount":0,"messages":[],"pendingInputCount":1,
+             "pendingInputs":[{"id":"\(requestID)","kind":"question","title":"Which file?","source":"fixture",
+              "detail":"Reply in chat","choices":[],"allowsFreeform":true,"expiresAt":9999999999}]}}
+            """.utf8))
+        }
+        let target = try XCTUnwrap(CantripNotificationTarget(userInfo: [
+            "cantrip": ["kind": "input", "eventID": requestID.uuidString, "sessionID": sessionID.uuidString,
+                        "serverID": a.id.uuidString, "fingerprint": fingerprint("paired-a")]
+        ]))
+        await model.openCompletionNotification(target)
+        XCTAssertEqual(model.selectedSessionID, sessionID.uuidString)
+        XCTAssertEqual(model.chatInputRequest?.id, requestID)
+        XCTAssertNil(model.inputRequestsSession)
+        XCTAssertFalse(model.showingMacAccess)
+        XCTAssertNotEqual(model.notificationNavigationID, navigation)
+    }
 }

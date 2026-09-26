@@ -475,10 +475,13 @@ AgentGateway updates or upload TestFlight builds.
 
 ### Cantrip input requests
 
-When a supported agent or command needs a response, the tab shows **Your input
-is needed**. Open it or **Review Input Requests** in tab actions to approve once,
-deny, choose an answer, or use a secure password field. The same request appears
-on the Mac and in browser/Cantrip Remote; only the first valid answer is accepted.
+When a supported agent or command needs a response, its question or action appears
+**inline in chat**. Reply using the normal composer with **Auto** delivery,
+including images, or tap a suggested answer. With multiple questions, use
+**Reply in chat** to choose one. **View Questions in Chat** in tab actions opens
+the conversation, not a modal. Approve/Deny and device-login actions are inline too.
+Only **passwords and passphrases** open the **Secure Input** modal.
+The same request appears on the Mac and in browser/Cantrip Remote; only the first valid answer is accepted.
 Requests expire after ten minutes and are cancelled by Stop, redirect or
 execution termination. They do not survive a host restart or replay automatically.
 
@@ -491,10 +494,12 @@ password prompts and macOS Touch ID/Keychain/TCC dialogs are not forwarded.
 
 Secure input goes to the verified waiting program, not the LLM, transcript,
 run journal, command arguments or notification payload. Ordinary question
-answers do go to the agent: **do not enter credentials in a question or chat**.
+answers do go to the agent and are saved in chat history: **do not enter credentials in a question or chat**.
 Secure text clears when submitted or dismissed. Responses pin the original
 saved Mac/tab/request; stale requests fail and uncertain responses are not
-retried. All clients need updated builds.
+retried or silently turned into queued tasks. An older host can still accept
+text-only question replies, but attached replies require the updated Mac host.
+Explicit Queue/Redirect/Inject delivery remains separate from answering a question.
 
 For GitHub, use **Sign in to GitHub on Mac** in an idle tab's actions or send
 `/login github`. The Mac's `gh` CLI starts device login; the request shows the
@@ -504,8 +509,9 @@ credential through the normal GitHub CLI credential store.
 
 ### Face ID and Mac Permissions / View Mac
 
-AgentGateway requires **Face ID or Touch ID** before affirmative input responses
-(Approve/Submit) and before starting a Mac viewing/control session. Biometrics
+AgentGateway requires **Face ID or Touch ID** before approvals, action confirmations,
+password/passphrase submission and starting a Mac viewing/control session.
+Ordinary question replies in chat do not require biometrics. Biometrics
 must be enrolled; authentication cancellation/failure sends nothing. Deny and
 Cancel remain available. This is an app-side guard, not a remotely transferable
 macOS authorization or device-attested signature.
@@ -557,7 +563,8 @@ generate success notifications. This does not apply to the Hermes gateway.
 
 **Cantrip needs your input** alerts contain only a generic notice, not the
 question, command, tab title, password or login code. Tapping opens the original
-Mac/tab's pending-input sheet; it never approves anything. A resolved/expired
+Mac/tab's conversation, with the pending question or secure-input button inline;
+it never opens an ordinary-question modal or approves anything. A resolved/expired
 request cannot be answered from an old alert. Unsent attention retries are
 removed when resolved; previously delivered Apple banners may remain.
 
