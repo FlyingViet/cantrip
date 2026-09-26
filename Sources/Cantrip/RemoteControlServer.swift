@@ -23,6 +23,7 @@ final class RemoteControlServer {
     private let buildMonitor: GitHubBuildMonitor
     private let usage: UsageTracker
     private let notifications: RemoteNotifications
+    private let generatedImages = RemoteGeneratedImages.Store()
     private var maintenance: RemoteMaintenance?
     private let desktopOverride: RemoteDesktop?
     private let notificationLifecycleLock = NSLock()
@@ -740,6 +741,43 @@ final class RemoteControlServer {
             return
         }
 
+        if parts.count >= 2, parts[1] == "previews" {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            guard parts.count == 4 || (parts.count == 5 && parts[4] == "thumbnail"),
+                  let messageID = UUID(uuidString: String(parts[2])) else {
+                sendError(404, "preview not found", on: connection)
+                return
+            }
+            let imageID = "previews/\(parts[2])/\(parts[3])"
+            guard !session.isLocalPrivate, RemoteGeneratedImages.validID(imageID),
+                  let message = session.messages.first(where: { $0.id == messageID && $0.role == .assistant }),
+                  let reference = RemoteGeneratedImages.presentation(message.text, messageID: messageID)
+                    .images.first(where: { $0.id == imageID }) else {
+                sendError(404, "preview not found in this session", on: connection)
+                return
+            }
+            Task {
+                do {
+                    let data = try await generatedImages.read(reference, sessionID: id, thumbnail: parts.count == 5)
+                    guard let current = manager.sessions.first(where: { $0.id == id && !$0.isPrivate }),
+                          let message = current.messages.first(where: { $0.id == messageID && $0.role == .assistant }),
+                          RemoteGeneratedImages.presentation(message.text, messageID: messageID)
+                            .images.contains(where: { $0.id == imageID }) else {
+                        sendError(404, "preview not found in this session", on: connection)
+                        return
+                    }
+                    sendJSON(["data": data.base64EncodedString()], on: connection)
+                } catch {
+                    Log.write("remote-control: generated preview failed: \(error.localizedDescription)")
+                    sendError(404, "The generated image is no longer available or cannot be previewed on the Mac.",
+                              on: connection)
+                }
+            }
+            return
+        }
         if parts.count >= 2, parts[1] == "attachments" {
             guard request.method == "GET" else {
                 sendError(405, "method not allowed", on: connection)
@@ -1109,6 +1147,12 @@ final class RemoteControlServer {
             if !presentation.imageIDs.isEmpty {
                 object["displayText"] = presentation.text
                 object["images"] = presentation.imageIDs.map { ["id": $0] }
+            }
+        } else if message.role == .assistant, sessionID != ChatSession.privateLocalID {
+            let presentation = RemoteGeneratedImages.presentation(message.text, messageID: message.id)
+            if !presentation.images.isEmpty {
+                object["displayText"] = presentation.text
+                object["images"] = presentation.images.map(\.snapshot)
             }
         }
         return object

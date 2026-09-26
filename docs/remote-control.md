@@ -843,6 +843,46 @@ Image reads and downsampling run off the main actor. AgentGateway keeps a
 bounded in-memory cache, clears it on pairing changes, and uses the same
 Tailscale-first/LAN-fallback routing as other read-only requests.
 
+## Generated image previews in AgentGateway
+
+With both apps updated and the Mac host reopened, screenshots and generated
+images can appear **inline in assistant replies**, in their original Markdown
+position. Tap a preview to open the full-screen viewer, pinch or double-tap to
+zoom, and tap **Done** to return. Loading failures show a retry action.
+
+Save PNG or JPEG output directly under `~/.cache/Cantrip/`, then include a
+standalone Markdown image in the assistant's reply:
+
+```markdown
+![Landscape preview](~/.cache/Cantrip/landscape-preview.png)
+```
+
+Absolute paths and local `file:` URLs also work; use `<...>` around paths
+containing spaces or parentheses. Up to eight distinct images are presented per
+message. Code examples, ordinary links, remote URLs, subdirectories (including
+uploaded attachments), and files outside this output folder do not authorize
+preview reads. Private Local keeps its existing text-only output behavior.
+
+The host preserves original transcript text and adds `displayText` with
+`cantrip-preview://image/previews/{messageID}/{hash}.jpg` references plus `images`
+metadata (`id`, `altText`). The pairing-authenticated read-only route
+`GET /api/v1/sessions/{sessionID}/previews/{messageID}/{hash}.jpg` returns
+base64 JPEG JSON (`data`); append `/thumbnail` for a 960-pixel inline preview.
+Each request requires that assistant message to remain in the same public
+session, including when serving a cached image. No client-supplied file path is
+accepted. Symlinks, hard links, non-images and oversized sources are rejected.
+
+Image reads and conversion run off the main actor. Source files are limited to
+30 MiB, 64 million pixels and 16,384 pixels per side. Delivery is re-encoded
+without source metadata, at most 4096 pixels per side and 4 MiB. The first
+successful read stores an owner-only copy in
+`~/.cache/Cantrip/remote-previews/{sessionID}/{messageID}/`; it survives source
+cleanup and host restarts. These cached copies are not automatically deleted.
+Previously linked screenshots work if their original files still exist when
+first loaded. Neither a public upload nor a temporary Safari gallery is needed.
+This adds native AgentGateway rendering; the browser/Mac Remote web transcript
+continues using its existing text rendering.
+
 ## Send a video for analysis from AgentGateway
 
 With both apps updated and the host reopened, use **+ > Video Library** or
