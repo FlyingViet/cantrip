@@ -8,9 +8,29 @@ struct CantripTabActions: View {
 
     var body: some View {
         Button {
+            model.showingMacAccess = true
+        } label: {
+            Label("Mac Permissions & View Mac", systemImage: "display")
+        }
+        if session.supportsInputRequests == true {
+            Button {
+                model.inputRequestsSession = session
+            } label: {
+                Label("Review Input Requests", systemImage: "person.crop.circle.badge.questionmark")
+            }
+            if session.isLocalPrivate != true {
+                Button {
+                    Task { await model.send("/login github", mode: .queue, sessionID: session.id) }
+                } label: {
+                    Label("Sign in to GitHub on Mac", systemImage: "person.badge.key")
+                }
+                .disabled(model.isMutating || session.isStreaming || session.queuedCount > 0)
+            }
+        }
+        Button {
             model.modelSettingsSession = session
         } label: {
-            Label("Model Settings", systemImage: "slider.horizontal.3")
+            Label(session.isLocalPrivate == true ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
         }
         .disabled(model.isMutating)
         Button(action: onRename) {
@@ -23,7 +43,10 @@ struct CantripTabActions: View {
             Label(session.isLocked == true ? "Unlock Tab" : "Lock Tab",
                   systemImage: session.isLocked == true ? "lock.open" : "lock")
         }
-        .disabled(model.isMutating || session.supportsTabMetadata != true)
+        .disabled(model.isMutating || session.supportsTabMetadata != true || session.isLocalPrivate == true)
+        if session.isLocalPrivate == true {
+            Text("Permanent tab. History saved; self-hosted models only.")
+        }
         if session.supportsTabMetadata != true {
             Text("Update and reopen Cantrip to rename or lock tabs.")
         }

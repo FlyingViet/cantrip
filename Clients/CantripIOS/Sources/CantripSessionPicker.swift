@@ -74,7 +74,8 @@ struct CantripSessionPicker: View {
         Button(action: onOpenTabs) {
             HStack(spacing: 10) {
                 if !dynamicTypeSize.isAccessibilitySize {
-                    Image(systemName: selectedSession?.isLocked == true ? "lock.fill" : "rectangle.stack")
+                    Image(systemName: selectedSession?.isLocalPrivate == true ? "lock.shield.fill"
+                          : selectedSession?.isLocked == true ? "lock.fill" : "rectangle.stack")
                         .foregroundStyle(.tint)
                 }
                 VStack(alignment: .leading, spacing: 3) {
@@ -120,7 +121,9 @@ struct CantripSessionPicker: View {
 
     static func statusSummary(for session: CantripRemoteSession) -> String {
         var parts: [String] = []
-        if session.isLocked == true { parts.append("Locked") }
+        if (session.pendingInputCount ?? 0) > 0 { parts.append("Needs input") }
+        if session.isLocalPrivate == true { parts.append("Self-hosted, saved") }
+        else if session.isLocked == true { parts.append("Locked") }
         if session.queuedCount > 0 { parts.append("\(session.queuedCount) queued") }
         return parts.joined(separator: ", ")
     }

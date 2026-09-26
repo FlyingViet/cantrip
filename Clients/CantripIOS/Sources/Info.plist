@@ -35,6 +35,8 @@
 	<array>
 		<string>_cantrip-remote._tcp</string>
 	</array>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Confirm sensitive Cantrip approvals, secure input and remote Mac access with Face ID.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>AgentGateway discovers and connects securely to your paired Cantrip on the local network.</string>
 	<key>NSMicrophoneUsageDescription</key>

@@ -49,6 +49,7 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var displayText: String? = nil
     var images: [ChatMessageImage]? = nil
     var isPreview: Bool? = nil
+    var isLocalPrivate: Bool? = nil
 
     var presentedText: String { displayText ?? text }
 }
@@ -88,6 +89,10 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var hasOlderMessages: Bool? = nil
     var supportsModelSettings: Bool? = nil
     var modelSettingsRevision: String? = nil
+    var isLocalPrivate: Bool? = nil
+    var supportsPrivateLocalSettings: Bool? = nil
+    var supportsInputRequests: Bool? = nil
+    var pendingInputCount: Int? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
 }
@@ -130,6 +135,7 @@ enum CantripRemoteError: LocalizedError {
     case maintenanceUnsupported
     case copilotUsageUnsupported
     case modelSettingsUnsupported
+    case privateLocalUnsupported
 
     static func isRouteFailure(_ error: Error) -> Bool {
         switch error {
@@ -184,6 +190,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to view Copilot account usage."
         case .modelSettingsUnsupported:
             return "Update and reopen Cantrip on your Mac to change a tab's model, effort and context window."
+        case .privateLocalUnsupported:
+            return "Update and reopen Cantrip on the Mac to use the saved Private Local tab. No cloud tab will be used instead."
         }
     }
 }
@@ -847,6 +855,95 @@ struct CantripRemoteAPI {
         }
     }
 
+    func privateLocalSettings(id: String) async throws -> CantripPrivateLocalSettings {
+        do {
+            return try await request(path: "/api/v1/sessions/\(id)/private-settings")
+        } catch CantripRemoteError.http(let status, _) where status == 404 || status == 405 {
+            throw CantripRemoteError.privateLocalUnsupported
+        }
+    }
+
+    func inputRequests(sessionID: String) async throws -> [CantripInputRequest] {
+        struct Response: Decodable { let requests: [CantripInputRequest] }
+        let response: Response = try await request(path: "/api/v1/sessions/\(sessionID)/input")
+        return response.requests
+    }
+
+    func macAccess() async throws -> CantripMacAccess {
+        do { return try await request(path: "/api/v1/mac-access") }
+        catch CantripRemoteError.http(let status, _) where status == 404 || status == 405 {
+            throw ServerConfigurationError(message: "Update and reopen Cantrip on the Mac to enable Mac Permissions & View Mac.")
+        }
+    }
+
+    func openMacSettings(_ permission: String) async throws {
+        struct Response: Decodable { let opened: Bool }
+        let response: Response = try await request(path: "/api/v1/mac-access", method: "POST",
+            body: JSONSerialization.data(withJSONObject: ["permission": permission]))
+        guard response.opened else { throw CantripRemoteError.invalidResponse }
+    }
+
+    func startDesktop(control: Bool) async throws -> CantripDesktopLease {
+        try await request(path: "/api/v1/desktop/start", method: "POST",
+                          body: JSONSerialization.data(withJSONObject: ["control": control]))
+    }
+
+    func desktopFrame(lease: CantripDesktopLease, displayID: UInt32) async throws -> CantripDesktopFrame {
+        try await request(path: "/api/v1/desktop/frame", method: "POST",
+            body: JSONSerialization.data(withJSONObject: ["id": lease.id.uuidString, "token": lease.token, "displayID": displayID]))
+    }
+
+    func desktopInput(lease: CantripDesktopLease, sequence: Int, encrypted: String) async throws {
+        struct Response: Decodable { let accepted: Bool }
+        let response: Response = try await request(path: "/api/v1/desktop/input", method: "POST",
+            body: JSONSerialization.data(withJSONObject: ["id": lease.id.uuidString, "token": lease.token,
+                                                         "sequence": sequence, "encrypted": encrypted]))
+        guard response.accepted else { throw CantripRemoteError.invalidResponse }
+    }
+
+    func stopDesktop(lease: CantripDesktopLease) async throws {
+        struct Response: Decodable { let stopped: Bool }
+        let response: Response = try await request(path: "/api/v1/desktop/stop", method: "POST",
+            body: JSONSerialization.data(withJSONObject: ["id": lease.id.uuidString, "token": lease.token]))
+        guard response.stopped else { throw CantripRemoteError.invalidResponse }
+    }
+
+    fileprivate func prepareInput(sessionID: String, id: UUID, answer: CantripInputAnswer) async throws -> Data {
+        let current = try await inputRequests(sessionID: sessionID)
+        guard current.contains(where: { $0.id == id && $0.expiresAt > Date().timeIntervalSince1970 }) else {
+            throw CantripRemoteError.http(409, "This request was already answered, cancelled or expired.")
+        }
+        return try JSONEncoder().encode(answer)
+    }
+
+    fileprivate func respondToInput(sessionID: String, id: UUID, body: Data) async throws -> Bool {
+        struct Response: Decodable { let accepted: Bool }
+        let response: Response = try await request(path: "/api/v1/sessions/\(sessionID)/input/\(id)",
+                                                   method: "POST", body: body)
+        return response.accepted
+    }
+
+    func privateLocalModels(id: String, baseURL: String) async throws -> [String] {
+        var query = URLComponents()
+        query.queryItems = [URLQueryItem(name: "baseURL", value: baseURL)]
+        struct Response: Decodable { let models: [String] }
+        let response: Response = try await request(path: "/api/v1/sessions/\(id)/private-models?\(query.percentEncodedQuery ?? "")")
+        return response.models
+    }
+
+    fileprivate func preparePrivateLocalSettings(id: String, change: CantripPrivateLocalChange) async throws -> Data {
+        let current = try await privateLocalSettings(id: id)
+        guard current.revision == change.revision else {
+            throw CantripRemoteError.http(409, "Private Local settings changed on another device. Reload before saving.")
+        }
+        if let reason = current.unavailableReason { throw CantripRemoteError.http(409, reason) }
+        return try JSONEncoder().encode(change)
+    }
+
+    fileprivate func updatePrivateLocalSettings(id: String, body: Data) async throws -> CantripPrivateLocalSettings {
+        try await request(path: "/api/v1/sessions/\(id)/private-settings", method: "POST", body: body)
+    }
+
     fileprivate func prepareModelSettings(id: String, change: CantripModelSettingsChange) async throws -> Data {
         let current = try await modelSettings(id: id)
         guard current.revision == change.revision else {
@@ -1051,6 +1148,8 @@ struct CantripRemoteAPI {
 @MainActor
 final class CantripRemoteModel: ObservableObject {
     @Published var modelSettingsSession: CantripRemoteSession?
+    @Published var inputRequestsSession: CantripRemoteSession?
+    @Published var showingMacAccess = false
     @Published private(set) var connectionState: CantripRemoteConnectionState = .disconnected
     @Published private(set) var configuredURL: String
     @Published private(set) var hasStoredToken: Bool
@@ -1154,9 +1253,13 @@ final class CantripRemoteModel: ObservableObject {
         return cache
     }()
 
+    private let authorizeSensitiveAction: (String) async throws -> Void
+
     init(urlSession: URLSession? = nil, servers: ServerProfiles? = nil,
-         completionAlerts: CantripNotifications? = nil) {
+         completionAlerts: CantripNotifications? = nil,
+         authorizeSensitiveAction: @escaping (String) async throws -> Void = CantripBiometrics.authorize) {
         self.urlSession = urlSession
+        self.authorizeSensitiveAction = authorizeSensitiveAction
         self.completionAlerts = completionAlerts ?? .shared
         self.servers = servers ?? ServerProfiles(kind: .cantrip)
         let storedURL = UserDefaults.standard.string(forKey: Self.endpointKey) ?? ""
@@ -1259,7 +1362,7 @@ final class CantripRemoteModel: ObservableObject {
         defer { isUpdatingNotifications = false }
         let identity = usageIdentity
         let notifications = completionAlerts
-        var body: [String: String] = ["installationID": notifications.installationID.uuidString,
+        var body: [String: Any] = ["installationID": notifications.installationID.uuidString,
                                       "serverID": serverID.uuidString]
         if enabled {
             let status = try await completionNotificationStatus()
@@ -1270,6 +1373,7 @@ final class CantripRemoteModel: ObservableObject {
                 throw ServerConfigurationError(message: "This build has no valid Apple push environment.")
             }
             body["environment"] = environment
+            body["inputNeeded"] = true
         }
         guard usageIdentity == identity, selectedServerID == serverID else { throw CancellationError() }
         let data = try JSONSerialization.data(withJSONObject: body)
@@ -1321,6 +1425,14 @@ final class CantripRemoteModel: ObservableObject {
                 throw ServerConfigurationError(message: "Finish the current upload or request before opening this notification.")
             }
             await selectSession(target.sessionID.uuidString)
+            if target.kind == "input", let session = selectedSession {
+                showingMacAccess = false
+                inputRequestsSession = session
+            }
+            if target.kind == "macAttention" {
+                inputRequestsSession = nil
+                showingMacAccess = true
+            }
             notificationNavigationID = UUID()
         } catch {
             errorMessage = error.localizedDescription
@@ -1614,6 +1726,103 @@ final class CantripRemoteModel: ObservableObject {
             try await api.prepareModelSettings(id: id, change: change)
         }, { api, body in
             try await api.updateModelSettings(id: id, body: body)
+        })
+        return result != nil
+    }
+
+    func privateLocalSettings(id: String) async throws -> CantripPrivateLocalSettings {
+        try await performHistoryRead { try await $0.privateLocalSettings(id: id) }
+    }
+
+    func privateLocalModels(id: String, baseURL: String) async throws -> [String] {
+        try await performHistoryRead { try await $0.privateLocalModels(id: id, baseURL: baseURL) }
+    }
+
+    func inputRequests(sessionID: String) async throws -> [CantripInputRequest] {
+        try await performHistoryRead { try await $0.inputRequests(sessionID: sessionID) }
+    }
+
+    func macAccess() async throws -> CantripMacAccess {
+        try await performHistoryRead { try await $0.macAccess() }
+    }
+
+    func openMacSettings(_ permission: String, identity: UUID) async throws {
+        guard usageIdentity == identity else { throw CancellationError() }
+        let result: Bool? = await mutate(prepare: { api in _ = try await api.macAccess() }, { api, _ in
+            try await api.openMacSettings(permission)
+            return true
+        })
+        guard result == true else { throw ServerConfigurationError(message: errorMessage ?? "Settings could not be opened.") }
+    }
+
+    func startDesktop(control: Bool, identity: UUID) async throws -> CantripDesktopLease {
+        guard usageIdentity == identity else { throw CancellationError() }
+        try await authorizeSensitiveAction(control ? "Allow viewing and controlling your Mac for five minutes." : "Allow viewing your Mac screen for five minutes.")
+        try Task.checkCancellation()
+        guard usageIdentity == identity else { throw CancellationError() }
+        let result = await mutate(prepare: { api in
+            let status = try await api.macAccess()
+            guard status.desktopEnabled else { throw ServerConfigurationError(message: "Enable View Mac in Cantrip settings on the Mac first.") }
+        }, { api, _ in try await api.startDesktop(control: control) })
+        guard let result else { throw ServerConfigurationError(message: errorMessage ?? "View Mac could not start. It may have reached the Mac; check before retrying.") }
+        return result
+    }
+
+    func desktopFrame(lease: CantripDesktopLease, displayID: UInt32, identity: UUID) async throws -> CantripDesktopFrame {
+        guard usageIdentity == identity else { throw CancellationError() }
+        return try await performHistoryRead { try await $0.desktopFrame(lease: lease, displayID: displayID) }
+    }
+
+    func desktopInput(lease: CantripDesktopLease, sequence: Int, encrypted: String, identity: UUID) async throws {
+        guard usageIdentity == identity else { throw CancellationError() }
+        let result: Bool? = await mutate(prepare: { api in _ = try await api.macAccess() }, { api, _ in
+            try await api.desktopInput(lease: lease, sequence: sequence, encrypted: encrypted)
+            return true
+        })
+        guard result == true else { throw ServerConfigurationError(message: errorMessage ?? "Desktop input could not be confirmed.") }
+    }
+
+    func stopDesktop(lease: CantripDesktopLease, identity: UUID) async throws {
+        guard usageIdentity == identity else { throw CancellationError() }
+        // Stop is idempotent in effect, but still never replay keyboard/pointer commands.
+        try await performHistoryRead { try await $0.stopDesktop(lease: lease) }
+    }
+
+    func respondToInput(sessionID: String, id: UUID, answer: CantripInputAnswer, identity: UUID) async -> Bool {
+        guard usageIdentity == identity else {
+            errorMessage = "The connected Mac changed. Reopen the input request before responding."
+            return false
+        }
+        if answer.decision == "approve" || answer.decision == "submit" {
+            do {
+                try await authorizeSensitiveAction("Confirm your response to the pending Cantrip request.")
+                try Task.checkCancellation()
+                guard usageIdentity == identity else { throw CancellationError() }
+            } catch is CancellationError {
+                errorMessage = "Authentication was cancelled or the connected Mac changed. Nothing was sent."
+                return false
+            } catch {
+                errorMessage = error.localizedDescription
+                return false
+            }
+        }
+        let accepted = await mutate(prepare: { api in
+            try await api.prepareInput(sessionID: sessionID, id: id, answer: answer)
+        }, { api, data in
+            try await api.respondToInput(sessionID: sessionID, id: id, body: data)
+        })
+        return accepted == true
+    }
+
+    func updatePrivateLocalSettings(id: String, change: CantripPrivateLocalChange, identity: UUID) async -> Bool {
+        guard identity == usageIdentity else {
+            errorMessage = "The connected Mac changed. Reopen Private Local settings before saving."
+            return false
+        }
+        let result = await mutate(prepare: { api in
+            try await api.preparePrivateLocalSettings(id: id, change: change)
+        }, { api, body in
+            try await api.updatePrivateLocalSettings(id: id, body: body)
         })
         return result != nil
     }
@@ -2322,7 +2531,13 @@ struct CantripRemoteView: View {
                 CantripTabRenameSheet(model: model, session: session)
             }
             .sheet(item: $model.modelSettingsSession) { session in
-                CantripModelSettingsView(model: model, session: session, identity: model.usageIdentity)
+                CantripSessionSettingsView(model: model, session: session, identity: model.usageIdentity)
+            }
+            .sheet(item: $model.inputRequestsSession) { session in
+                CantripInputRequestsView(model: model, session: session)
+            }
+            .sheet(isPresented: $model.showingMacAccess) {
+                NavigationStack { CantripMacAccessView(remote: model) }
             }
         }
         .cantripTabDrawer(
@@ -2355,6 +2570,7 @@ struct CantripRemoteView: View {
                 sessionControls
                 Divider()
                 CantripRemoteTranscript(model: model)
+                CantripInputBanner(model: model)
                 Divider()
                 composer
             } else {
@@ -2727,6 +2943,8 @@ private struct CantripRemoteMessageBubble: View {
                 if !message.presentedText.isEmpty {
                     if message.role == "user" {
                         PromptTextView(text: message.presentedText)
+                    } else if message.isLocalPrivate == true {
+                        Text(verbatim: message.text)
                     } else {
                         Markdown(message.text)
                     }

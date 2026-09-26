@@ -67,7 +67,7 @@ final class CantripNotificationTests: XCTestCase {
         ]))
     }
 
-    private func body(_ request: URLRequest) throws -> [String: String] {
+    private func body(_ request: URLRequest) throws -> [String: Any] {
         var data = request.httpBody ?? Data()
         if let stream = request.httpBodyStream {
             stream.open()
@@ -79,7 +79,7 @@ final class CantripNotificationTests: XCTestCase {
                 data.append(contentsOf: buffer.prefix(count))
             }
         }
-        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     func testEnableAndDisableArePairedPerServerAndPersistAfterAcknowledgement() async throws {
@@ -92,12 +92,13 @@ final class CantripNotificationTests: XCTestCase {
             methods.append(method)
             if method != "GET" {
                 let body = try self.body(request)
-                XCTAssertEqual(body["serverID"], a.id.uuidString)
-                XCTAssertEqual(body["installationID"], alerts.installationID.uuidString)
+                XCTAssertEqual(body["serverID"] as? String, a.id.uuidString)
+                XCTAssertEqual(body["installationID"] as? String, alerts.installationID.uuidString)
                 if method == "POST" {
                     XCTAssertFalse(alerts.isEnabled(serverID: a.id), "Wait for durable host acknowledgement")
-                    XCTAssertEqual(body["deviceToken"], String(repeating: "ab", count: 32))
-                    XCTAssertEqual(body["environment"], "development")
+                    XCTAssertEqual(body["deviceToken"] as? String, String(repeating: "ab", count: 32))
+                    XCTAssertEqual(body["environment"] as? String, "development")
+                    XCTAssertEqual(body["inputNeeded"] as? Bool, true)
                 }
             }
             return (200, self.ready)
@@ -205,5 +206,25 @@ final class CantripNotificationTests: XCTestCase {
         XCTAssertFalse(alerts.accepts(try target(server: a, fingerprint: "rotated")))
         alerts.save(serverID: a.id, fingerprint: nil)
         XCTAssertFalse(alerts.accepts(destination))
+    }
+
+    func testMacAttentionOpensPermissionsWithoutStartingViewerOrInput() async throws {
+        let (model, _, a, _, _) = try fixture()
+        let sessionID = UUID()
+        NotificationTestProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(sessionID)")
+            return (200, Data("""
+            {"session":{"id":"\(sessionID)","title":"Tab","workdir":"/tmp","isStreaming":false,
+             "canResume":false,"councilMode":false,"queuedCount":0,"messages":[]}}
+            """.utf8))
+        }
+        let target = try XCTUnwrap(CantripNotificationTarget(userInfo: [
+            "cantrip": ["kind": "macAttention", "eventID": UUID().uuidString, "sessionID": sessionID.uuidString,
+                        "serverID": a.id.uuidString, "fingerprint": fingerprint("paired-a")]
+        ]))
+        await model.openCompletionNotification(target)
+        XCTAssertTrue(model.showingMacAccess)
+        XCTAssertNil(model.inputRequestsSession)
     }
 }

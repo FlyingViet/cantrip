@@ -176,6 +176,155 @@ final class CantripModelSettingsTests: XCTestCase {
         catch CantripRemoteError.authentication {}
     }
 
+    private func privateSnapshot(revision: String = "private-v1", reason: String? = nil) throws -> Data {
+        var value: [String: Any] = [
+            "revision": revision,
+            "configuration": ["baseURL": "https://llm.example.ts.net/ollama", "model": "local:latest",
+                              "contextWindow": 8192, "systemPrompt": "Keep this conversation local."]
+        ]
+        if let reason { value["unavailableReason"] = reason }
+        return try JSONSerialization.data(withJSONObject: value)
+    }
+
+    func testPrivateLocalPreflightPinsConfigurationAndTab() async throws {
+        let model = try await model()
+        var methods: [String] = []
+        let settings = try JSONDecoder().decode(CantripPrivateLocalSettings.self, from: privateSnapshot())
+        ModelSettingsRequestProtocol.handler = { request in
+            methods.append(request.httpMethod!)
+            XCTAssertEqual(request.url?.host, "cantrip.example", "The phone sends configuration to the Mac, never directly to an LLM")
+            XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.id)/private-settings")
+            if request.httpMethod == "POST" {
+                let stream = try XCTUnwrap(request.httpBodyStream)
+                stream.open()
+                defer { stream.close() }
+                var bytes = [UInt8](repeating: 0, count: 4096)
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bytes.prefix(count))) as? [String: Any])
+                XCTAssertEqual(Set(body.keys), ["revision", "configuration"])
+                XCTAssertEqual(body["revision"] as? String, "private-v1")
+                let configuration = try XCTUnwrap(body["configuration"] as? [String: Any])
+                XCTAssertEqual(configuration["baseURL"] as? String, "https://llm.example.ts.net/ollama")
+                XCTAssertEqual(configuration["model"] as? String, "local:latest")
+                XCTAssertEqual(configuration["contextWindow"] as? Int, 8192)
+                XCTAssertNil(body["usesDefaults"], "Private Local cannot inherit a cloud route")
+            }
+            return (200, try self.privateSnapshot())
+        }
+        let saved = await model.updatePrivateLocalSettings(id: id,
+            change: .init(revision: settings.revision, configuration: settings.configuration),
+            identity: model.usageIdentity)
+        XCTAssertTrue(saved, model.errorMessage ?? "")
+        XCTAssertEqual(methods, ["GET", "POST"])
+    }
+
+    func testPrivateLocalBusyStaleAndChangedMacNeverWrite() async throws {
+        let model = try await model()
+        let snapshot = try JSONDecoder().decode(CantripPrivateLocalSettings.self, from: privateSnapshot())
+        let change = CantripPrivateLocalChange(revision: snapshot.revision, configuration: snapshot.configuration)
+        for data in [try privateSnapshot(revision: "newer"), try privateSnapshot(reason: "Wait for the queue.")] {
+            var methods: [String] = []
+            ModelSettingsRequestProtocol.handler = { request in
+                methods.append(request.httpMethod!)
+                return (200, data)
+            }
+            let saved = await model.updatePrivateLocalSettings(id: id, change: change, identity: model.usageIdentity)
+            XCTAssertFalse(saved)
+            XCTAssertEqual(methods, ["GET"])
+        }
+        ModelSettingsRequestProtocol.handler = { _ in
+            XCTFail("A stale editor must not contact a different Mac")
+            return (200, try self.privateSnapshot())
+        }
+        let saved = await model.updatePrivateLocalSettings(id: id, change: change, identity: UUID())
+        XCTAssertFalse(saved)
+    }
+
+    func testPrivateLocalUncertainSaveIsNeverReplayed() async throws {
+        let model = try await model()
+        let snapshot = try JSONDecoder().decode(CantripPrivateLocalSettings.self, from: privateSnapshot())
+        var methods: [String] = []
+        ModelSettingsRequestProtocol.handler = { request in
+            methods.append(request.httpMethod!)
+            if request.httpMethod == "POST" { throw URLError(.networkConnectionLost) }
+            return (200, try self.privateSnapshot())
+        }
+        let saved = await model.updatePrivateLocalSettings(id: id,
+            change: .init(revision: snapshot.revision, configuration: snapshot.configuration),
+            identity: model.usageIdentity)
+        XCTAssertFalse(saved)
+        XCTAssertEqual(methods, ["GET", "POST"])
+        XCTAssertTrue(model.errorMessage?.contains("may have reached Cantrip") == true)
+    }
+
+    func testPrivateModelListUsesPairedMacAndOldHostFailsClosed() async throws {
+        let api = CantripRemoteAPI(transport: .remote(URL(string: "https://cantrip.example")!),
+                                  token: "fixture", urlSession: client())
+        ModelSettingsRequestProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.id)/private-models")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            XCTAssertEqual(query?.queryItems?.first(where: { $0.name == "baseURL" })?.value, "https://llm.example.ts.net/ollama")
+            return (200, Data(#"{"models":["local:latest"]}"#.utf8))
+        }
+        let models = try await api.privateLocalModels(id: id, baseURL: "https://llm.example.ts.net/ollama")
+        XCTAssertEqual(models, ["local:latest"])
+        for code in [404, 405] {
+            ModelSettingsRequestProtocol.handler = { _ in (code, Data(#"{"error":"not found"}"#.utf8)) }
+            do { _ = try await api.privateLocalSettings(id: id); XCTFail("Do not fall back to cloud model settings") }
+            catch CantripRemoteError.privateLocalUnsupported {}
+        }
+        ModelSettingsRequestProtocol.handler = { _ in (401, Data(#"{"error":"unauthorized"}"#.utf8)) }
+        do { _ = try await api.privateLocalSettings(id: id); XCTFail("Authentication must remain distinct") }
+        catch CantripRemoteError.authentication {}
+    }
+
+    func testPrivateLocalSettingsAndStatusAtNarrowAndAccessibleWidths() async throws {
+        let model = try await model()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let session = CantripRemoteSession(id: id, title: "Private Local", workdir: "/tmp",
+            isStreaming: false, canResume: false, councilMode: false, queuedCount: 0, status: nil,
+            messages: nil, supportsImageAttachments: false, queued: nil, isLocked: true,
+            supportsModelSettings: false, isLocalPrivate: true, supportsPrivateLocalSettings: true)
+        XCTAssertEqual(CantripSessionPicker.statusSummary(for: session), "Self-hosted, saved")
+        var reads = 0
+        ModelSettingsRequestProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.id)/private-settings",
+                           "Private tabs must not open Copilot settings or refresh the cloud catalog")
+            reads += 1
+            return (200, try self.privateSnapshot())
+        }
+        for width: CGFloat in [320, 768] {
+            for size: DynamicTypeSize in [.large, .accessibility3] {
+                let before = reads
+                let view = CantripSessionSettingsView(model: model, session: session, identity: model.usageIdentity)
+                    .environment(\.dynamicTypeSize, size)
+                let controller = UIHostingController(rootView: view)
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: width, height: 700)
+                window.rootViewController = controller
+                window.makeKeyAndVisible()
+                defer { window.isHidden = true }
+                try await Task.sleep(for: .milliseconds(400))
+                controller.view.layoutIfNeeded()
+                XCTAssertGreaterThan(reads, before)
+                func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
+                let scrollViews = descendants(controller.view).compactMap { $0 as? UIScrollView }
+                XCTAssertFalse(scrollViews.isEmpty)
+                for scroll in scrollViews where scroll.bounds.width > 0 {
+                    XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1)
+                }
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "Private Local \(Int(width)) \(size)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
     func testModelSettingsFormFitsNarrowAndLargeTextLayouts() async throws {
         let model = try await model()
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)

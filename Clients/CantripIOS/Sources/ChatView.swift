@@ -294,6 +294,7 @@ final class ChatViewModel: ObservableObject {
             remoteMessageIDs[message.id] = id
             let isError = message.role == "error"
             return ChatTurn(
+                isLocalPrivate: session?.isLocalPrivate == true || message.isLocalPrivate == true,
                 id: id,
                 role: message.role == "user" ? .user : .assistant,
                 text: isError ? "" : message.presentedText,
@@ -1144,6 +1145,7 @@ struct ChatView: View {
                 }
                 transcriptList
                     .id(transcriptIdentity)
+                if vm.activeLane == .cantrip { CantripInputBanner(model: remote) }
                 inputBar
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -1179,7 +1181,13 @@ struct ChatView: View {
                 CantripTabRenameSheet(model: remote, session: session)
             }
             .sheet(item: $remote.modelSettingsSession) { session in
-                CantripModelSettingsView(model: remote, session: session, identity: remote.usageIdentity)
+                CantripSessionSettingsView(model: remote, session: session, identity: remote.usageIdentity)
+            }
+            .sheet(item: $remote.inputRequestsSession) { session in
+                CantripInputRequestsView(model: remote, session: session)
+            }
+            .sheet(isPresented: $remote.showingMacAccess) {
+                NavigationStack { CantripMacAccessView(remote: remote) }
             }
             .alert("Rename Tab", isPresented: $showRenameLocalTab) {
                 TextField("Tab name", text: $tabName)
@@ -1229,14 +1237,12 @@ struct ChatView: View {
         }
         .onChange(of: env.selectedServerID) { old, new in
             guard vm.activeLane != .cantrip else { return }
-            switchServerDraft(kind: .hermes, from: old, to: new)
             vm.gatewayDidChange()
             commands = []
             reloadCommands()
         }
         .onChange(of: remote.selectedServerID) { old, new in
             guard vm.activeLane == .cantrip else { return }
-            switchServerDraft(kind: .cantrip, from: old, to: new)
             vm.leaveVoiceMode()
             vm.syncRemoteTranscript()
             vm.remoteDeliveryMode = .auto
@@ -1272,6 +1278,15 @@ struct ChatView: View {
         .onChange(of: remote.selectedSessionID) { _, _ in
             vm.syncRemoteTranscript()
         }
+        .onChange(of: transcriptIdentity) { previous, current in
+            // A private draft must never follow selection into a cloud-backed tab.
+            serverTextDrafts[previous] = input
+            input = serverTextDrafts[current] ?? ""
+            composerRevision = UUID()
+            voice.stopListening(finalize: false)
+            voice.stopSpeaking()
+            showVoiceMode = false
+        }
         .onChange(of: remote.notificationNavigationID) { _, _ in
             showSettings = false
             showRemoteTabs = false
@@ -1300,14 +1315,15 @@ struct ChatView: View {
             if vm.activeLane == .cantrip {
                 Button { showRemoteTabs = true } label: {
                     ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
-                                    isWorking: remote.selectedSession?.isStreaming == true)
+                                    isWorking: remote.selectedSession?.isStreaming == true,
+                                    isLocalPrivate: remote.selectedSession?.isLocalPrivate == true)
                         .frame(maxWidth: .infinity, minHeight: 44)
                         .contentShape(Rectangle())
                 }
                 .disabled(!remoteTabsEnabled)
                 .accessibilityLabel("Switch tab")
                 .accessibilityValue([
-                    vm.tabTitle, vm.isTabLocked ? "Locked" : nil,
+                    vm.tabTitle, remote.selectedSession?.isLocalPrivate == true ? "Self-hosted, saved" : vm.isTabLocked ? "Locked" : nil,
                     remote.selectedSession?.isStreaming == true ? "Working" : nil
                 ].compactMap { $0 }.joined(separator: ", "))
                 .accessibilityHint("Shows tabs. Touch and hold for tab actions.")
@@ -1330,10 +1346,17 @@ struct ChatView: View {
                 }
             }
         } lane: {
-            ExecutionLanePicker(env: env, remote: remote)
-                .disabled(vm.sending || importingImages || submittingRemote)
+            if vm.activeLane == .cantrip, remote.selectedSession?.isLocalPrivate == true {
+                ChatHeaderIcon(systemName: "lock.shield.fill")
+                    .accessibilityLabel("Private Local. Self-hosted models; history is saved and available remotely.")
+            } else {
+                ExecutionLanePicker(env: env, remote: remote)
+                    .disabled(vm.sending || importingImages || submittingRemote)
+            }
         } usage: {
-            CopilotUsageButton(remote: remote) { composerFocused = false }
+            if remote.selectedSession?.isLocalPrivate != true {
+                CopilotUsageButton(remote: remote) { composerFocused = false }
+            }
         } delivery: {
             if vm.activeLane == .cantrip, remote.selectedSession != nil {
                 CantripDeliveryPicker(deliveryMode: $vm.remoteDeliveryMode, compact: true)
@@ -1367,7 +1390,7 @@ struct ChatView: View {
                         composerFocused = false
                         remote.modelSettingsSession = session
                     } label: {
-                        Label("Model Settings", systemImage: "slider.horizontal.3")
+                        Label(session.isLocalPrivate == true ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
                     }
                     .disabled(remote.isMutating)
                 }
@@ -1460,12 +1483,6 @@ struct ChatView: View {
                 commands = c
             }
         }
-    }
-
-    private func switchServerDraft(kind: ServerKind, from old: UUID?, to new: UUID?) {
-        serverTextDrafts["\(kind.rawValue)/\(old?.uuidString ?? "legacy")"] = input
-        input = serverTextDrafts["\(kind.rawValue)/\(new?.uuidString ?? "legacy")"] ?? ""
-        composerRevision = UUID()
     }
 
     private func remoteDraftKey(_ sessionID: String) -> String {
@@ -2068,10 +2085,11 @@ struct ChatHeaderTitle: View {
     let title: String
     let isLocked: Bool
     let isWorking: Bool
+    var isLocalPrivate = false
 
     var body: some View {
         HStack(spacing: 4) {
-            if isLocked { Image(systemName: "lock.fill") }
+            if isLocked { Image(systemName: isLocalPrivate ? "lock.shield.fill" : "lock.fill") }
             Text(title).lineLimit(1).truncationMode(.tail)
             if isWorking {
                 ThinkingView(size: 18).fixedSize().accessibilityHidden(true)
@@ -2081,7 +2099,7 @@ struct ChatHeaderTitle: View {
         .foregroundStyle(.primary)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
-        .accessibilityValue([isLocked ? "Locked" : nil, isWorking ? "Working" : nil]
+        .accessibilityValue([isLocalPrivate ? "Self-hosted, saved" : isLocked ? "Locked" : nil, isWorking ? "Working" : nil]
             .compactMap { $0 }.joined(separator: ", "))
         .accessibilityIdentifier("chat.header.title")
     }
@@ -2266,8 +2284,12 @@ private struct TurnView: View {
                     )
                 }
                 if !turn.text.isEmpty {
-                    Markdown(turn.text)            // full GFM: tables, lists, code blocks, headings
-                        .textSelection(.enabled)
+                    if turn.isLocalPrivate == true {
+                        Text(verbatim: turn.text).textSelection(.enabled)
+                    } else {
+                        Markdown(turn.text)            // full GFM: tables, lists, code blocks, headings
+                            .textSelection(.enabled)
+                    }
                 }
                 if !turn.actions.isEmpty {
                     HStack(spacing: 8) {

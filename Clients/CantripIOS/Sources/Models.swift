@@ -124,6 +124,7 @@ struct HermesRunStatus: Decodable, Equatable, Sendable {
 /// any tool activity the agent performed (rendered inline, Claude-Code style).
 /// `Codable` so the transcript survives app restarts.
 struct ChatTurn: Identifiable, Codable {
+    var isLocalPrivate: Bool? = nil
     var id = UUID()
     let role: Role
     var text: String = ""

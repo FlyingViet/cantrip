@@ -7,6 +7,7 @@ struct CantripPushStatus: Codable {
     let configured: Bool
     let message: String
     let lastDeliveryError: String?
+    var supportsInputAlerts: Bool? = nil
 }
 
 struct CantripNotificationTarget: Equatable {
@@ -14,6 +15,7 @@ struct CantripNotificationTarget: Equatable {
     let serverID: UUID
     let sessionID: UUID
     let fingerprint: String
+    var kind: String?
 
     init?(userInfo: [AnyHashable: Any]) {
         guard let value = userInfo["cantrip"] as? [String: String],
@@ -25,6 +27,7 @@ struct CantripNotificationTarget: Equatable {
         self.serverID = serverID
         self.sessionID = sessionID
         self.fingerprint = fingerprint
+        kind = value["kind"]
     }
 }
 
@@ -198,7 +201,7 @@ struct CantripNotificationSettingsSection: View {
                 get: { notifications.isEnabled(serverID: remote.selectedServerID) },
                 set: update
             )) {
-                Label("Notify when a tab finishes", systemImage: "bell.badge")
+                Label("Completion and input-needed alerts", systemImage: "bell.badge")
             }
             .disabled(busy || remote.isUpdatingNotifications || remote.selectedServerID == nil)
             if busy { ProgressView("Updating notifications...") }
@@ -227,9 +230,9 @@ struct CantripNotificationSettingsSection: View {
                 }
             }
         } header: {
-            Text("Cantrip completion alerts")
+            Text("Cantrip alerts")
         } footer: {
-            Text("For all tabs on the selected Mac, after queued prompts finish. Alerts continue while the phone is locked or another server is selected. The tab name and a short final-answer preview go through Apple push and may appear on your Lock Screen. Private tabs, stopped and failed runs do not send completion alerts. Your Mac must stay running and online. Connect to this Mac to turn alerts off.")
+            Text("Completion alerts include the tab name and final-answer preview. Input-needed alerts are generic: no command, password, question, login code or tab title goes through Apple push. Open the app to review and respond. Alerts work while the phone is locked; the Mac must stay online. Private tabs are excluded. Input alerts require an updated Mac host. Connect to this Mac to turn alerts off.")
         }
         .onChange(of: remote.selectedServerID) { _, _ in status = nil }
         .onChange(of: visibleStatus) { _, value in
@@ -242,7 +245,7 @@ struct CantripNotificationSettingsSection: View {
         Task {
             do {
                 try await remote.setCompletionNotifications(enabled: enable)
-                status = enable ? "Completion alerts are enabled for this Mac." : "Completion alerts are off."
+                status = enable ? "Cantrip alerts are enabled for this Mac." : "Cantrip alerts are off."
             } catch { status = error.localizedDescription }
             busy = false
         }

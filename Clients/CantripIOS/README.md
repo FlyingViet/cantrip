@@ -391,6 +391,40 @@ Requires updated AgentGateway and an updated, reopened Cantrip host. Older
 hosts show an update notice. Uses existing paired LAN/Tailscale access; memory
 reads have a 20-second content deadline and do not block chat polling or sends.
 
+### Saved Private Local tab in Cantrip Remote
+
+The updated Mac provides a permanent **Private Local** tab. It keeps conversation
+history and run recovery on the Mac while routing inference **only to your
+self-hosted Ollama server**. "Local" is the self-hosted label, not a requirement
+that inference runs on the Cantrip Mac. The server can be on another computer
+or NAS. It never uses the legacy Hermes Private Local lane or falls
+back to Copilot/cloud models; Hermes does not need to be enabled.
+
+Open this tab's **Chat menu > Private Local Settings**, or its tab actions, to
+set your self-hosted server's HTTPS base URL, installed model, context tokens and
+system prompt. **Load server models** reads that server's installed models through
+Cantrip. Install models on the chosen server, which must be reachable from the
+Cantrip Mac. LAN/Tailscale HTTPS URLs and reverse-proxy base paths are supported.
+HTTP is allowed only on loopback; `http://127.0.0.1:11434` still means the Mac,
+not the phone. Save while idle; stale/busy writes are rejected and uncertain
+writes are never replayed. The same configuration is available in Cantrip.
+
+This tab cannot be closed, cleared, unlocked or changed into a cloud tab.
+It is text-only: tools, shell/slash execution, Council, shared-memory logging,
+push summaries and automatic external content are disabled. Auto queues locally,
+and drafts stay with their tabs. Model input context remains bounded even though
+the full saved conversation is retained. The configured Ollama service must be
+yours and trusted, not a managed-cloud inference gateway. Cloud aliases,
+unencrypted non-loopback URLs and automatic redirects are refused; TLS
+certificate validation stays enabled.
+
+Remote access remains **AgentGateway -> Cantrip Mac -> self-hosted model server**.
+This is saved self-hosted chat, **not incognito or additional encryption at rest**.
+The Mac account, backups and paired devices can access its history. It is separate
+from Cantrip's older unsaved Private mode. Selected conversation context is sent
+to your configured server for inference, so that server's logging/storage policy
+also applies. Updated native builds and a host reopen are required.
+
 ### Per-tab model settings
 
 Open **Chat menu > Model Settings**, or use **Model Settings** in a tab's
@@ -439,13 +473,87 @@ Git access, Xcode tools, and signing already configured on the Mac. Commands and
 paths are fixed by the host, not supplied by the phone. This does not install
 AgentGateway updates or upload TestFlight builds.
 
-### Cantrip completion alerts
+### Cantrip input requests
 
-Select a saved Mac, then enable **Settings > Cantrip completion alerts > Notify
-when a tab finishes**. Successful completion of a tab's entire queue sends its
+When a supported agent or command needs a response, the tab shows **Your input
+is needed**. Open it or **Review Input Requests** in tab actions to approve once,
+deny, choose an answer, or use a secure password field. The same request appears
+on the Mac and in browser/Cantrip Remote; only the first valid answer is accepted.
+Requests expire after ten minutes and are cancelled by Stop, redirect or
+execution termination. They do not survive a host restart or replay automatically.
+
+Supported: native Copilot tool permissions/questions, Claude Code permissions/
+AskUserQuestion, ACP allow-once/deny, and verified system OpenSSH/`sudo -A`
+askpass requests from supported Cantrip-run processes. Existing automatic
+permission settings remain in effect; turn **Act on my behalf** off on the Mac
+for manual approvals. Private Local remains tool-free. Arbitrary terminal
+password prompts and macOS Touch ID/Keychain/TCC dialogs are not forwarded.
+
+Secure input goes to the verified waiting program, not the LLM, transcript,
+run journal, command arguments or notification payload. Ordinary question
+answers do go to the agent: **do not enter credentials in a question or chat**.
+Secure text clears when submitted or dismissed. Responses pin the original
+saved Mac/tab/request; stale requests fail and uncertain responses are not
+retried. All clients need updated builds.
+
+For GitHub, use **Sign in to GitHub on Mac** in an idle tab's actions or send
+`/login github`. The Mac's `gh` CLI starts device login; the request shows the
+GitHub page and temporary code. Password/2FA stay on GitHub's website, and only
+the CLI's successful exit confirms login. The Mac may store the resulting
+credential through the normal GitHub CLI credential store.
+
+### Face ID and Mac Permissions / View Mac
+
+AgentGateway requires **Face ID or Touch ID** before affirmative input responses
+(Approve/Submit) and before starting a Mac viewing/control session. Biometrics
+must be enrolled; authentication cancellation/failure sends nothing. Deny and
+Cancel remain available. This is an app-side guard, not a remotely transferable
+macOS authorization or device-attested signature.
+
+Open **Settings > Cantrip Mac > Mac Permissions & View Mac**, or the same action
+in a tab's menu. See Cantrip's permission status and supported Keychain issues,
+then open the relevant settings on the Mac. Full Disk Access needs manual review.
+Touch ID status refers to the Mac; it cannot be satisfied with phone Face ID.
+
+View Mac is disabled until someone enables **Allow paired clients to view and
+control this Mac** in Cantrip settings on the host. Screen Recording is required
+for viewing, Accessibility for control. Once enabled, holders of the pairing
+token can start sessions; keep that token private. Choose view-only or control,
+authenticate, pick a display and zoom. Tap the destination field/window before
+typing or sending keys/scroll. Typed text goes to the Mac's actual focused
+field: verify focus before entering a password.
+
+Sessions use in-memory encrypted snapshots about once a second, with basic
+click/right-click/double-click, text, navigation keys and scroll. No images or
+typed input are saved by Cantrip/AgentGateway or sent to an AI model by this
+feature. The receiving Mac app may still store what you type. Keys and frames
+are discarded when the view closes/backgrounds. Host leases expire after five
+minutes or60seconds without activity; the Mac can stop them immediately.
+Layout changes, stale frames and replayed input are rejected.
+
+The viewing key travels over the existing paired transport: use trusted
+LAN/Tailscale/HTTPS access. This is not a separately deployed end-to-end relay,
+and a third-party TLS-terminating proxy remains in the trust path.
+
+Supported missing-permission/Keychain-read conditions also generate generic
+**Cantrip Mac needs attention** notifications under the existing input-alert
+setting. Tap to open Mac Access; it never automatically starts capture or
+control. The app does not watch every other application's dialogs. Protected
+macOS dialogs may block capture/input and still need local interaction.
+
+### Cantrip completion and input alerts
+
+Select a saved Mac, then enable **Settings > Cantrip alerts > Completion and
+input-needed alerts**. Successful completion of a tab's entire queue sends its
 name and a brief final-answer excerpt. Tap the notification to reopen the
 correct saved Mac and conversation. Private, stopped and failed runs do not
 generate success notifications. This does not apply to the Hermes gateway.
+
+**Cantrip needs your input** alerts contain only a generic notice, not the
+question, command, tab title, password or login code. Tapping opens the original
+Mac/tab's pending-input sheet; it never approves anything. A resolved/expired
+request cannot be answered from an old alert. Unsent attention retries are
+removed when resolved; previously delivered Apple banners may remain.
 
 Alerts use **Apple push from the Mac**, not background polling. They require
 the updated host with an APNs signing key configured at

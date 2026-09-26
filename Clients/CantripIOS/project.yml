@@ -62,6 +62,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSMicrophoneUsageDescription: "Hermes uses the microphone for voice conversations with your agent."
         NSSpeechRecognitionUsageDescription: "Hermes transcribes your speech on-device so you can talk to your agent hands-free."
+        NSFaceIDUsageDescription: "Confirm sensitive Cantrip approvals, secure input and remote Mac access with Face ID."
         NSLocalNetworkUsageDescription: "AgentGateway discovers and connects securely to your paired Cantrip on the local network."
         NSBonjourServices:
           - _cantrip-remote._tcp
