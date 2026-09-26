@@ -198,6 +198,10 @@ blanket public permission-status API. Touch ID & Password shows local
 authentication availability, not an approval request for another app.
 Fixed **Open on Mac** actions open the appropriate system settings or Keychain
 Access. They do not grant permissions or unlock secrets.
+If the running app's files were replaced after launch, macOS cannot confirm
+those grants; the host reports `restartRequired` (**Reopen Cantrip on the Mac**;
+older Cantrip Agent builds show **Check on Mac**) instead of **Not granted**.
+Quit and reopen Cantrip rather than re-granting.
 
 When a supported Cantrip operation finds a missing permission or its own pairing
 credential read is blocked, **Cantrip Mac needs attention** can be sent through
@@ -435,7 +439,7 @@ fast host loopback with slow HTTPS points beyond that handler. Host-only probes
 cannot establish what happened on the remote client's tunnel/network path.
 These changes require updating and reopening the Mac host, not a Cantrip Agent
 release. Packaging with `make app` alone does not interrupt or update the running
-process.
+process; it stages the build for the next launch.
 
 **You need:** a Mac with Cantrip running, an available backend on that Mac,
 and access to its Settings. Native clients on the same local network do not
@@ -558,10 +562,13 @@ pulling and includes local edits, but refuses unresolved merge conflicts.
 No action stashes, resets, rebases, or discards work. Build output is limited
 to its latest 16,000 characters; errors remain visible.
 
-Building leaves the current app running. **Restart Cantrip** is separate and
-explicitly confirmed, verifies the installed signature, flushes session
-journals, rechecks for active work, then quits cleanly and reopens that exact
-bundle. Builds and restart refuse busy tabs, queues, and persistent shell
+Building leaves the current app and its files untouched: the signed build is
+staged beside it as `.Cantrip.app.pending`, so the running app keeps valid
+macOS permissions. Status reports that staged build as `installedBuild`.
+**Restart Cantrip** is separate and explicitly confirmed, verifies the staged
+(or installed) signature, flushes session journals, rechecks for active work,
+then quits cleanly and reopens that exact bundle path. The launch installs the
+staged build before starting. Builds and restart refuse busy tabs, queues, and persistent shell
 commands, including private sessions; they never cancel a run. New work that
 starts during a build is left alone and blocks a subsequent restart.
 

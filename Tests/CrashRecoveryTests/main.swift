@@ -48,6 +48,10 @@ let roundTrip = try JSONDecoder().decode(
 )
 expect(roundTrip == report, "crash reports should survive persistence")
 
+for failure in try pendingUpdateFailures() {
+    expect(false, failure)
+}
+
 if failures == 0 {
     print("Crash recovery tests passed")
 } else {

@@ -113,11 +113,13 @@ final class RemoteDesktop: ObservableObject {
         let access = permission()
         guard access.screen else {
             MacAttention.shared.record(.screenRecording)
-            throw SessionModelSettingsError(409, "Screen Recording permission is needed on the Mac. Viewing cannot grant its own permission.")
+            throw SessionModelSettingsError(409, MacAttention.restartRequired ? MacAttention.restartMessage(.screenRecording)
+                : "Screen Recording permission is needed on the Mac. Viewing cannot grant its own permission.")
         }
         guard !control || access.control else {
             MacAttention.shared.record(.accessibility)
-            throw SessionModelSettingsError(409, "Accessibility permission is needed on the Mac for remote control. View-only mode is still available.")
+            throw SessionModelSettingsError(409, MacAttention.restartRequired ? MacAttention.restartMessage(.accessibility)
+                : "Accessibility permission is needed on the Mac for remote control. View-only mode is still available.")
         }
         let displays = try listDisplays()
         guard !displays.isEmpty else { throw SessionModelSettingsError(503, "No accessible Mac display. Log in at the Mac.") }

@@ -1843,7 +1843,7 @@ private extension RemoteControlServer {
         if(!data.desktopEnabled)$("desktopError").textContent="Enable View Mac in Cantrip settings on the Mac first. This cannot be enabled remotely.";
         for(const issue of data.issues){const notice=document.createElement("p");notice.textContent=issue.title;$("desktopPermissions").append(notice)}
         for(const permission of data.permissions){const row=document.createElement("div"),label=document.createElement("span"),button=document.createElement("button");
-          label.textContent=`${permission.title}: ${permission.state==="granted"?"Granted":permission.state==="notGranted"?"Not granted":permission.state==="needsAttention"?"Needs attention":"Check on Mac"} `;
+          label.textContent=`${permission.title}: ${permission.state==="granted"?"Granted":permission.state==="notGranted"?"Not granted":permission.state==="restartRequired"?"Reopen Cantrip on the Mac":permission.state==="needsAttention"?"Needs attention":"Check on Mac"} `;
           button.className="control";button.textContent="Open on Mac";button.onclick=async()=>{if(desktopState!==state||token!==state.token)return;button.disabled=true;
             try{await api("/api/v1/mac-access",{method:"POST",body:JSON.stringify({permission:permission.permission})})}
             catch(error){if(desktopState===state)$("desktopError").textContent=error.message}finally{button.disabled=false}};row.append(label,button);$("desktopPermissions").append(row)}}

@@ -4,6 +4,8 @@ BUILD_DIR = $(shell swift build $(BUILD_FLAGS) --show-bin-path)
 APP_BUNDLE = $(APP_NAME).app
 APP_STAGING = .$(APP_NAME).app.staging
 APP_BACKUP = .$(APP_NAME).app.previous
+# A build made while Cantrip runs waits here; the next launch installs it.
+APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
@@ -71,7 +73,7 @@ test-package-tracking:
 test-recovery:
 	@BIN="/tmp/cantrip-recovery-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/CrashRecovery.swift Tests/CrashRecoveryTests/main.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/Log.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-run-journal:
@@ -94,7 +96,7 @@ icon:
 
 app: build cert icon
 	@set -eu; \
-	APP="$(APP_BUNDLE)"; STAGING="$(APP_STAGING)"; BACKUP="$(APP_BACKUP)"; \
+	APP="$(APP_BUNDLE)"; STAGING="$(APP_STAGING)"; BACKUP="$(APP_BACKUP)"; PENDING="$(APP_PENDING)"; \
 	cleanup() { \
 		status=$$?; trap - EXIT HUP INT TERM; rm -rf "$$STAGING"; \
 		if [ ! -e "$$APP" ] && [ -e "$$BACKUP" ]; then mv "$$BACKUP" "$$APP"; fi; \
@@ -123,9 +125,19 @@ app: build cert icon
 	if [ "$$IDENT" = "-" ]; then \
 		echo "WARNING: ad-hoc signed — cert creation failed, permissions will reset each build (see Scripts/make-cert.sh)."; \
 	fi; \
+	if [ "$${CANTRIP_INSTALL_NOW:-0}" != 1 ] && [ -e "$$APP/Contents/MacOS/$(APP_NAME)" ] \
+		&& /usr/sbin/lsof -t -- "$$APP/Contents/MacOS/$(APP_NAME)" >/dev/null 2>&1; then \
+		rm -rf "$$PENDING"; \
+		mv "$$STAGING" "$$PENDING"; \
+		trap - EXIT HUP INT TERM; \
+		echo "Built $$PENDING ($$BUILD_ID at $$BUILD_DATE)."; \
+		echo "Cantrip is running, so $$APP was left untouched to keep its macOS permissions valid."; \
+		echo "Quit and reopen Cantrip to install this build."; \
+		exit 0; \
+	fi; \
 	if [ -e "$$APP" ]; then mv "$$APP" "$$BACKUP"; fi; \
 	mv "$$STAGING" "$$APP"; \
-	rm -rf "$$BACKUP"; \
+	rm -rf "$$BACKUP" "$$PENDING"; \
 	trap - EXIT HUP INT TERM; \
 	echo "Built $$APP ($$BUILD_ID at $$BUILD_DATE). Run with: open $$APP"
 
@@ -135,4 +147,4 @@ run: app
 	@open -n $(APP_BUNDLE)
 
 clean:
-	rm -rf .build $(APP_BUNDLE) $(APP_STAGING) $(APP_BACKUP)
+	rm -rf .build $(APP_BUNDLE) $(APP_STAGING) $(APP_BACKUP) $(APP_PENDING)

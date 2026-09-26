@@ -51,9 +51,19 @@ final class MacAttention: ObservableObject {
         Task { @MainActor in shared.record(permission) }
     }
 
+    /// A running Cantrip whose app files were replaced fails macOS privacy
+    /// checks even when the permission is enabled in System Settings.
+    nonisolated static var restartRequired: Bool { PendingUpdate.launchedExecutableReplaced() }
+
+    nonisolated static func restartMessage(_ permission: MacPermission) -> String {
+        "Cantrip's app files changed while it was running, so macOS can't confirm \(permission.title) permission. Quit and reopen Cantrip on the Mac."
+    }
+
     func record(_ permission: MacPermission) {
         guard !issues.contains(where: { $0.permission == permission }) else { return }
-        let issue = MacAttentionIssue(id: UUID(), permission: permission, title: "\(permission.title) needs attention on the Mac")
+        let title = Self.restartRequired ? "Reopen Cantrip on the Mac to restore \(permission.title)"
+            : "\(permission.title) needs attention on the Mac"
+        let issue = MacAttentionIssue(id: UUID(), permission: permission, title: title)
         issues.append(issue)
         onAttention?(issue)
     }
@@ -65,13 +75,14 @@ final class MacAttention: ObservableObject {
     }
 
     func permissions() -> [MacPermissionStatus] {
-        MacPermission.allCases.map { permission in
+        let denied = Self.restartRequired ? "restartRequired" : "notGranted"
+        return MacPermission.allCases.map { permission in
             let state: String
             switch permission {
-            case .screenRecording: state = CGPreflightScreenCaptureAccess() ? "granted" : "notGranted"
-            case .accessibility: state = AXIsProcessTrusted() ? "granted" : "notGranted"
-            case .microphone: state = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? "granted" : "notGranted"
-            case .speechRecognition: state = SFSpeechRecognizer.authorizationStatus() == .authorized ? "granted" : "notGranted"
+            case .screenRecording: state = CGPreflightScreenCaptureAccess() ? "granted" : denied
+            case .accessibility: state = AXIsProcessTrusted() ? "granted" : denied
+            case .microphone: state = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? "granted" : denied
+            case .speechRecognition: state = SFSpeechRecognizer.authorizationStatus() == .authorized ? "granted" : denied
             case .fullDiskAccess: state = "manualCheck"
             case .keychain: state = issues.contains { $0.permission == .keychain } ? "needsAttention" : "checkedWhenUsed"
             case .authentication:

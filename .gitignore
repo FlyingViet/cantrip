@@ -1,5 +1,7 @@
 .build/
 *.app/
+# Cantrip packaging staging, pending update and backup bundles
+.*.app.*/
 .DS_Store
 Resources/AppIcon.icns
 *.xcodeproj

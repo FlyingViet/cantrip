@@ -31,8 +31,10 @@ extension SessionTabTests {
         let manager = SessionManager()
         let stateFile = root.appendingPathComponent("state/state.json")
         var builds = 0, restarts = 0, failBuild = false, busyDuringRestart = false
+        var verifiedBundles: [String] = []
         let runner: RemoteMaintenance.Runner = { executable, arguments, directory, output in
             if executable == "/usr/bin/codesign" {
+                verifiedBundles.append(arguments.last ?? "")
                 if busyDuringRestart { manager.active.isStreaming = true }
                 return ""
             }
@@ -145,6 +147,12 @@ extension SessionTabTests {
                      "Recheck activity after asynchronous restart preparation")
         manager.active.isStreaming = false
         busyDuringRestart = false
+        // A build made while Cantrip runs waits beside it; restart must verify and expect that build.
+        let staged = PendingUpdate.pendingURL(for: app)
+        try fm.createDirectory(at: staged.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: ["CantripBuildIdentity": "staged-test"],
+            format: .xml, options: 0).write(to: staged.appendingPathComponent("Contents/Info.plist"))
+        precondition(service.snapshot().installedBuild == "staged-test", "Report the staged build as installed next")
         let restartRequest = action(.restart)
         _ = try service.start(restartRequest)
         for _ in 0..<400 {
@@ -152,8 +160,10 @@ extension SessionTabTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         precondition(restarts == 1)
+        precondition(verifiedBundles.last == staged.path, "Restart must verify the staged build's signature")
+        try fm.removeItem(at: staged)
         let restarted = RemoteMaintenance(manager: manager, app: app, stateFile: stateFile,
-            runningBuild: "built-test", run: runner, restart: { _ in restarts += 1 })
+            runningBuild: "staged-test", run: runner, restart: { _ in restarts += 1 })
         precondition(restarted.snapshot().job?.phase == "succeeded")
         _ = try restarted.start(restartRequest)
         precondition(restarts == 1)
