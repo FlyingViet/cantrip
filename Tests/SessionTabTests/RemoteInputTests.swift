@@ -1,5 +1,8 @@
 import CryptoKit
 import Foundation
+import ImageIO
+import JavaScriptCore
+import UniformTypeIdentifiers
 
 private final class InputBackendFixture: Backend {
     var events: ((BackendEvent) -> Void)?
@@ -43,6 +46,31 @@ extension SessionTabTests {
         let journal = try String(contentsOf: RunJournal.defaultDirectory.appendingPathComponent("\(chat.id).jsonl"), encoding: .utf8)
         precondition(!journal.contains("fixture-secret-not-history"))
         precondition(!chat.messages.contains { $0.text.contains("fixture-secret-not-history") })
+        let queueCount = chat.queued.count
+        let question = BackendInputRequest(kind: .question, source: "fixture", title: "Show the error",
+            detail: "Include a screenshot.", allowsFreeform: true) { answers.append($0) }
+        chat.receiveInput(question)
+        chat.attachments = ["/tmp/question-fixture.png"]
+        chat.submit("Here is the screenshot", mode: .auto)
+        precondition(!question.isPending && chat.queued.count == queueCount && chat.attachments.isEmpty)
+        precondition(answers.last?.text?.contains("/tmp/question-fixture.png") == true)
+        precondition(chat.messages.contains { $0.role == .user && $0.text.contains("Here is the screenshot") })
+        try await chat.flushJournal()
+        let questionJournal = try String(contentsOf: RunJournal.defaultDirectory.appendingPathComponent("\(chat.id).jsonl"), encoding: .utf8)
+        precondition(questionJournal.contains("Here is the screenshot") && !questionJournal.contains("fixture-secret-not-history"))
+        do { try chat.respondInChat(id: question.snapshot.id, text: "late reply"); preconditionFailure() }
+        catch InputRequestError.unavailable {}
+        precondition(chat.queued.count == queueCount, "A stale reply must never turn into a queued task")
+        let choice = BackendInputRequest(kind: .question, source: "fixture", title: "Choose",
+            detail: "", choices: ["A", "B"]) { answers.append($0) }
+        chat.receiveInput(choice)
+        chat.attachments = ["/tmp/retained-fixture.png"]
+        do { try chat.submitInputReply("C", id: choice.snapshot.id); preconditionFailure() }
+        catch InputRequestError.invalidAnswer {}
+        precondition(choice.isPending && chat.attachments == ["/tmp/retained-fixture.png"])
+        chat.attachments = []
+        chat.submit("B")
+        precondition(!choice.isPending && answers.last?.text == "B")
         let stopped = BackendInputRequest(kind: .question, source: "fixture", title: "Choose",
             detail: "Which?", choices: ["A", "B"]) { answers.append($0) }
         chat.receiveInput(stopped)
@@ -61,6 +89,7 @@ extension SessionTabTests {
         try await testAskpass()
         try await testDeviceLogin()
         try await testInputPush()
+        try testInputWeb()
         print("Remote input: lifecycle, single-use replies, expiry, Stop, secret isolation, API, SDK bridge, real askpass and APNs passed")
     }
 
@@ -95,10 +124,73 @@ extension SessionTabTests {
         let replay = try await call("/\(pending.snapshot.id)", method: "POST", body: body)
         precondition(sent.0 == 200 && replay.0 == 409 && answer?.text == "secret-api-fixture")
         precondition(!String(data: sent.1, encoding: .utf8)!.contains("secret-api-fixture"))
+        func sendChat(_ requestID: UUID, text: String, images: [[String: String]] = []) async throws -> (Int, [String: Any]) {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/v1/sessions/\(chat.id)/messages")!)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "text": text, "mode": "auto", "inputRequestID": requestID.uuidString, "images": images
+            ])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            return ((response as! HTTPURLResponse).statusCode, try JSONSerialization.jsonObject(with: data) as! [String: Any])
+        }
+        let pixels = CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        let imageData = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(imageData, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, pixels.makeImage()!, nil)
+        precondition(CGImageDestinationFinalize(destination))
+        let question = BackendInputRequest(kind: .question, source: "fixture", title: "What failed?",
+            detail: "Attach the error", allowsFreeform: true) { answer = $0 }
+        chat.receiveInput(question)
+        let queued = chat.queued.count
+        let reply = try await sendChat(question.snapshot.id, text: "Error screenshot",
+                                      images: [["data": (imageData as Data).base64EncodedString()]])
+        precondition(reply.0 == 202 && answer?.text?.contains("remote-attachments") == true)
+        precondition(chat.queued.count == queued && !question.isPending)
+        let snapshot = reply.1["session"] as! [String: Any]
+        precondition(snapshot["supportsChatInputReplies"] as? Bool == true)
+        let messages = snapshot["messages"] as! [[String: Any]]
+        precondition(messages.contains { $0["role"] as? String == "user" && $0["images"] != nil })
+        let duplicate = try await sendChat(question.snapshot.id, text: "stale response")
+        precondition(duplicate.0 == 409 && chat.queued.count == queued)
+        let password = BackendInputRequest(kind: .secret, source: "fixture", title: "Password", detail: "") { answer = $0 }
+        chat.receiveInput(password)
+        let wrongChannel = try await sendChat(password.snapshot.id, text: "must-not-be-stored")
+        precondition(wrongChannel.0 == 400 && password.isPending)
+        precondition(!chat.messages.contains { $0.text.contains("must-not-be-stored") })
+        password.cancel()
         chat.isPrivate = true
         let hidden = try await call()
         precondition(hidden.0 == 404)
         chat.isPrivate = false
+    }
+
+    @MainActor
+    private static func testInputWeb() throws {
+        let source = try String(contentsOfFile: "Sources/Cantrip/RemoteControlServer.swift", encoding: .utf8)
+        let start = source.range(of: "    let inputState")!
+        let end = source.range(of: "    let desktopState", range: start.upperBound..<source.endIndex)!
+        let context = JSContext()!
+        context.exceptionHandler = { _, error in fatalError(error!.toString()) }
+        context.evaluateScript("""
+        function node(){return {children:[],dataset:{},style:{},value:"",append(...items){this.children.push(...items)},
+          replaceChildren(){this.children=[]},setAttribute(){},addEventListener(){},querySelectorAll(){return []},focus(){this.focused=true},
+          showModal(){this.open=true},close(){this.open=false}}}
+        const elements={};const $=id=>elements[id]||(elements[id]=node());const document={createElement:node};
+        let token="fixture",selected="tab",renderedPayload="",calls=[];function clearTimeout(){}function setTimeout(){return 1}
+        function safeURL(value){return value}function refresh(){return Promise.resolve()}
+        const question={id:"question",kind:"question",title:"Which?",detail:"Explain in chat",choices:["A","B"],allowsFreeform:true,expiresAt:9999999999};
+        const secret={id:"secret",kind:"secret",title:"Password",detail:"Verified program",choices:[],expiresAt:9999999999};
+        function api(path,options){calls.push({path,body:options?JSON.parse(options.body):null});return Promise.resolve({requests:[question,secret]})}
+        \(source[start.lowerBound..<end.lowerBound])
+        const inline=node();appendChatInputs(inline,{id:"tab",pendingInputs:[question,secret]});
+        """)
+        precondition(context.evaluateScript("!$('inputEditor').open && inline.children.length===2 && chatInputReply.id==='question'")!.toBool())
+        context.evaluateScript("showInputs()")
+        precondition(context.evaluateScript("$('inputCards').children.length===1 && $('inputCards').children[0].dataset.id==='secret'")!.toBool())
+        context.evaluateScript("respondChatInput({sessionID:'tab',token},question,{decision:'submit',text:'A'})")
+        precondition(context.evaluateScript("calls.some(c=>c.path==='/api/v1/sessions/tab/input/question' && c.body.text==='A')")!.toBool())
     }
 
     @MainActor

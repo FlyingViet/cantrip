@@ -111,8 +111,8 @@ struct LauncherView: View {
         }
         .sheet(isPresented: $showingInputRequests) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Input Needed").font(.headline)
-                ScrollView { RemoteInputView(session: session) }
+                Text("Secure Input").font(.headline)
+                ScrollView { RemoteInputView(session: session, secureOnly: true) }
                 Button("Done") { showingInputRequests = false }
             }.padding(20).frame(width: 600, height: 480)
         }
@@ -1053,11 +1053,14 @@ struct LauncherView: View {
     /// Progress + pending queue: what's running now and what runs next.
     private var queueView: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if !session.pendingInputs.isEmpty {
-                Button("Your input is needed - Review \(session.pendingInputs.count) request(s)") {
+            if session.pendingInputs.contains(where: { $0.kind == .secret }) {
+                Button("Enter password securely") {
                     showingInputRequests = true
                 }
                 .buttonStyle(.bordered)
+            }
+            if let request = session.chatInputRequest {
+                Text("Question waiting: \(request.title). Use Auto to reply.").font(.caption).foregroundStyle(.secondary)
             }
             if session.isStreaming {
                 HStack(spacing: 6) {
@@ -1959,12 +1962,18 @@ struct LauncherView: View {
     private func submit(interrupt: Bool = false, inject: Bool = false) {
         // Enter with an app suggestion showing launches the app;
         // ⌘↩ bypasses the suggestion and asks the AI.
-        if !session.isLocalPrivate, !interrupt, !inject, let suggestion = appSuggestion {
+        if !session.isLocalPrivate, session.chatInputRequest == nil, !interrupt, !inject, let suggestion = appSuggestion {
             launchApp(suggestion)
             return
         }
         if speech.isRecording { speech.stop() }
         let text = query
+        if !interrupt, !inject, deliveryMode == .auto, let request = session.chatInputRequest {
+            do { try session.submitInputReply(text, id: request.id) }
+            catch { session.deliveryStatusForInput(error.localizedDescription); return }
+            query = ""
+            return
+        }
         query = ""
         session.submit(text, mode: interrupt ? .interrupt : inject ? .inject : deliveryMode)
         deliveryMode = .auto
@@ -2013,7 +2022,7 @@ struct LauncherView: View {
                         MessageRow(message: message, localOnly: session.isLocalPrivate)
                             .id(message.id)
                     }
-                    RemoteInputView(session: session)
+                    RemoteInputView(session: session, openSecureInput: { showingInputRequests = true })
                     if let status = session.statusText {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.small)
