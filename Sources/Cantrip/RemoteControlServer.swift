@@ -502,7 +502,7 @@ final class RemoteControlServer {
                 let sessions = manager.sessions
                     .filter { !$0.isPrivate }
                     .map { snapshot($0, includeMessages: false, on: connection) }
-                sendJSON(["sessions": sessions], on: connection)
+                sendJSON(["sessions": sessions, "uiRevision": Self.webAppRevision], on: connection)
             case "POST":
                 let session = manager.newSession()
                 sendSession(session, status: 201, on: connection)
@@ -1288,7 +1288,10 @@ final class RemoteControlServer {
 }
 
 private extension RemoteControlServer {
-    static let webApp = """
+    static let webAppRevision = SHA256.hash(data: Data(webAppTemplate.utf8))
+        .map { String(format: "%02x", $0) }.joined()
+    static let webApp = webAppTemplate.replacingOccurrences(of: "__CANTRIP_UI_REVISION__", with: webAppRevision)
+    static let webAppTemplate = """
     <!doctype html>
     <html lang="en" data-cantrip-connected="false"><head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1348,6 +1351,7 @@ private extension RemoteControlServer {
     #desktopText{width:100%;box-sizing:border-box;min-height:44px}#desktopPermissions>div{margin:12px 0}
     .input-card input,.input-card textarea,.input-card select{box-sizing:border-box;width:100%;max-width:none;min-height:44px;background:Canvas;color:var(--text);border:1px solid var(--line);padding:8px;font:inherit}
     .input-card .tab-actions{flex-wrap:wrap}.input-card pre{max-height:240px;overflow:auto;white-space:pre-wrap}
+    #uiUpdateStatus:not(:empty){padding:8px 14px}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
@@ -1357,7 +1361,7 @@ private extension RemoteControlServer {
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div></header>
-    <div id="actionError" role="alert"></div><button id="inputBanner" class="control hidden">Your input is needed</button><div id="historyError" role="alert"></div><button id="olderMessages" class="control hidden">Load more messages</button><section id="messages"></section></main>
+    <div id="uiUpdateStatus" class="muted" role="status" aria-live="polite"></div><div id="actionError" role="alert"></div><button id="inputBanner" class="control hidden">Your input is needed</button><div id="historyError" role="alert"></div><button id="olderMessages" class="control hidden">Load more messages</button><section id="messages"></section></main>
     <dialog id="inputEditor" aria-labelledby="inputTitle"><strong id="inputTitle">Secure Input</strong>
     <p class="muted">Only passwords and passphrases belong here. Questions and other actions appear in chat.</p>
     <div id="inputError" role="alert"></div><div id="inputCards"></div>
@@ -1413,6 +1417,81 @@ private extension RemoteControlServer {
     <pre id="promptPage"></pre><div class="tab-actions"><button id="promptPrevious" class="control">Previous</button><span id="promptNumber"></span><button id="promptNext" class="control">Next</button><button id="promptDownload" class="control">Download all</button><button id="promptDone" class="control">Done</button></div></dialog>
     <script>
     const $=id=>document.getElementById(id);let token=localStorage.cantripToken||"",selected=null,timer=null,renderedSession=null,renderedPayload="",followOutput=true,suppressScroll=false;const expanded=new Set();
+    const uiRevision="__CANTRIP_UI_REVISION__",uiReloadStorageKey="cantrip.uiReload.v1";
+    let pendingUIRevision=null,blockedUIRevision=null,uiReloadTimer=null,uiNavigationTimer=null,uiReloading=false,uiNavigating=false,uiRestoreFailed=false,uiActiveWrites=0,uiLastInteraction=0,uiComposing=false,uiMutationWarning="";
+    function scheduleUIReload(){if(uiReloadTimer)clearTimeout(uiReloadTimer);uiReloadTimer=null;
+      if(pendingUIRevision&&pendingUIRevision!==blockedUIRevision&&!uiReloading&&!uiRestoreFailed&&!document.hidden)uiReloadTimer=setTimeout(reloadUpdatedUI,1000)}
+    function observeUIRevision(revision){
+      const previous=pendingUIRevision;
+      pendingUIRevision=typeof revision==="string"&&/^[a-f0-9]{64}$/.test(revision)&&revision!==uiRevision?revision:null;
+      if(!uiRestoreFailed){
+        if(pendingUIRevision&&pendingUIRevision!==blockedUIRevision)$("uiUpdateStatus").textContent="Remote update ready. Refreshing automatically when it is safe...";
+        else if(previous&&!pendingUIRevision&&!blockedUIRevision)$("uiUpdateStatus").textContent="";
+      }
+      scheduleUIReload();
+    }
+    function canReloadUI(){return Boolean(token&&!document.hidden&&!uiRestoreFailed&&!uiNavigating&&!uiComposing&&!uiActiveWrites&&!refreshTask&&!loadingHistory
+      &&!movingTab&&!draggedTabID&&!chatInputSaving&&!$("send").disabled&&!document.querySelector("dialog[open]")
+      &&Date.now()-uiLastInteraction>=2000&&followOutput&&document.documentElement.dataset.cantripConnected==="true")}
+    async function uiStateOwner(value){const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value));
+      return Array.from(new Uint8Array(bytes),byte=>byte.toString(16).padStart(2,"0")).join("")}
+    function captureUIState(owner,revision){const drafts=new Map(tabDrafts);if(selected)drafts.set(selected,$("draft").value);
+      const reply=chatInputReply?.sessionID===selected&&chatInputReply.token===token?{id:chatInputReply.id,sessionID:selected}:null;
+      return {schema:1,owner,revision,selected,drafts:[...drafts],mode:$("mode").value,reply,
+        error:uiMutationWarning||$("actionError").textContent,focus:document.activeElement===$("draft"),
+        selectionStart:$("draft").selectionStart,selectionEnd:$("draft").selectionEnd};
+    }
+    function navigateUpdatedUI(){location.replace(location.href)}
+    function pauseUIReload(revision,error){
+      if(uiNavigationTimer)clearTimeout(uiNavigationTimer);uiNavigationTimer=null;
+      if(uiNavigating){window.stop();
+        try{sessionStorage.removeItem(uiReloadStorageKey)}catch(storageError){uiRestoreFailed=true;error=new Error(`${error.message}; saved draft cleanup failed: ${storageError.message}`)}
+      }
+      uiNavigating=false;uiReloading=false;blockedUIRevision=revision;$("app").inert=false;
+      $("uiUpdateStatus").textContent=`Automatic refresh paused: ${error.message}. Your current drafts have not been cleared.`;
+      scheduleRefresh();
+    }
+    async function reloadUpdatedUI(){
+      uiReloadTimer=null;
+      if(!pendingUIRevision||pendingUIRevision===blockedUIRevision||uiReloading)return;
+      if(!canReloadUI()){scheduleUIReload();return}
+      const requestToken=token,revision=pendingUIRevision;uiReloading=true;
+      try{const owner=await uiStateOwner(requestToken);
+        if(token!==requestToken||pendingUIRevision!==revision||!canReloadUI()){uiReloading=false;scheduleUIReload();return}
+        // Persist only ordinary composer drafts, never secure fields, credentials or transcript data.
+        sessionStorage.setItem(uiReloadStorageKey,JSON.stringify(captureUIState(owner,revision)));
+        uiNavigating=true;$("app").inert=true;$("uiUpdateStatus").textContent="Updating Remote...";
+        if(timer)clearTimeout(timer);timer=null;
+        uiNavigationTimer=setTimeout(()=>pauseUIReload(revision,new Error("The updated interface did not load in time")),20000);
+        navigateUpdatedUI();
+      }catch(error){pauseUIReload(revision,error)}
+    }
+    async function restoreUIState(){
+      try{const raw=sessionStorage.getItem(uiReloadStorageKey);if(!raw)return;
+        const state=JSON.parse(raw),requestToken=token;
+        if(!requestToken){sessionStorage.removeItem(uiReloadStorageKey);return}
+        const owner=await uiStateOwner(requestToken);
+        if(token!==requestToken)return;
+        if(state.owner!==owner){sessionStorage.removeItem(uiReloadStorageKey);return}
+        if(state.schema!==1||typeof state.revision!=="string"||(state.selected!==null&&typeof state.selected!=="string")
+          ||!Array.isArray(state.drafts)||!state.drafts.every(item=>Array.isArray(item)&&item.length===2&&item.every(value=>typeof value==="string"))
+          ||!["auto","queue","interrupt","inject"].includes(state.mode)||typeof state.error!=="string"
+          ||(state.reply!==null&&(!state.reply||typeof state.reply.id!=="string"||state.reply.sessionID!==state.selected)))
+          throw Error("Saved Remote draft state is invalid");
+        tabDrafts.clear();for(const [id,text] of state.drafts)tabDrafts.set(id,text);
+        selected=state.selected;$("draft").value=tabDrafts.get(selected)||"";$("mode").value=state.mode;
+        chatInputReply=state.reply?{...state.reply,token}:null;$("actionError").textContent=state.error;
+        sessionStorage.removeItem(uiReloadStorageKey);
+        if(state.revision!==uiRevision){blockedUIRevision=state.revision;
+          $("uiUpdateStatus").textContent="The host returned an older Remote interface. Automatic refresh paused to avoid a reload loop; your drafts were restored."}
+        return state.focus?{start:state.selectionStart,end:state.selectionEnd}:null;
+      }catch(error){uiRestoreFailed=true;$("uiUpdateStatus").textContent=`Could not restore Remote drafts: ${error.message}. Automatic refresh paused; the saved state was retained.`}
+    }
+    function clearUIReloadState(){pendingUIRevision=null;blockedUIRevision=null;uiMutationWarning="";uiRestoreFailed=false;scheduleUIReload();
+      try{sessionStorage.removeItem(uiReloadStorageKey)}catch(error){$("uiUpdateStatus").textContent=`Could not clear saved Remote drafts: ${error.message}`}}
+    for(const name of ["input","change","pointerdown","keydown","wheel","touchmove"])document.addEventListener(name,()=>{uiLastInteraction=Date.now()},{passive:true});
+    document.addEventListener("compositionstart",()=>{uiComposing=true});
+    document.addEventListener("compositionend",()=>{uiComposing=false;uiLastInteraction=Date.now()});
     // The native Mac embed exposes this bridge; ordinary browsers keep the top tab strip.
     const sidebarLayout=Boolean(window.webkit?.messageHandlers?.cantripRemoteUnpair);
     if(sidebarLayout){document.documentElement.classList.add("remote-sidebar");$("sessionSidebar").classList.remove("hidden");$("sessionSidebar").append($("sessions"));$("sessionSidebarHeader").append($("newSession"));$("sessionProgress").prepend(brainIndicator())}
@@ -1435,12 +1514,16 @@ private extension RemoteControlServer {
       historyScrollIntent=["ArrowUp","PageUp","Home"].includes(event.key)||(event.key===" "&&event.shiftKey);if(historyScrollIntent){followOutput=false;requestHistoryOnScroll()}});
     addEventListener("scroll",()=>{const top=(document.scrollingElement||document.documentElement).scrollTop;if(!suppressScroll){followOutput=atBottom();if(top<lastHistoryScrollTop)requestHistoryOnScroll()}lastHistoryScrollTop=top},{passive:true});
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
+      if(uiNavigating)throw Error("Remote is updating; this request was not sent.");
       path+=(path.includes("?")?"&":"?")+"history=recent";
       const controller=(!options.method||options.method==="GET")?new AbortController():null;
       const segments=path.split("?")[0].split("/").filter(Boolean),historyRead=segments.slice(0,3).join("/")==="api/v1/sessions"&&(segments.length===4||(segments.length===6&&segments[4]==="messages"));
       if(sidebarLayout&&controller&&historyRead&&segments.length===4&&!new URLSearchParams(path.split("?")[1]).has("before"))path+="&recentExchanges=3";
       const deadline=controller?setTimeout(()=>controller.abort(),historyRead?20000:8000):null;if(controller)options.signal=controller.signal;
-      try{const response=await fetch(path,options);const data=await response.json();if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;throw error}return data}finally{if(deadline!==null)clearTimeout(deadline)}}
+      if(!controller)uiActiveWrites++;
+      try{const response=await fetch(path,options);const data=await response.json();if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;throw error}return data}
+      catch(error){if(!controller)uiMutationWarning=`A Remote action failed: ${error.message}. Check the conversation before retrying; it was not resent.`;throw error}
+      finally{if(deadline!==null)clearTimeout(deadline);if(!controller){uiActiveWrites--;scheduleUIReload()}}}
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
     let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;
     const tabDrafts=new Map();
@@ -1463,13 +1546,13 @@ private extension RemoteControlServer {
         if(start>0)session={...session,messages:session.messages.slice(start),hasOlderMessages:true}}
       if(!expandedHistory.has(session.id)){const pastGroups=Math.max(0,session.messages.filter(m=>m.role==="user").length-1);automaticHistoryRemaining.set(session.id,Math.min(automaticHistoryRemaining.get(session.id)??automaticHistoryLimit,Math.max(0,automaticHistoryLimit-pastGroups)))}
       historyCache.delete(session.id);historyCache.set(session.id,session);while(historyCache.size>5){const id=historyCache.keys().next().value;historyCache.delete(id);expandedHistory.delete(id);automaticHistoryRemaining.delete(id)}return session}
-    function scheduleRefresh(){if(timer)clearTimeout(timer);timer=null;if(!token||document.hidden)return;
+    function scheduleRefresh(){if(timer)clearTimeout(timer);timer=null;if(!token||document.hidden||uiNavigating)return;
       const busy=sessionItems.some(s=>s.isStreaming||s.queuedCount)||$("historyError").textContent||document.documentElement.dataset.cantripConnected!=="true";
       timer=setTimeout(refresh,busy?1500:5000)}
     function refresh(){refreshRequested=true;if(refreshTask)return refreshTask;
       refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision;
         let listedSuccessfully=false,requestSelection=requestedID;
-        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;
+        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);
           for(const id of historyCache.keys())if(!listed.sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);automaticHistoryRemaining.delete(id)}
           if(selected!==requestedID){refreshRequested=true;continue}
           if(!selected||!listed.sessions.some(s=>s.id===selected))selectTab(listed.sessions[0]?.id||null);
@@ -1485,7 +1568,7 @@ private extension RemoteControlServer {
           if(!listedSuccessfully||error.status===401)connection(false);
           $("historyError").textContent=`${listedSuccessfully?"Could not update this conversation":"Could not refresh tabs"}: ${error.message}. Retrying...`;
           if(error.status===401){refreshRequested=false;pair(true)}}}
-      })().finally(()=>{refreshTask=null;scheduleRefresh()});return refreshTask}
+      })().finally(()=>{refreshTask=null;scheduleRefresh();scheduleUIReload()});return refreshTask}
     async function loadOlderMessages(automatically=false){const current=historyCache.get(selected),before=current?.messages[0]?.id;if(loadingHistory||!current?.hasOlderMessages||!before||(automatically&&!canAutomaticallyLoadHistory(current)))return;
       const requestToken=token,orderRevision=tabOrderRevision;loadingHistory=true;updateHistoryControls(current);
       try{const data=await api(`/api/v1/sessions/${current.id}?before=${encodeURIComponent(before)}`),latest=historyCache.get(current.id);
@@ -1669,9 +1752,14 @@ private extension RemoteControlServer {
     let chatInputReply=null,chatInputSaving=false;
     function appendChatInputs(parent,session){
       const requests=session.pendingInputs||[],questions=requests.filter(r=>r.kind==="question");
-      const chosen=chatInputReply?.sessionID===session.id&&chatInputReply.token===token?questions.find(r=>r.id===chatInputReply.id):null;
+      const previous=chatInputReply?.sessionID===session.id&&chatInputReply.token===token?chatInputReply:null;
+      const chosen=previous?questions.find(r=>r.id===previous.id):null;
       const question=chosen||questions[0];chatInputReply=question?{id:question.id,sessionID:session.id,token}:null;
       $("draft").placeholder=question?`Reply in chat: ${question.title} (not passwords)`:"Message Cantrip...";
+      if(previous&&$("draft").value.trim()){
+        chatInputReply=previous;
+        if(!chosen)$("draft").placeholder="Previous question is no longer waiting. Choose another question or delivery mode.";
+      }
       for(const request of requests){const card=document.createElement("section");card.className="input-card";card.dataset.id=request.id;
         const title=document.createElement("strong");title.textContent=request.title;card.append(title);
         const button=(label,action)=>{const node=document.createElement("button");node.className="control";node.textContent=label;node.disabled=chatInputSaving||request.expiresAt<=Date.now()/1000;node.onclick=action;card.append(node)};
@@ -1826,15 +1914,22 @@ private extension RemoteControlServer {
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
     async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selectTab(data.session.id);renderedPayload="";await refresh()}
       catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
-    $("pairButton").onclick=async()=>{if(desktopState)await endDesktop();historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();tabDrafts.clear();selected=null;$("draft").value="";token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
+    $("pairButton").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();tabDrafts.clear();selected=null;$("draft").value="";token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
       catch(error){$("pairError").textContent=error.message}};
     $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;const sessionID=selected,requestToken=token,mode=$("mode").value,body={text,mode};
       if(mode==="auto"&&chatInputReply?.sessionID===sessionID&&chatInputReply.token===requestToken)body.inputRequestID=chatInputReply.id;
       $("send").disabled=true;try{await action("messages",body);if(selected===sessionID&&token===requestToken){if($("draft").value.trim()===text)$("draft").value="";$("mode").value="auto"}}
-      catch(error){const label=document.querySelector(".connection-label");if(label)label.textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false}};
+      catch(error){$("actionError").textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false;scheduleUIReload()}};
     $("draft").onkeydown=event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selectTab(data.session.id);refresh()};
-    $("forget").onclick=async()=>{if(desktopState)await endDesktop();localStorage.removeItem("cantripToken");historyCache.clear();expandedHistory.clear();tabDrafts.clear();selected=null;$("draft").value="";token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null)};if(token){pair(false);refresh()}else pair(true);
+    $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");historyCache.clear();expandedHistory.clear();tabDrafts.clear();selected=null;$("draft").value="";token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null)};
+    async function startRemoteUI(){
+      if(token){const focus=await restoreUIState();if(!token)return;pair(false);
+        if(focus){$("draft").focus();if(Number.isInteger(focus.start)&&Number.isInteger(focus.end))$("draft").setSelectionRange(focus.start,focus.end)}
+        refresh();
+      }else pair(true);
+    }
+    startRemoteUI();
     </script></body></html>
     """
 }
