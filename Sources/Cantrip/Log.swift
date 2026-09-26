@@ -29,4 +29,9 @@ enum Log {
             }
         }
     }
+
+    /// Waits for queued lines, for code paths that exit immediately.
+    static func flush() {
+        queue.sync {}
+    }
 }

@@ -10,6 +10,9 @@ if let watcherFlag = CommandLine.arguments.firstIndex(of: "--cantrip-crash-watch
     exit(EXIT_SUCCESS)
 }
 
+PendingUpdate.installIfReady()
+PendingUpdate.recordLaunchedExecutable()
+
 let recoveryReport = CrashRecovery.start()
 try? RunJournal.prune()
 

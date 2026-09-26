@@ -114,8 +114,11 @@ final class RemoteMaintenance {
         manager?.sessions.filter { $0.isStreaming || !$0.queued.isEmpty || $0.shell.isRunning }.count ?? 0
     }
 
+    /// A build staged while Cantrip runs is installed by the next launch.
+    private var installedBundle: URL { PendingUpdate.nextLaunchBundle(for: app) }
+
     private var installedBuild: String? {
-        guard let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist")) else { return nil }
+        guard let info = NSDictionary(contentsOf: installedBundle.appendingPathComponent("Contents/Info.plist")) else { return nil }
         return info["CantripBuildIdentity"] as? String
     }
 
@@ -219,7 +222,7 @@ final class RemoteMaintenance {
             guard let expected = installedBuild else {
                 throw RemoteMaintenanceError(status: 409, message: "Build Cantrip on the Mac before restarting.")
             }
-            try await command("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
+            try await command("/usr/bin/codesign", ["--verify", "--deep", "--strict", installedBundle.path])
             state.expectedBuild = expected
             try phase("restarting", "Restart requested. Cantrip Agent will reconnect when the Mac is ready.")
             try await Task.sleep(for: .seconds(2))

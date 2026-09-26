@@ -29,6 +29,18 @@ extension SessionTabTests {
         desktop.enabled = true
         access.screen = false
         try rejected({ _ = try desktop.start(control: false) }, status: 409)
+        // Replaced app files make macOS privacy checks fail until Cantrip reopens.
+        let replaced = FileManager.default.temporaryDirectory.appendingPathComponent("desktop-executable-\(UUID())")
+        try Data("previous build".utf8).write(to: replaced)
+        defer { try? FileManager.default.removeItem(at: replaced) }
+        PendingUpdate.recordLaunchedExecutable(replaced.path)
+        precondition(MacAttention.restartRequired)
+        do { _ = try desktop.start(control: false); preconditionFailure("Expected rejection") }
+        catch let error as SessionModelSettingsError {
+            precondition(error.status == 409 && error.message.contains("Quit and reopen Cantrip"), error.message)
+        }
+        PendingUpdate.recordLaunchedExecutable(nil)
+        precondition(!MacAttention.restartRequired)
         access.screen = true; access.control = false
         try rejected({ _ = try desktop.start(control: true) }, status: 409)
         let viewOnly = try desktop.start(control: false)

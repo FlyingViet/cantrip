@@ -217,7 +217,7 @@ enum CrashRecovery {
         kill(pid, 0) == 0 || errno == EPERM
     }
 
-    private static func hasRunningInstance(from bundlePath: String) -> Bool {
+    static func hasRunningInstance(from bundlePath: String) -> Bool {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: stateDirectory,
             includingPropertiesForKeys: nil

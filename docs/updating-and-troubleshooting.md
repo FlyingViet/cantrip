@@ -40,6 +40,17 @@ make run
 If a pull or build fails, stop at that error instead of assuming you are
 running the new version.
 
+While Cantrip is running, `make app` does not touch `Cantrip.app`. It stages
+the signed build beside it as `.Cantrip.app.pending`, because macOS checks
+Screen Recording, Accessibility, and other grants against the running app's
+files. The next launch verifies the signature, waits for the previous instance
+to exit, installs the staged build, and opens it. This happens for a manual
+quit and reopen, `make run`, the in-app updater, and **Restart Cantrip** in
+Cantrip Agent. When Cantrip is not running, `make app` replaces the app
+directly. `CANTRIP_INSTALL_NOW=1 make app` forces the old immediate
+replacement, which makes a running Cantrip report permissions as unavailable
+until it reopens.
+
 The in-app updater attempts to stash tracked local changes and restore them.
 If it reports a restore conflict, inspect `git status` and `git stash list`
 and reconcile the changes before proceeding. Do not delete the stash blindly.
@@ -104,7 +115,8 @@ that Apple supports on that hardware.
 
 Use the active Xcode's SDK for builds; a newer SDK does not need to be installed
 on Macs that only run the packaged app. To package without interrupting sessions,
-run `make app`, then quit and reopen Cantrip once active work is finished.
+run `make app`, then quit and reopen Cantrip once active work is finished;
+the reopen installs the staged build.
 The checks below cover the app bundle, not external backend dependencies.
 
 ## Intel app or Rosetta compatibility warning
@@ -115,7 +127,7 @@ Cantrip's `make app` (also used by the installer and updater) builds Universal
 supports Intel Macs on macOS 14 or later. Its Swift package uses Apple's system
 frameworks, with no third-party package dependencies.
 
-Before signing or replacing the existing app, packaging checks every bundled
+Before signing or staging/replacing the existing app, packaging checks every bundled
 Mach-O executable/library for both architectures and compatible macOS minimums.
 An incompatible component stops the update and leaves the previous app in
 place. To repeat that check:
@@ -227,6 +239,11 @@ If it reports an ad-hoc signature rather than a stable certificate, run
 `make cert`, resolve any certificate/trust error, then rebuild with `make run`
 after finishing active work. Review Cantrip's permissions again in System
 Settings. Avoid resetting all permissions as a first troubleshooting step.
+
+If System Settings shows a permission enabled but Mac Access reports
+**Reopen Cantrip on the Mac** (or older clients show **Not granted**), the
+running app's files were replaced after it launched. Quit and reopen Cantrip;
+do not re-grant or reset permissions.
 
 ## Find diagnostics for a bug report
 
