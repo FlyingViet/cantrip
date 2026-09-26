@@ -72,7 +72,7 @@ private final class BiometricActivity {
             timeoutTask = Task {
                 do { try await Task.sleep(for: timeout) }
                 catch { return }
-                finish(.failure(ServerConfigurationError(message: "Authentication finished, but AgentGateway did not become active. Nothing was sent. Try again.")))
+                finish(.failure(ServerConfigurationError(message: "Authentication finished, but Cantrip Agent did not become active. Nothing was sent. Try again.")))
             }
         }
         try Task.checkCancellation()

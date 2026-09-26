@@ -43,7 +43,7 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: AgentGateway   # App Store / TestFlight name (project stays "Hermes" internally)
+        CFBundleDisplayName: Cantrip Agent   # Home screen name; formerly AgentGateway (project stays "Hermes" internally)
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleIconName: AppIcon
@@ -61,10 +61,10 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        NSMicrophoneUsageDescription: "Hermes uses the microphone for voice conversations with your agent."
-        NSSpeechRecognitionUsageDescription: "Hermes transcribes your speech on-device so you can talk to your agent hands-free."
+        NSMicrophoneUsageDescription: "Cantrip Agent uses the microphone for voice conversations with your agent."
+        NSSpeechRecognitionUsageDescription: "Cantrip Agent transcribes your speech on-device so you can talk to your agent hands-free."
         NSFaceIDUsageDescription: "Confirm sensitive Cantrip approvals, secure input and remote Mac access with Face ID."
-        NSLocalNetworkUsageDescription: "AgentGateway discovers and connects securely to your paired Cantrip on the local network."
+        NSLocalNetworkUsageDescription: "Cantrip Agent discovers and connects securely to your paired Cantrip on the local network."
         NSBonjourServices:
           - _cantrip-remote._tcp
         NSAppTransportSecurity:

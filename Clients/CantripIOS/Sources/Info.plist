@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>AgentGateway</string>
+	<string>Cantrip Agent</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIconName</key>
@@ -38,11 +38,11 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>Confirm sensitive Cantrip approvals, secure input and remote Mac access with Face ID.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>AgentGateway discovers and connects securely to your paired Cantrip on the local network.</string>
+	<string>Cantrip Agent discovers and connects securely to your paired Cantrip on the local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Hermes uses the microphone for voice conversations with your agent.</string>
+	<string>Cantrip Agent uses the microphone for voice conversations with your agent.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Hermes transcribes your speech on-device so you can talk to your agent hands-free.</string>
+	<string>Cantrip Agent transcribes your speech on-device so you can talk to your agent hands-free.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

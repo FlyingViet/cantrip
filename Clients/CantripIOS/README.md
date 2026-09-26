@@ -1,4 +1,4 @@
-# Hermes — iOS client (AgentGateway)
+# Hermes — iOS client (Cantrip Agent, formerly AgentGateway)
 
 <img src="Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png" width="128" alt="Cantrip: a pearl-violet C casting a golden spark" />
 
@@ -28,7 +28,7 @@ A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.c
 ## How it works
 
 ```
-  iPhone (AgentGateway)  ──HTTPS + bearer key──►  private network / tunnel
+  iPhone (Cantrip Agent) ──HTTPS + bearer key──►  private network / tunnel
                                                         │
                                                         ▼
                                        Hermes gateway api_server  (:8642)
@@ -195,7 +195,7 @@ Removing the active configuration disconnects it; it does not delete chats or
 cancel work on that server. A failed save keeps the form and shows the error.
 
 For Cantrip, enter the pairing token from the corresponding Mac. Without
-a saved URL, AgentGateway discovers Cantrip on the same local network with Bonjour and connects
+a saved URL, Cantrip Agent discovers Cantrip on the same local network with Bonjour and connects
 directly using forward-secret TLS with the pairing token as a pre-shared key.
 Save Cantrip's Tailscale Serve HTTPS URL to prefer Tailscale both at home and
 away. The URL is stored in app preferences and the token is stored in Keychain.
@@ -287,7 +287,7 @@ failures stay queued. The host reports the delivery decision below the session
 controls. The small delivery menu retains one-message Queue/Redirect/Inject
 overrides, then resets to Auto.
 
-Update and reopen the Mac host before using Auto. AgentGateway checks
+Update and reopen the Mac host before using Auto. Cantrip Agent checks
 `supportsAutoDelivery` before sending; older hosts show an update notice
 without sending or discarding the draft. Manual modes remain compatible.
 The router uses Copilot Mini, Claude Haiku, or the configured local model;
@@ -317,14 +317,14 @@ Sent and queued images appear as **tappable thumbnails instead of Mac file
 paths**. Tap to open a full-screen, aspect-fit viewer; pinch or double-tap to
 zoom, drag to pan, and tap **Done** to return. Previously uploaded images also
 work when their files remain on the Mac and their session is open.
-This requires the updated Cantrip host as well as AgentGateway; older hosts
+This requires the updated Cantrip host as well as Cantrip Agent; older hosts
 retain their text-only attachment display. Downloads use the existing paired
 Tailscale/LAN connection, with an in-memory cache cleared when pairing changes.
 Missing files or connection failures show a retry state, not a blank image.
 
 ### Generated previews in replies
 
-With **both AgentGateway and the Mac Cantrip host updated**, assistant-generated
+With **both Cantrip Agent and the Mac Cantrip host updated**, assistant-generated
 PNG/JPEG screenshots appear inline where they are referenced in the reply.
 Tap to open the full-screen viewer and pinch or double-tap to zoom. Failed
 loads show a retry action. No public image hosting or temporary Safari gallery
@@ -343,7 +343,7 @@ After the first successful load, the Mac keeps a session-scoped copy so the
 preview survives source-file cleanup and host restarts. Cached previews still
 require a current reference in that session's assistant history. Older replies
 can display previews if their source images remain available. Update and reopen
-the host to activate delivery; an AgentGateway-only update cannot read Mac files.
+the host to activate delivery; a Cantrip Agent-only update cannot read Mac files.
 
 ### Video analysis
 
@@ -428,7 +428,7 @@ If a file changes between pages, **Reload file** starts with its current
 contents rather than joining different versions. Refresh/retry failures are
 visible, and changing the paired server clears the viewer's state.
 
-Requires updated AgentGateway and an updated, reopened Cantrip host. Older
+Requires updated Cantrip Agent and an updated, reopened Cantrip host. Older
 hosts show an update notice. Uses existing paired LAN/Tailscale access; memory
 reads have a 20-second content deadline and do not block chat polling or sends.
 
@@ -459,7 +459,7 @@ yours and trusted, not a managed-cloud inference gateway. Cloud aliases,
 unencrypted non-loopback URLs and automatic redirects are refused; TLS
 certificate validation stays enabled.
 
-Remote access remains **AgentGateway -> Cantrip Mac -> self-hosted model server**.
+Remote access remains **Cantrip Agent -> Cantrip Mac -> self-hosted model server**.
 This is saved self-hosted chat, **not incognito or additional encryption at rest**.
 The Mac account, backups and paired devices can access its history. It is separate
 from Cantrip's older unsaved Private mode. Selected conversation context is sent
@@ -475,7 +475,7 @@ defaults** to create a persistent override for this tab only; turn it back on
 to inherit the Mac's defaults again.
 
 This requires the Mac's **Copilot backend with Council mode off** and updated
-AgentGateway/Mac builds. Save while the tab, queue and shell are idle. The Mac
+Cantrip Agent/Mac builds. Save while the tab, queue and shell are idle. The Mac
 rejects stale or busy changes, and uncertain writes are never automatically
 replayed. Reload settings before retrying an uncertain result. Switching servers
 closes the editor and cannot apply its draft to another Mac.
@@ -503,7 +503,7 @@ activate the installed build and reconnect.
 Builds and restart require every Mac tab, queue, and shell command to be idle,
 including private tabs. Restart checks again just before quitting; no work is
 automatically stopped. The Mac owns the job, so closing or backgrounding
-AgentGateway does not cancel a build. Reopen this screen to recover progress.
+Cantrip Agent does not cancel a build. Reopen this screen to recover progress.
 If an acknowledgement is lost, **Retry Pending Request** reuses the saved request
 ID, not a new build. Status from the previous connection remains labeled stale
 until a refresh succeeds.
@@ -512,7 +512,7 @@ Requires a one-time update of both apps and reopening the Mac host to enable
 the maintenance API. `Cantrip.app` must run from its source checkout with
 Git access, Xcode tools, and signing already configured on the Mac. Commands and
 paths are fixed by the host, not supplied by the phone. This does not install
-AgentGateway updates or upload TestFlight builds.
+Cantrip Agent updates or upload TestFlight builds.
 
 ### Cantrip input requests
 
@@ -553,13 +553,13 @@ credential through the normal GitHub CLI credential store.
 
 ### Face ID and Mac Permissions / View Mac
 
-AgentGateway requires **Face ID or Touch ID** before approvals, action confirmations,
+Cantrip Agent requires **Face ID or Touch ID** before approvals, action confirmations,
 password/passphrase submission and starting a Mac viewing/control session.
 Ordinary question replies in chat do not require biometrics. Biometrics
 must be enrolled; authentication cancellation/failure sends nothing. Deny and
 Cancel remain available. This is an app-side guard, not a remotely transferable
 macOS authorization or device-attested signature.
-If Face ID finishes before its system sheet closes, AgentGateway waits for the
+If Face ID finishes before its system sheet closes, Cantrip Agent waits for the
 app to become active before proceeding. Backgrounding or cancelling still
 requires fresh authentication.
 
@@ -581,7 +581,7 @@ an active session or a permission grant. Each session requires authentication;
 
 Sessions use in-memory encrypted snapshots about once a second, with basic
 click/right-click/double-click, text, navigation keys and scroll. No images or
-typed input are saved by Cantrip/AgentGateway or sent to an AI model by this
+typed input are saved by Cantrip/Cantrip Agent or sent to an AI model by this
 feature. The receiving Mac app may still store what you type. Keys and frames
 are discarded when the view closes/backgrounds. Host leases expire after five
 minutes or60seconds without activity; the Mac can stop them immediately.
@@ -616,7 +616,7 @@ Alerts use **Apple push from the Mac**, not background polling. They require
 the updated host with an APNs signing key configured at
 `~/.config/Cantrip/apns.json` (see the Cantrip remote-control guide), the Apple
 Push Notifications capability/provisioning for `com.itzhoang.hermbot`, and a new
-signed AgentGateway build. Debug uses sandbox APNs; Release/TestFlight uses
+signed Cantrip Agent build. Debug uses sandbox APNs; Release/TestFlight uses
 production. An App Store Connect upload key is not an APNs key.
 
 The setting is per saved Mac, persists while the phone is locked or another
@@ -656,7 +656,7 @@ Pull-to-refresh reads the latest cached snapshot without bypassing that limit.
 Failures keep explicitly stale data rather than claiming the queue is empty.
 
 This feature requires an updated, reopened **Cantrip Mac host** as well as
-AgentGateway. It uses the existing Remote pairing and the Mac's `gh auth login`;
+Cantrip Agent. It uses the existing Remote pairing and the Mac's `gh auth login`;
 no GitHub token is entered into or sent to the phone. The host's
 `~/.config/Cantrip/github-builds.json` lists app/repository/runner mappings.
 See [host setup and permissions](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md#see-github-builds-in-agentgateway).
@@ -865,7 +865,7 @@ Tap **Test authenticated connection**. The app verifies the key against
 
 ## Durable tasks
 
-Every message creates a server-owned `/v1/runs` task. AgentGateway persists the
+Every message creates a server-owned `/v1/runs` task. Cantrip Agent persists the
 run ID before observing its event stream. Closing, suspending, or force-quitting
 the app only disconnects the viewer; it does not call the gateway's stop
 endpoint. When iOS leaves the foreground, the app drops its potentially stale
@@ -929,7 +929,7 @@ Once installed, **"Talk to Hermes"** appears in the Shortcuts app and is assigna
 Paste this into Claude Code, your Hermes agent, or any tool-using LLM **running on the machine where Hermes lives**:
 
 ```
-You are setting up the "AgentGateway" iOS app's backend on this machine, which
+You are setting up the "Cantrip Agent" iOS app's backend on this machine, which
 runs a Hermes agent at ~/.hermes. Do the following and report each result:
 
 1. Generate a strong API key: `openssl rand -hex 32`. Save it; I'll need it for

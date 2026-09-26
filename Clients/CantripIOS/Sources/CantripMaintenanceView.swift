@@ -205,7 +205,7 @@ private struct CantripMaintenanceContent: View {
                     .disabled(!model.canStart(action) || remote.isMutating || remote.isUploadingVideo)
                 }
             } footer: {
-                Text("Operations run on this Mac, even if you close AgentGateway. Building never automatically restarts Cantrip or stops a tab. This does not update the iPhone app.")
+                Text("Operations run on this Mac, even if you close Cantrip Agent. Building never automatically restarts Cantrip or stops a tab. This does not update the iPhone app.")
             }
             if let job = model.snapshot?.job {
                 Section("Latest operation") {

@@ -101,7 +101,7 @@ final class CantripNotifications: NSObject, ObservableObject, UNUserNotification
     func register() async throws -> String {
         let granted = try await authorize()
         guard granted else {
-            throw ServerConfigurationError(message: "Notifications are disabled for AgentGateway. Enable them in iOS Settings.")
+            throw ServerConfigurationError(message: "Notifications are disabled for Cantrip Agent. Enable them in iOS Settings.")
         }
         if let deviceToken { return deviceToken }
         registrationError = nil

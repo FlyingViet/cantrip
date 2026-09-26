@@ -177,7 +177,7 @@ enum CantripRemoteError: LocalizedError {
         case .autoDeliveryUnsupported:
             return "Update and reopen Cantrip on your Mac for Auto sending, or choose Queue, Redirect, or Inject. Your message has not been sent."
         case .queueRemovalUnsupported:
-            return "Update and reopen Cantrip on your Mac to remove queued messages from AgentGateway."
+            return "Update and reopen Cantrip on your Mac to remove queued messages from Cantrip Agent."
         case .tabMetadataUnsupported:
             return "Update and reopen Cantrip on your Mac to rename or lock its tabs."
         case .tabReorderingUnsupported:
@@ -3092,7 +3092,7 @@ private struct CantripRemoteSetupView: View {
             Section {
                 Label("Connect to Cantrip", systemImage: "antenna.radiowaves.left.and.right")
                     .font(.headline)
-                Text("Enter the pairing token from Cantrip. AgentGateway prefers your saved Tailscale Serve URL, even on the same local network. Direct LAN is used if Tailscale is unavailable or no URL is saved.")
+                Text("Enter the pairing token from Cantrip. Cantrip Agent prefers your saved Tailscale Serve URL, even on the same local network. Direct LAN is used if Tailscale is unavailable or no URL is saved.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

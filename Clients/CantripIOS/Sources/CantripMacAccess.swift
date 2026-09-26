@@ -179,7 +179,7 @@ struct CantripMacAccessView: View {
                 Text(snapshot?.name ?? "Cantrip Mac").font(.headline)
                 Text("Explicit remote viewing only. Screen frames and typed input are not saved or sent to the model. The paired connection carries the viewing key; only use a trusted HTTPS endpoint.")
                     .font(.footnote).foregroundStyle(.secondary)
-                Text("Face ID or Touch ID confirms sensitive approvals, secure input, and each View Mac session. It authorizes AgentGateway actions, not macOS Touch ID or Keychain access. Deny and Cancel do not need biometrics.")
+                Text("Face ID or Touch ID confirms sensitive approvals, secure input, and each View Mac session. It authorizes Cantrip Agent actions, not macOS Touch ID or Keychain access. Deny and Cancel do not need biometrics.")
                     .font(.footnote).foregroundStyle(.secondary)
                 if let error = desktop.error ?? error { Text(error).foregroundStyle(.orange) }
                 if let lease = desktop.lease {
