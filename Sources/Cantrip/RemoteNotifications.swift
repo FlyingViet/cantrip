@@ -380,7 +380,7 @@ actor RemoteNotifications {
                          forHTTPHeaderField: "apns-expiration")
         let input = completion.isAttention
         let alert = input ? ["title": completion.kind == "macAttention" ? "Cantrip Mac needs attention" : "Cantrip needs your input",
-                             "body": "Open AgentGateway to review the request on your Mac."]
+                             "body": "Open Cantrip Agent to review the request on your Mac."]
             : ["title": "Cantrip finished", "subtitle": String(completion.title.prefix(80)), "body": completion.summary]
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "aps": [
