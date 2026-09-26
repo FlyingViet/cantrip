@@ -147,12 +147,65 @@ extension SessionTabTests {
                          "Prompt-aligned cursors must not skip or duplicate messages")
             precondition(chat.messages == fixture)
         }
+        let exchanges = (0..<5).map { index in
+            [ChatMessage(role: .user, text: "Exchange \(index)"),
+             ChatMessage(role: .assistant, text: index == 2 ? oversized : "Answer \(index)")]
+                + (index == 3 ? (0..<40).map {
+                    ChatMessage(role: .assistant, text: "Continuation \($0)", author: "Council")
+                } : [])
+        }
+        chat.messages = exchanges.flatMap { $0 }
+        let completeHistory = chat.messages
+        let (_, threeResponse, threeBytes) = try await request("?history=recent&recentExchanges=3")
+        let three = threeResponse["session"] as! [String: Any]
+        let threeMessages = three["messages"] as! [[String: Any]]
+        let expectedThree = exchanges.suffix(3).flatMap { $0 }
+        precondition(threeMessages.map { $0["id"] as! String } == expectedThree.map { $0.id.uuidString })
+        precondition(threeMessages.filter { $0["role"] as? String == "user" }.count == 3)
+        precondition(threeMessages.count > RemoteHistory.pageSize && threeBytes > RemoteHistory.pageBytes,
+                     "Three complete exchanges must survive both soft page budgets")
+        for (payload, original) in zip(threeMessages, expectedThree) { expectFull(payload, original: original) }
+        precondition(three["hasOlderMessages"] as? Bool == true && chat.messages == completeHistory)
+        let (_, previousResponse, _) = try await request(
+            "?history=recent&recentExchanges=3&before=\(expectedThree[0].id)"
+        )
+        let previous = previousResponse["session"] as! [String: Any]
+        let previousMessages = previous["messages"] as! [[String: Any]]
+        precondition(previousMessages.map { $0["id"] as! String }
+                     == exchanges.prefix(2).flatMap { $0 }.map { $0.id.uuidString })
+        precondition(previous["hasOlderMessages"] as? Bool == false)
+        let (_, normalResponse, _) = try await request("?history=recent")
+        let normal = (normalResponse["session"] as! [String: Any])["messages"] as! [[String: Any]]
+        precondition(normal.first?["id"] as? String == exchanges[3][0].id.uuidString,
+                     "Other clients keep the usual budgeted recent page")
+
+        chat.messages.append(ChatMessage(role: .user, text: "Waiting for the next reply"))
+        let (_, waitingResponse, _) = try await request("?history=recent&recentExchanges=3")
+        let waiting = (waitingResponse["session"] as! [String: Any])["messages"] as! [[String: Any]]
+        precondition(waiting.first?["id"] as? String == exchanges[3][0].id.uuidString)
+        precondition(waiting.last?["role"] as? String == "user", "The active prompt is the newest exchange")
+        for invalid in ["0", "4", "-1", "invalid"] {
+            let (invalidStatus, _, _) = try await request("?history=recent&recentExchanges=\(invalid)")
+            precondition(invalidStatus == 400, "The exchange-count opt-in is bounded")
+        }
+        chat.messages = exchanges.prefix(2).flatMap { $0 }
+        let (_, shortResponse, _) = try await request("?history=recent&recentExchanges=3")
+        let short = shortResponse["session"] as! [String: Any]
+        precondition((short["messages"] as! [[String: Any]]).count == chat.messages.count)
+        precondition(short["hasOlderMessages"] as? Bool == false)
+        chat.messages = (0..<100).map { ChatMessage(role: .assistant, text: "Legacy \($0)") }
+        let (_, ungroupedResponse, _) = try await request("?history=recent&recentExchanges=3")
+        precondition(((ungroupedResponse["session"] as! [String: Any])["messages"] as! [[String: Any]]).count
+                     == RemoteHistory.pageSize, "Ungrouped legacy messages retain normal bounded paging")
         chat.messages = []
         let (resetStatus, _, _) = try await request("?history=recent&before=\(original[70].id)")
         precondition(resetStatus == 409)
         let (_, emptyResponse, _) = try await request("?history=recent")
         let empty = emptyResponse["session"] as! [String: Any]
         precondition(empty["hasOlderMessages"] as? Bool == false && (empty["messages"] as! [Any]).isEmpty)
-        print("Remote history: complete prompt-aligned pages, soft budgets, conditional reads, complete paging, legacy and private access passed")
+        let (_, emptyThreeResponse, _) = try await request("?history=recent&recentExchanges=3")
+        let emptyThree = emptyThreeResponse["session"] as! [String: Any]
+        precondition(emptyThree["hasOlderMessages"] as? Bool == false && (emptyThree["messages"] as! [Any]).isEmpty)
+        print("Remote history: three-exchange opt-in, complete prompt-aligned pages, soft budgets, conditional reads, complete paging, legacy and private access passed")
     }
 }

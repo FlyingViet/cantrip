@@ -308,12 +308,17 @@ Copilot Remote/ACP and unsupported backends continue to queue instead.
 ## Loading long conversations
 
 Updated AgentGateway and Mac/browser Remote load recent messages first instead
-of repeatedly downloading the entire live transcript. **Load older messages**
-pages backward without discarding host history or jumping away from the message
-you were reading. Every loaded message includes its complete text, reasoning,
-and tool input/output by default. Older pages are fetched only when you choose
-**Load older messages**, not prefetched. Reasoning/tool disclosures and long-prompt
-readers use content already downloaded; they do not require another message fetch.
+of repeatedly downloading the entire live transcript. **The native Mac Remote
+tab starts with the latest three prompt-and-reply exchanges**, including all
+continuation or council replies belonging to each prompt. A new prompt counts
+as the current exchange while its reply is still running.
+Scroll up near the top to load older exchanges without losing your reading
+position. Automatic loading stops after the current exchange plus ten earlier
+exchanges; **Load more messages** continues beyond that. Older history is not
+deleted, and expanded history stays open while you browse or switch cached tabs.
+Every loaded message includes its complete text, reasoning, and tool input/output
+by default. Reasoning/tool disclosures and long-prompt readers use content already
+downloaded; they do not require another message fetch.
 Older hosts that return previews retain the **Load full message and details** fallback.
 
 Automatic reads request `?history=recent`, including mutation acknowledgements.
@@ -323,10 +328,16 @@ prompt when available. A large response or multi-response turn may exceed these
 soft limits so its prompt stays visible before its output; messages are never
 truncated to fit. The same rules apply to requested older pages. This page budget
 excludes metadata and the ordered queue.
+Native Mac Remote adds `recentExchanges=3` to recent conversation reads. That
+opt-in returns up to three complete exchanges even when their combined output
+exceeds the usual soft page budgets; older-page requests retain normal paging.
+Browsers and AgentGateway keep their existing initial page sizes. Legacy hosts
+without pagination retain the full transcript rather than hiding inaccessible history.
 Page sizing and encoding run off the main actor and the lightweight tab-list queue.
-Unattended clients target a rolling 120-message window and cache up to five tabs,
-also retaining the prompt and responses at the start of the window. Explicit
-older-history loading can expand that window.
+Clients cache up to five tabs. Native Mac Remote keeps three complete exchanges
+until you expand history; other unattended clients target a rolling 120-message
+window while retaining the boundary prompt and responses. Older-history loading
+can expand these windows.
 
 Session summaries advertise `supportsPagedHistory` and `historyRevision`.
 Unchanged summaries need no detail download. A conditional detail read with

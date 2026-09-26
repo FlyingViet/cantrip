@@ -195,9 +195,74 @@ extension SessionTabTests {
             try await testRemoteProgress(webView: webView)
         }
         try await testRemoteTabReordering(webView: webView)
+        try await testRecentExchangeWindow(webView: webView)
         try await testRemoteHistoryNavigation(webView: webView)
         try await testAutomaticHistoryNavigation(webView: webView)
         print("Remote tabs (\(sidebar ? "Mac sidebar" : "browser strip")): WebKit scrolling, progress, polling, selection, focus, and controls passed at 320-1100pt widths and 340-700pt heights")
+    }
+
+    @MainActor
+    private static func testRecentExchangeWindow(webView: WKWebView) async throws {
+        _ = try await webView.callAsyncJavaScript("""
+        const originalAPI=api,originalFetch=fetch,originalToken=token,originalFrame=requestAnimationFrame;
+        const settle=()=>new Promise(resolve=>setTimeout(resolve,100));
+        window.requestAnimationFrame=callback=>setTimeout(callback,0);
+        const group=i=>[
+          {id:`p${i}`,role:"user",text:`Prompt ${i}`,activities:[]},
+          {id:`a${i}`,role:"assistant",text:`Answer ${i}`,activities:[]},
+          {id:`c${i}`,role:"assistant",text:`Continuation ${i}`,author:"Council",activities:[]}
+        ];
+        const all=Array.from({length:6},(_,i)=>group(i)).flat();
+        const session={id:"recent-three",title:"Recent",historyRevision:"r1",historyStartID:"start",
+          supportsPagedHistory:true,hasOlderMessages:false,messages:all};
+        try{
+          token="recent-test";historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();
+          const paths=[];window.fetch=async path=>{paths.push(path);return {ok:true,json:async()=>({})}};
+          await originalAPI("/api/v1/sessions/example");
+          await originalAPI("/api/v1/sessions/example?before=cursor");
+          await originalAPI("/api/v1/sessions/example/messages",{method:"POST",body:"{}"});
+          check(new URLSearchParams(paths[0].split("?")[1]).get("recentExchanges")===(sidebarLayout?"3":null),"Only native Mac recent reads request three complete exchanges");
+          check(!paths[1].includes("recentExchanges")&&!paths[2].includes("recentExchanges"),"Older pages and writes keep their existing paging");
+          selected=session.id;renderSessions([session]);render(cacheSession(session));await settle();
+          const initial=historyCache.get(selected);
+          check(initial.messages.length===(sidebarLayout?9:18),"Mac starts with three complete exchanges; browser retains its existing window");
+          check($("messages").querySelectorAll("article").length===initial.messages.length,"Every retained prompt and reply renders");
+          check(initial.messages[0].id===(sidebarLayout?"p3":"p0"),"The recent window starts at a prompt");
+          const updated=cacheSession({...session,historyRevision:"r2",messages:[...group(4),...group(5),...group(6)]});
+          check(updated.messages[0].id===(sidebarLayout?"p4":"p0"),"Unexpanded polling rolls the Mac window to the newest three exchanges");
+          render(updated);await settle();
+          if(sidebarLayout){
+            let reads=0;
+            api=async path=>{
+              reads++;check(path.includes("before=p4"),"Scrolling starts before the first retained prompt");
+              return {session:{...session,messages:all.slice(0,12)}};
+            };
+            document.scrollingElement.scrollTop=0;followOutput=false;await settle();
+            $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));await settle();
+            check(reads===1&&historyCache.get(selected).messages.length===21,"Scrolling restores earlier complete exchanges without gaps");
+            check(!followOutput,"Expanded history does not jump back to the latest answer");
+            const polled=cacheSession({...session,historyRevision:"r3",messages:[...group(5),...group(6),...group(7)]});
+            check(polled.messages.length===24&&polled.messages[0].id==="p0","Polling must not collapse history after expansion");
+            selectTab("another");selectTab(session.id);
+            check(historyCache.get(selected).messages.length===24,"Switching cached tabs keeps expanded history");
+            const huge=cacheSession({...session,id:"huge",messages:[
+              ...group(0),...group(1),{id:"p2",role:"user",text:"Long exchange",activities:[]},
+              ...Array.from({length:130},(_,i)=>({id:`long-${i}`,role:"assistant",text:"Continuation",activities:[]})),
+              ...group(3)
+            ]});
+            check(huge.messages.length===137&&huge.messages[0].id==="p1","A 120-message cutoff must not drop one of the three exchanges");
+          }
+          const legacyMessages=Array.from({length:150},(_,i)=>({id:`legacy-${i}`,role:"assistant",text:"Old reply",activities:[]}));
+          const ungrouped=cacheSession({...session,id:"ungrouped",messages:legacyMessages});
+          check(ungrouped.messages.length===120&&ungrouped.hasOlderMessages,"Ungrouped paged history stays bounded");
+          const legacy=cacheSession({...session,id:"legacy",supportsPagedHistory:false,messages:legacyMessages});
+          check(legacy.messages.length===150&&!legacy.hasOlderMessages,"Unpaged hosts must not hide inaccessible history");
+        }finally{
+          api=originalAPI;window.fetch=originalFetch;token=originalToken;window.requestAnimationFrame=originalFrame;
+          if(timer)clearTimeout(timer);timer=null;historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();
+          $("historyError").textContent="";selected=null;render(null);renderSessions([]);
+        }
+        """, arguments: [:], in: nil, contentWorld: .page)
     }
 
     @MainActor
@@ -249,8 +314,8 @@ extension SessionTabTests {
           check($("olderMessages").classList.contains("hidden"),"No control remains at the oldest message");
 
           const initial=cacheSession({...session,id:"initial",messages:Array.from({length:32},(_,i)=>message(i)),hasOlderMessages:false});
-          check(initial.messages.length===22&&initial.messages[0].id==="10"&&initial.hasOlderMessages,"Even an oversized initial page respects ten prior groups");
-          check(!canAutomaticallyLoadHistory(initial),"Already loaded past groups consume the allowance");
+          check(initial.messages.length===(sidebarLayout?6:22)&&initial.messages[0].id===(sidebarLayout?"26":"10")&&initial.hasOlderMessages,"Oversized initial pages respect each layout's exchange window");
+          check(canAutomaticallyLoadHistory(initial)===sidebarLayout,"Already loaded past groups consume the allowance");
           const reset=cacheSession({...initial,historyStartID:"reset",messages:[message(30),message(31)],hasOlderMessages:true});
           check(canAutomaticallyLoadHistory(reset),"Reset restores the automatic allowance");
 
@@ -325,23 +390,25 @@ extension SessionTabTests {
           current={...current,id:"prompt-boundary",messages:Array.from({length:122},(_,index)=>shortMessage(index))};
           $("historyError").textContent="";
           selected=current.id;renderSessions([current]);render(cacheSession(current));await settle();
-          check(historyCache.get(selected).messages.length===121&&historyCache.get(selected).messages[0].id==="1","Rolling cache retains the prompt preceding its cutoff");
+          const firstID=sidebarLayout?"0":"1";
+          check(historyCache.get(selected).messages.length===(sidebarLayout?122:121)&&historyCache.get(selected).messages[0].id===firstID,"Mac keeps three whole exchanges; browser retains its rolling boundary prompt");
           const firstRow=$("messages").querySelector("article");
-          check(firstRow.classList.contains("user")&&firstRow.textContent.includes("Prompt or response 1"),"The boundary prompt renders before its response");
+          check(firstRow.classList.contains("user")&&firstRow.textContent.includes("Prompt or response "+firstID),"The boundary prompt renders before its response");
           root.scrollTop=0;followOutput=false;await settle();
           const promptTop=firstRow.getBoundingClientRect().top;
+          const earlier=sidebarLayout?[{...shortMessage(-2),role:"user"},shortMessage(-1)]:[shortMessage(0)];
           let olderReads=0;
           api=async path=>{
-            olderReads++;check(path.includes("before=1"),"Older history pages before the retained prompt");
-            return {session:{...current,messages:[shortMessage(0)],hasOlderMessages:false}};
+            olderReads++;check(path.includes("before="+firstID),"Older history pages before the retained prompt");
+            return {session:{...current,messages:earlier,hasOlderMessages:false}};
           };
           check(olderReads===0,"Rendering never fetches earlier output");
           await loadOlderMessages();await settle();
-          check(olderReads===1&&historyCache.get(selected).messages.map(m=>m.id).join()===Array.from({length:122},(_,i)=>String(i)).join(),"Explicit paging restores the preceding history exactly once");
-          const restoredPromptTop=$("messages").querySelectorAll("article")[1].getBoundingClientRect().top;
+          check(olderReads===1&&historyCache.get(selected).messages.map(m=>m.id).join()===Array.from({length:sidebarLayout?124:122},(_,i)=>String(i-(sidebarLayout?2:0))).join(),"Explicit paging restores the preceding history exactly once");
+          const restoredPromptTop=$("messages").querySelectorAll("article")[earlier.length].getBoundingClientRect().top;
           check(Math.abs(restoredPromptTop-promptTop)<3,`Paging preserves the retained prompt's scroll anchor: ${promptTop} -> ${restoredPromptTop}, scroll ${root.scrollTop}`);
           const updated=cacheSession({...current,messages:Array.from({length:120},(_,i)=>shortMessage(i+4))});
-          check(updated.messages.length===124&&updated.messages[0].id==="0","Polling retains explicitly loaded prompts");
+          check(updated.messages.length===(sidebarLayout?126:124)&&updated.messages[0].id===(sidebarLayout?"-2":"0"),"Polling retains explicitly loaded prompts");
           const longTurn={...current,id:"long-turn",hasOlderMessages:false,messages:Array.from({length:130},(_,index)=>({...shortMessage(index),role:index===0?"user":"assistant"}))};
           const retained=cacheSession(longTurn);
           check(retained.messages.length===130&&retained.messages[0].role==="user"&&!retained.hasOlderMessages,"One long turn retains its prompt without inventing older history");
