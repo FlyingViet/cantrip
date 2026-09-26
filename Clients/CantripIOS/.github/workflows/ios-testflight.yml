@@ -38,6 +38,8 @@ jobs:
     # login keychain).
     runs-on: [self-hosted, macOS]
     timeout-minutes: 40
+    env:
+      TMPDIR: ${{ runner.temp }}/
 
     steps:
       - uses: actions/checkout@v5
@@ -79,6 +81,7 @@ jobs:
             -scheme "$SCHEME" \
             -configuration "$CONFIGURATION" \
             -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -archivePath "$RUNNER_TEMP/Hermes.xcarchive" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/asc/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8" \
