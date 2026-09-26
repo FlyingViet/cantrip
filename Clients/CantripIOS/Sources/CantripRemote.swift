@@ -2541,6 +2541,7 @@ final class CantripRemoteModel: ObservableObject {
 struct CantripRemoteView: View {
     @EnvironmentObject private var model: CantripRemoteModel
     @State private var showSettings = false
+    @State private var showCantripMaintenance = false
     @State private var draft = ""
     @State private var deliveryMode: CantripDeliveryMode = .auto
     @State private var renamingSession: CantripRemoteSession?
@@ -2568,6 +2569,9 @@ struct CantripRemoteView: View {
                     ChatSettingsButton { showSettings = true }
                 }, trailing: {
                     Menu {
+                        CantripMacMenuActions(remote: model, showingMaintenance: $showCantripMaintenance) {
+                            composerFocused = false
+                        }
                         Button { showSettings = true } label: {
                             Label("Settings", systemImage: "gearshape")
                         }
@@ -2591,6 +2595,9 @@ struct CantripRemoteView: View {
             }
             .sheet(isPresented: $model.showingMacAccess) {
                 NavigationStack { CantripMacAccessView(remote: model) }
+            }
+            .sheet(isPresented: $showCantripMaintenance) {
+                CantripMaintenanceSheet(remote: model)
             }
         }
         .cantripTabDrawer(

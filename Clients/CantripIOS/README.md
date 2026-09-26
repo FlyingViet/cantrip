@@ -102,6 +102,11 @@ retain 44-point tap targets. New Tab and tab actions live in the
 drawer rather than duplicate top-bar buttons. Resume (when available) and New
 conversation remain in the shared chat's hamburger menu.
 
+The hamburger menu's **Cantrip Mac** section opens **Mac Permissions & View Mac**
+and **Update & Rebuild Cantrip** directly, without going through Settings. These
+controls use the selected saved Mac and are disabled until Remote is configured.
+Settings keeps connection, notification, voice, and reply preferences.
+
 In regular-width iPad layouts, **Tabs** becomes a native sidebar beside the chat.
 Selecting, creating, or renaming a tab leaves this sidebar open; **Close tabs**
 hides it, and tapping the header title or the menu's **Tabs** action brings it
@@ -476,7 +481,7 @@ prompt; errors retain the cached catalog.
 
 ### Update and rebuild the Cantrip Mac
 
-Open **Settings > Cantrip Mac > Update & Rebuild Cantrip** for the selected
+Open **hamburger menu > Update & Rebuild Cantrip** under **Cantrip Mac** for the selected
 saved Mac. The screen shows running/installed build identities, source branch,
 local edits, newer commits after **Check for Updates**, and live build output.
 
@@ -550,7 +555,7 @@ If Face ID finishes before its system sheet closes, AgentGateway waits for the
 app to become active before proceeding. Backgrounding or cancelling still
 requires fresh authentication.
 
-Open **Settings > Cantrip Mac > Mac Permissions & View Mac**, or the same action
+Open **hamburger menu > Mac Permissions & View Mac** under **Cantrip Mac**, or the same action
 in a tab's menu. See Cantrip's permission status and supported Keychain issues,
 then open the relevant settings on the Mac. Full Disk Access needs manual review.
 Touch ID status refers to the Mac; it cannot be satisfied with phone Face ID.

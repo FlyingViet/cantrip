@@ -1094,6 +1094,7 @@ struct ChatView: View {
     @State private var showQueue = false
     @State private var showGitHubBuilds = false
     @State private var showCantripMemory = false
+    @State private var showCantripMaintenance = false
     @State private var showRemoteTabs = false
     @State private var renamingRemoteSession: CantripRemoteSession?
     @State private var showRenameLocalTab = false
@@ -1190,6 +1191,9 @@ struct ChatView: View {
             }
             .sheet(isPresented: $remote.showingMacAccess) {
                 NavigationStack { CantripMacAccessView(remote: remote) }
+            }
+            .sheet(isPresented: $showCantripMaintenance) {
+                CantripMaintenanceSheet(remote: remote)
             }
             .alert("Rename Tab", isPresented: $showRenameLocalTab) {
                 TextField("Tab name", text: $tabName)
@@ -1438,6 +1442,10 @@ struct ChatView: View {
                 Label("Cantrip Memory", systemImage: "brain")
             }
             .accessibilityIdentifier("chat.cantripMemory")
+            CantripMacMenuActions(remote: remote, showingMaintenance: $showCantripMaintenance) {
+                composerFocused = false
+                vm.leaveVoiceMode()
+            }
             Button { showSettings = true } label: {
                 Label("Settings", systemImage: "gearshape")
             }

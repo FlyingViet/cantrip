@@ -1,4 +1,6 @@
 import Foundation
+import SwiftUI
+import UIKit
 import XCTest
 @testable import Hermes
 
@@ -195,5 +197,57 @@ final class CantripMaintenanceTests: XCTestCase {
             XCTFail("Lost acknowledgement must surface")
         } catch {}
         XCTAssertEqual(methods, ["GET", "POST"])
+    }
+
+    func testMenuMaintenanceSheetOnlyReadsAndDismissesWhenMacChanges() async throws {
+        let remote = CantripRemoteModel(urlSession: client())
+        let configured = await remote.configure(url: "https://cantrip.example",
+            pairingToken: "maintenance-test", tailscaleOnly: true)
+        XCTAssertTrue(configured)
+        defer { remote.setAppActive(false); remote.clearConfiguration() }
+        var reads = 0
+        MaintenanceRequestProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET", "Opening maintenance must not start a Mac operation")
+            XCTAssertEqual(request.url?.path, "/api/v1/maintenance")
+            reads += 1
+            return (200, try self.data())
+        }
+        let state = MaintenanceSheetState()
+        let controller = UIHostingController(rootView: MaintenanceSheetHarness(remote: remote, state: state))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        for _ in 0..<100 where reads == 0 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertGreaterThan(reads, 0)
+        XCTAssertNotNil(controller.presentedViewController)
+        XCTAssertTrue(state.isPresented)
+
+        remote.clearConfiguration()
+        for _ in 0..<100 where state.isPresented {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(state.isPresented, "Dismiss the old Mac's maintenance screen after changing connection")
+    }
+}
+
+private final class MaintenanceSheetState: ObservableObject {
+    @Published var isPresented = true
+}
+
+private struct MaintenanceSheetHarness: View {
+    let remote: CantripRemoteModel
+    @ObservedObject var state: MaintenanceSheetState
+
+    var body: some View {
+        Color.clear
+            .sheet(isPresented: $state.isPresented) {
+                CantripMaintenanceSheet(remote: remote)
+                    .environment(\.scenePhase, .active)
+            }
     }
 }

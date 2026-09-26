@@ -46,6 +46,41 @@ final class CantripMacAccessTests: XCTestCase {
      "issues":[{"id":"3D3D0608-E1B3-4513-A2C0-FC00F4E17876","permission":"keychain","title":"Keychain needs attention on the Mac"}]}
     """.utf8)
 
+    func testMacMenuOpensExistingDestinationsWithoutStartingMacOperations() async throws {
+        let remote = try await model { _ in XCTFail("Opening a menu destination must not authenticate") }
+        MacAccessProtocol.handler = { _ in
+            XCTFail("Choosing a menu destination must not start a Mac operation")
+            return (200, self.status)
+        }
+        var showingMaintenance = false
+        var openings = 0
+        let actions = CantripMacMenuActions(
+            remote: remote,
+            showingMaintenance: Binding(get: { showingMaintenance }, set: { showingMaintenance = $0 })
+        ) {
+            XCTAssertFalse(remote.showingMacAccess)
+            XCTAssertFalse(showingMaintenance)
+            openings += 1
+        }
+
+        XCTAssertTrue(actions.isEnabled)
+        XCTAssertNil(remote.selectedSessionID, "Mac controls must not require a selected tab")
+        XCTAssertFalse(remote.isConnected, "Configured but offline Macs still need their status screens")
+        actions.openMacAccess()
+        XCTAssertTrue(remote.showingMacAccess)
+        XCTAssertFalse(showingMaintenance)
+        XCTAssertEqual(openings, 1)
+
+        remote.showingMacAccess = false
+        actions.openMaintenance()
+        XCTAssertTrue(showingMaintenance)
+        XCTAssertFalse(remote.showingMacAccess)
+        XCTAssertEqual(openings, 2)
+
+        remote.clearConfiguration()
+        XCTAssertFalse(actions.isEnabled)
+    }
+
     func testBiometricFailureBlocksApprovalSecretAndDesktopWithoutNetwork() async throws {
         var attempts = 0
         let remote = try await model { _ in attempts += 1; throw CancellationError() }

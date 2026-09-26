@@ -21,22 +21,6 @@ struct SettingsView: View {
                 gatewaySection
                 CantripRemoteSettingsSection(model: remote)
                 CantripNotificationSettingsSection(remote: remote)
-                Section("Cantrip Mac") {
-                    NavigationLink {
-                        CantripMacAccessView(remote: remote)
-                    } label: {
-                        Label("Mac Permissions & View Mac", systemImage: "display")
-                    }
-                    .disabled(!remote.isConfigured)
-                    Text("Face ID or Touch ID confirms approvals, submitted input, and each View Mac session. It authorizes AgentGateway actions, not macOS Touch ID or Keychain access. Deny and Cancel do not need biometrics.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    NavigationLink {
-                        CantripMaintenanceView(remote: remote)
-                    } label: {
-                        Label("Update & Rebuild Cantrip", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .disabled(!remote.isConfigured)
-                }
                 speechRecognitionSection
 
                 Section {
