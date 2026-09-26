@@ -3,7 +3,7 @@ import UIKit
 import XCTest
 @testable import Hermes
 
-private final class ImageRequestProtocol: URLProtocol {
+final class ImageRequestProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (Int, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -283,6 +283,46 @@ final class CantripImageTransportTests: XCTestCase {
         do {
             _ = try await api().imageData(sessionID: sessionID, imageID: imageID, thumbnail: false)
             XCTFail("Oversized responses must be rejected")
+        } catch ImageAttachmentError.invalidImage {}
+    }
+
+    func testGeneratedPreviewRoutesAreAuthenticatedBoundedAndDistinctFromUploads() async throws {
+        let imageID = "previews/\(UUID().uuidString)/\(String(repeating: "a", count: 64)).jpg"
+        let bytes = Data(repeating: 1, count: ImageAttachmentProcessor.maximumImageBytes + 1)
+        let response = try JSONSerialization.data(withJSONObject: ["data": bytes.base64EncodedString()])
+        var paths: [String] = []
+        ImageRequestProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertNotNil(request.value(forHTTPHeaderField: "Authorization"))
+            paths.append(try XCTUnwrap(request.url?.path))
+            return (200, response)
+        }
+        let client = try api()
+        for thumbnail in [true, false] {
+            let received = try await client.imageData(sessionID: sessionID, imageID: imageID, thumbnail: thumbnail)
+            XCTAssertEqual(received, bytes)
+        }
+        XCTAssertEqual(paths, [
+            "/api/v1/sessions/\(sessionID)/\(imageID)/thumbnail",
+            "/api/v1/sessions/\(sessionID)/\(imageID)",
+        ])
+        for invalid in [imageID + "/extra", imageID + "?path=/etc/passwd",
+                        imageID.replacingOccurrences(of: ".jpg", with: ".png"),
+                        "previews/not-a-message/\(String(repeating: "a", count: 64)).jpg"] {
+            do {
+                _ = try await client.imageData(sessionID: sessionID, imageID: invalid, thumbnail: false)
+                XCTFail("Invalid preview references must not be sent")
+            } catch CantripRemoteError.invalidResponse {}
+        }
+        XCTAssertEqual(paths.count, 2)
+        ImageRequestProtocol.handler = { _ in
+            (200, try JSONSerialization.data(withJSONObject: [
+                "data": Data(repeating: 0, count: GeneratedImagePreview.maximumImageBytes + 1).base64EncodedString()
+            ]))
+        }
+        do {
+            _ = try await client.imageData(sessionID: sessionID, imageID: imageID, thumbnail: false)
+            XCTFail("Generated previews retain a strict response limit")
         } catch ImageAttachmentError.invalidImage {}
     }
 

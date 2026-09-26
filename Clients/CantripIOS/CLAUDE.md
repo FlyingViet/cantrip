@@ -53,9 +53,15 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
 
 ## Conventions
 - Keep SwiftUI `body` lean (extract subviews) — the type-checker chokes on long chains.
-- `ChatNavigationView` keeps one split-navigation detail across resizing:
-  regular-width Cantrip tabs use a sidebar; compact windows keep the drawer.
+- `ChatNavigationView` keeps one navigation stack on iPhone (including Duo);
+  iPad uses adaptive split navigation, with a sidebar at regular width and a
+  drawer when compact. Never switch stack types based on folding or window width.
   Keep drafts, voice, and run ownership outside size-dependent branches.
+- `ChatDisplayObserver` reads window-local vertical-bar traits.
+  `ChatHeader` moves actions into the native vertical toolbar
+  only where the system supports it. Do not infer Duo from dimensions or device
+  names. `AGENTGATEWAY_DUO_SDK` is selected by SDK in `project.yml`, not by the
+  Swift compiler version; keep both SDK and iOS availability guards.
 - Saved servers live in `ServerProfiles`; each server's credential is stored
   separately in Keychain. Legacy `hermes.apiKey`/Cantrip slots are migrated.
   Settings uses blank add-server drafts, never live bindings to active credentials.

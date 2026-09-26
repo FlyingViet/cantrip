@@ -198,8 +198,9 @@ final class CantripTabDrawerTests: XCTestCase {
         state.isPresented = true
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
         let frame = try XCTUnwrap(state.panelFrame)
-        XCTAssertEqual(frame.minX, 0, accuracy: 1)
-        XCTAssertEqual(frame.width, CantripDrawerGesture.panelWidth(available: window.bounds.width), accuracy: 1)
+        let safeFrame = controller.view.safeAreaLayoutGuide.layoutFrame
+        XCTAssertEqual(frame.minX, safeFrame.minX, accuracy: 1)
+        XCTAssertEqual(frame.width, CantripDrawerGesture.panelWidth(available: safeFrame.width), accuracy: 1)
         XCTAssertEqual(state.contentAppearances, 1, "Opening tabs must not rebuild the chat or composer")
 
         state.isEnabled = false

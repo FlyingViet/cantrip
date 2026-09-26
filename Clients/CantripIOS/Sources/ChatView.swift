@@ -1151,7 +1151,6 @@ struct ChatView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                 chatAvailableHeight = $0
             }
-            .toolbar(.hidden, for: .navigationBar)
             .safeAreaInset(edge: .top, spacing: 0) { chatHeader }
             .sheet(
                 isPresented: $showSettings,
@@ -1311,6 +1310,7 @@ struct ChatView: View {
             await env.refreshGateway()
             reloadCommands()
         }
+        .modifier(ChatDisplayObserver())
     }
 
     private var chatHeader: some View {
@@ -1373,15 +1373,15 @@ struct ChatView: View {
                 }
                 .disabled(vm.sending || importingImages || submittingRemote)
             }
+        } settings: {
+            ChatSettingsButton { showSettings = true }
+                .disabled(vm.sending || importingImages || submittingRemote)
         } leading: {
-            chatMenu
-        } trailing: {
-            Button { showSettings = true } label: {
-                Image(systemName: "gearshape").frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+            if vm.activeLane == .cantrip {
+                ChatTabsButton(isEnabled: remoteTabsEnabled) { showRemoteTabs = true }
             }
-            .disabled(vm.sending || importingImages || submittingRemote)
-            .accessibilityLabel("Settings")
+        } trailing: {
+            chatMenu
         }
     }
 
@@ -1400,7 +1400,7 @@ struct ChatView: View {
                 Button {
                     showRemoteTabs = true
                 } label: {
-                    Label("Tabs", systemImage: "sidebar.left")
+                    Label("Tabs", systemImage: "rectangle.stack")
                 }
                 .disabled(!remoteTabsEnabled)
                 if remote.selectedSession?.canResume == true {
@@ -1438,6 +1438,10 @@ struct ChatView: View {
                 Label("Cantrip Memory", systemImage: "brain")
             }
             .accessibilityIdentifier("chat.cantripMemory")
+            Button { showSettings = true } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .disabled(vm.sending || importingImages || submittingRemote)
             Divider()
             if vm.activeLane != .cantrip {
                 Button {
@@ -1459,12 +1463,11 @@ struct ChatView: View {
             }
             .disabled(newConversationDisabled)
         } label: {
-            Image(systemName: paused ? "pause.circle.fill" : "line.3.horizontal")
-                .foregroundStyle(paused ? Color.orange : Color.accentColor)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+            ChatMenuIcon(isPaused: paused)
         }
         .accessibilityLabel("Chat menu")
+        .accessibilityValue(paused ? "Agent paused" : "")
+        .accessibilityIdentifier("chat.menu")
     }
 
     /// Load the command/skill menu for "/" suggestions. Only overwrites on a
@@ -1995,30 +1998,87 @@ extension ChatComposer where Accessory == EmptyView {
     }
 }
 
+struct ChatTabsButton: View {
+    let isEnabled: Bool
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            Image(systemName: "rectangle.stack")
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .disabled(!isEnabled)
+        .accessibilityLabel("Tabs")
+        .accessibilityHint("Shows your Cantrip sessions")
+        .accessibilityIdentifier("chat.tabs")
+    }
+}
+
+struct ChatMenuIcon: View {
+    var isPaused = false
+
+    var body: some View {
+        Image(systemName: "line.3.horizontal")
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .overlay(alignment: .bottomTrailing) {
+                if isPaused {
+                    Image(systemName: "pause.circle.fill")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.black, .orange)
+                        .font(.system(size: 14))
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+    }
+}
+
+struct ChatSettingsButton: View {
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            Image(systemName: "gearshape")
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Settings")
+        .accessibilityIdentifier("chat.settings")
+    }
+}
+
 struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delivery: View,
-                  Refresh: View, Leading: View, Trailing: View>: View {
+                  Refresh: View, Settings: View, Leading: View, Trailing: View>: View {
+    @Environment(\.chatDisplayTraits) private var displayTraits
     @ViewBuilder var title: () -> Title
     @ViewBuilder var connection: () -> Connection
     @ViewBuilder var lane: () -> Lane
     @ViewBuilder var usage: () -> Usage
     @ViewBuilder var delivery: () -> Delivery
     @ViewBuilder var refresh: () -> Refresh
+    @ViewBuilder var settings: () -> Settings
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                leading().frame(width: 44, height: 44)
+                if !displayTraits.hasVerticalBar {
+                    leading().frame(width: 44, height: 44)
+                }
                 title().frame(maxWidth: .infinity, minHeight: 44)
-                trailing().frame(width: 44, height: 44)
+                if !displayTraits.hasVerticalBar {
+                    trailing().frame(width: 44, height: 44)
+                }
             }
             HStack(alignment: .center, spacing: 2) {
                 connection()
                 lane()
                 usage()
                 delivery()
-                refresh()
+                if !displayTraits.hasVerticalBar { refresh() }
             }
         }
         .buttonStyle(.plain)
@@ -2029,6 +2089,9 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         .frame(maxWidth: .infinity)
         .background(.bar)
         .accessibilityIdentifier("chat.header")
+        .modifier(ChatNavigationActions(
+            leading: leading, refresh: refresh, settings: settings, trailing: trailing
+        ))
     }
 }
 
@@ -2324,8 +2387,7 @@ private struct TurnView: View {
                     if turn.isLocalPrivate == true {
                         Text(verbatim: turn.text).textSelection(.enabled)
                     } else {
-                        Markdown(turn.text)            // full GFM: tables, lists, code blocks, headings
-                            .textSelection(.enabled)
+                        ChatAssistantText(text: turn.text, images: turn.images ?? [], remote: remote)
                     }
                 }
                 if !turn.actions.isEmpty {

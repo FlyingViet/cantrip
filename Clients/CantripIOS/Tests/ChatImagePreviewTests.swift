@@ -55,6 +55,88 @@ final class ChatImagePreviewTests: XCTestCase {
         XCTAssertEqual(restored.images, [source])
     }
 
+    func testGeneratedPreviewReferencesPreserveAltTextAndRequireMatchingMessageMetadata() throws {
+        let id = "previews/\(UUID().uuidString)/\(String(repeating: "b", count: 64)).jpg"
+        let url = try XCTUnwrap(URL(string: "cantrip-preview://image/\(id)"))
+        let original = "Before\n\n![Duo](/Users/mac/.cache/Cantrip/duo.png)\n\nAfter"
+        let display = "Before\n\n![Duo](\(url.absoluteString))\n\nAfter"
+        let message = try JSONDecoder().decode(CantripRemoteMessage.self, from: JSONSerialization.data(withJSONObject: [
+            "id": UUID().uuidString, "role": "assistant", "text": original, "displayText": display,
+            "thinking": "", "activities": [], "images": [["id": id, "altText": "Duo landscape"]]
+        ]))
+        XCTAssertEqual(message.text, original)
+        XCTAssertEqual(message.presentedText, display)
+        let image = try XCTUnwrap(message.images?.first).inSession(UUID().uuidString)
+        XCTAssertEqual(image.altText, "Duo landscape")
+        XCTAssertEqual(ChatMessageImage.preview(for: url, images: [image]), image)
+        XCTAssertNil(ChatMessageImage.preview(for: url, images: []))
+        XCTAssertNil(ChatMessageImage.preview(for: URL(string: url.absoluteString + "?path=secret"), images: [image]))
+        XCTAssertNil(ChatMessageImage.preview(for: URL(string: "https://example.com/\(id)"), images: [image]))
+        let turn = ChatTurn(role: .assistant, text: display, images: [image])
+        let restored = try JSONDecoder().decode(ChatTurn.self, from: JSONEncoder().encode(turn))
+        XCTAssertEqual(restored.images, [image])
+    }
+
+    func testGeneratedPreviewsRenderInlineAndLoadFullImageThroughPairing() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ImageRequestProtocol.self]
+        let remote = CantripRemoteModel(urlSession: URLSession(configuration: configuration))
+        defer {
+            remote.clearConfiguration()
+            ImageRequestProtocol.handler = nil
+        }
+        let sessionID = UUID().uuidString
+        let imageID = "previews/\(UUID().uuidString)/\(String(repeating: "c", count: 64)).jpg"
+        let pixels = try imageData()
+        let response = try JSONSerialization.data(withJSONObject: ["data": pixels.base64EncodedString()])
+        var requestedPaths: [String] = []
+        ImageRequestProtocol.handler = { request in
+            XCTAssertNotNil(request.value(forHTTPHeaderField: "Authorization"))
+            let path = try XCTUnwrap(request.url?.path)
+            if path.contains("/previews/") {
+                requestedPaths.append(path)
+                return (200, response)
+            }
+            return (200, Data(#"{"sessions":[]}"#.utf8))
+        }
+        let configured = await remote.configure(url: "https://cantrip.example", pairingToken: "preview-fixture-token")
+        XCTAssertTrue(configured, remote.errorMessage ?? "")
+        let image = ChatMessageImage(id: imageID, sessionID: sessionID, altText: "Duo landscape preview")
+        let text = "## Before the preview\n\n![Duo](cantrip-preview://image/\(imageID))\n\n**After the preview**"
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        for width: CGFloat in [320, 844] {
+            let controller = UIHostingController(rootView:
+                ChatAssistantText(text: text, images: [image], remote: remote)
+                    .padding(16)
+                    .environment(\.dynamicTypeSize, width == 320 ? .accessibility3 : .large)
+                    .preferredColorScheme(.dark)
+            )
+            controller.safeAreaRegions = []
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 700)
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(700))
+            controller.view.layoutIfNeeded()
+            let fit = controller.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
+            XCTAssertLessThanOrEqual(fit.width, width)
+            XCTAssertGreaterThan(fit.height, 200, "The Markdown image must occupy visible space")
+            let screenshot = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: screenshot)
+            attachment.name = "Inline generated preview \(Int(width))"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertEqual(requestedPaths, ["/api/v1/sessions/\(sessionID)/\(imageID)/thumbnail"],
+                       "Inline previews use the paired route and reuse the image cache")
+        let full = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: false)
+        XCTAssertEqual(full.size, CGSize(width: 1200, height: 600))
+        XCTAssertEqual(requestedPaths.last, "/api/v1/sessions/\(sessionID)/\(imageID)")
+    }
+
     func testPreviewDecodeIsBoundedWhileFullImageKeepsUploadedPixels() throws {
         let data = try imageData()
         let thumbnail = try ChatImageDecoder.decode(data, maximumDimension: 320)

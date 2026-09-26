@@ -6,13 +6,14 @@ struct ChatNavigationView<Sidebar: View, Content: View>: View {
     let hasTabs: Bool
     let canSelectTabs: Bool
     var isReorderingTabs = false
+    var allowsSidebar = UIDevice.current.userInterfaceIdiom == .pad
     @ViewBuilder var sidebar: (_ isModal: Bool, _ dismiss: @escaping () -> Void) -> Sidebar
     @ViewBuilder var content: () -> Content
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     private var usesSidebar: Bool {
-        hasTabs && horizontalSizeClass == .regular
+        allowsSidebar && hasTabs && horizontalSizeClass == .regular
     }
 
     private var splitVisibility: Binding<NavigationSplitViewVisibility> {
@@ -30,22 +31,15 @@ struct ChatNavigationView<Sidebar: View, Content: View>: View {
     }
 
     var body: some View {
-        // Keep the detail in one navigation hierarchy as the window changes size.
-        NavigationSplitView(
-            columnVisibility: splitVisibility,
-            preferredCompactColumn: .constant(.detail)
-        ) {
-            if hasTabs {
-                sidebar(false, { columnVisibility = .detailOnly })
-                    .disabled(!canSelectTabs)
-                    .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 360)
-                    .toolbar(.hidden, for: .navigationBar)
+        Group {
+            // Device idiom is stable across folding; size-dependent stacks would
+            // recreate the transcript and its scroll position.
+            if allowsSidebar {
+                splitNavigation
+            } else {
+                NavigationStack { content() }
             }
-        } detail: {
-            content()
-                .toolbar(removing: .sidebarToggle)
         }
-        .navigationSplitViewStyle(.balanced)
         .cantripTabDrawer(
             isPresented: drawerPresentation,
             isEnabled: hasTabs && (canSelectTabs || isReorderingTabs) && !usesSidebar
@@ -65,5 +59,23 @@ struct ChatNavigationView<Sidebar: View, Content: View>: View {
                 isTabListPresented = false
             }
         }
+    }
+
+    private var splitNavigation: some View {
+        NavigationSplitView(
+            columnVisibility: splitVisibility,
+            preferredCompactColumn: .constant(.detail)
+        ) {
+            if hasTabs {
+                sidebar(false, { columnVisibility = .detailOnly })
+                    .disabled(!canSelectTabs)
+                    .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 360)
+                    .toolbar(.hidden, for: .navigationBar)
+            }
+        } detail: {
+            content()
+                .toolbar(removing: .sidebarToggle)
+        }
+        .navigationSplitViewStyle(.balanced)
     }
 }

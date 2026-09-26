@@ -425,10 +425,12 @@ final class CopilotUsageTests: XCTestCase {
                                 refreshFrame = $0
                             }
                     }
+                } settings: {
+                    ChatSettingsButton {}
                 } leading: {
-                    Button {} label: { Image(systemName: "line.3.horizontal") }
+                    ChatTabsButton(isEnabled: true) {}
                 } trailing: {
-                    Button {} label: { Image(systemName: "gearshape") }
+                    Button {} label: { ChatMenuIcon() }
                 }
             }
         }

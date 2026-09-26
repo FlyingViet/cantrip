@@ -14,11 +14,13 @@ struct ChatMessageImage: Codable, Equatable, Identifiable, Sendable {
     let id: String
     var sessionID: String?
     var data: Data?
+    var altText: String?
 
-    init(id: String, sessionID: String? = nil, data: Data? = nil) {
+    init(id: String, sessionID: String? = nil, data: Data? = nil, altText: String? = nil) {
         self.id = id
         self.sessionID = sessionID
         self.data = data
+        self.altText = altText
     }
 
     init(_ attachment: ChatImageAttachment) {
@@ -26,16 +28,40 @@ struct ChatMessageImage: Codable, Equatable, Identifiable, Sendable {
     }
 
     func inSession(_ id: String) -> Self {
-        Self(id: self.id, sessionID: id)
+        Self(id: self.id, sessionID: id, altText: altText)
     }
 
     static func validRemoteID(_ id: String) -> Bool {
+        if validPreviewID(id) { return true }
         let parts = id.split(separator: "/", omittingEmptySubsequences: false)
         return parts.count == 2 && UUID(uuidString: String(parts[0])) != nil
             && (1...ImageAttachmentProcessor.maximumCount).contains {
                 parts[1] == "image-\($0).jpg"
             }
     }
+
+    static func validPreviewID(_ id: String) -> Bool {
+        let parts = id.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0] == "previews", UUID(uuidString: String(parts[1])) != nil,
+              parts[2].hasSuffix(".jpg") else { return false }
+        let hash = parts[2].dropLast(4)
+        return hash.count == 64 && hash.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
+    static func preview(for url: URL?, images: [Self]) -> Self? {
+        guard let url, url.scheme == "cantrip-preview", url.host == "image",
+              url.query == nil, url.fragment == nil, url.user == nil, url.password == nil,
+              url.port == nil else { return nil }
+        let id = String(url.path.dropFirst())
+        guard validPreviewID(id) else { return nil }
+        return images.first { $0.id == id }
+    }
+}
+
+enum GeneratedImagePreview {
+    static let maximumImageBytes = 4 << 20
+    static let maximumDimension = 4096
+    static let thumbnailDimension = 960
 }
 
 enum ImageAttachmentError: LocalizedError {

@@ -70,6 +70,8 @@ final class ChatComposerLayoutTests: XCTestCase {
                     }
                     .environment(\.dynamicTypeSize, size)
                     let controller = UIHostingController(rootView: content)
+                    // These fixture widths describe usable content, not the display plus its system rail.
+                    controller.safeAreaRegions = []
                     let window = UIWindow(windowScene: scene)
                     window.frame = CGRect(x: 0, y: 0, width: width, height: 700)
                     window.rootViewController = controller

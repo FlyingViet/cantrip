@@ -696,12 +696,14 @@ struct CantripRemoteAPI {
             throw CantripRemoteError.invalidResponse
         }
         struct ImageResponse: Decodable { let data: Data }
+        let isPreview = ChatMessageImage.validPreviewID(imageID)
         let response: ImageResponse = try await request(
-            path: "/api/v1/sessions/\(sessionID)/attachments/\(imageID)"
+            path: "/api/v1/sessions/\(sessionID)/" + (isPreview ? imageID : "attachments/\(imageID)")
                 + (thumbnail ? "/thumbnail" : "")
         )
         guard !response.data.isEmpty,
-              response.data.count <= ImageAttachmentProcessor.maximumImageBytes else {
+              response.data.count <= (isPreview ? GeneratedImagePreview.maximumImageBytes
+                                               : ImageAttachmentProcessor.maximumImageBytes) else {
             throw ImageAttachmentError.invalidImage
         }
         return response.data
@@ -1618,9 +1620,13 @@ final class CantripRemoteModel: ObservableObject {
         let data = try await performAuthenticated(allowFallback: true) { api in
             try await api.imageData(sessionID: sessionID, imageID: imageID, thumbnail: thumbnail)
         }
+        let isPreview = ChatMessageImage.validPreviewID(imageID)
         let image = try await Task.detached(priority: .userInitiated) {
             try ChatImageDecoder.decode(
-                data, maximumDimension: thumbnail ? 320 : ImageAttachmentProcessor.maximumDimension
+                data, maximumDimension: isPreview
+                    ? (thumbnail ? GeneratedImagePreview.thumbnailDimension : GeneratedImagePreview.maximumDimension)
+                    : (thumbnail ? 320 : ImageAttachmentProcessor.maximumDimension),
+                maximumBytes: isPreview ? GeneratedImagePreview.maximumImageBytes : ImageAttachmentProcessor.maximumImageBytes
             )
         }.value
         try Task.checkCancellation()
@@ -2552,14 +2558,25 @@ struct CantripRemoteView: View {
                 }
             }
             .navigationTitle("Remote")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showSettings = true } label: {
-                        Image(systemName: "gearshape")
+            .modifier(ChatNavigationActions(
+                showsHorizontalBar: true,
+                leading: {
+                    ChatTabsButton(isEnabled: model.isConfigured && !model.isMutating) {
+                        showTabs = true
                     }
-                    .accessibilityLabel("Remote settings")
+                }, refresh: {}, settings: {
+                    ChatSettingsButton { showSettings = true }
+                }, trailing: {
+                    Menu {
+                        Button { showSettings = true } label: {
+                            Label("Settings", systemImage: "gearshape")
+                        }
+                    } label: {
+                        ChatMenuIcon()
+                    }
+                    .accessibilityLabel("Remote menu")
                 }
-            }
+            ))
             .sheet(isPresented: $showSettings) {
                 CantripRemoteSettingsSheet(model: model)
             }
@@ -2592,6 +2609,7 @@ struct CantripRemoteView: View {
         .onChange(of: showTabs) { _, showing in
             if showing { composerFocused = false }
         }
+        .modifier(ChatDisplayObserver())
     }
 
     private var remoteContent: some View {
@@ -3002,13 +3020,17 @@ private struct CantripRemoteMessageBubble: View {
                     if message.role == "user" {
                         PromptTextView(text: message.presentedText)
                     } else if message.isLocalPrivate == true {
-                        Text(verbatim: message.text)
+                        Text(verbatim: message.presentedText)
                     } else {
-                        Markdown(message.text)
+                        ChatAssistantText(
+                            text: message.presentedText,
+                            images: (message.images ?? []).map { $0.inSession(sessionID) }, remote: model
+                        )
                     }
                 }
                 ChatImageGallery(
-                    images: (message.images ?? []).map { $0.inSession(sessionID) }, remote: model
+                    images: (message.images ?? []).filter { !ChatMessageImage.validPreviewID($0.id) }
+                        .map { $0.inSession(sessionID) }, remote: model
                 )
                 ForEach(message.activities) { activity in
                     Label {

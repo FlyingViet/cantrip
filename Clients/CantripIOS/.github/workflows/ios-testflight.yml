@@ -32,7 +32,8 @@ env:
 
 jobs:
   testflight:
-    # Self-hosted Apple Silicon Mac with Xcode 26. If other self-hosted runners
+    # Self-hosted Apple Silicon Mac with the side-by-side Xcode 27.1 Duo SDK.
+    # If other self-hosted runners
     # share the machine, build serially (concurrent codesign collides on the
     # login keychain).
     runs-on: [self-hosted, macOS]
@@ -41,9 +42,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Select Duo toolchain for this job
+        run: |
+          DEVELOPER_DIR="$HOME/Applications/Xcode-27.1-beta.app/Contents/Developer"
+          test -d "$DEVELOPER_DIR"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+
       - name: Toolchain versions
         run: |
           xcodebuild -version
+          test "$(xcrun --sdk iphoneos --show-sdk-version)" = "27.1"
           command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
           xcodegen --version
 
@@ -78,6 +86,15 @@ jobs:
             -authenticationKeyIssuerID "${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             archive
+
+      - name: Verify archived Duo SDK
+        run: |
+          INFO="$RUNNER_TEMP/Hermes.xcarchive/Products/Applications/Hermes.app/Info.plist"
+          SDK=$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$INFO")
+          MINIMUM=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")
+          echo "Archived SDK: $SDK; minimum iOS: $MINIMUM"
+          test "$SDK" = "iphoneos27.1"
+          test "$MINIMUM" = "26.0"
 
       - name: Export & upload to TestFlight
         run: |

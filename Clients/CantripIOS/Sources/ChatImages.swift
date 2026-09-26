@@ -1,10 +1,12 @@
 import ImageIO
+import MarkdownUI
 import SwiftUI
 import UIKit
 
 enum ChatImageDecoder {
-    static func decode(_ data: Data, maximumDimension: Int) throws -> UIImage {
-        guard !data.isEmpty, data.count <= ImageAttachmentProcessor.maximumImageBytes,
+    static func decode(_ data: Data, maximumDimension: Int,
+                       maximumBytes: Int = ImageAttachmentProcessor.maximumImageBytes) throws -> UIImage {
+        guard !data.isEmpty, data.count <= maximumBytes,
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -36,6 +38,99 @@ enum ChatImageDecoder {
         try Task.checkCancellation()
         guard identity == remote.usageIdentity else { throw CancellationError() }
         return image
+    }
+}
+
+struct ChatAssistantText: View {
+    let text: String
+    let images: [ChatMessageImage]
+    @ObservedObject var remote: CantripRemoteModel
+
+    var body: some View {
+        Markdown(text)
+            .markdownImageProvider(ChatPreviewImageProvider(images: images, remote: remote))
+            .textSelection(.enabled)
+    }
+}
+
+private struct ChatPreviewImageProvider: ImageProvider {
+    let images: [ChatMessageImage]
+    let remote: CantripRemoteModel
+
+    @ViewBuilder func makeImage(url: URL?) -> some View {
+        if let source = ChatMessageImage.preview(for: url, images: images) {
+            ChatGeneratedImagePreview(source: source, remote: remote)
+        } else if url?.scheme == "https" || url?.scheme == "http" {
+            DefaultImageProvider().makeImage(url: url)
+        } else {
+            Label("Preview unavailable. Generated images require updated apps and a supported image in Cantrip's output folder.",
+                  systemImage: "photo.badge.exclamationmark")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct ChatGeneratedImagePreview: View {
+    let source: ChatMessageImage
+    @ObservedObject var remote: CantripRemoteModel
+    @State private var image: UIImage?
+    @State private var errorMessage: String?
+    @State private var showingImage = false
+    @State private var retry = 0
+
+    private var label: String {
+        if let alt = source.altText, !alt.isEmpty { return alt }
+        return "Generated image"
+    }
+
+    var body: some View {
+        Button {
+            if image != nil { showingImage = true }
+            else if errorMessage != nil { retry += 1 }
+        } label: {
+            Group {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 600, maxHeight: 360, alignment: .leading)
+                } else if let errorMessage {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Preview unavailable", systemImage: "photo.badge.exclamationmark")
+                        Text(errorMessage).font(.callout)
+                        Text("Tap to retry").font(.callout.weight(.semibold))
+                    }
+                    .padding()
+                    .frame(maxWidth: 600, minHeight: 120, alignment: .leading)
+                } else {
+                    ProgressView("Loading preview...")
+                        .frame(maxWidth: 600, minHeight: 160)
+                }
+            }
+            .background(.quaternary)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityValue(errorMessage ?? (image == nil ? "Loading" : ""))
+        .accessibilityHint(errorMessage == nil ? "View full image. Pinch to zoom." : "Double-tap to retry loading")
+        .accessibilityIdentifier("chat.generatedPreview")
+        .fullScreenCover(isPresented: $showingImage) {
+            ChatImageViewer(source: source, remote: remote, index: 0)
+        }
+        .task(id: "\(remote.usageIdentity)/\(source.sessionID ?? "")/\(source.id)/\(retry)") {
+            image = nil
+            errorMessage = nil
+            do {
+                image = try await ChatImageDecoder.load(source, remote: remote, thumbnail: true)
+            } catch is CancellationError {
+                return
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 }
 
@@ -98,7 +193,7 @@ struct ChatImageThumbnail: View {
         .fullScreenCover(isPresented: $showingImage) {
             ChatImageViewer(source: source, remote: remote, index: index)
         }
-        .task(id: "\(remote.usageIdentity)/\(source.id)/\(retry)") {
+        .task(id: "\(remote.usageIdentity)/\(source.sessionID ?? "")/\(source.id)/\(retry)") {
             image = nil
             errorMessage = nil
             do {
@@ -127,7 +222,7 @@ struct ChatImageViewer: View {
                 Color.black.ignoresSafeArea()
                 if let image {
                     ZoomableChatImage(image: image)
-                        .accessibilityLabel("Attached image \(index + 1)")
+                        .accessibilityLabel(source.altText ?? "Attached image \(index + 1)")
                 } else if let errorMessage {
                     VStack(spacing: 16) {
                         Label("Image unavailable", systemImage: "photo.badge.exclamationmark")
@@ -140,7 +235,7 @@ struct ChatImageViewer: View {
                     ProgressView("Loading image...").tint(.white).foregroundStyle(.white)
                 }
             }
-            .navigationTitle("Image \(index + 1)")
+            .navigationTitle(ChatMessageImage.validPreviewID(source.id) ? "Preview" : "Image \(index + 1)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -151,7 +246,7 @@ struct ChatImageViewer: View {
             .toolbarBackground(.black, for: .navigationBar)
             .toolbarBackgroundVisibility(.visible, for: .navigationBar)
         }
-        .task(id: "\(remote.usageIdentity)/\(source.id)/\(retry)") {
+        .task(id: "\(remote.usageIdentity)/\(source.sessionID ?? "")/\(source.id)/\(retry)") {
             image = nil
             errorMessage = nil
             do {

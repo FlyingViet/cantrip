@@ -63,6 +63,7 @@ final class ChatTranscriptLayoutTests: XCTestCase {
         )
         let window = UIWindow(windowScene: scene)
         let controller = UIHostingController(rootView: TranscriptLayoutHarness(model: model))
+        controller.safeAreaRegions = []
         window.rootViewController = controller
         window.makeKeyAndVisible()
         controller.view.layoutIfNeeded()

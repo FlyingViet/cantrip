@@ -87,8 +87,12 @@ shows a spinner while the request is pending and is disabled when
 disconnected or another request is in flight. A failed request is shown in
 the Remote error banner; it is never automatically retried.
 
-Swipe right from the **left edge** to open the Cantrip **Tabs** drawer. You can
-also tap the header title or choose **hamburger menu > Tabs**. Select a
+Tap the **stacked-tabs icon at the top left** or swipe right from the **left edge**
+to open the Cantrip **Tabs** drawer. The **hamburger menu is at the top right**,
+with **Settings** inside it. You can also tap the header title or choose
+**hamburger menu > Tabs**. On Duo's vertical toolbar, **Tabs sits near the bottom**,
+with a separate **Settings gear**, Refresh, and the **white hamburger menu at the top**.
+The hamburger stays white when paused, with a small orange pause badge. Select a
 tab to return to chat; swipe left on the drawer header or backdrop, tap outside,
 or use **Close tabs** to dismiss
 without changing tabs. The drawer shows the selected tab, activity, locks, and
@@ -98,10 +102,11 @@ retain 44-point tap targets. New Tab and tab actions live in the
 drawer rather than duplicate top-bar buttons. Resume (when available) and New
 conversation remain in the shared chat's hamburger menu.
 
-In regular-width layouts, **Tabs** becomes a native sidebar beside the chat.
+In regular-width iPad layouts, **Tabs** becomes a native sidebar beside the chat.
 Selecting, creating, or renaming a tab leaves this sidebar open; **Close tabs**
 hides it, and tapping the header title or the menu's **Tabs** action brings it
-back. Compact layouts retain the left-edge drawer. Resizing uses the same
+back. All iPhone layouts (including expanded Duo) and compact iPad windows retain
+the left-edge drawer. Resizing uses the same
 detail navigation hierarchy, preserving the composer and conversation rather
 than rebuilding them. Tab switching remains disabled during sends and image
 imports.
@@ -303,6 +308,29 @@ This requires the updated Cantrip host as well as AgentGateway; older hosts
 retain their text-only attachment display. Downloads use the existing paired
 Tailscale/LAN connection, with an in-memory cache cleared when pairing changes.
 Missing files or connection failures show a retry state, not a blank image.
+
+### Generated previews in replies
+
+With **both AgentGateway and the Mac Cantrip host updated**, assistant-generated
+PNG/JPEG screenshots appear inline where they are referenced in the reply.
+Tap to open the full-screen viewer and pinch or double-tap to zoom. Failed
+loads show a retry action. No public image hosting or temporary Safari gallery
+is required; images use the existing paired Tailscale/LAN connection.
+
+The agent should save output directly under `~/.cache/Cantrip/` and include
+a standalone Markdown image, for example
+`![Landscape preview](~/.cache/Cantrip/landscape-preview.png)`. Absolute paths
+and local `file:` URLs are supported too. Up to eight previews per message
+are supported; arbitrary paths, upload directories and code examples do not
+grant file access. Private Local retains its plain-text output behavior.
+
+Inline previews are at most 960 pixels; full-screen images retain up to 4096
+pixels per side, with a 4 MiB delivery limit and source metadata removed.
+After the first successful load, the Mac keeps a session-scoped copy so the
+preview survives source-file cleanup and host restarts. Cached previews still
+require a current reference in that session's assistant history. Older replies
+can display previews if their source images remain available. Update and reopen
+the host to activate delivery; an AgentGateway-only update cannot read Mac files.
 
 ### Video analysis
 
@@ -755,27 +783,45 @@ open Hermes.xcodeproj
 
 In Xcode: select the **Hermes** target → **Signing & Capabilities** → set your **Team** and a unique **Bundle Identifier** (e.g. `com.yourname.hermes`) → pick your iPhone → **Run** (⌘R). Trust the developer profile on the phone if prompted (Settings → General → VPN & Device Management).
 
-### Adaptive layouts and iPhone Duo preparation
+### Adaptive layouts and iPhone Duo
 
 The app supports portrait and both landscape orientations on iPhone, plus all
-orientations on iPad. Navigation uses the window's size class rather than a
-device-model check or main-screen dimensions. Interactive content stays within
-the system safe area, including asymmetric insets. Voice mode moves its
+orientations on iPad. Duo keeps chat full-width, with sessions in the existing
+drawer even on the expanded display. Where the system supplies a vertical bar,
+Tabs uses the bottom of Apple's native adaptive toolbar; a separate Settings gear,
+Refresh, and the hamburger menu stay at the top instead of duplicating controls
+above the conversation. The title, connection/usage row,
+and composer remain with the chat. In other display configurations the familiar
+header returns; regular-width iPad windows retain their session sidebar.
+
+All iPhones use one navigation stack and the session drawer, including landscape;
+iPad keeps its adaptive split navigation. This stable device-idiom choice avoids
+replacing navigation containers as Duo folds. Toolbar placement follows
+window-local system traits, not device names or main-screen dimensions.
+One navigation detail owns the conversation throughout those changes: folding
+does not select another tab, clear an attachment/text draft, or stop voice or a
+running reply. Interactive content stays within the system safe area, including
+asymmetric insets. Voice mode moves its
 microphone beside the reply in wide, short windows without restarting the
 conversation; its close button retains a 44-point target.
 
 The deployment target stays **iOS 26**. The project uses the selected Xcode's
 SDK, so installing another Xcode alone does not change command-line builds:
 check `xcodebuild -version` and `xcodebuild -showsdks` in the build environment.
-Build with Xcode 27 to link against the iOS 27 SDK. These adaptive changes also
-compile with Xcode 26; they do not by themselves constitute an iOS 27 build.
+Build with Xcode 27.1 for Duo support. `project.yml` enables
+`AGENTGATEWAY_DUO_SDK` for the iOS 27.1 SDK; the new APIs also have runtime
+availability guards. Xcode 27.0 and iOS 26 use the Tabs-left/menu-right header
+without Duo-only toolbar APIs. Select the beta per command with `DEVELOPER_DIR`, without changing the
+shared Mac's default Xcode or release jobs.
 
 Apple's [Duo preparation guide](https://developer.apple.com/videos/play/tech-talks/111461/)
 recommends native split navigation and size-class/safe-area-based layouts.
 The Duo simulator, reserved-region APIs, and arrangement containers described
 in [adaptive layouts on Duo](https://developer.apple.com/videos/play/tech-talks/111463/)
-require **Xcode/iOS 27.1**. This app does not yet adopt custom fold-region
-placement. Before a Duo-specific release, run it with that toolchain across
+require **Xcode/iOS 27.1**. The transcript remains one continuous scroll rather
+than splitting replies at the fold. This first pass adopts native navigation,
+not a separate tabletop composer or queue pane. Before a Duo-specific release,
+run it with that toolchain across
 open/closed, rotated, partially folded, and Split View configurations, including
 an active reply, an unsent image/text draft, the keyboard, and large text.
 
