@@ -497,6 +497,16 @@ final class RemoteControlServer {
             sendJSON(["status": "ready", "sessions": sessions], on: connection)
             return
         }
+        let recentExchanges: Int?
+        if connection.trace.usesPagedHistory, let raw = request.query("recentExchanges") {
+            guard let count = Int(raw), (1...3).contains(count) else {
+                sendError(400, "recentExchanges must be between 1 and 3.", on: connection)
+                return
+            }
+            recentExchanges = count
+        } else {
+            recentExchanges = nil
+        }
         if request.path == "/api/v1/sessions" {
             switch request.method {
             case "GET":
@@ -506,7 +516,7 @@ final class RemoteControlServer {
                 sendJSON(["sessions": sessions, "uiRevision": Self.webAppRevision], on: connection)
             case "POST":
                 let session = manager.newSession()
-                sendSession(session, status: 201, on: connection)
+                sendSession(session, status: 201, recentExchanges: recentExchanges, on: connection)
             default:
                 sendError(405, "method not allowed", on: connection)
             }
@@ -817,14 +827,6 @@ final class RemoteControlServer {
         }
         if parts.count == 1, request.method == "GET" {
             if connection.trace.usesPagedHistory {
-                var recentExchanges: Int?
-                if let raw = request.query("recentExchanges") {
-                    guard let count = Int(raw), (1...3).contains(count) else {
-                        sendError(400, "recentExchanges must be between 1 and 3.", on: connection)
-                        return
-                    }
-                    recentExchanges = count
-                }
                 let summary = snapshot(session, includeMessages: false, on: connection)
                 if request.query("before") == nil,
                    request.query("revision") == summary["historyRevision"] as? String {
@@ -859,7 +861,7 @@ final class RemoteControlServer {
             }
             // Resolve and remove on the main actor without yielding to queue draining.
             session.removeQueued(at: index)
-            sendSession(session, on: connection)
+            sendSession(session, recentExchanges: recentExchanges, on: connection)
             return
         }
         guard request.method == "POST", parts.count == 2 else {
@@ -882,7 +884,7 @@ final class RemoteControlServer {
             do {
                 try session.updateTab(name: body["customTitle"] as? String,
                                       isLocked: body["isLocked"] as? Bool)
-                sendSession(session, on: connection)
+                sendSession(session, recentExchanges: recentExchanges, on: connection)
             } catch let error as SessionTabError {
                 sendError(400, error.localizedDescription, on: connection)
             } catch let error as SessionModelSettingsError {
@@ -945,7 +947,7 @@ final class RemoteControlServer {
                                 + "\n\n" + video
                             if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
                             else { session.submitRemote(prompt, mode: mode) }
-                            sendSession(session, status: 202, on: connection)
+                            sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
                         } catch let error as InputRequestError {
                             sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
                         } catch let error as RemoteVideoError {
@@ -987,17 +989,17 @@ final class RemoteControlServer {
                 sendError(500, "Could not save the attached images on the Mac.", on: connection)
                 return
             }
-            sendSession(session, status: 202, on: connection)
+            sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
         case "cancel":
             session.cancel()
-            sendSession(session, on: connection)
+            sendSession(session, recentExchanges: recentExchanges, on: connection)
         case "resume":
             guard session.canResume, !session.isStreaming else {
                 sendError(409, "session is not resumable", on: connection)
                 return
             }
             session.resumeInterrupted()
-            sendSession(session, status: 202, on: connection)
+            sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
         case "new-conversation":
             guard !session.isLocked else {
                 sendError(409, SessionTabError.locked.localizedDescription, on: connection)
@@ -1008,7 +1010,7 @@ final class RemoteControlServer {
                 return
             }
             session.newConversation()
-            sendSession(session, on: connection)
+            sendSession(session, recentExchanges: recentExchanges, on: connection)
         case "close":
             guard !session.isLocked else {
                 sendError(409, SessionTabError.locked.localizedDescription, on: connection)
@@ -1019,7 +1021,7 @@ final class RemoteControlServer {
             let replacement = candidate.isPrivate
                 ? manager.sessions.first(where: { !$0.isPrivate }) ?? manager.newSession()
                 : candidate
-            sendSession(replacement, afterJournal: session, on: connection)
+            sendSession(replacement, recentExchanges: recentExchanges, afterJournal: session, on: connection)
         default:
             sendError(404, "action not found", on: connection)
         }
@@ -1027,6 +1029,7 @@ final class RemoteControlServer {
 
     @MainActor
     private func sendSession(_ session: ChatSession, status: Int = 200,
+                             recentExchanges: Int?,
                              afterJournal journalSession: ChatSession? = nil,
                              on connection: RemoteRequestConnection) {
         connection.trace.enter(.journalWait)
@@ -1040,7 +1043,7 @@ final class RemoteControlServer {
                 if connection.trace.usesPagedHistory {
                     let summary = snapshot(session, includeMessages: false, on: connection)
                     sendPagedSession(session, summary: summary, end: session.messages.endIndex,
-                                     status: status, on: connection)
+                                     status: status, recentExchanges: recentExchanges, on: connection)
                 } else {
                     sendJSON(["session": snapshot(session, on: connection)], status: status, on: connection)
                 }
