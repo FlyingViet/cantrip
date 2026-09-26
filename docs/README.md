@@ -17,8 +17,8 @@ only when you want the agent to make changes.
 | Send a question or pipe a log from Terminal | [Cantrip CLI](everyday-tasks.md#ask-cantrip-from-terminal) |
 | Ask about a screenshot, document, or selected text | [Files and screen context](files-and-screen-context.md) |
 | Keep projects separate, resume work, or compare models | [Sessions and council mode](sessions-and-council.md) |
-| Control my Mac from AgentGateway or another Mac | [Remote control](remote-control.md) |
-| Send a photo from my iPhone or iPad | [AgentGateway image attachments](remote-control.md#send-a-photo-or-screenshot-from-agentgateway) |
+| Control my Mac from Cantrip Agent or another Mac | [Remote control](remote-control.md) |
+| Send a photo from my iPhone or iPad | [Cantrip Agent image attachments](remote-control.md#send-a-photo-or-screenshot-from-agentgateway) |
 | Decide what Cantrip can do, see, and remember | [Permissions, privacy, and memory](privacy-and-memory.md) |
 | Install a dashboard or add my own command | [Extensions and skills](extensions-and-skills.md) |
 | Update Cantrip or fix a problem | [Updates and troubleshooting](updating-and-troubleshooting.md) |

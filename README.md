@@ -46,7 +46,7 @@ The macOS app includes:
   calculate, convert units, and run explicit shell commands.
 - **AI workspace:** streaming answers, file/screenshot attachments, voice,
   renameable, lockable, reorderable session tabs, recoverable runs, and a terminal per session.
-  Names, close-protection locks, and tab order sync to Cantrip Remote and AgentGateway.
+  Names, close-protection locks, and tab order sync to Cantrip Remote and Cantrip Agent.
   Drag a session tab onto another to move it, or use **Move Tab Left/Right** in
   its right-click menu. The Remote connection tab stays pinned first.
   Order survives restarts without switching conversations or interrupting work.
@@ -54,25 +54,26 @@ The macOS app includes:
   messages as context, corrections, or follow-ups. Uncertain decisions queue
   safely; manual Queue/Redirect/Inject overrides remain available.
 - **Live context:** local Copilot and Claude Code can accept **Inject** messages
-  without stopping their current work, including from AgentGateway and Mac/browser
+  without stopping their current work, including from Cantrip Agent and Mac/browser
   Remote. Copilot uses a persistent native SDK session per tab; accepted context is
   never blindly resent if its acknowledgement is lost. Requires Node.js and a
   recent Copilot CLI with its matching bundled SDK/runtime.
 - **Agent actions:** commands and file edits with backend-specific
   permissions; inspect tool activity and file diffs.
 - **Memory and council:** editable Markdown memory and multi-model answers.
-  AgentGateway's **Cantrip Memory** menu browses saved facts, preferences, notes,
+  Cantrip Agent's **Cantrip Memory** menu browses saved facts, preferences, notes,
   and session logs read-only, with search and paged file contents.
 - **Copilot usage:** account-wide AI credits used / total, reset date, and additional
-  usage in the Mac's **Usage** panel and AgentGateway's header beside the lane picker.
+  usage in the Mac's **Usage** panel and Cantrip Agent's header beside the lane picker.
   Reads your existing Copilot login without sending a prompt; credentials stay on the Mac.
 - **Long prompts:** compact, plain-text previews with **Read full prompt**,
   paged reading, and full-text copy/download in Mac and Remote. The submitted
   text stays intact. Memory retrieval uses bounded, deduplicated query terms
   and runs off the UI thread; large Remote responses are encoded off-thread.
-- **Remote control:** use the Mac's sessions from AgentGateway on iPhone/iPad,
+- **Remote control:** use the Mac's sessions from Cantrip Agent (formerly
+  AgentGateway) on iPhone/iPad,
   another Mac, or a browser. Recent messages load with full text and tool details.
-  AgentGateway can send one MOV/MP4 video (100 MB / five minutes) for analysis,
+  Cantrip Agent can send one MOV/MP4 video (100 MB / five minutes) for analysis,
   preserving the original and providing four timestamped preview frames.
   Scrolling up automatically pages back through ten earlier prompt-response
   groups, counting those already loaded. Beyond that, **Load more messages**
@@ -85,7 +86,7 @@ The macOS app includes:
   top. Remote tab lists keep their scroll position during refreshes. Mac Remote
   and browser tabs support drag reordering, move buttons in tab settings, and
   Option/Alt + arrow keys (up/down in the sidebar, left/right in the top strip).
-  AgentGateway's drawer/sidebar provides drag handles and **Move Tab Up/Down**
+  Cantrip Agent's drawer/sidebar provides drag handles and **Move Tab Up/Down**
   actions. Reordering requires the updated host's `supportsTabReordering`
   capability; unsaved Private mode tabs remain hidden from Remote.
   Native Mac tab labels use dedicated mouse handling, so dragging a tab does
@@ -93,13 +94,13 @@ The macOS app includes:
   Mac Remote
   shows a pulsing brain, live activity and queued counts in the sidebar, with
   the selected session's status pinned near the message box.
-  AgentGateway includes tappable uploaded-image
+  Cantrip Agent includes tappable uploaded-image
   thumbnails and full-screen viewing. Native clients support paired LAN connections;
   a saved Tailscale Serve URL is preferred even on the local network. Automatic
   routing uses LAN if Tailscale is unavailable and restores Tailscale with
   two confirmed read-only probes. Bounded reads and coalesced web refreshes avoid
   stalled request backlogs, without switching healthy Tailscale connections to LAN or replaying sends;
-  Tailscale-only mode is also available. AgentGateway can display and remove queued prompts.
+  Tailscale-only mode is also available. Cantrip Agent can display and remove queued prompts.
   Host diagnostics separate lightweight `/health` liveness from authenticated
   session readiness, with content-free request timings and bounded response writes.
 - **Durable runs:** journal encoding, writes, and synchronization use an ordered
@@ -110,7 +111,7 @@ The macOS app includes:
   server can run on another machine, independently of the global backend and
   Copilot settings, with no cloud fallback. Configure its HTTPS server URL
   (or loopback HTTP), model, context tokens and system prompt through **Private Local
-  Settings** in the Mac tab menu, Mac/browser Remote, or AgentGateway.
+  Settings** in the Mac tab menu, Mac/browser Remote, or Cantrip Agent.
   Model availability on that server is checked before sending conversation text.
   Tools, shell/slash execution, Council, shared memory/digests, push summaries,
   and automatic external content are disabled. Auto queues follow-ups locally.
@@ -169,7 +170,7 @@ by default. Private mode suppresses Cantrip conversation persistence, but
 does not prevent tool writes, image caches, or backend/provider logging.
 Read [permissions, privacy, and memory](docs/privacy-and-memory.md).
 
-AgentGateway can opt in to per-Mac completion alerts with a short final-answer
+Cantrip Agent can opt in to per-Mac completion alerts with a short final-answer
 preview and generic input-needed alerts with tap-to-tab navigation, including
 while the phone is locked. Supported Copilot/Claude/ACP prompts can wait for
 **Approve once / Deny** or an answer inline in Cantrip and Remote chat.
@@ -184,12 +185,12 @@ and new native phone/host builds are required; ordinary Remote polling is not
 a background notification service.
 
 **Mac Permissions & View Mac** adds user-initiated screen viewing and basic
-pointer/keyboard control from AgentGateway and Mac/browser Remote. Enable
+pointer/keyboard control from Cantrip Agent and Mac/browser Remote. Enable
 **Allow paired clients to view and control this Mac** locally first, with
 Screen Recording and (for control) Accessibility permissions. Sessions expire
 after five minutes or 60 seconds without activity; the Mac can end them from
 its panel or menu bar. New screen frames and desktop input are not saved or
-sent to models. AgentGateway requires Face ID/Touch ID for approvals, secure input
+sent to models. Cantrip Agent requires Face ID/Touch ID for approvals, secure input
 and starting View Mac, not ordinary chat replies; this is an app-side safeguard, not macOS
 authorization. See [Mac attention and biometrics](docs/remote-control.md#mac-attention-view-mac-and-face-id).
 
@@ -201,7 +202,7 @@ authorization. See [Mac attention and biometrics](docs/remote-control.md#mac-att
 | Launch apps, run commands, or use voice/CLI | [Everyday tasks](docs/everyday-tasks.md) |
 | Attach files, screenshots, or selected text | [Files and screen context](docs/files-and-screen-context.md) |
 | Resume work or compare models | [Sessions and council](docs/sessions-and-council.md) |
-| Pair AgentGateway, send photos, or connect another Mac | [Remote control](docs/remote-control.md) |
+| Pair Cantrip Agent, send photos, or connect another Mac | [Remote control](docs/remote-control.md) |
 | Add dashboards, tools, or slash commands | [Extensions and skills](docs/extensions-and-skills.md) |
 | Find a shortcut or fix a problem | [Keyboard reference](docs/keyboard-shortcuts.md) / [Troubleshooting](docs/updating-and-troubleshooting.md) |
 
@@ -219,7 +220,7 @@ See the [plugin reference](PLUGINS.md) and
 
 The Cantrip mark is a pearl-violet **C** casting a warm golden spark: a small,
 useful spell on a midnight-amethyst background. The same mark is used by the
-Mac and Windows apps and the AgentGateway iOS companion.
+Mac and Windows apps and the Cantrip Agent iOS companion.
 
 Run `make artwork` on macOS to regenerate the artwork using native CoreGraphics
 and ImageIO, with no fonts, downloaded images, or extra dependencies.

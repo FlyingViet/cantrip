@@ -2,8 +2,9 @@
 
 # Control Cantrip from another device
 
-Remote control uses the **same live sessions on your Mac**. AgentGateway is
-an iPhone/iPad client; another Mac can use Cantrip's **Remote** tab. A browser
+Remote control uses the **same live sessions on your Mac**. Cantrip Agent
+(formerly AgentGateway) is an iPhone/iPad client; another Mac can use Cantrip's
+**Remote** tab. A browser
 can use the host's web client through Tailscale Serve.
 
 Long user prompts appear as compact plain-text previews. Choose **Read full
@@ -46,7 +47,7 @@ separate client rebuild. Older hosts without `uiRevision` keep normal polling.
 **Private Local** is always present in the host's tabs and its paired Remote
 clients. **Local means self-hosted, not limited to the Cantrip host computer.**
 The model server can run on your NAS, another computer or another server you
-control. The connection is **AgentGateway/Cantrip Remote -> Cantrip Mac ->
+control. The connection is **Cantrip Agent/Cantrip Remote -> Cantrip Mac ->
 your self-hosted LLM server**. Its identity, history and self-hosted route survive
 restarts. It cannot
 be closed, cleared, unlocked or converted into a cloud-backed tab. It is separate
@@ -55,7 +56,7 @@ from the older **Private mode**, which disables saving and hides a tab from Remo
 1. Run a trusted Ollama installation on your chosen server and install a model
    there. The server must be reachable from the Cantrip Mac.
 2. Right-click **Private Local** on the Mac, or open the tab's three-dot menu in
-   Mac/browser Remote, and choose **Private Local Settings**. AgentGateway has the
+   Mac/browser Remote, and choose **Private Local Settings**. Cantrip Agent has the
    same action in its chat menu and tab actions.
 3. Set the server's base URL, choose **Load server models**, and select an
    installed model. Set context tokens and the
@@ -105,7 +106,7 @@ The paired API advertises `isLocalPrivate`/`supportsPrivateLocalSettings`, with
 ## Per-tab model, effort and context window
 
 Choose **Model Settings** in the Mac/browser Remote tab's settings menu
-(the three dots). AgentGateway exposes the same controls in the chat menu and
+(the three dots). Cantrip Agent exposes the same controls in the chat menu and
 tab actions. On the host Mac, right-click a local tab and choose **Model
 Settings**. These controls currently apply to the Mac's **Copilot** backend
 with Council mode off; they do not reconfigure Claude, Codex or ACP servers.
@@ -133,7 +134,7 @@ the paired `GET/POST /api/v1/sessions/{id}/model-settings` endpoint.
 
 ## Remote approvals and secure input
 
-Cantrip, Mac/browser Remote and AgentGateway display questions, approvals and
+Cantrip, Mac/browser Remote and Cantrip Agent display questions, approvals and
 other non-secret actions **inline in the conversation**. Ordinary questions use
 the normal chat composer with **Auto** delivery, including attachments, or the
 suggested-answer buttons. Select **Reply in chat** when several questions are
@@ -189,7 +190,7 @@ required. All native clients/host need the updated build.
 
 ## Mac attention, View Mac and Face ID
 
-Open **Mac Permissions & View Mac** from the Remote tab menu or AgentGateway's
+Open **Mac Permissions & View Mac** from the Remote tab menu or Cantrip Agent's
 **Settings > Cantrip Mac**. The page reports Cantrip's Screen Recording,
 Accessibility, Microphone and Speech Recognition grants, plus its own Keychain
 access issues. Full Disk Access is labeled for manual review; there is no
@@ -215,7 +216,7 @@ To use View Mac:
 2. Grant Screen Recording on the Mac. Also grant Accessibility if you want
    pointer/keyboard control; view-only works without Accessibility.
 3. On the remote client, explicitly start **View Mac** or enable control before
-   starting. AgentGateway requires enrolled Face ID or Touch ID.
+   starting. Cantrip Agent requires enrolled Face ID or Touch ID.
 4. Choose a display, zoom and tap to click. Click the target field/window before
    sending text, Return/Tab/Escape/Delete/arrows or scroll commands. Text entry
    is masked locally but is typed into the Mac's actual focused field, which
@@ -239,7 +240,7 @@ The session key is delivered over the existing authenticated connection: a
 third-party HTTPS-terminating proxy is in that trust path. This is not the
 previously discussed end-to-end encrypted relay.
 
-**Face ID/Touch ID is enforced by AgentGateway**, using a fresh biometric check
+**Face ID/Touch ID is enforced by Cantrip Agent**, using a fresh biometric check
 before an approval, action confirmation, password/passphrase submission or
 starting a viewing/control lease. Ordinary chat question replies do not require
 biometrics; the non-biometric response route accepts only question requests.
@@ -254,7 +255,7 @@ still require an allowed macOS authentication path or local interaction. View
 Mac cannot grant its own initial capture/control permissions. Corporate
 permissions remain subject to IT policy. Both native apps need updated builds.
 
-## AgentGateway completion notifications
+## Cantrip Agent completion notifications
 
 On iPhone/iPad, select a saved Mac and enable **Settings > Cantrip alerts >
 Completion and input-needed alerts**. After a successful run and all queued
@@ -274,7 +275,7 @@ deduplicated, and unsent retries are removed when resolved. Already-delivered
 Apple banners may remain. Older registration clients do not opt in to input
 alerts until updated. Unsaved Private tabs and Private Local are excluded.
 
-This needs **updated native AgentGateway and Mac builds**, plus Apple Push
+This needs **updated native Cantrip Agent and Mac builds**, plus Apple Push
 Notification service (APNs) configuration on the Mac. Foreground polling cannot
 deliver alerts while iOS suspends the app. Enable the Push Notifications
 capability for `com.itzhoang.hermbot` in the Apple Developer account and regenerate
@@ -320,7 +321,7 @@ No full transcript, pairing secret or APNs signing key goes to a relay service.
 
 ## Send context during a task
 
-Choose **Inject** in AgentGateway or Mac/browser Remote to add instructions
+Choose **Inject** in Cantrip Agent or Mac/browser Remote to add instructions
 to a running local Copilot or Claude Code task without stopping it. **Auto**
 also uses injection for messages classified as helpful same-task context.
 The existing clients use the host's delivery path, so this behavior requires
@@ -335,8 +336,8 @@ Copilot Remote/ACP and unsupported backends continue to queue instead.
 
 ## Loading long conversations
 
-Updated AgentGateway and Mac/browser Remote load recent messages first instead
-of repeatedly downloading the entire live transcript. **AgentGateway and the native
+Updated Cantrip Agent and Mac/browser Remote load recent messages first instead
+of repeatedly downloading the entire live transcript. **Cantrip Agent and the native
 Mac Remote tab start with the latest three prompt-and-reply exchanges**, including all
 continuation or council replies belonging to each prompt. A new prompt counts
 as the current exchange while its reply is still running.
@@ -356,8 +357,8 @@ prompt when available. A large response or multi-response turn may exceed these
 soft limits so its prompt stays visible before its output; messages are never
 truncated to fit. The same rules apply to requested older pages. This page budget
 excludes metadata and the ordered queue.
-Native Mac Remote and AgentGateway add `recentExchanges=3` to recent conversation
-reads. AgentGateway also includes it on session mutations so their acknowledgements
+Native Mac Remote and Cantrip Agent add `recentExchanges=3` to recent conversation
+reads. Cantrip Agent also includes it on session mutations so their acknowledgements
 do not collapse the transcript after a follow-up. The bounded opt-in (1-3) is
 validated before any mutation and returns up to three complete exchanges even
 when their combined output exceeds the usual soft page budgets. A running prompt
@@ -365,7 +366,7 @@ counts as the newest exchange; older-page requests retain normal paging.
 Browsers and clients without the opt-in keep their existing page sizes. Legacy hosts
 without pagination retain the full transcript rather than hiding inaccessible history.
 Page sizing and encoding run off the main actor and the lightweight tab-list queue.
-Clients cache up to five tabs. AgentGateway and native Mac Remote keep three complete exchanges
+Clients cache up to five tabs. Cantrip Agent and native Mac Remote keep three complete exchanges
 until you expand history; other unattended clients target a rolling 120-message
 window while retaining the boundary prompt and responses. Older-history loading
 can expand these windows.
@@ -385,7 +386,7 @@ successful tab-list read is applied immediately. A failed conversation read
 keeps cached messages and reports a separate error, rather than treating a
 reachable host as disconnected. Lightweight native HTTPS/LAN read deadlines remain
 3/2 seconds; conversation pages and full-message reads allow 20 seconds, while
-LAN connection establishment still times out after 2 seconds. AgentGateway history
+LAN connection establishment still times out after 2 seconds. Cantrip Agent history
 downloads do not hold its polling/mutation gate, and tab polling continues during
 a slow recent-page download. Uncertain writes are never replayed.
 
@@ -432,7 +433,7 @@ For another stall, compare timestamp-aligned host loopback and HTTPS health
 reads. Fast health with slow readiness identifies session-path contention;
 fast host loopback with slow HTTPS points beyond that handler. Host-only probes
 cannot establish what happened on the remote client's tunnel/network path.
-These changes require updating and reopening the Mac host, not an AgentGateway
+These changes require updating and reopening the Mac host, not a Cantrip Agent
 release. Packaging with `make app` alone does not interrupt or update the running
 process.
 
@@ -457,15 +458,15 @@ read-only access to saved Cantrip memory.
 Do not put it in a screenshot, shared note, issue, URL, or source repository.
 Remote prompts use the host's configured backend and action permissions.
 
-## 2a. Connect AgentGateway on iPhone or iPad
+## 2a. Connect Cantrip Agent on iPhone or iPad
 
-**Before you start:** install a current AgentGateway build (iOS/iPadOS 26+).
-AgentGateway is a separate app; installing Cantrip does not install it.
-See the [AgentGateway repository](https://github.com/FlyingViet/Hermes) for its
+**Before you start:** install a current Cantrip Agent build (iOS/iPadOS 26+).
+Cantrip Agent is a separate app; installing Cantrip does not install it.
+See the [Cantrip Agent repository](https://github.com/FlyingViet/Hermes) for its
 installation information.
 
 1. Put the phone/tablet and host Mac on the same local network.
-2. In AgentGateway, open **Settings** using the **gear**.
+2. In Cantrip Agent, open **Settings** using the **gear**.
 3. In **Cantrip Remote**, paste the **Pairing token**.
 4. Leave **Tailscale URL (optional, preferred when saved)** blank for LAN-only use.
 5. Tap **Save and Connect**. Allow Local Network access if prompted.
@@ -477,7 +478,7 @@ installation information.
 **Expected result:** the client reports a connection and shows the host
 session's live output. The work runs on the Mac, not on the iPhone/iPad.
 
-### See queued prompts in AgentGateway
+### See queued prompts in Cantrip Agent
 
 **Auto** is the default for typed and voice sends. The host Mac interprets
 busy-run messages using the same [routing policy](sessions-and-council.md#how-auto-decides)
@@ -486,7 +487,7 @@ whether the message was queued, injected, or redirected. The delivery menu
 keeps one-message Queue/Redirect/Inject overrides.
 
 Auto requires an updated, relaunched Mac host (`supportsAutoDelivery` in
-authenticated session snapshots). AgentGateway leaves your draft unsent and
+authenticated session snapshots). Cantrip Agent leaves your draft unsent and
 shows an update notice on older hosts; manual modes still work. API messages
 accept `mode: "auto"`; omitted mode also defaults to Auto.
 
@@ -498,21 +499,21 @@ it starts or is delivered into the current task. Messages being classified
 are already accepted and appear in this queue until delivery is decided.
 
 Both apps must be current: the Mac's authenticated session detail includes
-the ordered queue IDs and text. Older hosts provide only a count; AgentGateway
+the ordered queue IDs and text. Older hosts provide only a count; Cantrip Agent
 shows an update notice rather than an empty queue. Update and relaunch Cantrip
 on the host to enable queue contents. Disconnected clients show the last
 known queue until they reconnect.
 
 Tap a queued prompt's **trash button**, or swipe left and tap **Remove**, to
 remove it without stopping the active task. This requires the host's
-`supportsQueueRemoval` capability. AgentGateway disables removal while
+`supportsQueueRemoval` capability. Cantrip Agent disables removal while
 disconnected or a mutation is pending and waits for the authoritative snapshot.
 The authenticated `DELETE /api/v1/sessions/{sessionID}/queue/{promptID}` endpoint
 uses the stable prompt ID and the same durable removal as the Mac UI. A prompt
 that has already started or been removed returns HTTP 409; no other prompt or
 running task is affected.
 
-### Browse saved memory in AgentGateway
+### Browse saved memory in Cantrip Agent
 
 Open **hamburger menu > Cantrip Memory** to see core facts/conventions,
 preferences, saved procedure notes, and daily session logs on the connected
@@ -520,7 +521,7 @@ Mac. Filenames, sizes, and modification times appear in categorized sections.
 Search finds matching filenames throughout the memory folder. Opening a core
 file also shows its character cap and usage when the whole file fits on a page.
 
-Update AgentGateway and reopen an updated Cantrip host first. The viewer uses
+Update Cantrip Agent and reopen an updated Cantrip host first. The viewer uses
 existing paired LAN/Tailscale access and never edits or creates memory files,
 records retrieval usage, or invokes an agent. Disabling memory for conversations
 does not prevent viewing previously saved files.
@@ -542,10 +543,10 @@ content deadline without holding the chat polling/mutation gate. No file text
 is prefetched or persisted as a mobile offline copy. Server changes reset the
 viewer, and old hosts show an update notice rather than an empty memory list.
 
-### Update and rebuild this Mac from AgentGateway
+### Update and rebuild this Mac from Cantrip Agent
 
 Use **Settings > Cantrip Mac > Update & Rebuild Cantrip** in an updated
-AgentGateway. The host needs this API installed and reopened once first.
+Cantrip Agent. The host needs this API installed and reopened once first.
 The app must run as `Cantrip.app` beside its source checkout's `.git` and
 `Makefile`; existing Git authentication, Xcode, and signing configuration
 remain on the Mac.
@@ -584,10 +585,10 @@ not successful; inspect the checkout before retrying. Restart errors are
 logged to `~/Library/Logs/Cantrip-restart.log`. This updates only the selected
 Mac, not other hosts or the iPhone app.
 
-### See Copilot account usage in AgentGateway
+### See Copilot account usage in Cantrip Agent
 
 Tap the **usage gauge beside the Local/Remote lane picker (antenna)** in
-AgentGateway's top header. It shows **AI credits used / total** in compact
+Cantrip Agent's top header. It shows **AI credits used / total** in compact
 form, with full amounts and a secondary percentage progress bar in the details.
 Details also include reset time, additional usage, and the Copilot account
 signed in on the Mac. It is available from every chat lane;
@@ -616,7 +617,7 @@ snapshots also become stale after five minutes without retrieval, ten minutes
 of source age, or a passed reset. Older hosts show an update notice. This is
 not a live model-specific or short-term rate-limit meter.
 
-### See GitHub builds in AgentGateway
+### See GitHub builds in Cantrip Agent
 
 Open the mobile **hamburger menu > GitHub Builds** from any chat lane.
 This read-only dashboard separates running jobs, queued/eligible jobs, and
@@ -699,21 +700,21 @@ known** until the connection recovers. Reduce Motion disables the animations.
 The main Cantrip session tabs stay **across the top**. Ordinary browser clients
 also keep their horizontal tab strip with trackpad/mouse-wheel scrolling.
 Update and reopen the host, then reload the Mac Remote view to get the sidebar
-and progress indicators; no AgentGateway update is needed.
+and progress indicators; no Cantrip Agent update is needed.
 
 Use **Change server** to configure a different host.
 
 ## Rename and protect remote tabs
 
 In the Mac Remote view or browser, click the **...** beside a session tab to
-edit its name and lock. In AgentGateway, long-press a session tab or open its
+edit its name and lock. In Cantrip Agent, long-press a session tab or open its
 **...** actions menu, then choose **Rename Tab**, **Lock Tab**, or **Unlock Tab**.
 Names and locks belong to the Mac session and appear on all connected clients.
 
 Locked sessions cannot be closed or reset, even by an older client with stale
 state. The host rejects these requests with HTTP 409. Normal sending, Stop,
 Resume, and queue removal still work. Unlock before closing or clearing.
-Update and reopen the host to enable these controls; updated AgentGateway
+Update and reopen the host to enable these controls; updated Cantrip Agent
 checks the `supportsTabMetadata` capability before editing.
 
 Authenticated session snapshots include `customTitle` (empty for automatic
@@ -781,10 +782,10 @@ Uncertain sends and other mutations are **not automatically replayed**. Check
 the session before sending again; the host may have accepted the first request.
 
 To bypass LAN, enable **Tailscale only (skip local network)** when pairing,
-or use **Route > Tailscale only** in the Mac Remote header. AgentGateway has
+or use **Route > Tailscale only** in the Mac Remote header. Cantrip Agent has
 the same toggle in Remote settings. A saved Tailscale URL is required; keep
 Tailscale connected when using its HTTPS address. Choose **Automatic (Tailscale
-first)** on the Mac, or turn off the toggle in AgentGateway, to allow
+first)** on the Mac, or turn off the toggle in Cantrip Agent, to allow
 direct LAN as backup. LAN-only use remains supported without a saved URL.
 
 For the browser client, connect the device to Tailscale, open the same HTTPS
@@ -793,13 +794,13 @@ token in that browser profile; use **Unpair** on shared devices. A browser
 cannot connect directly to Cantrip's native LAN TLS service by opening the
 Mac's IP address.
 
-## Send a photo or screenshot from AgentGateway
+## Send a photo or screenshot from Cantrip Agent
 
 **Requirements:** current versions of both apps and a host session that
 advertises image support. Use a Claude, Copilot, or Codex backend on the Mac,
-not Local Model. Updating only AgentGateway is not enough.
+not Local Model. Updating only Cantrip Agent is not enough.
 
-1. In AgentGateway, choose **Cantrip Remote** and select a session.
+1. In Cantrip Agent, choose **Cantrip Remote** and select a session.
 2. Tap the **+** (**Attach images or video**) beside the chat composer.
 3. Choose **Photo Library**, **Choose Image File**, or **Paste Image**.
 4. Wait for **Preparing attachment...** to finish.
@@ -807,7 +808,7 @@ not Local Model. Updating only AgentGateway is not enough.
 6. Add a question if desired, then send. An image-only message is allowed.
 
 **Expected result:** up to **four images per message** are sent over the
-authenticated connection. AgentGateway converts/resizes them to JPEG and
+authenticated connection. Cantrip Agent converts/resizes them to JPEG and
 removes location metadata before upload; visible private information in the
 image is not redacted automatically.
 
@@ -830,23 +831,23 @@ Uploaded images remain on the host in
 `~/.cache/Cantrip/remote-attachments/` so queued work and follow-ups can read
 them. They are not automatically deleted after the reply.
 
-With both apps updated, AgentGateway shows sent and queued attachments as
+With both apps updated, Cantrip Agent shows sent and queued attachments as
 tappable thumbnails rather than Mac file paths, including older uploads still
 referenced by the open session. The full-screen viewer fits the entire uploaded
 image; pinch or double-tap to zoom, drag to pan, and tap **Done** to return.
 If the Mac is unreachable or a file was deleted, the image shows a retry state.
-Older AgentGateway clients keep the original prompt text unchanged.
+Older Cantrip Agent clients keep the original prompt text unchanged.
 
 The pairing-authenticated, read-only
 `GET /api/v1/sessions/{sessionID}/attachments/{uploadID}/image-{1...4}.jpg`
 returns the uploaded JPEG as base64 JSON (`data`); append `/thumbnail` for a
 320-pixel preview. Only stored upload IDs referenced by that public session's
 user messages or queue are available, never arbitrary filesystem paths.
-Image reads and downsampling run off the main actor. AgentGateway keeps a
+Image reads and downsampling run off the main actor. Cantrip Agent keeps a
 bounded in-memory cache, clears it on pairing changes, and uses the same
 Tailscale-first/LAN-fallback routing as other read-only requests.
 
-## Generated image previews in AgentGateway
+## Generated image previews in Cantrip Agent
 
 With both apps updated and the Mac host reopened, screenshots and generated
 images can appear **inline in assistant replies**, in their original Markdown
@@ -883,10 +884,10 @@ successful read stores an owner-only copy in
 cleanup and host restarts. These cached copies are not automatically deleted.
 Previously linked screenshots work if their original files still exist when
 first loaded. Neither a public upload nor a temporary Safari gallery is needed.
-This adds native AgentGateway rendering; the browser/Mac Remote web transcript
+This adds native Cantrip Agent rendering; the browser/Mac Remote web transcript
 continues using its existing text rendering.
 
-## Send a video for analysis from AgentGateway
+## Send a video for analysis from Cantrip Agent
 
 With both apps updated and the host reopened, use **+ > Video Library** or
 **Choose Video File**. Attach one standard MOV/MP4, up to **100 MB and five
@@ -949,7 +950,7 @@ the host. Pair clients again with the new token.
 
 To stop accepting Remote requests, turn off **Remote control daemon**.
 To forget one client's saved credentials, use **Clear Remote Connection** in
-AgentGateway or **Unpair** in the web client. Forgetting a client does not
+Cantrip Agent or **Unpair** in the web client. Forgetting a client does not
 rotate the host token.
 
 For failures, follow [Remote connection troubleshooting](updating-and-troubleshooting.md#remote-will-not-connect).

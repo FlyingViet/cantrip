@@ -221,7 +221,7 @@ final class RemoteMaintenance {
             }
             try await command("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
             state.expectedBuild = expected
-            try phase("restarting", "Restart requested. AgentGateway will reconnect when the Mac is ready.")
+            try phase("restarting", "Restart requested. Cantrip Agent will reconnect when the Mac is ready.")
             try await Task.sleep(for: .seconds(2))
             guard let manager else { throw RemoteMaintenanceError(status: 503, message: "Session manager unavailable.") }
             for session in manager.sessions { try await session.flushJournal() }

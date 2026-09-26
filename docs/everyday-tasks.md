@@ -115,7 +115,7 @@ appear as a secondary usage progress bar. Amounts use the account's reported cre
 directly, with up to two decimal places; positive amounts below `0.01` show
 `<0.01`. Missing amounts stay unavailable rather than being estimated from
 rounded percentages. Legacy request plans retain request labels.
-Refresh is shared with AgentGateway and limited to once a minute. Missing or
+Refresh is shared with Cantrip Agent and limited to once a minute. Missing or
 failed readings are marked unavailable/stale, never assumed to be zero usage.
 Model-specific or short-term throttling can still apply with budget remaining.
 

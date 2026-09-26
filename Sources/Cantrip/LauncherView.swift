@@ -2920,7 +2920,7 @@ struct SettingsView: View {
                     }
                     .font(.caption)
                 }
-                Text("Tailscale Serve can proxy 127.0.0.1:\(settings.remoteControlPort). AgentGateway also discovers an end-to-end encrypted connection automatically on the same local network. Regenerating the token disconnects paired clients.")
+                Text("Tailscale Serve can proxy 127.0.0.1:\(settings.remoteControlPort). Cantrip Agent also discovers an end-to-end encrypted connection automatically on the same local network. Regenerating the token disconnects paired clients.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

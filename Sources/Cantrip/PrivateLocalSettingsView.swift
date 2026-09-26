@@ -13,7 +13,7 @@ struct PrivateLocalSettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
             Label("Private Local Settings", systemImage: "lock.shield")
                 .font(.headline)
-            Text("Local means self-hosted, not limited to this Mac. Your Ollama server can run on another machine. Sessions stay saved on this Mac and accessible through Cantrip Remote and AgentGateway, with no cloud fallback.")
+            Text("Local means self-hosted, not limited to this Mac. Your Ollama server can run on another machine. Sessions stay saved on this Mac and accessible through Cantrip Remote and Cantrip Agent, with no cloud fallback.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Form {
                 TextField("Self-hosted Ollama URL", text: $configuration.baseURL)

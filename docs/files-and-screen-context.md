@@ -3,7 +3,7 @@
 # Ask about a file, screenshot, or selected text
 
 **Platform: macOS.** These steps use local Cantrip. For iPhone/iPad uploads,
-see [AgentGateway attachments](remote-control.md#send-a-photo-or-screenshot-from-agentgateway).
+see [Cantrip Agent attachments](remote-control.md#send-a-photo-or-screenshot-from-agentgateway).
 Windows currently supports [screen capture](windows.md#capture-your-screen),
 not clipboard/drop file attachments.
 
@@ -24,7 +24,7 @@ working image/file tool and sufficient permissions to read the attachment.
 
 **Expected result:** the attachment is included with the next question and
 the staged chip clears. Attach it again if you need to resend it. For an
-image-only submission from a phone, use AgentGateway instead.
+image-only submission from a phone, use Cantrip Agent instead.
 
 Cantrip supplies file paths to the CLI's tools. Keep the file at that path
 while work is queued or running; a file preview does not guarantee that every

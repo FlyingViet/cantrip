@@ -65,7 +65,7 @@ be approved by the current action policy are denied rather than left hanging.
 
 On macOS, the backend and its defaults are shared app settings. Copilot tabs
 can override the model, effort and context tier through **Model Settings** in
-the tab's context menu, Mac/browser Remote or AgentGateway. Overrides persist
+the tab's context menu, Mac/browser Remote or Cantrip Agent. Overrides persist
 per tab, require idle work and Council mode off, and can be removed with
 **Use Mac defaults**. Working directories and conversations are also per-session.
 

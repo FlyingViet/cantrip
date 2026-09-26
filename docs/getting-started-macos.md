@@ -93,4 +93,4 @@ open ~/Coding/Cantrip/Cantrip.app
 ```
 
 Continue with [everyday tasks](everyday-tasks.md) or
-[connect AgentGateway](remote-control.md).
+[connect Cantrip Agent](remote-control.md).
