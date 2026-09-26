@@ -24,6 +24,7 @@ final class RemoteControlServer {
     private let usage: UsageTracker
     private let notifications: RemoteNotifications
     private var maintenance: RemoteMaintenance?
+    private let desktopOverride: RemoteDesktop?
     private let notificationLifecycleLock = NSLock()
     private var notificationLifecycleTask: Task<Void, Never>?
     private let maximumRequestBytes = RemoteImageAttachments.maximumRequestBytes
@@ -32,6 +33,7 @@ final class RemoteControlServer {
          usage: UsageTracker = .shared,
          notifications: RemoteNotifications = RemoteNotifications(),
          maintenance: RemoteMaintenance? = nil,
+         desktop: RemoteDesktop? = nil,
          encodingQueue: DispatchQueue = DispatchQueue(label: "cantrip.remote-encoding", qos: .userInitiated),
          sendTimeout: TimeInterval = 15,
          requestLog: @escaping (String) -> Void = Log.write) {
@@ -40,6 +42,7 @@ final class RemoteControlServer {
         self.usage = usage
         self.notifications = notifications
         self.maintenance = maintenance
+        desktopOverride = desktop
         self.encodingQueue = encodingQueue
         self.sendTimeout = sendTimeout
         self.requestLog = requestLog
@@ -98,6 +101,8 @@ final class RemoteControlServer {
     }
 
     func stop() {
+        let desktop = desktopOverride
+        Task { @MainActor in (desktop ?? RemoteDesktop.shared).stop() }
         updateNotificationActivation(fingerprint: nil)
         listener?.stateUpdateHandler = nil
         listener?.cancel()
@@ -119,6 +124,123 @@ final class RemoteControlServer {
         Task {
             await activation?.value
             await notifications.enqueue(completion)
+        }
+    }
+
+    @MainActor
+    func notifyInput(for session: ChatSession, request: InputRequestSnapshot) {
+        guard !token.isEmpty, !session.isPrivate, !session.isLocalPrivate else { return }
+        notificationLifecycleLock.lock()
+        let activation = notificationLifecycleTask
+        notificationLifecycleLock.unlock()
+        Task {
+            await activation?.value
+            guard session.pendingInputs.contains(where: { $0.id == request.id }) else { return }
+            await notifications.enqueueInput(id: request.id, sessionID: session.id,
+                                            expiresAt: Date(timeIntervalSince1970: request.expiresAt))
+            if !session.pendingInputs.contains(where: { $0.id == request.id }) {
+                await notifications.resolveInput(request.id)
+            }
+        }
+    }
+
+    func resolveInputNotification(_ id: UUID) {
+        Task { await notifications.resolveInput(id) }
+    }
+
+    @MainActor
+    func notifyMacAttention(sessionID: UUID, issueID: UUID) {
+        guard !token.isEmpty else { return }
+        notificationLifecycleLock.lock()
+        let activation = notificationLifecycleTask
+        notificationLifecycleLock.unlock()
+        Task {
+            await activation?.value
+            guard MacAttention.shared.issues.contains(where: { $0.id == issueID }),
+                  manager?.sessions.contains(where: { $0.id == sessionID && !$0.isPrivate && !$0.isLocalPrivate }) == true else { return }
+            await notifications.enqueueInput(id: issueID, sessionID: sessionID,
+                expiresAt: Date().addingTimeInterval(600), kind: "macAttention")
+            if !MacAttention.shared.issues.contains(where: { $0.id == issueID }) {
+                await notifications.resolveInput(issueID)
+            }
+        }
+    }
+
+    @MainActor
+    private func handleMacAccess(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
+        guard request.body.count <= 24000 else { sendError(413, "Mac access request is too large.", on: connection); return }
+        let desktop = desktopOverride ?? RemoteDesktop.shared
+        do {
+            if request.path == "/api/v1/mac-access" {
+                if request.method == "GET" {
+                    let snapshot = desktop.snapshot()
+                    sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
+                } else if request.method == "POST" {
+                    guard let json = request.json, Set(json.keys) == ["permission"],
+                          let raw = json["permission"] as? String, let permission = MacPermission(rawValue: raw) else {
+                        throw SessionModelSettingsError(400, "Choose a supported settings pane.")
+                    }
+                    try MacAttention.shared.openSettings(permission)
+                    sendJSON(["opened": true], on: connection)
+                } else { throw SessionModelSettingsError(405, "method not allowed") }
+                return
+            }
+            guard request.method == "POST", let json = request.json else {
+                throw SessionModelSettingsError(405, "Use an explicit Mac access action.")
+            }
+            if request.path == "/api/v1/desktop/start" {
+                struct Start: Decodable { let control: Bool }
+                guard Set(json.keys) == ["control"] else { throw SessionModelSettingsError(400, "Provide control only.") }
+                let action = try JSONDecoder().decode(Start.self, from: request.body)
+                let lease = try desktop.start(control: action.control)
+                sendEncoded(on: connection) { try JSONEncoder().encode(lease) }
+                return
+            }
+            struct Action: Decodable {
+                let id: UUID
+                let token: String
+                let displayID: UInt32?
+                let sequence: Int?
+                let encrypted: String?
+            }
+            let action = try JSONDecoder().decode(Action.self, from: request.body)
+            switch request.path {
+            case "/api/v1/desktop/stop":
+                guard Set(json.keys) == ["id", "token"] else { throw SessionModelSettingsError(400, "Unexpected stop fields.") }
+                try desktop.stop(id: action.id, token: action.token)
+                sendJSON(["stopped": true], on: connection)
+            case "/api/v1/desktop/frame":
+                guard Set(json.keys) == ["id", "token", "displayID"], let displayID = action.displayID else {
+                    throw SessionModelSettingsError(400, "Choose a display.")
+                }
+                let pairingToken = token
+                Task {
+                    do {
+                        let frame = try await desktop.frame(id: action.id, token: action.token, displayID: displayID)
+                        guard self.token == pairingToken, !self.token.isEmpty else {
+                            sendError(401, "Pairing changed during capture.", on: connection)
+                            return
+                        }
+                        sendEncoded(on: connection) { try JSONEncoder().encode(frame) }
+                    } catch let error as SessionModelSettingsError {
+                        sendError(error.status, error.message, on: connection)
+                    } catch {
+                        sendError(503, "The Mac cannot capture this screen. Protected dialogs or a locked session may require local interaction.", on: connection)
+                    }
+                }
+            case "/api/v1/desktop/input":
+                guard Set(json.keys) == ["id", "token", "sequence", "encrypted"],
+                      let sequence = action.sequence, let encrypted = action.encrypted else {
+                    throw SessionModelSettingsError(400, "Provide the encrypted input and sequence.")
+                }
+                try desktop.input(id: action.id, token: action.token, sequence: sequence, encrypted: encrypted)
+                sendJSON(["accepted": true], on: connection)
+            default: throw SessionModelSettingsError(404, "Mac access action not found.")
+            }
+        } catch let error as SessionModelSettingsError {
+            sendError(error.status, error.message, on: connection)
+        } catch {
+            sendError(400, "Invalid Mac access request.", on: connection)
         }
     }
 
@@ -239,12 +361,18 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/memory/document"
                 || request.path == "/api/v1/notifications"
                 || request.path == "/api/v1/maintenance"
+                || request.path == "/api/v1/mac-access"
+                || request.path.hasPrefix("/api/v1/desktop/")
                 || request.path == "/api/v1/copilot/usage" else {
             sendError(404, "not found", on: connection)
             return
         }
         guard authorized(request.headers["authorization"]) else {
             sendError(401, "invalid pairing token", on: connection)
+            return
+        }
+        if request.path == "/api/v1/mac-access" || request.path.hasPrefix("/api/v1/desktop/") {
+            handleMacAccess(request, on: connection)
             return
         }
         if request.path == "/api/v1/maintenance" {
@@ -397,6 +525,31 @@ final class RemoteControlServer {
         }
         let session = manager.sessions[sessionIndex]
 
+        if parts.count >= 2, parts[1] == "input" {
+            if parts.count == 2, request.method == "GET" {
+                let requests = session.pendingInputs
+                sendEncoded(on: connection) { try JSONEncoder().encode(["requests": requests]) }
+            } else if parts.count == 3, request.method == "POST",
+                      let requestID = UUID(uuidString: String(parts[2])) {
+                guard request.body.count <= 12000, let json,
+                      Set(json.keys).isSubset(of: ["decision", "text"]), json["decision"] is String,
+                      json["text"] == nil || json["text"] is String else {
+                    sendError(400, "Provide a decision and, only when requested, a text value.", on: connection)
+                    return
+                }
+                do {
+                    let answer = try JSONDecoder().decode(InputRequestAnswer.self, from: request.body)
+                    try session.respondToInput(id: requestID, answer: answer)
+                    sendJSON(["accepted": true], on: connection)
+                } catch let error as InputRequestError {
+                    sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
+                } catch {
+                    sendError(400, "Invalid input response.", on: connection)
+                }
+            } else { sendError(405, "method not allowed", on: connection) }
+            return
+        }
+
         if parts.count >= 2, parts[1] == "videos" {
             guard session.supportsRemoteImages else {
                 sendError(409, "Choose a Claude, Copilot, or Codex backend to analyze videos.", on: connection)
@@ -468,8 +621,57 @@ final class RemoteControlServer {
             }
             return
         }
+        if parts.count == 2, ["private-settings", "private-models"].contains(String(parts[1])) {
+            do {
+                guard session.isLocalPrivate else { throw SessionModelSettingsError(404, "Private Local tab not found.") }
+                if parts[1] == "private-models" {
+                    guard request.method == "GET" else { throw SessionModelSettingsError(405, "method not allowed") }
+                    var configuration = try session.privateLocalConfiguration()
+                    if let baseURL = request.query("baseURL") { configuration.baseURL = baseURL }
+                    try configuration.validate(requireModel: false)
+                    Task {
+                        let client = PrivateLocalClient()
+                        defer { client.close() }
+                        do {
+                            let models = try await client.models(configuration)
+                            sendJSON(["models": models], on: connection)
+                        } catch {
+                            sendError(502, error.localizedDescription, on: connection)
+                        }
+                    }
+                    return
+                }
+                if request.method == "POST" {
+                    guard let json, Set(json.keys) == ["revision", "configuration"],
+                          let revision = json["revision"] as? String,
+                          let fields = json["configuration"] as? [String: Any],
+                          Set(fields.keys) == ["baseURL", "model", "contextWindow", "systemPrompt"],
+                          fields["baseURL"] is String, fields["model"] is String, fields["systemPrompt"] is String,
+                          let tokens = fields["contextWindow"] as? NSNumber,
+                          CFGetTypeID(tokens) != CFBooleanGetTypeID(),
+                          tokens.doubleValue == Double(tokens.intValue) else {
+                        throw SessionModelSettingsError(400, "Provide revision and the complete Private Local configuration.")
+                    }
+                    let configuration = try JSONDecoder().decode(PrivateLocalConfiguration.self,
+                        from: JSONSerialization.data(withJSONObject: fields))
+                    try session.updatePrivateLocalSettings(configuration, revision: revision)
+                } else if request.method != "GET" {
+                    throw SessionModelSettingsError(405, "method not allowed")
+                }
+                let data = try JSONEncoder().encode(session.privateLocalSnapshot())
+                send(status: 200, contentType: "application/json; charset=utf-8", body: data, on: connection)
+            } catch let error as SessionModelSettingsError {
+                sendError(error.status, error.message, on: connection)
+            } catch {
+                sendError(400, "Could not read or save Private Local settings. Reload before retrying.", on: connection)
+            }
+            return
+        }
         if parts.count == 2, parts[1] == "model-settings" {
             do {
+                guard !session.isLocalPrivate else {
+                    throw SessionModelSettingsError(409, "Private Local cannot use cloud models. Open Private Local Settings.")
+                }
                 if request.method == "GET" {
                     if request.query("refresh") == "true" {
                         session.settings.refreshCopilotModels()
@@ -635,11 +837,17 @@ final class RemoteControlServer {
                 sendSession(session, on: connection)
             } catch let error as SessionTabError {
                 sendError(400, error.localizedDescription, on: connection)
+            } catch let error as SessionModelSettingsError {
+                sendError(error.status, error.message, on: connection)
             } catch {
                 Log.write("remote-control: tab metadata storage failed: \(error.localizedDescription)")
                 sendError(500, "Could not save the tab on the Mac.", on: connection)
             }
         case "messages":
+            if let message = session.privateStorageError {
+                sendError(503, message, on: connection)
+                return
+            }
             guard let body = json,
                   let text = body["text"] as? String
             else {
@@ -805,9 +1013,13 @@ final class RemoteControlServer {
             "title": session.title,
             "customTitle": session.tabMetadata.customTitle ?? "",
             "isLocked": session.isLocked,
+            "isLocalPrivate": session.isLocalPrivate,
+            "supportsPrivateLocalSettings": session.isLocalPrivate,
+            "supportsInputRequests": true,
+            "pendingInputCount": session.pendingInputs.count,
             "supportsTabMetadata": true,
             "supportsTabReordering": true,
-            "supportsModelSettings": true,
+            "supportsModelSettings": !session.isLocalPrivate,
             "modelSettingsRevision": session.modelSettingsRevision,
             "workdir": session.workdir,
             "isStreaming": session.isStreaming,
@@ -853,6 +1065,7 @@ final class RemoteControlServer {
 
     private func messageSnapshot(_ message: ChatMessage, sessionID: UUID) -> [String: Any] {
         var object = RemoteHistory.message(message)
+        object["isLocalPrivate"] = sessionID == ChatSession.privateLocalID
         if message.role == .user {
             let presentation = RemoteImageAttachments.presentation(message.text, sessionID: sessionID)
             if !presentation.imageIDs.isEmpty {
@@ -995,6 +1208,7 @@ final class RemoteControlServer {
         case 202: reason = "Accepted"
         case 400: reason = "Bad Request"
         case 401: reason = "Unauthorized"
+        case 403: reason = "Forbidden"
         case 404: reason = "Not Found"
         case 405: reason = "Method Not Allowed"
         case 409: reason = "Conflict"
@@ -1070,6 +1284,18 @@ private extension RemoteControlServer {
     #modelForm select{width:100%;max-width:none;min-height:44px;border:1px solid var(--line);font-size:14px;color:var(--text)}
     #modelEditor button{min-height:44px}#modelForm select:focus-visible,#modelEditor button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     #modelError{color:var(--text);font-size:13px}#modelForm .tab-actions{flex-wrap:wrap}#modelForm input{width:24px;height:24px}
+    #privateEditor{width:min(calc(100% - 24px),480px);max-height:90vh;overflow:auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
+    #privateEditor::backdrop{background:rgba(0,0,0,.35)}#privateForm{display:grid;gap:14px}#privateForm label{display:grid;gap:6px}
+    #privateForm input,#privateForm select,#privateForm textarea{box-sizing:border-box;width:100%;max-width:none;min-height:44px;background:Canvas;color:var(--text);border:1px solid var(--line);padding:8px;font:inherit}
+    #privateForm .tab-actions{flex-wrap:wrap}#privateForm button{min-height:44px}#privateForm :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    #inputEditor{width:min(calc(100% - 24px),580px);max-height:90vh;overflow:auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
+    #inputEditor::backdrop{background:rgba(0,0,0,.35)}.input-card{display:grid;gap:12px;margin:16px 0;padding:12px;border:1px solid var(--line);border-radius:10px}
+    #desktopEditor{width:min(calc(100% - 24px),1000px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
+    #desktopEditor::backdrop{background:rgba(0,0,0,.35)}#desktopEditor .tab-actions{flex-wrap:wrap}#desktopEditor button,#desktopEditor select{min-height:44px}
+    #desktopViewport{height:380px;overflow:auto;border:1px solid var(--line)}#desktopImage{display:block;max-width:none;height:auto;width:100%}
+    #desktopText{width:100%;box-sizing:border-box;min-height:44px}#desktopPermissions>div{margin:12px 0}
+    .input-card input,.input-card textarea,.input-card select{box-sizing:border-box;width:100%;max-width:none;min-height:44px;background:Canvas;color:var(--text);border:1px solid var(--line);padding:8px;font:inherit}
+    .input-card .tab-actions{flex-wrap:wrap}.input-card pre{max-height:240px;overflow:auto;white-space:pre-wrap}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
@@ -1079,12 +1305,16 @@ private extension RemoteControlServer {
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div></header>
-    <div id="actionError" role="alert"></div><div id="historyError" role="alert"></div><button id="olderMessages" class="control hidden">Load more messages</button><section id="messages"></section></main>
+    <div id="actionError" role="alert"></div><button id="inputBanner" class="control hidden">Your input is needed</button><div id="historyError" role="alert"></div><button id="olderMessages" class="control hidden">Load more messages</button><section id="messages"></section></main>
+    <dialog id="inputEditor" aria-labelledby="inputTitle"><strong id="inputTitle">Input Needed</strong>
+    <p class="muted">Review the requesting program and action. Question answers go to the agent; passwords belong only in a secure credential request.</p>
+    <div id="inputError" role="alert"></div><div id="inputCards"></div>
+    <div class="tab-actions"><button id="inputReload" class="control">Reload</button><button id="inputDone" class="control">Done</button></div></dialog>
     <dialog id="tabEditor" aria-labelledby="tabEditorTitle"><form id="tabForm">
     <strong id="tabEditorTitle">Tab settings</strong><label>Tab name<input id="tabName" autocomplete="off"></label>
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
-    <button id="tabModelSettings" type="button" class="control">Model Settings</button>
+    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
@@ -1098,6 +1328,35 @@ private extension RemoteControlServer {
     <button id="modelReload" type="button" class="control">Reload settings</button><button id="modelRefresh" type="button" class="control">Refresh models</button>
     <button id="modelCancel" type="button" class="control">Cancel</button><button id="modelSave" type="submit" class="control primary">Save</button>
     </div></form></dialog>
+    <dialog id="desktopEditor" aria-labelledby="desktopTitle"><strong id="desktopTitle">Mac Permissions &amp; View Mac</strong>
+    <p class="muted">Start viewing explicitly. The Mac must first allow paired clients in Cantrip settings. Screen frames and typed text stay out of chat, files and AI models. Protected dialogs may be unavailable. Phone Face ID does not authorize macOS dialogs.</p>
+    <div id="desktopError" role="alert"></div><div class="tab-actions">
+    <label><input id="desktopControl" type="checkbox">Keyboard and pointer control</label>
+    <button id="desktopStart" class="control">Start View Mac</button><button id="desktopEnd" class="control">End View</button>
+    <button id="desktopReload" class="control">Refresh permissions</button><button id="desktopDone" class="control">Done</button></div>
+    <div id="desktopLive" class="hidden">
+    <p class="muted">Five-minute maximum; disconnects expire after 60 seconds. The paired connection carries the viewing key: use a trusted HTTPS endpoint. Frames refresh about once per second.</p>
+    <div class="tab-actions"><select id="desktopDisplay" aria-label="Display"></select>
+    <select id="desktopZoom" aria-label="Zoom"><option value="1">1x</option><option value="2">2x</option><option value="3">3x</option></select>
+    <select id="desktopClick" aria-label="Tap action"><option value="click">Click</option><option value="rightClick">Right click</option><option value="doubleClick">Double click</option></select></div>
+    <div id="desktopViewport"><img id="desktopImage" alt="Live Mac screen. Press Enter to click the center when control is enabled." tabindex="0"></div>
+    <div id="desktopInput"><label>Type into the focused Mac field<input id="desktopText" type="password" maxlength="4096" autocomplete="off"></label>
+    <div class="tab-actions"><button id="desktopSend" class="control">Send Text</button><button id="desktopReturn" class="control">Return</button>
+    <button id="desktopTab" class="control">Tab</button><button id="desktopEscape" class="control">Escape</button><button id="desktopDelete" class="control">Delete</button>
+    <button id="desktopUp" class="control">Scroll up</button><button id="desktopDown" class="control">Scroll down</button></div></div></div>
+    <div id="desktopPermissions"></div></dialog>
+    <dialog id="privateEditor" aria-labelledby="privateTitle"><form id="privateForm">
+    <strong id="privateTitle">Private Local Settings</strong>
+    <p class="muted">Local means self-hosted, not limited to the Cantrip Mac. Your Ollama server may run on another machine. This permanent tab stays saved on the Mac and accessible through paired Remote clients. No cloud fallback, tools, shared memory, push summaries or automatic external content.</p>
+    <label>Self-hosted Ollama server URL<input id="privateURL" type="url" required autocomplete="off"></label>
+    <label>Installed model<input id="privateModel" required autocomplete="off" list="privateModels"></label><datalist id="privateModels"></datalist>
+    <label>Context tokens<input id="privateContext" type="number" min="512" max="131072" step="1" required></label>
+    <label>System prompt<textarea id="privatePrompt" maxlength="8000" rows="4"></textarea></label>
+    <p class="muted">Use your own server's HTTPS URL, including LAN or Tailscale hostnames and reverse-proxy base paths. HTTP is allowed only on loopback. Install models on that server. Context depends on its model and RAM; saved history is not unlimited model context. Save while idle.</p>
+    <div id="privateError" role="alert"></div><div class="tab-actions">
+    <button id="privateReload" type="button" class="control">Reload settings</button><button id="privateRefresh" type="button" class="control">Load server models</button>
+    <button id="privateCancel" type="button" class="control">Cancel</button><button id="privateSave" type="submit" class="control primary">Save</button>
+    </div></form></dialog>
     <dialog id="promptReader" aria-labelledby="promptTitle"><strong id="promptTitle">Full prompt</strong>
     <pre id="promptPage"></pre><div class="tab-actions"><button id="promptPrevious" class="control">Previous</button><span id="promptNumber"></span><button id="promptNext" class="control">Next</button><button id="promptDownload" class="control">Download all</button><button id="promptDone" class="control">Done</button></div></dialog>
     <script>
@@ -1109,7 +1368,7 @@ private extension RemoteControlServer {
     function brainIndicator(){const icon=document.createElementNS("http://www.w3.org/2000/svg","svg");icon.setAttribute("class","brain-indicator");icon.setAttribute("viewBox","0 0 24 24");icon.setAttribute("aria-hidden","true");icon.setAttribute("focusable","false");
       const path=document.createElementNS(icon.namespaceURI,"path");path.setAttribute("d","M12 5C12 1 6 1 6 5C3 5 2 8 4 10C1 12 2 16 5 17C4 21 10 23 12 19C14 23 20 21 19 17C22 16 23 12 20 10C22 8 21 5 18 5C18 1 12 1 12 5V19M6 5C6 8 9 7 9 10M4 10C7 10 8 12 6 14M5 17C8 16 10 17 10 19M18 5C18 8 15 7 15 10M20 10C17 10 16 12 18 14M19 17C16 16 14 17 14 19");path.setAttribute("fill","none");path.setAttribute("stroke","currentColor");path.setAttribute("stroke-width","1.5");path.setAttribute("stroke-linecap","round");path.setAttribute("stroke-linejoin","round");icon.append(path);return icon}
     function setText(node,text){if(node.textContent!==text)node.textContent=text}
-    function progressSummary(session){const parts=[session.isStreaming?(session.status||"Working…"):(session.canResume?"Paused":"Ready")];if(session.queuedCount>0)parts.push(`${session.queuedCount} queued`);return parts.join(" · ")}
+    function progressSummary(session){const parts=[session.pendingInputCount?"Needs your input":session.isStreaming?(session.status||"Working…"):(session.canResume?"Paused":"Ready")];if(session.isLocalPrivate)parts.unshift("Self-hosted, saved");if(session.queuedCount>0)parts.push(`${session.queuedCount} queued`);return parts.join(" · ")}
     function updateProgressConnection(){if(!sidebarLayout)return;const connected=document.documentElement.dataset.cantripConnected==="true";
       for(const button of $("sessions").querySelectorAll(".session-select")){const summary=connected?button.dataset.status:`Last known: ${button.dataset.status}`;setText(button.querySelector(".session-status"),summary);button.title=`${button.dataset.title} — ${summary}${button.dataset.locked==="true"?" · Locked":""}`;button.setAttribute("aria-label",button.title)}
       const progress=$("sessionProgress");if(!progress.classList.contains("hidden")){const summary=connected?progress.dataset.status:`Reconnecting… Last known: ${progress.dataset.status}`;setText($("sessionProgressText"),summary);progress.title=summary}}
@@ -1131,6 +1390,8 @@ private extension RemoteControlServer {
       try{const response=await fetch(path,options);const data=await response.json();if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;throw error}return data}finally{if(deadline!==null)clearTimeout(deadline)}}
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
     let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;
+    const tabDrafts=new Map();
+    function selectTab(id){if(selected)tabDrafts.set(selected,$("draft").value);selected=id;$("draft").value=tabDrafts.get(id)||""}
     const historyCache=new Map(),expandedHistory=new Set(),automaticHistoryRemaining=new Map(),automaticHistoryLimit=10;
     function historySuffix(messages,groups){if(groups<=0)return [];const prompts=messages.flatMap((m,i)=>m.role==="user"?[i]:[]);return prompts.length>groups?messages.slice(prompts[prompts.length-groups]):messages}
     function canAutomaticallyLoadHistory(session){return Boolean(session?.hasOlderMessages&&(automaticHistoryRemaining.get(session.id)||0)>0)}
@@ -1158,7 +1419,7 @@ private extension RemoteControlServer {
         try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;
           for(const id of historyCache.keys())if(!listed.sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);automaticHistoryRemaining.delete(id)}
           if(selected!==requestedID){refreshRequested=true;continue}
-          if(!selected||!listed.sessions.some(s=>s.id===selected))selected=listed.sessions[0]?.id||null;
+          if(!selected||!listed.sessions.some(s=>s.id===selected))selectTab(listed.sessions[0]?.id||null);
           requestSelection=selected;
           renderSessions(listed.sessions);const detailID=selected;if(detailID){const cached=historyCache.get(detailID),summary=listed.sessions.find(s=>s.id===detailID);
             if(cached)render(cached);else if(renderedSession!==detailID)render(null);
@@ -1207,7 +1468,7 @@ private extension RemoteControlServer {
         tab.onkeydown=event=>{if(!event.altKey||!item.supportsTabReordering)return;const earlier=sidebarLayout?"ArrowUp":"ArrowLeft",later=sidebarLayout?"ArrowDown":"ArrowRight";
           if(event.key===earlier||event.key===later){event.preventDefault();moveTabBy(item.id,event.key===earlier?-1:1)}};
         const button=tab.children[0];if(sidebarLayout){setText(button.querySelector(".session-name"),item.title);tab.dataset.streaming=String(Boolean(item.isStreaming));button.dataset.title=item.title;button.dataset.status=progressSummary(item);button.dataset.locked=String(Boolean(item.isLocked))}else{button.textContent=item.title;button.title=item.title}
-        button.setAttribute("aria-current",item.id===selected?"true":"false");button.onclick=()=>{selected=item.id;renderedPayload="";renderProgress(item);refresh()};
+        button.setAttribute("aria-current",item.id===selected?"true":"false");button.onclick=()=>{selectTab(item.id);renderedPayload="";renderProgress(item);refresh()};
         const close=tab.children[1];close.textContent=item.isLocked?"🔒":"×";close.disabled=Boolean(item.isLocked);close.title=item.isLocked?"Locked - unlock in tab settings":`Close ${item.title}`;close.setAttribute("aria-label",close.title);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};
         let menu=tab.children[2];if(item.supportsTabMetadata){if(!menu){menu=document.createElement("button");menu.className="session-menu";menu.textContent="…";tab.append(menu)}
           menu.title=`Settings for ${item.title}${item.supportsTabReordering?" - drag tabs to reorder":""}`;menu.setAttribute("aria-label",menu.title);menu.onclick=()=>editTab(item)}else if(menu)menu.remove();
@@ -1243,7 +1504,7 @@ private extension RemoteControlServer {
       $("modelError").textContent=state.loading?"Loading model options...":state.error||reason||(state.data&&modelValidation(state))||state.data?.catalogError||"";
       $("modelSave").disabled=disabled||!state.data||Boolean(reason)||Boolean(state.data&&modelValidation(state))||state.needsReload;
       $("modelReload").disabled=disabled;$("modelRefresh").disabled=disabled;$("modelCancel").disabled=state.saving}
-    function editModelSettings(item){if(!item)return;modelEditorState={id:item.id,token,data:null,draft:null,usesDefaults:true,loading:false,saving:false,error:"",needsReload:false};
+    function editModelSettings(item){if(!item)return;if(item.isLocalPrivate){editPrivateSettings(item);return}modelEditorState={id:item.id,token,data:null,draft:null,usesDefaults:true,loading:false,saving:false,error:"",needsReload:false};
       $("modelTabTitle").textContent=item.title;$("modelEditor").showModal();loadModelSettings(true)}
     async function loadModelSettings(replaceDraft=false,refreshModels=false){const state=modelEditorState;if(!state||state.loading||state.saving)return;state.loading=true;renderModelSettings();
       const current=()=>modelEditorState===state&&token===state.token;
@@ -1273,7 +1534,7 @@ private extension RemoteControlServer {
       catch(error){if(modelEditorState===state){state.error=`${error.message} The change may have reached Cantrip. Reload settings before retrying.`;state.needsReload=true}}
       finally{if(modelEditorState===state){state.saving=false;renderModelSettings()}}};
     let editingTab=null,tabSaving=false;
-    function editTab(item){editingTab=item;$("tabName").value=item.customTitle||item.title;$("tabLocked").checked=Boolean(item.isLocked);$("tabError").textContent="";updateTabMoveControls();$("tabEditor").showModal();$("tabName").focus();$("tabName").select()}
+    function editTab(item){editingTab=item;$("tabName").value=item.customTitle||item.title;$("tabLocked").checked=Boolean(item.isLocked);$("tabLocked").disabled=Boolean(item.isLocalPrivate);$("tabModelSettings").textContent=item.isLocalPrivate?"Private Local Settings":"Model Settings";$("tabError").textContent=item.isLocalPrivate?"Permanent self-hosted-model tab. History is saved and available remotely.":"";updateTabMoveControls();$("tabEditor").showModal();$("tabName").focus();$("tabName").select()}
     function updateTabMoveControls(){const index=sessionItems.findIndex(s=>s.id===editingTab?.id);
       $("tabMoveControls").classList.toggle("hidden",!editingTab?.supportsTabReordering);
       $("tabMoveEarlier").textContent=sidebarLayout?"Move up":"Move left";$("tabMoveLater").textContent=sidebarLayout?"Move down":"Move right";
@@ -1281,6 +1542,7 @@ private extension RemoteControlServer {
     $("tabMoveEarlier").onclick=()=>{if(editingTab)moveTabBy(editingTab.id,-1)};
     $("tabMoveLater").onclick=()=>{if(editingTab)moveTabBy(editingTab.id,1)};
     $("tabModelSettings").onclick=()=>{if(editingTab&&!tabSaving&&!movingTab){const item=editingTab;$("tabEditor").close();editingTab=null;editModelSettings(item)}};
+    $("tabMacAccess").onclick=()=>{if(tabSaving||movingTab)return;$("tabEditor").close();editingTab=null;openDesktop()};
     $("tabCancel").onclick=()=>{$("tabEditor").close();editingTab=null};
     $("tabEditor").addEventListener("cancel",event=>{if(tabSaving||movingTab)event.preventDefault()});
     $("tabForm").onsubmit=async event=>{event.preventDefault();if(!editingTab||tabSaving||movingTab)return;const item=editingTab,body={};
@@ -1297,6 +1559,129 @@ private extension RemoteControlServer {
         if(token===requestToken){movingTab=false;renderSessions(data.sessions)}}
       catch(error){if(token===requestToken){const message=`${error.message} Refresh the tabs before trying again; the move may have reached Cantrip.`;$("actionError").textContent=message;$("tabError").textContent=message}}
       finally{movingTab=false;$("tabSave").disabled=false;$("tabCancel").disabled=false;updateTabMoveControls();refresh()}}
+    let privateEditorState=null;
+    function privateBusy(busy){for(const element of $("privateForm").elements)element.disabled=busy;
+      $("privateSave").disabled=busy||!privateEditorState?.data||Boolean(privateEditorState?.data?.unavailableReason)||Boolean(privateEditorState?.needsReload)}
+    function editPrivateSettings(item){privateEditorState={id:item.id,token,data:null,saving:false,needsReload:false};
+      $("privateEditor").showModal();loadPrivateSettings()}
+    async function loadPrivateSettings(){const state=privateEditorState;if(!state||state.saving)return;privateBusy(true);
+      try{const data=await api(`/api/v1/sessions/${state.id}/private-settings`);if(privateEditorState!==state||token!==state.token)return;
+        state.data=data;state.needsReload=false;const c=data.configuration;$("privateURL").value=c.baseURL;$("privateModel").value=c.model;$("privateContext").value=c.contextWindow;$("privatePrompt").value=c.systemPrompt;$("privateModels").replaceChildren();$("privateError").textContent=data.unavailableReason||""}
+      catch(error){if(privateEditorState===state){state.needsReload=true;$("privateError").textContent=error.message}}
+      finally{if(privateEditorState===state)privateBusy(false)}}
+    $("privateReload").onclick=loadPrivateSettings;
+    $("privateRefresh").onclick=async()=>{const state=privateEditorState;if(!state?.data||state.saving)return;privateBusy(true);
+      try{const data=await api(`/api/v1/sessions/${state.id}/private-models?baseURL=${encodeURIComponent($("privateURL").value)}`);if(privateEditorState!==state||token!==state.token)return;
+        $("privateModels").replaceChildren();for(const model of data.models){const option=document.createElement("option");option.value=model;$("privateModels").append(option)}
+        $("privateError").textContent=data.models.length?"Server models loaded. Choose an installed model.":"No self-hosted models installed. Install one with Ollama on the selected server."}
+      catch(error){if(privateEditorState===state)$("privateError").textContent=error.message}finally{if(privateEditorState===state)privateBusy(false)}};
+    $("privateCancel").onclick=()=>{if(privateEditorState?.saving)return;$("privateEditor").close();privateEditorState=null};
+    $("privateEditor").addEventListener("cancel",event=>{if(privateEditorState?.saving)event.preventDefault();else privateEditorState=null});
+    $("privateForm").onsubmit=async event=>{event.preventDefault();const state=privateEditorState;if(!state?.data||state.saving||state.needsReload||token!==state.token)return;
+      const configuration={baseURL:$("privateURL").value,model:$("privateModel").value,contextWindow:Number($("privateContext").value),systemPrompt:$("privatePrompt").value};
+      state.saving=true;privateBusy(true);
+      try{await api(`/api/v1/sessions/${state.id}/private-settings`,{method:"POST",body:JSON.stringify({revision:state.data.revision,configuration})});
+        if(privateEditorState===state&&token===state.token){$("privateEditor").close();privateEditorState=null;await refresh()}}
+      catch(error){if(privateEditorState===state){state.needsReload=true;$("privateError").textContent=`${error.message} The change may have reached Cantrip. Reload settings before retrying.`}}
+      finally{if(privateEditorState===state){state.saving=false;privateBusy(false)}}};
+    let inputState=null;
+    function closeInputs(){if(inputState?.saving)return;if(inputState?.timer)clearTimeout(inputState.timer);inputState=null;$("inputCards").replaceChildren();$("inputEditor").close()}
+    function showInputs(){if(!selected)return;inputState={id:selected,token,saving:false,timer:null};$("inputCards").replaceChildren();$("inputError").textContent="";$("inputEditor").showModal();loadInputs()}
+    async function loadInputs(){const state=inputState;if(!state||state.saving)return;if(state.timer)clearTimeout(state.timer);
+      try{const data=await api(`/api/v1/sessions/${state.id}/input`);if(inputState!==state||token!==state.token)return;
+        const cards=$("inputCards"),ids=new Set(data.requests.map(r=>r.id));
+        for(const card of Array.from(cards.children))if(!ids.has(card.dataset.id))card.remove();
+        for(const request of data.requests){if(Array.from(cards.children).some(card=>card.dataset.id===request.id))continue;
+          const card=document.createElement("section");card.className="input-card";card.dataset.id=request.id;
+          const title=document.createElement("strong"),source=document.createElement("span"),detail=document.createElement("pre");
+          title.textContent=request.title;source.textContent=request.source;detail.textContent=request.detail;card.append(title,source,detail);
+          let field=null;if(request.kind==="secret"||request.kind==="question"){
+            if(request.kind==="question"&&request.choices.length&&!request.allowsFreeform){field=document.createElement("select");const empty=document.createElement("option");empty.value="";empty.textContent="Choose a response";field.append(empty);
+              for(const choice of request.choices){const option=document.createElement("option");option.value=choice;option.textContent=choice;field.append(option)}}
+            else {field=document.createElement("input");field.type=request.kind==="secret"?"password":"text";field.autocomplete="off";field.spellcheck=false}
+            field.setAttribute("aria-label",request.kind==="secret"?"Password or passphrase":"Answer (shared with the agent)");card.append(field);
+            if(request.kind==="question"&&request.allowsFreeform&&request.choices.length){const choices=document.createElement("div");choices.textContent=request.choices.join(" / ");card.append(choices)}}
+          if(request.url){try{const url=new URL(request.url);if(url.protocol==="https:"){const link=document.createElement("a");link.href=url.href;link.textContent=`Open ${url.host}`;link.target="_blank";link.rel="noopener noreferrer";card.append(link)}}catch{}}
+          if(request.code){const code=document.createElement("pre");code.textContent=`Device code: ${request.code}`;card.append(code)}
+          const actions=document.createElement("div");actions.className="tab-actions";
+          for(const [label,decision] of request.kind==="approval"?[["Cancel","cancel"],["Deny","deny"],["Approve once","approve"]]:
+              ["question","secret"].includes(request.kind)?[["Cancel","cancel"],["Submit","submit"]]:[["Cancel","cancel"],["Done","approve"]]){
+            const button=document.createElement("button");button.className="control";button.textContent=label;button.onclick=()=>respondInput(state,request,decision,field);actions.append(button)}
+          card.append(actions);cards.append(card)}
+        if(!data.requests.length)$("inputError").textContent="No pending requests. It may have been answered, cancelled or expired."}
+      catch(error){if(inputState===state)$("inputError").textContent=error.message}
+      finally{if(inputState===state&&token===state.token)state.timer=setTimeout(loadInputs,2000)}}
+    async function respondInput(state,request,decision,field){if(state!==inputState||token!==state.token||state.saving)return;
+      const body={decision};if(decision==="submit"){body.text=field.value;if(!body.text)return}if(field)field.value="";
+      state.saving=true;for(const control of $("inputEditor").querySelectorAll("button,input,select"))control.disabled=true;
+      try{await api(`/api/v1/sessions/${state.id}/input/${request.id}`,{method:"POST",body:JSON.stringify(body)});
+        if(inputState===state)$("inputError").textContent="Response submitted."}
+      catch(error){if(inputState===state)$("inputError").textContent=`${error.message} Not retried. Reload the pending requests before responding again.`}
+      finally{delete body.text;state.saving=false;for(const control of $("inputEditor").querySelectorAll("button,input,select"))control.disabled=false;if(inputState===state){loadInputs();refresh()}}}
+    $("inputBanner").onclick=showInputs;$("inputReload").onclick=loadInputs;$("inputDone").onclick=closeInputs;
+    $("inputEditor").addEventListener("cancel",event=>{if(inputState?.saving)event.preventDefault();else closeInputs()});
+    let desktopState=null;
+    const desktopBytes=value=>Uint8Array.from(atob(value),c=>c.charCodeAt(0));
+    function desktopBase64(bytes){let result="";for(let i=0;i<bytes.length;i+=8192)result+=String.fromCharCode(...bytes.subarray(i,i+8192));return btoa(result)}
+    function openDesktop(){desktopState={token,lease:null,frame:null,sequence:0,timer:null,saving:false,starting:false,generation:0};$("desktopError").textContent="";$("desktopEditor").showModal();loadDesktopStatus()}
+    async function loadDesktopStatus(){const state=desktopState;if(!state)return;
+      try{const data=await api("/api/v1/mac-access");if(desktopState!==state||token!==state.token)return;
+        $("desktopStart").disabled=!data.desktopEnabled||Boolean(state.lease)||state.starting;
+        $("desktopPermissions").replaceChildren();const title=document.createElement("strong");title.textContent=data.name;$("desktopPermissions").append(title);
+        if(!data.desktopEnabled)$("desktopError").textContent="Enable View Mac in Cantrip settings on the Mac first. This cannot be enabled remotely.";
+        for(const issue of data.issues){const notice=document.createElement("p");notice.textContent=issue.title;$("desktopPermissions").append(notice)}
+        for(const permission of data.permissions){const row=document.createElement("div"),label=document.createElement("span"),button=document.createElement("button");
+          label.textContent=`${permission.title}: ${permission.state==="granted"?"Granted":permission.state==="notGranted"?"Not granted":permission.state==="needsAttention"?"Needs attention":"Check on Mac"} `;
+          button.className="control";button.textContent="Open on Mac";button.onclick=async()=>{if(desktopState!==state||token!==state.token)return;button.disabled=true;
+            try{await api("/api/v1/mac-access",{method:"POST",body:JSON.stringify({permission:permission.permission})})}
+            catch(error){if(desktopState===state)$("desktopError").textContent=error.message}finally{button.disabled=false}};row.append(label,button);$("desktopPermissions").append(row)}}
+      catch(error){if(desktopState===state)$("desktopError").textContent=`${error.message} Update and reopen Cantrip if Mac access is unavailable.`}}
+    async function startDesktop(){const state=desktopState;if(!state||state.lease||state.starting||token!==state.token)return;
+      if(!crypto?.subtle){$("desktopError").textContent="A secure browser context is required for encrypted viewing.";return}
+      state.starting=true;const generation=++state.generation;$("desktopStart").disabled=true;
+      try{const lease=await api("/api/v1/desktop/start",{method:"POST",body:JSON.stringify({control:$("desktopControl").checked})});
+        if(desktopState!==state||token!==state.token||generation!==state.generation){if(token===state.token)await api("/api/v1/desktop/stop",{method:"POST",body:JSON.stringify({id:lease.id,token:lease.token})});return}
+        state.lease=lease;state.key=await crypto.subtle.importKey("raw",desktopBytes(lease.key),"AES-GCM",false,["encrypt","decrypt"]);
+        if(desktopState!==state||token!==state.token||generation!==state.generation)return;
+        $("desktopDisplay").replaceChildren();for(const display of lease.displays){const option=document.createElement("option");option.value=display.id;option.textContent=display.name;$("desktopDisplay").append(option)}
+        $("desktopLive").classList.remove("hidden");$("desktopImage").style.width=`${Number($("desktopZoom").value)*100}%`;$("desktopInput").classList.toggle("hidden",!lease.control);$("desktopError").textContent="";refreshDesktop()}
+      catch(error){if(desktopState===state)$("desktopError").textContent=`${error.message} Not retried; the Mac may retain a lease for up to 60 seconds.`}
+      finally{state.starting=false;if(desktopState===state)$("desktopStart").disabled=Boolean(state.lease)}}
+    async function refreshDesktop(){const state=desktopState;if(!state?.lease||document.hidden)return;
+      const lease=state.lease,displayID=Number($("desktopDisplay").value);if(state.timer)clearTimeout(state.timer);
+      try{const frame=await api("/api/v1/desktop/frame",{method:"POST",body:JSON.stringify({id:lease.id,token:lease.token,displayID})});
+        if(desktopState!==state||state.lease!==lease||token!==state.token)return;
+        const encrypted=desktopBytes(frame.encryptedJPEG),ad=new TextEncoder().encode(`cantrip-desktop|${lease.id}|${frame.id}|${frame.display.id}|${frame.width}|${frame.height}`);
+        const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:encrypted.slice(0,12),additionalData:ad},state.key,encrypted.slice(12));
+        if(desktopState!==state||state.lease!==lease||token!==state.token)return;
+        if(Number($("desktopDisplay").value)===displayID){state.frame=frame;$("desktopImage").src=`data:image/jpeg;base64,${desktopBase64(new Uint8Array(plain))}`}}
+      catch(error){if(desktopState===state){$("desktopError").textContent=`${error.message} Viewing stopped. Start a new session to reconnect.`;endDesktop(false);return}}
+      if(desktopState===state)state.timer=setTimeout(refreshDesktop,1000)}
+    async function desktopInput(command){const state=desktopState;if(!state?.lease?.control||!state.frame||state.saving||token!==state.token)return;
+      state.saving=true;const lease=state.lease,sequence=++state.sequence;command.frameID=state.frame.id;
+      try{const iv=crypto.getRandomValues(new Uint8Array(12)),ad=new TextEncoder().encode(`cantrip-desktop|${lease.id}|input|${sequence}`);
+        const cipher=new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM",iv,additionalData:ad},state.key,new TextEncoder().encode(JSON.stringify(command))));
+        const combined=new Uint8Array(iv.length+cipher.length);combined.set(iv);combined.set(cipher,iv.length);
+        if(desktopState!==state||token!==state.token||state.lease!==lease)return;
+        await api("/api/v1/desktop/input",{method:"POST",body:JSON.stringify({id:lease.id,token:lease.token,sequence,encrypted:desktopBase64(combined)})});
+        if(desktopState===state)$("desktopError").textContent="Input sent. Verify the screen; this is not confirmation of macOS authorization."}
+      catch(error){if(desktopState===state)$("desktopError").textContent=`${error.message} Input was not retried.`}
+      finally{delete command.text;state.saving=false}}
+    async function endDesktop(close=true){const state=desktopState;if(!state)return;const lease=state.lease;state.generation++;state.lease=null;state.frame=null;state.key=null;
+      if(state.timer)clearTimeout(state.timer);$("desktopImage").removeAttribute("src");$("desktopText").value="";$("desktopLive").classList.add("hidden");$("desktopStart").disabled=false;
+      if(close){desktopState=null;$("desktopEditor").close()}
+      if(lease&&token===state.token){try{await api("/api/v1/desktop/stop",{method:"POST",body:JSON.stringify({id:lease.id,token:lease.token})})}
+        catch(error){$("actionError").textContent="View cleared; the Mac's session may remain until its 60-second idle timeout."}}}
+    $("desktopStart").onclick=startDesktop;$("desktopEnd").onclick=()=>endDesktop(false);$("desktopDone").onclick=()=>endDesktop();$("desktopReload").onclick=loadDesktopStatus;
+    $("desktopEditor").addEventListener("cancel",()=>endDesktop());$("desktopZoom").onchange=()=>{$("desktopImage").style.width=`${Number($("desktopZoom").value)*100}%`};
+    $("desktopDisplay").onchange=()=>{if(desktopState)desktopState.frame=null;$("desktopImage").removeAttribute("src");$("desktopText").value=""};
+    $("desktopImage").onclick=event=>{const rect=event.currentTarget.getBoundingClientRect();if(rect.width&&rect.height)desktopInput({kind:$("desktopClick").value,x:(event.clientX-rect.left)/rect.width,y:(event.clientY-rect.top)/rect.height})};
+    $("desktopImage").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();desktopInput({kind:"click",x:0.5,y:0.5})}};
+    $("desktopSend").onclick=()=>{const text=$("desktopText").value;$("desktopText").value="";if(text)desktopInput({kind:"text",text})};
+    for(const [id,key] of [["desktopReturn","return"],["desktopTab","tab"],["desktopEscape","escape"],["desktopDelete","delete"]])$(id).onclick=()=>desktopInput({kind:"key",key});
+    $("desktopUp").onclick=()=>desktopInput({kind:"scroll",delta:3});$("desktopDown").onclick=()=>desktopInput({kind:"scroll",delta:-3});
+    document.addEventListener("visibilitychange",()=>{if(document.hidden&&desktopState)endDesktop()});
+    addEventListener("pagehide",()=>{if(desktopState)endDesktop()});
     function safeURL(raw,image=false){try{const url=new URL(raw,location.href);if(url.protocol==="https:"||url.protocol==="http:"||(!image&&url.protocol==="mailto:"))return url.href}catch{}return null}
     function appendInline(parent,source){source=source.replace(/<br\\s*\\/?\\s*>/gi,"\\n");let cursor=0,plain="";
       const flush=()=>{if(plain){parent.append(document.createTextNode(plain));plain=""}};
@@ -1345,12 +1730,14 @@ private extension RemoteControlServer {
     $("promptDone").onclick=()=>$("promptReader").close();
     $("promptReader").addEventListener("close",()=>{readingPrompt="";promptStarts=[0];$("promptPage").textContent=""});
     function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight;
+      $("inputBanner").classList.toggle("hidden",!session?.pendingInputCount);$("inputBanner").textContent=`Your input is needed (${session?.pendingInputCount||0})`;
       renderProgress(session);updateHistoryControls(session);const box=$("messages"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
       const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession);renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;box.replaceChildren();$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
       if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
-      else{for(const message of session.messages){const activities=message.activities||[];if(!message.text&&!message.thinking&&!activities.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;
+      else{if(session.isLocalPrivate){const notice=document.createElement("p");notice.className="muted";notice.textContent="Private Local - saved on the Mac and available remotely. Self-hosted models; no cloud fallback. Configure the server in the tab menu.";box.append(notice)}
+        for(const message of session.messages){const activities=message.activities||[];if(!message.text&&!message.thinking&&!activities.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
-          appendThinking(row,message.thinking,message.id);if(message.text){if(message.role==="user")appendPrompt(row,message.text);else appendProse(row,message.text)}appendActivities(row,activities,message.id);
+          appendThinking(row,message.thinking,message.id);if(message.text){if(message.role==="user")appendPrompt(row,message.text);else if(session.isLocalPrivate){const text=document.createElement("pre");text.textContent=message.text;row.append(text)}else appendProse(row,message.text)}appendActivities(row,activities,message.id);
           if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
             const requestToken=token;button.disabled=true;try{const data=await api(`/api/v1/sessions/${session.id}/messages/${message.id}`);if(token!==requestToken||selected!==session.id)return;
               const full=data.message,parts=[full.text];if(full.thinking)parts.push("Reasoning\\n"+full.thinking);for(const step of full.activities||[])parts.push([step.title,step.input,step.output].filter(Boolean).join("\\n"));readPrompt(parts.join("\\n\\n"));$("promptTitle").textContent="Message details"}
@@ -1359,14 +1746,14 @@ private extension RemoteControlServer {
         if(!sidebarLayout&&(session.isStreaming||session.queuedCount)){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
       requestAnimationFrame(()=>{root.scrollTop=shouldFollow?root.scrollHeight:Math.min(previousTop+(prepend?root.scrollHeight-previousHeight:0),Math.max(0,root.scrollHeight-root.clientHeight));followOutput=shouldFollow;suppressScroll=false})}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
-    async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selected=data.session.id;renderedPayload="";await refresh()}
+    async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selectTab(data.session.id);renderedPayload="";await refresh()}
       catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
-    $("pairButton").onclick=async()=>{historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
+    $("pairButton").onclick=async()=>{if(desktopState)await endDesktop();historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();tabDrafts.clear();selected=null;$("draft").value="";token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
       catch(error){$("pairError").textContent=error.message}};
     $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;$("send").disabled=true;try{await action("messages",{text,mode:$("mode").value});if($("draft").value.trim()===text)$("draft").value="";$("mode").value="auto"}catch(error){const label=document.querySelector(".connection-label");if(label)label.textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false}};
     $("draft").onkeydown=event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
-    $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selected=data.session.id;refresh()};
-    $("forget").onclick=()=>{localStorage.removeItem("cantripToken");historyCache.clear();expandedHistory.clear();token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null)};if(token){pair(false);refresh()}else pair(true);
+    $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selectTab(data.session.id);refresh()};
+    $("forget").onclick=async()=>{if(desktopState)await endDesktop();localStorage.removeItem("cantripToken");historyCache.clear();expandedHistory.clear();tabDrafts.clear();selected=null;$("draft").value="";token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null)};if(token){pair(false);refresh()}else pair(true);
     </script></body></html>
     """
 }

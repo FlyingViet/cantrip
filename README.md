@@ -87,7 +87,7 @@ The macOS app includes:
   Option/Alt + arrow keys (up/down in the sidebar, left/right in the top strip).
   AgentGateway's drawer/sidebar provides drag handles and **Move Tab Up/Down**
   actions. Reordering requires the updated host's `supportsTabReordering`
-  capability; private tabs remain hidden from Remote.
+  capability; unsaved Private mode tabs remain hidden from Remote.
   Native Mac tab labels use dedicated mouse handling, so dragging a tab does
   not move the launcher window; dragging the window background still works.
   Mac Remote
@@ -105,6 +105,16 @@ The macOS app includes:
 - **Durable runs:** journal encoding, writes, and synchronization use an ordered
   background writer. Run completion and Remote mutation acknowledgements wait
   for saved events; storage failures are surfaced instead of reporting success.
+- **Private Local:** a permanent, saved tab shared with paired Remote clients.
+  "Local" means **self-hosted**, not restricted to the Cantrip Mac. Your Ollama
+  server can run on another machine, independently of the global backend and
+  Copilot settings, with no cloud fallback. Configure its HTTPS server URL
+  (or loopback HTTP), model, context tokens and system prompt through **Private Local
+  Settings** in the Mac tab menu, Mac/browser Remote, or AgentGateway.
+  Model availability on that server is checked before sending conversation text.
+  Tools, shell/slash execution, Council, shared memory/digests, push summaries,
+  and automatic external content are disabled. Auto queues follow-ups locally.
+  This is distinct from unsaved **Private mode**. See [setup and privacy limits](docs/remote-control.md#persistent-private-local-tab).
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a
   `cantrip` command for asking questions from Terminal.
 
@@ -160,10 +170,25 @@ does not prevent tool writes, image caches, or backend/provider logging.
 Read [permissions, privacy, and memory](docs/privacy-and-memory.md).
 
 AgentGateway can opt in to per-Mac completion alerts with a short final-answer
-preview and tap-to-tab navigation, including while the phone is locked.
+preview and generic input-needed alerts with tap-to-tab navigation, including
+while the phone is locked. Supported Copilot/Claude/ACP prompts can wait for
+**Approve once / Deny** or an answer in Cantrip and Remote. Verified system
+OpenSSH and `sudo -A` children of supported Cantrip runs can request secure
+password/passphrase input without putting it in chat. Use `/login github`
+for GitHub device sign-in. See [remote input and limitations](docs/remote-control.md#remote-approvals-and-secure-input).
 [Apple push setup](docs/remote-control.md#agentgateway-completion-notifications)
 and new native phone/host builds are required; ordinary Remote polling is not
 a background notification service.
+
+**Mac Permissions & View Mac** adds user-initiated screen viewing and basic
+pointer/keyboard control from AgentGateway and Mac/browser Remote. Enable
+**Allow paired clients to view and control this Mac** locally first, with
+Screen Recording and (for control) Accessibility permissions. Sessions expire
+after five minutes or 60 seconds without activity; the Mac can end them from
+its panel or menu bar. New screen frames and desktop input are not saved or
+sent to models. AgentGateway requires Face ID/Touch ID for affirmative input
+responses and starting View Mac; this is an app-side safeguard, not macOS
+authorization. See [Mac attention and biometrics](docs/remote-control.md#mac-attention-view-mac-and-face-id).
 
 ## Learn more
 

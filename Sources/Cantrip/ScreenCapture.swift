@@ -45,6 +45,7 @@ final class ScreenCapture {
     func captureNow() {
         guard AppSettings.shared.attachScreen else { return }
         guard hasAccess else {
+            MacAttention.report(.screenRecording)
             Log.write("screen: no access — enable in System Settings → Privacy → Screen Recording, then relaunch")
             return
         }

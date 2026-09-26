@@ -1,5 +1,9 @@
 import AppKit
 
+if CommandLine.arguments.dropFirst().first == "--cantrip-askpass" {
+    exit(RemoteAskpass.runHelper())
+}
+
 if let watcherFlag = CommandLine.arguments.firstIndex(of: "--cantrip-crash-watcher"),
    CommandLine.arguments.indices.contains(watcherFlag + 1) {
     CrashRecovery.runWatcher(markerPath: CommandLine.arguments[watcherFlag + 1])

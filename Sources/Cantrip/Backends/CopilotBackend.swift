@@ -24,6 +24,8 @@ final class CopilotBackend: Backend {
     }
     private var idle = false
     private var deliveries: [String: (MidTurnDelivery) -> Void] = [:]
+    private var inputRequests: [String: BackendInputRequest] = [:]
+    private var askpass: RemoteAskpass?
     private let bridgeScript: String
 
     struct Configuration: Equatable {
@@ -34,11 +36,12 @@ final class CopilotBackend: Backend {
         let contextTier: String
         let allowTools: Bool
         let readOnly: Bool
+        var autoApprove = true
 
         var json: [String: Any] {
             ["command": command, "workdir": workdir, "model": model,
              "effort": effort, "contextTier": contextTier,
-             "allowTools": allowTools, "readOnly": readOnly]
+             "allowTools": allowTools, "readOnly": readOnly, "autoApprove": autoApprove]
         }
     }
 
@@ -65,7 +68,7 @@ final class CopilotBackend: Backend {
             effort: effortOverride ?? settings.copilotEffort,
             contextTier: contextTierOverride ?? settings.copilotContextTier,
             allowTools: settings.copilotAllowTools || settings.allowActions,
-            readOnly: readOnly
+            readOnly: readOnly, autoApprove: settings.allowActions
         )
         let suffix = settings.copilotDiscourageSubagents
             ? "\n\n(Work directly in this session; avoid spawning subagents or delegating tasks unless strictly necessary.)"
@@ -95,10 +98,11 @@ final class CopilotBackend: Backend {
                     ) + suffix
                     try self.launch(config)
                 }
+                self.askpass?.beginTurn()
                 onEvent(.status("Connecting to Copilot"))
                 try self.write(command)
                 self.queue.asyncAfter(deadline: .now() + 45) { [weak self] in
-                    guard let self, self.runID == id, !self.ready else { return }
+                    guard let self, self.runID == id, !self.ready, self.inputRequests.isEmpty else { return }
                     self.fail("Copilot session startup timed out. Update the CLI and check its sign-in.")
                 }
             } catch {
@@ -149,6 +153,17 @@ final class CopilotBackend: Backend {
         var environment = ProcessInfo.processInfo.environment
         environment["NO_COLOR"] = "1"
         environment["TERM"] = "dumb"
+        if !config.readOnly {
+            let broker = try RemoteAskpass(process: p) { [weak self] request in
+                self?.queue.async {
+                    guard let self, self.process === p, self.runID != nil else { request.cancel(); return }
+                    self.ready = true
+                    self.onEvent?(.inputRequired(request))
+                }
+            }
+            environment.merge(broker.environment) { _, new in new }
+            askpass = broker
+        }
         p.environment = environment
         let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
         let outputLock = NSLock()
@@ -207,6 +222,32 @@ final class CopilotBackend: Backend {
                 }
                 guard let current = runID, object["runID"] as? String == current else { continue }
                 switch kind {
+                case "input":
+                    guard let id = object["id"] as? String,
+                          let rawKind = object["inputKind"] as? String,
+                          let inputKind = InputRequestSnapshot.Kind(rawValue: rawKind),
+                          [.approval, .question].contains(inputKind) else { throw CocoaError(.coderReadCorrupt) }
+                    let owner = current
+                    let request = BackendInputRequest(kind: inputKind, source: "Copilot",
+                        title: object["title"] as? String ?? "Input needed",
+                        detail: object["detail"] as? String ?? "",
+                        choices: object["choices"] as? [String] ?? [],
+                        allowsFreeform: object["allowsFreeform"] as? Bool ?? false) { [weak self] answer in
+                        self?.queue.async {
+                            guard let self, self.runID == owner, self.inputRequests.removeValue(forKey: id) != nil else { return }
+                            do {
+                                var reply: [String: Any] = ["kind": "inputAnswer", "runID": owner, "id": id,
+                                                          "decision": answer.decision.rawValue]
+                                if let text = answer.text { reply["text"] = text }
+                                try self.write(reply)
+                            } catch { self.fail("Could not deliver your response to Copilot. It was not retried.") }
+                        }
+                    }
+                    inputRequests[id] = request
+                    ready = true
+                    onEvent?(.inputRequired(request))
+                case "inputClosed":
+                    if let id = object["id"] as? String { inputRequests.removeValue(forKey: id)?.cancel() }
                 case "started":
                     ready = true
                     onEvent?(.status("Thinking..."))
@@ -255,6 +296,7 @@ final class CopilotBackend: Backend {
 
     private func finishIfIdle() {
         guard idle, runID != nil, deliveries.isEmpty else { return }
+        askpass?.endTurn()
         let sink = onEvent
         runID = nil
         onEvent = nil
@@ -276,6 +318,11 @@ final class CopilotBackend: Backend {
     }
 
     private func teardown() {
+        let pendingInputs = Array(inputRequests.values)
+        inputRequests.removeAll()
+        for request in pendingInputs { request.cancel() }
+        askpass?.stop()
+        askpass = nil
         resolveUncertainDeliveries()
         let old = process
         process = nil

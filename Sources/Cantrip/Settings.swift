@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import ServiceManagement
+import LocalAuthentication
 
 enum BackendKind: String, CaseIterable, Identifiable {
     case claudeCode = "Claude Code"
@@ -44,14 +45,24 @@ final class AppSettings: ObservableObject {
     }
 
     var remoteControlToken: String {
-        RemoteControlCredentials.load() ?? ""
+        do { return try RemoteControlCredentials.load() ?? "" }
+        catch {
+            MacAttention.report(.keychain)
+            return ""
+        }
     }
 
     @discardableResult
     func ensureRemoteControlToken() -> String? {
-        if let existing = RemoteControlCredentials.load(), !existing.isEmpty {
-            remoteControlError = nil
-            return existing
+        do {
+            if let existing = try RemoteControlCredentials.load(), !existing.isEmpty {
+                remoteControlError = nil
+                return existing
+            }
+        } catch {
+            MacAttention.report(.keychain)
+            remoteControlError = "Keychain access is blocked. Review Cantrip's access on the Mac; the existing pairing token was not replaced."
+            return nil
         }
         guard let token = RemoteControlCredentials.generate() else {
             remoteControlError = "Could not generate a secure pairing token."
@@ -564,14 +575,23 @@ private enum RemoteControlCredentials {
     private static let service = "com.brian.agentspotlight.remote-control"
     private static let account = "pairing-token"
 
-    static func load() -> String? {
+    static func load() throws -> String? {
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        defer { context.invalidate() }
+        query[kSecUseAuthenticationContext as String] = context
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: nil)
+        }
+        guard let token = String(data: data, encoding: .utf8), !token.isEmpty else { throw CocoaError(.coderReadCorrupt) }
+        Task { @MainActor in MacAttention.shared.clear(.keychain) }
+        return token
     }
 
     static func store(_ token: String) -> OSStatus {

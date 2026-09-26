@@ -73,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let menu = NSMenu()
         menu.addItem(withTitle: "Toggle (⌥Space)", action: #selector(togglePanel), keyEquivalent: "")
         menu.addItem(withTitle: "Stop Current Request", action: #selector(stopRequest), keyEquivalent: "")
+        menu.addItem(withTitle: "End Remote View", action: #selector(endRemoteView), keyEquivalent: "")
         menu.addItem(withTitle: "Hide Panel & Overlays", action: #selector(forceHide), keyEquivalent: "")
         menu.addItem(.separator())
         let remoteControlMenuItem = NSMenuItem(
@@ -144,6 +145,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         manager.onAnyRunFinished = { [weak self] finished in
             self?.notifyIfHidden(for: finished)
             self?.remoteControlServer?.notifyCompletion(for: finished)
+        }
+        manager.onAnyInputNeeded = { [weak self] session, request in
+            self?.remoteControlServer?.notifyInput(for: session, request: request)
+            guard !session.isPrivate else { return }
+            Task { @MainActor in
+                do {
+                    let center = UNUserNotificationCenter.current()
+                    guard try await center.requestAuthorization(options: [.alert, .sound]),
+                          session.pendingInputs.contains(where: { $0.id == request.id }), !session.isPrivate else { return }
+                    let content = UNMutableNotificationContent()
+                    content.title = "Cantrip needs your input"
+                    content.body = "Open Cantrip to review a pending request."
+                    content.sound = .default
+                    content.userInfo = ["sessionID": session.id.uuidString]
+                    try await center.add(UNNotificationRequest(identifier: request.id.uuidString, content: content, trigger: nil))
+                } catch { Log.write("input: Mac attention notification could not be delivered") }
+            }
+        }
+        manager.onAnyInputResolved = { [weak self] id in
+            self?.remoteControlServer?.resolveInputNotification(id)
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id.uuidString])
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id.uuidString])
+        }
+        MacAttention.shared.onAttention = { [weak self] issue in
+            guard let self, !manager.active.isPrivate, !manager.active.isLocalPrivate else { return }
+            remoteControlServer?.notifyMacAttention(sessionID: manager.active.id, issueID: issue.id)
+        }
+        MacAttention.shared.onResolved = { [weak self] id in
+            self?.remoteControlServer?.resolveInputNotification(id)
         }
 
         // Unix-socket server for the `cantrip` CLI.
@@ -316,9 +346,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     ) {
         Task { @MainActor [weak self] in
             guard let self else { return }
+            if let raw = response.notification.request.content.userInfo["sessionID"] as? String,
+               let id = UUID(uuidString: raw), manager.sessions.contains(where: { $0.id == id }) {
+                manager.select(id)
+            }
             if !panel.isVisible { togglePanel() }
         }
         completionHandler()
+    }
+
+    @objc func endRemoteView() {
+        RemoteDesktop.shared.stop()
     }
 
     @objc func newConversation() {

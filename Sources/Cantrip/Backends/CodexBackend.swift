@@ -8,6 +8,7 @@ import Foundation
 /// the user's terminal.
 final class CodexBackend: Backend {
     private var process: Process?
+    private var askpass: RemoteAskpass?
     /// Per-instance model override (council members run models different
     /// from the session's setting). Nil = use the configured model.
     var modelOverride: String?
@@ -39,6 +40,8 @@ final class CodexBackend: Backend {
     }
 
     func cancel() {
+        askpass?.stop()
+        askpass = nil
         guard let p = process else { return }
         process = nil
         activities.removeAll()
@@ -82,6 +85,19 @@ final class CodexBackend: Backend {
         p.currentDirectoryURL = URL(fileURLWithPath: workdir)
         var env = ProcessInfo.processInfo.environment
         env["NO_COLOR"] = "1"
+        if !readOnly {
+            do {
+                let broker = try RemoteAskpass(process: p) { [weak self] request in
+                    guard self?.process === p, p.isRunning else { request.cancel(); return }
+                    onEvent(.inputRequired(request))
+                }
+                env.merge(broker.environment) { _, new in new }
+                askpass = broker
+            } catch {
+                onEvent(.failure("Could not prepare secure Codex input. The process was not started."))
+                return
+            }
+        }
         p.environment = env
         p.standardInput = FileHandle.nullDevice
 
@@ -129,7 +145,11 @@ final class CodexBackend: Backend {
             }
             // Don't clobber a successor run's process handle when a
             // cancelled process finally dies (SIGKILL escalation).
-            if self?.process === proc { self?.process = nil }
+            if self?.process === proc {
+                self?.process = nil
+                self?.askpass?.stop()
+                self?.askpass = nil
+            }
         }
 
         do {

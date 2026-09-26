@@ -7,6 +7,9 @@ struct RemoteCompletion: Codable, Equatable {
     let title: String
     let summary: String
     let completedAt: Date
+    var kind: String? = nil
+    var expiresAt: Date? = nil
+    var isAttention: Bool { kind == "input" || kind == "macAttention" }
 
     static func preview(_ text: String) -> String {
         // Use the final answer, not tool output or a second model request.
@@ -24,6 +27,7 @@ struct RemotePushStatus: Codable {
     let configured: Bool
     let message: String
     let lastDeliveryError: String?
+    var supportsInputAlerts = true
 }
 
 struct RemotePushRegistration: Codable, Equatable {
@@ -31,6 +35,7 @@ struct RemotePushRegistration: Codable, Equatable {
     let serverID: UUID
     let deviceToken: String
     let environment: String
+    var inputNeeded: Bool? = nil
 
     var isValid: Bool {
         ["development", "production"].contains(environment)
@@ -121,6 +126,7 @@ actor RemoteNotifications {
     private var generation = 0
     private var lastDeliveryError: String?
     private var cachedAuthorization: (keyID: String, keyDigest: Data, value: String, date: Date)?
+    private var pendingInputs: Set<UUID> = []
 
     init(file: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cache/Cantrip/notifications/state.json"),
@@ -205,9 +211,11 @@ actor RemoteNotifications {
             next.completedIDs = Array((next.completedIDs + [completion.id]).suffix(512))
             next.subscribers.removeAll { $0.updatedAt < Date().addingTimeInterval(-90 * 86400) || $0.fingerprint != fingerprint }
             for subscriber in next.subscribers {
+                if completion.isAttention && subscriber.registration.inputNeeded != true { continue }
                 next.deliveries.append(Delivery(id: UUID(), subscriberRevision: subscriber.revision,
                                                completion: completion))
             }
+
             // Bound stale work without replaying historical tabs to new subscribers.
             next.deliveries.removeAll { $0.completion.completedAt < Date().addingTimeInterval(-3600) }
             guard next.deliveries.count <= 1024 else {
@@ -216,6 +224,23 @@ actor RemoteNotifications {
             try save(next)
             sleeper?.cancel()
             startWorker()
+        } catch { report(error.localizedDescription) }
+    }
+
+    func enqueueInput(id: UUID, sessionID: UUID, expiresAt: Date, kind: String = "input") {
+        guard expiresAt > Date() else { return }
+        pendingInputs.insert(id)
+        enqueue(RemoteCompletion(id: id, sessionID: sessionID, title: "", summary: "",
+                                 completedAt: Date(), kind: kind, expiresAt: expiresAt))
+    }
+
+    func resolveInput(_ id: UUID) {
+        pendingInputs.remove(id)
+        do {
+            var next = try load()
+            next.deliveries.removeAll { $0.completion.isAttention && $0.completion.id == id }
+            try save(next)
+            sleeper?.cancel()
         } catch { report(error.localizedDescription) }
     }
 
@@ -262,6 +287,9 @@ actor RemoteNotifications {
                 let now = Date()
                 next.deliveries.removeAll { delivery in
                     delivery.completion.completedAt < now.addingTimeInterval(-3600)
+                        || (delivery.completion.isAttention
+                            && (!pendingInputs.contains(delivery.completion.id)
+                                || (delivery.completion.expiresAt ?? .distantPast) <= now))
                         || !next.subscribers.contains {
                             $0.revision == delivery.subscriberRevision && $0.fingerprint == fingerprint
                         }
@@ -348,16 +376,20 @@ actor RemoteNotifications {
         request.setValue("10", forHTTPHeaderField: "apns-priority")
         request.setValue(deliveryID.uuidString, forHTTPHeaderField: "apns-id")
         request.setValue(completion.id.uuidString, forHTTPHeaderField: "apns-collapse-id")
-        request.setValue(String(Int(completion.completedAt.addingTimeInterval(3600).timeIntervalSince1970)),
+        request.setValue(String(Int((completion.expiresAt ?? completion.completedAt.addingTimeInterval(3600)).timeIntervalSince1970)),
                          forHTTPHeaderField: "apns-expiration")
+        let input = completion.isAttention
+        let alert = input ? ["title": completion.kind == "macAttention" ? "Cantrip Mac needs attention" : "Cantrip needs your input",
+                             "body": "Open AgentGateway to review the request on your Mac."]
+            : ["title": "Cantrip finished", "subtitle": String(completion.title.prefix(80)), "body": completion.summary]
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "aps": [
-                "alert": ["title": "Cantrip finished", "subtitle": String(completion.title.prefix(80)),
-                          "body": completion.summary],
+                "alert": alert,
                 "sound": "default", "thread-id": "\(registration.serverID)/\(completion.sessionID)",
             ],
             "cantrip": ["eventID": completion.id.uuidString, "sessionID": completion.sessionID.uuidString,
-                        "serverID": registration.serverID.uuidString, "fingerprint": fingerprint],
+                        "serverID": registration.serverID.uuidString, "fingerprint": fingerprint,
+                        "kind": input ? (completion.kind ?? "input") : "completion"],
         ])
         guard request.httpBody!.count <= 4096 else {
             throw RemotePushError(status: 400, message: "The completion alert exceeds Apple's payload limit.")

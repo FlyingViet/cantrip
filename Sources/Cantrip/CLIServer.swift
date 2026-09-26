@@ -208,6 +208,10 @@ final class CLIServer {
                 self.appendRunEvent(approvalEvent, durable: true)
                 self.send(["status": "\(approval.decision.capitalized): \(approval.tool)"],
                           on: connection, close: false)
+            case .inputRequired(let request):
+                request.cancel()
+                self.send(["status": "Interactive input requires a Cantrip tab. The request was declined."],
+                          on: connection, close: false)
             case .done:
                 guard latch.claimTerminal() else { return }
                 self.recordTerminal(runID: runID, status: "succeeded", startedAt: startedAt,

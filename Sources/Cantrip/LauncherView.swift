@@ -11,6 +11,8 @@ struct LauncherView: View {
     @ObservedObject var settings = AppSettings.shared
     @StateObject private var speech = SpeechRecognizer()
     @State private var query = ""
+    @State private var tabDrafts: [UUID: String] = [:]
+    @State private var suppressVoiceSubmission = false
     @State private var deliveryMode: MessageDeliveryMode = .auto
     @State private var showSettings = false
     @FocusState private var inputFocused: Bool
@@ -30,6 +32,7 @@ struct LauncherView: View {
     @State private var archivedSessions: [SessionManager.ArchivedSession] = []
     @State private var renamingSession: ChatSession?
     @State private var modelSettingsSession: ChatSession?
+    @State private var showingInputRequests = false
     @State private var tabName = ""
     /// Instant caption for whichever toolbar icon is hovered.
     @State private var toolbarHint: String?
@@ -102,8 +105,16 @@ struct LauncherView: View {
             set: { if !$0 { modelSettingsSession = nil } }
         )) {
             if let chat = modelSettingsSession {
-                SessionModelSettingsView(session: chat)
+                if chat.isLocalPrivate { PrivateLocalSettingsView(session: chat) }
+                else { SessionModelSettingsView(session: chat) }
             }
+        }
+        .sheet(isPresented: $showingInputRequests) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Input Needed").font(.headline)
+                ScrollView { RemoteInputView(session: session) }
+                Button("Done") { showingInputRequests = false }
+            }.padding(20).frame(width: 600, height: 480)
         }
         .alert("Rename Tab", isPresented: Binding(
             get: { renamingSession != nil },
@@ -154,9 +165,14 @@ struct LauncherView: View {
         .onChange(of: session.isStreaming) {
             onKeepVisibleChange(pinned || session.isStreaming)
         }
-        .onChange(of: session.id) {
+        .onChange(of: session.id) { previous, current in
+            tabDrafts[previous] = query
+            query = tabDrafts[current] ?? ""
             terminalCommand = ""
             resetTerminalHistoryNavigation()
+            showTerminal = false
+            if speech.isRecording { suppressVoiceSubmission = true }
+            speech.stop()
         }
         // Agent commands mirror into the terminal silently (background);
         // the toolbar icon signals activity — open it when you want to look.
@@ -170,12 +186,14 @@ struct LauncherView: View {
             if speech.isRecording { query = text }
         }
         .onChange(of: query) { _, newValue in
-            fileSearch.search(newValue)
-            FileRAG.shared.prepare(for: newValue)
+            if !session.isLocalPrivate {
+                fileSearch.search(newValue)
+                FileRAG.shared.prepare(for: newValue)
+            }
         }
         // Any file dropped on the panel becomes an attachment.
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            guard !manager.showingRemote else { return false }
+            guard !manager.showingRemote, !session.isLocalPrivate else { return false }
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
                     guard let url, url.isFileURL else { return }
@@ -205,10 +223,14 @@ struct LauncherView: View {
         // Voice mode loop: reply spoken → resume listening → dictation
         // ends → auto-submit.
         .onReceive(NotificationCenter.default.publisher(for: SpeechSynth.didFinish)) { _ in
-            if settings.voiceMode, !session.isStreaming { speech.start() }
+            if settings.voiceMode, !session.isStreaming, !session.isLocalPrivate { speech.start() }
         }
         .onChange(of: speech.isRecording) { _, recording in
-            if !recording, settings.voiceMode,
+            if !recording, suppressVoiceSubmission {
+                suppressVoiceSubmission = false
+                return
+            }
+            if !recording, settings.voiceMode, !session.isLocalPrivate,
                !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 submit()
             }
@@ -301,9 +323,13 @@ struct LauncherView: View {
 
     private var inputBar: some View {
         VStack(spacing: 4) {
+            MacDesktopStatusView()
             // Row 1: the essentials — clean, Spotlight-like.
             HStack(spacing: 10) {
-                Button(action: { withAnimation(.easeOut(duration: 0.15)) { showSettings.toggle() } }) {
+                Button(action: {
+                    if session.isLocalPrivate { modelSettingsSession = session }
+                    else { withAnimation(.easeOut(duration: 0.15)) { showSettings.toggle() } }
+                }) {
                     Image(systemName: backendIcon)
                         .font(.system(size: 18))
                         .foregroundStyle(.secondary)
@@ -406,6 +432,7 @@ struct LauncherView: View {
             Spacer()
 
             councilMenu
+                .disabled(session.isLocalPrivate)
                 .hoverHint("Council mode — several models answer in parallel, then the chair delivers a joint verdict", $toolbarHint)
 
             Button(action: {
@@ -430,6 +457,7 @@ struct LauncherView: View {
                     .font(.system(size: 14))
                     .foregroundStyle(session.isPrivate ? Color.purple : Color.secondary)
             }
+            .disabled(session.isLocalPrivate)
             .buttonStyle(.plain)
             .help(session.isPrivate
                   ? "Private mode ON — this session isn't saved to transcripts, history, or memory"
@@ -546,6 +574,7 @@ struct LauncherView: View {
     }
 
     private var backendIcon: String {
+        if session.isLocalPrivate { return "lock.shield.fill" }
         switch settings.backend {
         case .claudeCode: return "terminal"
         case .copilot: return "airplane"
@@ -625,9 +654,9 @@ struct LauncherView: View {
                                 .lineLimit(1)
                                 .frame(maxWidth: 140)
                             if chat.isLocked {
-                                Image(systemName: "lock.fill")
+                                Image(systemName: chat.isLocalPrivate ? "lock.shield.fill" : "lock.fill")
                                     .font(.system(size: 10))
-                                    .help("Locked tab - unlock from the tab menu to close")
+                                    .help(chat.isLocalPrivate ? "Permanent self-hosted-model tab. History is saved and available remotely." : "Locked tab - unlock from the tab menu to close")
                             }
                         }
                         .padding(.leading, 10)
@@ -671,7 +700,11 @@ struct LauncherView: View {
                     }
                     .help("Drag to reorder. Right-click for tab actions.")
                     .contextMenu {
-                        Button("Model Settings...") { modelSettingsSession = chat }
+                        Button(chat.isLocalPrivate ? "Private Local Settings..." : "Model Settings...") { modelSettingsSession = chat }
+                        if !chat.isLocalPrivate {
+                            Button("Sign in to GitHub on Mac...") { chat.submitRemote("/login github", mode: .queue) }
+                                .disabled(chat.isStreaming || !chat.queued.isEmpty)
+                        }
                         Button("Rename Tab...") {
                             tabName = chat.tabMetadata.customTitle ?? chat.title
                             renamingSession = chat
@@ -680,6 +713,7 @@ struct LauncherView: View {
                             do { try chat.updateTab(isLocked: !chat.isLocked) }
                             catch { manager.tabActionError = error.localizedDescription }
                         }
+                        .disabled(chat.isLocalPrivate)
                         Divider()
                         Button("Move Tab Left") {
                             moveTab(chat.id, offset: -1)
@@ -1019,6 +1053,12 @@ struct LauncherView: View {
     /// Progress + pending queue: what's running now and what runs next.
     private var queueView: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if !session.pendingInputs.isEmpty {
+                Button("Your input is needed - Review \(session.pendingInputs.count) request(s)") {
+                    showingInputRequests = true
+                }
+                .buttonStyle(.bordered)
+            }
             if session.isStreaming {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
@@ -1123,7 +1163,8 @@ struct LauncherView: View {
     }
 
     private var placeholder: String {
-        session.isPrivate ? "Private — nothing is saved" : "How can I help you?"
+        session.isLocalPrivate ? "Private Local - saved, self-hosted models"
+            : session.isPrivate ? "Private — nothing is saved" : "How can I help you?"
     }
 
     /// Dropdown row labels: backend + its currently selected model.
@@ -1149,6 +1190,7 @@ struct LauncherView: View {
 
     /// Backend + model, shown subtly since the placeholder no longer does.
     private var backendBadge: String {
+        if session.isLocalPrivate { return "Private Local - Ollama" }
         switch settings.backend {
         case .claudeCode:
             let model = settings.claudeModel.trimmingCharacters(in: .whitespaces)
@@ -1319,9 +1361,9 @@ struct LauncherView: View {
     }
 
     private var hasSuggestions: Bool {
-        appSuggestion != nil
+        !session.isLocalPrivate && (appSuggestion != nil
             || query.hasPrefix("/")
-            || (!fileSearch.results.isEmpty && !showHistory)
+            || (!fileSearch.results.isEmpty && !showHistory))
     }
 
     /// The suggestion rows themselves, shared between the inline layout
@@ -1425,7 +1467,7 @@ struct LauncherView: View {
 
     /// Top app hit for the current query (Spotlight-style).
     private var appSuggestion: AppMatch? {
-        guard !showHistory, !session.isStreaming else { return nil }
+        guard !session.isLocalPrivate, !showHistory, !session.isStreaming else { return nil }
         return AppCatalog.shared.match(query: query)
     }
 
@@ -1500,7 +1542,7 @@ struct LauncherView: View {
     private func toggleVoiceMode() {
         settings.voiceMode.toggle()
         if settings.voiceMode {
-            if !speech.isRecording { speech.start() }
+            if !speech.isRecording { speech.start(requireOnDevice: session.isLocalPrivate) }
         } else {
             SpeechSynth.shared.stop()
             if speech.isRecording { speech.stop() }
@@ -1611,6 +1653,10 @@ struct LauncherView: View {
     }
 
     private func toggleTerminal() {
+        guard !session.isLocalPrivate else {
+            session.tabActionError = "Shell commands and tools are disabled in Private Local."
+            return
+        }
         withAnimation(.easeOut(duration: 0.15)) {
             showTerminal.toggle()
             if showTerminal { showHistory = false; showUsage = false }
@@ -1686,6 +1732,10 @@ struct LauncherView: View {
     }
 
     private func submitTerminalCommand() {
+        guard !session.isLocalPrivate else {
+            session.tabActionError = "Shell commands and tools are disabled in Private Local."
+            return
+        }
         let command = terminalCommand.trimmingCharacters(in: .whitespaces)
         guard !command.isEmpty else { return }
         shell.run(command, workdir: session.workdir)
@@ -1909,7 +1959,7 @@ struct LauncherView: View {
     private func submit(interrupt: Bool = false, inject: Bool = false) {
         // Enter with an app suggestion showing launches the app;
         // ⌘↩ bypasses the suggestion and asks the AI.
-        if !interrupt, !inject, let suggestion = appSuggestion {
+        if !session.isLocalPrivate, !interrupt, !inject, let suggestion = appSuggestion {
             launchApp(suggestion)
             return
         }
@@ -1960,9 +2010,10 @@ struct LauncherView: View {
                 // is capped at ~30 messages, so laziness buys nothing.
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(transcriptMessages) { message in
-                        MessageRow(message: message)
+                        MessageRow(message: message, localOnly: session.isLocalPrivate)
                             .id(message.id)
                     }
+                    RemoteInputView(session: session)
                     if let status = session.statusText {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.small)
@@ -2286,6 +2337,7 @@ private struct SuggestionListHeightKey: PreferenceKey {
 
 private struct MessageRow: View {
     let message: ChatMessage
+    var localOnly = false
 
     var body: some View {
         switch message.role {
@@ -2312,8 +2364,12 @@ private struct MessageRow: View {
                         ThinkingDisclosure(text: message.thinking)
                     }
                     if !message.text.isEmpty {
-                        MarkdownContent(text: message.text)
-                            .textSelection(.enabled)
+                        if localOnly {
+                            Text(verbatim: message.text).textSelection(.enabled)
+                        } else {
+                            MarkdownContent(text: message.text)
+                                .textSelection(.enabled)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2828,6 +2884,7 @@ struct SettingsView: View {
                 .font(.caption)
                 .toggleStyle(.checkbox)
             if settings.remoteControlEnabled {
+                MacAccessView()
                 HStack(spacing: 8) {
                     Text("Port")
                         .font(.caption)
