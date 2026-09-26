@@ -48,6 +48,7 @@ final class CopilotACPBackend: Backend {
     /// newer turn.
     private var generation = 0
     private var activities: [String: ToolActivity] = [:]
+    private var inputRequests: [BackendInputRequest] = []
 
     deinit {
         connection?.cancel() // don't leak the socket with a closed tab
@@ -75,6 +76,7 @@ final class CopilotACPBackend: Backend {
     func cancel() {
         queue.async { [weak self] in
             guard let self else { return }
+            self.cancelInputs()
             self.generation += 1
             if self.promptInFlight, let sessionID = self.sessionID {
                 self.notify("session/cancel", params: ["sessionId": sessionID])
@@ -97,6 +99,7 @@ final class CopilotACPBackend: Backend {
         var interrupted = false
         queue.sync {
             guard promptInFlight, let sessionID else { return }
+            cancelInputs()
             notify("session/cancel", params: ["sessionId": sessionID])
             // Same idiom as ClaudeCodeBackend's interrupt: the aborted
             // turn's response must NOT reach the next turn. Bump the
@@ -411,6 +414,30 @@ final class CopilotACPBackend: Backend {
     private func handlePermission(id: Any?, params: [String: Any]) {
         let options = params["options"] as? [[String: Any]] ?? []
         let allow = settings.allowActions && !readOnly
+        if !allow, !readOnly, !suppressUpdates, promptInFlight, let id {
+            let gen = generation
+            let tool = params["toolCall"] as? [String: Any] ?? [:]
+            let title = tool["title"] as? String ?? "Copilot Remote tool"
+            let detail = (tool["rawInput"].flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.fragmentsAllowed, .sortedKeys]) })
+                .flatMap { String(data: $0, encoding: .utf8) } ?? title
+            let request = BackendInputRequest(kind: .approval, source: "Copilot Remote",
+                title: "Allow this action?", detail: detail) { [weak self] answer in
+                self?.queue.async {
+                    guard let self, self.generation == gen, self.promptInFlight else { return }
+                    let kind = answer.decision == .approve ? "allow_once" : "reject_once"
+                    let choice = options.first { $0["kind"] as? String == kind }?["optionId"] as? String
+                    let outcome: [String: Any] = choice.map { ["outcome": "selected", "optionId": $0] }
+                        ?? ["outcome": "cancelled"]
+                    self.sendRaw(["jsonrpc": "2.0", "id": id, "result": ["outcome": outcome]])
+                    self.currentOnEvent?(.approval(BackendApproval(tool: title,
+                        decision: choice != nil && kind == "allow_once" ? "approved" : "denied", decidedBy: "user")))
+                    self.inputRequests.removeAll { !$0.isPending }
+                }
+            }
+            inputRequests.append(request)
+            currentOnEvent?(.inputRequired(request))
+            return
+        }
 
         func option(kinds: [String]) -> String? {
             for kind in kinds {
@@ -460,6 +487,12 @@ final class CopilotACPBackend: Backend {
 
     // MARK: - JSON-RPC plumbing
 
+    private func cancelInputs() {
+        let pending = inputRequests
+        inputRequests.removeAll()
+        for request in pending { request.cancel() }
+    }
+
     @discardableResult
     private func request(_ method: String, params: [String: Any],
                          timeout: TimeInterval,
@@ -485,10 +518,15 @@ final class CopilotACPBackend: Backend {
               var data = try? JSONSerialization.data(withJSONObject: message)
         else { return }
         data.append(0x0A)
-        connection.send(content: data, completion: .contentProcessed { _ in })
+        connection.send(content: data, completion: .contentProcessed { [weak self] error in
+            if error != nil {
+                self?.queue.async { self?.connectionLost("Copilot Remote could not receive the request. It was not retried.") }
+            }
+        })
     }
 
     private func fail(_ message: String) {
+        cancelInputs()
         promptInFlight = false
         currentOnEvent?(.failure(message))
         currentOnEvent = nil
@@ -501,6 +539,7 @@ final class CopilotACPBackend: Backend {
     }
 
     private func teardownConnection() {
+        cancelInputs()
         connection?.cancel()
         connection = nil
         connectedEndpoint = nil

@@ -38,6 +38,9 @@ final class ClaudeCodeBackend: Backend {
     private var stdinHandle: FileHandle?
     private var processWorkdir = ""
     private var currentOnEvent: ((BackendEvent) -> Void)?
+    private var inputRequests: [String: BackendInputRequest] = [:]
+    private var askpass: RemoteAskpass?
+    private var processAllowsActions: Bool?
 
     init(persistKey: String = "claudeSessionID") {
         self.persistKey = persistKey
@@ -54,10 +57,14 @@ final class ClaudeCodeBackend: Backend {
             self.currentOnEvent = onEvent
             self.hasEmittedText = false
             self.hasEmittedThinking = false
-            if self.process?.isRunning != true || self.processWorkdir != workdir {
+            if self.process?.isRunning != true || self.processWorkdir != workdir
+                || self.processAllowsActions != self.settings.allowActions {
+                self.cancelInputs()
+                self.askpass?.stop()
                 self.process?.terminate()
                 self.startProcess(workdir: workdir)
             }
+            self.askpass?.beginTurn()
             self.writeUserMessage(request.prompt)
         }
     }
@@ -97,6 +104,7 @@ final class ClaudeCodeBackend: Backend {
             // (Verified: an idle interrupt yields only a control_response,
             // never a spurious result.)
             if self.turnInFlight {
+                self.cancelInputs()
                 self.suppressUntilResult = true
                 // The aborted turn no longer counts as in-flight — a
                 // redirect's writeUserMessage may re-arm this for the
@@ -129,6 +137,9 @@ final class ClaudeCodeBackend: Backend {
     }
 
     func cancel() {
+        cancelInputs()
+        askpass?.stop()
+        askpass = nil
         guard let p = process else { return }
         process = nil
         stdinHandle = nil
@@ -157,6 +168,50 @@ final class ClaudeCodeBackend: Backend {
     }
 
     // MARK: - Internals
+
+    private func sendControlResponse(id: String, response: [String: Any]) {
+        do {
+            guard let handle = stdinHandle else { throw CocoaError(.fileWriteUnknown) }
+            var data = try JSONSerialization.data(withJSONObject: [
+                "type": "control_response", "response": ["subtype": "success", "request_id": id, "response": response]
+            ])
+            data.append(10)
+            try handle.write(contentsOf: data)
+        } catch {
+            currentOnEvent?(.failure("Could not deliver your response to Claude. It was not retried."))
+        }
+    }
+
+    private func askQuestion(id: String, input: [String: Any], questions: [[String: Any]], answers: [String: String]) {
+        guard let question = questions.first, let text = question["question"] as? String else {
+            sendControlResponse(id: id, response: ["behavior": "allow",
+                "updatedInput": input.merging(["answers": answers]) { _, new in new }])
+            return
+        }
+        let options = (question["options"] as? [[String: Any]] ?? []).compactMap { $0["label"] as? String }
+        let owner = process
+        let pending = BackendInputRequest(kind: .question, source: "Claude Code", title: "Your answer is needed",
+            detail: text, choices: options, allowsFreeform: true) { [weak self] answer in
+            self?.queue.async {
+                guard let self, self.process === owner, self.inputRequests.removeValue(forKey: id) != nil else { return }
+                guard answer.decision == .submit, let value = answer.text else {
+                    self.sendControlResponse(id: id, response: ["behavior": "deny", "message": "User cancelled the question."])
+                    return
+                }
+                var answers = answers
+                answers[text] = value
+                self.askQuestion(id: id, input: input, questions: Array(questions.dropFirst()), answers: answers)
+            }
+        }
+        inputRequests[id] = pending
+        currentOnEvent?(.inputRequired(pending))
+    }
+
+    private func cancelInputs() {
+        let requests = Array(inputRequests.values)
+        inputRequests.removeAll()
+        for request in requests { request.cancel() }
+    }
 
     private func resolveClaudePath() -> String? {
         Self.findClaude(configured: settings.claudePath)
@@ -198,6 +253,7 @@ final class ClaudeCodeBackend: Backend {
         var args = ["-p", "--input-format", "stream-json",
                     "--output-format", "stream-json", "--verbose",
                     "--include-partial-messages"]
+        if !readOnly { args += ["--permission-prompt-tool", "stdio"] }
         let model = (modelOverride ?? settings.claudeModel).trimmingCharacters(in: .whitespaces)
         if !model.isEmpty { args += ["--model", model] }
         let effort = settings.claudeEffort.trimmingCharacters(in: .whitespaces)
@@ -222,6 +278,21 @@ final class ClaudeCodeBackend: Backend {
         var env = ProcessInfo.processInfo.environment
         // Ensure node/claude find their usual PATH entries.
         env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+        if !readOnly {
+            do {
+                let broker = try RemoteAskpass(process: p) { [weak self] request in
+                    self?.queue.async {
+                        guard let self, self.process === p, self.turnInFlight else { request.cancel(); return }
+                        self.currentOnEvent?(.inputRequired(request))
+                    }
+                }
+                env.merge(broker.environment) { _, new in new }
+                askpass = broker
+            } catch {
+                currentOnEvent?(.failure("Could not prepare secure Claude input. The process was not started."))
+                return
+            }
+        }
         p.environment = env
 
         let stdout = Pipe()
@@ -284,6 +355,7 @@ final class ClaudeCodeBackend: Backend {
             process = p
             stdinHandle = stdinPipe.fileHandleForWriting
             processWorkdir = workdir
+            processAllowsActions = settings.allowActions
             turnInFlight = false
             suppressUntilResult = false
             Log.write("claude started, pid=\(p.processIdentifier)")
@@ -318,9 +390,41 @@ final class ClaudeCodeBackend: Backend {
             }
             return
         }
-        if type == "result" { turnInFlight = false }
+        if type == "result" { turnInFlight = false; askpass?.endTurn(); cancelInputs() }
 
         switch type {
+        case "control_request":
+            guard let id = obj["request_id"] as? String,
+                  let request = obj["request"] as? [String: Any] else { return }
+            guard request["subtype"] as? String == "can_use_tool" else {
+                sendControlResponse(id: id, response: ["behavior": "deny", "message": "Unsupported interactive request."])
+                return
+            }
+            let tool = request["tool_name"] as? String ?? "tool"
+            let input = request["input"] as? [String: Any] ?? [:]
+            if readOnly {
+                sendControlResponse(id: id, response: ["behavior": "deny", "message": "Read-only session."])
+            } else if tool == "AskUserQuestion",
+                      let questions = input["questions"] as? [[String: Any]], !questions.isEmpty {
+                askQuestion(id: id, input: input, questions: questions, answers: [:])
+            } else {
+                let detail = (try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys]))
+                    .flatMap { String(data: $0, encoding: .utf8) } ?? tool
+                let owner = process
+                let pending = BackendInputRequest(kind: .approval, source: "Claude Code",
+                    title: "Allow \(tool)?", detail: detail) { [weak self] answer in
+                    self?.queue.async {
+                        guard let self, self.process === owner, self.inputRequests.removeValue(forKey: id) != nil else { return }
+                        self.sendControlResponse(id: id, response: answer.decision == .approve
+                            ? ["behavior": "allow", "updatedInput": input]
+                            : ["behavior": "deny", "message": "The user declined or cancelled this action."])
+                    }
+                }
+                inputRequests[id] = pending
+                onEvent(.inputRequired(pending))
+            }
+        case "control_cancel_request":
+            if let id = obj["request_id"] as? String { inputRequests.removeValue(forKey: id)?.cancel() }
         case "stream_event":
             // Token-level streaming (--include-partial-messages).
             guard let event = obj["event"] as? [String: Any],

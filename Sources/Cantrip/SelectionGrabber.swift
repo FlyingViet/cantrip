@@ -14,6 +14,7 @@ struct SelectionContext: Equatable {
 enum SelectionGrabber {
     static func grab() -> String? {
         guard AXIsProcessTrusted() else {
+            MacAttention.report(.accessibility)
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             AXIsProcessTrustedWithOptions(options)
             Log.write("selection: Accessibility not granted — prompted")

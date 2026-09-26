@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct SessionTabTests {
     @MainActor
     static func main() async throws {
+        if CommandLine.arguments.dropFirst().first == "--cantrip-askpass" { exit(RemoteAskpass.runHelper()) }
         // Exec a fresh process so Foundation resolves every data path under the
         // temporary home before any app singleton or UserDefaults is created.
         guard ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"] != nil else {
@@ -115,6 +116,9 @@ struct SessionTabTests {
         try await testCopilotUsage()
         try await testCopilotModels()
         try await testSessionModelSettings()
+        try await testRemoteInput()
+        try await testRemoteDesktop()
+        try await testPrivateLocal()
         try await testRemoteRequestIsolation()
         try await testRemoteHistory()
         try await testRemoteMemory()
@@ -354,7 +358,7 @@ struct SessionTabTests {
     static func testWebTabControls() throws {
         let source = try String(contentsOfFile: "Sources/Cantrip/RemoteControlServer.swift", encoding: .utf8)
         let start = source.range(of: "    let editingTab")!
-        let end = source.range(of: "    function safeURL", range: start.upperBound..<source.endIndex)!
+        let end = source.range(of: "    let privateEditorState", range: start.upperBound..<source.endIndex)!
         let context = JSContext()!
         context.exceptionHandler = { _, error in
             fatalError("Tab JavaScript failed: \(error?.toString() ?? "")")

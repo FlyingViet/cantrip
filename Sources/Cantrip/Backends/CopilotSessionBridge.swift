@@ -3,15 +3,34 @@ import Foundation
 enum CopilotSessionBridge {
     static let script = CopilotRuntime.discoveryScript + "\n" + #"""
     import { createInterface } from 'node:readline';
+    import { randomUUID } from 'node:crypto';
 
     let client, session, runID, stopping = false, sending = 0, idle = false;
+    const inputs = new Map();
     const emit = message => process.stdout.write(JSON.stringify(message) + '\n');
     const errorText = error => String(error?.message ?? error).slice(0, 2000);
     function finishIfIdle() {
-      if (!idle || sending || !runID) return;
+      if (!idle || sending || inputs.size || !runID) return;
       const completed = runID;
       runID = undefined;
       emit({ kind: 'done', runID: completed });
+    }
+    function requestInput(kind, detail, options = {}) {
+      if (!runID || stopping) return Promise.resolve({ decision: 'cancel' });
+      const id = randomUUID(), owner = runID;
+      return new Promise(resolve => {
+        const timer = setTimeout(() => answerInput({ id, runID: owner, decision: 'cancel' }), 600000);
+        inputs.set(id, { owner, resolve, timer });
+        emit({ kind: 'input', runID: owner, id, inputKind: kind, detail: String(detail), ...options });
+      });
+    }
+    function answerInput(command) {
+      const pending = inputs.get(command.id);
+      if (!pending || pending.owner !== command.runID) return;
+      inputs.delete(command.id);clearTimeout(pending.timer);
+      pending.resolve(command);
+      emit({kind:'inputClosed',runID:pending.owner,id:command.id});
+      finishIfIdle();
     }
     function onEvent(event) {
       if (!runID || stopping) return;
@@ -45,10 +64,23 @@ enum CopilotSessionBridge {
         enableFileHooks: config.allowTools && !config.readOnly,
         onPermissionRequest: request => {
           const allowed = config.allowTools && !config.readOnly;
+          if (allowed && !config.autoApprove && request.kind !== 'read') {
+            const detail = request.fullCommandText || request.intention
+              || JSON.stringify(request);
+            return requestInput('approval', detail, { title: `Allow ${request.kind}?` })
+              .then(answer => ({kind: answer.decision === 'approve' ? 'approve-once' : 'reject'}));
+          }
           emit({ kind: 'approval', runID, tool: request.kind,
             decision: allowed ? 'approved' : 'denied' });
           return { kind: allowed ? 'approve-once' : 'reject' };
         },
+        onUserInputRequest: request => requestInput('question', request.question, {
+          title: 'Copilot needs your answer', choices: request.choices || [],
+          allowsFreeform: request.allowFreeform !== false
+        }).then(answer => {
+          if (answer.decision !== 'submit') throw new Error('User cancelled the input request.');
+          return {answer:answer.text,wasFreeform:!(request.choices || []).includes(answer.text)};
+        }),
         onEvent
       });
       if (typeof session.send !== 'function') throw new Error('Copilot native session input is unavailable.');
@@ -95,6 +127,7 @@ enum CopilotSessionBridge {
     async function stop() {
       if (stopping) return;
       stopping = true;
+      for (const [id,pending] of inputs) answerInput({id,runID:pending.owner,decision:'cancel'});
       const deadline = setTimeout(() => process.exit(1), 2000);
       try {
         if (session && runID) await session.abort();
@@ -111,6 +144,11 @@ enum CopilotSessionBridge {
     const input = createInterface({ input: process.stdin });
     let commands = Promise.resolve();
     input.on('line', line => {
+      let immediate;
+      try { immediate = JSON.parse(line); }
+      catch { void stop(); return; }
+      // Input callbacks can be awaited by session.send: responses must bypass the send queue.
+      if (immediate.kind === 'inputAnswer') { answerInput(immediate); return; }
       commands = commands.then(async () => {
         if (stopping) return;
         const command = JSON.parse(line);

@@ -50,6 +50,7 @@ extension ChatSession {
     var modelSelection: SessionModelSelection { tabMetadata.modelSettings ?? defaultModelSelection }
 
     var modelSettingsUnavailableReason: String? {
+        if isLocalPrivate { return "Use Private Local Settings. This tab cannot use Copilot or Mac model defaults." }
         if settings.backend != .copilot || councilMode {
             return "Per-tab model settings require the Mac's Copilot backend with Council mode off."
         }

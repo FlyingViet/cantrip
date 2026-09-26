@@ -13,6 +13,8 @@ final class SessionManager: ObservableObject {
     @Published var tabActionError: String?
     /// Fires when any session's run completes (for notifications).
     var onAnyRunFinished: ((ChatSession) -> Void)?
+    var onAnyInputNeeded: ((ChatSession, InputRequestSnapshot) -> Void)?
+    var onAnyInputResolved: ((UUID) -> Void)?
     private var cancellables: Set<AnyCancellable> = []
 
     var active: ChatSession {
@@ -66,6 +68,9 @@ final class SessionManager: ObservableObject {
         } else {
             activeIndex = sessions.count - 1
         }
+        if !sessions.contains(where: \.isLocalPrivate) {
+            adopt(ChatSession(id: ChatSession.privateLocalID))
+        }
         persistOpenSessions()
     }
 
@@ -92,6 +97,10 @@ final class SessionManager: ObservableObject {
         session.onRunFinished = { [weak self, weak session] in
             if let session { self?.onAnyRunFinished?(session) }
         }
+        session.onInputNeeded = { [weak self, weak session] input in
+            if let session { self?.onAnyInputNeeded?(session, input) }
+        }
+        session.onInputResolved = { [weak self] id in self?.onAnyInputResolved?(id) }
         // Forward child changes so views observing the manager re-render.
         session.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -198,7 +207,12 @@ final class SessionManager: ObservableObject {
     func close(_ index: Int) {
         guard sessions.indices.contains(index) else { return }
         let session = sessions[index]
-        do { try session.tabMetadata.requireUnlocked() }
+        do {
+            if session.isLocalPrivate {
+                throw SessionModelSettingsError(409, "Private Local is a permanent tab and cannot be closed.")
+            }
+            try session.tabMetadata.requireUnlocked()
+        }
         catch {
             tabActionError = error.localizedDescription
             return
@@ -259,7 +273,7 @@ final class SessionManager: ObservableObject {
     }
 
     func deleteArchived(_ id: UUID) {
-        guard !sessions.contains(where: { $0.id == id }),
+        guard id != ChatSession.privateLocalID, !sessions.contains(where: { $0.id == id }),
               !SessionTabMetadata.load(id: id).isLocked else {
             tabActionError = "Open tabs and locked tabs cannot be deleted from history."
             return

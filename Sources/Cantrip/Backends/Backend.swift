@@ -40,6 +40,90 @@ struct BackendApproval {
     let decidedBy: String
 }
 
+struct InputRequestSnapshot: Codable, Equatable, Identifiable {
+    enum Kind: String, Codable { case approval, question, secret, login, localAction }
+    let id: UUID
+    let kind: Kind
+    let source: String
+    let title: String
+    let detail: String
+    var choices: [String] = []
+    var allowsFreeform = false
+    var url: String?
+    var code: String?
+    let expiresAt: Double
+}
+
+struct InputRequestAnswer: Codable {
+    enum Decision: String, Codable { case approve, deny, submit, cancel }
+    let decision: Decision
+    var text: String?
+}
+
+enum InputRequestError: LocalizedError, Equatable {
+    case unavailable, invalidAnswer
+    var errorDescription: String? {
+        switch self {
+        case .unavailable: return "This input request expired, was cancelled, or was already answered. Refresh the tab."
+        case .invalidAnswer: return "Choose a valid response for this request. Passwords must use the secure input field."
+        }
+    }
+}
+
+/// Callbacks and answers are runtime-only; neither belongs in the conversation or journal.
+final class BackendInputRequest {
+    let snapshot: InputRequestSnapshot
+    private let lock = NSLock()
+    private var handler: ((InputRequestAnswer) -> Void)?
+    private var resolvedCallback: (() -> Void)?
+    var onResolved: (() -> Void)? {
+        get { lock.withLock { resolvedCallback } }
+        set { lock.withLock { resolvedCallback = newValue } }
+    }
+
+    init(kind: InputRequestSnapshot.Kind, source: String, title: String, detail: String,
+         choices: [String] = [], allowsFreeform: Bool = false, url: String? = nil, code: String? = nil,
+         lifetime: TimeInterval = 600, handler: @escaping (InputRequestAnswer) -> Void) {
+        snapshot = InputRequestSnapshot(id: UUID(), kind: kind, source: String(source.prefix(160)),
+            title: String(title.prefix(240)), detail: detail,
+            choices: choices, allowsFreeform: allowsFreeform, url: url, code: code,
+            expiresAt: Date().addingTimeInterval(lifetime).timeIntervalSince1970)
+        self.handler = handler
+    }
+
+    var isPending: Bool { lock.withLock { handler != nil } }
+
+    func respond(_ answer: InputRequestAnswer) throws {
+        guard Date().timeIntervalSince1970 < snapshot.expiresAt else { cancel(); throw InputRequestError.unavailable }
+        guard answer.text?.utf8.count ?? 0 <= 8192 else { throw InputRequestError.invalidAnswer }
+        if answer.decision == .cancel || answer.decision == .deny {
+            guard answer.text == nil else { throw InputRequestError.invalidAnswer }
+        } else {
+            switch snapshot.kind {
+            case .approval, .login, .localAction:
+                guard answer.decision == .approve, answer.text == nil else { throw InputRequestError.invalidAnswer }
+            case .question:
+                guard answer.decision == .submit, let text = answer.text, !text.isEmpty,
+                      snapshot.allowsFreeform || snapshot.choices.contains(text) else { throw InputRequestError.invalidAnswer }
+            case .secret:
+                guard answer.decision == .submit, let text = answer.text, !text.isEmpty,
+                      !text.contains("\n"), !text.contains("\r"), !text.contains("\0") else { throw InputRequestError.invalidAnswer }
+            }
+        }
+        guard let callback = lock.withLock({ let value = handler; handler = nil; return value }) else {
+            throw InputRequestError.unavailable
+        }
+        callback(answer)
+        onResolved?()
+    }
+
+    func cancel() {
+        let callback = lock.withLock { let value = handler; handler = nil; return value }
+        callback?(InputRequestAnswer(decision: .cancel))
+        if callback != nil { onResolved?() }
+    }
+}
+
 /// Events streamed from a backend while answering a query.
 enum BackendEvent {
     case textDelta(String)         // partial assistant text
@@ -48,6 +132,7 @@ enum BackendEvent {
     case activity(ToolActivity)    // tool lifecycle and file-change details
     case usage(BackendUsage)       // token/cost accounting for this run
     case approval(BackendApproval) // harness policy decision for a tool
+    case inputRequired(BackendInputRequest)
     case done                      // stream finished successfully
     case failure(String)           // error message
 }

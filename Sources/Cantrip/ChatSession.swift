@@ -49,6 +49,14 @@ final class ChatSession: ObservableObject {
         didSet { remoteQueueRevision = UUID() }
     }
     @Published private(set) var deliveryStatus: String?
+    @Published var pendingInputs: [InputRequestSnapshot] = [] {
+        didSet { remoteMessageRevision = UUID() }
+    }
+    var inputRequests: [UUID: BackendInputRequest] = [:]
+    var inputExpiryTasks: [UUID: Task<Void, Never>] = [:]
+    var onInputNeeded: ((InputRequestSnapshot) -> Void)?
+    var onInputResolved: ((UUID) -> Void)?
+    func deliveryStatusForInput(_ message: String) { deliveryStatus = message }
     private var routingTask: Task<Void, Never>?
     private var routingItemID: UUID?
     private var routingRevision = 0
@@ -65,6 +73,8 @@ final class ChatSession: ObservableObject {
     /// Orphans events and preparation from cancelled/superseded backend runs.
     private var streamGeneration = 0 {
         didSet {
+            cancelInputs()
+            deviceLogin.cancel()
             preparationTask?.cancel()
             preparationTask = nil
             injectionTask?.cancel()
@@ -96,10 +106,12 @@ final class ChatSession: ObservableObject {
     private var journal: RunJournal?
     private let makeJournal: (UUID) throws -> RunJournal
     @Published private(set) var journalError: String?
+    private(set) var privateStorageError: String?
     /// Council mode: fan each prompt out to several backends in parallel,
     /// then have a chair synthesize the joint answer.
     @Published var councilMode = false {
         didSet {
+            if isLocalPrivate, councilMode { councilMode = false }
             // Turning council off shouldn't leave seat processes idling.
             if !councilMode, !councilRunning {
                 for backend in councilInstances.values { backend.cancel() }
@@ -121,8 +133,9 @@ final class ChatSession: ObservableObject {
     @Published private var automaticTitle = "New chat"
     @Published private(set) var tabMetadata = SessionTabMetadata()
     @Published var tabActionError: String?
-    var title: String { tabMetadata.customTitle ?? automaticTitle }
-    var isLocked: Bool { tabMetadata.isLocked }
+    var title: String { tabMetadata.customTitle ?? (isLocalPrivate ? "Private Local" : automaticTitle) }
+    var isLocked: Bool { isLocalPrivate || tabMetadata.isLocked }
+    var effectiveBackendKind: BackendKind { isLocalPrivate ? .localModel : settings.backend }
     /// Per-session working directory: backends, ! commands, and git
     /// actions all run here. A session becomes "the agent in this repo".
     @Published var workdir: String {
@@ -133,7 +146,13 @@ final class ChatSession: ObservableObject {
     /// vault becomes read-only for the agent.
     @Published var isPrivate = false {
         didSet {
+            if isLocalPrivate, isPrivate {
+                isPrivate = false
+                tabActionError = "Private Local saves its conversation and uses only your configured self-hosted model server."
+                return
+            }
             if isPrivate {
+                cancelInputs()
                 deleteTranscript()   // scrub anything already written
                 journalError = nil
                 Log.write("session \(id.uuidString.prefix(8)): private mode ON")
@@ -157,6 +176,8 @@ final class ChatSession: ObservableObject {
     private let copilotRemote = CopilotACPBackend()
     private let codex: CodexBackend
     private let localModel = OpenAICompatibleBackend()
+    private let privateLocalModel = PrivateLocalBackend()
+    private let deviceLogin = RemoteDeviceLogin()
     let shell = PersistentShell()
     private var shellObservation: AnyCancellable?
 
@@ -170,10 +191,11 @@ final class ChatSession: ObservableObject {
     }
 
     private var activeBackend: Backend {
-        backend(for: runningBackendKind ?? settings.backend)
+        backend(for: runningBackendKind ?? effectiveBackendKind)
     }
 
     private func backend(for kind: BackendKind) -> Backend {
+        if isLocalPrivate { return privateLocalModel }
         switch kind {
         case .claudeCode: return claudeCode
         case .copilot: return copilot
@@ -203,6 +225,7 @@ final class ChatSession: ObservableObject {
         tabMetadata = SessionTabMetadata.load(id: id)
         applyModelSelection()
         restoreDurableState()
+        if isLocalPrivate, !FileManager.default.fileExists(atPath: transcriptURL.path) { persistTranscript() }
     }
 
     // MARK: - Transcript persistence (survives app restarts)
@@ -233,19 +256,41 @@ final class ChatSession: ObservableObject {
     }
 
     private func persistTranscript() {
-        guard !isPrivate else { return }
+        guard !isPrivate, privateStorageError == nil else { return }
         tabMetadata.save(id: id)
         // Thinking/activities don't persist, so assistant messages whose
         // only content was runtime-only would reload as invisible husks.
         let persistable = messages.filter {
             !($0.role == .assistant && $0.text.isEmpty)
         }
-        if let data = try? JSONEncoder().encode(persistable) {
-            try? data.write(to: transcriptURL)
+        do {
+            if isLocalPrivate {
+                try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: SessionManager.chatsDir.path)
+            }
+            let data = try JSONEncoder().encode(persistable)
+            try data.write(to: transcriptURL, options: .atomic)
+            if isLocalPrivate {
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: transcriptURL.path)
+            }
+        } catch {
+            if isLocalPrivate {
+                privateStorageError = "Private Local history could not be saved. Check the Mac's disk and file permissions before reopening this tab."
+            }
+            reportJournalFailure(error)
         }
     }
 
     private func loadTranscript() {
+        if isLocalPrivate, FileManager.default.fileExists(atPath: transcriptURL.path) {
+            do { messages = try JSONDecoder().decode([ChatMessage].self, from: Data(contentsOf: transcriptURL)) }
+            catch {
+                let message = "Private Local history could not be read. It has not been overwritten. Repair or restore the transcript on the Mac before reopening Cantrip."
+                privateStorageError = message
+                messages = [ChatMessage(role: .error, text: message)]
+                Log.write("private-local: transcript read failed code=\((error as NSError).code)")
+            }
+            return
+        }
         guard let data = try? Data(contentsOf: transcriptURL),
               let restored = try? JSONDecoder().decode([ChatMessage].self, from: data),
               !restored.isEmpty else { return }
@@ -257,6 +302,9 @@ final class ChatSession: ObservableObject {
     }
 
     func updateTab(name: String? = nil, isLocked: Bool? = nil) throws {
+        if isLocalPrivate, isLocked == false {
+            throw SessionModelSettingsError(409, "Private Local is a permanent tab and cannot be unlocked or closed.")
+        }
         var updated = tabMetadata
         if let name { try updated.rename(name) }
         if let isLocked { updated.isLocked = isLocked }
@@ -316,6 +364,7 @@ final class ChatSession: ObservableObject {
 
     func flushJournal() async throws {
         guard !isPrivate else { return }
+        if let privateStorageError { throw SessionModelSettingsError(500, privateStorageError) }
         guard let journal else { throw CocoaError(.fileNoSuchFile) }
         do { try await journal.flush() }
         catch {
@@ -507,7 +556,7 @@ final class ChatSession: ObservableObject {
 
     private func completeRun(status: String, summary: String = "") {
         guard let runID = currentRunID else { return }
-        remoteCompletion = status == "succeeded" && !isPrivate
+        remoteCompletion = status == "succeeded" && !isPrivate && !isLocalPrivate
             ? RemoteCompletion(id: runID, sessionID: id, title: title,
                                summary: RemoteCompletion.preview(summary), completedAt: Date())
             : nil
@@ -735,7 +784,7 @@ final class ChatSession: ObservableObject {
     }
 
     var supportsRemoteImages: Bool {
-        settings.backend != .localModel && runningBackendKind != .localModel
+        !isLocalPrivate && settings.backend != .localModel && runningBackendKind != .localModel
     }
 
     /// Remote clients share the live session but must not consume context
@@ -770,14 +819,28 @@ final class ChatSession: ObservableObject {
     }
 
     private func receive(_ text: String, mode: MessageDeliveryMode, includesAmbientContext: Bool) {
+        if let privateStorageError {
+            tabActionError = privateStorageError
+            return
+        }
         var prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         invalidateRouting()
         deliveryStatus = nil
         let wasBusy = isStreaming || !queued.isEmpty
+        if !pendingInputs.isEmpty, mode != .interrupt {
+            enqueue(prompt, includesAmbientContext: includesAmbientContext)
+            deliveryStatus = "Queued. Answer the input request above to continue the current task."
+            return
+        }
+        if isLocalPrivate, mode == .auto, isStreaming {
+            enqueue(prompt, includesAmbientContext: false)
+            deliveryStatus = "Queued locally. Private Local never uses cloud message routing."
+            return
+        }
         // Bind staged attachments to this message before asynchronous routing.
         // A queued/remote send must never consume somebody else's next draft.
-        if includesAmbientContext, wasBusy, !prompt.hasPrefix("!"), !prompt.hasPrefix("/") {
+        if !isLocalPrivate, includesAmbientContext, wasBusy, !prompt.hasPrefix("!"), !prompt.hasPrefix("/") {
             prompt = consumeStagedContext(onto: prompt, backendKind: runningBackendKind ?? settings.backend)
         }
         guard mode == .auto, isStreaming else {
@@ -1062,15 +1125,37 @@ final class ChatSession: ObservableObject {
                       queuedItem: QueuedPrompt? = nil) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isStreaming else { return }
+        if !isLocalPrivate, prompt == "/login github" {
+            beginRun(prompt: "Sign in to GitHub on the Mac", mode: .shell, backends: ["GitHub device login"],
+                     backend: nil, includesAmbientContext: false, queueItemID: queuedItem?.id)
+            appendRunMessage(ChatMessage(role: .user, text: "/login github"))
+            appendRunMessage(ChatMessage(role: .assistant, text: ""))
+            isStreaming = true
+            streamGeneration += 1
+            let generation = streamGeneration
+            prepareMemory(onto: "", query: "", backendKind: nil, generation: generation) { [weak self] _ in
+                guard let self else { return }
+                self.deviceLogin.start(workdir: self.workdir) { [weak self] event in
+                    Task { @MainActor in
+                        guard let self, self.streamGeneration == generation else {
+                            if case .inputRequired(let request) = event { request.cancel() }
+                            return
+                        }
+                        self.handle(event)
+                    }
+                }
+            }
+            return
+        }
 
         // "!" prefix: run a raw shell command directly, no LLM.
-        if prompt.hasPrefix("!"), prompt.count > 1 {
+        if !isLocalPrivate, prompt.hasPrefix("!"), prompt.count > 1 {
             runShellCommand(String(prompt.dropFirst()).trimmingCharacters(in: .whitespaces))
             return
         }
 
         // "/" prefix: user-defined script command (skill), no LLM.
-        if prompt.hasPrefix("/"), prompt.count > 1 {
+        if !isLocalPrivate, prompt.hasPrefix("/"), prompt.count > 1 {
             let parts = String(prompt.dropFirst())
                 .split(separator: " ", maxSplits: 1)
             if let first = parts.first,
@@ -1083,7 +1168,7 @@ final class ChatSession: ObservableObject {
         }
 
         // Instant answers: math, unit conversion, app launch — no LLM.
-        if selectionContext == nil, let instant = InstantAnswers.answer(for: prompt) {
+        if !isLocalPrivate, selectionContext == nil, let instant = InstantAnswers.answer(for: prompt) {
             Log.write("instant: \"\(prompt.prefix(60))\"")
             messages.append(ChatMessage(role: .user, text: prompt))
             messages.append(ChatMessage(role: .assistant, text: instant))
@@ -1091,8 +1176,9 @@ final class ChatSession: ObservableObject {
             return
         }
 
-        let backendKind = isResume ? (currentRunBackend ?? settings.backend) : settings.backend
-        Log.write("send: \"\(prompt.prefix(80))\" via \(backendKind.rawValue)")
+        let backendKind = isLocalPrivate ? .localModel
+            : isResume ? (currentRunBackend ?? settings.backend) : settings.backend
+        if !isLocalPrivate { Log.write("send: \"\(prompt.prefix(80))\" via \(backendKind.rawValue)") }
         canResume = false
         if !isResume {
             // Fresh run: remember the prompt so an interrupted run can be
@@ -1139,6 +1225,16 @@ final class ChatSession: ObservableObject {
         prepareMemory(onto: backendPrompt, query: prompt, backendKind: backendKind,
                       generation: generation) { [weak self] prepared in
             guard let self else { return }
+            if self.isLocalPrivate {
+                do {
+                    let configuration = try self.privateLocalConfiguration()
+                    try configuration.validate()
+                    self.privateLocalModel.configuration = configuration
+                } catch {
+                    self.handle(.failure(error.localizedDescription))
+                    return
+                }
+            }
             let request = BackendRequest(
                 prompt: prepared,
                 userMessage: prompt,
@@ -1146,7 +1242,10 @@ final class ChatSession: ObservableObject {
             )
             self.backend(for: backendKind).send(request, workdir: self.workdir) { [weak self] event in
                 DispatchQueue.main.async {
-                    guard let self, self.streamGeneration == generation else { return }
+                    guard let self, self.streamGeneration == generation else {
+                        if case .inputRequired(let request) = event { request.cancel() }
+                        return
+                    }
                     self.handle(event)
                 }
             }
@@ -1155,7 +1254,7 @@ final class ChatSession: ObservableObject {
 
     private func prepareMemory(onto prompt: String, query: String, backendKind: BackendKind?,
                                generation: Int, completion: @escaping (String) -> Void) {
-        let memoryEnabled = settings.memoryEnabled
+        let memoryEnabled = settings.memoryEnabled && !isLocalPrivate
         let path = settings.memoryPath
         let privacy = isPrivate
         let directory = workdir
@@ -1177,8 +1276,9 @@ final class ChatSession: ObservableObject {
                   self.isStreaming else { return }
             self.preparationTask = nil
             guard self.isPrivate == privacy, self.workdir == directory,
-                  self.settings.backend == configuredBackend,
-                  self.settings.memoryEnabled == memoryEnabled, self.settings.memoryPath == path else {
+                  (self.isLocalPrivate || self.settings.backend == configuredBackend),
+                  (self.isLocalPrivate || self.settings.memoryEnabled == memoryEnabled),
+                  self.settings.memoryPath == path else {
                 self.cancel(keepQueue: true)
                 self.deliveryStatus = "Preparation cancelled because session settings changed. Send again to use the new settings."
                 return
@@ -1198,6 +1298,7 @@ final class ChatSession: ObservableObject {
                                 backendKind: BackendKind?,
                                 includesAmbientContext: Bool = true,
                                 consumesStagedContext: Bool = true) -> String {
+        if isLocalPrivate { return prompt }
         var backendPrompt = prompt
         if isFirstOfConversation,
            let digest = UserDefaults.standard.string(forKey: "lastConversationDigest"),
@@ -1322,6 +1423,10 @@ final class ChatSession: ObservableObject {
         consumesStagedContext: Bool = true,
         queuedItem: QueuedPrompt? = nil
     ) {
+        if isLocalPrivate {
+            send(text, includesAmbientContext: false, consumesStagedContext: false, queuedItem: queuedItem)
+            return
+        }
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isStreaming else { return }
         // Shell/skill/instant prompts don't need a council.
@@ -1438,6 +1543,8 @@ final class ChatSession: ObservableObject {
                                     prompt: String, generation: Int) {
         armWatchdog()
         switch event {
+        case .inputRequired(let request):
+            request.cancel()
         case .textDelta(let delta):
             appendCouncil(text: delta, to: messageID)
             recordOutput(delta, messageID: messageID)
@@ -1531,6 +1638,8 @@ final class ChatSession: ObservableObject {
                 guard let self, self.streamGeneration == generation else { return }
                 self.armWatchdog()
                 switch event {
+                case .inputRequired(let request):
+                    self.receiveInput(request)
                 case .textDelta(let delta):
                     self.appendCouncil(text: delta, to: messageID)
                     self.recordOutput(delta, messageID: messageID)
@@ -1647,6 +1756,7 @@ final class ChatSession: ObservableObject {
     }
 
     private var shellProcess: Process?
+    private var shellAskpass: RemoteAskpass?
 
     /// `!command` — run directly via the login shell, streaming output
     /// into the transcript as a code block.
@@ -1676,6 +1786,19 @@ final class ChatSession: ObservableObject {
         p.arguments = ["-l", "-c", command]
         p.currentDirectoryURL = URL(fileURLWithPath: workdir)
         p.standardInput = FileHandle.nullDevice
+        do {
+            let broker = try RemoteAskpass(process: p) { [weak self] request in
+                Task { @MainActor in
+                    guard let self, self.streamGeneration == generation else { request.cancel(); return }
+                    self.receiveInput(request)
+                }
+            }
+            p.environment = ProcessInfo.processInfo.environment.merging(broker.environment) { _, new in new }
+            shellAskpass = broker
+        } catch {
+            handleRunInterruption(errorText: "Could not prepare secure command input. The command was not started.")
+            return
+        }
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = pipe
@@ -1713,6 +1836,8 @@ final class ChatSession: ObservableObject {
                     self.recordOutput(suffix, messageID: assistantID)
                 }
                 self.shellProcess = nil
+                self.shellAskpass?.stop()
+                self.shellAskpass = nil
                 let summary = self.messages.last(where: { $0.role == .assistant })?.text ?? ""
                 self.completeRun(
                     status: proc.terminationStatus == 0 ? "succeeded" : "failed",
@@ -1861,6 +1986,8 @@ final class ChatSession: ObservableObject {
     private func handle(_ event: BackendEvent) {
         armWatchdog()
         switch event {
+        case .inputRequired(let request):
+            receiveInput(request)
         case .textDelta(let delta):
             Log.write("ui: textDelta(\(delta.count) chars)")
             if let idx = messages.lastIndex(where: { $0.role == .assistant }) {
@@ -2007,6 +2134,7 @@ final class ChatSession: ObservableObject {
     /// interrupted-turn context themselves; stateless ones need the
     /// harness to inject it.
     private var backendKeepsSession: Bool {
+        if isLocalPrivate { return false }
         switch currentRunBackend ?? settings.backend {
         case .claudeCode, .codex: return true
         // copilotRemote keeps its ACP session while the app runs, but an
@@ -2110,11 +2238,11 @@ final class ChatSession: ObservableObject {
         councilAnswers = []
         councilFinished = []
         councilSynthesizing = false
-        processOverlayBlock()
+        if !isLocalPrivate { processOverlayBlock() }
         isStreaming = false
         statusText = nil
         // Session layer: log the completed exchange for future grep.
-        if settings.memoryEnabled, !isPrivate,
+        if settings.memoryEnabled, !isPrivate, !isLocalPrivate,
            let userIdx = messages.lastIndex(where: { $0.role == .user }),
            let assistantIdx = messages.lastIndex(where: { $0.role == .assistant }),
            assistantIdx > userIdx, !messages[assistantIdx].text.isEmpty {
@@ -2148,7 +2276,7 @@ final class ChatSession: ObservableObject {
                 guard let self, self.streamGeneration == generation else { return }
                 self.drainQueue()
             }
-        } else if notify {
+        } else if notify, !isLocalPrivate {
             // Whole run complete: speak the reply / notify if hidden.
             if settings.voiceMode,
                let reply = messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }) {
@@ -2181,12 +2309,15 @@ final class ChatSession: ObservableObject {
     }
 
     private func cancel(keepQueue: Bool) {
+        deviceLogin.cancel()
         invalidateRouting()
         deliveryStatus = nil
         streamGeneration += 1        // orphan any in-flight events
         SpeechSynth.shared.stop()
         shellProcess?.terminate()
         shellProcess = nil
+        shellAskpass?.stop()
+        shellAskpass = nil
         if councilRunning {
             cancelCouncilBackends()
             councilRunning = false
@@ -2214,7 +2345,7 @@ final class ChatSession: ObservableObject {
         invalidateRouting()
         deliveryStatus = nil
         // Continuity: stash a digest of this conversation for the next one.
-        if messages.count >= 2, !isPrivate {
+        if messages.count >= 2, !isPrivate, !isLocalPrivate {
             let topics = messages.filter { $0.role == .user }.suffix(3)
                 .map { String($0.text.prefix(100)) }
                 .joined(separator: " | ")
@@ -2236,6 +2367,7 @@ final class ChatSession: ObservableObject {
         copilotRemote.reset()
         codex.reset()
         localModel.reset()
+        privateLocalModel.reset()
         for backend in councilInstances.values { backend.reset() }
         councilInstances = [:]
         messages.removeAll()

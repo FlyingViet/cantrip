@@ -12,33 +12,44 @@ final class SpeechRecognizer: ObservableObject {
     private let audioEngine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var generation = UUID()
 
-    func start() {
+    func start(requireOnDevice: Bool = false) {
+        generation = UUID()
+        let generation = generation
         errorMessage = nil
         transcript = ""
 
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
             DispatchQueue.main.async {
+                guard self?.generation == generation else { return }
                 guard status == .authorized else {
+                    MacAttention.report(.speechRecognition)
                     self?.errorMessage = "Speech recognition not authorized (System Settings → Privacy)."
                     return
                 }
                 AVCaptureDevice.requestAccess(for: .audio) { granted in
                     DispatchQueue.main.async {
+                        guard self?.generation == generation else { return }
                         guard granted else {
+                            MacAttention.report(.microphone)
                             self?.errorMessage = "Microphone access denied (System Settings → Privacy)."
                             return
                         }
-                        self?.beginSession()
+                        self?.beginSession(requireOnDevice: requireOnDevice, generation: generation)
                     }
                 }
             }
         }
     }
 
-    private func beginSession() {
+    private func beginSession(requireOnDevice: Bool, generation: UUID) {
         guard let recognizer, recognizer.isAvailable else {
             errorMessage = "Speech recognizer unavailable."
+            return
+        }
+        guard !requireOnDevice || recognizer.supportsOnDeviceRecognition else {
+            errorMessage = "Private Local requires on-device dictation, which is unavailable. Type your message instead."
             return
         }
 
@@ -67,6 +78,7 @@ final class SpeechRecognizer: ObservableObject {
         isRecording = true
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             DispatchQueue.main.async {
+                guard self?.generation == generation else { return }
                 if let result {
                     self?.transcript = result.bestTranscription.formattedString
                 }
@@ -78,6 +90,7 @@ final class SpeechRecognizer: ObservableObject {
     }
 
     func stop() {
+        generation = UUID()
         guard isRecording || audioEngine.isRunning else { return }
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
