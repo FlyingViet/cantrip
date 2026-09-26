@@ -65,10 +65,11 @@ final class CantripHistoryTests: XCTestCase {
     private func session(revision: String = "r1", start: String = "start", values: [Int] = [3, 4],
                          older: Bool = true, list: Bool = false, title: String = "Tab",
                          legacy: Bool = false, fullContent: Bool = false,
-                         prompts: Set<Int> = []) throws -> Data {
+                         prompts: Set<Int> = [], streaming: Bool = false) throws -> Data {
         var session: [String: Any] = [
-            "id": id, "title": title, "workdir": "/tmp", "isStreaming": false,
+            "id": id, "title": title, "workdir": "/tmp", "isStreaming": streaming,
             "canResume": false, "councilMode": false, "queuedCount": 0,
+            "supportsAutoDelivery": true,
         ]
         if !legacy {
             session["supportsPagedHistory"] = true
@@ -125,6 +126,8 @@ final class CantripHistoryTests: XCTestCase {
             paths.append(request.url!.path)
             let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
             XCTAssertTrue(items.contains(URLQueryItem(name: "history", value: "recent")))
+            XCTAssertEqual(items.first { $0.name == "recentExchanges" }?.value,
+                           request.url!.path == "/api/v1/sessions" ? nil : "3")
             XCTAssertEqual(request.timeoutInterval, request.url!.path == "/api/v1/sessions" ? 3 : 20,
                            "Only conversation reads receive a larger download budget")
             return (200, try self.session(list: request.url!.path == "/api/v1/sessions"))
@@ -142,6 +145,7 @@ final class CantripHistoryTests: XCTestCase {
                 return (200, try self.session(revision: "r2", list: true))
             }
             XCTAssertTrue(request.url!.query!.contains("revision=r1"))
+            XCTAssertTrue(request.url!.query!.contains("recentExchanges=3"))
             return (200, Data(#"{"unchanged":true}"#.utf8))
         }
         await model.refreshNow()
@@ -165,6 +169,7 @@ final class CantripHistoryTests: XCTestCase {
             if older {
                 olderReads += 1
                 XCTAssertEqual(items.first { $0.name == "before" }?.value, self.messageID(3))
+                XCTAssertFalse(items.contains { $0.name == "recentExchanges" })
             }
             return (200, try self.session(values: older ? [1, 2] : [3, 4], older: !older,
                                           list: request.url!.path == "/api/v1/sessions", fullContent: true))
@@ -450,7 +455,7 @@ final class CantripHistoryTests: XCTestCase {
         let model = try await model()
         HistoryRequestProtocol.handler = { request in
             (200, try self.session(values: Array(0..<122),
-                                  list: request.url!.path == "/api/v1/sessions", prompts: [0, 1, 4]))
+                                  list: request.url!.path == "/api/v1/sessions", prompts: [0, 1, 2, 4]))
         }
         model.setAppActive(true)
         try await waitForRefresh(model)
@@ -508,11 +513,11 @@ final class CantripHistoryTests: XCTestCase {
             let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
             if let before = items.first(where: { $0.name == "before" })?.value {
                 olderReads += 1
-                XCTAssertEqual(before, self.messageID(olderReads == 1 ? 28 : 10))
-                return (200, try self.session(values: Array(0..<(olderReads == 1 ? 28 : 10)),
+                XCTAssertEqual(before, self.messageID(olderReads == 1 ? 26 : 10))
+                return (200, try self.session(values: Array(0..<(olderReads == 1 ? 26 : 10)),
                                               older: false, prompts: prompts))
             }
-            return (200, try self.session(values: [28, 29, 30, 31],
+            return (200, try self.session(values: Array(26..<32),
                                           list: request.url!.path == "/api/v1/sessions", prompts: prompts))
         }
         model.setAppActive(true)
@@ -525,7 +530,7 @@ final class CantripHistoryTests: XCTestCase {
                        "The current prompt plus exactly ten prior prompt-response groups")
         XCTAssertEqual(model.selectedSession?.hasOlderMessages, true,
                        "An oversized page's earlier groups remain available through its retained cursor")
-        XCTAssertEqual(model.historyPrependAnchor, messageID(28))
+        XCTAssertEqual(model.historyPrependAnchor, messageID(26))
         XCTAssertFalse(model.canAutomaticallyLoadHistory)
         await model.refreshNow()
         await model.loadOlderMessages(automatically: true)
@@ -558,7 +563,7 @@ final class CantripHistoryTests: XCTestCase {
         XCTAssertFalse(model.canAutomaticallyLoadHistory)
     }
 
-    func testInitialPageCapsTenPastGroupsAndResetRestoresAutomaticLoading() async throws {
+    func testInitialPageKeepsThreeExchangesAndResetRestoresAutomaticLoading() async throws {
         let model = try await model()
         var reset = false
         HistoryRequestProtocol.handler = { request in
@@ -569,13 +574,94 @@ final class CantripHistoryTests: XCTestCase {
         }
         model.setAppActive(true)
         try await waitForRefresh(model)
-        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (10..<32).map(messageID))
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (26..<32).map(messageID))
         XCTAssertEqual(model.selectedSession?.hasOlderMessages, true)
-        XCTAssertFalse(model.canAutomaticallyLoadHistory)
+        XCTAssertTrue(model.canAutomaticallyLoadHistory)
         reset = true
         await model.refreshNow()
         XCTAssertTrue(model.canAutomaticallyLoadHistory)
         XCTAssertEqual(model.selectedSession?.transcript.map(\.id), [40, 41].map(messageID))
+    }
+
+    func testThreeCompleteExchangesExceedLegacyMessageAndByteLimits() async throws {
+        let model = try await model()
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(values: Array(0..<162), older: false,
+                                  list: request.url!.path == "/api/v1/sessions",
+                                  fullContent: true, prompts: [0, 2, 4, 156]))
+        }
+        model.setAppActive(true)
+        try await waitForRefresh(model)
+        let messages = try XCTUnwrap(model.selectedSession?.transcript)
+        XCTAssertEqual(messages.map(\.id), (2..<162).map(messageID))
+        XCTAssertEqual(messages.filter { $0.role == "user" }.count, 3)
+        XCTAssertEqual(messages[1].text, String(repeating: "Reply 3\n", count: 4000))
+        XCTAssertEqual(messages[1].thinking, String(repeating: "Reasoning\n", count: 1000))
+        XCTAssertEqual(messages[1].activities.count, 60)
+        XCTAssertEqual(model.selectedSession?.hasOlderMessages, true)
+    }
+
+    func testFollowUpKeepsThreeExchangesThroughoutSendAndCompletion() async throws {
+        let model = try await model()
+        var stage = 0
+        var writes = 0
+        let prompts: Set<Int> = [0, 2, 4, 6]
+        HistoryRequestProtocol.handler = { request in
+            let list = request.url!.path == "/api/v1/sessions"
+            let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            if !list {
+                XCTAssertEqual(items.first { $0.name == "recentExchanges" }?.value, "3")
+            }
+            if request.httpMethod == "POST" {
+                XCTAssertEqual(request.url!.path, "/api/v1/sessions/\(self.id)/messages")
+                writes += 1
+                stage = 1
+            }
+            return (200, try self.session(
+                revision: "r\(stage)", values: stage == 0 ? Array(0..<6) : Array(2..<(stage == 1 ? 7 : 8)),
+                older: stage > 0, list: list, prompts: prompts, streaming: stage == 1
+            ))
+        }
+        model.setAppActive(true)
+        try await waitForRefresh(model)
+        let env = HermesEnv()
+        env.select(.cantrip)
+        let vm = ChatViewModel(env: env, remote: model, voice: VoiceController())
+        vm.syncRemoteTranscript()
+        let previousTurnIDs = Array(vm.turns.suffix(4).map(\.id))
+        var publishedPromptCounts: [Int] = []
+        let observation = model.$selectedSession.sink { session in
+            if let session { publishedPromptCounts.append(session.transcript.filter { $0.role == "user" }.count) }
+        }
+        defer { observation.cancel() }
+
+        let sent = await vm.sendRemote("Follow-up")
+        XCTAssertTrue(sent, model.errorMessage ?? "")
+        XCTAssertEqual(writes, 1)
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (2..<7).map(messageID))
+        XCTAssertEqual(vm.turns.filter { $0.role == .user }.count, 3)
+        XCTAssertEqual(Array(vm.turns.prefix(4).map(\.id)), previousTurnIDs,
+                       "Prior exchanges stay mounted when optimistic messages become authoritative")
+        stage = 2
+        await model.refreshNow()
+        vm.syncRemoteTranscript()
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (2..<8).map(messageID))
+        XCTAssertEqual(vm.turns.count, 6)
+        XCTAssertTrue(publishedPromptCounts.allSatisfy { $0 == 3 },
+                      "Neither acknowledgement nor polling may collapse to just the latest response")
+    }
+
+    func testUnpagedLegacyHostKeepsAllExchangesAccessible() async throws {
+        let model = try await model()
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(values: Array(0..<12), older: false,
+                                  list: request.url!.path == "/api/v1/sessions", legacy: true,
+                                  prompts: Set(stride(from: 0, through: 10, by: 2))))
+        }
+        model.setAppActive(true)
+        try await waitForRefresh(model)
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (0..<12).map(messageID))
+        XCTAssertNil(model.selectedSession?.hasOlderMessages)
     }
 
     func testAutomaticHistoryCoalescesAndFailureRequiresManualRetry() async throws {

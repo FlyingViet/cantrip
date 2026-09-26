@@ -584,6 +584,10 @@ private final class CantripLANRequest: @unchecked Sendable {
     }
 }
 
+private enum CantripHistoryWindow {
+    static let recentExchanges = 3
+}
+
 struct CantripRemoteAPI {
     let transport: CantripTransport
     let token: String
@@ -711,7 +715,7 @@ struct CantripRemoteAPI {
 
     func session(id: String) async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
-            path: "/api/v1/sessions/\(id)"
+            path: "/api/v1/sessions/\(id)", includeRecentExchanges: true
         )
         return response.session
     }
@@ -719,7 +723,7 @@ struct CantripRemoteAPI {
     func createSession() async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions",
-            method: "POST"
+            method: "POST", includeRecentExchanges: true
         )
         return response.session
     }
@@ -733,7 +737,7 @@ struct CantripRemoteAPI {
             guard let target = components.string else { throw CantripRemoteError.invalidResponse }
             path = target
         }
-        let response: CantripSessionUpdate = try await request(path: path)
+        let response: CantripSessionUpdate = try await request(path: path, includeRecentExchanges: true)
         if let session = response.session { return session }
         guard response.unchanged == true, revision != nil else {
             throw CantripRemoteError.invalidResponse
@@ -842,7 +846,7 @@ struct CantripRemoteAPI {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(sessionID)/messages",
             method: "POST",
-            body: body
+            body: body, includeRecentExchanges: true
         )
         return response.session
     }
@@ -850,7 +854,7 @@ struct CantripRemoteAPI {
     func action(_ action: String, sessionID: String) async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(sessionID)/\(action)",
-            method: "POST"
+            method: "POST", includeRecentExchanges: true
         )
         return response.session
     }
@@ -1002,7 +1006,7 @@ struct CantripRemoteAPI {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(id)/metadata",
             method: "POST",
-            body: body
+            body: body, includeRecentExchanges: true
         )
         return response.session
     }
@@ -1041,7 +1045,7 @@ struct CantripRemoteAPI {
     fileprivate func deleteQueuedPrompt(id: String, sessionID: String) async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(sessionID)/queue/\(id)",
-            method: "DELETE"
+            method: "DELETE", includeRecentExchanges: true
         )
         return response.session
     }
@@ -1049,13 +1053,18 @@ struct CantripRemoteAPI {
     private func request<Response: Decodable>(
         path: String,
         method: String = "GET",
-        body: Data? = nil
+        body: Data? = nil,
+        includeRecentExchanges: Bool = false
     ) async throws -> Response {
         try Task.checkCancellation()
         guard var target = URLComponents(string: path), target.host == nil else {
             throw CantripRemoteError.invalidResponse
         }
         target.queryItems = (target.queryItems ?? []) + [URLQueryItem(name: "history", value: "recent")]
+        if includeRecentExchanges {
+            target.queryItems?.append(URLQueryItem(name: "recentExchanges",
+                                                  value: String(CantripHistoryWindow.recentExchanges)))
+        }
         guard let path = target.string else { throw CantripRemoteError.invalidResponse }
         if case .lan(let endpoint) = transport {
             return try await requestLAN(
@@ -2326,24 +2335,16 @@ final class CantripRemoteModel: ObservableObject {
             session.hasOlderMessages = previous.hasOlderMessages
         }
         if !expandedHistory.contains(session.id), session.supportsPagedHistory == true {
-            let bounded = Self.historySuffix(session.transcript, groups: Self.automaticHistoryLimit + 1)
+            let bounded = Self.historySuffix(session.transcript, groups: CantripHistoryWindow.recentExchanges)
             if bounded.count < session.transcript.count {
                 session.messages = bounded
                 session.hasOlderMessages = true
             }
         }
         if !expandedHistory.contains(session.id), session.supportsPagedHistory == true,
-           session.transcript.count > 120 {
-            let messages = session.transcript
-            var start = messages.count - 120
-            if messages[start].role != "user",
-               let prompt = messages[..<start].lastIndex(where: { $0.role == "user" }) {
-                start = prompt
-            }
-            if start > 0 {
-                session.messages = Array(messages[start...])
-                session.hasOlderMessages = true
-            }
+           session.transcript.count > 120, !session.transcript.contains(where: { $0.role == "user" }) {
+            session.messages = Array(session.transcript.suffix(120))
+            session.hasOlderMessages = true
         }
         if !expandedHistory.contains(session.id) {
             let pastGroups = max(0, session.transcript.filter { $0.role == "user" }.count - 1)

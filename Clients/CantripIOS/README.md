@@ -234,19 +234,24 @@ The dot indicates recent connectivity, not acknowledgement of a particular send.
 
 ### Long conversations and unreliable connections
 
-With an updated Cantrip host, the app targets 30 recent messages first, capped
-at the current prompt and ten earlier prompt-response groups. Scrolling upward
-near the top automatically loads older history up to that ten-group limit,
-including groups already loaded. Then tap **Load more messages** to page further
+With an updated Cantrip host, the app shows the **latest three complete
+prompt-and-reply exchanges**, matching native Mac Remote. A new or running prompt
+counts as the newest exchange. Sending a follow-up keeps the preceding two
+exchanges instead of replacing them with only the latest response.
+Scrolling upward near the top automatically loads older history up to the
+current exchange plus ten earlier groups, including groups already loaded.
+Then tap **Load more messages** to page further
 back while keeping your reading position. Every loaded message includes complete text,
 reasoning, and all tool input/output by default; there is no separate detail
 download on updated hosts. Opening a tab or polling never prefetches older pages.
 Automatic loading pauses on failure and offers a manual retry. The allowance is
 per cached tab and resets when its history is reset or its cache is cleared.
-Pages target 192 KiB, but always include at least one whole message
+Older pages target 30 messages and 192 KiB, but always include at least one whole message
 and extend back to its user prompt when available. Large answers or
 multi-response turns can exceed the soft count/size limits so the prompt stays
-visible before its output. The host retains its live history, and
+visible before its output. The initial three exchanges and send acknowledgements
+keep all their continuation/council responses even beyond those limits.
+The host retains its live history, and
 submitted/queued prompts are not truncated. The full-details button remains
 available for older hosts that still send previews.
 
@@ -258,9 +263,11 @@ the selected server and cleared when its configuration changes.
 
 Unchanged session revisions skip conversation downloads entirely. Foreground
 polling waits 1.5 seconds while any tab is working/queued or recovering, and
-5 seconds while idle. Unattended transcripts target a rolling 120-message
-window, retaining the prompt and responses at its start, with up to five tabs
-cached; scroll-triggered or manual older-history loading may expand that window. Lightweight
+5 seconds while idle. Unexpanded transcripts roll forward to the latest three
+exchanges, with up to five tabs cached. Older history loaded by scrolling or
+**Load more messages** stays expanded through polling and cached-tab selection.
+Ungrouped legacy pages retain the 120-message cache limit; unpaged legacy
+snapshots remain intact so their older messages do not become inaccessible. Lightweight
 reads retain 3-second HTTPS / 2-second LAN deadlines.
 Conversation pages and full-message downloads allow up to 20 seconds without
 blocking the polling/mutation gate; tab polling continues during slow recent-page
@@ -268,7 +275,8 @@ loads. LAN connection establishment still has a 2-second deadline, and uncertain
 mutations are never replayed.
 
 These changes need both the updated phone app and an updated, reopened Mac
-host. Older hosts remain readable but still return full snapshots. Older
+host, including three-exchange mutation acknowledgements. Older hosts remain
+readable but may still return smaller recent pages or full snapshots. Older
 history paging covers messages currently available in the live session.
 
 **Auto** is the default for Cantrip typed and voice messages. A bounded,
