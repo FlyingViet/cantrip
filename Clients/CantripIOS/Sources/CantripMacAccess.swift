@@ -160,7 +160,7 @@ struct CantripMacAccessView: View {
     @StateObject private var desktop: CantripDesktopModel
     @State private var snapshot: CantripMacAccess?
     @State private var error: String?
-    @State private var control = false
+    @AppStorage("cantrip.desktop.control") private var control = false
     @State private var zoom = 1
     @State private var clickKind = "click"
     @State private var text = ""
@@ -196,6 +196,10 @@ struct CantripMacAccessView: View {
                         .buttonStyle(.bordered).frame(minHeight: 44)
                 } else {
                     Toggle("Enable keyboard and pointer control", isOn: $control)
+                        .disabled(desktop.busy)
+                        .accessibilityIdentifier("cantrip.desktop.control")
+                    Text("Your control preference is saved. Authenticate to start each session; Done ends the session.")
+                        .font(.footnote).foregroundStyle(.secondary)
                     Button {
                         Task { await desktop.start(control: control) }
                     } label: {

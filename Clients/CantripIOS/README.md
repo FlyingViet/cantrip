@@ -509,6 +509,9 @@ AgentGateway requires **Face ID or Touch ID** before affirmative input responses
 must be enrolled; authentication cancellation/failure sends nothing. Deny and
 Cancel remain available. This is an app-side guard, not a remotely transferable
 macOS authorization or device-attested signature.
+If Face ID finishes before its system sheet closes, AgentGateway waits for the
+app to become active before proceeding. Backgrounding or cancelling still
+requires fresh authentication.
 
 Open **Settings > Cantrip Mac > Mac Permissions & View Mac**, or the same action
 in a tab's menu. See Cantrip's permission status and supported Keychain issues,
@@ -522,6 +525,9 @@ token can start sessions; keep that token private. Choose view-only or control,
 authenticate, pick a display and zoom. Tap the destination field/window before
 typing or sending keys/scroll. Typed text goes to the Mac's actual focused
 field: verify focus before entering a password.
+The keyboard/pointer control preference is remembered on this device, but is not
+an active session or a permission grant. Each session requires authentication;
+**Done** ends the current session, and reopening Mac Access does not reconnect.
 
 Sessions use in-memory encrypted snapshots about once a second, with basic
 click/right-click/double-click, text, navigation keys and scroll. No images or

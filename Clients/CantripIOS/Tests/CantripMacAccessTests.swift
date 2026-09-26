@@ -123,6 +123,191 @@ final class CantripMacAccessTests: XCTestCase {
         XCTAssertEqual(methods, ["GET", "POST"])
     }
 
+    func testBiometricSuccessWaitsForForegroundBeforeDesktopRequests() async throws {
+        var state = UIApplication.State.active
+        let notifications = NotificationCenter()
+        var evaluated = false, methods: [String] = []
+        let remote = try await model { _ in
+            try await CantripBiometrics.authorize(applicationState: { state }, notifications: notifications, evaluate: {
+                state = .inactive
+                evaluated = true
+                return true
+            }, invalidate: {})
+        }
+        MacAccessProtocol.handler = { request in
+            XCTAssertEqual(state, .active)
+            methods.append(request.httpMethod!)
+            if request.httpMethod == "GET" { return (200, self.status) }
+            return (200, Data("""
+            {"id":"\(UUID())","token":"fixture","key":"\(Data(repeating: 1, count: 32).base64EncodedString())",
+             "control":true,"expiresAt":\(Date().addingTimeInterval(300).timeIntervalSince1970),"displays":[]}
+            """.utf8))
+        }
+        let task = Task { try await remote.startDesktop(control: true, identity: remote.usageIdentity) }
+        for _ in 0..<50 where !evaluated { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(evaluated)
+        XCTAssertTrue(methods.isEmpty, "Face ID success alone must not send while inactive")
+        state = .active
+        notifications.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        let lease = try await task.value
+        XCTAssertTrue(lease.control)
+        XCTAssertEqual(methods, ["GET", "POST"])
+    }
+
+    func testBackgroundDuringBiometricsCannotAuthorizeAfterReturningToForeground() async throws {
+        var state = UIApplication.State.active, invalidations = 0
+        let notifications = NotificationCenter()
+        let remote = try await model { _ in
+            try await CantripBiometrics.authorize(applicationState: { state }, notifications: notifications, evaluate: {
+                state = .background
+                notifications.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+                XCTAssertGreaterThan(invalidations, 0)
+                state = .active
+                notifications.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+                return true
+            }, invalidate: { invalidations += 1 })
+        }
+        MacAccessProtocol.handler = { _ in XCTFail("Backgrounded authentication must not send"); return (200, self.status) }
+        do { _ = try await remote.startDesktop(control: false, identity: remote.usageIdentity); XCTFail("Expected cancellation") }
+        catch is CancellationError {}
+    }
+
+    func testBackgroundOrCancellationWhileWaitingForForegroundRejectsAuthentication() async throws {
+        for background in [true, false] {
+            var state = UIApplication.State.active, evaluated = false, invalidated = false
+            let notifications = NotificationCenter()
+            let task = Task {
+                try await CantripBiometrics.authorize(applicationState: { state }, notifications: notifications, evaluate: {
+                    state = .inactive
+                    evaluated = true
+                    return true
+                }, invalidate: { invalidated = true })
+            }
+            for _ in 0..<50 where !evaluated { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertTrue(evaluated)
+            if background {
+                state = .background
+                notifications.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+            } else {
+                task.cancel()
+            }
+            do { try await task.value; XCTFail("Expected cancellation") }
+            catch is CancellationError {}
+            XCTAssertTrue(invalidated)
+            state = .active
+            notifications.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        }
+    }
+
+    func testCancellingPendingBiometricEvaluationInvalidatesContext() async throws {
+        var pending: CheckedContinuation<Bool, Error>?
+        var invalidated = false
+        let task = Task {
+            try await CantripBiometrics.authorize(applicationState: { .active }, notifications: NotificationCenter(), evaluate: {
+                try await withCheckedThrowingContinuation { pending = $0 }
+            }, invalidate: {
+                invalidated = true
+                let continuation = pending
+                pending = nil
+                continuation?.resume(throwing: CancellationError())
+            })
+        }
+        for _ in 0..<50 where pending == nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNotNil(pending)
+        task.cancel()
+        do { try await task.value; XCTFail("Expected cancellation") }
+        catch is CancellationError {}
+        XCTAssertTrue(invalidated)
+    }
+
+    func testBiometricForegroundWaitTimesOutWithoutAuthorizing() async throws {
+        var state = UIApplication.State.active, invalidated = false
+        do {
+            try await CantripBiometrics.authorize(applicationState: { state }, notifications: NotificationCenter(),
+                activationTimeout: .milliseconds(20), evaluate: {
+                    state = .inactive
+                    return true
+                }, invalidate: { invalidated = true })
+            XCTFail("An inactive app must not authorize")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("did not become active"), error.localizedDescription)
+        }
+        XCTAssertTrue(invalidated)
+    }
+
+    func testBiometricFailureAndInitiallyInactiveAppCannotAuthorize() async throws {
+        for initialState in [UIApplication.State.active, .inactive, .background] {
+            var evaluated = false
+            do {
+                try await CantripBiometrics.authorize(applicationState: { initialState }, notifications: NotificationCenter(), evaluate: {
+                    evaluated = true
+                    return false
+                }, invalidate: {})
+                XCTFail("Expected rejection")
+            } catch is CancellationError {
+                XCTAssertNotEqual(initialState, .active)
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains("did not succeed"), error.localizedDescription)
+            }
+            XCTAssertEqual(evaluated, initialState == .active)
+        }
+    }
+
+    func testClosingDesktopDuringAuthenticationCannotStartSession() async throws {
+        var state = UIApplication.State.active, evaluated = false
+        let notifications = NotificationCenter()
+        let remote = try await model { _ in
+            try await CantripBiometrics.authorize(applicationState: { state }, notifications: notifications, evaluate: {
+                state = .inactive
+                evaluated = true
+                return true
+            }, invalidate: {})
+        }
+        MacAccessProtocol.handler = { _ in XCTFail("Done must cancel the pending start"); return (200, self.status) }
+        let desktop = CantripDesktopModel(remote: remote)
+        let task = Task { await desktop.start(control: true) }
+        for _ in 0..<50 where !evaluated { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(evaluated)
+        await desktop.stop()
+        state = .active
+        notifications.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        await task.value
+        XCTAssertNil(desktop.lease)
+        XCTAssertFalse(desktop.busy)
+        XCTAssertNotNil(desktop.error)
+    }
+
+    func testControlPreferenceSurvivesReopeningWithoutStartingSession() async throws {
+        let suite = "CantripMacAccessTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let remote = try await model { _ in XCTFail("A saved preference is not authorization") }
+        MacAccessProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/v1/mac-access")
+            return (200, self.status)
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
+        for expected in [false, true, false] {
+            let controller = UIHostingController(rootView:
+                NavigationStack { CantripMacAccessView(remote: remote) }.defaultAppStorage(defaults))
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true; window.rootViewController = nil }
+            try await Task.sleep(for: .milliseconds(350))
+            controller.view.layoutIfNeeded()
+            let toggle = try XCTUnwrap(descendants(controller.view).compactMap { $0 as? UISwitch }.first)
+            XCTAssertEqual(toggle.isOn, expected)
+            toggle.setOn(!expected, animated: false)
+            toggle.sendActions(for: .valueChanged)
+            try await Task.sleep(for: .milliseconds(50))
+            XCTAssertEqual(defaults.bool(forKey: "cantrip.desktop.control"), !expected)
+        }
+    }
+
     func testFrameAndKeyboardCiphertextAreBoundToLeaseFrameAndSequence() throws {
         let key = SymmetricKey(size: .bits256), leaseID = UUID(), frameID = UUID()
         let lease = CantripDesktopLease(id: leaseID, token: "fixture",
