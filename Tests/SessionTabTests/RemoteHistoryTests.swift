@@ -29,9 +29,15 @@ extension SessionTabTests {
         defer { client.invalidateAndCancel() }
         try await Task.sleep(nanoseconds: 300_000_000)
 
-        func request(_ suffix: String, auth: Bool = true) async throws -> (Int, [String: Any], Int) {
+        func request(_ suffix: String, auth: Bool = true, method: String = "GET",
+                     body: [String: Any]? = nil) async throws -> (Int, [String: Any], Int) {
             let url = URL(string: "http://127.0.0.1:\(port)/api/v1/sessions/\(chat.id)\(suffix)")!
             var request = URLRequest(url: url)
+            request.httpMethod = method
+            if let body {
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            }
             if auth { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
             let (data, response) = try await client.data(for: request)
             return ((response as! HTTPURLResponse).statusCode,
@@ -179,11 +185,45 @@ extension SessionTabTests {
         precondition(normal.first?["id"] as? String == exchanges[3][0].id.uuidString,
                      "Other clients keep the usual budgeted recent page")
 
+        chat.isStreaming = true
+        let (queuedStatus, queuedResponse, _) = try await request(
+            "/messages?history=recent&recentExchanges=3", method: "POST",
+            body: ["text": "Queued follow-up", "mode": "queue"]
+        )
+        let queuedSession = queuedResponse["session"] as! [String: Any]
+        precondition(queuedStatus == 202 && chat.queued.count == 1)
+        precondition((queuedSession["messages"] as! [[String: Any]]).map { $0["id"] as! String }
+                     == expectedThree.map { $0.id.uuidString },
+                     "Send acknowledgements retain three full exchanges beyond the usual page budgets")
+        let queuedID = chat.queued[0].id
+        let (removedStatus, removedResponse, _) = try await request(
+            "/queue/\(queuedID)?history=recent&recentExchanges=3", method: "DELETE"
+        )
+        precondition(removedStatus == 200 && chat.queued.isEmpty)
+        precondition(((removedResponse["session"] as! [String: Any])["messages"] as! [[String: Any]])
+            .map { $0["id"] as! String } == expectedThree.map { $0.id.uuidString })
+        for invalid in ["0", "4", "-1", "invalid"] {
+            let (invalidStatus, _, _) = try await request(
+                "/messages?history=recent&recentExchanges=\(invalid)", method: "POST",
+                body: ["text": "Must not be queued", "mode": "queue"]
+            )
+            precondition(invalidStatus == 400 && chat.queued.isEmpty && chat.messages == completeHistory,
+                         "Reject invalid history options before accepting any mutation")
+        }
+        chat.isStreaming = false
+
         chat.messages.append(ChatMessage(role: .user, text: "Waiting for the next reply"))
         let (_, waitingResponse, _) = try await request("?history=recent&recentExchanges=3")
         let waiting = (waitingResponse["session"] as! [String: Any])["messages"] as! [[String: Any]]
         precondition(waiting.first?["id"] as? String == exchanges[3][0].id.uuidString)
         precondition(waiting.last?["role"] as? String == "user", "The active prompt is the newest exchange")
+        let (renamedStatus, renamedResponse, _) = try await request(
+            "/metadata?history=recent&recentExchanges=3", method: "POST", body: ["customTitle": "Three exchanges"]
+        )
+        let renamedMessages = (renamedResponse["session"] as! [String: Any])["messages"] as! [[String: Any]]
+        precondition(renamedStatus == 200 && renamedMessages.map { $0["id"] as! String }
+                     == waiting.map { $0["id"] as! String },
+                     "An active prompt counts toward three exchanges in mutation replies too")
         for invalid in ["0", "4", "-1", "invalid"] {
             let (invalidStatus, _, _) = try await request("?history=recent&recentExchanges=\(invalid)")
             precondition(invalidStatus == 400, "The exchange-count opt-in is bounded")

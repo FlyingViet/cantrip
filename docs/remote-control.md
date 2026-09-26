@@ -336,8 +336,8 @@ Copilot Remote/ACP and unsupported backends continue to queue instead.
 ## Loading long conversations
 
 Updated AgentGateway and Mac/browser Remote load recent messages first instead
-of repeatedly downloading the entire live transcript. **The native Mac Remote
-tab starts with the latest three prompt-and-reply exchanges**, including all
+of repeatedly downloading the entire live transcript. **AgentGateway and the native
+Mac Remote tab start with the latest three prompt-and-reply exchanges**, including all
 continuation or council replies belonging to each prompt. A new prompt counts
 as the current exchange while its reply is still running.
 Scroll up near the top to load older exchanges without losing your reading
@@ -356,13 +356,16 @@ prompt when available. A large response or multi-response turn may exceed these
 soft limits so its prompt stays visible before its output; messages are never
 truncated to fit. The same rules apply to requested older pages. This page budget
 excludes metadata and the ordered queue.
-Native Mac Remote adds `recentExchanges=3` to recent conversation reads. That
-opt-in returns up to three complete exchanges even when their combined output
-exceeds the usual soft page budgets; older-page requests retain normal paging.
-Browsers and AgentGateway keep their existing initial page sizes. Legacy hosts
+Native Mac Remote and AgentGateway add `recentExchanges=3` to recent conversation
+reads. AgentGateway also includes it on session mutations so their acknowledgements
+do not collapse the transcript after a follow-up. The bounded opt-in (1-3) is
+validated before any mutation and returns up to three complete exchanges even
+when their combined output exceeds the usual soft page budgets. A running prompt
+counts as the newest exchange; older-page requests retain normal paging.
+Browsers and clients without the opt-in keep their existing page sizes. Legacy hosts
 without pagination retain the full transcript rather than hiding inaccessible history.
 Page sizing and encoding run off the main actor and the lightweight tab-list queue.
-Clients cache up to five tabs. Native Mac Remote keeps three complete exchanges
+Clients cache up to five tabs. AgentGateway and native Mac Remote keep three complete exchanges
 until you expand history; other unattended clients target a rolling 120-message
 window while retaining the boundary prompt and responses. Older-history loading
 can expand these windows.
