@@ -38,10 +38,11 @@ jobs:
     # login keychain).
     runs-on: [self-hosted, macOS]
     timeout-minutes: 40
-    env:
-      TMPDIR: ${{ runner.temp }}/
 
     steps:
+      - name: Use job-local temporary storage
+        run: echo "TMPDIR=$RUNNER_TEMP/" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v5
 
       - name: Select Duo toolchain for this job
