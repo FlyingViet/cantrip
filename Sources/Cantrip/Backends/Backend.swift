@@ -70,7 +70,7 @@ enum InputRequestError: LocalizedError, Equatable {
     }
 }
 
-/// Callbacks and answers are runtime-only; neither belongs in the conversation or journal.
+/// Callbacks and secrets are runtime-only. ChatSession records only non-secret question/answer turns.
 final class BackendInputRequest {
     let snapshot: InputRequestSnapshot
     private let lock = NSLock()

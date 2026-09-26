@@ -2,11 +2,13 @@ import SwiftUI
 
 struct RemoteInputView: View {
     @ObservedObject var session: ChatSession
+    var secureOnly = false
+    var openSecureInput: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(session.pendingInputs) { request in
-                NativeInputCard(session: session, request: request)
+            ForEach(session.pendingInputs.filter { !secureOnly || $0.kind == .secret }) { request in
+                NativeInputCard(session: session, request: request, secureEntry: secureOnly, openSecureInput: openSecureInput)
                     .id(request.id)
             }
         }
@@ -16,6 +18,8 @@ struct RemoteInputView: View {
 private struct NativeInputCard: View {
     @ObservedObject var session: ChatSession
     let request: InputRequestSnapshot
+    let secureEntry: Bool
+    let openSecureInput: () -> Void
     @State private var text = ""
     @State private var error: String?
 
@@ -28,17 +32,27 @@ private struct NativeInputCard: View {
             }
             .frame(maxHeight: 180)
             if request.kind == .secret {
-                SecureField("Password or passphrase", text: $text)
-                Text("Sent only to the verified waiting program. Not added to chat or saved by Cantrip.")
-                    .font(.caption)
+                if secureEntry {
+                    SecureField("Password or passphrase", text: $text)
+                    Text("Sent only to the verified waiting program. Not added to chat or saved by Cantrip.")
+                        .font(.caption)
+                } else {
+                    Button("Enter password securely", action: openSecureInput)
+                }
             } else if request.kind == .question {
-                if !request.choices.isEmpty {
-                    Picker("Response", selection: $text) {
-                        Text("Choose a response").tag("")
-                        ForEach(request.choices, id: \.self) { Text($0).tag($0) }
+                ForEach(request.choices, id: \.self) { choice in
+                    Button(choice) {
+                        text = choice
+                        respond(.submit)
                     }
                 }
-                if request.allowsFreeform { TextField("Answer (shared with the agent; not for passwords)", text: $text, axis: .vertical) }
+                if request.allowsFreeform {
+                    Text("Reply in the chat below. You can include attachments; do not enter passwords.")
+                        .font(.caption)
+                    if session.chatInputRequest?.id != request.id {
+                        Button("Reply to this question") { session.inputReplyID = request.id }
+                    }
+                }
             }
             if let raw = request.url, let url = URL(string: raw), url.scheme == "https" {
                 if let code = request.code { Text("Device code: \(code)").monospaced().textSelection(.enabled) }
@@ -52,9 +66,9 @@ private struct NativeInputCard: View {
                 if request.kind == .approval {
                     Button("Deny", role: .destructive) { respond(.deny) }
                     Button("Approve once") { respond(.approve) }
-                } else if request.kind == .secret || request.kind == .question {
+                } else if request.kind == .secret, secureEntry {
                     Button("Submit") { respond(.submit) }.disabled(text.isEmpty)
-                } else {
+                } else if request.kind != .secret && request.kind != .question {
                     Button(request.kind == .login ? "I've signed in" : "Done on Mac") { respond(.approve) }
                 }
             }

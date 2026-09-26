@@ -1,6 +1,24 @@
 import Foundation
 
 extension ChatSession {
+    var chatInputRequest: InputRequestSnapshot? {
+        pendingInputs.first { $0.kind == .question && $0.id == inputReplyID }
+            ?? pendingInputs.first { $0.kind == .question }
+    }
+
+    func validateChatInput(id: UUID) throws {
+        guard isStreaming, !isLocalPrivate, let request = inputRequests[id],
+              request.isPending, request.snapshot.expiresAt > Date().timeIntervalSince1970 else {
+            throw InputRequestError.unavailable
+        }
+        guard request.snapshot.kind == .question else { throw InputRequestError.invalidAnswer }
+    }
+
+    func respondInChat(id: UUID, text: String) throws {
+        try validateChatInput(id: id)
+        try respondToInput(id: id, answer: .init(decision: .submit, text: text))
+    }
+
     func receiveInput(_ request: BackendInputRequest) {
         guard isStreaming, !isLocalPrivate, request.isPending, inputRequests.count < 8 else {
             request.cancel()
@@ -31,6 +49,9 @@ extension ChatSession {
     func respondToInput(id: UUID, answer: InputRequestAnswer) throws {
         guard isStreaming, !isLocalPrivate, let request = inputRequests[id] else { throw InputRequestError.unavailable }
         try request.respond(answer)
+        if request.snapshot.kind == .question, answer.decision == .submit, let text = answer.text {
+            recordInputConversation(request.snapshot, answer: text)
+        }
         removeInput(id)
     }
 
@@ -38,6 +59,7 @@ extension ChatSession {
         guard inputRequests.removeValue(forKey: id) != nil else { return }
         inputExpiryTasks.removeValue(forKey: id)?.cancel()
         pendingInputs.removeAll { $0.id == id }
+        if inputReplyID == id { inputReplyID = nil }
         onInputResolved?(id)
         if pendingInputs.isEmpty, isStreaming { statusText = "Continuing..." }
     }

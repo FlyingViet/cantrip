@@ -172,7 +172,10 @@ Read [permissions, privacy, and memory](docs/privacy-and-memory.md).
 AgentGateway can opt in to per-Mac completion alerts with a short final-answer
 preview and generic input-needed alerts with tap-to-tab navigation, including
 while the phone is locked. Supported Copilot/Claude/ACP prompts can wait for
-**Approve once / Deny** or an answer in Cantrip and Remote. Verified system
+**Approve once / Deny** or an answer inline in Cantrip and Remote chat.
+Ordinary questions use the normal composer (Auto delivery), including attachments;
+only passwords and passphrases use the secure input modal. Input-needed alerts
+still open the correct conversation. Verified system
 OpenSSH and `sudo -A` children of supported Cantrip runs can request secure
 password/passphrase input without putting it in chat. Use `/login github`
 for GitHub device sign-in. See [remote input and limitations](docs/remote-control.md#remote-approvals-and-secure-input).
@@ -186,8 +189,8 @@ pointer/keyboard control from AgentGateway and Mac/browser Remote. Enable
 Screen Recording and (for control) Accessibility permissions. Sessions expire
 after five minutes or 60 seconds without activity; the Mac can end them from
 its panel or menu bar. New screen frames and desktop input are not saved or
-sent to models. AgentGateway requires Face ID/Touch ID for affirmative input
-responses and starting View Mac; this is an app-side safeguard, not macOS
+sent to models. AgentGateway requires Face ID/Touch ID for approvals, secure input
+and starting View Mac, not ordinary chat replies; this is an app-side safeguard, not macOS
 authorization. See [Mac attention and biometrics](docs/remote-control.md#mac-attention-view-mac-and-face-id).
 
 ## Learn more

@@ -53,6 +53,7 @@ final class ChatSession: ObservableObject {
         didSet { remoteMessageRevision = UUID() }
     }
     var inputRequests: [UUID: BackendInputRequest] = [:]
+    @Published var inputReplyID: UUID?
     var inputExpiryTasks: [UUID: Task<Void, Never>] = [:]
     var onInputNeeded: ((InputRequestSnapshot) -> Void)?
     var onInputResolved: ((UUID) -> Void)?
@@ -780,7 +781,27 @@ final class ChatSession: ObservableObject {
     }
 
     func submit(_ text: String, mode: MessageDeliveryMode = .auto) {
+        if mode == .auto, let request = chatInputRequest {
+            do { try submitInputReply(text, id: request.id) }
+            catch { deliveryStatusForInput(error.localizedDescription) }
+            return
+        }
         receive(text, mode: mode, includesAmbientContext: true)
+    }
+
+    func submitInputReply(_ text: String, id: UUID) throws {
+        let prompt = consumeStagedContext(onto: text, backendKind: runningBackendKind ?? settings.backend, consume: false)
+        try respondInChat(id: id, text: prompt)
+        attachments.removeAll()
+        selectionContext = nil
+    }
+
+    func recordInputConversation(_ request: InputRequestSnapshot, answer: String) {
+        let question = request.detail.isEmpty ? request.title : "\(request.title)\n\n\(request.detail)"
+        appendRunMessage(ChatMessage(role: .assistant, text: question))
+        appendRunMessage(ChatMessage(role: .user, text: answer))
+        appendRunMessage(ChatMessage(role: .assistant, text: ""))
+        persistTranscript()
     }
 
     var supportsRemoteImages: Bool {
@@ -1347,11 +1368,11 @@ final class ChatSession: ObservableObject {
         return backendPrompt
     }
 
-    private func consumeStagedContext(onto prompt: String, backendKind: BackendKind?) -> String {
+    private func consumeStagedContext(onto prompt: String, backendKind: BackendKind?, consume: Bool = true) -> String {
         var result = prompt
         if let selection = selectionContext {
             result += "\n\n(Selected text from \(selection.appName), which my request refers to:\n\"\"\"\n\(selection.text.prefix(4000))\n\"\"\")"
-            selectionContext = nil
+            if consume { selectionContext = nil }
         }
         if backendKind != .localModel {
             let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "tiff", "bmp", "svg"]
@@ -1362,7 +1383,7 @@ final class ChatSession: ObservableObject {
                     : "\n\n(Attached file: \(path) — read/analyze this file; it is part of my request.)"
             }
         }
-        attachments.removeAll()
+        if consume { attachments.removeAll() }
         return result
     }
 

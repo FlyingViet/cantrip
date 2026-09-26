@@ -860,6 +860,15 @@ final class RemoteControlServer {
                 return
             }
             do {
+                let inputRequestID: UUID?
+                if let value = body["inputRequestID"] {
+                    guard let raw = value as? String, let id = UUID(uuidString: raw), mode == .auto else {
+                        sendError(400, "A chat reply requires an input request UUID and auto delivery.", on: connection)
+                        return
+                    }
+                    try session.validateChatInput(id: id)
+                    inputRequestID = id
+                } else { inputRequestID = nil }
                 let images = try RemoteImageAttachments.decode(body["images"])
                 if let value = body["videoID"] {
                     guard let rawID = value as? String, let uploadID = UUID(uuidString: rawID),
@@ -886,8 +895,11 @@ final class RemoteControlServer {
                             }
                             let prompt = (trimmed.isEmpty ? "Please analyze the attached video." : trimmed)
                                 + "\n\n" + video
-                            session.submitRemote(prompt, mode: mode)
+                            if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
+                            else { session.submitRemote(prompt, mode: mode) }
                             sendSession(session, status: 202, on: connection)
+                        } catch let error as InputRequestError {
+                            sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
                         } catch let error as RemoteVideoError {
                             sendError(error.status, error.message, on: connection)
                         } catch {
@@ -914,7 +926,11 @@ final class RemoteControlServer {
                 let prompt = try RemoteImageAttachments.preparePrompt(
                     text, images: images, sessionID: session.id
                 )
-                session.submitRemote(prompt, mode: mode)
+                if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
+                else { session.submitRemote(prompt, mode: mode) }
+            } catch let error as InputRequestError {
+                sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
+                return
             } catch let error as RemoteImageAttachmentError {
                 sendError(400, error.localizedDescription, on: connection)
                 return
@@ -1016,6 +1032,7 @@ final class RemoteControlServer {
             "isLocalPrivate": session.isLocalPrivate,
             "supportsPrivateLocalSettings": session.isLocalPrivate,
             "supportsInputRequests": true,
+            "supportsChatInputReplies": true,
             "pendingInputCount": session.pendingInputs.count,
             "supportsTabMetadata": true,
             "supportsTabReordering": true,
@@ -1043,6 +1060,17 @@ final class RemoteControlServer {
         hasher.update(data: Data(session.remoteMessageRevision.uuidString.utf8))
         hasher.update(data: Data(session.remoteQueueRevision.uuidString.utf8))
         result["historyRevision"] = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        result["pendingInputs"] = session.pendingInputs.map { request -> [String: Any] in
+            var object: [String: Any] = [
+                "id": request.id.uuidString, "kind": request.kind.rawValue,
+                "source": request.source, "title": request.title, "detail": request.detail,
+                "choices": request.choices, "allowsFreeform": request.allowsFreeform,
+                "expiresAt": request.expiresAt
+            ]
+            if let url = request.url { object["url"] = url }
+            if let code = request.code { object["code"] = code }
+            return object
+        }
         if includeMessages {
             result["queued"] = session.queued.map { prompt in
                 let presentation = RemoteImageAttachments.presentation(prompt.text, sessionID: session.id)
@@ -1306,8 +1334,8 @@ private extension RemoteControlServer {
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div></header>
     <div id="actionError" role="alert"></div><button id="inputBanner" class="control hidden">Your input is needed</button><div id="historyError" role="alert"></div><button id="olderMessages" class="control hidden">Load more messages</button><section id="messages"></section></main>
-    <dialog id="inputEditor" aria-labelledby="inputTitle"><strong id="inputTitle">Input Needed</strong>
-    <p class="muted">Review the requesting program and action. Question answers go to the agent; passwords belong only in a secure credential request.</p>
+    <dialog id="inputEditor" aria-labelledby="inputTitle"><strong id="inputTitle">Secure Input</strong>
+    <p class="muted">Only passwords and passphrases belong here. Questions and other actions appear in chat.</p>
     <div id="inputError" role="alert"></div><div id="inputCards"></div>
     <div class="tab-actions"><button id="inputReload" class="control">Reload</button><button id="inputDone" class="control">Done</button></div></dialog>
     <dialog id="tabEditor" aria-labelledby="tabEditorTitle"><form id="tabForm">
@@ -1589,26 +1617,19 @@ private extension RemoteControlServer {
     function showInputs(){if(!selected)return;inputState={id:selected,token,saving:false,timer:null};$("inputCards").replaceChildren();$("inputError").textContent="";$("inputEditor").showModal();loadInputs()}
     async function loadInputs(){const state=inputState;if(!state||state.saving)return;if(state.timer)clearTimeout(state.timer);
       try{const data=await api(`/api/v1/sessions/${state.id}/input`);if(inputState!==state||token!==state.token)return;
-        const cards=$("inputCards"),ids=new Set(data.requests.map(r=>r.id));
+        const requests=data.requests.filter(r=>r.kind==="secret"),cards=$("inputCards"),ids=new Set(requests.map(r=>r.id));
         for(const card of Array.from(cards.children))if(!ids.has(card.dataset.id))card.remove();
-        for(const request of data.requests){if(Array.from(cards.children).some(card=>card.dataset.id===request.id))continue;
+        for(const request of requests){if(Array.from(cards.children).some(card=>card.dataset.id===request.id))continue;
           const card=document.createElement("section");card.className="input-card";card.dataset.id=request.id;
           const title=document.createElement("strong"),source=document.createElement("span"),detail=document.createElement("pre");
           title.textContent=request.title;source.textContent=request.source;detail.textContent=request.detail;card.append(title,source,detail);
-          let field=null;if(request.kind==="secret"||request.kind==="question"){
-            if(request.kind==="question"&&request.choices.length&&!request.allowsFreeform){field=document.createElement("select");const empty=document.createElement("option");empty.value="";empty.textContent="Choose a response";field.append(empty);
-              for(const choice of request.choices){const option=document.createElement("option");option.value=choice;option.textContent=choice;field.append(option)}}
-            else {field=document.createElement("input");field.type=request.kind==="secret"?"password":"text";field.autocomplete="off";field.spellcheck=false}
-            field.setAttribute("aria-label",request.kind==="secret"?"Password or passphrase":"Answer (shared with the agent)");card.append(field);
-            if(request.kind==="question"&&request.allowsFreeform&&request.choices.length){const choices=document.createElement("div");choices.textContent=request.choices.join(" / ");card.append(choices)}}
-          if(request.url){try{const url=new URL(request.url);if(url.protocol==="https:"){const link=document.createElement("a");link.href=url.href;link.textContent=`Open ${url.host}`;link.target="_blank";link.rel="noopener noreferrer";card.append(link)}}catch{}}
-          if(request.code){const code=document.createElement("pre");code.textContent=`Device code: ${request.code}`;card.append(code)}
+          const field=document.createElement("input");field.type="password";field.autocomplete="off";field.spellcheck=false;
+          field.setAttribute("aria-label","Password or passphrase");card.append(field);
           const actions=document.createElement("div");actions.className="tab-actions";
-          for(const [label,decision] of request.kind==="approval"?[["Cancel","cancel"],["Deny","deny"],["Approve once","approve"]]:
-              ["question","secret"].includes(request.kind)?[["Cancel","cancel"],["Submit","submit"]]:[["Cancel","cancel"],["Done","approve"]]){
+          for(const [label,decision] of [["Cancel","cancel"],["Submit","submit"]]){
             const button=document.createElement("button");button.className="control";button.textContent=label;button.onclick=()=>respondInput(state,request,decision,field);actions.append(button)}
           card.append(actions);cards.append(card)}
-        if(!data.requests.length)$("inputError").textContent="No pending requests. It may have been answered, cancelled or expired."}
+        if(!requests.length)$("inputError").textContent="No password is pending. Return to chat for questions and other actions."}
       catch(error){if(inputState===state)$("inputError").textContent=error.message}
       finally{if(inputState===state&&token===state.token)state.timer=setTimeout(loadInputs,2000)}}
     async function respondInput(state,request,decision,field){if(state!==inputState||token!==state.token||state.saving)return;
@@ -1620,6 +1641,37 @@ private extension RemoteControlServer {
       finally{delete body.text;state.saving=false;for(const control of $("inputEditor").querySelectorAll("button,input,select"))control.disabled=false;if(inputState===state){loadInputs();refresh()}}}
     $("inputBanner").onclick=showInputs;$("inputReload").onclick=loadInputs;$("inputDone").onclick=closeInputs;
     $("inputEditor").addEventListener("cancel",event=>{if(inputState?.saving)event.preventDefault();else closeInputs()});
+    let chatInputReply=null,chatInputSaving=false;
+    function appendChatInputs(parent,session){
+      const requests=session.pendingInputs||[],questions=requests.filter(r=>r.kind==="question");
+      const chosen=chatInputReply?.sessionID===session.id&&chatInputReply.token===token?questions.find(r=>r.id===chatInputReply.id):null;
+      const question=chosen||questions[0];chatInputReply=question?{id:question.id,sessionID:session.id,token}:null;
+      $("draft").placeholder=question?`Reply in chat: ${question.title} (not passwords)`:"Message Cantrip...";
+      for(const request of requests){const card=document.createElement("section");card.className="input-card";card.dataset.id=request.id;
+        const title=document.createElement("strong");title.textContent=request.title;card.append(title);
+        const button=(label,action)=>{const node=document.createElement("button");node.className="control";node.textContent=label;node.disabled=chatInputSaving||request.expiresAt<=Date.now()/1000;node.onclick=action;card.append(node)};
+        if(request.kind==="secret"){button("Enter password securely",showInputs);parent.append(card);continue}
+        const detail=document.createElement("pre");detail.textContent=request.detail;card.append(detail);
+        const state={sessionID:session.id,token};
+        if(request.kind==="question"){
+          for(const choice of request.choices)button(choice,()=>respondChatInput(state,request,{decision:"submit",text:choice}));
+          if(request.allowsFreeform)button("Reply in chat",()=>{chatInputReply={id:request.id,sessionID:session.id,token};$("mode").value="auto";$("draft").focus()});
+        }else if(request.kind==="approval"){
+          button("Approve once",()=>respondChatInput(state,request,{decision:"approve"}));button("Deny",()=>respondChatInput(state,request,{decision:"deny"}));
+        }else{
+          if(request.url){const url=safeURL(request.url);if(url?.startsWith("https:")){const link=document.createElement("a");link.href=url;link.textContent="Open sign-in page";link.target="_blank";link.rel="noopener noreferrer";card.append(link)}}
+          if(request.code){const code=document.createElement("pre");code.textContent=`Device code: ${request.code}`;card.append(code)}
+          button(request.kind==="login"?"I've signed in":"Done on Mac",()=>respondChatInput(state,request,{decision:"approve"}));
+        }
+        button("Cancel",()=>respondChatInput(state,request,{decision:"cancel"}));parent.append(card);
+      }
+    }
+    async function respondChatInput(state,request,body){
+      if(chatInputSaving||selected!==state.sessionID||token!==state.token)return;chatInputSaving=true;
+      try{await api(`/api/v1/sessions/${state.sessionID}/input/${request.id}`,{method:"POST",body:JSON.stringify(body)});if(token===state.token&&selected===state.sessionID){$("actionError").textContent="";await refresh()}}
+      catch(error){if(token===state.token&&selected===state.sessionID)$("actionError").textContent=`${error.message} Not retried. Refresh before responding again.`}
+      finally{chatInputSaving=false;renderedPayload="";refresh()}
+    }
     let desktopState=null;
     const desktopBytes=value=>Uint8Array.from(atob(value),c=>c.charCodeAt(0));
     function desktopBase64(bytes){let result="";for(let i=0;i<bytes.length;i+=8192)result+=String.fromCharCode(...bytes.subarray(i,i+8192));return btoa(result)}
@@ -1730,7 +1782,7 @@ private extension RemoteControlServer {
     $("promptDone").onclick=()=>$("promptReader").close();
     $("promptReader").addEventListener("close",()=>{readingPrompt="";promptStarts=[0];$("promptPage").textContent=""});
     function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight;
-      $("inputBanner").classList.toggle("hidden",!session?.pendingInputCount);$("inputBanner").textContent=`Your input is needed (${session?.pendingInputCount||0})`;
+      $("inputBanner").classList.toggle("hidden",!session?.pendingInputs?.some(r=>r.kind==="secret"));$("inputBanner").textContent="Enter password securely";
       renderProgress(session);updateHistoryControls(session);const box=$("messages"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
       const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession);renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;box.replaceChildren();$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
       if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
@@ -1742,6 +1794,7 @@ private extension RemoteControlServer {
             const requestToken=token;button.disabled=true;try{const data=await api(`/api/v1/sessions/${session.id}/messages/${message.id}`);if(token!==requestToken||selected!==session.id)return;
               const full=data.message,parts=[full.text];if(full.thinking)parts.push("Reasoning\\n"+full.thinking);for(const step of full.activities||[])parts.push([step.title,step.input,step.output].filter(Boolean).join("\\n"));readPrompt(parts.join("\\n\\n"));$("promptTitle").textContent="Message details"}
             catch(error){if(token===requestToken)$("historyError").textContent=`Could not load message details: ${error.message}`}finally{button.disabled=false}};row.append(button)}box.append(row)}
+        appendChatInputs(box,session);
         if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}
         if(!sidebarLayout&&(session.isStreaming||session.queuedCount)){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
       requestAnimationFrame(()=>{root.scrollTop=shouldFollow?root.scrollHeight:Math.min(previousTop+(prepend?root.scrollHeight-previousHeight:0),Math.max(0,root.scrollHeight-root.clientHeight));followOutput=shouldFollow;suppressScroll=false})}
@@ -1750,7 +1803,10 @@ private extension RemoteControlServer {
       catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
     $("pairButton").onclick=async()=>{if(desktopState)await endDesktop();historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();tabDrafts.clear();selected=null;$("draft").value="";token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
       catch(error){$("pairError").textContent=error.message}};
-    $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;$("send").disabled=true;try{await action("messages",{text,mode:$("mode").value});if($("draft").value.trim()===text)$("draft").value="";$("mode").value="auto"}catch(error){const label=document.querySelector(".connection-label");if(label)label.textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false}};
+    $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;const sessionID=selected,requestToken=token,mode=$("mode").value,body={text,mode};
+      if(mode==="auto"&&chatInputReply?.sessionID===sessionID&&chatInputReply.token===requestToken)body.inputRequestID=chatInputReply.id;
+      $("send").disabled=true;try{await action("messages",body);if(selected===sessionID&&token===requestToken){if($("draft").value.trim()===text)$("draft").value="";$("mode").value="auto"}}
+      catch(error){const label=document.querySelector(".connection-label");if(label)label.textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false}};
     $("draft").onkeydown=event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selectTab(data.session.id);refresh()};
     $("forget").onclick=async()=>{if(desktopState)await endDesktop();localStorage.removeItem("cantripToken");historyCache.clear();expandedHistory.clear();tabDrafts.clear();selected=null;$("draft").value="";token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null)};if(token){pair(false);refresh()}else pair(true);

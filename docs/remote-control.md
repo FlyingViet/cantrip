@@ -105,10 +105,14 @@ the paired `GET/POST /api/v1/sessions/{id}/model-settings` endpoint.
 
 ## Remote approvals and secure input
 
-Cantrip, Mac/browser Remote and AgentGateway display pending **Input Needed**
-requests. AgentGateway shows a review banner and **Review Input Requests** in
-tab actions. The host Mac shows the request in the transcript and a review
-button. Requests belong to the original tab and execution, accept one response
+Cantrip, Mac/browser Remote and AgentGateway display questions, approvals and
+other non-secret actions **inline in the conversation**. Ordinary questions use
+the normal chat composer with **Auto** delivery, including attachments, or the
+suggested-answer buttons. Select **Reply in chat** when several questions are
+waiting. Explicit Queue/Redirect/Inject modes keep their existing meaning.
+**View Questions in Chat** opens the conversation; it does not open a modal.
+Only **passwords and passphrases** use the **Secure Input** modal, opened by
+**Enter password securely**. Requests belong to the original tab and execution, accept one response
 only, and expire after ten minutes. Stop, redirect, privacy changes and backend
 termination invalidate pending requests. Another device's answer removes the
 request on refresh. Requests and secrets are not restored/replayed after a crash.
@@ -128,9 +132,9 @@ remain read-only; the Private Local tab remains tool-free. Codex's headless
 `exec` tool-approval protocol, arbitrary programs, manual persistent-terminal
 input, and arbitrary OAuth callback flows are not covered by this bridge.
 
-Secure fields are separate from normal question fields. Answers to questions
-are sent to the agent; **never enter passwords in those fields or ordinary
-chat**. Secure answers go through the authenticated connection directly to an
+Secure fields are separate from ordinary chat. Non-secret questions and their
+answers become normal saved conversation turns and are sent to the agent;
+**never enter passwords in ordinary chat**. Secure answers go through the authenticated connection directly to an
 OS-verified askpass requester, not to the model, transcript, journal, command
 arguments or push payload. The broker verifies user, executable, process
 ancestry and the current execution before sending a response. Background
@@ -141,11 +145,16 @@ program and destination must still be trusted.
 
 `gh` must be installed for GitHub sign-in. The CLI may save its resulting
 credential in the Mac's normal credential store. A pending device code stays
-only in the request UI, never in chat or push.
+only in the live inline request UI, never in saved chat history or push.
 
 The paired API exposes `GET /api/v1/sessions/{id}/input` and
 `POST /api/v1/sessions/{id}/input/{requestID}` with a `decision` and optional
-`text`. Capabilities and pending counts are advertised in tab snapshots.
+`text`. Chat replies use `POST /api/v1/sessions/{id}/messages` with an explicit
+`inputRequestID` and Auto delivery, retaining the existing image/video transport.
+Only a still-pending question can accept that ID; stale replies fail instead of
+starting or queuing another task. Capabilities, pending requests and counts are
+advertised in tab snapshots. New phone clients can use text-only input replies
+with older hosts; attached replies require `supportsChatInputReplies`.
 Responses are never automatically retried after an uncertain connection;
 reload the requests instead. Existing LAN/Tailscale routes work; no relay is
 required. All native clients/host need the updated build.
@@ -203,7 +212,9 @@ third-party HTTPS-terminating proxy is in that trust path. This is not the
 previously discussed end-to-end encrypted relay.
 
 **Face ID/Touch ID is enforced by AgentGateway**, using a fresh biometric check
-before an affirmative input response or starting a viewing/control lease.
+before an approval, action confirmation, password/passphrase submission or
+starting a viewing/control lease. Ordinary chat question replies do not require
+biometrics; the non-biometric response route accepts only question requests.
 Authentication failure, cancellation, a changed Mac or an expired request never
 proceeds. There is no silent device-passcode fallback; Deny and Cancel remain
 available. The Mac/browser clients retain their paired-client authorization.
@@ -228,8 +239,9 @@ recovery do not send success alerts.
 
 Input requests also send **Cantrip needs your input**. These alerts contain no
 question, command, password, device code or tab title. Tap to open the original
-Mac/tab's input sheet; tapping never approves an action. A stale alert opens an
-empty/expired-request notice. Attention alerts use the request's expiry, are
+Mac/tab's conversation, with questions or secure-input buttons inline; tapping
+never approves an action or opens an ordinary-question modal. A stale alert
+cannot revive an answered or expired request. Attention alerts use the request's expiry, are
 deduplicated, and unsent retries are removed when resolved. Already-delivered
 Apple banners may remain. Older registration clients do not opt in to input
 alerts until updated. Unsaved Private tabs and Private Local are excluded.
