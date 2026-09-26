@@ -1389,25 +1389,61 @@ struct ChatView: View {
         }
     }
 
+    /// Everything `chatMenu` renders. The menu only rebuilds when this changes.
+    private struct ChatMenuState: Equatable {
+        let isCantrip: Bool
+        let selectedSessionID: String?
+        let isLocalPrivate: Bool
+        let canResume: Bool
+        let isRemoteMutating: Bool
+        let remoteTabsEnabled: Bool
+        let paused: Bool
+        let voiceModeDisabled: Bool
+        let macControlsEnabled: Bool
+        let settingsDisabled: Bool
+        let isTabLocked: Bool
+        let newConversationDisabled: Bool
+    }
+
+    private var chatMenuState: ChatMenuState {
+        ChatMenuState(
+            isCantrip: vm.activeLane == .cantrip,
+            selectedSessionID: remote.selectedSession?.id,
+            isLocalPrivate: remote.selectedSession?.isLocalPrivate == true,
+            canResume: remote.selectedSession?.canResume == true,
+            isRemoteMutating: remote.isMutating,
+            remoteTabsEnabled: remoteTabsEnabled,
+            paused: paused,
+            voiceModeDisabled: paused || !destinationReady || hasImageDraft || importingImages,
+            macControlsEnabled: remote.isConfigured,
+            settingsDisabled: vm.sending || importingImages || submittingRemote,
+            isTabLocked: vm.isTabLocked,
+            newConversationDisabled: newConversationDisabled
+        )
+    }
+
     private var chatMenu: some View {
-        Menu {
-            if vm.activeLane == .cantrip {
-                if let session = remote.selectedSession {
+        let state = chatMenuState
+        return StableMenu(state: state) {
+            if state.isCantrip {
+                if state.selectedSessionID != nil {
                     Button {
                         composerFocused = false
-                        remote.modelSettingsSession = session
+                        if let session = remote.selectedSession {
+                            remote.modelSettingsSession = session
+                        }
                     } label: {
-                        Label(session.isLocalPrivate == true ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
+                        Label(state.isLocalPrivate ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
                     }
-                    .disabled(remote.isMutating)
+                    .disabled(state.isRemoteMutating)
                 }
                 Button {
                     showRemoteTabs = true
                 } label: {
                     Label("Tabs", systemImage: "rectangle.stack")
                 }
-                .disabled(!remoteTabsEnabled)
-                if remote.selectedSession?.canResume == true {
+                .disabled(!state.remoteTabsEnabled)
+                if state.canResume {
                     Button {
                         Task {
                             _ = await remote.resume()
@@ -1416,19 +1452,19 @@ struct ChatView: View {
                     } label: {
                         Label("Resume", systemImage: "play")
                     }
-                    .disabled(remote.isMutating)
+                    .disabled(state.isRemoteMutating)
                 }
             }
             Divider()
             Button { paused.toggle() } label: {
-                Label(paused ? "Resume agent" : "Pause agent",
-                      systemImage: paused ? "play.circle" : "pause.circle")
+                Label(state.paused ? "Resume agent" : "Pause agent",
+                      systemImage: state.paused ? "play.circle" : "pause.circle")
             }
             Divider()
             Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
-                .disabled(paused || vm.activeLane == .cantrip)
+                .disabled(state.paused || state.isCantrip)
             Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
-                .disabled(paused || !destinationReady || hasImageDraft || importingImages)
+                .disabled(state.voiceModeDisabled)
             Button {
                 composerFocused = false
                 showGitHubBuilds = true
@@ -1449,9 +1485,9 @@ struct ChatView: View {
             Button { showSettings = true } label: {
                 Label("Settings", systemImage: "gearshape")
             }
-            .disabled(vm.sending || importingImages || submittingRemote)
+            .disabled(state.settingsDisabled)
             Divider()
-            if vm.activeLane != .cantrip {
+            if !state.isCantrip {
                 Button {
                     tabName = vm.tabMetadata.customTitle ?? vm.tabTitle
                     showRenameLocalTab = true
@@ -1461,20 +1497,21 @@ struct ChatView: View {
                 Button {
                     vm.setTabLocked(!vm.isTabLocked)
                 } label: {
-                    Label(vm.isTabLocked ? "Unlock Tab" : "Lock Tab",
-                          systemImage: vm.isTabLocked ? "lock.open" : "lock")
+                    Label(state.isTabLocked ? "Unlock Tab" : "Lock Tab",
+                          systemImage: state.isTabLocked ? "lock.open" : "lock")
                 }
                 Divider()
             }
             Button(role: .destructive) { vm.newConversation() } label: {
                 Label("New conversation", systemImage: "square.and.pencil")
             }
-            .disabled(newConversationDisabled)
+            .disabled(state.newConversationDisabled)
         } label: {
-            ChatMenuIcon(isPaused: paused)
+            ChatMenuIcon(isPaused: state.paused)
         }
+        .equatable()
         .accessibilityLabel("Chat menu")
-        .accessibilityValue(paused ? "Agent paused" : "")
+        .accessibilityValue(state.paused ? "Agent paused" : "")
         .accessibilityIdentifier("chat.menu")
     }
 
@@ -2020,6 +2057,21 @@ struct ChatTabsButton: View {
         .accessibilityLabel("Tabs")
         .accessibilityHint("Shows your Cantrip sessions")
         .accessibilityIdentifier("chat.tabs")
+    }
+}
+
+/// A Menu whose items are rebuilt only when `state` changes. Rebuilding an open
+/// menu scrolls it back to the top, and Cantrip polling re-renders the chat every
+/// few seconds. Use with `.equatable()`, and put everything the items read into `state`.
+struct StableMenu<State: Equatable, Content: View, MenuLabel: View>: View, Equatable {
+    let state: State
+    @ViewBuilder let content: () -> Content
+    @ViewBuilder let label: () -> MenuLabel
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.state == rhs.state }
+
+    var body: some View {
+        Menu(content: content, label: label)
     }
 }
 

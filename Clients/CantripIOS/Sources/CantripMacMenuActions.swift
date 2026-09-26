@@ -1,11 +1,19 @@
 import SwiftUI
 
 struct CantripMacMenuActions: View {
-    @ObservedObject var remote: CantripRemoteModel
+    // Not observed: polling would rebuild the open menu and reset its scroll.
+    // The enclosing StableMenu rebuilds this section when `isConfigured` changes.
+    let remote: CantripRemoteModel
     @Binding var showingMaintenance: Bool
+    let isEnabled: Bool
     let onOpen: () -> Void
 
-    var isEnabled: Bool { remote.isConfigured }
+    init(remote: CantripRemoteModel, showingMaintenance: Binding<Bool>, onOpen: @escaping () -> Void) {
+        self.remote = remote
+        _showingMaintenance = showingMaintenance
+        isEnabled = remote.isConfigured
+        self.onOpen = onOpen
+    }
 
     var body: some View {
         Section("Cantrip Mac") {

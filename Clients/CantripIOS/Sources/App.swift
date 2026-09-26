@@ -6,7 +6,9 @@ struct HermesApp: App {
     @ObservedObject private var notifications = CantripNotifications.shared
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var env = HermesEnv()
-    @StateObject private var remoteModel = CantripRemoteModel()
+    // Held, not observed: re-rendering the whole scene on every Cantrip poll
+    // snaps open menus back to the top. ChatView observes the model itself.
+    @State private var remoteModel = CantripRemoteModel()
 
     var body: some Scene {
         WindowGroup {

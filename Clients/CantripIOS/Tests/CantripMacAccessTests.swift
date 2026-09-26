@@ -78,7 +78,8 @@ final class CantripMacAccessTests: XCTestCase {
         XCTAssertEqual(openings, 2)
 
         remote.clearConfiguration()
-        XCTAssertFalse(actions.isEnabled)
+        let rebuilt = CantripMacMenuActions(remote: remote, showingMaintenance: .constant(false)) {}
+        XCTAssertFalse(rebuilt.isEnabled)
     }
 
     func testBiometricFailureBlocksApprovalSecretAndDesktopWithoutNetwork() async throws {

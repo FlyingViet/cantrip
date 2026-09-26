@@ -2569,7 +2569,7 @@ struct CantripRemoteView: View {
                 }, refresh: {}, settings: {
                     ChatSettingsButton { showSettings = true }
                 }, trailing: {
-                    Menu {
+                    StableMenu(state: model.isConfigured) {
                         CantripMacMenuActions(remote: model, showingMaintenance: $showCantripMaintenance) {
                             composerFocused = false
                         }
@@ -2579,6 +2579,7 @@ struct CantripRemoteView: View {
                     } label: {
                         ChatMenuIcon()
                     }
+                    .equatable()
                     .accessibilityLabel("Remote menu")
                 }
             ))
