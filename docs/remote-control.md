@@ -13,6 +13,34 @@ prepares memory context and encodes transcript responses off the UI thread.
 Requests remain single messages, and uncertain sends are still never
 automatically replayed.
 
+## Automatic Remote interface updates
+
+Mac Remote and the browser client detect host interface changes through their
+existing session polling. A content-based `uiRevision` changes with the host's
+HTML, styles or scripts, not with ordinary chat updates or an unchanged restart.
+The page reloads automatically when connected and idle on the latest output.
+Typing, text composition, active submissions, tab dragging, history loading and
+open dialogs (including Secure Input and View Mac) defer the reload. Reading
+older history also defers it until you return to the latest output.
+
+The selected chat, ordinary drafts in other tabs, delivery mode and pending
+question reply target survive the reload. Replies are never resent automatically;
+an expired question draft cannot silently turn into a new task or an answer to
+another question. Failed-action warnings remain visible. Secure fields, sign-in
+codes, pairing tokens and transcripts are not copied into reload state.
+Ordinary drafts are temporarily stored in this browser tab's `sessionStorage`,
+bound to a fingerprint of the current pairing and consumed once after loading.
+Unpairing clears that state. If it cannot be saved, the current page stays open
+and shows an error rather than risking draft loss.
+Controls briefly lock during navigation so a new submission cannot race the
+reload. A navigation timeout restores the original controls and drafts; a
+host returning the old interface pauses automatic refresh to avoid a loop.
+
+The host must run the updated build. Pages opened before this feature need
+**one initial reload** to acquire the update detector; subsequent interface
+updates are automatic. The same host-served fix covers Mac Remote without a
+separate client rebuild. Older hosts without `uiRevision` keep normal polling.
+
 ## Persistent Private Local tab
 
 **Private Local** is always present in the host's tabs and its paired Remote

@@ -254,6 +254,15 @@ struct SessionTabTests {
         let (page, pageResponse) = try await URLSession.shared.data(from: base)
         precondition((pageResponse as! HTTPURLResponse).statusCode == 200)
         try await testRemoteTabScrolling(html: String(decoding: page, as: UTF8.self), baseURL: base)
+        let listed = try await request("api/v1/sessions", method: "GET")
+        let uiRevision = listed.1["uiRevision"] as! String
+        precondition(uiRevision.count == 64 && uiRevision.allSatisfy { $0.isHexDigit })
+        precondition(String(decoding: page, as: UTF8.self).contains("const uiRevision=\"\(uiRevision)\""))
+        precondition((pageResponse as! HTTPURLResponse).value(forHTTPHeaderField: "Cache-Control") == "no-store")
+        let listedAgain = try await request("api/v1/sessions", method: "GET")
+        precondition(listedAgain.1["uiRevision"] as? String == uiRevision, "UI revisions remain stable across polls")
+        try await testRemoteUIUpdates(html: String(decoding: page, as: UTF8.self), baseURL: base,
+                                      token: token, sessionID: chat.id, revision: uiRevision)
         let buildsPath = "api/v1/github/builds"
         let unauthorizedBuilds = try await request(buildsPath, method: "GET", authenticated: false)
         precondition(unauthorizedBuilds.0 == 401)
