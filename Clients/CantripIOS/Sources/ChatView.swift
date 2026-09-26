@@ -1087,6 +1087,7 @@ struct ChatView: View {
     @State private var submittingRemote = false
     @State private var imageSendError: String?
     @State private var composerRevision = UUID()
+    @State private var chatAvailableHeight: CGFloat = 600
     @State private var showSettings = false
     @State private var showVoiceMode = false
     @State private var showSkills = false
@@ -1145,8 +1146,10 @@ struct ChatView: View {
                 }
                 transcriptList
                     .id(transcriptIdentity)
-                if vm.activeLane == .cantrip { CantripInputBanner(model: remote) }
                 inputBar
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                chatAvailableHeight = $0
             }
             .toolbar(.hidden, for: .navigationBar)
             .safeAreaInset(edge: .top, spacing: 0) { chatHeader }
@@ -1606,7 +1609,7 @@ struct ChatView: View {
                 }
             }
             if vm.activeLane == .cantrip {
-                CantripInputTranscript(model: remote, focusComposer: { composerFocused = true })
+                CantripInputTranscript(model: remote)
             }
         }
     }
@@ -1739,7 +1742,9 @@ struct ChatView: View {
             }
         } message: {
             TextField(
-                vm.activeLane == .cantrip ? "Message Cantrip…" : "Message Hermes…",
+                vm.activeLane == .cantrip
+                    ? CantripInputComposer.placeholder(for: remote.chatInputRequest, mode: vm.remoteDeliveryMode)
+                    : "Message Hermes…",
                 text: $input,
                 axis: .vertical
             )
@@ -1748,13 +1753,26 @@ struct ChatView: View {
             .textFieldStyle(.plain).lineLimit(1...5)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, minHeight: 44)
-            .disabled(!destinationReady || vm.sending || submittingRemote)
+            .disabled(!destinationReady || !composerAcceptsText || vm.sending || submittingRemote)
             .onSubmit(sendText)
             .accessibilityIdentifier("chat.message")
         } trailing: {
             remoteStopButton
             composerAction
+        } accessory: {
+            if vm.activeLane == .cantrip {
+                CantripInputComposer(
+                    model: remote, deliveryMode: vm.remoteDeliveryMode,
+                    maxHeight: min(320, max(72, chatAvailableHeight * 0.45)),
+                    busy: vm.sending || submittingRemote || importingImages
+                )
+            }
         }
+    }
+
+    private var composerAcceptsText: Bool {
+        vm.activeLane != .cantrip
+            || CantripInputComposer.acceptsText(for: remote.chatInputRequest, mode: vm.remoteDeliveryMode)
     }
 
     private func imageDraft(for sessionID: String) -> Binding<[ChatImageAttachment]> {
@@ -1768,7 +1786,7 @@ struct ChatView: View {
     }
 
     private var imagePickerDisabled: Bool {
-        !destinationReady || vm.sending || submittingRemote || remote.isMutating || voice.isListening
+        !destinationReady || !composerAcceptsText || vm.sending || submittingRemote || remote.isMutating || voice.isListening
     }
 
     @ViewBuilder private var remoteStopButton: some View {
@@ -1799,7 +1817,7 @@ struct ChatView: View {
             } else if input.isEmpty && !hasImageDraft {
                 ChatMicrophoneButton(
                     isListening: voice.isListening,
-                    isEnabled: voice.authorized && destinationReady,
+                    isEnabled: voice.authorized && destinationReady && composerAcceptsText,
                     onTap: {
                         if voice.isSpeaking { vm.interruptAndListen() } else { voice.toggleListening() }
                     },
@@ -1810,8 +1828,9 @@ struct ChatView: View {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 24))
                         .frame(width: 44, height: 44).contentShape(Rectangle())
                 }
-                .disabled(!destinationReady || remote.isMutating)
-                .accessibilityLabel("Send prompt")
+                .disabled(!destinationReady || !composerAcceptsText || remote.isMutating)
+                .accessibilityLabel(vm.activeLane == .cantrip && vm.remoteDeliveryMode == .auto
+                    && remote.chatInputRequest != nil ? "Send reply" : "Send prompt")
             }
         }
         .frame(width: 44, height: 44)
@@ -1882,7 +1901,7 @@ struct ChatView: View {
                 Spacer(minLength: 0)
                 Button { voice.stopSpeaking() } label: { Image(systemName: "stop.circle").font(.title3) }
             }
-        } else if vm.isWorking {
+        } else if vm.isWorking && !(vm.activeLane == .cantrip && remote.chatInputRequest != nil) {
             HStack(spacing: 10) {
                 ThinkingView(size: 22, color: .accentColor)
                 Text(
@@ -1901,7 +1920,7 @@ struct ChatView: View {
     private func sendText() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !paused, !importingImages, !submittingRemote, !vm.sending,
-              destinationReady, !remote.isMutating,
+              destinationReady, composerAcceptsText, !remote.isMutating,
               !text.isEmpty || hasImageDraft else { return }
         composerFocused = false
         if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
@@ -1942,22 +1961,37 @@ struct ChatView: View {
     private var importingImages: Bool { imageImportID != nil }
 }
 
-struct ChatComposer<Leading: View, Message: View, Trailing: View>: View {
+struct ChatComposer<Leading: View, Message: View, Trailing: View, Accessory: View>: View {
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var message: () -> Message
     @ViewBuilder var trailing: () -> Trailing
+    @ViewBuilder var accessory: () -> Accessory
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 4) {
-            leading()
-            message()
-            trailing()
+        VStack(spacing: 0) {
+            accessory()
+            HStack(alignment: .bottom, spacing: 4) {
+                leading()
+                message()
+                trailing()
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 4)
-        .padding(.vertical, 2)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24))
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
         .accessibilityIdentifier("chat.composer")
+    }
+}
+
+extension ChatComposer where Accessory == EmptyView {
+    init(
+        @ViewBuilder leading: @escaping () -> Leading,
+        @ViewBuilder message: @escaping () -> Message,
+        @ViewBuilder trailing: @escaping () -> Trailing
+    ) {
+        self.init(leading: leading, message: message, trailing: trailing, accessory: { EmptyView() })
     }
 }
 

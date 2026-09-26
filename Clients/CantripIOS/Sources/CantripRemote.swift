@@ -2539,6 +2539,7 @@ struct CantripRemoteView: View {
     @State private var deliveryMode: CantripDeliveryMode = .auto
     @State private var renamingSession: CantripRemoteSession?
     @State private var showTabs = false
+    @State private var chatAvailableHeight: CGFloat = 600
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -2605,7 +2606,6 @@ struct CantripRemoteView: View {
                 sessionControls
                 Divider()
                 CantripRemoteTranscript(model: model)
-                CantripInputBanner(model: model)
                 Divider()
                 composer
             } else {
@@ -2621,6 +2621,9 @@ struct CantripRemoteView: View {
                     .disabled(model.isMutating)
                 }
             }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+            chatAvailableHeight = $0
         }
     }
 
@@ -2730,13 +2733,21 @@ struct CantripRemoteView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField("Message Cantrip", text: $draft, axis: .vertical)
+            ChatComposer {
+                EmptyView()
+            } message: {
+                TextField(CantripInputComposer.placeholder(for: model.chatInputRequest, mode: deliveryMode),
+                          text: $draft, axis: .vertical)
                     .focused($composerFocused)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
                     .lineLimit(1...5)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .disabled(model.isMutating || !composerAcceptsText)
                     .submitLabel(.send)
                     .onSubmit { submit() }
+            } trailing: {
                 CantripStopButton(
                     session: model.selectedSession,
                     isConnected: model.isConnected,
@@ -2750,22 +2761,33 @@ struct CantripRemoteView: View {
                 Button(action: submit) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
+                        .frame(width: 44, height: 44)
                 }
                 .disabled(
                     model.isMutating
+                        || !composerAcceptsText
                         || model.selectedSessionID == nil
                         || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
-                .accessibilityLabel("Send prompt")
+                .accessibilityLabel(deliveryMode == .auto && model.chatInputRequest != nil ? "Send reply" : "Send prompt")
+            } accessory: {
+                CantripInputComposer(
+                    model: model, deliveryMode: deliveryMode,
+                    maxHeight: min(320, max(72, chatAvailableHeight * 0.45))
+                )
             }
         }
         .padding()
         .background(.ultraThinMaterial)
     }
 
+    private var composerAcceptsText: Bool {
+        CantripInputComposer.acceptsText(for: model.chatInputRequest, mode: deliveryMode)
+    }
+
     private func submit() {
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else { return }
+        guard !prompt.isEmpty, composerAcceptsText, !model.isMutating else { return }
         Task {
             if await model.send(prompt, mode: deliveryMode) {
                 draft = ""

@@ -38,55 +38,39 @@ extension CantripRemoteModel {
     }
 }
 
-struct CantripInputBanner: View {
+struct CantripInputComposer: View {
     @ObservedObject var model: CantripRemoteModel
-
-    var body: some View {
-        if let question = model.chatInputRequest {
-            Text("Question waiting: \(question.title). Use Auto to reply.")
-                .font(.caption).foregroundStyle(.secondary)
-            .padding(.horizontal)
-            .accessibilityIdentifier("cantrip.input.banner")
-        }
-    }
-}
-
-struct CantripInputTranscript: View {
-    @ObservedObject var model: CantripRemoteModel
-    var focusComposer: () -> Void = {}
+    var deliveryMode: CantripDeliveryMode = .auto
+    var maxHeight: CGFloat = 300
+    var busy = false
     @State private var error: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let error { Text(error).foregroundStyle(.orange) }
-            if let session = model.selectedSession {
-                ForEach(model.pendingInputRequests) { request in
-                    if request.kind == "secret" {
-                        Button {
-                            model.inputRequestsSession = session
-                        } label: {
-                            Label("Enter password or passphrase securely", systemImage: "lock.shield")
-                                .frame(minHeight: 44)
-                        }.buttonStyle(.bordered)
-                    } else {
-                        CantripInputCard(request: request, busy: model.isMutating, reply: {
-                            model.inputReplyID = request.id
-                            focusComposer()
-                        }) { answer in
-                            let identity = model.usageIdentity
-                            Task {
-                                if await model.respondToInput(sessionID: session.id, id: request.id, answer: answer,
-                                    identity: identity, questionOnly: request.kind == "question") {
-                                    await model.refreshNow()
-                                }
-                            }
+        VStack(spacing: 0) {
+            if let error {
+                Text(error).font(.caption).foregroundStyle(.orange).padding(12)
+            }
+            if let session = model.selectedSession, let question = model.chatInputRequest {
+                CantripQuestionPanel(
+                    request: question,
+                    questions: model.pendingInputRequests.filter { $0.kind == "question" },
+                    deliveryMode: deliveryMode, maxHeight: maxHeight,
+                    busy: busy || model.isMutating,
+                    select: { model.inputReplyID = $0 }
+                ) { answer in
+                    let identity = model.usageIdentity
+                    Task {
+                        if await model.respondToInput(sessionID: session.id, id: question.id,
+                            answer: answer, identity: identity, questionOnly: true) {
+                            await model.refreshNow()
                         }
                     }
                 }
+                Divider().padding(.horizontal, 12)
             }
         }
-        .accessibilityIdentifier("cantrip.input.inline")
         .task(id: "\(model.usageIdentity)/\(model.selectedSession?.id ?? "")/\(model.selectedSession?.supportsInputRequests == true)") {
+            error = nil
             guard let session = model.selectedSession, session.supportsInputRequests == true,
                   session.pendingInputs == nil else { return }
             let identity = model.usageIdentity
@@ -102,6 +86,158 @@ struct CantripInputTranscript: View {
                 catch { return }
             }
         }
+    }
+
+    static func placeholder(for question: CantripInputRequest?, mode: CantripDeliveryMode) -> String {
+        guard mode == .auto, let question else { return "Message Cantrip…" }
+        return question.allowsFreeform ? "Your reply…" : "Choose an answer above…"
+    }
+
+    static func acceptsText(for question: CantripInputRequest?, mode: CantripDeliveryMode) -> Bool {
+        mode != .auto || question?.allowsFreeform != false
+    }
+}
+
+struct CantripQuestionPanel: View {
+    let request: CantripInputRequest
+    var questions: [CantripInputRequest] = []
+    var deliveryMode: CantripDeliveryMode = .auto
+    var maxHeight: CGFloat = 300
+    var busy = false
+    var select: (UUID) -> Void = { _ in }
+    let send: (CantripInputAnswer) -> Void
+    @State private var contentHeight: CGFloat?
+
+    var body: some View {
+        ScrollView {
+            content
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    contentHeight = $0
+                }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: min(maxHeight, contentHeight ?? maxHeight))
+        .id(request.id)
+        .disabled(busy || Date().timeIntervalSince1970 >= request.expiresAt)
+        .accessibilityIdentifier("cantrip.input.composer")
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Reply to \(request.source)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if questions.count > 1 {
+                    Menu {
+                        ForEach(questions) { question in
+                            Button {
+                                select(question.id)
+                            } label: {
+                                if question.id == request.id {
+                                    Label(question.detail, systemImage: "checkmark")
+                                } else {
+                                    Text(verbatim: question.detail)
+                                }
+                            }
+                        }
+                    } label: {
+                        Text("\((questions.firstIndex { $0.id == request.id } ?? 0) + 1)/\(questions.count)")
+                            .font(.caption.monospacedDigit())
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                    .accessibilityLabel("Choose pending question")
+                }
+                Button {
+                    send(.init(decision: "cancel"))
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Cancel question")
+            }
+            Text(verbatim: request.detail)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            ForEach(Array(request.choices.enumerated()), id: \.offset) { index, choice in
+                Button {
+                    send(.init(decision: "submit", text: choice))
+                } label: {
+                    Text(verbatim: choice)
+                }
+                .buttonStyle(CantripInputChoiceStyle())
+                .accessibilityIdentifier("cantrip.input.choice.\(index)")
+            }
+            if deliveryMode != .auto {
+                Text("Switch delivery to Auto to send a typed reply to this question.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 12)
+    }
+}
+
+struct CantripInputChoiceStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(
+                Color.primary.opacity(configuration.isPressed ? 0.14 : 0.06),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.primary.opacity(0.12))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct CantripInputTranscript: View {
+    @ObservedObject var model: CantripRemoteModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let session = model.selectedSession {
+                ForEach(model.pendingInputRequests.filter { $0.kind != "question" }) { request in
+                    if request.kind == "secret" {
+                        Button {
+                            model.inputRequestsSession = session
+                        } label: {
+                            Label("Enter password or passphrase securely", systemImage: "lock.shield")
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.roundedRectangle(radius: 8))
+                    } else {
+                        CantripInputCard(request: request, busy: model.isMutating) { answer in
+                            let identity = model.usageIdentity
+                            Task {
+                                if await model.respondToInput(sessionID: session.id, id: request.id, answer: answer,
+                                    identity: identity, questionOnly: request.kind == "question") {
+                                    await model.refreshNow()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .accessibilityIdentifier("cantrip.input.inline")
     }
 }
 
@@ -183,7 +319,6 @@ struct CantripInputRequestsView: View {
 private struct CantripInputCard: View {
     let request: CantripInputRequest
     let busy: Bool
-    var reply: () -> Void = {}
     let send: (CantripInputAnswer) -> Void
     @State private var text = ""
 
@@ -199,17 +334,6 @@ private struct CantripInputCard: View {
                     .accessibilityIdentifier("cantrip.input.secret")
                 Text("Sent only to the verified waiting program on the Mac. Not added to chat or saved by Cantrip.")
                     .font(.footnote).foregroundStyle(.secondary)
-            } else if request.kind == "question" {
-                ForEach(request.choices, id: \.self) { choice in
-                    Button(choice) {
-                        send(.init(decision: "submit", text: choice))
-                    }
-                    .buttonStyle(.bordered).frame(minHeight: 44)
-                }
-                if request.allowsFreeform {
-                    Button("Reply in chat", action: reply).frame(minHeight: 44)
-                    Text("Use the normal chat composer, including attachments. Do not enter passwords here.").font(.footnote)
-                }
             }
             if let raw = request.url, let url = URL(string: raw), url.scheme == "https" {
                 if let code = request.code { Text("Device code: \(code)").monospaced().textSelection(.enabled) }
@@ -224,6 +348,7 @@ private struct CantripInputCard: View {
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        .buttonBorderShape(.roundedRectangle(radius: 8))
         .disabled(busy || Date().timeIntervalSince1970 >= request.expiresAt)
         .onDisappear { text = "" }
     }

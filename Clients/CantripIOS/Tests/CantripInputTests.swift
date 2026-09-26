@@ -147,7 +147,7 @@ final class CantripInputTests: XCTestCase {
         XCTAssertFalse(sent)
     }
 
-    func testQuestionsStayOutOfSecureModalAndInlineHasNoAnswerField() async throws {
+    func testQuestionsStayOutOfSecureModalAndComposerContextHasNoSeparateAnswerField() async throws {
         let model = try await model { _ in XCTFail("Rendering questions must not authenticate") }
         InputRequestProtocol.handler = { request in
             if request.url?.path.hasSuffix("/input") == true { return (200, try self.data(kind: "question")) }
@@ -159,7 +159,7 @@ final class CantripInputTests: XCTestCase {
         func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
         for modal in [false, true] {
             let view = modal ? AnyView(CantripInputRequestsView(model: model, session: session))
-                : AnyView(ScrollView { CantripInputTranscript(model: model) })
+                : AnyView(CantripInputComposer(model: model))
             let controller = UIHostingController(rootView: view)
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(x: 0, y: 0, width: 320, height: 700)
@@ -173,11 +173,53 @@ final class CantripInputTests: XCTestCase {
             let attachment = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
                 window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
             })
-            attachment.name = modal ? "Secure modal excludes question" : "Inline chat question"
+            attachment.name = modal ? "Secure modal excludes question" : "Composer question context"
             attachment.lifetime = .keepAlways
             add(attachment)
         }
         XCTAssertNil(model.inputRequestsSession)
+    }
+
+    func testComposerPollsLegacyQuestionsWithoutMountingTranscript() async throws {
+        let model = try await model { _ in XCTFail("Question polling must not authenticate") }
+        InputRequestProtocol.handler = { request in
+            if request.url?.path.hasSuffix("/input") == true { return (200, try self.data(kind: "question")) }
+            return (200, try self.sessionData(chatReplies: false))
+        }
+        await model.selectSession(sessionID)
+        XCTAssertNil(model.chatInputRequest)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let controller = UIHostingController(rootView: CantripInputComposer(model: model))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 700)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        for _ in 0..<20 where model.chatInputRequest == nil {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(model.chatInputRequest?.id, id)
+        XCTAssertEqual(model.inputContext?.sessionID, sessionID)
+        XCTAssertNil(model.inputRequestsSession)
+    }
+
+    func testComposerReplyStateRespectsExplicitDeliveryAndChoiceOnlyQuestions() throws {
+        let question = try XCTUnwrap(
+            JSONDecoder().decode([String: [CantripInputRequest]].self, from: data(kind: "question"))["requests"]?.first
+        )
+        let choiceOnly = CantripInputRequest(
+            id: UUID(), kind: "question", source: "Copilot", title: "Choose",
+            detail: "Choose one", choices: ["A", "B"], allowsFreeform: false,
+            url: nil, code: nil, expiresAt: question.expiresAt
+        )
+        XCTAssertEqual(CantripInputComposer.placeholder(for: question, mode: .auto), "Your reply…")
+        XCTAssertEqual(CantripInputComposer.placeholder(for: choiceOnly, mode: .auto), "Choose an answer above…")
+        XCTAssertFalse(CantripInputComposer.acceptsText(for: choiceOnly, mode: .auto))
+        for mode in CantripDeliveryMode.allCases where mode != .auto {
+            XCTAssertEqual(CantripInputComposer.placeholder(for: question, mode: mode), "Message Cantrip…")
+            XCTAssertTrue(CantripInputComposer.acceptsText(for: choiceOnly, mode: mode))
+        }
+        XCTAssertTrue(CantripInputComposer.acceptsText(for: nil, mode: .auto))
     }
 
     func testResponsePreflightsOriginalChallengeAndNeverUsesChat() async throws {

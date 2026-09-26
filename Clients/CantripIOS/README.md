@@ -475,11 +475,14 @@ AgentGateway updates or upload TestFlight builds.
 
 ### Cantrip input requests
 
-When a supported agent or command needs a response, its question or action appears
-**inline in chat**. Reply using the normal composer with **Auto** delivery,
-including images, or tap a suggested answer. With multiple questions, use
-**Reply in chat** to choose one. **View Questions in Chat** in tab actions opens
-the conversation, not a modal. Approve/Deny and device-login actions are inline too.
+When a supported agent needs an answer, its question and suggested answers
+**extend the normal composer**, sharing one lightly rounded rectangular surface.
+Type directly in the **Your reply** field with **Auto** delivery, including images,
+or tap a rectangular suggested answer. Long questions and choices scroll within
+the extension so the message field stays available. With multiple questions,
+use the question-count menu to choose one. There is no separate **Reply in chat**
+button or answer form. **View Questions in Chat** in tab actions opens the
+conversation, not a modal. Approve/Deny and device-login actions remain inline.
 Only **passwords and passphrases** open the **Secure Input** modal.
 The same request appears on the Mac and in browser/Cantrip Remote; only the first valid answer is accepted.
 Requests expire after ten minutes and are cancelled by Stop, redirect or
