@@ -231,6 +231,67 @@ private func testUnknownSubagentFallsBackToTopLevel() {
     expect(CopilotJSONStreamParser.tokenLabel(1_250_000) == "1.2M tokens", "large token counts should be compact")
 }
 
+private func thinking(from events: [BackendEvent]) -> String {
+    events.compactMap { event in
+        guard case .thinkingDelta(let delta) = event else { return nil }
+        return delta
+    }.joined()
+}
+
+private func testReasoningBlocksAndSteps() {
+    var parser = CopilotJSONStreamParser()
+    // Shapes captured from Copilot CLI 1.0.88: Claude repeats block r1 under r2 on later calls.
+    var events = parser.consume(Data("""
+    {"type":"assistant.reasoning_delta","id":"r1","data":{"reasoningId":"rid-1","deltaContent":"Look for the parser."}}
+    {"type":"assistant.reasoning","id":"r2","data":{"reasoningId":"rid-1","content":"Look for the parser."}}
+    {"type":"assistant.reasoning","id":"r3","data":{"reasoningId":"rid-2","content":"Look for the parser.\\n"}}
+    {"type":"assistant.reasoning_delta","id":"r3b","data":{"reasoningId":"rid-2b","deltaContent":"\\n"}}
+    {"type":"assistant.reasoning_delta","id":"r4","data":{"reasoningId":"rid-3","deltaContent":"**Checking results**\\n\\nIt"}}
+    {"type":"assistant.reasoning_delta","id":"r4b","data":{"reasoningId":"rid-3","deltaContent":"\\n\\n"}}
+    {"type":"assistant.reasoning_delta","id":"r4c","data":{"reasoningId":"rid-3","deltaContent":"worked."}}
+    {"type":"assistant.reasoning","id":"r5","data":{"reasoningId":"rid-4","content":"A block that never streamed."}}
+
+    """.utf8)) { _, _ in expect(false, "reasoning events should parse") }
+    expect(thinking(from: events) == "Look for the parser.\n\n**Checking results**\n\nIt\n\nworked.\n\nA block that never streamed.",
+           "blocks should be separated, streamed aggregates, repeats and blank blocks skipped")
+
+    events = parser.consume(Data("""
+    {"type":"tool.execution_start","id":"r6","data":{"toolCallId":"task-9","toolName":"task","arguments":{"description":"Find"}}}
+    {"type":"subagent.started","id":"r7","agentId":"agent-9","data":{"toolCallId":"task-9","agentName":"explore","agentDisplayName":"find-parser","agentDescription":"Find"}}
+    {"type":"assistant.reasoning","id":"r8","agentId":"agent-9","data":{"reasoningId":"a1","content":"**Exploring local repository options**\\n\\nI'm considering rg."}}
+    {"type":"assistant.reasoning","id":"r9","agentId":"agent-9","data":{"reasoningId":"a2","content":""}}
+    {"type":"assistant.reasoning","id":"r10","agentId":"agent-9","data":{"reasoningId":"a3","content":"**Exploring local repository options**\\n\\nI'm considering rg."}}
+    {"type":"assistant.reasoning_delta","id":"r11","agentId":"agent-9","data":{"reasoningId":"a4","deltaContent":"ignored"}}
+
+    """.utf8)) { _, _ in expect(false, "subagent reasoning should parse") }
+    let info = lastActivity(events, id: "task-9")?.subagent
+    expect(info?.reasoning == ["**Exploring local repository options**\n\nI'm considering rg."],
+           "subagent blocks should be kept once, without empties or deltas")
+    expect(thinking(from: events).isEmpty, "subagent reasoning should stay out of the reply's reasoning")
+
+    var window = SubagentInfo(agentID: "a", name: "", agentType: "", summary: "")
+    for block in 1...(SubagentInfo.reasoningLimit + 2) {
+        window.addReasoning(block == 1 ? "**One**\n\na\n\n**Two**\n\nb" : "Block \(block).")
+    }
+    expect(window.reasoning.count == SubagentInfo.reasoningLimit && window.reasoning.first == "Block 3."
+           && window.reasoningStepOffset == 3,
+           "dropped blocks should keep later step numbers stable: \(window.reasoningStepOffset)")
+
+    let steps = ReasoningStep.steps(from: [
+        "**Crafting prompt**\n\nI'm putting it together.\n\n**Checking scope**\n\nOnly Swift files.",
+        "I need to check the parser. Then the tests.",
+        "No sentence end\nsecond line",
+        String(repeating: "word ", count: 40) + "end.",
+    ])
+    expect(steps.map(\.title).prefix(4) == ["Crafting prompt", "Checking scope", "I need to check the parser", "No sentence end"],
+           "headings and first sentences should title steps")
+    expect(steps.map(\.text).prefix(4) == ["I'm putting it together.", "Only Swift files.", "Then the tests.", "second line"],
+           "step text should follow its title")
+    expect(steps.last?.title.hasSuffix("word…") == true && (steps.last?.title.count ?? 0) <= ReasoningStep.titleLimit + 1
+           && steps.last?.text.hasSuffix("end.") == true,
+           "a long first sentence should be shortened and keep the full text")
+}
+
 testMalformedLineDoesNotAbortBatch()
 testMalformedEventDoesNotPoisonLaterChunks()
 testMalformedFinalLineIsReportedAndSkipped()
@@ -240,10 +301,11 @@ testBackgroundSubagentKeepsReporting()
 testSubagentLiveProgress()
 testSubagentFailureAndNesting()
 testUnknownSubagentFallsBackToTopLevel()
+testReasoningBlocksAndSteps()
 failures += runMCPAppTests()
 
 if failures > 0 {
     fputs("\(failures) Copilot parser test(s) failed\n", stderr)
     exit(1)
 }
-print("All 10 Copilot parser test groups passed (incl. MCP Apps)")
+print("All 11 Copilot parser test groups passed (incl. MCP Apps)")

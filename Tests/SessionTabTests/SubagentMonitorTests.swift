@@ -67,6 +67,7 @@ extension SessionTabTests {
             }
             running.add('agent-1');
             setTimeout(() => {
+              emit({ type: 'assistant.reasoning_delta', data: { reasoningId: 'r-1', deltaContent: '**Planning**\n\nSpawn an explorer.' } });
               emit({ type: 'tool.execution_start', data: { toolCallId: 'task-1', toolName: 'task',
                 arguments: { description: 'Find tests', agent_type: 'explore', mode: 'background' } } });
               emit({ type: 'tool.execution_complete', data: { toolCallId: 'task-1', success: true,
@@ -75,9 +76,11 @@ extension SessionTabTests {
                 agentName: 'explore', agentDisplayName: 'Find tests', agentDescription: 'Locate the parser tests',
                 model: 'gpt-5.4-mini', agentType: 'explore', executionMode: 'background' } });
               emit({ type: 'assistant.usage', agentId: 'agent-1', data: { inputTokens: 4000, outputTokens: 100 } });
+              emit({ type: 'assistant.reasoning', agentId: 'agent-1', data: { reasoningId: 'a-1', content: 'I should search Tests/ first. Then report back.' } });
               emit({ type: 'assistant.intent', agentId: 'agent-1', data: { intent: 'Searching Tests/' } });
               emit({ type: 'tool.execution_start', agentId: 'agent-1', data: { toolCallId: 'grep-1', toolName: 'grep',
                 parentToolCallId: 'task-1', arguments: { pattern: 'testSubagent' } } });
+              emit({ type: 'assistant.reasoning_delta', data: { reasoningId: 'r-2', deltaContent: 'Wait for the explorer to report.' } });
               emit({ type: 'assistant.message', data: { messageId: 'root-1', content: 'Waiting on the explorer.' } });
             }, 10);
             return 'm';
@@ -111,7 +114,9 @@ extension SessionTabTests {
         try await Task.sleep(for: .milliseconds(300))
 
         chat.submit("spawn")
-        try await waitForJournalTest { chat.subagent(agentID: "agent-1")?.intent != nil }
+        try await waitForJournalTest {
+            chat.subagent(agentID: "agent-1")?.intent != nil && chat.messages.last?.text.isEmpty == false
+        }
         let live = try require(chat.subagent(agentID: "agent-1"))
         precondition(live.status == .running && live.background && live.canCancel && live.tokens == 4100,
                      "a live background agent should be tracked with its usage: \(live)")
@@ -149,6 +154,17 @@ extension SessionTabTests {
                      && summary["finishedAt"] == nil
                      && (summary["recentSteps"] as? [[String: Any]])?.first?["state"] as? String == "running",
                      "snapshots should carry the monitor summary: \(summary)")
+        // Cantrip Agent lists reasoning as titled steps, one per block, for the reply and each subagent.
+        let reasoning = messages.compactMap { $0["reasoning"] as? [[String: Any]] }.first ?? []
+        precondition(reasoning.map { $0["title"] as? String } == ["Planning", "Wait for the explorer to report"]
+                     && reasoning.map { $0["number"] as? Int } == [1, 2]
+                     && reasoning.first?["text"] as? String == "Spawn an explorer."
+                     && reply.thinking == "**Planning**\n\nSpawn an explorer.\n\nWait for the explorer to report.",
+                     "reply reasoning should split into steps: \(reasoning) \(reply.thinking.debugDescription)")
+        let agentReasoning = summary["reasoning"] as? [[String: Any]] ?? []
+        precondition(agentReasoning.map { $0["title"] as? String } == ["I should search Tests/ first"]
+                     && agentReasoning.first?["text"] as? String == "Then report back.",
+                     "subagent reasoning should reach its card: \(agentReasoning)")
         let unknown = try await call("api/v1/sessions/\(chat.id)/subagents/nope/cancel", method: "POST")
         let wrongMethod = try await call("api/v1/sessions/\(chat.id)/subagents/agent-1/cancel")
         precondition(unknown.0 == 404 && wrongMethod.0 == 405, "\(unknown) \(wrongMethod)")

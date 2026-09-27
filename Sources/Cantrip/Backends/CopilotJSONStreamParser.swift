@@ -12,6 +12,11 @@ struct CopilotJSONStreamParser {
     private(set) var answer = ""
     /// Whether reasoning streamed as deltas (skip the aggregate block).
     private var reasoningDeltaSeen = false
+    /// Root reasoning text by `reasoningId`, to separate blocks and skip repeats.
+    private var reasoningBlocks: [String: String] = [:]
+    private var lastReasoningID: String?
+    private var reasoningEmitted = false
+    private var reasoningBreakPending = false
     private var streamedMessageIDs: Set<String> = []
     /// MCP tool call → its `tool.execution_start` data, for MCP App views.
     private var mcpCalls: [String: [String: Any]] = [:]
@@ -120,19 +125,48 @@ struct CopilotJSONStreamParser {
             // data schema isn't formalized (github/copilot-cli#3551) and
             // emission is provider-dependent — parse leniently and never
             // throw; a missing event just means no reasoning display.
-            guard object["agentId"] as? String == nil,
-                  eventData?["parentToolCallId"] as? String == nil else {
-                return []
-            }
             let text = (eventData?["deltaContent"] ?? eventData?["content"]
                 ?? eventData?["delta"] ?? eventData?["text"]) as? String ?? ""
-            guard !text.isEmpty else { return [] }
+            if let agentID = object["agentId"] as? String {
+                // Subagent deltas are off; their blocks arrive whole.
+                guard type == "assistant.reasoning",
+                      let block = SubagentInfo.clipped(text, limit: 1_200) else { return [] }
+                return updateSubagent(agentID: agentID) { $0.addReasoning(block) }
+            }
+            guard eventData?["parentToolCallId"] as? String == nil, !text.isEmpty else {
+                return []
+            }
+            let blockID = eventData?["reasoningId"] as? String
             if type == "assistant.reasoning_delta" {
                 reasoningDeltaSeen = true
-                return [.thinkingDelta(text)]
+            } else {
+                // Aggregate block — only useful if its deltas never streamed.
+                if blockID.map({ reasoningBlocks[$0] != nil }) ?? reasoningDeltaSeen { return [] }
+                // Claude models can repeat an earlier block under a new ID on later model calls.
+                let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if reasoningBlocks.values.contains(where: {
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines) == content
+                }) { return [] }
             }
-            // Aggregate block — only useful if deltas never streamed.
-            return reasoningDeltaSeen ? [] : [.thinkingDelta(text)]
+            var events: [BackendEvent] = []
+            if let blockID {
+                reasoningBlocks[blockID, default: ""] += text
+                if blockID != lastReasoningID {
+                    lastReasoningID = blockID
+                    reasoningBreakPending = reasoningEmitted
+                }
+            }
+            // Separate blocks, but not for a block that is only whitespace (Claude can send one).
+            guard text.contains(where: { !$0.isWhitespace }) || (reasoningEmitted && !reasoningBreakPending) else {
+                return []
+            }
+            if reasoningBreakPending {
+                events.append(.thinkingDelta("\n\n"))
+                reasoningBreakPending = false
+            }
+            reasoningEmitted = true
+            events.append(.thinkingDelta(text))
+            return events
 
         case "assistant.message":
             var events: [BackendEvent] = []

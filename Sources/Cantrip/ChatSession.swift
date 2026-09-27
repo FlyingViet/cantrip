@@ -9,6 +9,10 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var activities: [ToolActivity] = []
     /// Streamed reasoning (thinking deltas) — shown collapsed in the UI.
     var thinking: String = ""
+    /// UTF-8 offsets in `thinking` where each reasoning block starts.
+    var reasoningStarts: [Int] = []
+    /// Tool calls and answer length at the last reasoning; a change starts a new block.
+    var reasoningMark: ReasoningMark?
     /// Which model produced this (council mode) — shown as a caption.
     var author: String?
     /// Associates persisted transcript messages with their durable run.
@@ -16,8 +20,38 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     /// Interactive MCP App views returned by this reply's tool calls.
     var apps: [MCPAppPayload] = []
     enum Role: String, Codable { case user, assistant, error }
+    struct ReasoningMark: Equatable {
+        let activities: Int
+        let textBytes: Int
+    }
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey { case id, role, text, author, runID, apps }
+}
+
+extension ChatMessage {
+    /// Appends streamed reasoning. Reasoning after a new tool call or answer text is a new block.
+    mutating func appendThinking(_ delta: String) {
+        defer { thinking += delta }
+        guard delta.contains(where: { !$0.isWhitespace }) else { return }
+        let mark = ReasoningMark(activities: activities.count, textBytes: text.utf8.count)
+        if reasoningStarts.isEmpty || reasoningMark != mark {
+            reasoningStarts.append(thinking.utf8.count)
+        }
+        reasoningMark = mark
+    }
+
+    /// `thinking` split into its blocks (usually one per model call).
+    var reasoningBlocks: [String] {
+        let bytes = Array(thinking.utf8)
+        let starts = reasoningStarts.isEmpty ? [0] : reasoningStarts
+        return starts.indices.compactMap { index in
+            let end = index + 1 < starts.count ? starts[index + 1] : bytes.count
+            guard starts[index] < end, end <= bytes.count else { return nil }
+            let block = String(decoding: bytes[starts[index]..<end], as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return block.isEmpty ? nil : block
+        }
+    }
 }
 
 extension ChatMessage {
@@ -1630,7 +1664,7 @@ final class ChatSession: ObservableObject {
     private func appendCouncil(text: String? = nil, thinking: String? = nil, to id: UUID) {
         guard let idx = messages.firstIndex(where: { $0.id == id }) else { return }
         if let text { messages[idx].text += text }
-        if let thinking { messages[idx].thinking += thinking }
+        if let thinking { messages[idx].appendThinking(thinking) }
     }
 
     private func councilMemberFinished(messageID: UUID, prompt: String) {
@@ -2058,7 +2092,7 @@ final class ChatSession: ObservableObject {
                // bubble (e.g. right after a mid-turn injection).
                !(messages[idx].thinking.isEmpty
                  && delta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
-                messages[idx].thinking += delta
+                messages[idx].appendThinking(delta)
             }
             statusText = currentActivity?.title ?? "Thinking…"
         case .status(let status):

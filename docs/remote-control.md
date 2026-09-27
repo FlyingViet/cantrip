@@ -977,12 +977,22 @@ for confirmation, then cancels only that subagent.
 
 Session messages include a `subagents` array (`id`, `agentID`, `name`,
 `agentType`, `summary`, `status`, `startedAt`, `finishedAt`, `intent`,
-`currentStep`, `steps`, `tokens`, `recentSteps`, `canCancel` and more).
+`currentStep`, `steps`, `tokens`, `recentSteps`, `reasoning`, `canCancel` and
+more).
 `POST /api/v1/sessions/{sessionID}/subagents/{agentID}/cancel` stops one. It
 returns `{"cancelled": true}`, or `{"cancelled": false}` if the subagent had
 already finished. It returns 404 if the subagent isn't in that conversation, and
 409 if it can't be stopped, for example because it finished or the tab's
 backend isn't Copilot.
+
+## Reasoning steps
+
+Assistant messages include `reasoning`, the reply's reasoning split into titled
+steps (`title`, `text`), next to the complete `thinking` text. Cantrip starts a
+new step for each reasoning block, usually one per model call. A line that is
+only a bold heading, as in GPT reasoning summaries, also starts a step. Other
+steps are titled by their first sentence. Each subagent's `reasoning` holds its
+last 8 steps. Cantrip Agent shows these steps instead of tool calls.
 
 ## Understand what is available remotely
 

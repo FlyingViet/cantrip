@@ -23,6 +23,10 @@ enum RemoteHistory {
             },
         ]
         if let author = message.author { result["author"] = author }
+        let reasoning = ReasoningStep.steps(from: message.reasoningBlocks)
+        if !reasoning.isEmpty {
+            result["reasoning"] = reasoning.enumerated().map { $1.snapshot(number: $0 + 1) }
+        }
         let subagents = message.activities.flatMap(\.subagentActivities)
         if !subagents.isEmpty { result["subagents"] = subagents.compactMap(subagent) }
         // Summaries only; clients fetch each view's payload on demand.
@@ -58,6 +62,12 @@ enum RemoteHistory {
         item["currentStep"] = current?.title
         item["latestMessage"] = info.latestMessage
         item["error"] = info.error
+        let reasoning = ReasoningStep.steps(from: info.reasoning)
+        if !reasoning.isEmpty {
+            item["reasoning"] = reasoning.indices.suffix(8).map {
+                reasoning[$0].snapshot(number: info.reasoningStepOffset + $0 + 1)
+            }
+        }
         return item
     }
 

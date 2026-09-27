@@ -107,8 +107,24 @@ struct SubagentInfo: Equatable, Codable {
     var error: String?
     /// The backend can stop this agent on its own (Copilot SDK sessions).
     var canCancel = false
+    /// Complete reasoning blocks, oldest first (Copilot forwards subagent blocks whole).
+    var reasoning: [String] = []
+    /// Steps in blocks dropped from `reasoning`, so step numbers stay stable.
+    var reasoningStepOffset = 0
+
+    static let reasoningLimit = 12
 
     var isActive: Bool { status == .running || status == .idle }
+
+    mutating func addReasoning(_ block: String) {
+        guard reasoning.last != block else { return }
+        reasoning.append(block)
+        if reasoning.count > Self.reasoningLimit {
+            let dropped = Array(reasoning.prefix(reasoning.count - Self.reasoningLimit))
+            reasoningStepOffset += ReasoningStep.steps(from: dropped).count
+            reasoning.removeFirst(dropped.count)
+        }
+    }
 
     var displayName: String {
         if !name.isEmpty { return name }
@@ -139,6 +155,66 @@ struct SubagentInfo: Equatable, Codable {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         return trimmed.count > limit ? String(trimmed.prefix(limit - 1)) + "…" : trimmed
+    }
+}
+
+/// One titled reasoning step, as Cantrip Agent lists a reply's reasoning.
+struct ReasoningStep: Equatable {
+    let title: String
+    /// Everything after the title; the whole text when the title had to be shortened.
+    let text: String
+
+    static let titleLimit = 100
+
+    /// `number` is the step's 1-based position in the whole reply or subagent run.
+    func snapshot(number: Int) -> [String: Any] { ["title": title, "text": text, "number": number] }
+
+    /// A line that is only `**Title**` starts a step (GPT reasoning summaries);
+    /// otherwise each block is one step titled by its first sentence.
+    static func steps(from blocks: [String]) -> [ReasoningStep] {
+        blocks.flatMap(sections).compactMap { heading, body in
+            if let heading { return ReasoningStep(title: heading, text: body) }
+            return body.isEmpty ? nil : titled(body)
+        }
+    }
+
+    private static func sections(_ block: String) -> [(heading: String?, body: String)] {
+        var sections: [(heading: String?, lines: [Substring])] = [(nil, [])]
+        for line in block.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let inner = trimmed.dropFirst(2).dropLast(2).trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("**"), trimmed.hasSuffix("**"), !inner.isEmpty, !inner.contains("**") {
+                sections.append((inner, []))
+            } else {
+                sections[sections.count - 1].lines.append(line)
+            }
+        }
+        return sections.map {
+            ($0.heading, $0.lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+
+    private static func titled(_ text: String) -> ReasoningStep {
+        var end = text.endIndex
+        var index = text.startIndex
+        while index < text.endIndex {
+            let next = text.index(after: index)
+            if text[index] == "\n" { end = index; break }
+            if ".!?".contains(text[index]), next == text.endIndex || text[next].isWhitespace {
+                end = next
+                break
+            }
+            index = next
+        }
+        var title = text[..<end].trimmingCharacters(in: .whitespaces)
+        if title.hasSuffix("."), !title.hasSuffix("..") { title.removeLast() }
+        guard title.count > titleLimit else {
+            return ReasoningStep(title: title, text: text[end...].trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        let prefix = title.prefix(titleLimit)
+        let words = prefix.lastIndex(of: " ").map { prefix[..<$0] } ?? prefix
+        let short = words.trimmingCharacters(in: CharacterSet.whitespaces.union(.punctuationCharacters))
+        return ReasoningStep(title: short + "…", text: text)
     }
 }
 
