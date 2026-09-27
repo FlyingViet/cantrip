@@ -40,7 +40,7 @@ enum PendingUpdate {
     }
 
     /// Runs first at launch. When a staged build is installed, this process
-    /// is replaced by the updated executable before the app starts.
+    /// hands off to a fresh launch of the updated app before the app starts.
     static func installIfReady() {
         let app = Bundle.main.bundleURL
         guard app.pathExtension == "app" else { return }
@@ -58,16 +58,17 @@ enum PendingUpdate {
         case .installed:
             Log.write("update: installed staged build \(buildIdentity(of: app) ?? "unknown"); starting it")
             Log.flush()
-            // Replace this process image so the launch keeps its pid and arguments.
+            // Relaunch through Launch Services: macOS hides the menu bar icon of
+            // a process that exec'd a new image after launch.
+            if open(app) {
+                exit(EXIT_SUCCESS)
+            }
+            Log.write("update: could not open the installed build; starting it in this process")
+            Log.flush()
             let executable = app.appendingPathComponent("Contents/MacOS")
                 .appendingPathComponent(Bundle.main.executableURL?.lastPathComponent ?? "Cantrip").path
             execv(executable, CommandLine.unsafeArgv)
-            Log.write("update: could not start the installed build (\(String(cString: strerror(errno)))); opening it instead")
-            if open(app) {
-                Log.flush()
-                exit(EXIT_SUCCESS)
-            }
-            Log.write("update: could not reopen the installed build; continuing with the previous process")
+            Log.write("update: could not start the installed build (\(String(cString: strerror(errno)))); continuing with the previous process")
         }
     }
 
