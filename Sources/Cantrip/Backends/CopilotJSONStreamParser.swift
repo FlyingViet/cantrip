@@ -13,6 +13,8 @@ struct CopilotJSONStreamParser {
     /// Whether reasoning streamed as deltas (skip the aggregate block).
     private var reasoningDeltaSeen = false
     private var streamedMessageIDs: Set<String> = []
+    /// MCP tool call → its `tool.execution_start` data, for MCP App views.
+    private var mcpCalls: [String: [String: Any]] = [:]
 
     mutating func consume(
         _ data: Data,
@@ -171,6 +173,9 @@ struct CopilotJSONStreamParser {
                   let name = eventData?["toolName"] as? String else {
                 return []
             }
+            if let eventData, eventData["mcpServerName"] is String {
+                mcpCalls[id] = eventData
+            }
             if activities[id] != nil || childParents[id] != nil {
                 return []
             }
@@ -199,6 +204,7 @@ struct CopilotJSONStreamParser {
                 output = result
             }
             let success = eventData?["success"] as? Bool ?? false
+            let mcpStart = mcpCalls.removeValue(forKey: id)
             if let parentID = childParents[id], var parent = activities[parentID],
                let index = parent.children.firstIndex(where: { $0.id == id }) {
                 parent.children[index] = ToolActivityFactory.complete(
@@ -207,12 +213,16 @@ struct CopilotJSONStreamParser {
                 activities[parentID] = parent
                 return [.activity(parent)]
             }
-            let completed = ToolActivityFactory.complete(
+            var completed = ToolActivityFactory.complete(
                 activities.removeValue(forKey: id),
                 id: id,
                 success: success,
                 output: output
             )
+            // Only root calls get views; nested subagent calls returned above.
+            if let eventData {
+                completed.app = MCPAppPayload.copilot(callID: id, start: mcpStart, complete: eventData)
+            }
             // A background subagent keeps reporting after its task call returns.
             if agentParents.values.contains(id) {
                 activities[id] = completed

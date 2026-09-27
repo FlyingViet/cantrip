@@ -2019,7 +2019,8 @@ struct LauncherView: View {
                 // is capped at ~30 messages, so laziness buys nothing.
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(transcriptMessages) { message in
-                        MessageRow(message: message, localOnly: session.isLocalPrivate)
+                        MessageRow(message: message, localOnly: session.isLocalPrivate,
+                                   appActions: settings.copilotMCPApps ? mcpAppActions : nil)
                             .id(message.id)
                     }
                     RemoteInputView(session: session, openSecureInput: { showingInputRequests = true })
@@ -2066,6 +2067,17 @@ struct LauncherView: View {
                 scrollConversationToBottom(proxy)
             }
         }
+    }
+
+    private var mcpAppActions: MCPAppActions {
+        let session = session
+        return MCPAppActions(
+            serverRequest: { app, method, params, completion in
+                session.mcpAppRequest(app, method: method, params: params, completion: completion)
+            },
+            sendMessage: { app, text in session.submitMCPAppMessage(text, from: app) },
+            updateContext: { app, text in session.setMCPAppContext(app, text: text) }
+        )
     }
 
     private func scrollConversationToBottom(_ proxy: ScrollViewProxy) {
@@ -2347,6 +2359,10 @@ private struct SuggestionListHeightKey: PreferenceKey {
 private struct MessageRow: View {
     let message: ChatMessage
     var localOnly = false
+    /// Nil while MCP App views are turned off: saved views stay hidden and inert.
+    var appActions: MCPAppActions?
+
+    private var visibleApps: [MCPAppPayload] { appActions == nil ? [] : message.apps }
 
     var body: some View {
         switch message.role {
@@ -2356,8 +2372,10 @@ private struct MessageRow: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .assistant:
-            // Tool steps render in the progress sidebar, not inline.
-            if message.text.isEmpty && message.thinking.isEmpty && message.author == nil {
+            // Tool steps render in the progress sidebar, not inline; MCP App
+            // views (e.g. galleries) are part of the reply.
+            if message.text.isEmpty && message.thinking.isEmpty && message.author == nil
+                && visibleApps.isEmpty {
                 EmptyView()
             } else {
                 VStack(alignment: .leading, spacing: 6) {
@@ -2371,6 +2389,9 @@ private struct MessageRow: View {
                     }
                     if !message.thinking.isEmpty {
                         ThinkingDisclosure(text: message.thinking)
+                    }
+                    ForEach(visibleApps) { app in
+                        MCPAppInlineView(app: app, actions: appActions)
                     }
                     if !message.text.isEmpty {
                         if localOnly {
@@ -2842,6 +2863,9 @@ struct SettingsView: View {
                     .font(.caption)
                     .toggleStyle(.checkbox)
                 Toggle("Allow subagents for broad searches, noisy builds/tests and parallel work — off removes them", isOn: $settings.copilotAllowSubagents)
+                    .font(.caption)
+                    .toggleStyle(.checkbox)
+                Toggle("Show interactive MCP App views (e.g. Mobbin galleries) inline in chat", isOn: $settings.copilotMCPApps)
                     .font(.caption)
                     .toggleStyle(.checkbox)
             case .copilotRemote:

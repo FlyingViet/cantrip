@@ -179,6 +179,11 @@ final class AppSettings: ObservableObject {
     @Published var copilotAllowSubagents: Bool {
         didSet { d.set(copilotAllowSubagents, forKey: "copilotAllowSubagents") }
     }
+    /// Opt Copilot sessions into MCP Apps so tools such as Mobbin's searches
+    /// return interactive views that render inline in the chat.
+    @Published var copilotMCPApps: Bool {
+        didSet { d.set(copilotMCPApps, forKey: "copilotMCPApps") }
+    }
     /// Cached account model list from the configured Copilot runtime.
     @Published var copilotAvailableModels: [String] {
         didSet { d.set(copilotAvailableModels, forKey: "copilotAvailableModels") }
@@ -542,6 +547,8 @@ final class AppSettings: ObservableObject {
         // Replaces the old prompt-only "discourage" preference, whose default was on.
         copilotAllowSubagents = d.object(forKey: "copilotAllowSubagents") == nil
             ? true : d.bool(forKey: "copilotAllowSubagents")
+        copilotMCPApps = d.object(forKey: "copilotMCPApps") == nil
+            ? true : d.bool(forKey: "copilotMCPApps")
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
         copilotModelCatalog = (d.data(forKey: "copilotModelCatalog")
             .flatMap { try? JSONDecoder().decode([CopilotModelInfo].self, from: $0) }) ?? []

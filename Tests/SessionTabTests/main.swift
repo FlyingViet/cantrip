@@ -128,6 +128,7 @@ struct SessionTabTests {
         try await testRemoteGeneratedImages()
         try await testJournalDelivery()
         try await testCopilotSteering()
+        try await testMCPAppTranscripts()
         try await testHostProtection(manager: manager)
         print("Session tab persistence, protection, privacy, and web controls passed")
     }

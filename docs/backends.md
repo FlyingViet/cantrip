@@ -97,6 +97,41 @@ Turning the setting off removes the `task`, `read_agent`, `write_agent` and
 `list_agents` tools from new Copilot sessions, which also saves their schema
 tokens on every model call. The change applies to each tab's next request.
 
+## Interactive MCP App views
+
+**Show interactive MCP App views** (Settings > Copilot, on by default) opts
+Copilot sessions into [MCP Apps](https://github.com/modelcontextprotocol/ext-apps)
+(SEP-1865). MCP servers that support it, such as Mobbin, then return a small
+web view with their tool results, and the Mac chat shows it inline above the
+reply: for example, a scrollable gallery of the screens a Mobbin search found.
+Click a screen to open it on Mobbin in your browser. A caption above each view
+names the server it came from. Views are saved with the conversation and
+reappear when you reopen the tab.
+
+Each view runs in its own sandbox:
+
+- It is an isolated origin inside a Cantrip wrapper page, with no access to
+  Cantrip, other views or your files, and nothing it stores is kept after
+  Cantrip quits.
+- It can load resources only from the domains the server declared, under a
+  Content Security Policy. It cannot navigate away; web links open in your
+  browser.
+- It can call tools and read resources on **its own** MCP server only, and the
+  Copilot runtime also blocks tools the server marked model-only. These
+  calls go through the tab's live Copilot session. If that session has ended
+  (for example after Stop or a relaunch), send a message in the tab first.
+- A view can ask Cantrip to send a chat message for you. The confirmation
+  dialog shows the exact text; approved text goes to the model labelled with
+  the view's server and never runs as a `!` or `/` command. Context a view
+  shares for the model is added to your next prompt only and is dropped when
+  you start a new conversation.
+
+Views appear in the Mac app only. Cantrip Agent and the browser Remote still
+show the tool step and the text reply. Scrolling up or down over a view scrolls
+the conversation; sideways scrolling moves through the gallery. Turning the
+setting off hides all views, including saved ones, and stops opting in from
+each tab's next request.
+
 ## Connect a local model
 
 **Mac only.** Cantrip does not install or start the model server for you.

@@ -62,6 +62,7 @@ enum CopilotSessionBridge {
         model: config.model || undefined, reasoningEffort: config.effort || undefined,
         contextTier: config.contextTier || undefined, streaming: true,
         enableConfigDiscovery: true, remoteSession: 'off', mcpOAuthTokenStorage: 'persistent',
+        enableMcpApps: config.mcpApps === true,
         availableTools: config.readOnly ? [] : config.allowTools ? undefined : ['view', 'glob', 'grep'],
         excludedTools: config.allowSubagents === false ? subagentTools : undefined,
         systemMessage: config.subagentGuidance ? { mode: 'append', content: config.subagentGuidance } : undefined,
@@ -89,6 +90,18 @@ enum CopilotSessionBridge {
         onEvent
       });
       if (typeof session.send !== 'function') throw new Error('Copilot native session input is unavailable.');
+      await settleMcpServers();
+    }
+    // A prompt sent while an MCP server is still connecting sees the tool catalog
+    // change mid-turn, and the first call to that server fails. Wait briefly.
+    async function settleMcpServers(limitMs = 6000) {
+      const deadline = Date.now() + limitMs;
+      while (Date.now() < deadline && !stopping) {
+        let servers;
+        try { servers = (await session.rpc?.mcp?.list?.())?.servers ?? []; } catch { return; }
+        if (!servers.some(server => server.status === 'pending')) return;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
     async function deliver(command) {
       if (command.kind === 'start') {
@@ -129,6 +142,29 @@ enum CopilotSessionBridge {
         throw new Error('Invalid Cantrip session command.');
       }
     }
+    // MCP App views call their own server only (the runtime enforces origin and visibility).
+    async function appRequest(command) {
+      const reply = outcome => emit({ kind: 'appResponse', id: command.id, ...outcome });
+      try {
+        const apps = session?.rpc?.mcp?.apps;
+        if (!apps || stopping) throw new Error("This tab's Copilot session is not running. Send a message in this tab, then try again.");
+        const serverName = String(command.serverName || ''), params = command.params || {};
+        let result;
+        if (command.method === 'tools/call') {
+          result = await apps.callTool({ serverName, originServerName: serverName,
+            toolName: String(params.name ?? ''), arguments: params.arguments ?? {} });
+        } else if (command.method === 'tools/list') {
+          result = await apps.listTools({ serverName, originServerName: serverName });
+        } else if (command.method === 'resources/read') {
+          result = await apps.readResource({ serverName, uri: String(params.uri ?? '') });
+        } else {
+          throw new Error('Unsupported MCP App request.');
+        }
+        reply({ result: result ?? {} });
+      } catch (error) {
+        reply({ error: errorText(error) });
+      }
+    }
     async function stop() {
       if (stopping) return;
       stopping = true;
@@ -154,6 +190,8 @@ enum CopilotSessionBridge {
       catch { void stop(); return; }
       // Input callbacks can be awaited by session.send: responses must bypass the send queue.
       if (immediate.kind === 'inputAnswer') { answerInput(immediate); return; }
+      // View requests must not wait behind a turn's session.send.
+      if (immediate.kind === 'appRequest') { void appRequest(immediate); return; }
       commands = commands.then(async () => {
         if (stopping) return;
         const command = JSON.parse(line);

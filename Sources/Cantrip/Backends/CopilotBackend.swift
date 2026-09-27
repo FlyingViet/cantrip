@@ -24,6 +24,7 @@ final class CopilotBackend: Backend {
     }
     private var idle = false
     private var deliveries: [String: (MidTurnDelivery) -> Void] = [:]
+    private var appRequests: [String: (Result<[String: Any], Error>) -> Void] = [:]
     private var inputRequests: [String: BackendInputRequest] = [:]
     private var askpass: RemoteAskpass?
     private let bridgeScript: String
@@ -38,12 +39,13 @@ final class CopilotBackend: Backend {
         let readOnly: Bool
         var autoApprove = true
         var allowSubagents = true
+        var mcpApps = true
 
         var json: [String: Any] {
             ["command": command, "workdir": workdir, "model": model,
              "effort": effort, "contextTier": contextTier,
              "allowTools": allowTools, "readOnly": readOnly, "autoApprove": autoApprove,
-             "allowSubagents": allowSubagents,
+             "allowSubagents": allowSubagents, "mcpApps": mcpApps,
              "subagentGuidance": allowSubagents ? CopilotBackend.subagentGuidance : ""]
         }
     }
@@ -83,7 +85,8 @@ final class CopilotBackend: Backend {
             contextTier: contextTierOverride ?? settings.copilotContextTier,
             allowTools: settings.copilotAllowTools || settings.allowActions,
             readOnly: readOnly, autoApprove: settings.allowActions,
-            allowSubagents: settings.copilotAllowSubagents
+            allowSubagents: settings.copilotAllowSubagents,
+            mcpApps: settings.copilotMCPApps
         )
         queue.async { [weak self] in
             guard let self else { return }
@@ -157,6 +160,36 @@ final class CopilotBackend: Backend {
     }
     func reset() { cancel() }
 
+    /// Proxies an MCP App view's `tools/call`, `tools/list` or `resources/read`
+    /// to its server through this tab's live session, between turns too.
+    /// Completion runs on the backend queue.
+    func mcpAppRequest(serverName: String, method: String, params: [String: Any],
+                       completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        queue.async { [weak self] in
+            guard let self, self.process?.isRunning == true, self.configuration?.mcpApps == true else {
+                completion(.failure(MCPAppRequestError.sessionUnavailable))
+                return
+            }
+            guard ["tools/call", "tools/list", "resources/read"].contains(method),
+                  !serverName.isEmpty, JSONSerialization.isValidJSONObject(params) else {
+                completion(.failure(MCPAppRequestError.invalidRequest))
+                return
+            }
+            let id = UUID().uuidString
+            self.appRequests[id] = completion
+            do {
+                try self.write(["kind": "appRequest", "id": id, "serverName": serverName,
+                                "method": method, "params": params])
+            } catch {
+                self.appRequests.removeValue(forKey: id)?(.failure(error))
+                return
+            }
+            self.queue.asyncAfter(deadline: .now() + 60) { [weak self] in
+                self?.appRequests.removeValue(forKey: id)?(.failure(MCPAppRequestError.timedOut))
+            }
+        }
+    }
+
     private func launch(_ config: Configuration) throws {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -165,6 +198,8 @@ final class CopilotBackend: Backend {
         var environment = ProcessInfo.processInfo.environment
         environment["NO_COLOR"] = "1"
         environment["TERM"] = "dumb"
+        // The runtime only honours `enableMcpApps` while its MCP_APPS gate is on.
+        if config.mcpApps { environment["COPILOT_MCP_APPS"] = "true" }
         if !config.readOnly {
             let broker = try RemoteAskpass(process: p) { [weak self] request in
                 self?.queue.async {
@@ -231,6 +266,17 @@ final class CopilotBackend: Backend {
                 guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any],
                       let kind = object["kind"] as? String else {
                     throw CocoaError(.coderReadCorrupt)
+                }
+                if kind == "appResponse" {
+                    guard let id = object["id"] as? String,
+                          let completion = appRequests.removeValue(forKey: id) else { continue }
+                    if let result = object["result"] as? [String: Any] {
+                        completion(.success(result))
+                    } else {
+                        completion(.failure(MCPAppRequestError.server(
+                            object["error"] as? String ?? "The MCP server request failed.")))
+                    }
+                    continue
                 }
                 guard let current = runID, object["runID"] as? String == current else { continue }
                 switch kind {
@@ -336,6 +382,9 @@ final class CopilotBackend: Backend {
         askpass?.stop()
         askpass = nil
         resolveUncertainDeliveries()
+        let pendingAppRequests = Array(appRequests.values)
+        appRequests.removeAll()
+        for completion in pendingAppRequests { completion(.failure(MCPAppRequestError.sessionUnavailable)) }
         let old = process
         process = nil
         input?.closeFile()

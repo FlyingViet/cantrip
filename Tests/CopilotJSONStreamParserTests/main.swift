@@ -161,9 +161,10 @@ testSDKMessagesAndUsage()
 testSubagentStepsNestUnderTask()
 testBackgroundSubagentKeepsReporting()
 testUnknownSubagentFallsBackToTopLevel()
+failures += runMCPAppTests()
 
 if failures > 0 {
     fputs("\(failures) Copilot parser test(s) failed\n", stderr)
     exit(1)
 }
-print("All 7 Copilot parser tests passed")
+print("All 8 Copilot parser test groups passed (incl. MCP Apps)")

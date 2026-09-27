@@ -13,9 +13,33 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var author: String?
     /// Associates persisted transcript messages with their durable run.
     var runID: UUID?
+    /// Interactive MCP App views returned by this reply's tool calls.
+    var apps: [MCPAppPayload] = []
     enum Role: String, Codable { case user, assistant, error }
     // Activities and thinking are runtime-only; transcripts skip them.
-    private enum CodingKeys: String, CodingKey { case id, role, text, author, runID }
+    private enum CodingKeys: String, CodingKey { case id, role, text, author, runID, apps }
+}
+
+extension ChatMessage {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        role = try container.decode(Role.self, forKey: .role)
+        text = try container.decode(String.self, forKey: .text)
+        author = try container.decodeIfPresent(String.self, forKey: .author)
+        runID = try container.decodeIfPresent(UUID.self, forKey: .runID)
+        apps = (try? container.decodeIfPresent([MCPAppPayload].self, forKey: .apps)) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(role, forKey: .role)
+        try container.encode(text, forKey: .text)
+        try container.encodeIfPresent(author, forKey: .author)
+        try container.encodeIfPresent(runID, forKey: .runID)
+        if !apps.isEmpty { try container.encode(apps, forKey: .apps) }
+    }
 }
 
 struct QueuedPrompt: Identifiable, Equatable {
@@ -152,6 +176,7 @@ final class ChatSession: ObservableObject {
                 tabActionError = "Private Local saves its conversation and uses only your configured self-hosted model server."
                 return
             }
+            mcpAppContext.removeAll()
             if isPrivate {
                 cancelInputs()
                 deleteTranscript()   // scrub anything already written
@@ -262,7 +287,7 @@ final class ChatSession: ObservableObject {
         // Thinking/activities don't persist, so assistant messages whose
         // only content was runtime-only would reload as invisible husks.
         let persistable = messages.filter {
-            !($0.role == .assistant && $0.text.isEmpty)
+            !($0.role == .assistant && $0.text.isEmpty && $0.apps.isEmpty)
         }
         do {
             if isLocalPrivate {
@@ -1374,6 +1399,11 @@ final class ChatSession: ObservableObject {
             result += "\n\n(Selected text from \(selection.appName), which my request refers to:\n\"\"\"\n\(selection.text.prefix(4000))\n\"\"\")"
             if consume { selectionContext = nil }
         }
+        for key in mcpAppContext.keys.sorted() {
+            guard let entry = mcpAppContext[key] else { continue }
+            result += "\n\n(Context from the \(entry.server) app view shown in this chat, which my request may refer to:\n\(entry.text)\n)"
+        }
+        if consume { mcpAppContext.removeAll() }
         if backendKind != .localModel {
             let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "tiff", "bmp", "svg"]
             for path in attachments {
@@ -1580,6 +1610,7 @@ final class ChatSession: ObservableObject {
                 } else {
                     messages[idx].activities.append(activity)
                 }
+                attachApp(from: activity, toMessageAt: idx)
                 shell.mirror(activity)
                 recordActivity(activity, messageID: messageID)
             }
@@ -1676,6 +1707,7 @@ final class ChatSession: ObservableObject {
                         } else {
                             self.messages[idx].activities.append(activity)
                         }
+                        self.attachApp(from: activity, toMessageAt: idx)
                         self.shell.mirror(activity)
                         self.recordActivity(activity, messageID: messageID)
                     }
@@ -2365,6 +2397,7 @@ final class ChatSession: ObservableObject {
         }
         invalidateRouting()
         deliveryStatus = nil
+        mcpAppContext.removeAll()
         // Continuity: stash a digest of this conversation for the next one.
         if messages.count >= 2, !isPrivate, !isLocalPrivate {
             let topics = messages.filter { $0.role == .user }.suffix(3)
@@ -2422,6 +2455,44 @@ final class ChatSession: ObservableObject {
             messages[messageIndex].activities[activityIndex] = activity
         } else {
             messages[messageIndex].activities.append(activity)
+        }
+        attachApp(from: activity, toMessageAt: messageIndex)
+    }
+
+    private func attachApp(from activity: ToolActivity, toMessageAt index: Int) {
+        guard let app = activity.app, !isLocalPrivate, settings.copilotMCPApps,
+              !messages[index].apps.contains(where: { $0.id == app.id }) else { return }
+        messages[index].apps.append(app)
+    }
+
+    // MARK: - MCP App views
+
+    /// Latest `ui/update-model-context` per view, added to the next prompt.
+    private var mcpAppContext: [String: (server: String, text: String)] = [:]
+
+    func setMCPAppContext(_ app: MCPAppPayload, text: String?) {
+        mcpAppContext[app.id] = text.map { (app.serverName.isEmpty ? "MCP" : app.serverName, $0) }
+    }
+
+    /// A view's approved `ui/message`: always a literal prompt for the model,
+    /// never a `!`/`/` command or an answer to pending input, and without
+    /// ambient Mac data. The label also shows where the message came from.
+    func submitMCPAppMessage(_ text: String, from app: MCPAppPayload) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        receive(MCPAppHost.chatMessage(trimmed, server: app.serverName),
+                mode: .auto, includesAmbientContext: false)
+    }
+
+    /// Completion runs on the main actor.
+    func mcpAppRequest(_ app: MCPAppPayload, method: String, params: [String: Any],
+                       completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        guard let backend = copilot as? CopilotBackend else {
+            completion(.failure(MCPAppRequestError.sessionUnavailable))
+            return
+        }
+        backend.mcpAppRequest(serverName: app.serverName, method: method, params: params) { result in
+            DispatchQueue.main.async { completion(result) }
         }
     }
 
