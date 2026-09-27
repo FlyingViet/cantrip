@@ -359,9 +359,18 @@ interactive MCP App views** is off on the Mac.
 
 With **both Cantrip Agent and the Mac Cantrip host updated**, replies that spawn
 Copilot subagents show live monitor cards above the text. Each card shows the
-subagent name, status, current work, elapsed time, step count and token count.
-Expand a card for recent steps, the latest subagent message or an error, and tap
-**Stop** on a running or waiting card to stop just that subagent.
+subagent name, status, its latest reasoning step, elapsed time and token count.
+Expand a card for its reasoning steps, the latest subagent message or an error,
+and tap **Stop** on a running or waiting card to stop just that subagent.
+
+### Reasoning steps in replies
+
+Cantrip replies show a **Reasoning** section with one titled step for each
+reasoning block, usually one per model call, instead of tool calls such as
+shell commands. While a reply runs, the collapsed section shows the latest step.
+Tap a step to read the rest of it. Tool calls are still shown on the Mac and in
+the browser Remote. A Mac host without this update shows all of a reply's
+reasoning as one step.
 
 ### Video analysis
 

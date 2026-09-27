@@ -118,6 +118,33 @@ struct CantripRemoteSubagentStep: Decodable, Equatable, Identifiable {
     }
 }
 
+/// One titled step of a reply's (or subagent's) reasoning, split by the Mac host.
+struct CantripRemoteReasoningStep: Decodable, Equatable {
+    let title: String
+    let text: String
+    /// 1-based position in the whole reply or subagent run; subagents send only their latest steps.
+    let number: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case title, text, number
+    }
+
+    init(title: String, text: String = "", number: Int? = nil) {
+        self.title = title
+        self.text = text
+        self.number = number
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            title: container.decodeLenient(String.self, forKey: .title, default: ""),
+            text: container.decodeLenient(String.self, forKey: .text, default: ""),
+            number: container.decodeLenient(Int.self, forKey: .number)
+        )
+    }
+}
+
 struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
     let id: String
     let agentID: String
@@ -138,11 +165,12 @@ struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
     let error: String?
     let canCancel: Bool
     let recentSteps: [CantripRemoteSubagentStep]
+    let reasoning: [CantripRemoteReasoningStep]
 
     private enum CodingKeys: String, CodingKey {
         case id, agentID, name, agentType, summary, model, effort, background, status
         case startedAt, finishedAt, intent, currentStep, latestMessage, steps, tokens, error
-        case canCancel, recentSteps
+        case canCancel, recentSteps, reasoning
     }
 
     init(
@@ -164,7 +192,8 @@ struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
         tokens: Int = 0,
         error: String? = nil,
         canCancel: Bool = false,
-        recentSteps: [CantripRemoteSubagentStep] = []
+        recentSteps: [CantripRemoteSubagentStep] = [],
+        reasoning: [CantripRemoteReasoningStep] = []
     ) {
         self.id = id
         self.agentID = agentID
@@ -185,6 +214,7 @@ struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
         self.error = error
         self.canCancel = canCancel
         self.recentSteps = recentSteps
+        self.reasoning = reasoning
     }
 
     init(from decoder: Decoder) throws {
@@ -208,7 +238,8 @@ struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
             tokens: container.decodeLenient(Int.self, forKey: .tokens, default: 0),
             error: container.decodeLenient(String.self, forKey: .error),
             canCancel: container.decodeLenient(Bool.self, forKey: .canCancel, default: false),
-            recentSteps: container.decodeLenient([CantripRemoteSubagentStep].self, forKey: .recentSteps, default: [])
+            recentSteps: container.decodeLenient([CantripRemoteSubagentStep].self, forKey: .recentSteps, default: []),
+            reasoning: container.decodeLenient([CantripRemoteReasoningStep].self, forKey: .reasoning, default: [])
         )
     }
 }
@@ -232,6 +263,8 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     let activities: [CantripRemoteActivity]
     let apps: [CantripRemoteMCPAppSummary]?
     let subagents: [CantripRemoteSubagent]?
+    /// Reasoning split into titled steps; absent from Mac hosts before this field existed.
+    var reasoning: [CantripRemoteReasoningStep]? = nil
     var displayText: String? = nil
     var images: [ChatMessageImage]? = nil
     var isPreview: Bool? = nil

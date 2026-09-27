@@ -338,12 +338,13 @@ struct CantripSubagentCard: View {
         return summary
     }
 
+    /// The latest reasoning step; tool calls stay on the Mac.
     private var currentWorkLine: String? {
         guard subagent.status == .running else { return nil }
+        let reasoning = CantripSubagentFormat.trimmed(subagent.reasoning.last?.title)
+        if !reasoning.isEmpty { return reasoning }
         let intent = CantripSubagentFormat.trimmed(subagent.intent)
-        if !intent.isEmpty { return intent }
-        let currentStep = CantripSubagentFormat.trimmed(subagent.currentStep)
-        return currentStep.isEmpty ? nil : currentStep
+        return intent.isEmpty ? nil : intent
     }
 
     private func metaLine(now: Date) -> String {
@@ -355,19 +356,14 @@ struct CantripSubagentCard: View {
             finishedAt: subagent.finishedAt,
             now: now
         ))
-        parts.append(CantripSubagentFormat.stepLabel(subagent.steps))
         parts.append(CantripSubagentFormat.tokenLabel(subagent.tokens))
         return parts.joined(separator: " · ")
     }
 
     private var details: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !subagent.recentSteps.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(subagent.recentSteps.enumerated()), id: \.offset) { _, step in
-                        CantripSubagentStepRow(step: step)
-                    }
-                }
+            if !subagent.reasoning.isEmpty {
+                CantripReasoningStepList(steps: subagent.reasoning, streaming: subagent.status == .running)
             }
             let latest = CantripSubagentFormat.trimmed(subagent.latestMessage)
             if !latest.isEmpty {
@@ -400,7 +396,6 @@ struct CantripSubagentCard: View {
                 finishedAt: subagent.finishedAt,
                 now: now
             ),
-            CantripSubagentFormat.stepLabel(subagent.steps),
             CantripSubagentFormat.tokenAccessibilityLabel(subagent.tokens),
         ].joined(separator: ", ")
     }
@@ -456,69 +451,5 @@ private struct CantripSubagentBadge: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
             .background(Color.accentColor.opacity(0.12), in: Capsule())
-    }
-}
-
-private struct CantripSubagentStepRow: View {
-    let step: CantripRemoteSubagentStep
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 7) {
-            Image(systemName: iconName)
-                .foregroundStyle(iconColor)
-                .frame(width: 16)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if !toolName.isEmpty {
-                    Text(toolName)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
-    }
-
-    private var title: String {
-        let value = CantripSubagentFormat.trimmed(step.title)
-        return value.isEmpty ? "Step" : value
-    }
-
-    private var toolName: String {
-        CantripSubagentFormat.trimmed(step.toolName)
-    }
-
-    private var state: String {
-        CantripSubagentFormat.trimmed(step.state)
-    }
-
-    private var iconName: String {
-        switch state {
-        case "running": return "circle.dotted"
-        case "succeeded": return "checkmark.circle"
-        case "failed": return "exclamationmark.triangle"
-        case "cancelled": return "xmark.circle"
-        default: return "circle"
-        }
-    }
-
-    private var iconColor: Color {
-        switch state {
-        case "succeeded": return .green
-        case "failed": return .orange
-        case "running": return .blue
-        default: return .secondary
-        }
-    }
-
-    private var accessibilityLabel: String {
-        [state.isEmpty ? nil : state, title, toolName.isEmpty ? nil : toolName]
-            .compactMap { $0 }
-            .joined(separator: ", ")
     }
 }

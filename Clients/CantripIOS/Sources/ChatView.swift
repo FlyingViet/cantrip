@@ -2440,7 +2440,9 @@ private struct TurnView: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
-                if hasIntermediateSteps {
+                if !cantripReasoning.isEmpty {
+                    CantripReasoningSteps(steps: cantripReasoning, streaming: turn.streaming)
+                } else if turn.executionLane != .cantrip, hasIntermediateSteps {
                     IntermediateStepsView(
                         thinking: turn.thinking,
                         tools: turn.tools,
@@ -2504,7 +2506,7 @@ private struct TurnView: View {
                         in: RoundedRectangle(cornerRadius: 10)
                     )
                 }
-                if turn.streaming && turn.text.isEmpty && turn.tools.isEmpty && cantripApps.isEmpty && cantripSubagents.isEmpty {
+                if turn.streaming && turn.text.isEmpty && !showsWork && cantripApps.isEmpty && cantripSubagents.isEmpty {
                     ThinkingView(size: 22, color: .gray)
                 }
                 if let err = turn.error {
@@ -2518,6 +2520,16 @@ private struct TurnView: View {
 
     private var hasIntermediateSteps: Bool {
         !(turn.thinking?.isEmpty ?? true) || !turn.tools.isEmpty
+    }
+
+    /// Cantrip replies show reasoning steps; tool calls stay on the Mac.
+    private var cantripReasoning: [CantripRemoteReasoningStep] {
+        guard turn.role == .assistant, turn.executionLane == .cantrip else { return [] }
+        return CantripReasoningFormat.steps(for: remoteMessage, thinking: turn.thinking)
+    }
+
+    private var showsWork: Bool {
+        turn.executionLane == .cantrip ? !cantripReasoning.isEmpty : !turn.tools.isEmpty
     }
 
     private var cantripApps: [CantripRemoteMCPAppSummary] {
