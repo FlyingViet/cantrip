@@ -86,12 +86,32 @@ sessions or silently resetting your preferences.
 **Allow subagents** (Settings > Copilot, on by default) lets Copilot delegate
 broad multi-file searches, noisy builds/tests and independent parallel work.
 Cantrip adds brief token-saving guidance once to the session's system message,
-not to every prompt, and does not stream subagent text into the reply. Each
-subagent's steps are nested under its task activity, whose title shows the
-subagent's model and total tokens (for example `· gpt-5.6-luna · 8.1k tokens`);
-Cantrip Agent and the browser Remote show that title too. Subagent token usage
-is included in the run's usage totals. Background subagents keep the turn open
-until they finish, and Stop cancels them.
+not to every prompt, and does not stream subagent text into the reply.
+Subagent token usage is included in the run's usage totals. Background
+subagents keep the turn open until they finish, and Stop cancels them.
+
+### Monitor subagents
+
+A reply that starts subagents shows a line above its text, such as
+`2 subagents running · Find tests: Searching Tests/ · 42s`. Click it to open
+the **Progress** pane. Its **Subagents** section has a card for each subagent,
+running ones first. A card shows:
+
+- the subagent's name and type (for example `explore`), and whether it runs in
+  the background
+- its status: Running, Waiting (a background agent that finished its turn and
+  is waiting for instructions), Done, Failed or Stopped
+- **Now**: what it reports doing, or its current step
+- elapsed time, step count, tokens used so far, and model and effort
+- its steps and latest message, under the disclosure, plus any failure reason
+
+**Stop** on a card cancels only that subagent. The rest of the reply keeps
+going, and Copilot is told the subagent was stopped. Stop appears only for
+Copilot sessions; Claude Code Task subagents are shown but can't be stopped
+one at a time. Subagent cards last as long as the conversation is open, like
+other tool steps. The browser Remote, another Mac's Remote tab and Cantrip
+Agent show the same cards with Stop in each reply; see
+[Monitor subagents remotely](remote-control.md#monitor-subagents-remotely).
 
 Turning the setting off removes the `task`, `read_agent`, `write_agent` and
 `list_agents` tools from new Copilot sessions, which also saves their schema

@@ -117,8 +117,15 @@ private func testSubagentStepsNestUnderTask() {
     expect(task?.state == .succeeded, "the task activity should complete")
     expect(task?.children.map(\.id) == ["glob-1"], "the subagent's tool call should be nested once")
     expect(task?.children.first?.state == .succeeded, "the nested step should complete")
-    expect(task?.title == "Count txt files · gpt-5.6-luna · 8.4k tokens",
-           "the task title should report the subagent's model and token use")
+    expect(task?.title == "Count txt files", "subagent metrics belong to the monitor, not the title")
+    let info = task?.subagent
+    expect(info?.agentID == "agent-1" && info?.name == "Explore" && info?.agentType == "explore",
+           "the task should carry the subagent's identity")
+    expect(info?.status == .completed && info?.finishedAt != nil, "the subagent should finish")
+    expect(info?.model == "gpt-5.6-luna" && info?.tokens == 8367 && info?.toolCalls == 1,
+           "completion totals should replace the live estimate")
+    expect(info?.latestMessage == "Looking", "the subagent's latest text should be kept for the monitor")
+    expect(info?.canCancel == false, "a finished subagent can't be stopped")
     expect(text(from: events) == "3", "subagent text must stay out of the answer")
     let usage = events.compactMap { event -> Int? in
         guard case .usage(let usage) = event else { return nil }
@@ -141,7 +148,77 @@ private func testBackgroundSubagentKeepsReporting() {
     let task = lastActivity(events, id: "task-2")
     expect(lastActivity(events, id: "bash-1") == nil, "background steps should nest under their task")
     expect(task?.children.first?.state == .failed, "a background step's outcome should be kept")
-    expect(task?.title == "Run tests · claude-haiku-4.5 · 950 tokens", "late completion metrics should be shown")
+    expect(task?.title == "Run tests", "late completion metrics should not rename the task")
+    expect(task?.subagent?.background == true && task?.subagent?.status == .completed
+           && task?.subagent?.model == "claude-haiku-4.5" && task?.subagent?.tokens == 950,
+           "late completion metrics should reach the monitor")
+}
+
+private func testSubagentLiveProgress() {
+    var parser = CopilotJSONStreamParser(canCancelSubagents: true)
+    // Shapes captured from Copilot CLI 1.0.88 (background general-purpose agent).
+    var events = parser.consume(Data("""
+    {"type":"tool.execution_start","id":"p1","data":{"toolCallId":"task-3","toolName":"task","arguments":{"description":"Slow counter","agent_type":"general-purpose","name":"slow-counter","mode":"background"}}}
+    {"type":"tool.execution_complete","id":"p2","data":{"toolCallId":"task-3","success":true,"result":{"content":"Agent started"}}}
+    {"type":"subagent.started","id":"p3","timestamp":"2026-09-27T09:27:34.000Z","agentId":"agent-3","data":{"toolCallId":"task-3","agentName":"general-purpose","agentDisplayName":"slow-counter","agentDescription":"Slow counter","model":"gpt-5-mini","agentType":"general-purpose","executionMode":"background"}}
+    {"type":"subagent.configured","id":"p4","agentId":"agent-3","data":{"model":"gpt-5-mini","reasoningEffort":"high","multiTurn":true}}
+    {"type":"assistant.usage","id":"p5","agentId":"agent-3","data":{"inputTokens":4401,"outputTokens":67}}
+    {"type":"assistant.intent","id":"p6","agentId":"agent-3","data":{"intent":"Waiting on sleep"}}
+    {"type":"assistant.message","id":"p7","agentId":"agent-3","data":{"content":"","parentToolCallId":"task-3","toolRequests":[{"toolCallId":"bash-3","name":"bash","arguments":{"command":"sleep 60","description":"Sleep for 60 seconds"}}]}}
+    {"type":"tool.execution_start","id":"p8","agentId":"agent-3","data":{"toolCallId":"bash-3","toolName":"bash","parentToolCallId":"task-3"}}
+    {"type":"assistant.usage","id":"p9","agentId":"agent-3","data":{"inputTokens":4494,"outputTokens":10}}
+
+    """.utf8)) { _, _ in expect(false, "live subagent events should parse") }
+    var task = lastActivity(events, id: "task-3")
+    var info = task?.subagent
+    expect(task?.state == .succeeded && info?.status == .running,
+           "a background agent keeps running after its task call returns")
+    expect(info?.name == "slow-counter" && info?.summary == "Slow counter" && info?.background == true,
+           "start details should describe the agent")
+    expect(info?.effort == "high", "configured effort should be shown")
+    expect(info?.tokens == 4401 + 67 + 4494 + 10, "tokens should accumulate live from subagent usage")
+    expect(info?.intent == "Waiting on sleep", "the latest intent should be shown")
+    expect(info?.canCancel == true, "an SDK session can stop a running subagent")
+    expect(abs((info?.startedAt.timeIntervalSince1970 ?? 0) - 1_790_501_254) < 0.01,
+           "the start time should come from the event timestamp")
+    expect(task?.children.map(\.state) == [.running], "the running step should be nested")
+
+    // Stopped from Cantrip: the bridge's synthetic event lands before the runtime's report.
+    events = parser.consume(Data("""
+    {"type":"\(CopilotJSONStreamParser.cancelledEventType)","id":"p10","agentId":"agent-3","data":{}}
+    {"type":"subagent.completed","id":"p11","agentId":"agent-3","data":{"toolCallId":"task-3","agentName":"general-purpose","agentDisplayName":"slow-counter","cancelled":true,"model":"gpt-5-mini","totalToolCalls":0,"totalTokens":16750,"durationMs":6215}}
+
+    """.utf8)) { _, _ in expect(false, "cancel events should parse") }
+    task = lastActivity(events, id: "task-3")
+    info = task?.subagent
+    expect(info?.status == .cancelled && info?.canCancel == false, "a stopped agent should read as stopped")
+    expect(task?.children.map(\.state) == [.cancelled], "a stopped agent's running steps should stop too")
+    expect(info?.tokens == 16750, "the runtime's final total should win")
+    expect(abs((info?.elapsed() ?? 0) - 6.215) < 0.01, "the runtime's duration should set the elapsed time")
+}
+
+private func testSubagentFailureAndNesting() {
+    var parser = CopilotJSONStreamParser()
+    let events = parser.consume(Data("""
+    {"type":"tool.execution_start","id":"n1","data":{"toolCallId":"task-4","toolName":"task","arguments":{"description":"Outer"}}}
+    {"type":"subagent.started","id":"n2","agentId":"agent-4","data":{"toolCallId":"task-4","agentName":"general-purpose","agentDisplayName":"Outer","agentDescription":""}}
+    {"type":"tool.execution_start","id":"n3","agentId":"agent-4","data":{"toolCallId":"task-5","toolName":"task","arguments":{"description":"Inner"}}}
+    {"type":"subagent.started","id":"n4","agentId":"agent-5","data":{"toolCallId":"task-5","agentName":"explore","agentDisplayName":"Inner","agentDescription":"","executionMode":"sync"}}
+    {"type":"tool.execution_start","id":"n5","agentId":"agent-5","data":{"toolCallId":"grep-5","toolName":"grep"}}
+    {"type":"subagent.failed","id":"n6","agentId":"agent-5","data":{"toolCallId":"task-5","agentName":"explore","agentDisplayName":"Inner","error":"Model call failed"}}
+    {"type":"tool.execution_complete","id":"n7","agentId":"agent-4","data":{"toolCallId":"task-5","success":false,"result":{"content":"failed"}}}
+    {"type":"tool.execution_complete","id":"n8","data":{"toolCallId":"task-4","success":true,"result":{"content":"done"}}}
+
+    """.utf8)) { _, _ in expect(false, "nested subagent events should parse") }
+    let outer = lastActivity(events, id: "task-4")
+    let agents = outer?.subagentActivities ?? []
+    expect(agents.map(\.id) == ["task-4", "task-5"], "nested subagents should be listed after their parent")
+    let inner = agents.last?.subagent
+    expect(inner?.status == .failed && inner?.error == "Model call failed", "a failure should keep its reason")
+    expect(inner?.canCancel == false, "without SDK support Stop stays hidden")
+    expect(outer?.children.map(\.id) == ["task-5"], "an inner agent's steps should nest under its own task")
+    expect(agents.last?.children.map(\.state) == [.failed], "a failed agent's unfinished steps should end")
+    expect(outer?.subagent?.status == .completed, "a sync agent ends when its task call returns")
 }
 
 private func testUnknownSubagentFallsBackToTopLevel() {
@@ -160,6 +237,8 @@ testMalformedFinalLineIsReportedAndSkipped()
 testSDKMessagesAndUsage()
 testSubagentStepsNestUnderTask()
 testBackgroundSubagentKeepsReporting()
+testSubagentLiveProgress()
+testSubagentFailureAndNesting()
 testUnknownSubagentFallsBackToTopLevel()
 failures += runMCPAppTests()
 
@@ -167,4 +246,4 @@ if failures > 0 {
     fputs("\(failures) Copilot parser test(s) failed\n", stderr)
     exit(1)
 }
-print("All 8 Copilot parser test groups passed (incl. MCP Apps)")
+print("All 10 Copilot parser test groups passed (incl. MCP Apps)")

@@ -2516,11 +2516,74 @@ final class ChatSession: ObservableObject {
         _ activity: ToolActivity,
         as state: ToolActivityState
     ) -> ToolActivity {
-        var activity = activity
-        if activity.state == .running {
-            activity.state = state
+        activity.finishing(as: state)
+    }
+
+    // MARK: - Subagents
+
+    /// The subagent with this agent ID, searched newest message first.
+    func subagent(agentID: String) -> SubagentInfo? {
+        guard !agentID.isEmpty else { return nil }
+        for message in messages.reversed() {
+            for activity in message.activities {
+                if let info = activity.subagentActivities
+                    .last(where: { $0.subagent?.agentID == agentID })?.subagent {
+                    return info
+                }
+            }
         }
-        activity.children = activity.children.map { finalize($0, as: state) }
-        return activity
+        return nil
+    }
+
+    /// Stops one subagent while the rest of the reply keeps going. Completion
+    /// runs on the main actor: `true` = stopped, `false` = it had already finished.
+    func cancelSubagent(agentID: String, completion: @escaping (Result<Bool, Error>) -> Void) {
+        guard let info = subagent(agentID: agentID) else {
+            completion(.failure(SubagentCancelError.notFound))
+            return
+        }
+        guard info.isActive else {
+            completion(.failure(SubagentCancelError.finished))
+            return
+        }
+        guard info.canCancel, let backend = copilot as? CopilotBackend else {
+            completion(.failure(SubagentCancelError.unsupported))
+            return
+        }
+        Log.write("session \(id.uuidString.prefix(8)): stopping subagent \(agentID.prefix(8))")
+        backend.cancelSubagent(agentID: agentID) { [weak self] result in
+            DispatchQueue.main.async {
+                if case .success(true) = result { self?.markSubagentCancelled(agentID: agentID) }
+                completion(result)
+            }
+        }
+    }
+
+    /// Also covers a stop confirmed after the turn ended (no more parser events).
+    private func markSubagentCancelled(agentID: String) {
+        func cancelled(_ activity: ToolActivity) -> ToolActivity {
+            if let info = activity.subagent, info.agentID == agentID {
+                // The turn can end (finalizing it as done) before the stop is confirmed.
+                guard info.isActive || info.status == .completed else { return activity }
+                var stopped = activity.finishing(as: .cancelled)
+                stopped.subagent?.status = .cancelled
+                stopped.subagent?.canCancel = false
+                return stopped
+            }
+            var activity = activity
+            activity.children = activity.children.map(cancelled)
+            return activity
+        }
+        for messageIndex in messages.indices {
+            for activityIndex in messages[messageIndex].activities.indices {
+                let current = messages[messageIndex].activities[activityIndex]
+                let updated = cancelled(current)
+                guard updated != current else { continue }
+                messages[messageIndex].activities[activityIndex] = updated
+                if messages[messageIndex].runID == currentRunID {
+                    recordActivity(updated, messageID: messages[messageIndex].id)
+                }
+            }
+        }
     }
 }

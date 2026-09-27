@@ -1,0 +1,323 @@
+import AppKit
+import Foundation
+import SwiftUI
+import WebKit
+
+@MainActor
+private final class SubagentPageDelegate: NSObject, WKNavigationDelegate {
+    var finished = false
+    var error: Error?
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { finished = true }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        self.error = error
+    }
+}
+
+extension SessionTabTests {
+    /// A fake SDK whose `spawn` prompt starts a background subagent that runs until
+    /// stopped. Like Copilot CLI 1.0.88, the stop's completion report arrives only
+    /// after the root session is idle, so the bridge must say so first.
+    private static let subagentFakeSDK = #"""
+    export const RuntimeConnection = { forStdio: options => options };
+    export class CopilotClient {
+      constructor() {}
+      async start() {}
+      async forceStop() {}
+      async createSession(config) {
+        const emit = event => config.onEvent({ id: `e${Math.random()}`, timestamp: new Date().toISOString(), ...event });
+        const running = new Set();
+        let late = false;
+        const tasks = {
+          async list() {
+            return { tasks: [...[...running].map(id => ({ id, type: 'agent', status: 'running' })),
+              { id: 'shell-1', type: 'shell', status: 'running' }] };
+          },
+          async cancel({ id }) {
+            if (id === 'shell-1') throw Error('shell tasks must never be cancelled from the monitor');
+            if (!running.delete(id)) return { cancelled: false };
+            if (late) {
+              // Reversed order: the turn ends before the stop is confirmed.
+              emit({ type: 'session.idle', data: {} });
+              await new Promise(resolve => setTimeout(resolve, 150));
+              return { cancelled: true };
+            }
+            setTimeout(() => {
+              emit({ type: 'session.idle', data: {} });
+              emit({ type: 'subagent.completed', agentId: id, data: { toolCallId: 'task-1', agentName: 'explore',
+                agentDisplayName: 'Find tests', cancelled: true, totalTokens: 9000, durationMs: 1500 } });
+            }, 20);
+            return { cancelled: true };
+          }
+        };
+        return {
+          rpc: { tasks },
+          async abort() {},
+          async send(options) {
+            if (!options.prompt.includes('spawn')) { emit({ type: 'session.idle', data: {} }); return 'm'; }
+            late = options.prompt.includes('late');
+            if (late) {
+              running.add('agent-2');
+              setTimeout(() => {
+                emit({ type: 'tool.execution_start', data: { toolCallId: 'task-2', toolName: 'task',
+                  arguments: { description: 'Late stop', mode: 'background' } } });
+                emit({ type: 'subagent.started', agentId: 'agent-2', data: { toolCallId: 'task-2',
+                  agentName: 'task', agentDisplayName: 'Late stop', agentDescription: '', executionMode: 'background' } });
+              }, 10);
+              return 'm';
+            }
+            running.add('agent-1');
+            setTimeout(() => {
+              emit({ type: 'tool.execution_start', data: { toolCallId: 'task-1', toolName: 'task',
+                arguments: { description: 'Find tests', agent_type: 'explore', mode: 'background' } } });
+              emit({ type: 'tool.execution_complete', data: { toolCallId: 'task-1', success: true,
+                result: { content: 'Agent started' } } });
+              emit({ type: 'subagent.started', agentId: 'agent-1', data: { toolCallId: 'task-1',
+                agentName: 'explore', agentDisplayName: 'Find tests', agentDescription: 'Locate the parser tests',
+                model: 'gpt-5.4-mini', agentType: 'explore', executionMode: 'background' } });
+              emit({ type: 'assistant.usage', agentId: 'agent-1', data: { inputTokens: 4000, outputTokens: 100 } });
+              emit({ type: 'assistant.intent', agentId: 'agent-1', data: { intent: 'Searching Tests/' } });
+              emit({ type: 'tool.execution_start', agentId: 'agent-1', data: { toolCallId: 'grep-1', toolName: 'grep',
+                parentToolCallId: 'task-1', arguments: { pattern: 'testSubagent' } } });
+              emit({ type: 'assistant.message', data: { messageId: 'root-1', content: 'Waiting on the explorer.' } });
+            }, 10);
+            return 'm';
+          }
+        };
+      }
+    }
+    """#
+
+    @MainActor
+    static func testSubagentMonitor() async throws {
+        let settings = AppSettings.shared
+        settings.backend = .copilot
+        settings.memoryEnabled = false
+        settings.attachScreen = false
+        settings.shareLocation = false
+        settings.shareCalendar = false
+        settings.fileRAGEnabled = false
+
+        let sdkURL = "data:text/javascript;base64," + Data(subagentFakeSDK.utf8).base64EncodedString()
+        let discovery = "function resolveCopilotRuntime() { return {sdk: '\(sdkURL)', runtime: 'fixture', sessionRuntime: 'fixture'}; }"
+        let backend = CopilotBackend(bridgeScript: CopilotSessionBridge.script.replacingOccurrences(
+            of: CopilotRuntime.discoveryScript, with: discovery))
+        let chat = ChatSession(copilotBackend: backend)
+        let manager = SessionManager()
+        manager.sessions = [chat]
+        let server = RemoteControlServer(manager: manager)
+        let port = Int.random(in: 49152...65535), token = UUID().uuidString
+        server.start(port: port, token: token)
+        defer { server.stop(); chat.cancel() }
+        try await Task.sleep(for: .milliseconds(300))
+
+        chat.submit("spawn")
+        try await waitForJournalTest { chat.subagent(agentID: "agent-1")?.intent != nil }
+        let live = try require(chat.subagent(agentID: "agent-1"))
+        precondition(live.status == .running && live.background && live.canCancel && live.tokens == 4100,
+                     "a live background agent should be tracked with its usage: \(live)")
+        let reply = try require(chat.messages.last)
+        precondition(reply.text == "Waiting on the explorer.", "subagent progress must stay out of the reply text")
+
+        // Only agent tasks can be stopped; a shell task with a known ID is refused before cancel.
+        let shell: Result<Bool, Error> = await withCheckedContinuation { continuation in
+            backend.cancelSubagent(agentID: "shell-1") { continuation.resume(returning: $0) }
+        }
+        guard case .success(false) = shell else { preconditionFailure("shell tasks are not subagents: \(shell)") }
+
+        let base = URL(string: "http://127.0.0.1:\(port)/")!
+        let client = URLSession(configuration: .ephemeral)
+        defer { client.invalidateAndCancel() }
+        func call(_ path: String, method: String = "GET", body: String? = nil) async throws -> (Int, [String: Any]) {
+            var request = URLRequest(url: URL(string: path, relativeTo: base)!)
+            request.httpMethod = method
+            request.httpBody = body.map { Data($0.utf8) }
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let (data, response) = try await client.data(for: request)
+            return ((response as! HTTPURLResponse).statusCode,
+                    (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:])
+        }
+        let snapshot = try await call("api/v1/sessions/\(chat.id)")
+        let messages = (snapshot.1["session"] as? [String: Any])?["messages"] as? [[String: Any]] ?? []
+        let summary = try require(messages.compactMap { $0["subagents"] as? [[String: Any]] }.first?.first)
+        precondition(summary["id"] as? String == "task-1" && summary["agentID"] as? String == "agent-1"
+                     && summary["name"] as? String == "Find tests" && summary["agentType"] as? String == "explore"
+                     && summary["summary"] as? String == "Locate the parser tests"
+                     && summary["status"] as? String == "running" && summary["background"] as? Bool == true
+                     && summary["canCancel"] as? Bool == true && summary["tokens"] as? Int == 4100
+                     && summary["steps"] as? Int == 1 && summary["intent"] as? String == "Searching Tests/"
+                     && summary["model"] as? String == "gpt-5.4-mini" && summary["startedAt"] is Double
+                     && summary["finishedAt"] == nil
+                     && (summary["recentSteps"] as? [[String: Any]])?.first?["state"] as? String == "running",
+                     "snapshots should carry the monitor summary: \(summary)")
+        let unknown = try await call("api/v1/sessions/\(chat.id)/subagents/nope/cancel", method: "POST")
+        let wrongMethod = try await call("api/v1/sessions/\(chat.id)/subagents/agent-1/cancel")
+        precondition(unknown.0 == 404 && wrongMethod.0 == 405, "\(unknown) \(wrongMethod)")
+
+        // The browser Remote renders a live card and stops the agent from it.
+        let (page, _) = try await client.data(from: base)
+        _ = NSApplication.shared
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let delegate = SubagentPageDelegate()
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 420, height: 640), configuration: configuration)
+        webView.navigationDelegate = delegate
+        let window = NSWindow(contentRect: webView.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = webView
+        defer { webView.stopLoading(); window.close() }
+        webView.loadHTMLString(String(decoding: page, as: UTF8.self), baseURL: base)
+        for _ in 0..<200 where !delegate.finished && delegate.error == nil { try await Task.sleep(for: .milliseconds(50)) }
+        precondition(delegate.finished, "Remote page should load: \(String(describing: delegate.error))")
+        let card = try await webView.callAsyncJavaScript("""
+        localStorage.cantripToken=pairing;token=pairing;pair(false);selected=sessionID;
+        const data=await api(`/api/v1/sessions/${sessionID}`);render(data.session);
+        const cards=[...document.querySelectorAll('#messages .subagent')];
+        const steps=[...document.querySelectorAll('#messages .steps .step')].map(step=>step.textContent);
+        return {count:cards.length,text:cards[0]?.textContent||"",stop:Boolean(cards[0]?.querySelector('.subagent-stop')),
+          live:Boolean(cards[0]?.querySelector('.subagent-meta[data-live]')),label:cards[0]?.getAttribute('aria-label')||"",steps};
+        """, arguments: ["pairing": token, "sessionID": chat.id.uuidString], contentWorld: .page) as? [String: Any]
+        let cardText = card?["text"] as? String ?? ""
+        precondition(card?["count"] as? Int == 1 && card?["stop"] as? Bool == true && card?["live"] as? Bool == true
+                     && cardText.contains("Find tests") && cardText.contains("Now: Searching Tests/")
+                     && cardText.contains("4.1k tokens") && cardText.contains("Background")
+                     && (card?["label"] as? String ?? "").hasPrefix("Find tests subagent, Running"),
+                     "the browser should show a live, stoppable card: \(String(describing: card))")
+        precondition((card?["steps"] as? [String])?.isEmpty == true,
+                     "a subagent's task call should not repeat in the step list: \(String(describing: card))")
+        try await snapshotSubagentPage(webView, name: "remote-running")
+
+        let clicked = try await webView.callAsyncJavaScript("""
+        window.confirm=()=>true;document.querySelector('#messages .subagent-stop').click();return true;
+        """, contentWorld: .page) as? Bool
+        precondition(clicked == true)
+        try await waitForJournalTest { chat.subagent(agentID: "agent-1")?.status == .cancelled && !chat.isStreaming }
+        let stopped = try require(chat.subagent(agentID: "agent-1"))
+        precondition(stopped.finishedAt != nil && !stopped.canCancel, "a stopped agent should be final: \(stopped)")
+        let task = try require(chat.messages.last?.activities.first { $0.id == "task-1" })
+        precondition(task.children.map(\.state) == [.cancelled], "the stopped agent's running step should stop")
+
+        var rendered = ""
+        for _ in 0..<60 {
+            rendered = try await webView.evaluateJavaScript(
+                "document.querySelector('#messages .subagent')?.textContent || ''") as? String ?? ""
+            if rendered.contains("Stopped") { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        precondition(rendered.contains("Stopped") && !rendered.contains("Now:"),
+                     "the browser should refresh to the stopped card: \(rendered)")
+        let again = try await call("api/v1/sessions/\(chat.id)/subagents/agent-1/cancel", method: "POST", body: "{}")
+        precondition(again.0 == 409 && (again.1["error"] as? String)?.contains("already finished") == true, "\(again)")
+        try await snapshotSubagentPage(webView, name: "remote-stopped")
+
+        // A stop confirmed after the turn already finished still reads as stopped.
+        chat.submit("spawn late")
+        try await waitForJournalTest { chat.subagent(agentID: "agent-2")?.status == .running }
+        var lateResult: Result<Bool, Error>?
+        chat.cancelSubagent(agentID: "agent-2") { lateResult = $0 }
+        try await waitForJournalTest { lateResult != nil && !chat.isStreaming }
+        guard case .success(true) = lateResult else { preconditionFailure("\(String(describing: lateResult))") }
+        precondition(chat.subagent(agentID: "agent-2")?.status == .cancelled,
+                     "a late-confirmed stop must not read as done: \(String(describing: chat.subagent(agentID: "agent-2")))")
+
+        // Non-SDK backends can show subagents but not stop them.
+        let fixture = MCPAppLikeFixture()
+        let other = ChatSession(copilotBackend: fixture)
+        defer { other.cancel() }
+        other.submit("Delegate")
+        try await waitForJournalTest { fixture.sink != nil }
+        var claudeTask = ToolActivityFactory.start(id: "tool-9", toolName: "Task", arguments: ["description": "Review"])
+        claudeTask.subagent = SubagentInfo(agentID: "tool-9", name: "Review", agentType: "code-reviewer", summary: "")
+        fixture.sink?(.activity(claudeTask))
+        try await waitForJournalTest { other.subagent(agentID: "tool-9") != nil }
+        var refused: Error?
+        other.cancelSubagent(agentID: "tool-9") { if case .failure(let error) = $0 { refused = error } }
+        precondition(refused as? SubagentCancelError == .unsupported, "\(String(describing: refused))")
+        fixture.sink?(.done)
+        try await waitForJournalTest { !other.isStreaming }
+        precondition(other.subagent(agentID: "tool-9")?.status == .completed,
+                     "a finished turn should end its subagents")
+
+        try snapshotSubagentViews()
+        print("Subagent monitor: live tracking, remote summaries, browser cards, per-agent stop, and finalization passed")
+    }
+
+    private static func require<T>(_ value: T?, line: UInt = #line) throws -> T {
+        guard let value else { preconditionFailure("missing value at line \(line)") }
+        return value
+    }
+
+    /// Writes PNGs for review when CANTRIP_SNAPSHOT_DIR is set.
+    @MainActor
+    private static func snapshotSubagentPage(_ webView: WKWebView, name: String) async throws {
+        guard let directory = ProcessInfo.processInfo.environment["CANTRIP_SNAPSHOT_DIR"] else { return }
+        for dark in [false, true] {
+            webView.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            try await Task.sleep(for: .milliseconds(300))
+            let image = try await webView.takeSnapshot(configuration: nil)
+            guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+                  let png = bitmap.representation(using: .png, properties: [:]) else { continue }
+            try png.write(to: URL(fileURLWithPath: directory)
+                .appendingPathComponent("\(name)-\(dark ? "dark" : "light").png"))
+        }
+    }
+
+    @MainActor
+    private static func snapshotSubagentViews() throws {
+        guard let directory = ProcessInfo.processInfo.environment["CANTRIP_SNAPSHOT_DIR"] else { return }
+        let start = Date().addingTimeInterval(-83)
+        func agent(_ id: String, _ name: String, _ type: String, _ status: SubagentInfo.Status,
+                   background: Bool = false, intent: String? = nil, tokens: Int, error: String? = nil,
+                   steps: [ToolActivityState]) -> ToolActivity {
+            var activity = ToolActivityFactory.start(id: id, toolName: "task", arguments: ["description": name])
+            activity.state = status == .running ? .running : .succeeded
+            activity.subagent = SubagentInfo(
+                agentID: id, name: name, agentType: type, summary: "Find every caller of the parser and report file:line",
+                model: "gpt-5.4-mini", background: background, status: status, startedAt: start,
+                finishedAt: status.isFinal ? start.addingTimeInterval(47) : nil, intent: intent,
+                latestMessage: "Found 3 callers in Sources/Cantrip.", tokens: tokens, error: error, canCancel: !status.isFinal)
+            activity.children = steps.enumerated().map { index, state in
+                var step = ToolActivityFactory.start(id: "\(id)-\(index)", toolName: index % 2 == 0 ? "grep" : "view",
+                                                     arguments: ["pattern": "CopilotJSONStreamParser"])
+                step.state = state
+                return step
+            }
+            return activity
+        }
+        let agents = [
+            agent("a", "Map parser callers", "explore", .running, intent: "Reading MessageRouter.swift",
+                  tokens: 8_412, steps: [.succeeded, .succeeded, .running]),
+            agent("b", "Run session-tab tests", "task", .idle, background: true, tokens: 21_870, steps: [.succeeded]),
+            agent("c", "Review the diff", "code-review", .completed, tokens: 120_400, steps: [.succeeded, .succeeded]),
+            agent("d", "Check iOS build", "task", .failed, tokens: 950, error: "xcodebuild exited with 65",
+                  steps: [.failed]),
+        ]
+        for dark in [false, true] {
+            let content = VStack(alignment: .leading, spacing: 10) {
+                SubagentStrip(activities: agents, open: {})
+                SubagentMonitorView(activities: agents, stop: { _, done in done(nil) })
+            }
+            .padding(12)
+            .frame(width: 300)
+            .background(dark ? Color.black : Color.white)
+            .environment(\.colorScheme, dark ? .dark : .light)
+            let renderer = ImageRenderer(content: content)
+            renderer.scale = 2
+            guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiff),
+                  let png = bitmap.representation(using: .png, properties: [:]) else { continue }
+            try png.write(to: URL(fileURLWithPath: directory)
+                .appendingPathComponent("mac-monitor-\(dark ? "dark" : "light").png"))
+        }
+    }
+}
+
+private final class MCPAppLikeFixture: Backend {
+    var sink: ((BackendEvent) -> Void)?
+    func send(_ request: BackendRequest, workdir: String, onEvent: @escaping (BackendEvent) -> Void) { sink = onEvent }
+    func cancel() {}
+    func reset() {}
+}
+
+private extension SubagentInfo.Status {
+    var isFinal: Bool { self == .completed || self == .failed || self == .cancelled }
+}

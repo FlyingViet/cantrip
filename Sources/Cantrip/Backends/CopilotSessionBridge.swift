@@ -165,6 +165,25 @@ enum CopilotSessionBridge {
         reply({ error: errorText(error) });
       }
     }
+    // Stops one subagent. Only agent tasks: never a shell task with a matching ID.
+    async function cancelAgent(command) {
+      const reply = outcome => emit({ kind: 'agentCancelResponse', id: command.id, ...outcome });
+      try {
+        const tasks = session?.rpc?.tasks;
+        if (!tasks?.cancel || !tasks?.list || stopping) throw new Error("This tab's Copilot session is not running.");
+        const agentID = String(command.agentID || '');
+        const listed = (await tasks.list())?.tasks ?? [];
+        if (!listed.some(task => task.id === agentID && task.type === 'agent')) { reply({ cancelled: false }); return; }
+        const cancelled = (await tasks.cancel({ id: agentID }))?.cancelled === true;
+        // The runtime reports the stop only after the root turn may already be idle.
+        if (cancelled && runID) emit({ kind: 'event', runID, event: {
+          type: 'cantrip.subagent_cancelled', id: randomUUID(), agentId: agentID,
+          timestamp: new Date().toISOString(), data: {} } });
+        reply({ cancelled });
+      } catch (error) {
+        reply({ error: errorText(error) });
+      }
+    }
     async function stop() {
       if (stopping) return;
       stopping = true;
@@ -192,6 +211,7 @@ enum CopilotSessionBridge {
       if (immediate.kind === 'inputAnswer') { answerInput(immediate); return; }
       // View requests must not wait behind a turn's session.send.
       if (immediate.kind === 'appRequest') { void appRequest(immediate); return; }
+      if (immediate.kind === 'cancelAgent') { void cancelAgent(immediate); return; }
       commands = commands.then(async () => {
         if (stopping) return;
         const command = JSON.parse(line);

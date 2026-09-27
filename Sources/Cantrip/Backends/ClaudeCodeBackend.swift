@@ -13,6 +13,8 @@ final class ClaudeCodeBackend: Backend {
     private var activities: [String: ToolActivity] = [:]
     /// child tool_use id → parent Task activity id (subagent steps).
     private var childIndex: [String: String] = [:]
+    /// Claude repeats a message's full usage on every content-block event.
+    private var countedSubagentMessages: Set<String> = []
     /// Whether any text has streamed this run (for block separation).
     private var hasEmittedText = false
     /// Same, for thinking blocks (separate consecutive reasoning blocks).
@@ -113,6 +115,7 @@ final class ClaudeCodeBackend: Backend {
                 self.turnInFlight = false
                 self.activities.removeAll()
                 self.childIndex.removeAll()
+                self.countedSubagentMessages.removeAll()
             }
             data.append(0x0A)
             handle.write(data)
@@ -149,6 +152,7 @@ final class ClaudeCodeBackend: Backend {
         currentOnEvent = nil
         activities.removeAll()
         childIndex.removeAll()
+        countedSubagentMessages.removeAll()
         turnInFlight = false
         suppressUntilResult = false
         p.terminate()
@@ -460,6 +464,23 @@ final class ClaudeCodeBackend: Backend {
             guard let message = obj["message"] as? [String: Any],
                   let content = message["content"] as? [[String: Any]] else { return }
             let parentID = obj["parent_tool_use_id"] as? String
+            if let parentID, var parent = activities[parentID], parent.subagent != nil {
+                // A subagent's own message: feed the monitor, keep it out of the answer.
+                let messageID = message["id"] as? String
+                let firstReport = messageID.map { countedSubagentMessages.insert($0).inserted } ?? true
+                let usage = firstReport ? message["usage"] as? [String: Any] : nil
+                parent.subagent?.tokens += (usage?["input_tokens"] as? Int ?? 0)
+                    + (usage?["cache_creation_input_tokens"] as? Int ?? 0)
+                    + (usage?["cache_read_input_tokens"] as? Int ?? 0)
+                    + (usage?["output_tokens"] as? Int ?? 0)
+                let text = content.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
+                    .joined(separator: "\n")
+                if let latest = SubagentInfo.clipped(text) { parent.subagent?.latestMessage = latest }
+                if parent != activities[parentID] {
+                    activities[parentID] = parent
+                    onEvent(.activity(parent))
+                }
+            }
             for block in content {
                 switch block["type"] as? String {
                 case "text":
@@ -469,11 +490,22 @@ final class ClaudeCodeBackend: Backend {
                 case "tool_use":
                     guard let id = block["id"] as? String else { continue }
                     let name = block["name"] as? String ?? "tool"
-                    let activity = ToolActivityFactory.start(
+                    var activity = ToolActivityFactory.start(
                         id: id,
                         toolName: name,
                         arguments: block["input"]
                     )
+                    if parentID == nil, ["Task", "Agent"].contains(name) {
+                        let input = block["input"] as? [String: Any]
+                        activity.subagent = SubagentInfo(
+                            agentID: id,
+                            name: input?["description"] as? String ?? "",
+                            agentType: input?["subagent_type"] as? String ?? "general-purpose",
+                            summary: "",
+                            model: input?["model"] as? String,
+                            background: input?["run_in_background"] as? Bool ?? false
+                        )
+                    }
                     if let parentID, var parent = activities[parentID] {
                         // Subagent step: nest under its Task activity.
                         parent.children.append(activity)
@@ -507,12 +539,16 @@ final class ClaudeCodeBackend: Backend {
                     onEvent(.activity(parent))
                     continue
                 }
-                let completed = ToolActivityFactory.complete(
+                var completed = ToolActivityFactory.complete(
                     activities.removeValue(forKey: id),
                     id: id,
                     success: !isError,
                     output: output
                 )
+                if let info = completed.subagent, info.isActive, !info.background {
+                    completed = completed.finishing(as: isError ? .failed : .succeeded)
+                    completed.subagent?.toolCalls = completed.children.count
+                }
                 onEvent(.activity(completed))
             }
         case "result":

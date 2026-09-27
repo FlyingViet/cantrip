@@ -23,6 +23,8 @@ enum RemoteHistory {
             },
         ]
         if let author = message.author { result["author"] = author }
+        let subagents = message.activities.flatMap(\.subagentActivities)
+        if !subagents.isEmpty { result["subagents"] = subagents.compactMap(subagent) }
         // Summaries only; clients fetch each view's payload on demand.
         if !message.apps.isEmpty, AppSettings.shared.copilotMCPApps {
             result["apps"] = message.apps.map { app -> [String: Any] in
@@ -33,6 +35,30 @@ enum RemoteHistory {
             }
         }
         return result
+    }
+
+    /// Monitor summary; contract shared with the web UI and Cantrip Agent.
+    static func subagent(_ activity: ToolActivity) -> [String: Any]? {
+        guard let info = activity.subagent else { return nil }
+        let current = activity.children.last(where: { $0.state == .running }) ?? activity.children.last
+        var item: [String: Any] = [
+            "id": activity.id, "agentID": info.agentID, "name": info.name,
+            "agentType": info.agentType, "summary": info.summary, "background": info.background,
+            "status": info.status.rawValue, "startedAt": info.startedAt.timeIntervalSince1970,
+            "steps": info.toolCalls ?? activity.children.count, "tokens": info.tokens,
+            "canCancel": info.canCancel && info.isActive,
+            "recentSteps": activity.children.suffix(6).map { step in
+                ["title": step.title, "toolName": step.toolName, "state": state(step.state)]
+            },
+        ]
+        item["model"] = info.model
+        item["effort"] = info.effort
+        item["finishedAt"] = info.finishedAt?.timeIntervalSince1970
+        item["intent"] = info.intent
+        item["currentStep"] = current?.title
+        item["latestMessage"] = info.latestMessage
+        item["error"] = info.error
+        return item
     }
 
     private static func state(_ state: ToolActivityState) -> String {

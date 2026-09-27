@@ -5,6 +5,15 @@ enum ToolActivityState: Equatable {
     case succeeded
     case failed
     case cancelled
+
+    init(_ status: SubagentInfo.Status) {
+        switch status {
+        case .running, .idle: self = .running
+        case .completed: self = .succeeded
+        case .failed: self = .failed
+        case .cancelled: self = .cancelled
+        }
+    }
 }
 
 struct ToolFileChange: Identifiable, Equatable {
@@ -27,6 +36,110 @@ struct ToolActivity: Identifiable, Equatable {
     var children: [ToolActivity] = []
     /// Interactive MCP App view returned with the result (Copilot only).
     var app: MCPAppPayload?
+    /// Set when this activity spawned a subagent (Copilot task, Claude Task).
+    var subagent: SubagentInfo?
+
+    /// Every subagent in this activity tree, parents before their nested agents.
+    var subagentActivities: [ToolActivity] {
+        (subagent == nil ? [] : [self]) + children.flatMap(\.subagentActivities)
+    }
+
+    /// Ends this activity tree: unfinished steps and active subagents end as `state`.
+    func finishing(as state: ToolActivityState, at date: Date = Date()) -> ToolActivity {
+        var activity = self
+        if activity.state == .running { activity.state = state }
+        if let info = activity.subagent, info.isActive {
+            activity.subagent?.status = SubagentInfo.Status(state)
+            activity.subagent?.finishedAt = date
+            activity.subagent?.canCancel = false
+        }
+        activity.children = activity.children.map { $0.finishing(as: state, at: date) }
+        return activity
+    }
+}
+
+enum SubagentCancelError: LocalizedError, Equatable {
+    case notFound, finished, unsupported, sessionUnavailable, timedOut
+    case server(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notFound: return "That subagent isn't in this conversation."
+        case .finished: return "That subagent has already finished."
+        case .unsupported: return "This tab's backend can't stop a single subagent. Stop the whole reply instead."
+        case .sessionUnavailable: return "This tab's Copilot session isn't running, so the subagent has already stopped."
+        case .timedOut: return "Copilot didn't confirm the stop in time. Check the subagent's status."
+        case .server(let message): return message
+        }
+    }
+}
+
+/// Live progress of a subagent, shown in Cantrip's subagent monitor.
+struct SubagentInfo: Equatable, Codable {
+    enum Status: String, Codable {
+        case running, idle, completed, failed, cancelled
+
+        init(_ state: ToolActivityState) {
+            switch state {
+            case .running: self = .running
+            case .succeeded: self = .completed
+            case .failed: self = .failed
+            case .cancelled: self = .cancelled
+            }
+        }
+    }
+
+    /// Copilot agent/task ID (the cancel target); Claude: the Task tool-use ID.
+    var agentID: String
+    var name: String
+    var agentType: String
+    var summary: String
+    var model: String?
+    var effort: String?
+    var background = false
+    var status: Status = .running
+    var startedAt = Date()
+    var finishedAt: Date?
+    var intent: String?
+    var latestMessage: String?
+    var tokens = 0
+    var toolCalls: Int?
+    var error: String?
+    /// The backend can stop this agent on its own (Copilot SDK sessions).
+    var canCancel = false
+
+    var isActive: Bool { status == .running || status == .idle }
+
+    var displayName: String {
+        if !name.isEmpty { return name }
+        if !agentType.isEmpty { return agentType.replacingOccurrences(of: "-", with: " ").capitalized }
+        return "Subagent"
+    }
+
+    func elapsed(now: Date = Date()) -> TimeInterval {
+        max(0, (finishedAt ?? now).timeIntervalSince(startedAt))
+    }
+
+    static func elapsedLabel(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded(.down))
+        if total < 60 { return "\(total)s" }
+        if total < 3600 { return String(format: "%dm %02ds", total / 60, total % 60) }
+        return String(format: "%dh %02dm", total / 3600, (total % 3600) / 60)
+    }
+
+    static func tokenLabel(_ tokens: Int) -> String {
+        switch tokens {
+        case ..<1_000: return "\(tokens) tokens"
+        case ..<1_000_000: return String(format: "%.1fk tokens", Double(tokens) / 1_000)
+        default: return String(format: "%.1fM tokens", Double(tokens) / 1_000_000)
+        }
+    }
+
+    static func clipped(_ text: String, limit: Int = 400) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed.count > limit ? String(trimmed.prefix(limit - 1)) + "…" : trimmed
+    }
 }
 
 struct BackendUsage {
