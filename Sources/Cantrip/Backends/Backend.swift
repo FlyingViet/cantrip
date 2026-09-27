@@ -25,6 +25,8 @@ struct ToolActivity: Identifiable, Equatable {
     /// Steps run inside this activity by a subagent (Claude Code Task
     /// tool_use parent IDs; Copilot subagent.started agent IDs).
     var children: [ToolActivity] = []
+    /// Interactive MCP App view returned with the result (Copilot only).
+    var app: MCPAppPayload?
 }
 
 struct BackendUsage {

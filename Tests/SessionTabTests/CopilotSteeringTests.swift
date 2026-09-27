@@ -286,12 +286,23 @@ extension SessionTabTests {
             if (!config.streaming || !config.enableConfigDiscovery || config.remoteSession !== 'off'
                 || config.mcpOAuthTokenStorage !== 'persistent')
               throw Error('Missing session settings');
+            if (config.enableMcpApps !== true || process.env.COPILOT_MCP_APPS !== 'true')
+              throw Error('MCP Apps must be enabled with the runtime gate');
             if (config.availableTools?.length === 0) {
               if (config.onPermissionRequest({kind:'write'}).kind !== 'reject')
                 throw Error('Read-only council must deny writes');
             }
             let count = 0;
+            const apps = {
+              async callTool(params) {
+                if (params.originServerName !== params.serverName) throw Error('origin mismatch');
+                return {content:[{type:'text',text:`${params.serverName}:${params.toolName}:${params.arguments.q}`}]};
+              },
+              async listTools(params) { return {tools:[{name:`${params.originServerName}-tool`}]}; },
+              async readResource(params) { throw Error(`no resource ${params.uri}`); }
+            };
             return {
+              rpc: { mcp: { apps } },
               async abort() {},
               async send(options) {
                 count++;
@@ -333,6 +344,20 @@ extension SessionTabTests {
         precondition(next.text == "4:enqueue:finish\n" || next.text.hasPrefix("4:enqueue:finish\n\n"),
                      "follow-ups must keep the native session without resending history: \(next.text)")
         precondition(!next.text.contains("OLD_HISTORY_MUST_NOT_REPEAT"))
+        // MCP App views reach their server between turns, outside any run.
+        let call = try await mcpAppRequest(backend, method: "tools/call",
+                                           params: ["name": "search", "arguments": ["q": "login"]])
+        precondition(((call["content"] as? [[String: Any]])?.first?["text"] as? String) == "mobbin:search:login")
+        let tools = try await mcpAppRequest(backend, method: "tools/list", params: [:])
+        precondition(((tools["tools"] as? [[String: Any]])?.first?["name"] as? String) == "mobbin-tool")
+        do {
+            _ = try await mcpAppRequest(backend, method: "resources/read", params: ["uri": "ui://x"])
+            preconditionFailure("server errors must reach the view")
+        } catch MCPAppRequestError.server(let message) { precondition(message.contains("no resource ui://x")) }
+        do {
+            _ = try await mcpAppRequest(backend, method: "sampling/createMessage", params: [:])
+            preconditionFailure("only proxied view methods may reach the bridge")
+        } catch MCPAppRequestError.invalidRequest {}
         let isolated = SteeringEvents()
         other.send(BackendRequest(prompt: "hold", userMessage: "hold", previousTurns: []),
                    workdir: NSHomeDirectory(), onEvent: isolated.append)
@@ -370,6 +395,15 @@ extension SessionTabTests {
         try await waitForJournalTest { late.done == 1 }
         precondition(late.notSent == 1 && late.uncertain == 0,
                      "idle cannot discard a pending definitive not-sent acknowledgement")
+    }
+
+    private static func mcpAppRequest(_ backend: CopilotBackend, method: String,
+                                      params: [String: Any]) async throws -> [String: Any] {
+        try await withCheckedThrowingContinuation { continuation in
+            backend.mcpAppRequest(serverName: "mobbin", method: method, params: params) {
+                continuation.resume(with: $0)
+            }
+        }
     }
 
     @MainActor

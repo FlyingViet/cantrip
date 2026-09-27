@@ -34,7 +34,7 @@ test-session-tabs:
 test-message-routing:
 	@BIN="/tmp/cantrip-message-routing-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/Log.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/Log.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-remote-routing:
 	@BIN="/tmp/cantrip-remote-routing-tests-$$$$"; \
@@ -61,7 +61,7 @@ test-features:
 test-copilot-parser:
 	@BIN="/tmp/cantrip-copilot-parser-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/ConversationContext.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Tests/CopilotJSONStreamParserTests/main.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Tests/CopilotJSONStreamParserTests/*.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-package-tracking:
