@@ -28,7 +28,12 @@ enum RemoteHistory {
             result["reasoning"] = reasoning.enumerated().map { $1.snapshot(number: $0 + 1) }
         }
         let subagents = message.activities.flatMap(\.subagentActivities)
-        if !subagents.isEmpty { result["subagents"] = subagents.compactMap(subagent) }
+        if !subagents.isEmpty {
+            result["subagents"] = subagents.compactMap { activity in
+                subagent(activity, textBlock: activity.subagent?.isActive == false
+                         ? message.subagentTextBlock(activity.id) : nil)
+            }
+        }
         // Summaries only; clients fetch each view's payload on demand.
         if !message.apps.isEmpty, AppSettings.shared.copilotMCPApps {
             result["apps"] = message.apps.map { app -> [String: Any] in
@@ -42,7 +47,8 @@ enum RemoteHistory {
     }
 
     /// Monitor summary; contract shared with the web UI and Cantrip Agent.
-    static func subagent(_ activity: ToolActivity) -> [String: Any]? {
+    /// `textBlock`: a finished card follows that many reply blocks (see ReplyBlocks).
+    static func subagent(_ activity: ToolActivity, textBlock: Int? = nil) -> [String: Any]? {
         guard let info = activity.subagent else { return nil }
         let current = activity.children.last(where: { $0.state == .running }) ?? activity.children.last
         var item: [String: Any] = [
@@ -62,6 +68,7 @@ enum RemoteHistory {
         item["currentStep"] = current?.title
         item["latestMessage"] = info.latestMessage
         item["error"] = info.error
+        item["textBlock"] = textBlock
         let reasoning = ReasoningStep.steps(from: info.reasoning)
         if !reasoning.isEmpty {
             item["reasoning"] = reasoning.indices.suffix(8).map {

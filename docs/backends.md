@@ -95,8 +95,9 @@ subagents keep the turn open until they finish, and Stop cancels them.
 While a reply's subagents run, a line pinned to the bottom of the chat shows
 their progress, such as
 `2 subagents running · Find tests: Searching Tests/ · 42s`, so it stays in
-view as the reply grows. When they all finish, the line moves to its place
-above the reply's text. Click it to open
+view as the reply grows. When a subagent finishes, a summary line for it
+moves into the reply at the point it ended, after the paragraph that was
+being written at the time, so later text follows it. Click either line to open
 the **Progress** pane. Its **Subagents** section has a card for each subagent,
 running ones first. A card shows:
 

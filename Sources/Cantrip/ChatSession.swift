@@ -6,7 +6,11 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var id = UUID()
     let role: Role
     var text: String
-    var activities: [ToolActivity] = []
+    var activities: [ToolActivity] = [] {
+        didSet { recordSubagentEnds() }
+    }
+    /// UTF-8 length of `text` when each subagent (by activity ID) finished; its card sits there.
+    var subagentEnds: [String: Int] = [:]
     /// Streamed reasoning (thinking deltas) — shown collapsed in the UI.
     var thinking: String = ""
     /// UTF-8 offsets in `thinking` where each reasoning block starts.
@@ -38,6 +42,24 @@ extension ChatMessage {
             reasoningStarts.append(thinking.utf8.count)
         }
         reasoningMark = mark
+    }
+
+    /// Notes where the reply had got to when each subagent ended; a revived agent is re-noted.
+    private mutating func recordSubagentEnds() {
+        for agent in activities.flatMap(\.subagentActivities) {
+            guard let info = agent.subagent else { continue }
+            if info.isActive {
+                subagentEnds[agent.id] = nil
+            } else if subagentEnds[agent.id] == nil {
+                subagentEnds[agent.id] = text.utf8.count
+            }
+        }
+    }
+
+    /// Reply block a finished subagent's card follows (0 = before the text).
+    func subagentTextBlock(_ activityID: String) -> Int {
+        guard let end = subagentEnds[activityID] else { return 0 }
+        return ReplyBlocks.block(atOffset: end, in: text)
     }
 
     /// `thinking` split into its blocks (usually one per model call).

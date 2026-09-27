@@ -220,16 +220,26 @@ extension SessionTabTests {
 
         var rendered = ""
         var pinnedLeft = false
+        var afterText = false
         for _ in 0..<60 {
             rendered = try await webView.evaluateJavaScript(
                 "document.querySelector('#messages .subagent')?.textContent || ''") as? String ?? ""
             pinnedLeft = try await webView.evaluateJavaScript(
                 "document.getElementById('liveSubagents').classList.contains('hidden') && !document.querySelector('#liveSubagents .subagent')") as? Bool ?? false
-            if rendered.contains("Stopped") && pinnedLeft { break }
+            afterText = try await webView.evaluateJavaScript("""
+                (()=>{const card=document.querySelector('#messages .subagent'),prose=card?.closest('.message')?.querySelector(':scope>.prose');
+                return Boolean(card&&prose&&prose.textContent.includes('Waiting on the explorer.')&&(prose.compareDocumentPosition(card)&Node.DOCUMENT_POSITION_FOLLOWING))})()
+                """) as? Bool ?? false
+            if rendered.contains("Stopped") && pinnedLeft && afterText { break }
             try await Task.sleep(for: .milliseconds(100))
         }
         precondition(rendered.contains("Stopped") && !rendered.contains("Now:") && pinnedLeft,
                      "the stopped card should move back into its reply: \(rendered) pinnedLeft=\(pinnedLeft)")
+        precondition(afterText, "the stopped card should follow the text written before it ended")
+        let settled = try await call("api/v1/sessions/\(chat.id)")
+        let settledAgent = ((settled.1["session"] as? [String: Any])?["messages"] as? [[String: Any]])?
+            .compactMap { $0["subagents"] as? [[String: Any]] }.first?.first
+        precondition(settledAgent?["textBlock"] as? Int == 1, "\(String(describing: settledAgent))")
         let again = try await call("api/v1/sessions/\(chat.id)/subagents/agent-1/cancel", method: "POST", body: "{}")
         precondition(again.0 == 409 && (again.1["error"] as? String)?.contains("already finished") == true, "\(again)")
         try await snapshotSubagentPage(webView, name: "remote-stopped")
@@ -264,6 +274,45 @@ extension SessionTabTests {
 
         try snapshotSubagentViews()
         print("Subagent monitor: live tracking, remote summaries, browser cards, per-agent stop, and finalization passed")
+    }
+
+    /// A finished subagent's card sits where the reply had got to when it ended.
+    static func testSubagentPlacement() throws {
+        let fenced = "A\n\nB\nC\n\n```\nx\n\ny\n```\n\nD"
+        precondition(ReplyBlocks.starts(in: fenced).count == 4, "blank lines inside a code fence don't split blocks")
+        precondition(ReplyBlocks.split(fenced, before: [3]) == ["A\n\nB\nC\n\n```\nx\n\ny\n```", "D"],
+                     "\(ReplyBlocks.split(fenced, before: [3]))")
+        precondition(ReplyBlocks.split("é👍\n\nNext", before: [1]) == ["é👍", "Next"], "splits on UTF-8 boundaries")
+        precondition(ReplyBlocks.split("A\r\n\r\nB", before: [1]) == ["A", "B"], "CRLF blank lines split like the browser")
+        precondition(ReplyBlocks.split("Only", before: [0, 5]) == ["", "Only", ""], "0 = before the text, past the end = after")
+        precondition(ReplyBlocks.block(atOffset: 8, in: "Para one is long\n\nPara two") == 1,
+                     "ending mid-paragraph places the card after that paragraph")
+
+        var message = ChatMessage(role: .assistant, text: "Starting an explorer.")
+        var task = ToolActivityFactory.start(id: "task-a", toolName: "task", arguments: [:])
+        task.subagent = SubagentInfo(agentID: "a", name: "Explore", agentType: "explore", summary: "")
+        message.activities = [task]
+        message.text += "\n\nStill waiting."
+        precondition(message.subagentEnds.isEmpty, "a running agent has no place in the text yet")
+        task.subagent?.status = .completed
+        message.activities[0] = task
+        message.text += "\n\nIt found three tests."
+        precondition(message.subagentTextBlock("task-a") == 2, "\(message.subagentEnds)")
+        precondition(ReplyBlocks.split(message.text, before: [2])
+                     == ["Starting an explorer.\n\nStill waiting.", "It found three tests."])
+        let remote = RemoteHistory.message(message)["subagents"] as? [[String: Any]]
+        precondition(remote?.first?["textBlock"] as? Int == 2, "\(String(describing: remote))")
+
+        // A revived agent (e.g. a background agent given more work) is placed where it ends next.
+        task.subagent?.status = .running
+        message.activities[0] = task
+        precondition(message.subagentEnds.isEmpty
+                     && (RemoteHistory.message(message)["subagents"] as? [[String: Any]])?.first?["textBlock"] == nil)
+        message.text += "\n\nMore."
+        task.subagent?.status = .failed
+        message.activities[0] = task
+        precondition(message.subagentTextBlock("task-a") == 4, "\(message.subagentEnds)")
+        print("Subagent placement: cards follow the reply block that was streaming when each agent ended")
     }
 
     private static func require<T>(_ value: T?, line: UInt = #line) throws -> T {
