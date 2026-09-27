@@ -125,7 +125,7 @@ struct RemoteConnectionView: View {
 
 @MainActor
 final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
-    WKScriptMessageHandler {
+    WKScriptMessageHandler, WKUIDelegate {
     @Published var address: String
     @Published var pairingToken = ""
     @Published var tailscaleOnly: Bool
@@ -187,6 +187,7 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
             name: "cantripRemoteUnpair"
         )
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
         installPairingTokenScript(RemoteClientCredentials.load())
     }
@@ -368,6 +369,26 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
         } else {
             errorMessage = "Blocked navigation outside the paired Cantrip host."
             decisionHandler(.cancel)
+        }
+    }
+
+    /// JavaScript confirm() for the paired Remote page (e.g. approving a message
+    /// an MCP App view asks to send).
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        guard frame.isMainFrame, sameOrigin(frame.request.url ?? webView.url, endpoint) else {
+            completionHandler(false)
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Cantrip Remote"
+        alert.informativeText = String(message.prefix(2_400))
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        if let window = webView.window {
+            alert.beginSheetModal(for: window) { completionHandler($0 == .alertFirstButtonReturn) }
+        } else {
+            completionHandler(alert.runModal() == .alertFirstButtonReturn)
         }
     }
 

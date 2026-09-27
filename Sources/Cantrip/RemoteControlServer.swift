@@ -25,6 +25,8 @@ final class RemoteControlServer {
     private let notifications: RemoteNotifications
     private let generatedImages = RemoteGeneratedImages.Store()
     private var maintenance: RemoteMaintenance?
+    /// Single-use MCP App view addresses (main actor), valid for a minute.
+    private var mcpAppViewTokens: [String: (sessionID: UUID, appID: String, expires: Date)] = [:]
     private let desktopOverride: RemoteDesktop?
     private let notificationLifecycleLock = NSLock()
     private var notificationLifecycleTask: Task<Void, Never>?
@@ -345,6 +347,12 @@ final class RemoteControlServer {
 
     @MainActor
     private func route(_ request: HTTPRequest, json: [String: Any]?, on connection: RemoteRequestConnection) {
+        // Frame navigations cannot carry the pairing header, so views load
+        // through short-lived single-use URLs minted by an authorized request.
+        if request.method == "GET", request.path.hasPrefix("/mcp-app/") {
+            serveMCPAppView(String(request.path.dropFirst("/mcp-app/".count)), on: connection)
+            return
+        }
         if request.method == "GET", request.path == "/" {
             send(
                 status: 200,
@@ -535,6 +543,13 @@ final class RemoteControlServer {
             return
         }
         let session = manager.sessions[sessionIndex]
+
+        if parts.count >= 3, parts[1] == "apps" {
+            handleMCPApp(request, json: json, session: session, appID: String(parts[2]),
+                         action: parts.count == 4 ? String(parts[3]) : parts.count == 3 ? nil : "invalid",
+                         on: connection)
+            return
+        }
 
         if parts.count >= 2, parts[1] == "input" {
             if parts.count == 2, request.method == "GET" {
@@ -1290,6 +1305,97 @@ final class RemoteControlServer {
         }
     }
 
+    // MARK: - MCP App views
+
+    @MainActor
+    private func handleMCPApp(_ request: HTTPRequest, json: [String: Any]?, session: ChatSession,
+                              appID: String, action: String?, on connection: RemoteRequestConnection) {
+        guard AppSettings.shared.copilotMCPApps else {
+            sendError(404, "Interactive MCP App views are turned off on the Mac.", on: connection)
+            return
+        }
+        guard let app = session.messages.lazy.flatMap(\.apps).last(where: { $0.id == appID }) else {
+            sendError(404, "This view is no longer in the conversation.", on: connection)
+            return
+        }
+        switch (request.method, action) {
+        case ("GET", nil):
+            sendEncoded(on: connection) { try JSONEncoder().encode(app) }
+        case ("POST", "view"):
+            let now = Date()
+            mcpAppViewTokens = mcpAppViewTokens.filter { $0.value.expires > now }
+            guard mcpAppViewTokens.count < 64 else {
+                sendError(409, "Too many views are loading. Try again shortly.", on: connection)
+                return
+            }
+            var bytes = [UInt8](repeating: 0, count: 24)
+            guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+                sendError(500, "Could not create a view address.", on: connection)
+                return
+            }
+            let token = bytes.map { String(format: "%02x", $0) }.joined()
+            mcpAppViewTokens[token] = (session.id, app.id, now.addingTimeInterval(60))
+            sendJSON(["url": "/mcp-app/\(token)"], on: connection)
+        case ("POST", "request"):
+            guard request.body.count <= 256 * 1024, let json, Set(json.keys).isSubset(of: ["method", "params"]),
+                  let method = json["method"] as? String,
+                  ["tools/call", "tools/list", "resources/read"].contains(method),
+                  json["params"] == nil || json["params"] is [String: Any] else {
+                sendError(400, "Provide method tools/call, tools/list or resources/read, and params as an object.", on: connection)
+                return
+            }
+            session.mcpAppRequest(app, method: method, params: json["params"] as? [String: Any] ?? [:]) { [weak self] result in
+                switch result {
+                case .success(let value): self?.sendJSON(["result": value], on: connection)
+                case .failure(let error): self?.sendError(502, error.localizedDescription, on: connection)
+                }
+            }
+        case ("POST", "message"):
+            guard request.body.count <= 16 * 1024, let json, Set(json.keys) == ["text"],
+                  let raw = json["text"] as? String else {
+                sendError(400, "Provide the approved message text.", on: connection)
+                return
+            }
+            let text = MCPAppHost.messageText(raw)
+            guard !text.isEmpty else {
+                sendError(400, "The message is empty.", on: connection)
+                return
+            }
+            session.submitMCPAppMessage(text, from: app)
+            sendJSON(["accepted": true, "text": text], on: connection)
+        case ("POST", "context"):
+            guard request.body.count <= 16 * 1024, let json, Set(json.keys) == ["text"],
+                  json["text"] is String || json["text"] is NSNull else {
+                sendError(400, "Provide text as a string, or null to clear it.", on: connection)
+                return
+            }
+            let text = (json["text"] as? String).map { String($0.prefix(8_000)) }
+            session.setMCPAppContext(app, text: text?.isEmpty == false ? text : nil)
+            sendJSON(["accepted": true], on: connection)
+        case (_, nil), (_, "view"), (_, "request"), (_, "message"), (_, "context"):
+            sendError(405, "method not allowed", on: connection)
+        default:
+            sendError(404, "not found", on: connection)
+        }
+    }
+
+    @MainActor
+    private func serveMCPAppView(_ token: String, on connection: RemoteRequestConnection) {
+        guard token.count == 48, let entry = mcpAppViewTokens.removeValue(forKey: token),
+              entry.expires > Date(), AppSettings.shared.copilotMCPApps,
+              let session = manager?.sessions.first(where: { $0.id == entry.sessionID && !$0.isPrivate }),
+              let app = session.messages.lazy.flatMap(\.apps).last(where: { $0.id == entry.appID }) else {
+            sendError(404, "This view address expired. Reload the conversation.", on: connection)
+            return
+        }
+        // The sandbox directive keeps the view on an opaque origin even when
+        // opened directly, so it can never read the Remote page's pairing token.
+        send(status: 200, contentType: "text/html; charset=utf-8",
+             body: Data(MCPAppDocument.viewHTML(app).utf8),
+             contentSecurityPolicy: app.csp.policy + "; frame-ancestors 'self'; sandbox allow-scripts allow-forms",
+             on: connection)
+    }
+
     private func sendError(_ status: Int, _ message: String, on connection: RemoteRequestConnection) {
         sendJSON(["error": message], status: status, on: connection)
     }
@@ -1298,6 +1404,7 @@ final class RemoteControlServer {
         status: Int,
         contentType: String,
         body: Data,
+        contentSecurityPolicy: String = "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' https: data:; frame-ancestors 'none'",
         on connection: RemoteRequestConnection
     ) {
         let reason: String
@@ -1323,7 +1430,8 @@ final class RemoteControlServer {
         Cache-Control: no-store\r
         X-Content-Type-Options: nosniff\r
         X-Cantrip-Request-ID: \(connection.trace.id)\r
-        Content-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' https: data:; frame-ancestors 'none'\r
+        Content-Security-Policy: \(contentSecurityPolicy)\r
+        Referrer-Policy: no-referrer\r
         Connection: close\r
         \r
 
@@ -1357,6 +1465,7 @@ private extension RemoteControlServer {
     select{height:27px;max-width:90px;padding:0 5px;border:0;border-radius:6px;outline:0;background:transparent;color:var(--secondary);font-size:12px}select:hover,select:focus{background:var(--surface)}
     #messages{width:100%;min-height:calc(100vh - 88px);margin:0;padding:16px;display:flex;flex-direction:column;gap:12px}
     .message{width:100%;overflow-wrap:anywhere}.message.user{color:var(--secondary);font-size:13px;font-weight:600;line-height:1.4}.message.assistant{color:var(--text);line-height:1.5}.message.error{color:var(--orange);padding-left:21px;position:relative}.message.error:before{content:"!";position:absolute;left:3px;font-weight:800}.author{display:block;margin-bottom:5px;color:var(--tertiary);font-size:11px;font-weight:600}
+    .mcp-app{margin:0;width:100%;display:flex;flex-direction:column;gap:5px}.mcp-app figcaption{color:var(--tertiary);font-size:11px;font-weight:600}.mcp-app iframe{display:block;width:100%;border:0;border-radius:10px;background:transparent}.mcp-app-status{color:var(--secondary);font-size:12px}.mcp-app-link{align-self:flex-start;color:var(--accent);font-size:11px}
     .prose p{margin:0 0 8px}.prose p:last-child{margin-bottom:0}.prose h1,.prose h2,.prose h3{margin:12px 0 6px;line-height:1.25}.prose h1:first-child,.prose h2:first-child,.prose h3:first-child{margin-top:0}.prose h1{font-size:17px}.prose h2{font-size:15px}.prose h3{font-size:13.5px}.prose ul,.prose ol{margin:4px 0 8px;padding-left:22px}.prose li{margin:3px 0}.prose blockquote{margin:7px 0;padding-left:10px;border-left:3px solid rgba(107,140,255,.55);color:var(--secondary)}.prose a{color:var(--accent);text-decoration:none}.prose a:hover{text-decoration:underline}.prose code{padding:1px 4px;border-radius:4px;background:var(--surface-2);font:12px ui-monospace,SFMono-Regular,Menlo,monospace}.prose pre{margin:8px 0;padding:8px;border:0;border-radius:6px;background:var(--surface-2);overflow:auto}.prose pre code{padding:0;background:transparent;white-space:pre}.prose hr{margin:10px 0;border:0;border-top:1px solid var(--line)}.prose table{display:block;width:max-content;max-width:100%;margin:8px 0;border-collapse:collapse;border-radius:8px;background:var(--surface);overflow-x:auto;font-size:13px}.prose th,.prose td{padding:6px 10px;border:0;text-align:left;vertical-align:top}.prose th{font-weight:600;border-bottom:1px solid var(--line)}.prose img{display:block;max-width:min(100%,440px);max-height:280px;margin:8px 0;border-radius:8px;object-fit:contain}
     details{min-width:0}summary{list-style:none;cursor:pointer}summary::-webkit-details-marker{display:none}.disclosure{margin-top:7px;color:var(--secondary)}.disclosure>summary{display:flex;align-items:center;gap:7px;width:max-content;max-width:100%;font-size:12px}.disclosure>summary:before{content:"›";width:12px;color:var(--tertiary);font-size:17px;line-height:12px;transition:transform .12s}.disclosure[open]>summary:before{transform:rotate(90deg)}.disclosure-body{margin:7px 0 2px 18px;padding-left:10px;border-left:2px solid rgba(107,140,255,.22)}
     .steps{margin-top:8px}.status-icon{display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;font-size:10px;font-weight:800;color:var(--tertiary)}.status-icon.succeeded{color:var(--green)}.status-icon.failed{color:var(--red)}.status-icon.cancelled{color:var(--secondary)}.status-icon.running{color:var(--accent);animation:pulse 1.1s ease-in-out infinite}@keyframes pulse{50%{opacity:.35}}
@@ -1909,6 +2018,68 @@ private extension RemoteControlServer {
       flush()}
     function listLine(line){const match=line.match(/^(\\s*)([-*+]|\\d+[.)])\\s+(.+)$/);return match?{indent:Math.floor(match[1].length/2),ordered:/^\\d/.test(match[2]),start:parseInt(match[2],10)||1,text:match[3]}:null}
     function tableCells(line){let text=line.trim();if(text.startsWith("|"))text=text.slice(1);if(text.endsWith("|"))text=text.slice(0,-1);return text.split("|").map(cell=>cell.trim())}
+    // MCP App views (e.g. Mobbin galleries): each runs in a frame sandboxed to an
+    // opaque origin (never allow-same-origin: this page holds the pairing token).
+    const mcpMaxHeight=640,mcpApps=new Map(),mcpHeights=new Map(),mcpDark=matchMedia("(prefers-color-scheme: dark)"),mcpCoarse=matchMedia("(pointer: coarse)");
+    function mcpAppSlot(sessionID,app){const slot=document.createElement("div");slot.dataset.mcpSession=sessionID;slot.dataset.mcpApp=JSON.stringify(app);return slot}
+    function mcpReconcile(live,staged){
+      const nodes=[...staged.childNodes].map(node=>node.dataset?.mcpApp?mcpAppElement(node.dataset.mcpSession,JSON.parse(node.dataset.mcpApp)):node),keep=new Set(nodes);
+      for(const child of [...live.childNodes])if(!keep.has(child))child.remove();
+      let cursor=live.firstChild;for(const node of nodes){if(node===cursor){cursor=cursor.nextSibling;continue}live.insertBefore(node,cursor)}
+      for(const [key,state] of mcpApps)if(!state.element.isConnected){state.stopped=true;mcpApps.delete(key)}}
+    async function mcpFetch(path,options={}){const headers={Authorization:`Bearer ${token}`};if(options.body)headers["Content-Type"]="application/json";
+      const response=await fetch(path,{...options,headers}),data=await response.json().catch(()=>({}));if(!response.ok)throw Error(data.error||`HTTP ${response.status}`);return data}
+    function mcpAppElement(sessionID,app){const key=`${sessionID}:${app.id}`;let state=mcpApps.get(key);if(state)return state.element;
+      const figure=document.createElement("figure"),caption=document.createElement("figcaption"),status=document.createElement("div"),label=`${app.serverName||"MCP app"} · ${app.title||app.toolName}`;
+      figure.className="mcp-app";caption.textContent=label;caption.title=`Interactive view from ${app.serverName||"an MCP server"}, shown in a sandbox`;status.className="mcp-app-status";status.textContent="Loading view…";status.setAttribute("role","status");figure.append(caption,status);
+      state={key,app,label,element:figure,status,frame:null,payload:null,base:`/api/v1/sessions/${sessionID}/apps/${encodeURIComponent(app.id)}`,sentData:false,initialized:false,loads:0,stopped:false};
+      mcpApps.set(key,state);mcpLoad(state);return figure}
+    async function mcpLoad(state){try{state.payload=await mcpFetch(state.base);const view=await mcpFetch(`${state.base}/view`,{method:"POST"});if(state.stopped)return;
+        const frame=document.createElement("iframe");frame.setAttribute("sandbox","allow-scripts allow-forms");frame.setAttribute("referrerpolicy","no-referrer");
+        if((state.payload.permissions||[]).includes("clipboardWrite"))frame.setAttribute("allow","clipboard-write");
+        frame.title=`Interactive view: ${state.label}`;frame.style.height=`${mcpHeights.get(state.key)||150}px`;frame.src=view.url;
+        frame.addEventListener("load",()=>{if(++state.loads>1)mcpStop(state,"This view tried to leave its page, so it was closed. Reload the conversation to show it again.")});
+        state.frame=frame;state.status.replaceWith(frame);new ResizeObserver(()=>mcpContext(state,{containerDimensions:{width:frame.clientWidth,maxHeight:mcpMaxHeight}})).observe(frame)}
+      catch(error){state.status.textContent=`Could not load this view: ${error.message}`}}
+    function mcpStop(state,reason){state.stopped=true;state.frame?.remove();state.frame=null;state.status.textContent=reason;state.element.append(state.status)}
+    function mcpSend(state,message){state.frame?.contentWindow?.postMessage({jsonrpc:"2.0",...message},"*")}
+    function mcpContext(state,changes){if(state.initialized&&!state.stopped)mcpSend(state,{method:"ui/notifications/host-context-changed",params:changes})}
+    mcpDark.addEventListener("change",()=>{for(const state of mcpApps.values())mcpContext(state,{theme:mcpDark.matches?"dark":"light"})});
+    function mcpText(content){const blocks=Array.isArray(content)?content:content&&typeof content==="object"?[content]:[];
+      return blocks.filter(block=>block?.type==="text"&&typeof block.text==="string").map(block=>block.text).join("\\n\\n").trim()}
+    function mcpMessageText(text){return text.replace(/[\\u00AD\\u061C\\u180E\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u206F\\uFEFF]/g,"").replace(/[^\\S\\n]+/g," ").replace(/ *\\n\\s*\\n\\s*/g,"\\n\\n").trim().slice(0,2000)}
+    function mcpExternalURL(raw){try{const url=new URL(String(raw));return (url.protocol==="https:"||url.protocol==="http:")&&url.hostname&&!url.username&&!url.password?url.href:null}catch{return null}}
+    function mcpOpen(state,url){const link=document.createElement("a");link.href=url;link.target="_blank";link.rel="noopener noreferrer";link.click();
+      let note=state.element.querySelector(".mcp-app-link");if(!note){note=document.createElement("a");note.className="mcp-app-link";note.target="_blank";note.rel="noopener noreferrer";state.element.append(note)}
+      note.href=url;note.textContent=`Open ${new URL(url).host} ↗`}
+    function mcpInitialize(state){const payload=state.payload,permissions=Object.fromEntries((payload.permissions||[]).map(name=>[name,{}]));let tool;try{tool=JSON.parse(payload.tool)}catch{tool={name:payload.toolName,inputSchema:{type:"object"}}}
+      return {protocolVersion:"2026-01-26",hostInfo:{name:"Cantrip Remote",version:"1.0"},
+        hostCapabilities:{openLinks:{},logging:{},serverTools:{},serverResources:{},message:{text:{}},updateModelContext:{text:{},structuredContent:{}},sandbox:{csp:payload.csp||{},permissions}},
+        hostContext:{toolInfo:{tool},theme:mcpDark.matches?"dark":"light",displayMode:"inline",availableDisplayModes:["inline"],containerDimensions:{width:state.frame.clientWidth,maxHeight:mcpMaxHeight},
+          locale:navigator.language,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,userAgent:"Cantrip Remote",platform:mcpCoarse.matches?"mobile":"web",
+          deviceCapabilities:{touch:mcpCoarse.matches,hover:matchMedia("(hover: hover)").matches},styles:{variables:{"--font-sans":"-apple-system, BlinkMacSystemFont, system-ui, sans-serif","--font-mono":"ui-monospace, Menlo, monospace"}}}}}
+    function mcpPost(state,path,body){return mcpFetch(`${state.base}/${path}`,{method:"POST",body:JSON.stringify(body)})}
+    function mcpReceive(state,message){if(!message||message.jsonrpc!=="2.0"||typeof message.method!=="string"||state.stopped||!state.payload)return;
+      const params=message.params&&typeof message.params==="object"?message.params:{},id=message.id;
+      if(id===undefined){if(message.method==="ui/notifications/initialized"){state.initialized=true;if(!state.sentData){state.sentData=true;let input={},result={content:[]};try{input=JSON.parse(state.payload.toolInput);result=JSON.parse(state.payload.toolResult)}catch{}
+          mcpSend(state,{method:"ui/notifications/tool-input",params:{arguments:input}});mcpSend(state,{method:"ui/notifications/tool-result",params:result})}}
+        else if(message.method==="ui/notifications/size-changed"&&Number(params.height)>0&&state.frame){const height=Math.min(mcpMaxHeight,Math.max(48,Math.ceil(Number(params.height))));state.frame.style.height=`${height}px`;mcpHeights.set(state.key,height)}
+        else if(message.method==="notifications/message")console.debug(`${state.app.serverName} view:`,params.data);return}
+      if(typeof id!=="string"&&typeof id!=="number")return;
+      const reply=result=>mcpSend(state,{id,result}),fail=(code,text)=>mcpSend(state,{id,error:{code,message:text}});
+      switch(message.method){
+        case "ui/initialize":state.initialized=false;state.sentData=false;reply(mcpInitialize(state));break;
+        case "ping":reply({});break;
+        case "ui/request-display-mode":reply({mode:"inline"});break;
+        case "ui/open-link":{const url=mcpExternalURL(params.url);if(!url){fail(-32602,"Invalid URL");break}mcpOpen(state,url);reply({});break}
+        case "ui/message":{const text=mcpMessageText(mcpText(params.content));if((params.role&&params.role!=="user")||!text){fail(-32602,"Invalid message format");break}
+          if(!confirm(`Send this message from ${state.app.serverName||"the MCP app"} to the model as your next message?\\n\\n${text}`)){fail(-32000,"Message sending denied");break}
+          mcpPost(state,"message",{text}).then(()=>reply({}),error=>fail(-32000,error.message));break}
+        case "ui/update-model-context":{const parts=[mcpText(params.content)];if(params.structuredContent&&typeof params.structuredContent==="object"&&Object.keys(params.structuredContent).length)parts.push(JSON.stringify(params.structuredContent));
+          const text=parts.filter(Boolean).join("\\n").slice(0,8000);mcpPost(state,"context",{text:text||null}).then(()=>reply({}),error=>fail(-32000,error.message));break}
+        case "tools/call":case "tools/list":case "resources/read":mcpPost(state,"request",{method:message.method,params}).then(data=>reply(data.result||{}),error=>fail(-32000,error.message));break;
+        default:fail(-32601,`Method not found: ${message.method}`)}}
+    window.addEventListener("message",event=>{for(const state of mcpApps.values())if(state.frame&&event.source===state.frame.contentWindow){mcpReceive(state,event.data);return}});
     function appendProse(parent,source){const prose=document.createElement("div");prose.className="prose";const lines=source.split("\\n");let index=0,paragraph=[];
       const flush=()=>{if(!paragraph.length)return;const p=document.createElement("p");appendInline(p,paragraph.join(" "));prose.append(p);paragraph=[]};
       while(index<lines.length){const line=lines[index],trimmed=line.trim();if(!trimmed){flush();index++;continue}
@@ -1943,11 +2114,12 @@ private extension RemoteControlServer {
     $("promptReader").addEventListener("close",()=>{readingPrompt="";promptStarts=[0];$("promptPage").textContent=""});
     function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight;
       $("inputBanner").classList.toggle("hidden",!session?.pendingInputs?.some(r=>r.kind==="secret"));$("inputBanner").textContent="Enter password securely";
-      renderProgress(session);updateHistoryControls(session);const box=$("messages"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
-      const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession);renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;box.replaceChildren();$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
+      renderProgress(session);updateHistoryControls(session);const liveBox=$("messages"),box=document.createElement("div"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
+      const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession);renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
       if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{if(session.isLocalPrivate){const notice=document.createElement("p");notice.className="muted";notice.textContent="Private Local - saved on the Mac and available remotely. Self-hosted models; no cloud fallback. Configure the server in the tab menu.";box.append(notice)}
-        for(const message of session.messages){const activities=message.activities||[];if(!message.text&&!message.thinking&&!activities.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;
+        for(const message of session.messages){const activities=message.activities||[],apps=message.apps||[];for(const app of apps)box.append(mcpAppSlot(session.id,app));
+          if(!message.text&&!message.thinking&&!activities.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
           appendThinking(row,message.thinking,message.id);if(message.text){if(message.role==="user")appendPrompt(row,message.text);else if(session.isLocalPrivate){const text=document.createElement("pre");text.textContent=message.text;row.append(text)}else appendProse(row,message.text)}appendActivities(row,activities,message.id);
           if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
@@ -1957,6 +2129,7 @@ private extension RemoteControlServer {
         appendChatInputs(box,session);
         if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}
         if(!sidebarLayout&&(session.isStreaming||session.queuedCount)){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
+      mcpReconcile(liveBox,box);
       requestAnimationFrame(()=>{root.scrollTop=shouldFollow?root.scrollHeight:Math.min(previousTop+(prepend?root.scrollHeight-previousHeight:0),Math.max(0,root.scrollHeight-root.clientHeight));followOutput=shouldFollow;suppressScroll=false})}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
     async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selectTab(data.session.id);renderedPayload="";await refresh()}

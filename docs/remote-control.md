@@ -936,6 +936,36 @@ Sent originals and frames remain for queued/recovered work. Unsubmitted
 uploads reserve at most 500 MB; abandoned uploads older than 24 hours are
 reclaimed when starting a new upload. These limits do not truncate videos.
 
+## Interactive MCP App views remotely
+
+When the Mac shows an [MCP App view](backends.md#interactive-mcp-app-views),
+such as a Mobbin screen gallery, the browser Remote, another Mac's Remote tab
+and an updated Cantrip Agent show it above the reply too. Galleries scroll
+sideways, and tapping a screen opens it on Mobbin. If a browser blocks the new
+tab, use the **Open ...** link under the gallery. A message a view asks to send
+opens a confirmation with the exact text first. Views are hidden everywhere
+while **Show interactive MCP App views** is off on the Mac.
+
+Session messages include only small `apps` summaries (`id`, `serverName`,
+`toolName`, `title`, `prefersBorder`). Pairing-authenticated routes under
+`/api/v1/sessions/{sessionID}/apps/{appID}` serve the rest:
+
+| Route | Purpose |
+|---|---|
+| `GET` | Full view payload (HTML, CSP, tool input and result) for native clients |
+| `POST .../view` | Single-use `/mcp-app/{token}` address for a browser frame, valid for one minute |
+| `POST .../request` | `tools/call`, `tools/list` or `resources/read` on the view's own server, through the tab's live Copilot session |
+| `POST .../message` | Approved message text; sent as a labelled prompt, never a `!` or `/` command |
+| `POST .../context` | Context for the next prompt (`text`, or `null` to clear) |
+
+The browser loads each view from its single-use address in a frame sandboxed to
+an opaque origin (`allow-scripts allow-forms`, never `allow-same-origin`), and
+the response's CSP repeats that `sandbox` directive. The view therefore cannot
+read the Remote page, its stored pairing token or the paired API, even if
+opened directly. It can load only the domains its server declared. If it
+navigates away, the Remote page closes it. Cantrip Agent renders views the way
+the Mac does, in an isolated origin inside its own web view.
+
 ## Understand what is available remotely
 
 | Situation | Behavior |
