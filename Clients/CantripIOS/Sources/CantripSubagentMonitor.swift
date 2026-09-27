@@ -74,6 +74,44 @@ enum CantripSubagentFormat {
     }
 }
 
+/// Running subagents stay pinned above the composer so a growing reply can't
+/// scroll them away; each card returns to its reply once it finishes.
+struct CantripPinnedSubagents: View {
+    @ObservedObject var remote: CantripRemoteModel
+    let sessionID: String?
+    let subagents: [CantripRemoteSubagent]
+    let maxHeight: CGFloat
+
+    @State private var contentHeight: CGFloat = 0
+
+    static func live(in messages: [CantripRemoteMessage]) -> [CantripRemoteSubagent] {
+        messages.flatMap { $0.subagents ?? [] }.filter(\.status.isLive)
+    }
+
+    var body: some View {
+        if !subagents.isEmpty {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(subagents) { subagent in
+                        CantripSubagentCard(remote: remote, sessionID: sessionID, subagent: subagent)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: min(contentHeight, maxHeight))
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.bar)
+            .overlay(alignment: .top) { Divider() }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Running subagents")
+            .accessibilityIdentifier("chat.pinnedSubagents")
+        }
+    }
+}
+
 struct CantripSubagentStack: View {
     @ObservedObject var remote: CantripRemoteModel
     let sessionID: String?

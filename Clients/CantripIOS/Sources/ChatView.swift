@@ -1147,6 +1147,14 @@ struct ChatView: View {
                 }
                 transcriptList
                     .id(transcriptIdentity)
+                if vm.activeLane == .cantrip {
+                    CantripPinnedSubagents(
+                        remote: remote,
+                        sessionID: remote.selectedSessionID,
+                        subagents: CantripPinnedSubagents.live(in: remote.selectedSession?.transcript ?? []),
+                        maxHeight: max(120, chatAvailableHeight * 0.35)
+                    )
+                }
                 inputBar
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
@@ -2537,9 +2545,10 @@ private struct TurnView: View {
         return remoteMessage?.apps ?? []
     }
 
+    /// Finished subagents; running ones are pinned above the composer.
     private var cantripSubagents: [CantripRemoteSubagent] {
         guard turn.role == .assistant else { return [] }
-        return remoteMessage?.subagents ?? []
+        return (remoteMessage?.subagents ?? []).filter { !$0.status.isLive }
     }
 
     private func approvalTitle(_ choice: String) -> String {

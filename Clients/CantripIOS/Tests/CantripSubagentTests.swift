@@ -269,6 +269,65 @@ final class CantripSubagentTests: XCTestCase {
         }
     }
 
+    func testPinnedSubagentsKeepOnlyLiveOnesAcrossReplies() throws {
+        let messages = try JSONDecoder().decode([CantripRemoteMessage].self, from: Data(#"""
+        [{"id":"m1","role":"assistant","text":"First","thinking":"","activities":[],
+          "subagents":[{"id":"a","agentID":"a","status":"completed"},{"id":"b","agentID":"b","status":"running"}]},
+         {"id":"m2","role":"user","text":"Next","thinking":"","activities":[]},
+         {"id":"m3","role":"assistant","text":"","thinking":"","activities":[],
+          "subagents":[{"id":"c","agentID":"c","status":"idle"},{"id":"d","agentID":"d","status":"failed"},
+                       {"id":"e","agentID":"e","status":"cancelled"},{"id":"f","agentID":"f","status":"starting-soon"}]}]
+        """#.utf8))
+
+        XCTAssertEqual(CantripPinnedSubagents.live(in: messages).map(\.id), ["b", "c", "f"])
+        XCTAssertEqual(CantripPinnedSubagents.live(in: [messages[1]]), [])
+    }
+
+    func testPinnedSubagentScreenshotsAtPhoneWidth() async throws {
+        let artifactDirectory = ProcessInfo.processInfo.environment["TEST_RUNNER_SUBAGENTS_ARTIFACT_DIR"]
+        guard let artifactDirectory, !artifactDirectory.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_SUBAGENTS_ARTIFACT_DIR to write subagent screenshots.")
+        }
+        let output = URL(fileURLWithPath: artifactDirectory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let live = screenshotSubagents().filter(\.status.isLive)
+
+        for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", UIUserInterfaceStyle.dark)] {
+            let controller = UIHostingController(rootView:
+                VStack(spacing: 0) {
+                    ScrollView {
+                        Text(String(repeating: "A long streamed reply keeps growing below the subagent. ", count: 40))
+                            .padding()
+                    }
+                    CantripPinnedSubagents(remote: CantripRemoteModel(), sessionID: sessionID,
+                                           subagents: live, maxHeight: 300)
+                    Text("Composer").frame(maxWidth: .infinity, minHeight: 52).background(.gray.opacity(0.2))
+                }
+                .frame(width: 393)
+                .background(Color(.systemBackground))
+            )
+            controller.overrideUserInterfaceStyle = style
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 852))
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(250))
+            controller.view.frame = window.bounds
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let url = output.appendingPathComponent("subagent-pinned-\(name).png")
+            try XCTUnwrap(image.pngData()).write(to: url)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        }
+    }
+
     private func sessionPayload(subagentStatus: String) throws -> Data {
         try JSONSerialization.data(withJSONObject: [
             "session": [
