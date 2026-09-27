@@ -13,7 +13,7 @@ final class CopilotBackend: Backend {
     private var process: Process?
     private var input: FileHandle?
     private var buffer = Data()
-    private var parser = CopilotJSONStreamParser()
+    private var parser = CopilotJSONStreamParser(canCancelSubagents: true)
     private var configuration: Configuration?
     private var runID: String?
     private var onEvent: ((BackendEvent) -> Void)?
@@ -25,6 +25,7 @@ final class CopilotBackend: Backend {
     private var idle = false
     private var deliveries: [String: (MidTurnDelivery) -> Void] = [:]
     private var appRequests: [String: (Result<[String: Any], Error>) -> Void] = [:]
+    private var cancelRequests: [String: (Result<Bool, Error>) -> Void] = [:]
     private var inputRequests: [String: BackendInputRequest] = [:]
     private var askpass: RemoteAskpass?
     private let bridgeScript: String
@@ -102,7 +103,7 @@ final class CopilotBackend: Backend {
             self.runID = id
             self.ready = false
             self.idle = false
-            self.parser = CopilotJSONStreamParser()
+            self.parser = CopilotJSONStreamParser(canCancelSubagents: true)
             do {
                 var command: [String: Any] = [
                     "kind": "start", "runID": id, "config": config.json, "prompt": request.prompt
@@ -186,6 +187,28 @@ final class CopilotBackend: Backend {
             }
             self.queue.asyncAfter(deadline: .now() + 60) { [weak self] in
                 self?.appRequests.removeValue(forKey: id)?(.failure(MCPAppRequestError.timedOut))
+            }
+        }
+    }
+
+    /// Stops one running subagent in this tab's live session. `true` = stopped,
+    /// `false` = it had already finished. Completion runs on the backend queue.
+    func cancelSubagent(agentID: String, completion: @escaping (Result<Bool, Error>) -> Void) {
+        queue.async { [weak self] in
+            guard let self, self.process?.isRunning == true else {
+                completion(.failure(SubagentCancelError.sessionUnavailable))
+                return
+            }
+            let id = UUID().uuidString
+            self.cancelRequests[id] = completion
+            do {
+                try self.write(["kind": "cancelAgent", "id": id, "agentID": agentID])
+            } catch {
+                self.cancelRequests.removeValue(forKey: id)?(.failure(error))
+                return
+            }
+            self.queue.asyncAfter(deadline: .now() + 20) { [weak self] in
+                self?.cancelRequests.removeValue(forKey: id)?(.failure(SubagentCancelError.timedOut))
             }
         }
     }
@@ -275,6 +298,17 @@ final class CopilotBackend: Backend {
                     } else {
                         completion(.failure(MCPAppRequestError.server(
                             object["error"] as? String ?? "The MCP server request failed.")))
+                    }
+                    continue
+                }
+                if kind == "agentCancelResponse" {
+                    guard let id = object["id"] as? String,
+                          let completion = cancelRequests.removeValue(forKey: id) else { continue }
+                    if let cancelled = object["cancelled"] as? Bool {
+                        completion(.success(cancelled))
+                    } else {
+                        completion(.failure(SubagentCancelError.server(
+                            object["error"] as? String ?? "Copilot couldn't stop the subagent.")))
                     }
                     continue
                 }
@@ -385,6 +419,9 @@ final class CopilotBackend: Backend {
         let pendingAppRequests = Array(appRequests.values)
         appRequests.removeAll()
         for completion in pendingAppRequests { completion(.failure(MCPAppRequestError.sessionUnavailable)) }
+        let pendingCancels = Array(cancelRequests.values)
+        cancelRequests.removeAll()
+        for completion in pendingCancels { completion(.failure(SubagentCancelError.sessionUnavailable)) }
         let old = process
         process = nil
         input?.closeFile()

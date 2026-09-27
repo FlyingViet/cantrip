@@ -966,6 +966,24 @@ opened directly. It can load only the domains its server declared. If it
 navigates away, the Remote page closes it. Cantrip Agent renders views the way
 the Mac does, in an isolated origin inside its own web view.
 
+## Monitor subagents remotely
+
+When a Copilot reply starts [subagents](backends.md#monitor-subagents), the
+browser Remote, another Mac's Remote tab and an updated Cantrip Agent show a
+live card for each one above the reply, with the same status, current activity,
+elapsed time, steps and tokens as the Mac. If a reply has more than three
+subagents, finished ones collapse under **N finished subagents**. **Stop** asks
+for confirmation, then cancels only that subagent.
+
+Session messages include a `subagents` array (`id`, `agentID`, `name`,
+`agentType`, `summary`, `status`, `startedAt`, `finishedAt`, `intent`,
+`currentStep`, `steps`, `tokens`, `recentSteps`, `canCancel` and more).
+`POST /api/v1/sessions/{sessionID}/subagents/{agentID}/cancel` stops one. It
+returns `{"cancelled": true}`, or `{"cancelled": false}` if the subagent had
+already finished. It returns 404 if the subagent isn't in that conversation, and
+409 if it can't be stopped, for example because it finished or the tab's
+backend isn't Copilot.
+
 ## Understand what is available remotely
 
 | Situation | Behavior |

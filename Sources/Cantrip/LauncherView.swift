@@ -814,6 +814,33 @@ struct LauncherView: View {
         session.messages.flatMap(\.activities)
     }
 
+    private var sessionSubagents: [ToolActivity] {
+        allActivities.flatMap(\.subagentActivities)
+    }
+
+    private var stopSubagent: (SubagentInfo, @escaping (String?) -> Void) -> Void {
+        let session = session
+        return { info, done in
+            session.cancelSubagent(agentID: info.agentID) { result in
+                switch result {
+                case .success(true): done(nil)
+                case .success(false): done("It had already finished.")
+                case .failure(let error): done(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func progressSectionTitle(_ title: String, detail: String? = nil) -> some View {
+        HStack(spacing: 4) {
+            Text(title)
+            if let detail { Text("· \(detail)").foregroundStyle(.tertiary) }
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .textCase(.uppercase)
+    }
+
     private var stepsSidebar: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -831,18 +858,30 @@ struct LauncherView: View {
                 }
                 .buttonStyle(.plain)
             }
+            let subagents = sessionSubagents
+            let steps = allActivities.filter { $0.subagent == nil }
             if allActivities.isEmpty {
                 Text("No steps yet — tool activity will appear here.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-            } else {
+            }
+            if !subagents.isEmpty {
+                let running = subagents.filter { $0.subagent?.isActive == true }.count
+                progressSectionTitle("Subagents", detail: running > 0 ? "\(running) running" : nil)
+                ScrollView {
+                    SubagentMonitorView(activities: subagents, stop: stopSubagent)
+                }
+                .frame(maxHeight: 320)
+            }
+            if !steps.isEmpty {
+                if !subagents.isEmpty { progressSectionTitle("Steps").padding(.top, 4) }
                 ScrollViewReader { proxy in
                     ScrollView {
-                        ToolProgressView(activities: allActivities)
+                        ToolProgressView(activities: steps)
                             .id("steps-end")
                     }
-                    .frame(maxHeight: 560)
-                    .onChange(of: allActivities.count) {
+                    .frame(maxHeight: subagents.isEmpty ? 560 : 300)
+                    .onChange(of: steps.count) {
                         proxy.scrollTo("steps-end", anchor: .bottom)
                     }
                 }
@@ -2020,7 +2059,10 @@ struct LauncherView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(transcriptMessages) { message in
                         MessageRow(message: message, localOnly: session.isLocalPrivate,
-                                   appActions: settings.copilotMCPApps ? mcpAppActions : nil)
+                                   appActions: settings.copilotMCPApps ? mcpAppActions : nil,
+                                   openSubagents: {
+                                       withAnimation(.easeOut(duration: 0.15)) { showSteps = true }
+                                   })
                             .id(message.id)
                     }
                     RemoteInputView(session: session, openSecureInput: { showingInputRequests = true })
@@ -2361,8 +2403,13 @@ private struct MessageRow: View {
     var localOnly = false
     /// Nil while MCP App views are turned off: saved views stay hidden and inert.
     var appActions: MCPAppActions?
+    /// Shows the Progress pane's subagent monitor.
+    var openSubagents: (() -> Void)?
 
     private var visibleApps: [MCPAppPayload] { appActions == nil ? [] : message.apps }
+    private var subagents: [ToolActivity] {
+        openSubagents == nil ? [] : message.activities.flatMap(\.subagentActivities)
+    }
 
     var body: some View {
         switch message.role {
@@ -2375,7 +2422,7 @@ private struct MessageRow: View {
             // Tool steps render in the progress sidebar, not inline; MCP App
             // views (e.g. galleries) are part of the reply.
             if message.text.isEmpty && message.thinking.isEmpty && message.author == nil
-                && visibleApps.isEmpty {
+                && visibleApps.isEmpty && subagents.isEmpty {
                 EmptyView()
             } else {
                 VStack(alignment: .leading, spacing: 6) {
@@ -2389,6 +2436,9 @@ private struct MessageRow: View {
                     }
                     if !message.thinking.isEmpty {
                         ThinkingDisclosure(text: message.thinking)
+                    }
+                    if let openSubagents, !subagents.isEmpty {
+                        SubagentStrip(activities: subagents, open: openSubagents)
                     }
                     ForEach(visibleApps) { app in
                         MCPAppInlineView(app: app, actions: appActions)
@@ -2546,7 +2596,7 @@ private struct ToolActivityGroupRow: View {
     }
 }
 
-private struct ToolActivityRow: View {
+struct ToolActivityRow: View {
     let activity: ToolActivity
     @State private var isExpanded = false
 
