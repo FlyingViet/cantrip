@@ -95,6 +95,11 @@ Cantrip injects plugin MCP configuration into Claude Code and Codex and can
 connect local models through its own MCP client. Copilot's tools must be
 registered in the Copilot CLI's own configuration instead.
 
+For a Copilot MCP server that uses OAuth, sign in once from Terminal with
+`copilot`, then `/mcp auth <server>`. Cantrip's Copilot sessions reuse the
+token that the CLI saved in the macOS Keychain. Tools appear in the next
+Copilot session Cantrip starts.
+
 For manifests, tool configuration, and dashboard APIs, use the
 [plugin developer reference](../PLUGINS.md). Windows uses the same manifest
 format but a different host; follow [Windows plugins](../windows/PLUGINS.md).

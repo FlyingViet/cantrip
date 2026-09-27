@@ -53,7 +53,7 @@ enum CopilotSessionBridge {
         throw new Error('Update Copilot CLI to a version with native session steering.');
       }
       client = new sdk.CopilotClient({
-        connection: sdk.RuntimeConnection.forStdio({ path: paths.runtime }),
+        connection: sdk.RuntimeConnection.forStdio({ path: paths.sessionRuntime }),
         workingDirectory: config.workdir, logLevel: 'none', useLoggedInUser: true
       });
       await client.start();
@@ -61,7 +61,7 @@ enum CopilotSessionBridge {
         clientName: 'Cantrip', workingDirectory: config.workdir,
         model: config.model || undefined, reasoningEffort: config.effort || undefined,
         contextTier: config.contextTier || undefined, streaming: true,
-        enableConfigDiscovery: true, remoteSession: 'off',
+        enableConfigDiscovery: true, remoteSession: 'off', mcpOAuthTokenStorage: 'persistent',
         availableTools: config.readOnly ? [] : config.allowTools ? undefined : ['view', 'glob', 'grep'],
         excludedTools: config.allowSubagents === false ? subagentTools : undefined,
         systemMessage: config.subagentGuidance ? { mode: 'append', content: config.subagentGuidance } : undefined,

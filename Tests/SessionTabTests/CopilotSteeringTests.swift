@@ -276,10 +276,15 @@ extension SessionTabTests {
         let fakeSDK = #"""
         export const RuntimeConnection = { forStdio: options => options };
         export class CopilotClient {
+          constructor(options) {
+            if (options.connection.path !== 'session-fixture')
+              throw Error('Sessions must run the signed CLI runtime');
+          }
           async start() {}
           async forceStop() {}
           async createSession(config) {
-            if (!config.streaming || !config.enableConfigDiscovery || config.remoteSession !== 'off')
+            if (!config.streaming || !config.enableConfigDiscovery || config.remoteSession !== 'off'
+                || config.mcpOAuthTokenStorage !== 'persistent')
               throw Error('Missing session settings');
             if (config.availableTools?.length === 0) {
               if (config.onPermissionRequest({kind:'write'}).kind !== 'reject')
@@ -301,7 +306,7 @@ extension SessionTabTests {
         }
         """#
         let sdkURL = "data:text/javascript;base64," + Data(fakeSDK.utf8).base64EncodedString()
-        let discovery = "function resolveCopilotRuntime() { return {sdk: '\(sdkURL)', runtime: 'fixture'}; }"
+        let discovery = "function resolveCopilotRuntime() { return {sdk: '\(sdkURL)', runtime: 'fixture', sessionRuntime: 'session-fixture'}; }"
         let script = CopilotSessionBridge.script.replacingOccurrences(
             of: CopilotRuntime.discoveryScript, with: discovery
         )
