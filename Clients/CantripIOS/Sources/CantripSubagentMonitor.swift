@@ -236,10 +236,7 @@ struct CantripSubagentCard: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if let stopError {
-                Label(stopError, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
+                CantripSubagentErrorRow(stopError)
             }
 
             if expanded {
@@ -342,7 +339,7 @@ struct CantripSubagentCard: View {
     }
 
     private var currentWorkLine: String? {
-        guard subagent.status == .running || subagent.status == .idle else { return nil }
+        guard subagent.status == .running else { return nil }
         let intent = CantripSubagentFormat.trimmed(subagent.intent)
         if !intent.isEmpty { return intent }
         let currentStep = CantripSubagentFormat.trimmed(subagent.currentStep)
@@ -385,10 +382,7 @@ struct CantripSubagentCard: View {
             }
             let error = CantripSubagentFormat.trimmed(subagent.error)
             if subagent.status == .failed, !error.isEmpty {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
+                CantripSubagentErrorRow(error)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -423,6 +417,27 @@ struct CantripSubagentCard: View {
         } catch {
             stopError = CantripSubagentFormat.readableError(error)
         }
+    }
+}
+
+private struct CantripSubagentErrorRow: View {
+    let message: String
+
+    init(_ message: String) {
+        self.message = message
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .accessibilityHidden(true)
+            Text(message)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.caption)
+        .accessibilityElement(children: .combine)
     }
 }
 
