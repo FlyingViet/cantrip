@@ -974,7 +974,9 @@ live card for each one, with the same status, current activity,
 elapsed time, steps and tokens as the Mac. Running cards stay pinned at the
 bottom of the chat (above the composer in Cantrip Agent) so they don't scroll
 away as the reply grows. When a subagent finishes, its card moves into its
-reply. If a reply has more than three
+reply at the point it ended, after the paragraph that was being written.
+Older Cantrip Agent builds show finished cards before the reply's text. If a
+reply has more than three
 subagents, finished ones collapse under **N finished subagents**. **Stop** asks
 for confirmation, then cancels only that subagent.
 

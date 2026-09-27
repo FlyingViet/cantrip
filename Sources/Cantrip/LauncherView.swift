@@ -818,12 +818,9 @@ struct LauncherView: View {
         allActivities.flatMap(\.subagentActivities)
     }
 
-    /// Subagents of replies that still have one running, pinned below the transcript.
+    /// Running subagents, pinned below the transcript until each one finishes.
     private var pinnedSubagents: [ToolActivity] {
-        session.messages.flatMap { message -> [ToolActivity] in
-            let agents = message.activities.flatMap(\.subagentActivities)
-            return agents.contains { $0.subagent?.isActive == true } ? agents : []
-        }
+        sessionSubagents.filter { $0.subagent?.isActive == true }
     }
 
     private var stopSubagent: (SubagentInfo, @escaping (String?) -> Void) -> Void {
@@ -2427,11 +2424,13 @@ private struct MessageRow: View {
     var openSubagents: (() -> Void)?
 
     private var visibleApps: [MCPAppPayload] { appActions == nil ? [] : message.apps }
-    /// Running subagents are pinned below the transcript; the strip returns here once they finish.
-    private var subagents: [ToolActivity] {
+    /// Finished subagents grouped by the reply block they follow; running ones are pinned below the transcript.
+    private var placedSubagents: [(block: Int, agents: [ToolActivity])] {
         guard openSubagents != nil else { return [] }
-        let agents = message.activities.flatMap(\.subagentActivities)
-        return agents.contains { $0.subagent?.isActive == true } ? [] : agents
+        let finished = message.activities.flatMap(\.subagentActivities).filter { $0.subagent?.isActive == false }
+        return Dictionary(grouping: finished) { message.subagentTextBlock($0.id) }
+            .sorted { $0.key < $1.key }
+            .map { (block: $0.key, agents: $0.value) }
     }
 
     var body: some View {
@@ -2444,10 +2443,12 @@ private struct MessageRow: View {
         case .assistant:
             // Tool steps render in the progress sidebar, not inline; MCP App
             // views (e.g. galleries) are part of the reply.
+            let placed = placedSubagents
             if message.text.isEmpty && message.thinking.isEmpty && message.author == nil
-                && visibleApps.isEmpty && subagents.isEmpty {
+                && visibleApps.isEmpty && placed.isEmpty {
                 EmptyView()
             } else {
+                let parts = ReplyBlocks.split(message.text, before: placed.map(\.block))
                 VStack(alignment: .leading, spacing: 6) {
                     if let author = message.author {
                         Label(author, systemImage: author.hasPrefix("Verdict")
@@ -2460,18 +2461,21 @@ private struct MessageRow: View {
                     if !message.thinking.isEmpty {
                         ThinkingDisclosure(text: message.thinking)
                     }
-                    if let openSubagents, !subagents.isEmpty {
-                        SubagentStrip(activities: subagents, open: openSubagents)
-                    }
                     ForEach(visibleApps) { app in
                         MCPAppInlineView(app: app, actions: appActions)
                     }
-                    if !message.text.isEmpty {
-                        if localOnly {
-                            Text(verbatim: message.text).textSelection(.enabled)
-                        } else {
-                            MarkdownContent(text: message.text)
-                                .textSelection(.enabled)
+                    // Each finished subagent's strip sits where the reply had got to when it ended.
+                    ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
+                        if index > 0, let openSubagents {
+                            SubagentStrip(activities: placed[index - 1].agents, open: openSubagents)
+                        }
+                        if !part.isEmpty {
+                            if localOnly {
+                                Text(verbatim: part).textSelection(.enabled)
+                            } else {
+                                MarkdownContent(text: part)
+                                    .textSelection(.enabled)
+                            }
                         }
                     }
                 }

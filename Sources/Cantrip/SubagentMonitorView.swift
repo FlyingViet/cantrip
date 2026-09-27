@@ -250,7 +250,7 @@ struct SubagentStatusIcon: View {
     }
 }
 
-/// Compact line above a reply that spawned subagents; opens the monitor.
+/// Compact subagent summary (pinned while running, then in the reply); opens the monitor.
 struct SubagentStrip: View {
     let activities: [ToolActivity]
     let open: () -> Void
