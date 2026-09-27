@@ -23,6 +23,15 @@ enum RemoteHistory {
             },
         ]
         if let author = message.author { result["author"] = author }
+        // Summaries only; clients fetch each view's payload on demand.
+        if !message.apps.isEmpty, AppSettings.shared.copilotMCPApps {
+            result["apps"] = message.apps.map { app -> [String: Any] in
+                var item: [String: Any] = ["id": app.id, "serverName": app.serverName, "toolName": app.toolName]
+                item["title"] = app.title
+                item["prefersBorder"] = app.prefersBorder
+                return item
+            }
+        }
         return result
     }
 

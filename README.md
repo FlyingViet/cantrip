@@ -119,7 +119,8 @@ The macOS app includes:
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a
   `cantrip` command for asking questions from Terminal. With Copilot, MCP
   tools that return interactive views (such as Mobbin's screen galleries)
-  render them inline in the Mac chat. See [MCP App views](docs/backends.md#interactive-mcp-app-views).
+  render them inline in the chat, on the Mac and in Remote clients. See
+  [MCP App views](docs/backends.md#interactive-mcp-app-views).
 
 Capabilities depend on the backend. The current Local Model backend does
 not receive file/image attachments or screen captures; tool use requires

@@ -126,8 +126,9 @@ Each view runs in its own sandbox:
   shares for the model is added to your next prompt only and is dropped when
   you start a new conversation.
 
-Views appear in the Mac app only. Cantrip Agent and the browser Remote still
-show the tool step and the text reply. Scrolling up or down over a view scrolls
+The browser Remote, another Mac's Remote tab and Cantrip Agent show views too;
+see [MCP App views remotely](remote-control.md#interactive-mcp-app-views-remotely).
+On the Mac, scrolling up or down over a view scrolls
 the conversation; sideways scrolling moves through the gallery. Turning the
 setting off hides all views, including saved ones, and stops opting in from
 each tab's next request.
