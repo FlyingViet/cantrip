@@ -187,10 +187,13 @@ extension SessionTabTests {
         let card = try await webView.callAsyncJavaScript("""
         localStorage.cantripToken=pairing;token=pairing;pair(false);selected=sessionID;
         const data=await api(`/api/v1/sessions/${sessionID}`);render(data.session);
-        const cards=[...document.querySelectorAll('#messages .subagent')];
+        const cards=[...document.querySelectorAll('#liveSubagents .subagent')];
         const steps=[...document.querySelectorAll('#messages .steps .step')].map(step=>step.textContent);
+        const bar=document.getElementById('liveSubagents'),box=document.getElementById('messages');
         return {count:cards.length,text:cards[0]?.textContent||"",stop:Boolean(cards[0]?.querySelector('.subagent-stop')),
-          live:Boolean(cards[0]?.querySelector('.subagent-meta[data-live]')),label:cards[0]?.getAttribute('aria-label')||"",steps};
+          live:Boolean(cards[0]?.querySelector('.subagent-meta[data-live]')),label:cards[0]?.getAttribute('aria-label')||"",steps,
+          inline:box.querySelectorAll('.subagent').length,pinnedAfter:box.compareDocumentPosition(bar)===Node.DOCUMENT_POSITION_FOLLOWING,
+          sticky:getComputedStyle(bar).position,visible:!bar.classList.contains('hidden')};
         """, arguments: ["pairing": token, "sessionID": chat.id.uuidString], contentWorld: .page) as? [String: Any]
         let cardText = card?["text"] as? String ?? ""
         precondition(card?["count"] as? Int == 1 && card?["stop"] as? Bool == true && card?["live"] as? Bool == true
@@ -198,12 +201,15 @@ extension SessionTabTests {
                      && cardText.contains("4.1k tokens") && cardText.contains("Background")
                      && (card?["label"] as? String ?? "").hasPrefix("Find tests subagent, Running"),
                      "the browser should show a live, stoppable card: \(String(describing: card))")
+        precondition(card?["inline"] as? Int == 0 && card?["pinnedAfter"] as? Bool == true
+                     && card?["sticky"] as? String == "sticky" && card?["visible"] as? Bool == true,
+                     "a running subagent should be pinned below the chat, not inline: \(String(describing: card))")
         precondition((card?["steps"] as? [String])?.isEmpty == true,
                      "a subagent's task call should not repeat in the step list: \(String(describing: card))")
         try await snapshotSubagentPage(webView, name: "remote-running")
 
         let clicked = try await webView.callAsyncJavaScript("""
-        window.confirm=()=>true;document.querySelector('#messages .subagent-stop').click();return true;
+        window.confirm=()=>true;document.querySelector('#liveSubagents .subagent-stop').click();return true;
         """, contentWorld: .page) as? Bool
         precondition(clicked == true)
         try await waitForJournalTest { chat.subagent(agentID: "agent-1")?.status == .cancelled && !chat.isStreaming }
@@ -213,14 +219,17 @@ extension SessionTabTests {
         precondition(task.children.map(\.state) == [.cancelled], "the stopped agent's running step should stop")
 
         var rendered = ""
+        var pinnedLeft = false
         for _ in 0..<60 {
             rendered = try await webView.evaluateJavaScript(
                 "document.querySelector('#messages .subagent')?.textContent || ''") as? String ?? ""
-            if rendered.contains("Stopped") { break }
+            pinnedLeft = try await webView.evaluateJavaScript(
+                "document.getElementById('liveSubagents').classList.contains('hidden') && !document.querySelector('#liveSubagents .subagent')") as? Bool ?? false
+            if rendered.contains("Stopped") && pinnedLeft { break }
             try await Task.sleep(for: .milliseconds(100))
         }
-        precondition(rendered.contains("Stopped") && !rendered.contains("Now:"),
-                     "the browser should refresh to the stopped card: \(rendered)")
+        precondition(rendered.contains("Stopped") && !rendered.contains("Now:") && pinnedLeft,
+                     "the stopped card should move back into its reply: \(rendered) pinnedLeft=\(pinnedLeft)")
         let again = try await call("api/v1/sessions/\(chat.id)/subagents/agent-1/cancel", method: "POST", body: "{}")
         precondition(again.0 == 409 && (again.1["error"] as? String)?.contains("already finished") == true, "\(again)")
         try await snapshotSubagentPage(webView, name: "remote-stopped")

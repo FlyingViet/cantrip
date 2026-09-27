@@ -970,8 +970,11 @@ the Mac does, in an isolated origin inside its own web view.
 
 When a Copilot reply starts [subagents](backends.md#monitor-subagents), the
 browser Remote, another Mac's Remote tab and an updated Cantrip Agent show a
-live card for each one above the reply, with the same status, current activity,
-elapsed time, steps and tokens as the Mac. If a reply has more than three
+live card for each one, with the same status, current activity,
+elapsed time, steps and tokens as the Mac. Running cards stay pinned at the
+bottom of the chat (above the composer in Cantrip Agent) so they don't scroll
+away as the reply grows. When a subagent finishes, its card moves into its
+reply. If a reply has more than three
 subagents, finished ones collapse under **N finished subagents**. **Stop** asks
 for confirmation, then cancels only that subagent.
 

@@ -818,6 +818,14 @@ struct LauncherView: View {
         allActivities.flatMap(\.subagentActivities)
     }
 
+    /// Subagents of replies that still have one running, pinned below the transcript.
+    private var pinnedSubagents: [ToolActivity] {
+        session.messages.flatMap { message -> [ToolActivity] in
+            let agents = message.activities.flatMap(\.subagentActivities)
+            return agents.contains { $0.subagent?.isActive == true } ? agents : []
+        }
+    }
+
     private var stopSubagent: (SubagentInfo, @escaping (String?) -> Void) -> Void {
         let session = session
         return { info, done in
@@ -2092,6 +2100,18 @@ struct LauncherView: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                let pinned = pinnedSubagents
+                if !pinned.isEmpty {
+                    SubagentStrip(activities: pinned, open: {
+                        withAnimation(.easeOut(duration: 0.15)) { showSteps = true }
+                    })
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.bar)
+                    .overlay(alignment: .top) { Divider().opacity(0.5) }
+                }
+            }
             .frame(maxHeight: metrics.transcriptMaxHeight)
             // Fresh scroll-view identity per session: prevents stale layout
             // state from the previous tab leaving a blank transcript.
@@ -2407,8 +2427,11 @@ private struct MessageRow: View {
     var openSubagents: (() -> Void)?
 
     private var visibleApps: [MCPAppPayload] { appActions == nil ? [] : message.apps }
+    /// Running subagents are pinned below the transcript; the strip returns here once they finish.
     private var subagents: [ToolActivity] {
-        openSubagents == nil ? [] : message.activities.flatMap(\.subagentActivities)
+        guard openSubagents != nil else { return [] }
+        let agents = message.activities.flatMap(\.subagentActivities)
+        return agents.contains { $0.subagent?.isActive == true } ? [] : agents
     }
 
     var body: some View {

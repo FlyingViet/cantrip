@@ -92,8 +92,11 @@ subagents keep the turn open until they finish, and Stop cancels them.
 
 ### Monitor subagents
 
-A reply that starts subagents shows a line above its text, such as
-`2 subagents running · Find tests: Searching Tests/ · 42s`. Click it to open
+While a reply's subagents run, a line pinned to the bottom of the chat shows
+their progress, such as
+`2 subagents running · Find tests: Searching Tests/ · 42s`, so it stays in
+view as the reply grows. When they all finish, the line moves to its place
+above the reply's text. Click it to open
 the **Progress** pane. Its **Subagents** section has a card for each subagent,
 running ones first. A card shows:
 
@@ -110,7 +113,8 @@ going, and Copilot is told the subagent was stopped. Stop appears only for
 Copilot sessions; Claude Code Task subagents are shown but can't be stopped
 one at a time. Subagent cards last as long as the conversation is open, like
 other tool steps. The browser Remote, another Mac's Remote tab and Cantrip
-Agent show the same cards with Stop in each reply; see
+Agent show the same cards: running ones pinned at the bottom of the chat with
+Stop, finished ones in their reply; see
 [Monitor subagents remotely](remote-control.md#monitor-subagents-remotely).
 
 Turning the setting off removes the `task`, `read_agent`, `write_agent` and
