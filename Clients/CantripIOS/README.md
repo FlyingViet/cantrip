@@ -360,7 +360,8 @@ interactive MCP App views** is off on the Mac.
 With **both Cantrip Agent and the Mac Cantrip host updated**, replies that spawn
 Copilot subagents show live monitor cards. Running cards stay pinned above the
 composer, so they don't scroll away as the reply grows; when a subagent
-finishes, its card moves into its reply above the text. Each card shows the
+finishes, its card moves into its reply at the point it ended, after the
+paragraph that was being written. Each card shows the
 subagent name, status, its latest reasoning step, elapsed time and token count.
 Expand a card for its reasoning steps, the latest subagent message or an error,
 and tap **Stop** on a running or waiting card to stop just that subagent.

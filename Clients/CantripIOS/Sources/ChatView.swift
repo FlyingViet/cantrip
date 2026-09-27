@@ -2461,14 +2461,20 @@ private struct TurnView: View {
                 if !cantripApps.isEmpty {
                     CantripMCPAppStack(remote: remote, sessionID: cantripSessionID, apps: cantripApps)
                 }
-                if !cantripSubagents.isEmpty {
-                    CantripSubagentStack(remote: remote, sessionID: cantripSessionID, subagents: cantripSubagents)
-                }
-                if !turn.text.isEmpty {
-                    if turn.isLocalPrivate == true {
-                        Text(verbatim: turn.text).textSelection(.enabled)
-                    } else {
-                        ChatAssistantText(text: turn.text, images: turn.images ?? [], remote: remote)
+                // Each finished subagent's card sits where the reply had got to when it ended.
+                let placed = CantripReplyBlocks.placed(cantripSubagents)
+                let parts = CantripReplyBlocks.split(turn.text, before: placed.map(\.block))
+                ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
+                    if index > 0 {
+                        CantripSubagentStack(remote: remote, sessionID: cantripSessionID,
+                                             subagents: placed[index - 1].subagents)
+                    }
+                    if !part.isEmpty {
+                        if turn.isLocalPrivate == true {
+                            Text(verbatim: part).textSelection(.enabled)
+                        } else {
+                            ChatAssistantText(text: part, images: turn.images ?? [], remote: remote)
+                        }
                     }
                 }
                 if !turn.actions.isEmpty {

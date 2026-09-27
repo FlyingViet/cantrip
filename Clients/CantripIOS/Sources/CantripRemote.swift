@@ -166,11 +166,13 @@ struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
     let canCancel: Bool
     let recentSteps: [CantripRemoteSubagentStep]
     let reasoning: [CantripRemoteReasoningStep]
+    /// A finished card follows this many reply blocks; nil from hosts that don't place cards.
+    let textBlock: Int?
 
     private enum CodingKeys: String, CodingKey {
         case id, agentID, name, agentType, summary, model, effort, background, status
         case startedAt, finishedAt, intent, currentStep, latestMessage, steps, tokens, error
-        case canCancel, recentSteps, reasoning
+        case canCancel, recentSteps, reasoning, textBlock
     }
 
     init(
@@ -193,7 +195,8 @@ struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
         error: String? = nil,
         canCancel: Bool = false,
         recentSteps: [CantripRemoteSubagentStep] = [],
-        reasoning: [CantripRemoteReasoningStep] = []
+        reasoning: [CantripRemoteReasoningStep] = [],
+        textBlock: Int? = nil
     ) {
         self.id = id
         self.agentID = agentID
@@ -215,6 +218,7 @@ struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
         self.canCancel = canCancel
         self.recentSteps = recentSteps
         self.reasoning = reasoning
+        self.textBlock = textBlock
     }
 
     init(from decoder: Decoder) throws {
@@ -239,7 +243,8 @@ struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
             error: container.decodeLenient(String.self, forKey: .error),
             canCancel: container.decodeLenient(Bool.self, forKey: .canCancel, default: false),
             recentSteps: container.decodeLenient([CantripRemoteSubagentStep].self, forKey: .recentSteps, default: []),
-            reasoning: container.decodeLenient([CantripRemoteReasoningStep].self, forKey: .reasoning, default: [])
+            reasoning: container.decodeLenient([CantripRemoteReasoningStep].self, forKey: .reasoning, default: []),
+            textBlock: container.decodeLenient(Int.self, forKey: .textBlock)
         )
     }
 }

@@ -74,6 +74,61 @@ enum CantripSubagentFormat {
     }
 }
 
+/// A reply's markdown blocks (runs of lines split at blank lines outside code
+/// fences), matching the Mac's ReplyBlocks: finished subagent cards sit
+/// between blocks, where each agent ended.
+enum CantripReplyBlocks {
+    /// Where each block starts.
+    static func starts(in text: String) -> [String.Index] {
+        var starts: [String.Index] = []
+        var fence: String?
+        var afterBlank = true
+        var lineStart = text.startIndex
+        let scalars = text.unicodeScalars
+        for line in scalars.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = Substring(line).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let open = fence {
+                if trimmed.hasPrefix(open) { fence = nil }
+                afterBlank = false
+            } else if trimmed.isEmpty {
+                afterBlank = true
+            } else {
+                if afterBlank { starts.append(lineStart) }
+                afterBlank = false
+                if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { fence = String(trimmed.prefix(3)) }
+            }
+            lineStart = line.endIndex < scalars.endIndex ? scalars.index(after: line.endIndex) : scalars.endIndex
+        }
+        return starts
+    }
+
+    /// Finished subagents grouped by the block they follow, in reply order.
+    static func placed(_ subagents: [CantripRemoteSubagent]) -> [(block: Int, subagents: [CantripRemoteSubagent])] {
+        Dictionary(grouping: subagents) { max(0, $0.textBlock ?? 0) }
+            .sorted { $0.key < $1.key }
+            .map { (block: $0.key, subagents: $0.value) }
+    }
+
+    /// `text` cut before each block number in `blocks` (ascending); returns
+    /// `blocks.count + 1` parts. Numbers past the last block cut at the end.
+    static func split(_ text: String, before blocks: [Int]) -> [String] {
+        guard !blocks.isEmpty else { return [text] }
+        let starts = starts(in: text)
+        var parts: [String] = []
+        var from = text.startIndex
+        for block in blocks {
+            let cut = block <= 0 ? text.startIndex : block < starts.count ? starts[block] : text.endIndex
+            let to = max(from, cut)
+            var part = text[from..<to]
+            while let last = part.last, last.isWhitespace { part = part.dropLast() }
+            parts.append(String(part))
+            from = to
+        }
+        parts.append(String(text[from...]))
+        return parts
+    }
+}
+
 /// Running subagents stay pinned above the composer so a growing reply can't
 /// scroll them away; each card returns to its reply once it finishes.
 struct CantripPinnedSubagents: View {

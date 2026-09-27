@@ -283,6 +283,27 @@ final class CantripSubagentTests: XCTestCase {
         XCTAssertEqual(CantripPinnedSubagents.live(in: [messages[1]]), [])
     }
 
+    func testFinishedSubagentsSitWhereTheyEndedInTheReply() throws {
+        let message = try JSONDecoder().decode(CantripRemoteMessage.self, from: Data(#"""
+        {"id":"m1","role":"assistant","text":"Starting an explorer.\n\n```\na\n\nb\n```\n\nIt found three tests.","thinking":"","activities":[],
+         "subagents":[{"id":"a","agentID":"a","status":"completed","textBlock":2},
+                      {"id":"b","agentID":"b","status":"failed"},
+                      {"id":"c","agentID":"c","status":"cancelled","textBlock":2}]}
+        """#.utf8))
+        let subagents = try XCTUnwrap(message.subagents)
+        XCTAssertEqual(subagents.map(\.textBlock), [2, nil, 2])
+
+        // Old hosts send no textBlock: those cards stay before the text.
+        let placed = CantripReplyBlocks.placed(subagents)
+        XCTAssertEqual(placed.map(\.block), [0, 2])
+        XCTAssertEqual(placed.map { $0.subagents.map(\.id) }, [["b"], ["a", "c"]])
+        XCTAssertEqual(CantripReplyBlocks.split(message.text, before: placed.map(\.block)),
+                       ["", "Starting an explorer.\n\n```\na\n\nb\n```", "It found three tests."])
+        XCTAssertEqual(CantripReplyBlocks.split("é👍\r\n\r\nNext", before: [1]), ["é👍", "Next"])
+        XCTAssertEqual(CantripReplyBlocks.split("Only", before: [7]), ["Only", ""])
+        XCTAssertEqual(CantripReplyBlocks.split("Only", before: []), ["Only"])
+    }
+
     func testPinnedSubagentScreenshotsAtPhoneWidth() async throws {
         let artifactDirectory = ProcessInfo.processInfo.environment["TEST_RUNNER_SUBAGENTS_ARTIFACT_DIR"]
         guard let artifactDirectory, !artifactDirectory.isEmpty else {
