@@ -2841,7 +2841,7 @@ struct SettingsView: View {
                 Toggle("Allow all tools (--allow-all-tools) — lets Copilot run commands unprompted", isOn: $settings.copilotAllowTools)
                     .font(.caption)
                     .toggleStyle(.checkbox)
-                Toggle("Discourage subagents (they're slow server-side) — work inline instead", isOn: $settings.copilotDiscourageSubagents)
+                Toggle("Allow subagents for broad searches, noisy builds/tests and parallel work — off removes them", isOn: $settings.copilotAllowSubagents)
                     .font(.caption)
                     .toggleStyle(.checkbox)
             case .copilotRemote:

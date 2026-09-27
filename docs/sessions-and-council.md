@@ -77,7 +77,7 @@ Each local Copilot tab keeps its own native SDK session across successful
 turns. Node.js and a recent Copilot CLI with a matching bundled SDK/runtime
 are required (exercised with CLI 1.0.83). A missing/incompatible runtime is
 reported rather than silently replaying the task with another transport.
-Changing model, effort, context tier, action policy, or working directory takes
+Changing model, effort, context tier, action policy, subagent setting, or working directory takes
 effect on the next request by starting a fresh runtime with recent conversation
 context. Stop/reset closes the runtime; checkpoint recovery remains Cantrip's
 safety net after an interruption.

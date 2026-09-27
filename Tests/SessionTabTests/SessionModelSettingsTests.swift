@@ -137,7 +137,73 @@ extension SessionTabTests {
         chat.isPrivate = false
         try testModelSettingsWeb()
         try await testModelSettingsRuntime()
+        try await testSubagentSessionConfiguration()
         print("Per-tab model settings: persistence, isolation, validation, API and web passed")
+    }
+
+    @MainActor
+    private static func testSubagentSessionConfiguration() async throws {
+        let settings = AppSettings.shared
+        let allow = settings.copilotAllowSubagents, memory = settings.memoryEnabled
+        let screen = settings.attachScreen, location = settings.shareLocation
+        let calendar = settings.shareCalendar, files = settings.fileRAGEnabled
+        defer {
+            settings.copilotAllowSubagents = allow; settings.memoryEnabled = memory
+            settings.attachScreen = screen; settings.shareLocation = location
+            settings.shareCalendar = calendar; settings.fileRAGEnabled = files
+        }
+        settings.memoryEnabled = false; settings.attachScreen = false
+        settings.shareLocation = false; settings.shareCalendar = false; settings.fileRAGEnabled = false
+        // A subagent's idle must not end the turn; the root reply arrives afterwards.
+        let fakeSDK = #"""
+        export const RuntimeConnection={forStdio:value=>value};
+        export class CopilotClient {
+          async start() {} async stop() {} async forceStop() {}
+          async createSession(config) { return {
+            async abort() {}, async destroy() {},
+            async send(options) {
+              config.onEvent({type:'session.idle',agentId:'child',data:{}});
+              setTimeout(() => {
+                config.onEvent({type:'assistant.message_delta',id:'event-'+Math.random(),data:{messageId:'message',
+                  deltaContent:JSON.stringify({excluded:config.excludedTools||null,
+                    guidance:config.systemMessage?.content||'',mode:config.systemMessage?.mode||'',
+                    childStreaming:config.includeSubAgentStreamingEvents,prompt:options.prompt})}});
+                config.onEvent({type:'session.idle',data:{}});
+              }, 100);
+              return 'native-message';
+            }
+          }; }
+        }
+        """#
+        let sdkURL = "data:text/javascript;base64," + Data(fakeSDK.utf8).base64EncodedString()
+        let script = CopilotSessionBridge.script.replacingOccurrences(
+            of: CopilotRuntime.discoveryScript,
+            with: "function resolveCopilotRuntime(){return {sdk:'\(sdkURL)',runtime:'fixture'}}"
+        )
+        let chat = ChatSession(copilotBackend: CopilotBackend(bridgeScript: script))
+        defer { chat.cancel() }
+
+        settings.copilotAllowSubagents = true
+        chat.submitRemote("Allowed subagents fixture")
+        try await waitForJournalTest { !chat.isStreaming }
+        let allowed = try JSONSerialization.jsonObject(with: Data(chat.messages.last!.text.utf8)) as! [String: Any]
+        precondition(allowed["excluded"] is NSNull, "Allowed subagents keep their tools")
+        precondition(allowed["mode"] as? String == "append"
+                     && allowed["guidance"] as? String == CopilotBackend.subagentGuidance,
+                     "Subagent guidance belongs in the appended system message")
+        precondition(allowed["childStreaming"] as? Bool == false, "Subagent deltas are not streamed to Cantrip")
+        precondition((allowed["prompt"] as? String)?.contains("avoid spawning subagents") == false,
+                     "Prompts must not carry a per-turn subagent suffix")
+
+        settings.copilotAllowSubagents = false
+        chat.submitRemote("Disabled subagents fixture")
+        try await waitForJournalTest { !chat.isStreaming }
+        let disabled = try JSONSerialization.jsonObject(with: Data(chat.messages.last!.text.utf8)) as! [String: Any]
+        precondition(disabled["excluded"] as? [String] == ["task", "read_agent", "write_agent", "list_agents"],
+                     "Disabling subagents removes their tools")
+        precondition(disabled["guidance"] as? String == "", "Disabled subagents get no delegation guidance")
+        precondition((disabled["prompt"] as? String)?.contains("Allowed subagents fixture") == true,
+                     "Changing the subagent setting must carry recent conversation context")
     }
 
     @MainActor

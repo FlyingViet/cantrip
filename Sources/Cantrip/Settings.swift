@@ -174,10 +174,10 @@ final class AppSettings: ObservableObject {
     @Published var copilotContextTier: String {
         didSet { d.set(copilotContextTier, forKey: "copilotContextTier") }
     }
-    /// Ask Copilot to work inline instead of delegating to (slow,
-    /// server-side) subagents.
-    @Published var copilotDiscourageSubagents: Bool {
-        didSet { d.set(copilotDiscourageSubagents, forKey: "copilotDiscourageSubagents") }
+    /// Let Copilot delegate to subagents, guided toward token-saving uses.
+    /// Off removes the subagent tools from the session entirely.
+    @Published var copilotAllowSubagents: Bool {
+        didSet { d.set(copilotAllowSubagents, forKey: "copilotAllowSubagents") }
     }
     /// Cached account model list from the configured Copilot runtime.
     @Published var copilotAvailableModels: [String] {
@@ -539,8 +539,9 @@ final class AppSettings: ObservableObject {
         copilotAllowTools = d.bool(forKey: "copilotAllowTools")
         copilotEffort = d.string(forKey: "copilotEffort") ?? ""
         copilotContextTier = d.string(forKey: "copilotContextTier") ?? ""
-        copilotDiscourageSubagents = d.object(forKey: "copilotDiscourageSubagents") == nil
-            ? true : d.bool(forKey: "copilotDiscourageSubagents")
+        // Replaces the old prompt-only "discourage" preference, whose default was on.
+        copilotAllowSubagents = d.object(forKey: "copilotAllowSubagents") == nil
+            ? true : d.bool(forKey: "copilotAllowSubagents")
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
         copilotModelCatalog = (d.data(forKey: "copilotModelCatalog")
             .flatMap { try? JSONDecoder().decode([CopilotModelInfo].self, from: $0) }) ?? []
