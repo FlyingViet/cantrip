@@ -23,7 +23,7 @@ struct ToolActivity: Identifiable, Equatable {
     var fileChanges: [ToolFileChange]
     var terminalCommand: String?
     /// Steps run inside this activity by a subagent (Claude Code Task
-    /// tool events carry parent_tool_use_id; Copilot doesn't expose this).
+    /// tool_use parent IDs; Copilot subagent.started agent IDs).
     var children: [ToolActivity] = []
 }
 

@@ -37,13 +37,27 @@ final class CopilotBackend: Backend {
         let allowTools: Bool
         let readOnly: Bool
         var autoApprove = true
+        var allowSubagents = true
 
         var json: [String: Any] {
             ["command": command, "workdir": workdir, "model": model,
              "effort": effort, "contextTier": contextTier,
-             "allowTools": allowTools, "readOnly": readOnly, "autoApprove": autoApprove]
+             "allowTools": allowTools, "readOnly": readOnly, "autoApprove": autoApprove,
+             "allowSubagents": allowSubagents,
+             "subagentGuidance": allowSubagents ? CopilotBackend.subagentGuidance : ""]
         }
     }
+
+    /// Appended once to the session's system message (not to every prompt).
+    static let subagentGuidance = """
+    Subagents cost extra tokens and time. Delegate only when that saves main-context \
+    tokens or wall time: broad multi-file exploration (explore), noisy builds, tests or \
+    installs where only the outcome matters (task), or genuinely independent threads run \
+    in parallel. Do small lookups and edits yourself. Give each subagent a complete, \
+    self-contained brief and ask for a concise result: findings with file:line, or pass/fail \
+    with only the relevant errors. Don't re-read what a subagent reported, don't launch \
+    speculative agents, and wait for background agents before finishing your reply.
+    """
 
     init(bridgeScript: String = CopilotSessionBridge.script) {
         self.bridgeScript = bridgeScript
@@ -68,11 +82,9 @@ final class CopilotBackend: Backend {
             effort: effortOverride ?? settings.copilotEffort,
             contextTier: contextTierOverride ?? settings.copilotContextTier,
             allowTools: settings.copilotAllowTools || settings.allowActions,
-            readOnly: readOnly, autoApprove: settings.allowActions
+            readOnly: readOnly, autoApprove: settings.allowActions,
+            allowSubagents: settings.copilotAllowSubagents
         )
-        let suffix = settings.copilotDiscourageSubagents
-            ? "\n\n(Work directly in this session; avoid spawning subagents or delegating tasks unless strictly necessary.)"
-            : ""
         queue.async { [weak self] in
             guard let self else { return }
             guard self.runID == nil else {
@@ -90,12 +102,12 @@ final class CopilotBackend: Backend {
             self.parser = CopilotJSONStreamParser()
             do {
                 var command: [String: Any] = [
-                    "kind": "start", "runID": id, "config": config.json, "prompt": request.prompt + suffix
+                    "kind": "start", "runID": id, "config": config.json, "prompt": request.prompt
                 ]
                 if self.process == nil {
                     command["initialPrompt"] = ConversationContextBuilder.composePrompt(
                         currentPrompt: request.prompt, query: request.userMessage, turns: request.previousTurns
-                    ) + suffix
+                    )
                     try self.launch(config)
                 }
                 self.askpass?.beginTurn()

@@ -5,6 +5,10 @@ struct CopilotJSONStreamParser {
     private var lastMessageID: String?
     private var processedEventIDs: Set<String> = []
     private var activities: [String: ToolActivity] = [:]
+    /// Subagent instance ID → the task tool call that spawned it.
+    private var agentParents: [String: String] = [:]
+    /// Nested subagent step → its top-level activity.
+    private var childParents: [String: String] = [:]
     private(set) var answer = ""
     /// Whether reasoning streamed as deltas (skip the aggregate block).
     private var reasoningDeltaSeen = false
@@ -134,10 +138,11 @@ struct CopilotJSONStreamParser {
                 events.append(.textDelta(delta))
             }
             let requests = eventData?["toolRequests"] as? [[String: Any]] ?? []
-            events += requests.compactMap { request in
+            let parentID = subagentParent(object, eventData)
+            for request in requests {
                 guard let id = request["toolCallId"] as? String,
                       let name = request["name"] as? String else {
-                    return nil
+                    continue
                 }
                 let activity = ToolActivityFactory.start(
                     id: id,
@@ -145,8 +150,12 @@ struct CopilotJSONStreamParser {
                     arguments: request["arguments"],
                     intentionSummary: request["intentionSummary"] as? String
                 )
-                activities[id] = activity
-                return .activity(activity)
+                if let parentID {
+                    events += nest(activity, under: parentID)
+                } else {
+                    activities[id] = activity
+                    events.append(.activity(activity))
+                }
             }
             return events
 
@@ -162,7 +171,7 @@ struct CopilotJSONStreamParser {
                   let name = eventData?["toolName"] as? String else {
                 return []
             }
-            if activities[id] != nil {
+            if activities[id] != nil || childParents[id] != nil {
                 return []
             }
             let activity = ToolActivityFactory.start(
@@ -170,6 +179,9 @@ struct CopilotJSONStreamParser {
                 toolName: name,
                 arguments: eventData?["arguments"]
             )
+            if let parentID = subagentParent(object, eventData) {
+                return nest(activity, under: parentID)
+            }
             activities[id] = activity
             return [.activity(activity)]
 
@@ -186,16 +198,87 @@ struct CopilotJSONStreamParser {
             } else {
                 output = result
             }
+            let success = eventData?["success"] as? Bool ?? false
+            if let parentID = childParents[id], var parent = activities[parentID],
+               let index = parent.children.firstIndex(where: { $0.id == id }) {
+                parent.children[index] = ToolActivityFactory.complete(
+                    parent.children[index], id: id, success: success, output: output
+                )
+                activities[parentID] = parent
+                return [.activity(parent)]
+            }
             let completed = ToolActivityFactory.complete(
                 activities.removeValue(forKey: id),
                 id: id,
-                success: eventData?["success"] as? Bool ?? false,
+                success: success,
                 output: output
             )
+            // A background subagent keeps reporting after its task call returns.
+            if agentParents.values.contains(id) {
+                activities[id] = completed
+            }
             return [.activity(completed)]
+
+        case "subagent.started":
+            if let agentID = object["agentId"] as? String,
+               let callID = eventData?["toolCallId"] as? String {
+                agentParents[agentID] = callID
+            }
+            return []
+
+        case "subagent.completed", "subagent.failed":
+            guard let callID = eventData?["toolCallId"] as? String else { return [] }
+            let details = [eventData?["model"] as? String,
+                           (eventData?["totalTokens"] as? Int).map(Self.tokenLabel)]
+                .compactMap { $0 }.filter { !$0.isEmpty }
+            guard !details.isEmpty else { return [] }
+            let suffix = " · " + details.joined(separator: " · ")
+            if var activity = activities[callID] {
+                activity.title += suffix
+                activities[callID] = activity
+                return [.activity(activity)]
+            }
+            if let parentID = childParents[callID], var parent = activities[parentID],
+               let index = parent.children.firstIndex(where: { $0.id == callID }) {
+                parent.children[index].title += suffix
+                activities[parentID] = parent
+                return [.activity(parent)]
+            }
+            return []
 
         default:
             return []
+        }
+    }
+
+    /// The top-level activity a subagent event belongs to, if it is still tracked.
+    private func subagentParent(_ object: [String: Any], _ data: [String: Any]?) -> String? {
+        let agentID = object["agentId"] as? String
+        guard let direct = agentID.flatMap({ agentParents[$0] })
+                ?? data?["parentToolCallId"] as? String else {
+            return nil
+        }
+        let root = childParents[direct] ?? direct
+        return activities[root] != nil ? root : nil
+    }
+
+    private mutating func nest(_ activity: ToolActivity, under parentID: String) -> [BackendEvent] {
+        guard var parent = activities[parentID] else { return [] }
+        if let index = parent.children.firstIndex(where: { $0.id == activity.id }) {
+            parent.children[index] = activity
+        } else {
+            parent.children.append(activity)
+        }
+        childParents[activity.id] = parentID
+        activities[parentID] = parent
+        return [.activity(parent)]
+    }
+
+    static func tokenLabel(_ tokens: Int) -> String {
+        switch tokens {
+        case ..<1_000: return "\(tokens) tokens"
+        case ..<1_000_000: return String(format: "%.1fk tokens", Double(tokens) / 1_000)
+        default: return String(format: "%.1fM tokens", Double(tokens) / 1_000_000)
         }
     }
 }

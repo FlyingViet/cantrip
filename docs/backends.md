@@ -81,6 +81,22 @@ are not interchangeable with total context or maximum output tokens. Unsupported
 saved effort/tier values remain visible with a warning, without changing active
 sessions or silently resetting your preferences.
 
+## Copilot subagents
+
+**Allow subagents** (Settings > Copilot, on by default) lets Copilot delegate
+broad multi-file searches, noisy builds/tests and independent parallel work.
+Cantrip adds brief token-saving guidance once to the session's system message,
+not to every prompt, and does not stream subagent text into the reply. Each
+subagent's steps are nested under its task activity, whose title shows the
+subagent's model and total tokens (for example `· gpt-5.6-luna · 8.1k tokens`);
+Cantrip Agent and the browser Remote show that title too. Subagent token usage
+is included in the run's usage totals. Background subagents keep the turn open
+until they finish, and Stop cancels them.
+
+Turning the setting off removes the `task`, `read_agent`, `write_agent` and
+`list_agents` tools from new Copilot sessions, which also saves their schema
+tokens on every model call. The change applies to each tab's next request.
+
 ## Connect a local model
 
 **Mac only.** Cantrip does not install or start the model server for you.

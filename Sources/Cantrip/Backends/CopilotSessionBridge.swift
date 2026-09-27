@@ -7,6 +7,7 @@ enum CopilotSessionBridge {
 
     let client, session, runID, stopping = false, sending = 0, idle = false;
     const inputs = new Map();
+    const subagentTools = ['task', 'read_agent', 'write_agent', 'list_agents'];
     const emit = message => process.stdout.write(JSON.stringify(message) + '\n');
     const errorText = error => String(error?.message ?? error).slice(0, 2000);
     function finishIfIdle() {
@@ -34,10 +35,11 @@ enum CopilotSessionBridge {
     }
     function onEvent(event) {
       if (!runID || stopping) return;
-      if (event.type === 'session.idle') {
+      // Subagents share this stream: only the root agent's idle or error ends the turn.
+      if (event.type === 'session.idle' && !event.agentId) {
         idle = true;
         finishIfIdle();
-      } else if (event.type === 'session.error') {
+      } else if (event.type === 'session.error' && !event.agentId) {
         emit({ kind: 'failure', runID, message: event.data.message });
         runID = undefined;
       } else {
@@ -61,6 +63,9 @@ enum CopilotSessionBridge {
         contextTier: config.contextTier || undefined, streaming: true,
         enableConfigDiscovery: true, remoteSession: 'off',
         availableTools: config.readOnly ? [] : config.allowTools ? undefined : ['view', 'glob', 'grep'],
+        excludedTools: config.allowSubagents === false ? subagentTools : undefined,
+        systemMessage: config.subagentGuidance ? { mode: 'append', content: config.subagentGuidance } : undefined,
+        includeSubAgentStreamingEvents: false,
         enableFileHooks: config.allowTools && !config.readOnly,
         onPermissionRequest: request => {
           const allowed = config.allowTools && !config.readOnly;
