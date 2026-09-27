@@ -39,6 +39,190 @@ struct CantripRemoteActivity: Decodable, Equatable, Identifiable {
     var output: String? = nil
 }
 
+enum CantripRemoteSubagentStatus: Equatable {
+    case running
+    case idle
+    case completed
+    case failed
+    case cancelled
+    case working
+
+    init(rawValue: String) {
+        switch rawValue {
+        case "running": self = .running
+        case "idle": self = .idle
+        case "completed": self = .completed
+        case "failed": self = .failed
+        case "cancelled": self = .cancelled
+        default: self = .working
+        }
+    }
+
+    var isLive: Bool {
+        switch self {
+        case .running, .idle, .working: return true
+        case .completed, .failed, .cancelled: return false
+        }
+    }
+
+    var isCancellableState: Bool {
+        switch self {
+        case .running, .idle: return true
+        case .completed, .failed, .cancelled, .working: return false
+        }
+    }
+
+    var displayText: String {
+        switch self {
+        case .running: return "Running"
+        case .idle: return "Waiting"
+        case .completed: return "Done"
+        case .failed: return "Failed"
+        case .cancelled: return "Stopped"
+        case .working: return "Working"
+        }
+    }
+}
+
+extension CantripRemoteSubagentStatus: Decodable {
+    init(from decoder: Decoder) throws {
+        let raw = (try? decoder.singleValueContainer().decode(String.self)) ?? ""
+        self.init(rawValue: raw)
+    }
+}
+
+struct CantripRemoteSubagentStep: Decodable, Equatable, Identifiable {
+    let id: String
+    let title: String
+    let toolName: String
+    let state: String
+
+    private enum CodingKeys: String, CodingKey {
+        case title, toolName, state
+    }
+
+    init(title: String = "", toolName: String = "", state: String = "") {
+        self.title = title
+        self.toolName = toolName
+        self.state = state
+        self.id = [title, toolName, state].joined(separator: "\u{1f}")
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            title: container.decodeLenient(String.self, forKey: .title, default: ""),
+            toolName: container.decodeLenient(String.self, forKey: .toolName, default: ""),
+            state: container.decodeLenient(String.self, forKey: .state, default: "")
+        )
+    }
+}
+
+struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
+    let id: String
+    let agentID: String
+    let name: String
+    let agentType: String
+    let summary: String
+    let model: String?
+    let effort: String?
+    let background: Bool
+    let status: CantripRemoteSubagentStatus
+    let startedAt: TimeInterval?
+    let finishedAt: TimeInterval?
+    let intent: String?
+    let currentStep: String?
+    let latestMessage: String?
+    let steps: Int
+    let tokens: Int
+    let error: String?
+    let canCancel: Bool
+    let recentSteps: [CantripRemoteSubagentStep]
+
+    private enum CodingKeys: String, CodingKey {
+        case id, agentID, name, agentType, summary, model, effort, background, status
+        case startedAt, finishedAt, intent, currentStep, latestMessage, steps, tokens, error
+        case canCancel, recentSteps
+    }
+
+    init(
+        id: String,
+        agentID: String,
+        name: String = "",
+        agentType: String = "",
+        summary: String = "",
+        model: String? = nil,
+        effort: String? = nil,
+        background: Bool = false,
+        status: CantripRemoteSubagentStatus = .working,
+        startedAt: TimeInterval? = nil,
+        finishedAt: TimeInterval? = nil,
+        intent: String? = nil,
+        currentStep: String? = nil,
+        latestMessage: String? = nil,
+        steps: Int = 0,
+        tokens: Int = 0,
+        error: String? = nil,
+        canCancel: Bool = false,
+        recentSteps: [CantripRemoteSubagentStep] = []
+    ) {
+        self.id = id
+        self.agentID = agentID
+        self.name = name
+        self.agentType = agentType
+        self.summary = summary
+        self.model = model
+        self.effort = effort
+        self.background = background
+        self.status = status
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.intent = intent
+        self.currentStep = currentStep
+        self.latestMessage = latestMessage
+        self.steps = steps
+        self.tokens = tokens
+        self.error = error
+        self.canCancel = canCancel
+        self.recentSteps = recentSteps
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(String.self, forKey: .id),
+            agentID: try container.decode(String.self, forKey: .agentID),
+            name: container.decodeLenient(String.self, forKey: .name, default: ""),
+            agentType: container.decodeLenient(String.self, forKey: .agentType, default: ""),
+            summary: container.decodeLenient(String.self, forKey: .summary, default: ""),
+            model: container.decodeLenient(String.self, forKey: .model),
+            effort: container.decodeLenient(String.self, forKey: .effort),
+            background: container.decodeLenient(Bool.self, forKey: .background, default: false),
+            status: container.decodeLenient(CantripRemoteSubagentStatus.self, forKey: .status, default: .working),
+            startedAt: container.decodeLenient(TimeInterval.self, forKey: .startedAt),
+            finishedAt: container.decodeLenient(TimeInterval.self, forKey: .finishedAt),
+            intent: container.decodeLenient(String.self, forKey: .intent),
+            currentStep: container.decodeLenient(String.self, forKey: .currentStep),
+            latestMessage: container.decodeLenient(String.self, forKey: .latestMessage),
+            steps: container.decodeLenient(Int.self, forKey: .steps, default: 0),
+            tokens: container.decodeLenient(Int.self, forKey: .tokens, default: 0),
+            error: container.decodeLenient(String.self, forKey: .error),
+            canCancel: container.decodeLenient(Bool.self, forKey: .canCancel, default: false),
+            recentSteps: container.decodeLenient([CantripRemoteSubagentStep].self, forKey: .recentSteps, default: [])
+        )
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeLenient<T: Decodable>(_ type: T.Type, forKey key: Key, default defaultValue: @autoclosure () -> T) -> T {
+        (try? decodeIfPresent(type, forKey: key)) ?? defaultValue()
+    }
+
+    func decodeLenient<T: Decodable>(_ type: T.Type, forKey key: Key) -> T? {
+        try? decodeIfPresent(type, forKey: key)
+    }
+}
+
 struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     let id: String
     let role: String
@@ -47,6 +231,7 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     let author: String?
     let activities: [CantripRemoteActivity]
     let apps: [CantripRemoteMCPAppSummary]?
+    let subagents: [CantripRemoteSubagent]?
     var displayText: String? = nil
     var images: [ChatMessageImage]? = nil
     var isPreview: Bool? = nil
@@ -128,6 +313,10 @@ private struct CantripMCPAppMessageResponse: Decodable {
 
 private struct CantripMCPAppAcceptedResponse: Decodable {
     let accepted: Bool
+}
+
+private struct CantripSubagentCancelResponse: Decodable {
+    let cancelled: Bool
 }
 
 enum CantripRemoteError: LocalizedError {
@@ -788,6 +977,10 @@ struct CantripRemoteAPI {
         "/api/v1/sessions/\(try Self.pathComponent(sessionID))/apps/\(try Self.pathComponent(appID))"
     }
 
+    private func subagentPath(sessionID: String, agentID: String) throws -> String {
+        "/api/v1/sessions/\(try Self.pathComponent(sessionID))/subagents/\(try Self.pathComponent(agentID))"
+    }
+
     func mcpAppPayload(sessionID: String, appID: String) async throws -> MCPAppPayload {
         try await request(path: try mcpAppPath(sessionID: sessionID, appID: appID))
     }
@@ -831,6 +1024,14 @@ struct CantripRemoteAPI {
             body: body
         )
         guard response.accepted else { throw CantripRemoteError.invalidResponse }
+    }
+
+    func cancelSubagent(sessionID: String, agentID: String) async throws -> Bool {
+        let response: CantripSubagentCancelResponse = try await request(
+            path: try subagentPath(sessionID: sessionID, agentID: agentID) + "/cancel",
+            method: "POST"
+        )
+        return response.cancelled
     }
 
     func send(
@@ -1825,6 +2026,28 @@ final class CantripRemoteModel: ObservableObject {
         try await performAuthenticated(allowFallback: false) { api in
             try await api.updateMCPAppContext(sessionID: sessionID, appID: appID, text: text)
         }
+    }
+
+    @discardableResult
+    func cancelSubagent(sessionID: String, agentID: String) async throws -> Bool {
+        let cancelled = try await performAuthenticated(allowFallback: false) { api in
+            try await api.cancelSubagent(sessionID: sessionID, agentID: agentID)
+        }
+        guard selectedSessionID == sessionID else { return cancelled }
+        do {
+            let detail = try await performHistoryRead { api in
+                try await api.session(id: sessionID)
+            }
+            guard selectedSessionID == sessionID else { return cancelled }
+            apply(detail)
+            detailError = nil
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            detailError = "Could not update this conversation. \(error.localizedDescription)"
+            handleReadFailure(error, detailOnly: true)
+        }
+        return cancelled
     }
 
     private func performHistoryRead<T>(
@@ -3121,6 +3344,9 @@ private struct CantripRemoteMessageBubble: View {
                             .padding(.top, 3)
                     }
                     .font(.caption)
+                }
+                if let subagents = message.subagents, !subagents.isEmpty {
+                    CantripSubagentStack(remote: model, sessionID: sessionID, subagents: subagents)
                 }
                 if !message.presentedText.isEmpty {
                     if message.role == "user" {

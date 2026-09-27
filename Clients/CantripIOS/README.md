@@ -355,6 +355,14 @@ domains its server declared. If a view asks to send a message, Cantrip Agent
 shows the exact text for approval first. Views are hidden when **Show
 interactive MCP App views** is off on the Mac.
 
+### Subagent monitors in replies
+
+With **both Cantrip Agent and the Mac Cantrip host updated**, replies that spawn
+Copilot subagents show live monitor cards above the text. Each card shows the
+subagent name, status, current work, elapsed time, step count and token count.
+Expand a card for recent steps, the latest subagent message or an error, and tap
+**Stop** on a running or waiting card to stop just that subagent.
+
 ### Video analysis
 
 Use the composer's **+ > Video Library** or **Choose Video File** to attach

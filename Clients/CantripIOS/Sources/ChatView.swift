@@ -2451,6 +2451,9 @@ private struct TurnView: View {
                 if !cantripApps.isEmpty {
                     CantripMCPAppStack(remote: remote, sessionID: cantripSessionID, apps: cantripApps)
                 }
+                if !cantripSubagents.isEmpty {
+                    CantripSubagentStack(remote: remote, sessionID: cantripSessionID, subagents: cantripSubagents)
+                }
                 if !turn.text.isEmpty {
                     if turn.isLocalPrivate == true {
                         Text(verbatim: turn.text).textSelection(.enabled)
@@ -2501,7 +2504,7 @@ private struct TurnView: View {
                         in: RoundedRectangle(cornerRadius: 10)
                     )
                 }
-                if turn.streaming && turn.text.isEmpty && turn.tools.isEmpty && cantripApps.isEmpty {
+                if turn.streaming && turn.text.isEmpty && turn.tools.isEmpty && cantripApps.isEmpty && cantripSubagents.isEmpty {
                     ThinkingView(size: 22, color: .gray)
                 }
                 if let err = turn.error {
@@ -2520,6 +2523,11 @@ private struct TurnView: View {
     private var cantripApps: [CantripRemoteMCPAppSummary] {
         guard turn.role == .assistant else { return [] }
         return remoteMessage?.apps ?? []
+    }
+
+    private var cantripSubagents: [CantripRemoteSubagent] {
+        guard turn.role == .assistant else { return [] }
+        return remoteMessage?.subagents ?? []
     }
 
     private func approvalTitle(_ choice: String) -> String {
