@@ -345,6 +345,16 @@ require a current reference in that session's assistant history. Older replies
 can display previews if their source images remain available. Update and reopen
 the host to activate delivery; a Cantrip Agent-only update cannot read Mac files.
 
+### Interactive views in replies
+
+With **both Cantrip Agent and the Mac Cantrip host updated**, interactive MCP
+App views that Copilot tools return, such as Mobbin screen galleries, appear
+above the reply. Swipe sideways through a gallery and tap a screen to open it
+in Safari. Each view runs isolated in its own web view and can load only the
+domains its server declared. If a view asks to send a message, Cantrip Agent
+shows the exact text for approval first. Views are hidden when **Show
+interactive MCP App views** is off on the Mac.
+
 ### Video analysis
 
 Use the composer's **+ > Video Library** or **Choose Video File** to attach

@@ -1643,14 +1643,17 @@ struct ChatView: View {
             }
             if vm.turns.isEmpty { emptyState }
             ForEach(vm.turns) { turn in
+                let remoteMessage = vm.activeLane == .cantrip ? vm.remoteMessage(for: turn.id) : nil
                 TurnView(
                     turn: turn,
                     remote: remote,
+                    cantripSessionID: vm.activeLane == .cantrip ? remote.selectedSessionID : nil,
+                    remoteMessage: remoteMessage,
                     onAction: { vm.send($0.command) },
                     onApproval: { vm.approveRun($0, for: turn.id) }
                 )
                 .id(turn.id)
-                if vm.activeLane == .cantrip, let message = vm.remoteMessage(for: turn.id),
+                if vm.activeLane == .cantrip, let message = remoteMessage,
                    message.isPreview == true {
                     CantripMessageDetailsButton(model: remote, message: message,
                                                 sessionID: remote.selectedSessionID ?? "")
@@ -2397,6 +2400,8 @@ struct WaveformView: View {
 private struct TurnView: View {
     let turn: ChatTurn
     @ObservedObject var remote: CantripRemoteModel
+    var cantripSessionID: String?
+    var remoteMessage: CantripRemoteMessage?
     var onAction: (ChatAction) -> Void = { _ in }
     var onApproval: (String) -> Void = { _ in }
 
@@ -2442,6 +2447,9 @@ private struct TurnView: View {
                         streaming: turn.streaming,
                         fullToolOutput: turn.executionLane == .cantrip
                     )
+                }
+                if !cantripApps.isEmpty {
+                    CantripMCPAppStack(remote: remote, sessionID: cantripSessionID, apps: cantripApps)
                 }
                 if !turn.text.isEmpty {
                     if turn.isLocalPrivate == true {
@@ -2493,7 +2501,7 @@ private struct TurnView: View {
                         in: RoundedRectangle(cornerRadius: 10)
                     )
                 }
-                if turn.streaming && turn.text.isEmpty && turn.tools.isEmpty {
+                if turn.streaming && turn.text.isEmpty && turn.tools.isEmpty && cantripApps.isEmpty {
                     ThinkingView(size: 22, color: .gray)
                 }
                 if let err = turn.error {
@@ -2507,6 +2515,11 @@ private struct TurnView: View {
 
     private var hasIntermediateSteps: Bool {
         !(turn.thinking?.isEmpty ?? true) || !turn.tools.isEmpty
+    }
+
+    private var cantripApps: [CantripRemoteMCPAppSummary] {
+        guard turn.role == .assistant else { return [] }
+        return remoteMessage?.apps ?? []
     }
 
     private func approvalTitle(_ choice: String) -> String {

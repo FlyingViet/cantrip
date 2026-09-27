@@ -46,6 +46,7 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     let thinking: String
     let author: String?
     let activities: [CantripRemoteActivity]
+    let apps: [CantripRemoteMCPAppSummary]?
     var displayText: String? = nil
     var images: [ChatMessageImage]? = nil
     var isPreview: Bool? = nil
@@ -114,6 +115,19 @@ private struct CantripSessionUpdate: Decodable {
 
 private struct CantripErrorResponse: Decodable {
     let error: String
+}
+
+private struct CantripMCPAppServerResponse: Decodable {
+    let result: [String: MCPAppJSONValue]
+}
+
+private struct CantripMCPAppMessageResponse: Decodable {
+    let accepted: Bool
+    let text: String
+}
+
+private struct CantripMCPAppAcceptedResponse: Decodable {
+    let accepted: Bool
 }
 
 enum CantripRemoteError: LocalizedError {
@@ -594,13 +608,21 @@ struct CantripRemoteAPI {
     var urlSession: URLSession?
 
     static func isContentRead(method: String, path: String) -> Bool {
-        let parts = (URLComponents(string: path)?.path ?? "").split(separator: "/")
+        let parts = (URLComponents(string: path)?.percentEncodedPath ?? "").split(separator: "/")
         return method == "GET" && (
             parts == ["api", "v1", "maintenance"]
                 || parts == ["api", "v1", "memory"] || parts == ["api", "v1", "memory", "document"]
                 || (parts.starts(with: ["api", "v1", "sessions"])
-                    && (parts.count == 4 || (parts.count == 6 && parts[4] == "messages")))
+                    && (parts.count == 4 || (parts.count == 6 && (parts[4] == "messages" || parts[4] == "apps"))))
         )
+    }
+
+    static func pathComponent(_ raw: String) throws -> String {
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        guard !raw.isEmpty,
+              let encoded = raw.addingPercentEncoding(withAllowedCharacters: allowed),
+              !encoded.isEmpty else { throw CantripRemoteError.invalidResponse }
+        return encoded
     }
 
     private static let readSession: URLSession = {
@@ -760,6 +782,55 @@ struct CantripRemoteAPI {
         struct Response: Decodable { let message: CantripRemoteMessage }
         let response: Response = try await request(path: "/api/v1/sessions/\(sessionID)/messages/\(messageID)")
         return response.message
+    }
+
+    private func mcpAppPath(sessionID: String, appID: String) throws -> String {
+        "/api/v1/sessions/\(try Self.pathComponent(sessionID))/apps/\(try Self.pathComponent(appID))"
+    }
+
+    func mcpAppPayload(sessionID: String, appID: String) async throws -> MCPAppPayload {
+        try await request(path: try mcpAppPath(sessionID: sessionID, appID: appID))
+    }
+
+    func mcpAppServerRequest(sessionID: String, appID: String, method: String,
+                             params: [String: Any]) async throws -> [String: Any] {
+        guard ["tools/call", "tools/list", "resources/read"].contains(method),
+              JSONSerialization.isValidJSONObject(params) else {
+            throw MCPAppRequestError.invalidRequest
+        }
+        let body = try JSONSerialization.data(withJSONObject: ["method": method, "params": params])
+        do {
+            let response: CantripMCPAppServerResponse = try await request(
+                path: try mcpAppPath(sessionID: sessionID, appID: appID) + "/request",
+                method: "POST",
+                body: body
+            )
+            return response.result.mapValues { $0.any }
+        } catch CantripRemoteError.http(_, let message) {
+            throw MCPAppRequestError.server(message)
+        }
+    }
+
+    func sendMCPAppMessage(sessionID: String, appID: String, text: String) async throws -> String {
+        let body = try JSONSerialization.data(withJSONObject: ["text": text])
+        let response: CantripMCPAppMessageResponse = try await request(
+            path: try mcpAppPath(sessionID: sessionID, appID: appID) + "/message",
+            method: "POST",
+            body: body
+        )
+        guard response.accepted else { throw CantripRemoteError.invalidResponse }
+        return response.text
+    }
+
+    func updateMCPAppContext(sessionID: String, appID: String, text: String?) async throws {
+        let contextText: Any = text ?? NSNull()
+        let body = try JSONSerialization.data(withJSONObject: ["text": contextText])
+        let response: CantripMCPAppAcceptedResponse = try await request(
+            path: try mcpAppPath(sessionID: sessionID, appID: appID) + "/context",
+            method: "POST",
+            body: body
+        )
+        guard response.accepted else { throw CantripRemoteError.invalidResponse }
     }
 
     func send(
@@ -1727,6 +1798,32 @@ final class CantripRemoteModel: ObservableObject {
     func fullMessage(sessionID: String, messageID: String) async throws -> CantripRemoteMessage {
         try await performHistoryRead { api in
             try await api.fullMessage(sessionID: sessionID, messageID: messageID)
+        }
+    }
+
+    func mcpAppPayload(sessionID: String, appID: String) async throws -> MCPAppPayload {
+        try await performHistoryRead { api in
+            try await api.mcpAppPayload(sessionID: sessionID, appID: appID)
+        }
+    }
+
+    func mcpAppServerRequest(sessionID: String, appID: String, method: String,
+                             params: [String: Any]) async throws -> [String: Any] {
+        try await performAuthenticated(allowFallback: false) { api in
+            try await api.mcpAppServerRequest(sessionID: sessionID, appID: appID, method: method, params: params)
+        }
+    }
+
+    func sendMCPAppMessage(sessionID: String, appID: String, text: String) async throws -> Bool {
+        _ = try await performAuthenticated(allowFallback: false) { api in
+            try await api.sendMCPAppMessage(sessionID: sessionID, appID: appID, text: text)
+        }
+        return true
+    }
+
+    func updateMCPAppContext(sessionID: String, appID: String, text: String?) async throws {
+        try await performAuthenticated(allowFallback: false) { api in
+            try await api.updateMCPAppContext(sessionID: sessionID, appID: appID, text: text)
         }
     }
 
