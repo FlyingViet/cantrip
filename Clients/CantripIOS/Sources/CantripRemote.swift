@@ -40,6 +40,9 @@ struct CantripRemoteActivity: Decodable, Equatable, Identifiable {
 }
 
 enum CantripRemoteSubagentStatus: Equatable {
+    /// Launched but not started: Copilot starts a background agent only once
+    /// the main agent waits for it or ends its turn.
+    case queued
     case running
     case idle
     case completed
@@ -49,6 +52,7 @@ enum CantripRemoteSubagentStatus: Equatable {
 
     init(rawValue: String) {
         switch rawValue {
+        case "queued": self = .queued
         case "running": self = .running
         case "idle": self = .idle
         case "completed": self = .completed
@@ -60,20 +64,21 @@ enum CantripRemoteSubagentStatus: Equatable {
 
     var isLive: Bool {
         switch self {
-        case .running, .idle, .working: return true
+        case .queued, .running, .idle, .working: return true
         case .completed, .failed, .cancelled: return false
         }
     }
 
     var isCancellableState: Bool {
         switch self {
-        case .running, .idle: return true
+        case .queued, .running, .idle: return true
         case .completed, .failed, .cancelled, .working: return false
         }
     }
 
     var displayText: String {
         switch self {
+        case .queued: return "Queued"
         case .running: return "Running"
         case .idle: return "Waiting"
         case .completed: return "Done"

@@ -3,6 +3,8 @@ import SwiftUI
 import UIKit
 
 enum CantripSubagentFormat {
+    static let queuedHint = "Starts when the main agent waits for it or finishes its turn."
+
     static func displayName(for subagent: CantripRemoteSubagent) -> String {
         let name = trimmed(subagent.name)
         if !name.isEmpty { return name }
@@ -274,7 +276,7 @@ struct CantripSubagentCard: View {
     }
 
     private var usesLiveTimeline: Bool {
-        subagent.status == .running || subagent.status == .idle
+        subagent.status == .queued || subagent.status == .running || subagent.status == .idle
     }
 
     private var displayName: String {
@@ -311,6 +313,13 @@ struct CantripSubagentCard: View {
 
             if let summaryLine {
                 Text(summaryLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if subagent.status == .queued {
+                Text(CantripSubagentFormat.queuedHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -385,6 +394,9 @@ struct CantripSubagentCard: View {
     @ViewBuilder
     private var statusIcon: some View {
         switch subagent.status {
+        case .queued:
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
         case .running, .working:
             ProgressView()
                 .controlSize(.small)

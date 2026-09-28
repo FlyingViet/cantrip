@@ -269,6 +269,19 @@ final class CantripSubagentTests: XCTestCase {
         }
     }
 
+    func testQueuedSubagentIsLiveAndStoppable() throws {
+        let messages = try JSONDecoder().decode([CantripRemoteMessage].self, from: Data(#"""
+        [{"id":"m1","role":"assistant","text":"Launched the prompts agent.","thinking":"","activities":[],
+          "subagents":[{"id":"q","agentID":"agent-q","name":"notif-prompts","status":"queued","background":true,"canCancel":true}]}]
+        """#.utf8))
+        let queued = try XCTUnwrap(messages.first?.subagents?.first)
+        XCTAssertEqual(queued.status, .queued)
+        XCTAssertTrue(queued.status.isLive)
+        XCTAssertTrue(queued.status.isCancellableState)
+        XCTAssertEqual(queued.status.displayText, "Queued")
+        XCTAssertEqual(CantripPinnedSubagents.live(in: messages).map(\.id), ["q"])
+    }
+
     func testPinnedSubagentsKeepOnlyLiveOnesAcrossReplies() throws {
         let messages = try JSONDecoder().decode([CantripRemoteMessage].self, from: Data(#"""
         [{"id":"m1","role":"assistant","text":"First","thinking":"","activities":[],
