@@ -41,10 +41,12 @@ extension SessionTabTests {
               await new Promise(resolve => setTimeout(resolve, 150));
               return { cancelled: true };
             }
+            const queued = id === 'agent-q';
             setTimeout(() => {
               emit({ type: 'session.idle', data: {} });
-              emit({ type: 'subagent.completed', agentId: id, data: { toolCallId: 'task-1', agentName: 'explore',
-                agentDisplayName: 'Find tests', cancelled: true, totalTokens: 9000, durationMs: 1500 } });
+              emit({ type: 'subagent.completed', agentId: id, data: { toolCallId: queued ? 'task-q' : 'task-1',
+                agentName: queued ? 'general-purpose' : 'explore', agentDisplayName: queued ? 'notif-prompts' : 'Find tests',
+                cancelled: true, totalTokens: queued ? 0 : 9000, durationMs: 1500 } });
             }, 20);
             return { cancelled: true };
           }
@@ -55,6 +57,19 @@ extension SessionTabTests {
           async send(options) {
             if (!options.prompt.includes('spawn')) { emit({ type: 'session.idle', data: {} }); return 'm'; }
             late = options.prompt.includes('late');
+            if (options.prompt.includes('queue')) {
+              // Copilot CLI 1.0.88 queues a background agent until the root waits for it.
+              running.add('agent-q');
+              setTimeout(() => {
+                emit({ type: 'tool.execution_start', data: { toolCallId: 'task-q', toolName: 'task',
+                  arguments: { description: 'Build notification prompts', agent_type: 'general-purpose',
+                    name: 'notif-prompts', mode: 'background' } } });
+                emit({ type: 'tool.execution_complete', data: { toolCallId: 'task-q', success: true,
+                  result: { content: "Agent started in background with agent_id: agent-q. You'll be notified when it completes." } } });
+                emit({ type: 'assistant.message', data: { messageId: 'root-q', content: 'Launched the prompts agent.' } });
+              }, 10);
+              return 'm';
+            }
             if (late) {
               running.add('agent-2');
               setTimeout(() => {
@@ -254,6 +269,43 @@ extension SessionTabTests {
         precondition(chat.subagent(agentID: "agent-2")?.status == .cancelled,
                      "a late-confirmed stop must not read as done: \(String(describing: chat.subagent(agentID: "agent-2")))")
 
+        // A queued background agent shows from its launch, pinned, and can be stopped before it starts.
+        chat.submit("spawn queue")
+        try await waitForJournalTest {
+            chat.subagent(agentID: "agent-q")?.status == .queued && chat.messages.last?.text.isEmpty == false
+        }
+        let queued = try require(chat.subagent(agentID: "agent-q"))
+        precondition(queued.name == "notif-prompts" && queued.background && queued.canCancel,
+                     "a queued agent should be identified and stoppable: \(queued)")
+        let queuedSnapshot = try await call("api/v1/sessions/\(chat.id)")
+        let queuedSummary = ((queuedSnapshot.1["session"] as? [String: Any])?["messages"] as? [[String: Any]])?
+            .last?["subagents"] as? [[String: Any]]
+        precondition(queuedSummary?.first?["status"] as? String == "queued"
+                     && queuedSummary?.first?["canCancel"] as? Bool == true
+                     && queuedSummary?.first?["textBlock"] == nil,
+                     "remote clients should see the queued agent: \(String(describing: queuedSummary))")
+        let queuedCard = try await webView.callAsyncJavaScript("""
+        const data=await api(`/api/v1/sessions/${sessionID}`);render(data.session);
+        const card=document.querySelector('#liveSubagents .subagent');
+        return {text:card?.textContent||"",stop:Boolean(card?.querySelector('.subagent-stop')),
+          inline:[...document.querySelectorAll('#messages .subagent')].filter(inline=>inline.textContent.includes('notif-prompts')).length,label:card?.getAttribute('aria-label')||""};
+        """, arguments: ["sessionID": chat.id.uuidString], contentWorld: .page) as? [String: Any]
+        let queuedText = queuedCard?["text"] as? String ?? ""
+        precondition(queuedText.contains("notif-prompts") && queuedText.contains("Queued")
+                     && queuedText.contains("Starts when the main agent waits for it")
+                     && queuedCard?["stop"] as? Bool == true && queuedCard?["inline"] as? Int == 0
+                     && (queuedCard?["label"] as? String ?? "").contains("Queued"),
+                     "the browser should pin the queued agent's card: \(String(describing: queuedCard))")
+        try await snapshotSubagentPage(webView, name: "remote-queued")
+        var queuedStop: Result<Bool, Error>?
+        chat.cancelSubagent(agentID: "agent-q") { queuedStop = $0 }
+        try await waitForJournalTest { queuedStop != nil && !chat.isStreaming }
+        guard case .success(true) = queuedStop else { preconditionFailure("\(String(describing: queuedStop))") }
+        let queuedEnd = try require(chat.messages.last)
+        let queuedTask = try require(queuedEnd.activities.first { $0.id == "task-q" })
+        precondition(queuedTask.subagent?.status == .cancelled && queuedEnd.subagentTextBlock("task-q") == 1,
+                     "a queued agent stopped after the reply's text should sit after it: \(String(describing: queuedTask.subagent))")
+
         // Non-SDK backends can show subagents but not stop them.
         let fixture = MCPAppLikeFixture()
         let other = ChatSession(copilotBackend: fixture)
@@ -361,6 +413,7 @@ extension SessionTabTests {
             agent("a", "Map parser callers", "explore", .running, intent: "Reading MessageRouter.swift",
                   tokens: 8_412, steps: [.succeeded, .succeeded, .running]),
             agent("b", "Run session-tab tests", "task", .idle, background: true, tokens: 21_870, steps: [.succeeded]),
+            agent("q", "Build notification prompts", "general-purpose", .queued, background: true, tokens: 0, steps: []),
             agent("c", "Review the diff", "code-review", .completed, tokens: 120_400, steps: [.succeeded, .succeeded]),
             agent("d", "Check iOS build", "task", .failed, tokens: 950, error: "xcodebuild exited with 65",
                   steps: [.failed]),

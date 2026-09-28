@@ -199,6 +199,8 @@ struct CopilotJSONStreamParser {
                     intentionSummary: request["intentionSummary"] as? String
                 )
                 activity.subagent = pendingSubagents.removeValue(forKey: id)
+                    ?? Self.launchedSubagent(toolName: name, arguments: request["arguments"],
+                                             at: Self.date(object["timestamp"]) ?? Date())
                 if let parentID {
                     events += nest(activity, under: parentID)
                 } else {
@@ -253,6 +255,8 @@ struct CopilotJSONStreamParser {
                 arguments: eventData?["arguments"]
             )
             activity.subagent = pendingSubagents.removeValue(forKey: id)
+                ?? Self.launchedSubagent(toolName: name, arguments: eventData?["arguments"],
+                                         at: Self.date(object["timestamp"]) ?? Date())
             if let parentID = subagentParent(object, eventData) {
                 return nest(activity, under: parentID)
             }
@@ -288,6 +292,9 @@ struct CopilotJSONStreamParser {
                 success: success,
                 output: output
             ))
+            if completed.toolName == "task" {
+                completed = noteLaunch(of: completed, success: success, result: result, eventData: eventData)
+            }
             // Only root calls get views; nested subagent calls returned above.
             if let eventData {
                 completed.app = MCPAppPayload.copilot(callID: id, start: mcpStart, complete: eventData)
@@ -313,7 +320,9 @@ struct CopilotJSONStreamParser {
                 startedAt: Self.date(object["timestamp"]) ?? Date(),
                 canCancel: canCancelSubagents
             )
-            if let events = updateSubagent(callID: callID, { $0 = info }) { return events }
+            if let events = updateSubagent(callID: callID, { if $0.status != .cancelled { $0 = info } }) {
+                return events
+            }
             pendingSubagents[callID] = info
             return []
 
@@ -356,6 +365,60 @@ struct CopilotJSONStreamParser {
 
     /// Synthetic event the Cantrip bridge emits once `tasks.cancel` stops an agent.
     static let cancelledEventType = "cantrip.subagent_cancelled"
+
+    /// The card a `task` call shows before Copilot announces the agent. Sync
+    /// agents start right away; background agents wait in Copilot's queue until
+    /// the main agent waits for them or ends its turn.
+    private static func launchedSubagent(toolName: String, arguments: Any?, at date: Date) -> SubagentInfo? {
+        guard toolName == "task" else { return nil }
+        let arguments = arguments as? [String: Any] ?? [:]
+        let background = arguments["mode"] as? String == "background"
+        var info = SubagentInfo(
+            agentID: "",
+            name: nonEmpty(arguments["name"]) ?? "",
+            agentType: nonEmpty(arguments["agent_type"]) ?? "",
+            summary: nonEmpty(arguments["description"]) ?? "",
+            model: nonEmpty(arguments["model"]),
+            background: background,
+            status: background ? .queued : .running,
+            startedAt: date
+        )
+        info.effort = nonEmpty(arguments["reasoning_effort"])
+        return info
+    }
+
+    /// A background task call returns at once with the agent's ID, which Stop
+    /// needs. A failed call means the agent never ran.
+    private mutating func noteLaunch(of activity: ToolActivity, success: Bool,
+                                     result: [String: Any]?, eventData: [String: Any]?) -> ToolActivity {
+        guard var info = activity.subagent, info.isActive else { return activity }
+        var activity = activity
+        if !success {
+            info.status = .failed
+            info.finishedAt = info.finishedAt ?? Date()
+            info.canCancel = false
+            let error = (eventData?["error"] as? [String: Any])?["message"] ?? eventData?["error"]
+                ?? result?["content"]
+            info.error = info.error ?? (error as? String).flatMap { SubagentInfo.clipped($0) }
+        } else if info.agentID.isEmpty, let content = result?["content"] as? String,
+                  let agentID = Self.backgroundAgentID(in: content) {
+            info.agentID = agentID
+            info.canCancel = canCancelSubagents
+            agentParents[agentID] = activity.id
+        }
+        activity.subagent = info
+        return activity
+    }
+
+    /// "Agent started in background with agent_id: <id>. ..."
+    static func backgroundAgentID(in content: String) -> String? {
+        guard let marker = content.range(of: "agent_id:") else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        let id = content[marker.upperBound...].drop { $0 == " " }
+            .prefix { $0.unicodeScalars.allSatisfy(allowed.contains) }
+        let trimmed = String(id).trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     /// A sync subagent is over once its task call returns, even without a report.
     private static func endingSyncSubagent(_ activity: ToolActivity) -> ToolActivity {
