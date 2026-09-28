@@ -73,7 +73,7 @@ test-package-tracking:
 test-recovery:
 	@BIN="/tmp/cantrip-recovery-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/Log.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-run-journal:

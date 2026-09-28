@@ -20,6 +20,14 @@ means your checkout is newer/different than the running app.
 Pulling source or running `make build` alone does not replace and relaunch the
 app bundle.
 
+To see which build you are on, open the **gear** and scroll to **Version**.
+It lists **This build** (running), **Next launch** (a staged build waiting
+for a reopen), and **Latest on GitHub**, each as version (build number),
+commit, and date. The status line says whether you are up to date. Use the
+refresh button to check GitHub now, **Update and Restart** to pull, rebuild,
+and relaunch, or **Restart to Install** to activate a staged build. Restart
+stays disabled while any tab is running, queued, or running a shell command.
+
 For a manual update, use Terminal, not a Cantrip task that you need to keep
 alive. The following assumes the standard installation path:
 
