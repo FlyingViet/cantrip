@@ -13,7 +13,7 @@ struct CantripTabsEntry: TimelineEntry {
             generatedAt: now, hostName: "Mac mini", running: 2, needsInput: 1, total: 6,
             tabs: [
                 CantripLiveTab(id: UUID().uuidString, title: "Deploy the widget", state: "input",
-                               startedAt: now - 300, detail: "Approve the TestFlight upload"),
+                               startedAt: now - 300, detail: "Approve the TestFlight upload", inputKind: "approval"),
                 CantripLiveTab(id: UUID().uuidString, title: "Audit notifications", state: "running",
                                startedAt: now - 1_260, detail: "Running the test suite", subagents: 1),
                 CantripLiveTab(id: UUID().uuidString, title: "Resume review", state: "running",

@@ -28,7 +28,7 @@ final class CantripLiveStatusTests: XCTestCase {
     private let hostJSON = #"""
     {"version":1,"generatedAt":1790577000.5,"hostName":"Mac mini","running":1,"needsInput":1,"total":9,
      "tabs":[{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","title":"Deploy it","state":"input","startedAt":1790576700,
-              "finishedAt":null,"detail":"Approve the upload","queued":0,"subagents":0},
+              "finishedAt":null,"detail":"Approve the upload","queued":0,"subagents":0,"inputKind":"approval"},
              {"id":"7F9619FF-8B86-D011-B42D-00C04FC964FF","title":"Audit notifications","state":"running",
               "startedAt":1790575740,"finishedAt":null,"detail":"Running tests","queued":2,"subagents":1},
              {"id":"8F9619FF-8B86-D011-B42D-00C04FC964FF","title":"","state":"done","startedAt":null,
@@ -48,6 +48,22 @@ final class CantripLiveStatusTests: XCTestCase {
         XCTAssertEqual(snapshot.tabs[3].queued, 0, "missing counts default to zero")
         XCTAssertEqual(snapshot.summary, "1 needs input · 1 running")
         XCTAssertTrue(snapshot.isActive)
+        XCTAssertEqual(snapshot.tabs[0].request, .approval)
+        XCTAssertNil(snapshot.tabs[1].request, "only waiting tabs carry a request")
+        XCTAssertEqual(snapshot.waitingTab?.id, "6F9619FF-8B86-D011-B42D-00C04FC964FF")
+        XCTAssertEqual(CantripLiveFormat.accessibility(snapshot.tabs[0]), "Deploy it, Approval needed, Approve the upload")
+    }
+
+    func testRequestKinds() {
+        XCTAssertEqual(CantripLiveRequest(kind: "question").title, "Question for you")
+        XCTAssertEqual(CantripLiveRequest(kind: "secret").shortTitle, "Password")
+        XCTAssertEqual(CantripLiveRequest(kind: "login"), .login)
+        XCTAssertEqual(CantripLiveRequest(kind: "localAction").title, "Action needed on Mac")
+        XCTAssertEqual(CantripLiveRequest(kind: nil).title, "Needs your response", "older Macs send no kind")
+        XCTAssertEqual(CantripLiveRequest(kind: "something-new"), .other)
+        let waiting = CantripLiveTab(id: "x", title: "T", state: "input")
+        XCTAssertEqual(waiting.request, .other)
+        XCTAssertNil(CantripLiveTab(id: "y", title: "T", state: "running", inputKind: "approval").request)
     }
 
     func testLiveActivityStateCarriesAtMostFiveTabs() throws {
@@ -61,6 +77,17 @@ final class CantripLiveStatusTests: XCTestCase {
         let decoded = try JSONDecoder().decode(CantripTabsAttributes.ContentState.self, from: Data(pushed.utf8))
         XCTAssertEqual(decoded.tabs.first?.status, .running)
         XCTAssertEqual(decoded.summary, "1 running")
+        XCTAssertNil(decoded.waitingTab)
+        XCTAssertEqual(decoded.primaryLink, CantripDeepLink.tabs(serverID: nil))
+
+        let waiting = #"{"tabs":[{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","title":"Deploy","state":"input","detail":"Which environment?","inputKind":"question"},{"id":"y","title":"T","state":"running","startedAt":1}],"running":1,"needsInput":1,"total":2,"updatedAt":2}"#
+        let asking = try JSONDecoder().decode(CantripTabsAttributes.ContentState.self, from: Data(waiting.utf8))
+        XCTAssertEqual(asking.waitingTab?.request, .question)
+        XCTAssertEqual(asking.waitingTab?.detail, "Which environment?")
+        XCTAssertEqual(asking.primaryLink, CantripDeepLink.tab("6F9619FF-8B86-D011-B42D-00C04FC964FF", serverID: nil),
+                       "tapping the activity opens the tab that's waiting")
+        XCTAssertEqual(try JSONDecoder().decode(CantripTabsAttributes.ContentState.self,
+                                                from: JSONEncoder().encode(asking)), asking)
     }
 
     func testSummaries() {
@@ -149,6 +176,8 @@ final class CantripLiveStatusTests: XCTestCase {
         XCTAssertEqual(fields["installationID"] as? String, installation.uuidString)
         XCTAssertEqual(fields["liveActivities"] as? Bool, true)
         XCTAssertEqual(fields["startToken"] as? String, "")
+        XCTAssertNil(fields["activityToken"], "an unknown activity state must not clear the Mac's update token")
+        XCTAssertNil(fields["activityID"])
 
         fields = try XCTUnwrap(controller.subscriptionFields(activitiesAllowed: false))
         XCTAssertEqual(fields["liveActivities"] as? Bool, false, "iOS Live Activities setting off")

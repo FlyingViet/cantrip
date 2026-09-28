@@ -44,6 +44,56 @@ enum CantripLiveTabState: String, Codable, Hashable {
     }
 }
 
+/// What a waiting tab asks for, from the Mac's `inputKind`.
+enum CantripLiveRequest: Equatable {
+    case approval, question, secret, login, macAction, other
+
+    init(kind: String?) {
+        switch kind {
+        case "approval": self = .approval
+        case "question": self = .question
+        case "secret": self = .secret
+        case "login": self = .login
+        case "localAction": self = .macAction
+        default: self = .other
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .approval: return "Approval needed"
+        case .question: return "Question for you"
+        case .secret: return "Password needed"
+        case .login: return "Sign-in needed"
+        case .macAction: return "Action needed on Mac"
+        case .other: return "Needs your response"
+        }
+    }
+
+    /// Fits the trailing edge of a tab row.
+    var shortTitle: String {
+        switch self {
+        case .approval: return "Approval"
+        case .question: return "Question"
+        case .secret: return "Password"
+        case .login: return "Sign-in"
+        case .macAction: return "On Mac"
+        case .other: return "Needs input"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .approval: return "hand.raised.fill"
+        case .question: return "questionmark.bubble.fill"
+        case .secret: return "key.fill"
+        case .login: return "person.badge.key.fill"
+        case .macAction: return "desktopcomputer"
+        case .other: return "exclamationmark.bubble.fill"
+        }
+    }
+}
+
 struct CantripLiveTab: Codable, Hashable, Identifiable {
     let id: String
     let title: String
@@ -53,22 +103,26 @@ struct CantripLiveTab: Codable, Hashable, Identifiable {
     var detail: String?
     var queued: Int = 0
     var subagents: Int = 0
+    /// approval, question, secret, login or localAction; set only while the tab waits.
+    var inputKind: String?
 
     /// Unknown states from a newer host read as running rather than failing to decode.
     var status: CantripLiveTabState { CantripLiveTabState(rawValue: state) ?? .running }
     var startDate: Date? { startedAt.map(Date.init(timeIntervalSince1970:)) }
     var finishDate: Date? { finishedAt.map(Date.init(timeIntervalSince1970:)) }
+    /// The pending request while the tab waits for a response.
+    var request: CantripLiveRequest? { status == .input ? CantripLiveRequest(kind: inputKind) : nil }
     var displayTitle: String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled tab" : trimmed
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, state, startedAt, finishedAt, detail, queued, subagents
+        case id, title, state, startedAt, finishedAt, detail, queued, subagents, inputKind
     }
 
     init(id: String, title: String, state: String, startedAt: Double? = nil, finishedAt: Double? = nil,
-         detail: String? = nil, queued: Int = 0, subagents: Int = 0) {
+         detail: String? = nil, queued: Int = 0, subagents: Int = 0, inputKind: String? = nil) {
         self.id = id
         self.title = title
         self.state = state
@@ -77,6 +131,7 @@ struct CantripLiveTab: Codable, Hashable, Identifiable {
         self.detail = detail
         self.queued = queued
         self.subagents = subagents
+        self.inputKind = inputKind
     }
 
     init(from decoder: Decoder) throws {
@@ -89,6 +144,7 @@ struct CantripLiveTab: Codable, Hashable, Identifiable {
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
         queued = try container.decodeIfPresent(Int.self, forKey: .queued) ?? 0
         subagents = try container.decodeIfPresent(Int.self, forKey: .subagents) ?? 0
+        inputKind = try container.decodeIfPresent(String.self, forKey: .inputKind)
     }
 }
 
@@ -106,6 +162,7 @@ struct CantripLiveStatusSnapshot: Codable, Equatable {
 
     var summary: String { CantripLiveFormat.summary(running: running, needsInput: needsInput, total: total) }
     var isActive: Bool { running + needsInput > 0 }
+    var waitingTab: CantripLiveTab? { tabs.first { $0.status == .input } }
 }
 
 /// What the widget last knew, and when it learned it.
@@ -125,6 +182,12 @@ struct CantripTabsAttributes: ActivityAttributes {
 
         var summary: String { CantripLiveFormat.summary(running: running, needsInput: needsInput, total: total) }
         var isActive: Bool { running + needsInput > 0 }
+        /// The Mac lists waiting tabs first; the first one leads the Live Activity.
+        var waitingTab: CantripLiveTab? { tabs.first { $0.status == .input } }
+        /// Tapping the activity opens the tab that needs a response, if any.
+        var primaryLink: URL {
+            waitingTab.map { CantripDeepLink.tab($0.id, serverID: nil) } ?? CantripDeepLink.tabs(serverID: nil)
+        }
         /// The longest-running tab drives the compact Dynamic Island timer.
         var oldestRunningStart: Date? {
             tabs.filter { $0.status == .running }.compactMap(\.startDate).min()
@@ -157,7 +220,7 @@ enum CantripLiveFormat {
     }
 
     static func accessibility(_ tab: CantripLiveTab, now: Date = Date()) -> String {
-        var parts = [tab.displayTitle, tab.status.label]
+        var parts = [tab.displayTitle, tab.request?.title ?? tab.status.label]
         if let finished = tab.finishDate, !tab.status.isActive {
             parts.append(RelativeDateTimeFormatter().localizedString(for: finished, relativeTo: now))
         }
@@ -344,6 +407,68 @@ enum CantripLiveStatusFetcher {
     }
 }
 
+/// The tab waiting for a response, shown above the other tabs in the Live Activity.
+struct CantripLiveRequestCallout: View {
+    let tab: CantripLiveTab
+    /// Other tabs also waiting.
+    var others = 0
+    var compact = false
+
+    private var request: CantripLiveRequest { tab.request ?? .other }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: request.symbol)
+                .font(compact ? .footnote.weight(.semibold) : .callout.weight(.semibold))
+                .foregroundStyle(Color.orange)
+                .frame(width: compact ? 16 : 22)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    // Primary text keeps contrast on the tinted background; orange marks the icon and edge.
+                    Text(request.title)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.primary)
+                    Text("· \(tab.displayTitle)")
+                        .font(.caption)
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(1)
+                        .privacySensitive()
+                    Spacer(minLength: 4)
+                    if others > 0 {
+                        Text("+\(others) waiting")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(Color.secondary)
+                    }
+                }
+                .lineLimit(1)
+                Text(tab.detail?.isEmpty == false ? tab.detail! : "Open the tab to respond.")
+                    .font(compact ? .caption : .footnote.weight(.medium))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(compact ? 1 : 2)
+                    .multilineTextAlignment(.leading)
+                    .privacySensitive()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, compact ? 8 : 10)
+        .padding(.vertical, compact ? 6 : 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.18), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.orange.opacity(0.6)))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityText)
+        .accessibilityHint("Opens the tab so you can respond.")
+    }
+
+    private var accessibilityText: String {
+        var parts = ["\(request.title) in \(tab.displayTitle)"]
+        if let detail = tab.detail, !detail.isEmpty { parts.append(detail) }
+        if others > 0 { parts.append("\(others) more tab\(others == 1 ? "" : "s") waiting") }
+        return parts.joined(separator: ", ")
+    }
+}
+
 /// One tab row for the widget and the Live Activity.
 struct CantripLiveTabRow: View {
     let tab: CantripLiveTab
@@ -402,7 +527,7 @@ struct CantripLiveTabRow: View {
                 Text("Running")
             }
         case .input:
-            Text("Needs input")
+            Text(tab.request?.shortTitle ?? tab.status.label)
         case .done, .failed, .stopped:
             if let finished = tab.finishDate {
                 Text(finished, format: .relative(presentation: .named, unitsStyle: .abbreviated))
