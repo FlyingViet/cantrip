@@ -176,6 +176,7 @@ final class AgentGatewayAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         CantripNotifications.shared.install()
+        CantripLiveStatusController.shared.start()
         return true
     }
 
@@ -238,6 +239,7 @@ struct CantripNotificationSettingsSection: View {
         .onChange(of: visibleStatus) { _, value in
             if let value { UIAccessibility.post(notification: .announcement, argument: value) }
         }
+        CantripLiveStatusSettingsSection()
     }
 
     private func update(_ enable: Bool) {

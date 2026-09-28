@@ -4,5 +4,11 @@
 <dict>
     <key>aps-environment</key>
     <string>$(APS_ENVIRONMENT)</string>
+    <!-- The app's own group stays first so existing Keychain items keep their default group. -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)com.itzhoang.hermbot</string>
+        <string>$(AppIdentifierPrefix)com.itzhoang.hermbot.shared</string>
+    </array>
 </dict>
 </plist>

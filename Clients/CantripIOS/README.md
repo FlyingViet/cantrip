@@ -659,6 +659,30 @@ settings determine when the alert appears; delivery is not guaranteed.
 The tab title and preview pass through Apple and can appear on your Lock Screen.
 There is no extra AI summarization request or third-party notification relay.
 
+### Cantrip Tabs widget and Live Activity
+
+Add **Cantrip Tabs** from the Home Screen widget gallery in medium (4x2) or
+large (4x4) size. It lists the selected Mac's tabs: needs input first, then
+running tabs with a live timer, then finished tabs (**Done**, **Failed** or
+**Stopped**) with how long ago they ended. The large size adds each running
+tab's current step, subagent count and queued prompts. Tap the widget to open
+Cantrip Agent, or tap a row to open that tab.
+
+While any tab is running or needs input, a **Live Activity** shows the same rows
+on the Lock Screen and in the Dynamic Island, with a timer for the longest
+running tab. It ends about a minute after the last tab finishes and stays on the
+Lock Screen for 15 minutes. Turn it off in **Settings > Widget and Live
+Activity**; iOS Settings can also disable Live Activities for the app.
+
+The Mac refreshes both with Apple push (widget refreshes and Live Activity
+updates), using the same `~/.config/Cantrip/apns.json` key as alerts, and needs
+an updated Mac host (`/api/v1/live-status`). iOS budgets widget refreshes, so
+the widget can lag by a few minutes; timers keep counting on their own. Away
+from the app, the widget reads status over the saved Tailscale URL; a
+local-network-only pairing refreshes the widget whenever the app is open.
+Private tabs are never included. Tab titles and current steps can appear on the
+Lock Screen and are hidden when iOS redacts widgets on a locked device.
+
 ### GitHub build queue
 
 Open **hamburger menu > GitHub Builds** from any chat lane to see builds
