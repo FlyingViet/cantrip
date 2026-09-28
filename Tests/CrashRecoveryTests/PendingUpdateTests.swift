@@ -34,6 +34,7 @@ func pendingUpdateFailures() throws -> [String] {
     try makeBundle(app, build: "old", date: "2026-09-26T15:44:57Z")
     expect(PendingUpdate.install(app: app, validate: valid, otherInstanceRunning: idle) == .none,
            "launch without a staged build should do nothing")
+    expect(PendingUpdate.stagedBuild(for: app) == nil, "without a staged build none is reported")
     expect(PendingUpdate.nextLaunchBundle(for: app) == app, "without a staged build the app itself launches next")
 
     // A running process keeps its executable identity until the file is replaced.
@@ -43,6 +44,8 @@ func pendingUpdateFailures() throws -> [String] {
 
     try makeBundle(pending, build: "new", date: "2026-09-26T19:00:00Z")
     expect(PendingUpdate.nextLaunchBundle(for: app) == pending, "a staged build is what the next launch installs")
+    expect(PendingUpdate.stagedBuild(for: app) == .init(identity: "new", date: "2026-09-26T19:00:00Z"),
+           "Settings should report the staged build")
     expect(!PendingUpdate.launchedExecutableReplaced(executable), "staging must leave the running app's files alone")
 
     var checks = 0
@@ -67,6 +70,7 @@ func pendingUpdateFailures() throws -> [String] {
     expect(build(app) == "new" && !exists(pending), "an invalid build must never replace the app")
 
     try makeBundle(pending, build: "older", date: "2026-09-26T18:00:00Z")
+    expect(PendingUpdate.stagedBuild(for: app) == nil, "a staged build the next launch discards is not reported")
     let older = PendingUpdate.install(app: app, validate: valid, otherInstanceRunning: idle)
     if case .discarded = older {} else { failures.append("a staged build older than the app should be discarded") }
     expect(build(app) == "new" && !exists(pending), "an older build must never replace the app")

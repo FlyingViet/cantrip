@@ -802,7 +802,11 @@ struct LauncherView: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
-            SettingsView()
+            SettingsView(
+                busySessions: manager.sessions.filter {
+                    $0.isStreaming || !$0.queued.isEmpty || $0.shell.isRunning
+                }.count,
+                onUpdate: { session.submit("!" + UpdateChecker.shared.updateCommand) })
             Spacer(minLength: 0)
         }
         .frame(width: CGFloat(settingsPaneUserWidth), alignment: .topLeading)
@@ -2858,6 +2862,8 @@ private struct DiffView: View {
 
 struct SettingsView: View {
     @ObservedObject var settings = AppSettings.shared
+    var busySessions = 0
+    var onUpdate: (() -> Void)?
 
     var body: some View {
         ScrollView(.vertical) {
@@ -3050,6 +3056,8 @@ struct SettingsView: View {
                     Text("· \(loc)").font(.caption).foregroundStyle(.tertiary)
                 }
             }
+            Divider().opacity(0.3)
+            CantripVersionView(busySessions: busySessions, onUpdate: onUpdate)
         }
         .padding(16)
     }

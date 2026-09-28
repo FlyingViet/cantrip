@@ -51,6 +51,9 @@ expect(roundTrip == report, "crash reports should survive persistence")
 for failure in try pendingUpdateFailures() {
     expect(false, failure)
 }
+for failure in cantripVersionFailures() {
+    expect(false, failure)
+}
 
 if failures == 0 {
     print("Crash recovery tests passed")

@@ -39,6 +39,20 @@ enum PendingUpdate {
         return isDirectory(pending) ? pending : app
     }
 
+    struct StagedBuild: Equatable {
+        let identity: String
+        let date: String?
+    }
+
+    /// The staged build that the next launch will install. Builds the next
+    /// launch would discard as not newer are left out.
+    static func stagedBuild(for app: URL) -> StagedBuild? {
+        let pending = pendingURL(for: app)
+        guard isDirectory(pending), let identity = buildIdentity(of: pending),
+              notNewerProblem(pending: pending, installed: app) == nil else { return nil }
+        return StagedBuild(identity: identity, date: buildDate(of: pending))
+    }
+
     /// Runs first at launch. When a staged build is installed, this process
     /// hands off to a fresh launch of the updated app before the app starts.
     static func installIfReady() {

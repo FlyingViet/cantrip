@@ -13,9 +13,13 @@ final class UpdateChecker: ObservableObject {
     @Published private(set) var staleBuild = false
     /// Anything that the update/rebuild chip should appear for.
     var updateAvailable: Bool { commitsBehind > 0 || staleBuild }
+    /// Running, staged, and latest GitHub versions for Settings.
+    @Published private(set) var versionReport: CantripVersionReport
+    @Published private(set) var isChecking = false
     private var lastCheck = Date.distantPast
-    private var checking = false
-    private init() {}
+    private init() {
+        versionReport = Self.localReport(repositoryAvailable: true)
+    }
 
     /// The repo is wherever the .app lives.
     private var repoPath: String {
@@ -24,20 +28,42 @@ final class UpdateChecker: ObservableObject {
 
     /// Checks on every panel show (lightly debounced so rapid
     /// summon/dismiss cycles don't spam git fetch).
-    func checkIfDue() {
-        guard Date().timeIntervalSince(lastCheck) > 30, !checking else { return }
-        guard FileManager.default.fileExists(atPath: repoPath + "/.git") else { return }
+    func checkIfDue() { check(force: false) }
+
+    /// Checks right away, e.g. from the Settings refresh button.
+    func checkNow() { check(force: true) }
+
+    private func check(force: Bool) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.check(force: force) }
+            return
+        }
+        guard !isChecking, force || Date().timeIntervalSince(lastCheck) > 30 else { return }
+        guard FileManager.default.fileExists(atPath: repoPath + "/.git") else {
+            versionReport = Self.localReport(repositoryAvailable: false)
+            return
+        }
         lastCheck = Date()
-        checking = true
+        isChecking = true
+        let repoPath = repoPath
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            defer { self.checking = false }
+            var report = Self.localReport(repositoryAvailable: true)
+            defer {
+                report.checkedAt = Date()
+                let finished = report
+                DispatchQueue.main.async {
+                    self.versionReport = finished
+                    self.isChecking = false
+                }
+            }
 
             // Local staleness first — needs no network: does the source
             // checkout describe differently than the build we're running?
             let buildIdentity = CrashRecovery.buildIdentity
-            if buildIdentity != "development",
-               let sourceIdentity = Self.sourceIdentity(in: self.repoPath) {
+            let sourceIdentity = Self.sourceIdentity(in: repoPath)
+            report.source = sourceIdentity.map(CantripBuildVersion.init(identity:))
+            if buildIdentity != "development", let sourceIdentity {
                 let stale = sourceIdentity != buildIdentity
                 DispatchQueue.main.async {
                     guard self.staleBuild != stale else { return }
@@ -48,14 +74,51 @@ final class UpdateChecker: ObservableObject {
                 }
             }
 
-            guard Self.git(["fetch", "--quiet", "origin"], in: self.repoPath) != nil,
-                  let countText = Self.git(["rev-list", "--count", "HEAD..origin/main"],
-                                           in: self.repoPath),
+            let fetched = Self.git(["fetch", "--quiet", "origin"], in: repoPath) != nil
+            report.fetchFailed = !fetched
+            // After a failed fetch the last fetched origin/main still says
+            // what was latest then; Settings labels it as such.
+            Self.addLatest(to: &report, in: repoPath)
+
+            guard fetched,
+                  let countText = Self.git(["rev-list", "--count", "HEAD..origin/main"], in: repoPath),
                   let count = Int(countText) else { return }
             DispatchQueue.main.async {
                 self.commitsBehind = count
                 if count > 0 { Log.write("update: \(count) commit(s) behind origin/main") }
             }
+        }
+    }
+
+    private static func localReport(repositoryAvailable: Bool) -> CantripVersionReport {
+        var report = CantripVersionReport(runningIdentity: CrashRecovery.buildIdentity,
+                                          runningDate: CrashRecovery.buildDate)
+        report.repositoryAvailable = repositoryAvailable
+        if let staged = PendingUpdate.stagedBuild(for: Bundle.main.bundleURL) {
+            report.staged = CantripBuildVersion(identity: staged.identity)
+            report.stagedDate = staged.date.flatMap(CantripVersionReport.parseDate)
+        }
+        return report
+    }
+
+    private static func addLatest(to report: inout CantripVersionReport, in dir: String) {
+        let latest = "origin/main"
+        guard let identity = git(["describe", "--always", latest], in: dir), !identity.isEmpty else { return }
+        report.latest = CantripBuildVersion(identity: identity)
+        if let log = git(["log", "-1", "--format=%s%x1f%cI", latest], in: dir) {
+            let fields = log.components(separatedBy: "\u{1f}")
+            report.latestSubject = fields.first.flatMap { $0.isEmpty ? nil : $0 }
+            report.latestDate = fields.count > 1 ? CantripVersionReport.parseDate(fields[1]) : nil
+        }
+        func count(_ range: String) -> Int? {
+            git(["rev-list", "--count", range], in: dir).flatMap { Int($0) }
+        }
+        if let running = report.running.gitRevision {
+            report.runningBehind = count("\(running)..\(latest)")
+            report.runningAhead = count("\(latest)..\(running)")
+        }
+        if let staged = report.staged?.gitRevision {
+            report.stagedBehind = count("\(staged)..\(latest)")
         }
     }
 
