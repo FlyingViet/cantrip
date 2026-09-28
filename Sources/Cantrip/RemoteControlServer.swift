@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import CryptoKit
+import Combine
 
 /// Authenticated HTTP control plane for the live sessions owned by the app.
 /// Loopback HTTP remains available for Tailscale Serve. A separate Bonjour
@@ -23,6 +24,7 @@ final class RemoteControlServer {
     private let buildMonitor: GitHubBuildMonitor
     private let usage: UsageTracker
     private let notifications: RemoteNotifications
+    private let liveStatus: RemoteLiveStatus
     private let generatedImages = RemoteGeneratedImages.Store()
     private var maintenance: RemoteMaintenance?
     /// Single-use MCP App view addresses (main actor), valid for a minute.
@@ -30,11 +32,15 @@ final class RemoteControlServer {
     private let desktopOverride: RemoteDesktop?
     private let notificationLifecycleLock = NSLock()
     private var notificationLifecycleTask: Task<Void, Never>?
+    private let liveStatusLifecycleLock = NSLock()
+    private var liveStatusLifecycleTask: Task<Void, Never>?
+    private var liveStatusObservation: AnyCancellable?
     private let maximumRequestBytes = RemoteImageAttachments.maximumRequestBytes
 
     init(manager: SessionManager, buildMonitor: GitHubBuildMonitor = GitHubBuildMonitor(),
          usage: UsageTracker = .shared,
          notifications: RemoteNotifications = RemoteNotifications(),
+         liveStatus: RemoteLiveStatus = RemoteLiveStatus(),
          maintenance: RemoteMaintenance? = nil,
          desktop: RemoteDesktop? = nil,
          encodingQueue: DispatchQueue = DispatchQueue(label: "cantrip.remote-encoding", qos: .userInitiated),
@@ -44,6 +50,7 @@ final class RemoteControlServer {
         self.buildMonitor = buildMonitor
         self.usage = usage
         self.notifications = notifications
+        self.liveStatus = liveStatus
         self.maintenance = maintenance
         desktopOverride = desktop
         self.encodingQueue = encodingQueue
@@ -95,6 +102,7 @@ final class RemoteControlServer {
             activePort = port
             self.token = token
             updateNotificationActivation(fingerprint: RemoteLANProtocol.tokenFingerprint(token))
+            updateLiveStatusActivation(fingerprint: RemoteLANProtocol.tokenFingerprint(token))
             listener.start(queue: queue)
             startLANListener(token: token)
         } catch {
@@ -107,6 +115,7 @@ final class RemoteControlServer {
         let desktop = desktopOverride
         Task { @MainActor in (desktop ?? RemoteDesktop.shared).stop() }
         updateNotificationActivation(fingerprint: nil)
+        updateLiveStatusActivation(fingerprint: nil)
         listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
@@ -257,6 +266,88 @@ final class RemoteControlServer {
         }
     }
 
+    private func updateLiveStatusActivation(fingerprint: String?) {
+        liveStatusLifecycleLock.lock()
+        let previous = liveStatusLifecycleTask
+        liveStatusLifecycleTask = Task {
+            await previous?.value
+            await liveStatus.activate(fingerprint: fingerprint)
+        }
+        liveStatusLifecycleLock.unlock()
+        Task { @MainActor [weak self] in
+            if fingerprint == nil { self?.liveStatusObservation = nil }
+            else { self?.startLiveStatusObservation() }
+        }
+    }
+
+    private func currentLiveStatusActivation() -> Task<Void, Never>? {
+        liveStatusLifecycleLock.lock()
+        defer { liveStatusLifecycleLock.unlock() }
+        return liveStatusLifecycleTask
+    }
+
+    @MainActor
+    private func startLiveStatusObservation() {
+        guard liveStatusObservation == nil else {
+            publishLiveStatusSnapshot()
+            return
+        }
+        // Throttle, not debounce: a streaming tab changes constantly, and another
+        // tab finishing must still be published.
+        liveStatusObservation = manager?.objectWillChange
+            .throttle(for: .milliseconds(1500), scheduler: DispatchQueue.main, latest: true)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.publishLiveStatusSnapshot() }
+            }
+        publishLiveStatusSnapshot()
+    }
+
+    @MainActor
+    private func publishLiveStatusSnapshot() {
+        guard !token.isEmpty, let manager else { return }
+        let snapshot = liveStatusSnapshot(from: manager)
+        let activation = currentLiveStatusActivation()
+        Task { [liveStatus] in
+            await activation?.value
+            await liveStatus.update(snapshot)
+        }
+    }
+
+    @MainActor
+    private func liveStatusSnapshot(from manager: SessionManager) -> LiveStatusSnapshot {
+        LiveStatusSnapshot.build(from: manager.sessions.map { session in
+            LiveStatusSession(
+                id: session.id,
+                title: session.title,
+                customTitle: session.tabMetadata.customTitle,
+                isPrivate: session.isPrivate,
+                isLocalPrivate: session.isLocalPrivate,
+                isStreaming: session.isStreaming,
+                statusText: session.statusText,
+                currentActivityTitle: session.currentActivity?.title,
+                queued: session.queued.count,
+                pendingInputs: session.pendingInputs.map { LiveStatusInput(title: $0.title) },
+                currentRunStartedAt: session.currentRunStart,
+                lastRunOutcome: session.lastRunOutcome,
+                activeSubagents: activeSubagents(in: session)
+            )
+        })
+    }
+
+    @MainActor
+    private func activeSubagents(in session: ChatSession) -> Int {
+        let messages: [ChatMessage]
+        if let runID = session.currentRunIdentifier {
+            messages = session.messages.filter { $0.runID == runID && $0.role == .assistant }
+        } else if let latest = session.messages.last(where: { $0.role == .assistant }) {
+            messages = [latest]
+        } else {
+            messages = []
+        }
+        return messages.flatMap(\.activities).flatMap(\.subagentActivities)
+            .filter { $0.subagent?.isActive == true }.count
+    }
+
     private func startLANListener(token: String) {
         do {
             let listener = try NWListener(using: RemoteLANProtocol.parameters(token: token))
@@ -369,6 +460,8 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/memory"
                 || request.path == "/api/v1/memory/document"
                 || request.path == "/api/v1/notifications"
+                || request.path == "/api/v1/live-status"
+                || request.path == "/api/v1/live-status/subscription"
                 || request.path == "/api/v1/maintenance"
                 || request.path == "/api/v1/mac-access"
                 || request.path.hasPrefix("/api/v1/desktop/")
@@ -455,6 +548,44 @@ final class RemoteControlServer {
             }
             return
         }
+        if request.path == "/api/v1/live-status/subscription" {
+            let fingerprint = RemoteLANProtocol.tokenFingerprint(token)
+            guard ["GET", "POST", "DELETE"].contains(request.method) else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            guard request.body.count <= 4096 else {
+                sendError(413, "live status subscription is too large", on: connection)
+                return
+            }
+            let activation = currentLiveStatusActivation()
+            Task {
+                do {
+                    await activation?.value
+                    if request.method == "POST" {
+                        guard let json = request.json else {
+                            throw RemotePushError(status: 400, message: "Invalid live status subscription.")
+                        }
+                        try await liveStatus.merge(RemoteLiveStatusSubscriptionUpdate(json: json),
+                                                   fingerprint: fingerprint)
+                    } else if request.method == "DELETE" {
+                        guard let json = request.json else {
+                            throw RemotePushError(status: 400, message: "Invalid live status subscription removal.")
+                        }
+                        try await liveStatus.unregister(RemoteLiveStatusSubscriptionRemoval(json: json),
+                                                        fingerprint: fingerprint)
+                    }
+                    let status = await liveStatus.status()
+                    sendEncoded(on: connection) { try JSONEncoder().encode(status) }
+                } catch let error as RemotePushError {
+                    sendError(error.status, error.message, on: connection)
+                } catch {
+                    Log.write("remote-live-status: request failed: \(error.localizedDescription)")
+                    sendError(500, "Could not update live status subscription on the Mac.", on: connection)
+                }
+            }
+            return
+        }
         if request.path == "/api/v1/memory" || request.path == "/api/v1/memory/document" {
             guard request.method == "GET" else {
                 sendError(405, "method not allowed", on: connection)
@@ -492,6 +623,16 @@ final class RemoteControlServer {
         }
         guard let manager else {
             sendError(503, "session manager unavailable", on: connection)
+            return
+        }
+
+        if request.path == "/api/v1/live-status" {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            let snapshot = liveStatusSnapshot(from: manager)
+            sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
             return
         }
 

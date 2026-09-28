@@ -323,6 +323,12 @@ conversation. Focus, notification settings and OS scheduling affect presentation
 The tab title and preview travel through Apple and may appear on the Lock Screen.
 No full transcript, pairing secret or APNs signing key goes to a relay service.
 
+Cantrip Agent's Home Screen widget and Live Activity use the same APNs key and
+`~/.config/Cantrip/apns.json` file. Paired phones register widget,
+push-to-start and Live Activity update tokens with
+`/api/v1/live-status/subscription`; the Mac then pushes tab-state refreshes
+directly to APNs. Private and Private Local tabs are never included.
+
 ## Send context during a task
 
 Choose **Inject** in Cantrip Agent or Mac/browser Remote to add instructions

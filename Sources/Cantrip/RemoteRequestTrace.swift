@@ -42,6 +42,7 @@ final class RemoteRequestTrace {
         case "/api/v1/memory": route = "memory"
         case "/api/v1/memory/document": route = "memory_document"
         case "/api/v1/notifications": route = "notifications"
+        case "/api/v1/live-status", "/api/v1/live-status/subscription": route = "live-status"
         default:
             route = request.path.hasPrefix("/api/v1/sessions/") ? "session" : "unknown"
         }
