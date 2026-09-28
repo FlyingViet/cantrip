@@ -38,6 +38,9 @@ final class CantripLiveStatusController: ObservableObject {
     private var startToken: String?
     private var activityToken: String?
     private var activityID: String?
+    /// False until this launch knows whether an activity is running, so an early
+    /// upload doesn't clear the token the Mac is still using.
+    private var activityTokenKnown = false
     private var observedActivities: Set<String> = []
     private var observing = false
     private var uploadedSignature: String?
@@ -68,7 +71,11 @@ final class CantripLiveStatusController: ObservableObject {
                 self?.observe(activity)
             }
         }
-        for activity in Activity<CantripTabsAttributes>.activities { observe(activity) }
+        let existing = Activity<CantripTabsAttributes>.activities
+        for activity in existing { observe(activity) }
+        if !existing.contains(where: { $0.activityState == .active || $0.activityState == .stale }) {
+            activityTokenKnown = true
+        }
     }
 
     /// Mirrors the selected pairing for the widget; nil clears it.
@@ -139,25 +146,36 @@ final class CantripLiveStatusController: ObservableObject {
         guard let config, let environment = config.environment,
               ["development", "production"].contains(environment) else { return nil }
         let enabled = liveActivitiesEnabled && activitiesAllowed
-        return [
+        var fields: [String: Any] = [
             "installationID": config.installationID, "serverID": config.serverID, "environment": environment,
             "liveActivities": enabled,
             "startToken": enabled ? startToken ?? "" : "",
-            "activityToken": enabled ? activityToken ?? "" : "",
-            "activityID": enabled ? activityID ?? "" : "",
             "widgetToken": CantripSharedStore.loadWidgetToken() ?? "",
         ]
+        if !enabled || activityToken != nil || activityTokenKnown {
+            fields["activityToken"] = enabled ? activityToken ?? "" : ""
+            fields["activityID"] = enabled ? activityID ?? "" : ""
+        }
+        // Otherwise leave both out: the Mac keeps updating the activity it knows about.
+        return fields
     }
 
     // MARK: - Private
 
     private func observe(_ activity: Activity<CantripTabsAttributes>) {
         guard observedActivities.insert(activity.id).inserted else { return }
+        if activity.activityState == .active || activity.activityState == .stale, let data = activity.pushToken {
+            activityToken = Self.hex(data)
+            activityID = activity.id
+            activityTokenKnown = true
+            scheduleUpload(force: true)
+        }
         Task { [weak self] in
             for await data in activity.pushTokenUpdates {
                 guard let self, activity.activityState == .active || activity.activityState == .stale else { continue }
                 activityToken = Self.hex(data)
                 activityID = activity.id
+                activityTokenKnown = true
                 scheduleUpload(force: true)
             }
         }
@@ -166,14 +184,24 @@ final class CantripLiveStatusController: ObservableObject {
                 guard let self, activityID == activity.id else { continue }
                 activityToken = nil
                 activityID = nil
+                activityTokenKnown = true
                 scheduleUpload(force: true)
             }
         }
     }
 
     private func scheduleUpload(force: Bool = false) {
-        guard let fields = subscriptionFields(activitiesAllowed: ActivityAuthorizationInfo().areActivitiesEnabled),
-              let uploader else { return }
+        guard let fields = subscriptionFields(activitiesAllowed: ActivityAuthorizationInfo().areActivitiesEnabled) else { return }
+        let send: () async throws -> CantripLiveStatusSubscriptionStatus?
+        if let uploader {
+            send = { try await uploader(JSONSerialization.data(withJSONObject: fields)) }
+        } else if let config, config.baseURL != nil {
+            // Woken in the background for a pushed Live Activity before the Remote
+            // connection exists: hand the Mac the new token over Tailscale directly.
+            send = { try await CantripLiveStatusFetcher.subscribe(config, fields: fields); return nil }
+        } else {
+            return
+        }
         let signature = Self.signature(fields)
         guard signature != uploadedSignature, uploadTask == nil else { return }
         if !force, let last = lastUploadAttempt, Date().timeIntervalSince(last) < 20 { return }
@@ -181,12 +209,12 @@ final class CantripLiveStatusController: ObservableObject {
         uploadTask = Task { [weak self] in
             var uploaded = false
             do {
-                let body = try JSONSerialization.data(withJSONObject: fields)
-                let result = try await uploader(body)
+                if let result = try await send() {
+                    self?.status = result.configured ? nil : result.message
+                }
                 self?.uploadedSignature = signature
-                self?.status = result.configured ? nil : result.message
                 uploaded = true
-            } catch CantripRemoteError.http(404, _) {
+            } catch CantripRemoteError.http(404, _), CantripLiveStatusFetchError.hostTooOld {
                 self?.status = "Update Cantrip on your Mac to use the widget and Live Activity."
             } catch {}
             self?.uploadTask = nil
@@ -258,7 +286,7 @@ struct CantripLiveStatusSettingsSection: View {
         } header: {
             Text("Widget and Live Activity")
         } footer: {
-            Text("Add the Cantrip Tabs widget from your Home Screen in medium or large size to see which tabs are running, need input, or finished. Tap a tab to open it. The Live Activity shows running tabs on the Lock Screen and in the Dynamic Island. The Mac refreshes both with Apple push, set up the same way as alerts. Private tabs are never shown.")
+            Text("Add the Cantrip Tabs widget from your Home Screen in medium or large size to see which tabs are running, need input, or finished. Tap a tab to open it. The Live Activity shows running tabs on the Lock Screen and in the Dynamic Island, and puts a tab that's waiting for your approval or answer at the top. The Mac refreshes both with Apple push, set up the same way as alerts. Private tabs are never shown.")
         }
     }
 }
