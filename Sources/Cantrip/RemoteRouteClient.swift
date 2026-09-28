@@ -26,23 +26,37 @@ enum RemoteRouteError: LocalizedError {
 }
 
 struct RemoteHTTPResponse {
+    static let defaultContentSecurityPolicy = "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' https: data:; frame-ancestors 'none'"
+
     let status: Int
     let contentType: String
     let body: Data
+    /// The host's own policy. MCP App views need theirs (frame-ancestors 'self',
+    /// sandbox, the server's resource domains); the default would block them.
+    var contentSecurityPolicy: String? = nil
 
     var data: Data {
+        let policy = contentSecurityPolicy.flatMap(Self.headerValue) ?? Self.defaultContentSecurityPolicy
         let header = """
         HTTP/1.1 \(status) \(HTTPURLResponse.localizedString(forStatusCode: status))\r
         Content-Type: \(contentType)\r
         Content-Length: \(body.count)\r
         Cache-Control: no-store\r
         X-Content-Type-Options: nosniff\r
-        Content-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' https: data:; frame-ancestors 'none'\r
+        Content-Security-Policy: \(policy)\r
+        Referrer-Policy: no-referrer\r
         Connection: close\r
         \r
 
         """
         return Data(header.utf8) + body
+    }
+
+    private static func headerValue(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed.utf8.count <= 8 * 1024,
+              !trimmed.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else { return nil }
+        return trimmed
     }
 
     static func parse(_ data: Data) throws -> RemoteHTTPResponse? {
@@ -74,7 +88,8 @@ struct RemoteHTTPResponse {
         return RemoteHTTPResponse(
             status: status,
             contentType: fields["content-type"] ?? "application/octet-stream",
-            body: data.subdata(in: range.upperBound..<(range.upperBound + length))
+            body: data.subdata(in: range.upperBound..<(range.upperBound + length)),
+            contentSecurityPolicy: fields["content-security-policy"]
         )
     }
 }
@@ -273,7 +288,8 @@ actor RemoteRouteClient {
                 return RemoteHTTPResponse(
                     status: response.statusCode,
                     contentType: response.value(forHTTPHeaderField: "Content-Type") ?? "application/octet-stream",
-                    body: data
+                    body: data,
+                    contentSecurityPolicy: response.value(forHTTPHeaderField: "Content-Security-Policy")
                 )
             } catch let error as URLError {
                 if error.code == .cancelled { throw CancellationError() }

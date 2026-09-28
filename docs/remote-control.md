@@ -854,12 +854,15 @@ Image reads and downsampling run off the main actor. Cantrip Agent keeps a
 bounded in-memory cache, clears it on pairing changes, and uses the same
 Tailscale-first/LAN-fallback routing as other read-only requests.
 
-## Generated image previews in Cantrip Agent
+## Generated image previews in Cantrip Agent and the browser Remote
 
-With both apps updated and the Mac host reopened, screenshots and generated
-images can appear **inline in assistant replies**, in their original Markdown
-position. Tap a preview to open the full-screen viewer, pinch or double-tap to
-zoom, and tap **Done** to return. Loading failures show a retry action.
+With the Mac host reopened, screenshots and generated images can appear
+**inline in assistant replies**, in their original Markdown position, in an
+updated Cantrip Agent, the browser Remote and another Mac's Remote tab. Tap or
+click a preview to open the full-screen viewer, and tap **Done** (or press
+Escape) to return. In Cantrip Agent, pinch or double-tap to zoom. In the
+browser Remote, choose **Actual size** or click the image to zoom to full
+resolution, then scroll to pan. Loading failures show a retry action.
 
 Save PNG or JPEG output directly under `~/.cache/Cantrip/`, then include a
 standalone Markdown image in the assistant's reply:
@@ -891,8 +894,13 @@ successful read stores an owner-only copy in
 cleanup and host restarts. These cached copies are not automatically deleted.
 Previously linked screenshots work if their original files still exist when
 first loaded. Neither a public upload nor a temporary Safari gallery is needed.
-This adds native Cantrip Agent rendering; the browser/Mac Remote web transcript
-continues using its existing text rendering.
+
+The browser Remote fetches the same routes with its pairing token and shows
+each image as a `data:` URL, loading thumbnails only as they scroll near view
+and keeping loaded previews across transcript refreshes. Images other than
+`https:`/`http:` URLs and these previews, such as a Mac path in a subdirectory,
+show their description instead of a broken image. iPhone uploads appear as
+thumbnails under the prompt, with the upload marker removed from its text.
 
 ## Send a video for analysis from Cantrip Agent
 
@@ -965,6 +973,12 @@ read the Remote page, its stored pairing token or the paired API, even if
 opened directly. It can load only the domains its server declared. If it
 navigates away, the Remote page closes it. Cantrip Agent renders views the way
 the Mac does, in an isolated origin inside its own web view.
+
+Another Mac's Remote tab reaches the host through a local bridge, which keeps
+the host's own `Content-Security-Policy` for each response. Earlier Cantrip
+builds replaced it with the Remote page's policy (`frame-ancestors 'none'`),
+so galleries there stayed blank; update Cantrip on the Mac that opens the
+Remote tab to show them.
 
 ## Monitor subagents remotely
 
