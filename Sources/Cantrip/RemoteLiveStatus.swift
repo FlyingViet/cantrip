@@ -3,6 +3,8 @@ import Foundation
 
 struct LiveStatusInput: Equatable {
     let title: String
+    /// `InputRequestSnapshot.Kind` raw value: approval, question, secret, login or localAction.
+    var kind: String? = nil
 }
 
 enum LiveStatusTabState: String, Codable, Equatable {
@@ -59,13 +61,15 @@ struct LiveStatusTab: Codable, Equatable {
     let detail: String?
     let queued: Int
     let subagents: Int
+    /// What the first pending request asks for (input tabs only); older apps ignore it.
+    let inputKind: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, state, startedAt, finishedAt, detail, queued, subagents
+        case id, title, state, startedAt, finishedAt, detail, queued, subagents, inputKind
     }
 
     init(id: String, title: String, state: LiveStatusTabState, startedAt: Double?,
-         finishedAt: Double?, detail: String?, queued: Int, subagents: Int) {
+         finishedAt: Double?, detail: String?, queued: Int, subagents: Int, inputKind: String? = nil) {
         self.id = id
         self.title = title
         self.state = state
@@ -74,6 +78,7 @@ struct LiveStatusTab: Codable, Equatable {
         self.detail = detail
         self.queued = queued
         self.subagents = subagents
+        self.inputKind = inputKind
     }
 
     init(from decoder: Decoder) throws {
@@ -86,6 +91,7 @@ struct LiveStatusTab: Codable, Equatable {
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
         queued = try container.decode(Int.self, forKey: .queued)
         subagents = try container.decode(Int.self, forKey: .subagents)
+        inputKind = try container.decodeIfPresent(String.self, forKey: .inputKind)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -101,6 +107,7 @@ struct LiveStatusTab: Codable, Equatable {
         else { try container.encodeNil(forKey: .detail) }
         try container.encode(queued, forKey: .queued)
         try container.encode(subagents, forKey: .subagents)
+        try container.encodeIfPresent(inputKind, forKey: .inputKind)
     }
 }
 
@@ -137,11 +144,13 @@ struct LiveStatusSnapshot: Codable, Equatable {
             let startedAt: Double?
             let finishedAt: Double?
             let detail: String?
+            var inputKind: String?
             if let input = session.pendingInputs.first {
                 state = .input
                 startedAt = session.currentRunStartedAt?.timeIntervalSince1970
                 finishedAt = nil
                 detail = Self.clipped(input.title, limit: 72)
+                inputKind = input.kind
             } else if session.isStreaming {
                 state = .running
                 startedAt = session.currentRunStartedAt?.timeIntervalSince1970
@@ -167,7 +176,8 @@ struct LiveStatusSnapshot: Codable, Equatable {
                 finishedAt: finishedAt,
                 detail: detail,
                 queued: session.queued,
-                subagents: session.activeSubagents
+                subagents: session.activeSubagents,
+                inputKind: inputKind
             ), order: offset)
         }
 
@@ -901,11 +911,7 @@ actor RemoteLiveStatus {
             case .activityStart:
                 aps["attributes-type"] = "CantripTabsAttributes"
                 aps["attributes"] = ["hostName": snapshot.hostName]
-                let count = snapshot.running + snapshot.needsInput
-                aps["alert"] = [
-                    "title": "Cantrip is working",
-                    "body": "\(count) tab\(count == 1 ? "" : "s") running",
-                ]
+                aps["alert"] = startAlert(snapshot)
                 aps["stale-date"] = now.addingTimeInterval(3600).timeIntervalSince1970
             case .activityUpdate:
                 aps["stale-date"] = now.addingTimeInterval(3600).timeIntervalSince1970
@@ -919,6 +925,18 @@ actor RemoteLiveStatus {
             guard !tabs.isEmpty else { return data }
             tabs.removeLast()
         }
+    }
+
+    /// Generic on purpose: the alert can show on a locked phone or a watch.
+    static func startAlert(_ snapshot: LiveStatusSnapshot) -> [String: String] {
+        let waiting = snapshot.needsInput
+        guard waiting > 0 else {
+            let count = snapshot.running
+            return ["title": "Cantrip is working", "body": "\(count) tab\(count == 1 ? "" : "s") running"]
+        }
+        var body = waiting == 1 ? "1 tab needs your response" : "\(waiting) tabs need your response"
+        if snapshot.running > 0 { body += " · \(snapshot.running) running" }
+        return ["title": "Cantrip needs your response", "body": body]
     }
 
     private static func eventName(_ kind: DeliveryKind) -> String {
@@ -941,25 +959,34 @@ actor RemoteLiveStatus {
         object["startedAt"] = tab.startedAt ?? NSNull()
         object["finishedAt"] = tab.finishedAt ?? NSNull()
         object["detail"] = LiveStatusSnapshot.clipped(tab.detail, limit: detailLimit) ?? NSNull()
+        if let inputKind = tab.inputKind { object["inputKind"] = inputKind }
         return object
     }
 
     private static func widgetSignature(_ snapshot: LiveStatusSnapshot) -> String {
-        snapshot.tabs.map { "\($0.id)|\($0.state.rawValue)|\($0.title)" }.joined(separator: "\n")
+        snapshot.tabs.map { "\($0.id)|\($0.state.rawValue)|\($0.title)|\(request($0))" }.joined(separator: "\n")
     }
 
-    /// Leaves out `detail`: the current step changes every few seconds, and the
-    /// Live Activity doesn't show it, so it alone never warrants a push.
+    /// Leaves out a running tab's `detail`: its current step changes every few seconds,
+    /// and the Live Activity doesn't show it, so it alone never warrants a push.
     private static func activitySignature(_ snapshot: LiveStatusSnapshot) -> String {
         let tabs = snapshot.tabs.prefix(5).map { tab in
             [tab.id, tab.state.rawValue, tab.title,
              String(tab.queued), String(tab.subagents),
-             tab.startedAt.map { String($0) } ?? "", tab.finishedAt.map { String($0) } ?? ""].joined(separator: "|")
+             tab.startedAt.map { String($0) } ?? "", tab.finishedAt.map { String($0) } ?? "",
+             request(tab)].joined(separator: "|")
         }.joined(separator: "\n")
         return "\(snapshot.running)|\(snapshot.needsInput)|\(snapshot.total)|\(tabs)"
     }
 
+    /// A new request in a waiting tab is as urgent as the tab starting to wait.
     private static func activityStateSignature(_ snapshot: LiveStatusSnapshot) -> String {
-        snapshot.tabs.prefix(5).map { "\($0.id)|\($0.state.rawValue)" }.joined(separator: "\n")
+        snapshot.tabs.prefix(5).map { "\($0.id)|\($0.state.rawValue)|\(request($0))" }.joined(separator: "\n")
+    }
+
+    /// The pending request a waiting tab shows; empty for every other state.
+    private static func request(_ tab: LiveStatusTab) -> String {
+        guard tab.state == .input else { return "" }
+        return "\(tab.inputKind ?? "")|\(tab.detail ?? "")"
     }
 }

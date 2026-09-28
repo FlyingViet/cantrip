@@ -326,7 +326,7 @@ final class RemoteControlServer {
                 statusText: session.statusText,
                 currentActivityTitle: session.currentActivity?.title,
                 queued: session.queued.count,
-                pendingInputs: session.pendingInputs.map { LiveStatusInput(title: $0.title) },
+                pendingInputs: session.pendingInputs.map { LiveStatusInput(title: $0.title, kind: $0.kind.rawValue) },
                 currentRunStartedAt: session.currentRunStart,
                 lastRunOutcome: session.lastRunOutcome,
                 activeSubagents: activeSubagents(in: session)
