@@ -437,6 +437,17 @@ private func runTests() async throws {
            "bridge preserves the web client's content security policy")
     expect(try RemoteHTTPResponse.parse(raw.dropLast()) == nil, "partial HTTP response waits for body")
     expect(try RemoteHTTPResponse.parse(raw)?.body == Data("{}".utf8), "complete HTTP response round-trips")
+    let viewPolicy = "default-src 'none'; script-src https://mobbin.com; frame-ancestors 'self'; sandbox allow-scripts allow-forms"
+    let hostView = Data("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Security-Policy: \(viewPolicy)\r\nContent-Length: 2\r\n\r\nok".utf8)
+    let bridgedView = String(decoding: try RemoteHTTPResponse.parse(hostView)?.data ?? Data(), as: UTF8.self)
+    expect(bridgedView.contains("Content-Security-Policy: \(viewPolicy)\r\n") && !bridgedView.contains("frame-ancestors 'none'"),
+           "bridge keeps the host's own policy so sandboxed MCP App views can be framed")
+    let injected = RemoteHTTPResponse(status: 200, contentType: "text/html", body: Data(),
+                                      contentSecurityPolicy: "default-src *\r\nX-Evil: 1").data
+    expect(String(decoding: injected, as: UTF8.self).contains(
+        "Content-Security-Policy: \(RemoteHTTPResponse.defaultContentSecurityPolicy)\r\n")
+           && !String(decoding: injected, as: UTF8.self).contains("X-Evil"),
+           "unsafe policy values fall back to the default instead of splitting headers")
     do {
         _ = try RemoteHTTPResponse.parse(Data("HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n".utf8))
         expect(false, "invalid response length rejected")

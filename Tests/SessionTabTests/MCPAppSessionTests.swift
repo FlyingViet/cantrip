@@ -260,6 +260,33 @@ extension SessionTabTests {
         """, contentWorld: .page) as? Bool
         precondition(stable == true, "gallery frames must survive transcript re-renders without reloading")
 
+        // Another Mac's Remote tab reaches the host through its local bridge, which
+        // must keep each response's own policy or the view can never be framed.
+        let bridge = RemoteLANBridge(token: token)
+        var bridgeURL: URL?
+        bridge.onReady = { bridgeURL = $0 }
+        await bridge.update(endpoints: [], fallback: base)
+        bridge.start()
+        defer { bridge.stop() }
+        try await waitForJournalTest { bridgeURL != nil }
+        func bridged(_ path: String, method: String = "GET") async throws -> (Data, HTTPURLResponse) {
+            var request = URLRequest(url: URL(string: path, relativeTo: bridgeURL)!)
+            request.httpMethod = method
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let (data, response) = try await client.data(for: request)
+            return (data, response as! HTTPURLResponse)
+        }
+        let (_, bridgedPage) = try await bridged("/")
+        precondition(bridgedPage.value(forHTTPHeaderField: "Content-Security-Policy")?.contains("frame-ancestors 'none'") == true,
+                     "the Remote page itself still refuses framing through the bridge")
+        let (bridgedViewData, _) = try await bridged(appPath + "/view", method: "POST")
+        let bridgedViewURL = (try JSONSerialization.jsonObject(with: bridgedViewData) as? [String: Any])?["url"] as? String ?? ""
+        let (_, bridgedView) = try await bridged(bridgedViewURL)
+        let bridgedCSP = bridgedView.value(forHTTPHeaderField: "Content-Security-Policy") ?? ""
+        precondition(bridgedView.statusCode == 200 && bridgedCSP.contains("frame-ancestors 'self'")
+                     && bridgedCSP.contains("sandbox allow-scripts allow-forms") && bridgedCSP.contains("https://mobbin.com"),
+                     "bridged views keep the host's view policy: \(bridgedCSP)")
+
         settings.copilotMCPApps = false
         defer { settings.copilotMCPApps = true }
         let turnedOff = try await call(appPath)
@@ -267,6 +294,6 @@ extension SessionTabTests {
         let hidden = try await call("api/v1/sessions/\(chat.id)")
         let hiddenMessages = (hidden.1["session"] as? [String: Any])?["messages"] as? [[String: Any]] ?? []
         precondition(!hiddenMessages.contains { $0["apps"] != nil }, "snapshots omit views while turned off")
-        print("MCP App views: transcripts, context, remote payloads, one-time sandboxed views, proxy and browser rendering passed")
+        print("MCP App views: transcripts, context, remote payloads, one-time sandboxed views, proxy, browser rendering and Mac Remote bridge policy passed")
     }
 }
