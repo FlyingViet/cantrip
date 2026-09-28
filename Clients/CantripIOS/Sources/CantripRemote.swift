@@ -897,6 +897,14 @@ struct CantripRemoteAPI {
         }
     }
 
+    func liveStatus() async throws -> CantripLiveStatusSnapshot {
+        try await request(path: "/api/v1/live-status")
+    }
+
+    func liveStatusSubscription(body: Data) async throws -> CantripLiveStatusSubscriptionStatus {
+        try await request(path: "/api/v1/live-status/subscription", method: "POST", body: body)
+    }
+
     func githubBuilds() async throws -> CantripBuildSnapshot {
         do {
             return try await request(path: "/api/v1/github/builds")
@@ -1598,11 +1606,15 @@ final class CantripRemoteModel: ObservableObject {
     }()
 
     private let authorizeSensitiveAction: (String) async throws -> Void
+    /// Only the app's model feeds the widget and Live Activity; test models don't.
+    private let liveStatus: CantripLiveStatusController?
 
     init(urlSession: URLSession? = nil, servers: ServerProfiles? = nil,
          completionAlerts: CantripNotifications? = nil,
+         liveStatus: CantripLiveStatusController? = nil,
          authorizeSensitiveAction: @escaping (String) async throws -> Void = CantripBiometrics.authorize) {
         self.urlSession = urlSession
+        self.liveStatus = liveStatus
         self.authorizeSensitiveAction = authorizeSensitiveAction
         self.completionAlerts = completionAlerts ?? .shared
         self.servers = servers ?? ServerProfiles(kind: .cantrip)
@@ -1639,6 +1651,51 @@ final class CantripRemoteModel: ObservableObject {
             hasStoredToken = false
             errorMessage = error.localizedDescription
         }
+        if let liveStatus {
+            liveStatus.uploader = { [weak self] body in
+                guard let self else { throw CancellationError() }
+                return try await self.performAuthenticated(allowFallback: true) {
+                    try await $0.liveStatusSubscription(body: body)
+                }
+            }
+            liveStatus.fetcher = { [weak self] in
+                guard let self else { throw CancellationError() }
+                return try await self.performAuthenticated(allowFallback: true) { try await $0.liveStatus() }
+            }
+            syncLiveStatusPairing()
+        }
+    }
+
+    /// Shares the selected pairing with the widget (nil clears it).
+    private func syncLiveStatusPairing() {
+        liveStatus?.pairingChanged(serverID: token == nil ? nil : selectedServerID, token: token, baseURL: baseURL,
+                                   tailscaleOnly: tailscaleOnly, installationID: completionAlerts.installationID)
+    }
+
+    /// Opens the Mac tab a widget or Live Activity row points at.
+    func openLiveStatusLink(_ target: CantripDeepLink.Target) async {
+        let serverID: String?
+        let sessionID: String?
+        switch target {
+        case .tabs(let server): serverID = server; sessionID = nil
+        case .tab(let id, let server): serverID = server; sessionID = id
+        }
+        do {
+            if let serverID, serverID != selectedServerID?.uuidString {
+                guard let server = servers.servers.first(where: { $0.id.uuidString == serverID }) else {
+                    throw ServerConfigurationError(message: "That widget belongs to a Mac that is no longer paired.")
+                }
+                try await selectServer(server)
+            }
+            guard let sessionID else { return }
+            guard !isMutating, !isUploadingVideo else {
+                throw ServerConfigurationError(message: "Finish the current upload or request before opening another tab.")
+            }
+            await selectSession(sessionID)
+            notificationNavigationID = UUID()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func addServer(_ draft: ServerDraft) throws {
@@ -1655,6 +1712,7 @@ final class CantripRemoteModel: ObservableObject {
         }
         try servers.select(server)
         selectedServerID = server.id
+        syncLiveStatusPairing()
         notificationStatus = nil
         refreshCompletionNotificationRegistration(force: true)
     }
@@ -1877,6 +1935,7 @@ final class CantripRemoteModel: ObservableObject {
             selectedServerID = nil
             errorMessage = nil
             transcriptRevision += 1
+            syncLiveStatusPairing()
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -2555,6 +2614,8 @@ final class CantripRemoteModel: ObservableObject {
             guard revision == mutationRevision else { return }
             sessions = listed
             errorMessage = nil
+            syncLiveStatusPairing()
+            liveStatus?.refreshIfDue(anyStreaming: listed.contains { $0.isStreaming })
             let publicIDs = Set(listed.map(\.id))
             detailCache = detailCache.filter { publicIDs.contains($0.key) }
             cacheOrder.removeAll { !publicIDs.contains($0) }
