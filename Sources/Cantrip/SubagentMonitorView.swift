@@ -46,6 +46,8 @@ struct SubagentCard: View {
 
     private var info: SubagentInfo { activity.subagent ?? SubagentInfo(agentID: "", name: "", agentType: "", summary: "") }
 
+    static let queuedHint = "Starts when the main agent waits for it or finishes its turn."
+
     private var currentStep: ToolActivity? {
         activity.children.last(where: { $0.state == .running }) ?? activity.children.last
     }
@@ -83,6 +85,12 @@ struct SubagentCard: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
+                }
+                if info.status == .queued {
+                    Text(Self.queuedHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if info.status == .running, let now = info.intent ?? currentStep?.title {
                     Label {
@@ -223,6 +231,7 @@ struct SubagentStatusIcon: View {
 
     static func label(_ status: SubagentInfo.Status) -> String {
         switch status {
+        case .queued: return "Queued"
         case .running: return "Running"
         case .idle: return "Waiting"
         case .completed: return "Done"
@@ -234,6 +243,8 @@ struct SubagentStatusIcon: View {
     var body: some View {
         Group {
             switch status {
+            case .queued:
+                Image(systemName: "clock").foregroundStyle(.secondary)
             case .running:
                 ProgressView().controlSize(.mini)
             case .idle:
@@ -294,9 +305,12 @@ struct SubagentStrip: View {
 
     private func summary(now: Date) -> String {
         let noun = { (count: Int) in count == 1 ? "subagent" : "subagents" }
-        if let lead = active.first, let info = lead.subagent {
-            let waiting = active.allSatisfy { $0.subagent?.status == .idle }
-            var parts = ["\(active.count) \(noun(active.count)) \(waiting ? "waiting" : "running")"]
+        if let lead = active.first(where: { $0.subagent?.status == .running }) ?? active.first,
+           let info = lead.subagent {
+            let statuses = active.compactMap(\.subagent?.status)
+            let state = statuses.contains(.running) ? "running"
+                : statuses.allSatisfy { $0 == .queued } ? "queued" : "waiting"
+            var parts = ["\(active.count) \(noun(active.count)) \(state)"]
             let step = lead.children.last(where: { $0.state == .running })?.title
             parts.append(info.displayName + ((info.intent ?? step).map { ": \($0)" } ?? ""))
             parts.append(SubagentInfo.elapsedLabel(info.elapsed(now: now)))

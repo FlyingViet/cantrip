@@ -8,7 +8,7 @@ enum ToolActivityState: Equatable {
 
     init(_ status: SubagentInfo.Status) {
         switch status {
-        case .running, .idle: self = .running
+        case .queued, .running, .idle: self = .running
         case .completed: self = .succeeded
         case .failed: self = .failed
         case .cancelled: self = .cancelled
@@ -77,6 +77,9 @@ enum SubagentCancelError: LocalizedError, Equatable {
 /// Live progress of a subagent, shown in Cantrip's subagent monitor.
 struct SubagentInfo: Equatable, Codable {
     enum Status: String, Codable {
+        /// Launched but not started: Copilot starts a background agent only
+        /// once the main agent waits for it or ends its turn.
+        case queued
         case running, idle, completed, failed, cancelled
 
         init(_ state: ToolActivityState) {
@@ -114,7 +117,7 @@ struct SubagentInfo: Equatable, Codable {
 
     static let reasoningLimit = 12
 
-    var isActive: Bool { status == .running || status == .idle }
+    var isActive: Bool { status == .queued || status == .running || status == .idle }
 
     mutating func addReasoning(_ block: String) {
         guard reasoning.last != block else { return }

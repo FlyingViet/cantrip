@@ -197,6 +197,70 @@ private func testSubagentLiveProgress() {
     expect(abs((info?.elapsed() ?? 0) - 6.215) < 0.01, "the runtime's duration should set the elapsed time")
 }
 
+private func testQueuedBackgroundSubagentShowsAtLaunch() {
+    var parser = CopilotJSONStreamParser(canCancelSubagents: true)
+    // Shapes captured from Copilot CLI 1.0.88: the agent starts only once the root waits.
+    var events = parser.consume(Data("""
+    {"type":"assistant.message","id":"q1","timestamp":"2026-09-28T06:21:14.900Z","data":{"messageId":"m1","content":"","toolRequests":[{"toolCallId":"task-q","name":"task","arguments":{"agent_type":"general-purpose","description":"Build notification permission prompts","mode":"background","name":"notif-prompts","prompt":"Implement the prompts."}}]}}
+    {"type":"tool.execution_start","id":"q2","timestamp":"2026-09-28T06:21:14.918Z","data":{"toolCallId":"task-q","toolName":"task","arguments":{"agent_type":"general-purpose","description":"Build notification permission prompts","mode":"background","name":"notif-prompts"}}}
+    {"type":"tool.execution_complete","id":"q3","timestamp":"2026-09-28T06:21:14.921Z","data":{"toolCallId":"task-q","success":true,"result":{"content":"Agent started in background with agent_id: 84c6dca2-b522-4aa0-9337-123d56cd1088. You'll be notified when it completes."}}}
+    {"type":"tool.execution_start","id":"q4","data":{"toolCallId":"bash-q","toolName":"bash","arguments":{"command":"make test"}}}
+
+    """.utf8)) { _, _ in expect(false, "queued launch events should parse") }
+    var info = lastActivity(events, id: "task-q")?.subagent
+    expect(info?.status == .queued && info?.isActive == true, "a launched background agent should show as queued")
+    expect(info?.name == "notif-prompts" && info?.agentType == "general-purpose"
+           && info?.summary == "Build notification permission prompts" && info?.background == true,
+           "the launch arguments should describe the queued agent")
+    expect(info?.agentID == "84c6dca2-b522-4aa0-9337-123d56cd1088" && info?.canCancel == true,
+           "the task result's agent ID should make a queued agent stoppable")
+    expect(abs((info?.startedAt.timeIntervalSince1970 ?? 0) - 1_790_576_474.9) < 0.01,
+           "queued time should count from the launch")
+
+    events = parser.consume(Data("""
+    {"type":"subagent.started","id":"q5","timestamp":"2026-09-28T06:27:00.000Z","agentId":"84c6dca2-b522-4aa0-9337-123d56cd1088","data":{"toolCallId":"task-q","agentName":"general-purpose","agentDisplayName":"notif-prompts","agentDescription":"Build notification permission prompts","executionMode":"background"}}
+    {"type":"tool.execution_start","id":"q6","agentId":"84c6dca2-b522-4aa0-9337-123d56cd1088","data":{"toolCallId":"view-q","toolName":"view","arguments":{"path":"src/app.tsx"}}}
+
+    """.utf8)) { _, _ in expect(false, "queued start events should parse") }
+    var task = lastActivity(events, id: "task-q")
+    info = task?.subagent
+    expect(info?.status == .running && info?.canCancel == true, "a queued agent should run once Copilot starts it")
+    expect(abs((info?.startedAt.timeIntervalSince1970 ?? 0) - 1_790_576_820) < 0.01,
+           "run time should count from the actual start")
+    expect(task?.children.map(\.id) == ["view-q"], "the started agent's steps should nest under its task")
+
+    events = parser.consume(Data("""
+    {"type":"subagent.completed","id":"q7","agentId":"84c6dca2-b522-4aa0-9337-123d56cd1088","data":{"toolCallId":"task-q","agentName":"general-purpose","agentDisplayName":"notif-prompts","totalTokens":1200}}
+
+    """.utf8)) { _, _ in expect(false, "queued completion should parse") }
+    expect(lastActivity(events, id: "task-q")?.subagent?.status == .completed, "the agent should finish normally")
+
+    // A sync agent shows as running from its launch; a failed launch never runs.
+    events = parser.consume(Data("""
+    {"type":"tool.execution_start","id":"s1","data":{"toolCallId":"task-s","toolName":"task","arguments":{"agent_type":"explore","description":"Map callers","name":"map-callers"}}}
+    {"type":"tool.execution_start","id":"f1","data":{"toolCallId":"task-f","toolName":"task","arguments":{"agent_type":"task","description":"Run tests","mode":"background"}}}
+    {"type":"tool.execution_complete","id":"f2","data":{"toolCallId":"task-f","success":false,"error":{"message":"Too many subagents are running."}}}
+
+    """.utf8)) { _, _ in expect(false, "launch variants should parse") }
+    expect(lastActivity(events, id: "task-s")?.subagent?.status == .running, "a sync agent should show as running at launch")
+    let failed = lastActivity(events, id: "task-f")?.subagent
+    expect(failed?.status == .failed && failed?.error == "Too many subagents are running." && failed?.canCancel == false,
+           "a failed launch should end its card with the reason")
+
+    // Stopped while queued: a late start must not revive it.
+    events = parser.consume(Data("""
+    {"type":"tool.execution_start","id":"c1","data":{"toolCallId":"task-c","toolName":"task","arguments":{"agent_type":"task","description":"Lint","mode":"background"}}}
+    {"type":"tool.execution_complete","id":"c2","data":{"toolCallId":"task-c","success":true,"result":{"content":"Agent started in background with agent_id: agent-c. You'll be notified when it completes."}}}
+    {"type":"\(CopilotJSONStreamParser.cancelledEventType)","id":"c3","agentId":"agent-c","data":{}}
+    {"type":"subagent.started","id":"c4","agentId":"agent-c","data":{"toolCallId":"task-c","agentName":"task","agentDisplayName":"Lint","executionMode":"background"}}
+
+    """.utf8)) { _, _ in expect(false, "queued cancel events should parse") }
+    task = lastActivity(events, id: "task-c")
+    expect(task?.subagent?.status == .cancelled, "an agent stopped while queued should stay stopped")
+    expect(CopilotJSONStreamParser.backgroundAgentID(in: "Agent started in background with agent_id: notif-prompts-2. You'll") == "notif-prompts-2",
+           "named agent IDs should parse without the sentence's period")
+}
+
 private func testSubagentFailureAndNesting() {
     var parser = CopilotJSONStreamParser()
     let events = parser.consume(Data("""
@@ -299,6 +363,7 @@ testSDKMessagesAndUsage()
 testSubagentStepsNestUnderTask()
 testBackgroundSubagentKeepsReporting()
 testSubagentLiveProgress()
+testQueuedBackgroundSubagentShowsAtLaunch()
 testSubagentFailureAndNesting()
 testUnknownSubagentFallsBackToTopLevel()
 testReasoningBlocksAndSteps()
@@ -308,4 +373,4 @@ if failures > 0 {
     fputs("\(failures) Copilot parser test(s) failed\n", stderr)
     exit(1)
 }
-print("All 11 Copilot parser test groups passed (incl. MCP Apps)")
+print("All 12 Copilot parser test groups passed (incl. MCP Apps)")
