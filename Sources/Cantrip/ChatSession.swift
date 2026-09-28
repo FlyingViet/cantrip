@@ -176,8 +176,11 @@ final class ChatSession: ObservableObject {
     private var autoResumeSpent = false
     /// Durable run identity survives backend retries and process restarts.
     private var currentRunID: UUID?
+    var currentRunIdentifier: UUID? { currentRunID }
     private var lastJournalRunID: UUID?
     private var currentRunStartedAt: Date?
+    var currentRunStart: Date? { currentRunStartedAt }
+    private(set) var lastRunOutcome: LiveStatusRunOutcome?
     private var currentRunMode: RunJournal.Mode?
     private var currentRunBackend: BackendKind?
     private var currentAttempt = 0
@@ -292,6 +295,7 @@ final class ChatSession: ObservableObject {
         self.id = id
         self.copilot = copilotBackend
         self.makeJournal = makeJournal
+        self.lastRunOutcome = Self.loadLastRunOutcome(id: id)
         self.workdir = UserDefaults.standard.string(forKey: "workdir-\(id.uuidString)")
             ?? AppSettings.shared.claudeWorkdir
         self.claudeCode = ClaudeCodeBackend(persistKey: "claudeSessionID-\(id.uuidString)")
@@ -328,6 +332,7 @@ final class ChatSession: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "claudeSessionID-\(id.uuidString)")
         UserDefaults.standard.removeObject(forKey: "codexSessionID-\(id.uuidString)")
         UserDefaults.standard.removeObject(forKey: "workdir-\(id.uuidString)")
+        clearLastRunOutcome()
         // Council scratch sessions: scan for this session's keys so no
         // seat count or key scheme can strand them.
         for key in UserDefaults.standard.dictionaryRepresentation().keys
@@ -638,9 +643,17 @@ final class ChatSession: ObservableObject {
 
     private func completeRun(status: String, summary: String = "") {
         guard let runID = currentRunID else { return }
+        let finishedAt = Date()
+        if !isPrivate, !isLocalPrivate {
+            if status == "succeeded" {
+                recordLastRunOutcome(.init(status: .done, finishedAt: finishedAt))
+            } else if status == "failed" {
+                recordLastRunOutcome(.init(status: .failed, finishedAt: finishedAt))
+            }
+        }
         remoteCompletion = status == "succeeded" && !isPrivate && !isLocalPrivate
             ? RemoteCompletion(id: runID, sessionID: id, title: title,
-                               summary: RemoteCompletion.preview(summary), completedAt: Date())
+                               summary: RemoteCompletion.preview(summary), completedAt: finishedAt)
             : nil
         var event = RunJournal.Event(
             sessionID: id,
@@ -659,6 +672,9 @@ final class ChatSession: ObservableObject {
     private func cancelRun(reason: String) {
         remoteCompletion = nil
         guard let runID = currentRunID else { return }
+        if reason != "superseded by a new run", !isPrivate, !isLocalPrivate {
+            recordLastRunOutcome(.init(status: .stopped, finishedAt: Date()))
+        }
         var event = RunJournal.Event(
             sessionID: id,
             runID: runID,
@@ -683,6 +699,27 @@ final class ChatSession: ObservableObject {
         recordedArtifacts.removeAll()
         currentRunPrompt = nil
         canResume = false
+    }
+
+    private static func lastRunOutcomeKey(_ id: UUID) -> String {
+        "lastRunOutcome-\(id.uuidString)"
+    }
+
+    private static func loadLastRunOutcome(id: UUID) -> LiveStatusRunOutcome? {
+        guard let data = UserDefaults.standard.data(forKey: lastRunOutcomeKey(id)) else { return nil }
+        return try? JSONDecoder().decode(LiveStatusRunOutcome.self, from: data)
+    }
+
+    private func recordLastRunOutcome(_ outcome: LiveStatusRunOutcome) {
+        lastRunOutcome = outcome
+        if let data = try? JSONEncoder().encode(outcome) {
+            UserDefaults.standard.set(data, forKey: Self.lastRunOutcomeKey(id))
+        }
+    }
+
+    private func clearLastRunOutcome() {
+        lastRunOutcome = nil
+        UserDefaults.standard.removeObject(forKey: Self.lastRunOutcomeKey(id))
     }
 
     @discardableResult
@@ -2496,6 +2533,7 @@ final class ChatSession: ObservableObject {
         }
         clearQueue()
         clearCurrentRun()
+        clearLastRunOutcome()
         persistTranscript()
     }
 
