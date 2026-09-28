@@ -328,6 +328,11 @@ Cantrip Agent's Home Screen widget and Live Activity use the same APNs key and
 push-to-start and Live Activity update tokens with
 `/api/v1/live-status/subscription`; the Mac then pushes tab-state refreshes
 directly to APNs. Private and Private Local tabs are never included.
+A tab waiting for an approval, answer, password or sign-in reports the first
+request's title and `inputKind` (`approval`, `question`, `secret`, `login` or
+`localAction`); the Live Activity puts that tab at the top and opens it on tap.
+A new request in a waiting tab pushes immediately, like a state change. The
+request's title (never an answer or secret) can appear on the Lock Screen.
 
 ## Send context during a task
 

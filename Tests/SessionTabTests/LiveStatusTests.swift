@@ -56,7 +56,8 @@ extension SessionTabTests {
             LiveStatusSession(id: UUID(), title: "Private", isPrivate: true, isStreaming: true),
             LiveStatusSession(id: UUID(), title: "Local", isLocalPrivate: true, isStreaming: true),
             LiveStatusSession(id: UUID(), title: "Input tab", isStreaming: true, statusText: "Running",
-                              queued: 2, pendingInputs: [LiveStatusInput(title: String(repeating: "Q", count: 90))],
+                              queued: 2, pendingInputs: [LiveStatusInput(title: String(repeating: "Q", count: 90), kind: "question"),
+                                                         LiveStatusInput(title: "Second", kind: "approval")],
                               currentRunStartedAt: newRun, activeSubagents: 3),
             LiveStatusSession(id: UUID(), title: String(repeating: "R", count: 60), isStreaming: true,
                               statusText: "", currentActivityTitle: "Building", currentRunStartedAt: oldRun),
@@ -74,6 +75,10 @@ extension SessionTabTests {
         precondition(snapshot.tabs.count == 8)
         precondition(snapshot.tabs[0].state == .input && snapshot.tabs[0].queued == 2 && snapshot.tabs[0].subagents == 3)
         precondition(snapshot.tabs[0].detail?.count == 72 && snapshot.tabs[0].detail?.last == "…")
+        precondition(snapshot.tabs[0].inputKind == "question", "The first pending request names the tab's input kind")
+        precondition(snapshot.tabs.dropFirst().allSatisfy { $0.inputKind == nil })
+        let inputObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot.tabs[0])) as! [String: Any]
+        precondition(inputObject["inputKind"] as? String == "question")
         precondition(snapshot.tabs[1].state == .running && snapshot.tabs[1].startedAt == oldRun.timeIntervalSince1970)
         precondition(snapshot.tabs[1].title.count == 48 && snapshot.tabs[1].title.last == "…")
         precondition(snapshot.tabs[2].state == .running && snapshot.tabs[2].startedAt == newRun.timeIntervalSince1970)
@@ -84,6 +89,7 @@ extension SessionTabTests {
         let object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         precondition(object.keys.contains("startedAt") && object["startedAt"] is NSNull)
         precondition(object.keys.contains("detail") && object["detail"] is NSNull)
+        precondition(!object.keys.contains("inputKind"), "Only waiting tabs carry an input kind")
     }
 
     @MainActor
@@ -221,6 +227,77 @@ extension SessionTabTests {
         try await testLiveStatusInvalidation(configuration: configuration)
         try await testLiveStatusRetry(configuration: configuration)
         try await testLiveStatusPayloadLimit(configuration: configuration)
+        try await testLiveStatusInputRequests(configuration: configuration)
+    }
+
+    static func testLiveStatusInputRequests(configuration: RemotePushConfiguration) async throws {
+        let clock = LiveStatusTestClock(Date(timeIntervalSince1970: 40_000))
+        let recorder = LiveStatusRequestRecorder()
+        let service = RemoteLiveStatus(
+            file: liveStatusStateFile("input"),
+            now: clock.now,
+            sleep: { seconds in clock.advance(seconds) },
+            configuration: { configuration },
+            send: { await recorder.respond($0) }
+        )
+        await service.activate(fingerprint: "paired")
+        let installationID = UUID(), serverID = UUID()
+        let startToken = String(repeating: "1", count: 64)
+        let activityToken = String(repeating: "2", count: 64)
+        try await service.merge(RemoteLiveStatusSubscriptionUpdate(json: [
+            "installationID": installationID.uuidString,
+            "serverID": serverID.uuidString,
+            "environment": "development",
+            "startToken": startToken,
+            "liveActivities": true,
+        ]), fingerprint: "paired")
+        let waitingID = UUID(), runningID = UUID()
+        func snapshot(request: LiveStatusInput, step: String) -> LiveStatusSnapshot {
+            LiveStatusSnapshot.build(from: [
+                LiveStatusSession(id: runningID, title: "Tests", isStreaming: true, statusText: step,
+                                  currentRunStartedAt: clock.now()),
+                LiveStatusSession(id: waitingID, title: "Deploy", isStreaming: true,
+                                  pendingInputs: [request], currentRunStartedAt: clock.now()),
+            ], now: clock.now(), hostName: "Mac")
+        }
+        let approval = LiveStatusInput(title: "Run the deploy script?", kind: "approval")
+        await service.update(snapshot(request: approval, step: "Compiling"))
+        try await waitForLiveStatusRequests(recorder, atLeast: 1)
+        let start = (await recorder.all())[0]
+        precondition(start.url?.lastPathComponent == startToken)
+        let startAPS = try aps(start)
+        let alert = startAPS["alert"] as? [String: String]
+        precondition(alert?["title"] == "Cantrip needs your response")
+        precondition(alert?["body"] == "1 tab needs your response · 1 running")
+        let startTabs = (startAPS["content-state"] as! [String: Any])["tabs"] as! [[String: Any]]
+        precondition(startTabs[0]["id"] as? String == waitingID.uuidString && startTabs[0]["state"] as? String == "input")
+        precondition(startTabs[0]["inputKind"] as? String == "approval")
+        precondition(startTabs[0]["detail"] as? String == "Run the deploy script?")
+        precondition(startTabs[1]["inputKind"] == nil)
+
+        try await service.merge(RemoteLiveStatusSubscriptionUpdate(json: [
+            "installationID": installationID.uuidString,
+            "serverID": serverID.uuidString,
+            "environment": "development",
+            "activityToken": activityToken,
+            "liveActivities": true,
+        ]), fingerprint: "paired")
+        await service.update(snapshot(request: approval, step: "Compiling"))
+        try await waitForLiveStatusRequests(recorder, atLeast: 2)
+        await service.update(snapshot(request: approval, step: "Linking"))
+        try await Task.sleep(for: .milliseconds(20))
+        let afterStep = await recorder.count()
+        precondition(afterStep == 2, "A running tab's step change alone doesn't push")
+
+        let question = LiveStatusInput(title: "Which environment?", kind: "question")
+        await service.update(snapshot(request: question, step: "Linking"))
+        try await waitForLiveStatusRequests(recorder, atLeast: 3)
+        let update = (await recorder.all())[2]
+        precondition(update.url?.lastPathComponent == activityToken && liveStatusEvent(update) == "update")
+        precondition(update.value(forHTTPHeaderField: "apns-priority") == "10",
+                     "A new request in a waiting tab pushes at high priority")
+        let tabs = (try aps(update)["content-state"] as! [String: Any])["tabs"] as! [[String: Any]]
+        precondition(tabs[0]["inputKind"] as? String == "question" && tabs[0]["detail"] as? String == "Which environment?")
     }
 
     static func testLiveStatusAPNsLifecycle(configuration: RemotePushConfiguration) async throws {
