@@ -2431,15 +2431,21 @@ private struct TurnView: View {
 
     var body: some View {
         if turn.role == .user {
-            HStack {
-                Spacer(minLength: 40)
-                VStack(alignment: .leading, spacing: 8) {
-                    if !turn.text.isEmpty { PromptTextView(text: turn.text) }
-                    ChatImageGallery(images: turn.images ?? [], remote: remote)
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack {
+                    Spacer(minLength: 40)
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !turn.text.isEmpty { PromptTextView(text: turn.text) }
+                        ChatImageGallery(images: turn.images ?? [], remote: remote)
+                    }
+                        .padding(.horizontal, 14).padding(.vertical, 9)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
+                        .foregroundStyle(.white)
                 }
-                    .padding(.horizontal, 14).padding(.vertical, 9)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
-                    .foregroundStyle(.white)
+                if let usage = remoteMessage?.promptUsage {
+                    CantripPromptUsageLine(usage: usage)
+                        .padding(.trailing, 6)
+                }
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {

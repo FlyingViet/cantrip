@@ -279,6 +279,8 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var images: [ChatMessageImage]? = nil
     var isPreview: Bool? = nil
     var isLocalPrivate: Bool? = nil
+    /// Context size and token use for a prompt; absent from older Mac hosts.
+    var promptUsage: CantripPromptUsage? = nil
 
     var presentedText: String { displayText ?? text }
 }
@@ -3488,6 +3490,9 @@ private struct CantripRemoteMessageBubble: View {
                         }
                         .font(.caption)
                     }
+                }
+                if message.role == "user", let usage = message.promptUsage {
+                    CantripPromptUsageLine(usage: usage)
                 }
             }
             .padding(11)
