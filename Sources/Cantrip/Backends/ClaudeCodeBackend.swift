@@ -15,6 +15,8 @@ final class ClaudeCodeBackend: Backend {
     private var childIndex: [String: String] = [:]
     /// Claude repeats a message's full usage on every content-block event.
     private var countedSubagentMessages: Set<String> = []
+    /// Root model calls already reported as context, by message ID.
+    private var countedRootMessages: Set<String> = []
     /// Whether any text has streamed this run (for block separation).
     private var hasEmittedText = false
     /// Same, for thinking blocks (separate consecutive reasoning blocks).
@@ -67,7 +69,9 @@ final class ClaudeCodeBackend: Backend {
                 self.startProcess(workdir: workdir)
             }
             self.askpass?.beginTurn()
+            self.countedRootMessages.removeAll()
             self.writeUserMessage(request.prompt)
+            onEvent(.context(BackendContextUsage(messageCharacters: request.prompt.count)))
         }
     }
 
@@ -480,6 +484,13 @@ final class ClaudeCodeBackend: Backend {
                     activities[parentID] = parent
                     onEvent(.activity(parent))
                 }
+            } else if parentID == nil, let messageID = message["id"] as? String,
+                      countedRootMessages.insert(messageID).inserted,
+                      let usage = message["usage"] as? [String: Any] {
+                // Each root model call's full prompt: the context at that point in the turn.
+                onEvent(.context(BackendContextUsage(tokens: (usage["input_tokens"] as? Int ?? 0)
+                    + (usage["cache_creation_input_tokens"] as? Int ?? 0)
+                    + (usage["cache_read_input_tokens"] as? Int ?? 0))))
             }
             for block in content {
                 switch block["type"] as? String {
@@ -559,7 +570,9 @@ final class ClaudeCodeBackend: Backend {
                     inputTokens: (usage?["input_tokens"] as? Int ?? 0)
                         + (usage?["cache_creation_input_tokens"] as? Int ?? 0)
                         + (usage?["cache_read_input_tokens"] as? Int ?? 0),
-                    outputTokens: usage?["output_tokens"] as? Int ?? 0
+                    outputTokens: usage?["output_tokens"] as? Int ?? 0,
+                    cachedInputTokens: usage?["cache_read_input_tokens"] as? Int ?? 0,
+                    modelCalls: max(1, obj["num_turns"] as? Int ?? 1)
                 )))
             }
             if let isError = obj["is_error"] as? Bool, isError,

@@ -356,6 +356,64 @@ private func testReasoningBlocksAndSteps() {
            "a long first sentence should be shortened and keep the full text")
 }
 
+private func contexts(_ events: [BackendEvent]) -> [BackendContextUsage] {
+    events.compactMap { if case .context(let context) = $0 { return context }; return nil }
+}
+
+private func testPromptContextUsage() {
+    // Shapes captured from Copilot CLI 1.0.88 (gpt-5-mini, one glob step).
+    var parser = CopilotJSONStreamParser()
+    let events = parser.consume(Data("""
+    {"type":"user.message","id":"c1","data":{"content":"List files","transformedContent":"<current_datetime>x</current_datetime>List files"}}
+    {"type":"assistant.turn_start","id":"c2","data":{"turnId":"0"}}
+    {"type":"session.usage_info","id":"c3","ephemeral":true,"data":{"tokenLimit":128000,"currentTokens":2315,"messagesLength":2,"systemTokens":1946,"conversationTokens":43,"toolDefinitionsTokens":326,"isInitial":true}}
+    {"type":"assistant.usage","id":"c4","data":{"model":"gpt-5-mini","inputTokens":2241,"outputTokens":344,"cacheReadTokens":0,"maxPromptTokens":128000}}
+    {"type":"session.usage_info","id":"c5","agentId":"agent-1","data":{"tokenLimit":64000,"currentTokens":900}}
+    {"type":"user.message","id":"c6","agentId":"agent-1","data":{"content":"Subagent task"}}
+    {"type":"session.usage_info","id":"c7","data":{"tokenLimit":128000,"currentTokens":2593,"systemTokens":1946,"conversationTokens":321,"toolDefinitionsTokens":326}}
+    {"type":"assistant.usage","id":"c8","data":{"inputTokens":2599,"outputTokens":76,"cacheReadTokens":2176}}
+
+    """.utf8)) { _, _ in expect(false, "context events should parse") }
+    let context = contexts(events)
+    expect(context.count == 3, "root message and each root usage_info report context; subagents don't")
+    expect(context.first?.messageCharacters == 48, "the message as sent includes runtime-added context")
+    expect(context.dropFirst().first == BackendContextUsage(tokens: 2315, limit: 128000, systemTokens: 1946,
+                                                           toolTokens: 326, conversationTokens: 43),
+           "usage_info carries the context breakdown")
+    expect(context.last?.tokens == 2593, "later calls update the latest context")
+    let usages = events.compactMap { if case .usage(let usage) = $0 { return usage }; return nil }
+    expect(usages.map(\.cachedInputTokens) == [0, 2176], "cached input tokens should be reported")
+
+    var promptUsage = PromptUsage()
+    for event in events {
+        switch event {
+        case .context(let context): promptUsage.apply(context, typedCharacters: "List files".count)
+        case .usage(let usage): promptUsage.apply(usage)
+        default: break
+        }
+    }
+    expect(promptUsage.contextTokens == 2315 && promptUsage.latestContextTokens == 2593
+           && promptUsage.contextLimit == 128000, "the prompt keeps its first context and tracks the latest")
+    expect(promptUsage.messageTokens == 12 && promptUsage.addedTokens == 9, "message size is estimated at 4 characters per token")
+    expect(promptUsage.modelCalls == 2 && promptUsage.inputTokens == 4840 && promptUsage.cachedInputTokens == 2176
+           && promptUsage.outputTokens == 420, "run totals add every call")
+    expect(promptUsage.summary == "2.3k tokens of context · 2% of 128k", "summary line: \(promptUsage.summary)")
+    expect(promptUsage.sections.map(\.title) == ["When sent", "This run"], "details group what was sent and what the run used")
+    expect(promptUsage.sections.last?.rows.contains(PromptUsage.Row(label: "Input tokens", value: "4,840 (45% cached)")) == true,
+           "input shows the cached share")
+
+    // Older runtimes without usage_info: the first root call's input is the context.
+    var fallback = CopilotJSONStreamParser()
+    let legacy = contexts(fallback.consume(Data("""
+    {"type":"assistant.usage","id":"l1","data":{"inputTokens":5000,"outputTokens":10,"maxPromptTokens":200000}}
+    {"type":"assistant.usage","id":"l2","agentId":"agent-1","data":{"inputTokens":700,"outputTokens":10}}
+
+    """.utf8)) { _, _ in })
+    expect(legacy == [BackendContextUsage(tokens: 5000, limit: 200000)], "fallback context comes from root calls only")
+    expect(PromptUsage.compact(999) == "999" && PromptUsage.compact(38_210) == "38.2k" && PromptUsage.compact(412_000) == "412k"
+           && PromptUsage.compact(1_260_000) == "1.3M" && PromptUsage.percent(1, of: 1000) == "<1%", "compact formatting")
+}
+
 testMalformedLineDoesNotAbortBatch()
 testMalformedEventDoesNotPoisonLaterChunks()
 testMalformedFinalLineIsReportedAndSkipped()
@@ -367,10 +425,11 @@ testQueuedBackgroundSubagentShowsAtLaunch()
 testSubagentFailureAndNesting()
 testUnknownSubagentFallsBackToTopLevel()
 testReasoningBlocksAndSteps()
+testPromptContextUsage()
 failures += runMCPAppTests()
 
 if failures > 0 {
     fputs("\(failures) Copilot parser test(s) failed\n", stderr)
     exit(1)
 }
-print("All 12 Copilot parser test groups passed (incl. MCP Apps)")
+print("All 13 Copilot parser test groups passed (incl. MCP Apps)")

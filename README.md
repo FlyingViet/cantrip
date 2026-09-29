@@ -66,6 +66,12 @@ The macOS app includes:
 - **Copilot usage:** account-wide AI credits used / total, reset date, and additional
   usage in the Mac's **Usage** panel and Cantrip Agent's header beside the lane picker.
   Reads your existing Copilot login without sending a prompt; credentials stay on the Mac.
+- **Prompt context:** a line under each sent prompt shows how many tokens were in
+  the model's context and how full the window is. Click it (Mac, Remote, Cantrip
+  Agent) for the breakdown: system instructions, tool definitions, conversation,
+  the message's estimated size with what Cantrip added, and the run's model calls,
+  input (with cached share) and output tokens. Copilot reports the full breakdown;
+  Claude Code reports totals.
 - **Long prompts:** compact, plain-text previews with **Read full prompt**,
   paged reading, and full-text copy/download in Mac and Remote. The submitted
   text stays intact. Memory retrieval uses bounded, deduplicated query terms

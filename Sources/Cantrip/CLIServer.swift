@@ -200,6 +200,8 @@ final class CLIServer {
                     outputTokens: usage.outputTokens, costUSD: usage.costUSD
                 )
                 self.appendRunEvent(usageEvent, durable: true)
+            case .context:
+                break
             case .approval(let approval):
                 var approvalEvent = RunJournal.Event(sessionID: self.journalSessionID, runID: runID, kind: .approval)
                 approvalEvent.tool = approval.tool
