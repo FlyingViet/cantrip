@@ -165,6 +165,11 @@ struct CantripSessionDrawer: View {
                     .padding(.top, 8)
                     .accessibilityIdentifier("cantrip-tab-error")
             }
+            if model.isConfigured {
+                CantripLiveActivityToggle()
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+            }
             Button(action: {
                 if isModal { onDismiss() }
                 onCreate()

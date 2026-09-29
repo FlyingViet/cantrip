@@ -671,8 +671,10 @@ Cantrip Agent, or tap a row to open that tab.
 While any tab is running or needs input, a **Live Activity** shows the same rows
 on the Lock Screen and in the Dynamic Island, with a timer for the longest
 running tab. It ends about a minute after the last tab finishes and stays on the
-Lock Screen for 15 minutes. Turn it off in **Settings > Widget and Live
-Activity**; iOS Settings can also disable Live Activities for the app.
+Lock Screen for 15 minutes. Turn it on or off with the **Live Activity** switch
+in the Tabs list, the hamburger menu, or **Settings > Widget and Live
+Activity**. Turning it on while tabs are running starts it right away; iOS
+Settings can also disable Live Activities for the app.
 
 The Mac refreshes both with Apple push (widget refreshes and Live Activity
 updates), using the same `~/.config/Cantrip/apns.json` key as alerts, and needs

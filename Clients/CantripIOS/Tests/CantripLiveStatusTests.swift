@@ -190,6 +190,23 @@ final class CantripLiveStatusTests: XCTestCase {
         controller.pairingChanged(serverID: nil, token: nil, baseURL: nil, tailscaleOnly: false, installationID: installation)
     }
 
+    func testTurningTheLiveActivityOnFetchesStatusRightAway() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "live-status-\(UUID().uuidString)"))
+        defaults.set(false, forKey: CantripLiveStatusController.enabledKey)
+        let controller = CantripLiveStatusController(defaults: defaults)
+        controller.uploader = { _ in CantripLiveStatusSubscriptionStatus(configured: true, message: "") }
+        controller.pairingChanged(serverID: UUID(), token: "t", baseURL: nil, tailscaleOnly: false, installationID: UUID())
+        let fetched = expectation(description: "fetched without waiting for the next poll")
+        controller.fetcher = {
+            fetched.fulfill()
+            throw URLError(.cancelled)
+        }
+        controller.liveActivitiesEnabled = true
+        await fulfillment(of: [fetched], timeout: 2)
+        XCTAssertEqual(defaults.object(forKey: CantripLiveStatusController.enabledKey) as? Bool, true)
+        controller.pairingChanged(serverID: nil, token: nil, baseURL: nil, tailscaleOnly: false, installationID: UUID())
+    }
+
     func testSameContentIgnoresReadTime() throws {
         var snapshot = try CantripLiveStatusFetcher.decode(Data(hostJSON.utf8))
         let earlier = snapshot

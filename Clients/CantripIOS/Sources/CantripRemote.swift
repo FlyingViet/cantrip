@@ -2994,6 +2994,9 @@ struct CantripRemoteView: View {
                     ChatSettingsButton { showSettings = true }
                 }, trailing: {
                     StableMenu(state: model.isConfigured) {
+                        if model.isConfigured {
+                            CantripLiveActivityToggle()
+                        }
                         CantripMacMenuActions(remote: model, showingMaintenance: $showCantripMaintenance) {
                             composerFocused = false
                         }

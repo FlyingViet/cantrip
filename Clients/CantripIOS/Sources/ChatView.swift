@@ -1451,6 +1451,9 @@ struct ChatView: View {
                     Label("Tabs", systemImage: "rectangle.stack")
                 }
                 .disabled(!state.remoteTabsEnabled)
+                if state.macControlsEnabled {
+                    CantripLiveActivityToggle()
+                }
                 if state.canResume {
                     Button {
                         Task {
