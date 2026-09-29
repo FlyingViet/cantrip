@@ -23,13 +23,15 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var runID: UUID?
     /// Interactive MCP App views returned by this reply's tool calls.
     var apps: [MCPAppPayload] = []
+    /// A prompt's context size and its run's token use.
+    var promptUsage: PromptUsage?
     enum Role: String, Codable { case user, assistant, error }
     struct ReasoningMark: Equatable {
         let activities: Int
         let textBytes: Int
     }
     // Activities and thinking are runtime-only; transcripts skip them.
-    private enum CodingKeys: String, CodingKey { case id, role, text, author, runID, apps }
+    private enum CodingKeys: String, CodingKey { case id, role, text, author, runID, apps, promptUsage }
 }
 
 extension ChatMessage {
@@ -85,6 +87,7 @@ extension ChatMessage {
         author = try container.decodeIfPresent(String.self, forKey: .author)
         runID = try container.decodeIfPresent(UUID.self, forKey: .runID)
         apps = (try? container.decodeIfPresent([MCPAppPayload].self, forKey: .apps)) ?? []
+        promptUsage = try? container.decodeIfPresent(PromptUsage.self, forKey: .promptUsage)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -95,6 +98,7 @@ extension ChatMessage {
         try container.encodeIfPresent(author, forKey: .author)
         try container.encodeIfPresent(runID, forKey: .runID)
         if !apps.isEmpty { try container.encode(apps, forKey: .apps) }
+        try container.encodeIfPresent(promptUsage, forKey: .promptUsage)
     }
 }
 
@@ -185,6 +189,8 @@ final class ChatSession: ObservableObject {
     private var currentRunBackend: BackendKind?
     private var currentAttempt = 0
     private var runningBackendKind: BackendKind?
+    /// The prompt whose line shows this run's context and token use.
+    private var promptUsageMessageID: UUID?
     private var activityStartedAt: [String: Date] = [:]
     private var recordedArtifacts: Set<String> = []
     private var journal: RunJournal?
@@ -480,6 +486,7 @@ final class ChatSession: ObservableObject {
         currentRunMode = mode
         currentRunBackend = backend
         currentAttempt = 1
+        promptUsageMessageID = nil
         activityStartedAt.removeAll()
         recordedArtifacts.removeAll()
 
@@ -613,6 +620,14 @@ final class ChatSession: ObservableObject {
             costUSD: usage.costUSD
         )
         appendRunEvent(event, durable: true)
+    }
+
+    private func updatePromptUsage(_ update: (inout PromptUsage, _ typedCharacters: Int) -> Void) {
+        guard let promptUsageMessageID,
+              let index = messages.firstIndex(where: { $0.id == promptUsageMessageID }) else { return }
+        var usage = messages[index].promptUsage ?? PromptUsage()
+        update(&usage, messages[index].text.count)
+        if usage != messages[index].promptUsage { messages[index].promptUsage = usage }
     }
 
     private func recordApproval(_ approval: BackendApproval) {
@@ -1338,7 +1353,7 @@ final class ChatSession: ObservableObject {
         let isFirstOfConversation = messages.isEmpty
         let previousTurns = completedConversationTurns()
         if automaticTitle == "New chat" { automaticTitle = String(prompt.prefix(34)) }
-        appendRunMessage(ChatMessage(role: .user, text: prompt))
+        promptUsageMessageID = appendRunMessage(ChatMessage(role: .user, text: prompt))
         appendRunMessage(ChatMessage(role: .assistant, text: ""))
         isStreaming = true
         statusText = "Thinking…"
@@ -1709,6 +1724,8 @@ final class ChatSession: ObservableObject {
             }
         case .usage(let usage):
             recordUsage(usage)
+        case .context:
+            break // several models share the prompt
         case .approval(let approval):
             recordApproval(approval)
         case .done:
@@ -1806,6 +1823,8 @@ final class ChatSession: ObservableObject {
                     }
                 case .usage(let usage):
                     self.recordUsage(usage)
+                case .context:
+                    break
                 case .approval(let approval):
                     self.recordApproval(approval)
                 case .done:
@@ -2165,6 +2184,9 @@ final class ChatSession: ObservableObject {
             statusText = currentActivity?.title ?? "Thinking…"
         case .usage(let usage):
             recordUsage(usage)
+            updatePromptUsage { promptUsage, _ in promptUsage.apply(usage) }
+        case .context(let context):
+            updatePromptUsage { $0.apply(context, typedCharacters: $1) }
         case .approval(let approval):
             recordApproval(approval)
         case .done:

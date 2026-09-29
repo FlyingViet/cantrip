@@ -23,6 +23,9 @@ enum RemoteHistory {
             },
         ]
         if let author = message.author { result["author"] = author }
+        if message.role == .user, let usage = message.promptUsage, !usage.isEmpty {
+            result["promptUsage"] = usage.snapshot
+        }
         let reasoning = ReasoningStep.steps(from: message.reasoningBlocks)
         if !reasoning.isEmpty {
             result["reasoning"] = reasoning.enumerated().map { $1.snapshot(number: $0 + 1) }

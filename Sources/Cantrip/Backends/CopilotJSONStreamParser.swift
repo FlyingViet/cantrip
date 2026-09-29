@@ -24,6 +24,8 @@ struct CopilotJSONStreamParser {
     private var pendingSubagents: [String: SubagentInfo] = [:]
     /// Whether the session can stop one subagent (SDK `tasks.cancel`).
     private let canCancelSubagents: Bool
+    /// The runtime reports the root context window (`session.usage_info`).
+    private var contextReported = false
 
     init(canCancelSubagents: Bool = false) {
         self.canCancelSubagents = canCancelSubagents
@@ -216,12 +218,31 @@ struct CopilotJSONStreamParser {
             var events: [BackendEvent] = [.usage(BackendUsage(
                 backend: "copilot", costUSD: 0,
                 inputTokens: input,
-                outputTokens: output
+                outputTokens: output,
+                cachedInputTokens: eventData?["cacheReadTokens"] as? Int ?? 0
             ))]
             if let agentID = object["agentId"] as? String {
                 events += updateSubagent(agentID: agentID) { $0.tokens += input + output }
+            } else if !contextReported {
+                // Runtimes without session.usage_info: the first call's input is the context.
+                events.append(.context(BackendContextUsage(
+                    tokens: input, limit: eventData?["maxPromptTokens"] as? Int)))
             }
             return events
+
+        case "session.usage_info":
+            guard object["agentId"] == nil, let tokens = eventData?["currentTokens"] as? Int else { return [] }
+            contextReported = true
+            return [.context(BackendContextUsage(
+                tokens: tokens, limit: eventData?["tokenLimit"] as? Int,
+                systemTokens: eventData?["systemTokens"] as? Int,
+                toolTokens: eventData?["toolDefinitionsTokens"] as? Int,
+                conversationTokens: eventData?["conversationTokens"] as? Int))]
+
+        case "user.message":
+            guard object["agentId"] == nil,
+                  let sent = (eventData?["transformedContent"] ?? eventData?["content"]) as? String else { return [] }
+            return [.context(BackendContextUsage(messageCharacters: sent.count))]
 
         case "assistant.intent":
             guard let agentID = object["agentId"] as? String,

@@ -133,6 +133,7 @@ struct SessionTabTests {
         try await testMCPAppRemote()
         try testSubagentPlacement()
         try await testSubagentMonitor()
+        try await testPromptUsage()
         try await testHostProtection(manager: manager)
         print("Session tab persistence, protection, privacy, and web controls passed")
     }

@@ -2440,10 +2440,15 @@ private struct MessageRow: View {
     var body: some View {
         switch message.role {
         case .user:
-            PromptTextView(text: message.text)
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                PromptTextView(text: message.text)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if let usage = message.promptUsage, !usage.isEmpty {
+                    PromptUsageLine(usage: usage)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .assistant:
             // Tool steps render in the progress sidebar, not inline; MCP App
             // views (e.g. galleries) are part of the reply.

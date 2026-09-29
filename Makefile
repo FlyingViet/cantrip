@@ -61,7 +61,7 @@ test-features:
 test-copilot-parser:
 	@BIN="/tmp/cantrip-copilot-parser-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Tests/CopilotJSONStreamParserTests/*.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/PromptUsage.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Tests/CopilotJSONStreamParserTests/*.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-package-tracking:

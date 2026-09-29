@@ -226,6 +226,23 @@ struct BackendUsage {
     let costUSD: Double
     let inputTokens: Int
     let outputTokens: Int
+    /// Part of `inputTokens` read from the prompt cache.
+    var cachedInputTokens = 0
+    /// Model calls this usage covers (Claude reports a whole turn at once).
+    var modelCalls = 1
+}
+
+/// What the model had in its context window for the prompt being answered.
+/// Nil fields are unknown; each event carries only what the backend reported.
+struct BackendContextUsage: Equatable {
+    /// Tokens in context for this model call (system, tools and conversation).
+    var tokens: Int?
+    var limit: Int?
+    var systemTokens: Int?
+    var toolTokens: Int?
+    var conversationTokens: Int?
+    /// Characters of the message actually sent for this prompt, including context Cantrip added.
+    var messageCharacters: Int?
 }
 
 struct BackendApproval {
@@ -325,6 +342,7 @@ enum BackendEvent {
     case status(String)            // transient status, e.g. "Thinking"
     case activity(ToolActivity)    // tool lifecycle and file-change details
     case usage(BackendUsage)       // token/cost accounting for this run
+    case context(BackendContextUsage) // root agent's context window for this prompt
     case approval(BackendApproval) // harness policy decision for a tool
     case inputRequired(BackendInputRequest)
     case done                      // stream finished successfully
