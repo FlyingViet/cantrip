@@ -375,6 +375,17 @@ Tap a step to read the rest of it. Tool calls are still shown on the Mac and in
 the browser Remote. A Mac host without this update shows all of a reply's
 reasoning as one step.
 
+### Prompt context
+
+A small line under each prompt you send shows how many tokens were in the
+model's context and how full its window is, for example **38.2k tokens of
+context · 19% of 200k**. Tap it for the breakdown: system instructions, tool
+definitions, the conversation so far, this message's estimated size and how much
+of it Cantrip added (memory and context), then the run's model calls, input
+tokens with the cached share, output tokens and the latest context size. Copilot
+tabs report the full breakdown; Claude Code reports totals. A Mac host without
+this update shows no line.
+
 ### Video analysis
 
 Use the composer's **+ > Video Library** or **Choose Video File** to attach
