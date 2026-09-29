@@ -24,6 +24,8 @@ final class CantripLiveStatusController: ObservableObject {
             defaults.set(liveActivitiesEnabled, forKey: Self.enabledKey)
             if !liveActivitiesEnabled { endAll(immediately: true) }
             scheduleUpload(force: true)
+            // Show it now if tabs are already running, rather than at the next poll.
+            if liveActivitiesEnabled { fetchNow() }
         }
     }
     @Published private(set) var status: String?
@@ -106,9 +108,13 @@ final class CantripLiveStatusController: ObservableObject {
     /// Called after each successful tab-list poll while the app is open.
     func refreshIfDue(anyStreaming: Bool) {
         scheduleUpload()
-        guard fetchTask == nil, let fetcher, config != nil else { return }
         let interval: TimeInterval = anyStreaming ? 10 : 30
         guard lastFetch.map({ Date().timeIntervalSince($0) >= interval }) ?? true else { return }
+        fetchNow()
+    }
+
+    private func fetchNow() {
+        guard fetchTask == nil, let fetcher, config != nil else { return }
         lastFetch = Date()
         fetchTask = Task { [weak self] in
             defer { self?.fetchTask = nil }
@@ -272,21 +278,32 @@ final class CantripLiveStatusController: ObservableObject {
     static func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
 }
 
+/// The Live Activity switch, shared by Settings, the tabs drawer and the chat menu.
+struct CantripLiveActivityToggle: View {
+    @ObservedObject private var controller = CantripLiveStatusController.shared
+    var title = "Live Activity"
+
+    var body: some View {
+        Toggle(isOn: $controller.liveActivitiesEnabled) {
+            Label(title, systemImage: "dot.radiowaves.left.and.right")
+        }
+        .accessibilityIdentifier("cantrip.liveActivityToggle")
+    }
+}
+
 struct CantripLiveStatusSettingsSection: View {
     @ObservedObject private var controller = CantripLiveStatusController.shared
 
     var body: some View {
         Section {
-            Toggle(isOn: $controller.liveActivitiesEnabled) {
-                Label("Live Activity while tabs run", systemImage: "dot.radiowaves.left.and.right")
-            }
+            CantripLiveActivityToggle(title: "Live Activity while tabs run")
             if let status = controller.status {
                 Text(status).font(.footnote).foregroundStyle(.secondary)
             }
         } header: {
             Text("Widget and Live Activity")
         } footer: {
-            Text("Add the Cantrip Tabs widget from your Home Screen in medium or large size to see which tabs are running, need input, or finished. Tap a tab to open it. The Live Activity shows running tabs on the Lock Screen and in the Dynamic Island, and puts a tab that's waiting for your approval or answer at the top. The Mac refreshes both with Apple push, set up the same way as alerts. Private tabs are never shown.")
+            Text("Add the Cantrip Tabs widget from your Home Screen in medium or large size to see which tabs are running, need input, or finished. Tap a tab to open it. The Live Activity shows running tabs on the Lock Screen and in the Dynamic Island, and puts a tab that's waiting for your approval or answer at the top. You can also switch the Live Activity from the Tabs list or the menu. The Mac refreshes both with Apple push, set up the same way as alerts. Private tabs are never shown.")
         }
     }
 }
