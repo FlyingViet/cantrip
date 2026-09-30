@@ -456,6 +456,8 @@ final class RemoteControlServer {
         guard request.path == "/api/v1/sessions"
                 || request.path == "/api/v1/ready"
                 || request.path.hasPrefix("/api/v1/sessions/")
+                || request.path == "/api/v1/home"
+                || request.path.hasPrefix("/api/v1/home/")
                 || request.path == "/api/v1/github/builds"
                 || request.path == "/api/v1/memory"
                 || request.path == "/api/v1/memory/document"
@@ -672,18 +674,25 @@ final class RemoteControlServer {
             return
         }
 
+        if request.path == "/api/v1/home" || request.path.hasPrefix("/api/v1/home/") {
+            handleCantripHome(
+                request, json: json, manager: manager,
+                recentExchanges: recentExchanges, on: connection
+            )
+            return
+        }
+
         let tail = String(request.path.dropFirst("/api/v1/sessions/".count))
         let parts = tail.split(separator: "/", omittingEmptySubsequences: true)
         guard let rawID = parts.first,
               let id = UUID(uuidString: String(rawID)),
-              let sessionIndex = manager.sessions.firstIndex(where: {
-                  $0.id == id && !$0.isPrivate
-              })
+              let session = manager.managedSession(id: id),
+              !session.isPrivate,
+              (!session.isCantripHome || AppSettings.shared.cantripHomeEnabled)
         else {
             sendError(404, "session not found", on: connection)
             return
         }
-        let session = manager.sessions[sessionIndex]
 
         if parts.count >= 3, parts[1] == "apps" {
             handleMCPApp(request, json: json, session: session, appID: String(parts[2]),
@@ -781,7 +790,7 @@ final class RemoteControlServer {
                         try await RemoteVideoAttachments.shared.prepare(sessionID: id, uploadID: uploadID)
                         upload = nil
                     }
-                    guard manager.sessions.contains(where: { $0.id == id && !$0.isPrivate }) else {
+                    guard manager.managedSession(id: id).map({ !$0.isPrivate }) == true else {
                         sendError(404, "session not found", on: connection)
                         return
                     }
@@ -954,7 +963,7 @@ final class RemoteControlServer {
             Task {
                 do {
                     let data = try await generatedImages.read(reference, sessionID: id, thumbnail: parts.count == 5)
-                    guard let current = manager.sessions.first(where: { $0.id == id && !$0.isPrivate }),
+                    guard                     let current = manager.managedSession(id: id), !current.isPrivate,
                           let message = current.messages.first(where: { $0.id == messageID && $0.role == .assistant }),
                           RemoteGeneratedImages.presentation(message.text, messageID: messageID)
                             .images.contains(where: { $0.id == imageID }) else {
@@ -995,7 +1004,7 @@ final class RemoteControlServer {
                     let data = try await Task.detached(priority: .userInitiated) {
                         try RemoteImageAttachments.read(id: imageID, sessionID: id, thumbnail: thumbnail)
                     }.value
-                    guard manager.sessions.contains(where: { $0.id == id && !$0.isPrivate }) else {
+                    guard manager.managedSession(id: id).map({ !$0.isPrivate }) == true else {
                         sendError(404, "session not found", on: connection)
                         return
                     }
@@ -1120,7 +1129,7 @@ final class RemoteControlServer {
                     Task {
                         do {
                             let video = try await RemoteVideoAttachments.shared.claim(sessionID: id, uploadID: uploadID)
-                            guard manager.sessions.contains(where: { $0 === session && !$0.isPrivate }),
+                            guard manager.managedSession(id: id) === session, !session.isPrivate,
                                   session.supportsRemoteImages else {
                                 sendError(409, "The session changed before the video could be sent.", on: connection)
                                 return
@@ -1198,6 +1207,10 @@ final class RemoteControlServer {
                 sendError(409, SessionTabError.locked.localizedDescription, on: connection)
                 return
             }
+            guard let sessionIndex = manager.sessions.firstIndex(where: { $0 === session }) else {
+                sendError(409, "This permanent session cannot be closed.", on: connection)
+                return
+            }
             manager.close(sessionIndex)
             let candidate = manager.sessions[min(sessionIndex, manager.sessions.count - 1)]
             let replacement = candidate.isPrivate
@@ -1206,6 +1219,131 @@ final class RemoteControlServer {
             sendSession(replacement, recentExchanges: recentExchanges, afterJournal: session, on: connection)
         default:
             sendError(404, "action not found", on: connection)
+        }
+    }
+
+    @MainActor
+    private func handleCantripHome(
+        _ request: HTTPRequest,
+        json: [String: Any]?,
+        manager: SessionManager,
+        recentExchanges: Int?,
+        on connection: RemoteRequestConnection
+    ) {
+        guard AppSettings.shared.cantripHomeEnabled else {
+            sendError(409, "Turn on Cantrip Home in the Mac's Cantrip settings first.", on: connection)
+            return
+        }
+        let store = CantripHomeStore.shared
+        let parts = request.path.split(separator: "/", omittingEmptySubsequences: true)
+        if parts.count == 3 {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            let session = manager.homeSession
+            if connection.trace.usesPagedHistory {
+                let summary = snapshot(session, includeMessages: false, on: connection)
+                if request.query("revision") == summary["historyRevision"] as? String {
+                    sendJSON(["unchanged": true], on: connection)
+                    return
+                }
+                sendPagedSession(
+                    session, summary: summary, end: session.messages.endIndex,
+                    recentExchanges: recentExchanges, on: connection
+                )
+            } else {
+                sendJSON(["session": snapshot(session, on: connection)], on: connection)
+            }
+            return
+        }
+        guard parts.count >= 4 else {
+            sendError(404, "not found", on: connection)
+            return
+        }
+        switch String(parts[3]) {
+        case "tasks":
+            if parts.count == 4 {
+                guard request.method == "GET" else {
+                    sendError(405, "Tasks are created conversationally in Cantrip Home.", on: connection)
+                    return
+                }
+                let value = CantripHomeTasksSnapshot(
+                    tasks: store.tasks, revision: store.revision.uuidString,
+                    error: store.storageError
+                )
+                sendEncoded(on: connection) { try JSONEncoder().encode(value) }
+                return
+            }
+            guard parts.count == 5, let id = UUID(uuidString: String(parts[4])) else {
+                sendError(404, "task not found", on: connection)
+                return
+            }
+            do {
+                switch request.method {
+                case "PATCH":
+                    guard request.body.count <= 16_384, let json,
+                          !json.isEmpty,
+                          Set(json.keys).isSubset(of: ["title", "prompt", "enabled"]),
+                          json["title"] == nil || json["title"] is String,
+                          json["prompt"] == nil || json["prompt"] is String,
+                          json["enabled"] == nil || (json["enabled"] as? NSNumber).map({
+                              CFGetTypeID($0) == CFBooleanGetTypeID()
+                          }) == true else {
+                        throw CantripHomeError(400, "Provide title, prompt, and/or enabled.")
+                    }
+                    let update = try JSONDecoder().decode(
+                        CantripHomeTaskUpdate.self, from: request.body
+                    )
+                    let task = try store.update(id: id, update: update)
+                    sendEncoded(on: connection) { try JSONEncoder().encode(task) }
+                case "DELETE":
+                    try store.delete(id: id)
+                    sendJSON(["deleted": true], on: connection)
+                default:
+                    sendError(405, "method not allowed", on: connection)
+                }
+            } catch let error as CantripHomeError {
+                sendError(error.status, error.message, on: connection)
+            } catch {
+                Log.write("home: task update failed: \(error.localizedDescription)")
+                sendError(500, "Could not save the task on the Mac.", on: connection)
+            }
+        case "artifacts":
+            if parts.count == 4 {
+                guard request.method == "GET" else {
+                    sendError(405, "method not allowed", on: connection)
+                    return
+                }
+                let value = CantripHomeArtifactsSnapshot(
+                    artifacts: store.artifacts, revision: store.revision.uuidString
+                )
+                sendEncoded(on: connection) { try JSONEncoder().encode(value) }
+                return
+            }
+            guard parts.count == 5, request.method == "GET",
+                  let id = UUID(uuidString: String(parts[4])) else {
+                sendError(404, "artifact not found", on: connection)
+                return
+            }
+            do {
+                let (artifact, data) = try store.artifactData(id: id)
+                sendJSON([
+                    "artifact": [
+                        "id": artifact.id.uuidString,
+                        "title": artifact.title,
+                        "mimeType": artifact.mimeType,
+                    ],
+                    "data": data.base64EncodedString(),
+                ], on: connection)
+            } catch let error as CantripHomeError {
+                sendError(error.status, error.message, on: connection)
+            } catch {
+                Log.write("home: artifact read failed: \(error.localizedDescription)")
+                sendError(404, "Artifact is no longer available on the Mac.", on: connection)
+            }
+        default:
+            sendError(404, "not found", on: connection)
         }
     }
 
@@ -1263,12 +1401,13 @@ final class RemoteControlServer {
             "customTitle": session.tabMetadata.customTitle ?? "",
             "isLocked": session.isLocked,
             "isLocalPrivate": session.isLocalPrivate,
+            "isCantripHome": session.isCantripHome,
             "supportsPrivateLocalSettings": session.isLocalPrivate,
             "supportsInputRequests": true,
             "supportsChatInputReplies": true,
             "pendingInputCount": session.pendingInputs.count,
-            "supportsTabMetadata": true,
-            "supportsTabReordering": true,
+            "supportsTabMetadata": !session.isCantripHome,
+            "supportsTabReordering": !session.isCantripHome,
             "supportsModelSettings": !session.isLocalPrivate,
             "modelSettingsRevision": session.modelSettingsRevision,
             "workdir": session.workdir,
@@ -1550,7 +1689,7 @@ final class RemoteControlServer {
     private func serveMCPAppView(_ token: String, on connection: RemoteRequestConnection) {
         guard token.count == 48, let entry = mcpAppViewTokens.removeValue(forKey: token),
               entry.expires > Date(), AppSettings.shared.copilotMCPApps,
-              let session = manager?.sessions.first(where: { $0.id == entry.sessionID && !$0.isPrivate }),
+              let session = manager?.managedSession(id: entry.sessionID), !session.isPrivate,
               let app = session.messages.lazy.flatMap(\.apps).last(where: { $0.id == entry.appID }) else {
             sendError(404, "This view address expired. Reload the conversation.", on: connection)
             return

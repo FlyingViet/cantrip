@@ -43,6 +43,10 @@ final class AppSettings: ObservableObject {
     @Published var remoteControlPort: Int {
         didSet { d.set(remoteControlPort, forKey: "remoteControlPort") }
     }
+    /// Permanent hidden session used by Cantrip Agent's focused Home mode.
+    @Published var cantripHomeEnabled: Bool {
+        didSet { d.set(cantripHomeEnabled, forKey: "cantripHomeEnabled") }
+    }
 
     var remoteControlToken: String {
         do { return try RemoteControlCredentials.load() ?? "" }
@@ -409,6 +413,7 @@ final class AppSettings: ObservableObject {
             "panelOpacity": panelOpacity,
             "remoteControlEnabled": remoteControlEnabled,
             "remoteControlPort": remoteControlPort,
+            "cantripHomeEnabled": cantripHomeEnabled,
         ]
         if let data = try? JSONSerialization.data(
             withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]) {
@@ -457,6 +462,7 @@ final class AppSettings: ObservableObject {
         str("memoryPath") { self.memoryPath = $0 }
         bool("fileRAGEnabled") { self.fileRAGEnabled = $0 }
         bool("remoteControlEnabled") { self.remoteControlEnabled = $0 }
+        bool("cantripHomeEnabled") { self.cantripHomeEnabled = $0 }
         if let port = dict["remoteControlPort"] as? Int {
             remoteControlPort = port
         }
@@ -532,6 +538,7 @@ final class AppSettings: ObservableObject {
         remoteControlEnabled = d.bool(forKey: "remoteControlEnabled")
         let storedRemotePort = d.integer(forKey: "remoteControlPort")
         remoteControlPort = storedRemotePort == 0 ? 8765 : storedRemotePort
+        cantripHomeEnabled = d.bool(forKey: "cantripHomeEnabled")
         backend = BackendKind(rawValue: d.string(forKey: "backend") ?? "") ?? .claudeCode
         claudePath = d.string(forKey: "claudePath") ?? ""
         claudeWorkdir = d.string(forKey: "claudeWorkdir") ?? NSHomeDirectory()
