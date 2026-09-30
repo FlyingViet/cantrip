@@ -53,6 +53,11 @@ The macOS app includes:
 - **Automatic sending:** a separate, tool-free model call interprets busy-run
   messages as context, corrections, or follow-ups. Uncertain decisions queue
   safely; manual Queue/Redirect/Inject overrides remain available.
+- **Background waiters:** after starting a long external build, TestFlight upload,
+  download, or similar job, the agent can hand passive monitoring to a dedicated
+  watcher and continue independent work. The watcher stays visible in the subagent
+  monitor; when it finishes, Cantrip wakes the same run and continues from where it
+  paused instead of making you send another message.
 - **Live context:** local Copilot and Claude Code can accept **Inject** messages
   without stopping their current work, including from Cantrip Agent and Mac/browser
   Remote. Copilot uses a persistent native SDK session per tab; accepted context is

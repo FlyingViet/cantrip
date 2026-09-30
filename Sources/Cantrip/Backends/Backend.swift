@@ -118,6 +118,9 @@ struct SubagentInfo: Equatable, Codable {
     static let reasoningLimit = 12
 
     var isActive: Bool { status == .queued || status == .running || status == .idle }
+    var isBackgroundWatcher: Bool {
+        background && agentType == "task" && name.lowercased().hasPrefix("watch-")
+    }
 
     mutating func addReasoning(_ block: String) {
         guard reasoning.last != block else { return }

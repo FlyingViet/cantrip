@@ -58,8 +58,20 @@ final class CopilotBackend: Backend {
     installs where only the outcome matters (task), or genuinely independent threads run \
     in parallel. Do small lookups and edits yourself. Give each subagent a complete, \
     self-contained brief and ask for a concise result: findings with file:line, or pass/fail \
-    with only the relevant errors. Don't re-read what a subagent reported, don't launch \
-    speculative agents, and wait for background agents before finishing your reply.
+    with only the relevant errors. Don't re-read what a subagent reported or launch \
+    speculative agents.
+
+    For passive waiting after you have already started an external build, TestFlight upload, \
+    download, or similar long-running job, launch one background `task` agent whose name \
+    starts with `watch-`. Its only job is to wait with a bounded timeout, verify the terminal \
+    result, and report it; it must not edit files or start the job again. Continue all \
+    independent work immediately. Do not call `read_agent` or keep the root turn blocked only \
+    to poll a `watch-` agent. When your immediate work is done, briefly tell the user the \
+    watcher is continuing and finish the root turn. Cantrip keeps that run available, wakes \
+    you when the watcher finishes, and asks you to read its result once so you can continue \
+    from the exact point you paused. Never use the `watch-` prefix for implementation, \
+    research, or other delegated work. Wait for every other background agent before finishing \
+    your reply.
     """
 
     init(bridgeScript: String = CopilotSessionBridge.script) {
@@ -343,6 +355,13 @@ final class CopilotBackend: Backend {
                 case "started":
                     ready = true
                     onEvent?(.status("Thinking..."))
+                case "watcherWaiting":
+                    let count = object["count"] as? Int ?? 1
+                    onEvent?(.status(count == 1
+                        ? "Background watcher running"
+                        : "\(count) background watchers running"))
+                case "watcherResuming":
+                    onEvent?(.status("Watcher finished; resuming..."))
                 case "delivery":
                     guard let id = object["id"] as? String,
                           let completion = deliveries.removeValue(forKey: id) else { continue }
