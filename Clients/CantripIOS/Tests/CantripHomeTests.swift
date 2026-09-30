@@ -174,6 +174,8 @@ final class CantripHomeTests: XCTestCase {
                 return (200, Data(#"{"deleted":true}"#.utf8))
             case ("GET", let value) where value.hasPrefix("/api/v1/home/artifacts/"):
                 return (200, Data(#"{"artifact":{"id":"20000000-0000-0000-0000-000000000001","title":"Flight report","mimeType":"text/markdown"},"data":"UmVwb3J0"}"#.utf8))
+            case ("DELETE", let value) where value.hasPrefix("/api/v1/home/artifacts/"):
+                return (200, Data(#"{"deleted":true}"#.utf8))
             default:
                 XCTFail("Unexpected Home request: \(request.httpMethod ?? "") \(path)")
                 return (404, Data(#"{"error":"unexpected"}"#.utf8))
@@ -212,7 +214,11 @@ final class CantripHomeTests: XCTestCase {
         _ = try await api.deleteHomeTaskRecord(taskID: tracker.id, recordID: record.id)
         let data = try await api.homeArtifactData(id: try XCTUnwrap(artifacts.artifacts.first?.id))
         XCTAssertEqual(String(decoding: data, as: UTF8.self), "Report")
+        try await api.deleteHomeArtifact(id: try XCTUnwrap(artifacts.artifacts.first?.id))
         XCTAssertTrue(requests.contains { $0.0 == "GET" && $0.1 == "/api/v1/home" })
+        XCTAssertTrue(requests.contains {
+            $0.0 == "DELETE" && $0.1 == "/api/v1/home/artifacts/20000000-0000-0000-0000-000000000001"
+        })
     }
 
     func testUnchangedHomeRefreshDoesNotRepublishSnapshots() async throws {
@@ -224,6 +230,10 @@ final class CantripHomeTests: XCTestCase {
             let path = URLComponents(
                 url: request.url!, resolvingAgainstBaseURL: false
             )?.percentEncodedPath ?? ""
+            if request.httpMethod == "DELETE",
+               path.hasPrefix("/api/v1/home/artifacts/") {
+                return (200, Data(#"{"deleted":true}"#.utf8))
+            }
             switch path {
             case "/api/v1/home": return (200, self.homeSessionPayload())
             case "/api/v1/home/tasks": return (200, unchangedTasks)
@@ -261,6 +271,12 @@ final class CantripHomeTests: XCTestCase {
         XCTAssertEqual(taskPublishes, 0)
         XCTAssertEqual(artifactPublishes, 0)
         XCTAssertEqual(loadingPublishes, 0)
+
+        let artifact = try XCTUnwrap(model.homeArtifacts.first)
+        let deleted = await model.deleteHomeArtifact(artifact)
+        XCTAssertTrue(deleted)
+        XCTAssertTrue(model.homeArtifacts.isEmpty)
+        XCTAssertEqual(artifactPublishes, 1)
     }
 
     func testHomeFocusedScreenshots() async throws {

@@ -1194,6 +1194,14 @@ struct CantripRemoteAPI {
         return response.data
     }
 
+    func deleteHomeArtifact(id: UUID) async throws {
+        struct Response: Decodable { let deleted: Bool }
+        let response: Response = try await request(
+            path: "/api/v1/home/artifacts/\(id.uuidString)", method: "DELETE"
+        )
+        guard response.deleted else { throw CantripRemoteError.invalidResponse }
+    }
+
     func createSession() async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions",
@@ -2427,6 +2435,23 @@ final class CantripRemoteModel: ObservableObject {
             if let index = homeTasks.firstIndex(where: { $0.id == updated.id }) {
                 homeTasks[index] = updated
             }
+            homeDataError = nil
+            return true
+        } catch {
+            homeDataError = error.localizedDescription
+            return false
+        }
+    }
+
+    func deleteHomeArtifact(_ artifact: CantripHomeArtifact) async -> Bool {
+        guard !isMutating else { return false }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            try await performAuthenticated(allowFallback: false) {
+                try await $0.deleteHomeArtifact(id: artifact.id)
+            }
+            homeArtifacts.removeAll { $0.id == artifact.id }
             homeDataError = nil
             return true
         } catch {

@@ -888,6 +888,7 @@ struct CantripHomeArtifactsView: View {
     @State private var previewURL: URL?
     @State private var loadingID: UUID?
     @State private var previewError: String?
+    @State private var deleting: CantripHomeArtifact?
 
     private let columns = [
         GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12)
@@ -969,51 +970,94 @@ struct CantripHomeArtifactsView: View {
         } message: {
             Text(previewError ?? "")
         }
+        .confirmationDialog(
+            "Delete \(deleting?.title ?? "artifact")?",
+            isPresented: Binding(
+                get: { deleting != nil },
+                set: { if !$0 { deleting = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let deleting {
+                Button("Delete artifact", role: .destructive) {
+                    let artifact = deleting
+                    self.deleting = nil
+                    Task { _ = await remote.deleteHomeArtifact(artifact) }
+                }
+            }
+            Button("Cancel", role: .cancel) { deleting = nil }
+        } message: {
+            Text("This permanently deletes the file from your Mac.")
+        }
     }
 
     private func artifactCard(_ artifact: CantripHomeArtifact) -> some View {
-        Button {
-            guard loadingID == nil else { return }
-            loadingID = artifact.id
-            Task {
-                defer { loadingID = nil }
-                do { previewURL = try await remote.homeArtifactFile(artifact) }
-                catch { previewError = error.localizedDescription }
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.1))
-                    if loadingID == artifact.id {
-                        ProgressView()
-                    } else {
-                        Image(systemName: artifactIcon(artifact))
-                            .font(.system(size: 34))
-                            .foregroundStyle(.tint)
+        ZStack(alignment: .topTrailing) {
+            Button {
+                guard loadingID == nil else { return }
+                loadingID = artifact.id
+                Task {
+                    defer { loadingID = nil }
+                    do { previewURL = try await remote.homeArtifactFile(artifact) }
+                    catch { previewError = error.localizedDescription }
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.1))
+                        if loadingID == artifact.id {
+                            ProgressView()
+                        } else {
+                            Image(systemName: artifactIcon(artifact))
+                                .font(.system(size: 34))
+                                .foregroundStyle(.tint)
+                        }
                     }
+                    .frame(height: 104)
+                    Text(artifact.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                    HStack {
+                        Text(artifact.kind.capitalized)
+                        Spacer()
+                        Text(ByteCountFormatter.string(
+                            fromByteCount: Int64(artifact.size), countStyle: .file
+                        ))
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 }
-                .frame(height: 104)
-                Text(artifact.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-                HStack {
-                    Text(artifact.kind.capitalized)
-                    Spacer()
-                    Text(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .padding(10)
+                .background(Color(.secondarySystemBackground),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .contentShape(Rectangle())
             }
-            .padding(10)
-            .background(Color(.secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .disabled(loadingID != nil)
+            .accessibilityLabel("\(artifact.title), \(artifact.kind)")
+
+            Menu {
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    deleting = artifact
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: 32, height: 32)
+                    .background(.regularMaterial, in: Circle())
+                    .contentShape(Circle())
+            }
+            .padding(16)
+            .disabled(loadingID != nil)
+            .accessibilityLabel("Actions for \(artifact.title)")
         }
-        .buttonStyle(.plain)
-        .disabled(loadingID != nil)
-        .accessibilityLabel("\(artifact.title), \(artifact.kind)")
+        .contextMenu {
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                deleting = artifact
+            }
+        }
     }
 
     private func artifactIcon(_ artifact: CantripHomeArtifact) -> String {
