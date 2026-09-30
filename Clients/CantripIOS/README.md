@@ -386,7 +386,9 @@ Create automations or structured trackers conversationally in Chat. Automations
 can use one-time, interval, or weekday schedules. A tracker carries a validated
 field and presentation schema, so Tasks renders native searchable list, detail,
 add and edit screens without task-specific app code; records can also be updated
-through Chat. Tasks still supports review, editing, pause, resume, deletion and
+through Chat. Long-text values use full-width, left-aligned blocks so generated
+bullets and multi-line summaries remain readable. Tasks still supports review,
+editing, pause, resume, deletion and
 recent run outcomes. Scheduled results appear in the Home conversation.
 Documents and media created as Home deliverables are collected automatically in
 Artifacts and open with the system preview. The menu on each artifact can
