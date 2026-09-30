@@ -33,8 +33,6 @@ enum GatewayConnectionState: Equatable {
 final class HermesEnv: ObservableObject {
     private static let backendOrderKey = "hermes.backendOrder"
     private static let hiddenBackendsKey = "hermes.hiddenBackends"
-    static let homeDefaultVersionKey = "hermes.homeDefaultVersion"
-    private static let homeDefaultVersion = 1
 
     // Each user points this at their own HTTPS Hermes gateway. No default server.
     @AppStorage("hermes.baseURL") var baseURL: String = ""
@@ -78,16 +76,12 @@ final class HermesEnv: ObservableObject {
         backendOrder = order
         hiddenBackends = hidden
         let storedLane = defaults.string(forKey: "hermes.executionLane")
-        let shouldAdoptHomeDefault = defaults.integer(forKey: Self.homeDefaultVersionKey)
-            < Self.homeDefaultVersion
-        let restoredLane = shouldAdoptHomeDefault
-            ? ExecutionLane.home
-            : ExecutionLane(rawValue: storedLane ?? "") ?? .defaultLane
         let visible = order.filter { !hidden.contains($0) }
-        executionLane = visible.contains(restoredLane)
-            ? restoredLane
-            : Self.fallbackLane(in: visible)
-        defaults.set(Self.homeDefaultVersion, forKey: Self.homeDefaultVersionKey)
+        let restoredLane = ExecutionLane(rawValue: storedLane ?? "")
+        executionLane = visible.contains(.home)
+            ? .home
+            : restoredLane.flatMap { visible.contains($0) ? $0 : nil }
+                ?? Self.fallbackLane(in: visible)
         if executionLane.rawValue != storedLane {
             defaults.set(executionLane.rawValue, forKey: "hermes.executionLane")
         }
