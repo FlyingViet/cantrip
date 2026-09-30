@@ -1400,17 +1400,21 @@ struct ChatView: View {
     private var chatHeader: some View {
         ChatHeader(compact: vm.activeLane == .home || vm.activeLane == .cantrip) {
             if vm.activeLane == .cantrip {
-                CantripCenteredHeaderTitle(
-                    title: "Cantrip Remote",
-                    isConnected: remote.isConnected,
+                ExecutionLanePicker(
+                    env: env,
+                    remote: remote,
+                    centeredTitle: "Cantrip Remote",
                     isWorking: remote.selectedSession?.isStreaming == true
                 )
+                .disabled(vm.sending || importingImages || submittingRemote)
             } else if vm.activeLane == .home {
-                CantripCenteredHeaderTitle(
-                    title: "Cantrip Home",
-                    isConnected: remote.isConnected,
+                ExecutionLanePicker(
+                    env: env,
+                    remote: remote,
+                    centeredTitle: "Cantrip Home",
                     isWorking: remote.selectedSession?.isStreaming == true
                 )
+                .disabled(vm.sending || importingImages || submittingRemote)
             } else {
                 ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
                                 isWorking: vm.isWorking)
@@ -2550,9 +2554,23 @@ struct ExecutionLaneBadge: View {
     }
 }
 
-private struct ExecutionLanePicker: View {
+struct ExecutionLanePicker: View {
     @ObservedObject var env: HermesEnv
     @ObservedObject var remote: CantripRemoteModel
+    var centeredTitle: String?
+    var isWorking = false
+
+    init(
+        env: HermesEnv,
+        remote: CantripRemoteModel,
+        centeredTitle: String? = nil,
+        isWorking: Bool = false
+    ) {
+        self.env = env
+        self.remote = remote
+        self.centeredTitle = centeredTitle
+        self.isWorking = isWorking
+    }
 
     var body: some View {
         if env.selectableLanes.count == 1 {
@@ -2581,11 +2599,20 @@ private struct ExecutionLanePicker: View {
             currentLabel
         }
         .menuIndicator(.hidden)
+        .accessibilityHint("Switches between available backends")
         .accessibilityIdentifier("execution-lane-picker")
     }
 
     @ViewBuilder private var currentLabel: some View {
-        ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
+        if let centeredTitle {
+            CantripCenteredHeaderTitle(
+                title: centeredTitle,
+                isConnected: remote.isConnected,
+                isWorking: isWorking
+            )
+        } else {
+            ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
+        }
     }
 
     private func pickerTitle(_ lane: ExecutionLane) -> String {
