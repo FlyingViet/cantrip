@@ -48,6 +48,18 @@ final class CantripHomeTests: XCTestCase {
         XCTAssertEqual(CantripHomeSection.allCases, [.chat, .tasks, .artifacts])
     }
 
+    func testHomeBadgeTonesUseHiringLifecycleSemantics() {
+        XCTAssertEqual(CantripHomeBadgeTone(value: "Rejected"), .rejected)
+        XCTAssertEqual(CantripHomeBadgeTone(value: "Application declined"), .rejected)
+        XCTAssertEqual(CantripHomeBadgeTone(value: "Offer"), .offer)
+        XCTAssertEqual(CantripHomeBadgeTone(value: "Applied"), .inProgress)
+        XCTAssertEqual(
+            CantripHomeBadgeTone(value: "Recruiter conversation scheduled"),
+            .inProgress
+        )
+        XCTAssertEqual(CantripHomeBadgeTone(value: "Healthy"), .accent)
+    }
+
     func testHomeViewModelUsesPermanentLockedRemoteConversation() {
         let env = HermesEnv()
         let original = env.executionLane
