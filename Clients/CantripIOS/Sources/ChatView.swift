@@ -1416,13 +1416,8 @@ struct ChatView: View {
                     }
                 }
             } else if vm.activeLane == .home {
-                HStack(spacing: 8) {
-                    Image(systemName: "house.fill")
-                        .foregroundStyle(.tint)
-                    Text("Cantrip Home")
-                        .font(.headline)
-                }
-                .frame(maxWidth: .infinity, minHeight: 44)
+                ExecutionLanePicker(env: env, remote: remote, showsHomeTitle: true)
+                    .disabled(vm.sending || importingImages || submittingRemote)
             } else {
                 ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
                                 isWorking: vm.isWorking)
@@ -2255,9 +2250,8 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     var body: some View {
         VStack(spacing: 0) {
             if compact {
-                HStack(alignment: .center, spacing: 2) {
-                    connection()
-                    lane()
+                HStack(alignment: .center, spacing: 1) {
+                    title()
                     usage()
                     delivery()
                     if !displayTraits.hasVerticalBar {
@@ -2287,7 +2281,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         }
         .buttonStyle(.plain)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-        .padding(.horizontal, 12)
+        .padding(.horizontal, compact ? 4 : 12)
         .padding(.top, compact ? 2 : 8)
         .padding(.bottom, compact ? 2 : 4)
         .frame(maxWidth: .infinity)
@@ -2461,10 +2455,11 @@ struct ExecutionLaneBadge: View {
 private struct ExecutionLanePicker: View {
     @ObservedObject var env: HermesEnv
     @ObservedObject var remote: CantripRemoteModel
+    var showsHomeTitle = false
 
     var body: some View {
         if env.selectableLanes.count == 1 {
-            ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
+            currentLabel
         } else {
             laneMenu
         }
@@ -2486,10 +2481,18 @@ private struct ExecutionLanePicker: View {
                 .disabled(!env.isAvailable(lane))
             }
         } label: {
-            ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
+            currentLabel
         }
         .menuIndicator(.hidden)
         .accessibilityIdentifier("execution-lane-picker")
+    }
+
+    @ViewBuilder private var currentLabel: some View {
+        if showsHomeTitle, env.executionLane == .home {
+            CantripHomeHeaderTitle(isConnected: remote.isConnected)
+        } else {
+            ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
+        }
     }
 
     private func pickerTitle(_ lane: ExecutionLane) -> String {
@@ -2507,6 +2510,34 @@ private struct ExecutionLanePicker: View {
         default:
             lane.title
         }
+    }
+}
+
+struct CantripHomeHeaderTitle: View {
+    let isConnected: Bool
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "house.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.purple)
+            Text("Cantrip Home")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Circle()
+                .fill(isConnected ? Color.green : Color.gray)
+                .frame(width: 6, height: 6)
+        }
+        .layoutPriority(1)
+        .dynamicTypeSize(...DynamicTypeSize.large)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Cantrip Home")
+        .accessibilityValue(isConnected ? "Connected" : "Disconnected")
+        .accessibilityIdentifier("home.header.title")
     }
 }
 
