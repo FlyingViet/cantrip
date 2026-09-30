@@ -354,20 +354,22 @@ final class CopilotUsageTests: XCTestCase {
         }
     }
 
-    func testHomeHeaderKeepsTitleInOneCompactControlRow() throws {
+    func testRemoteHeadersUseCenteredCompactTitles() throws {
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
-        for width: CGFloat in [320, 393] {
-            for size: DynamicTypeSize in [.large, .accessibility5] {
-                assertHeaderLayout(
-                    scene: scene,
-                    width: width,
-                    size: size,
-                    mode: .auto,
-                    lane: .home,
-                    compact: true
-                )
+        for lane in [ExecutionLane.home, .cantrip] {
+            for width: CGFloat in [320, 393] {
+                for size: DynamicTypeSize in [.large, .accessibility5] {
+                    assertHeaderLayout(
+                        scene: scene,
+                        width: width,
+                        size: size,
+                        mode: .auto,
+                        lane: lane,
+                        compact: true
+                    )
+                }
             }
         }
     }
@@ -384,6 +386,7 @@ final class CopilotUsageTests: XCTestCase {
         var usageFrame = CGRect.zero
         var deliveryFrame = CGRect.zero
         var refreshFrame = CGRect.zero
+        var leadingFrame = CGRect.zero
         var menuFrame = CGRect.zero
         var titleFrame = CGRect.zero
         var headerFrame = CGRect.zero
@@ -402,7 +405,11 @@ final class CopilotUsageTests: XCTestCase {
                 ChatHeader(compact: compact) {
                     Group {
                         if compact {
-                            CantripHomeHeaderTitle(isConnected: isConnected)
+                            CantripCenteredHeaderTitle(
+                                title: lane == .home ? "Cantrip Home" : "Cantrip Remote",
+                                isConnected: isConnected,
+                                isWorking: isRefreshing
+                            )
                         } else {
                             ChatHeaderTitle(
                                 title: "Bass Compass project with a long tab name",
@@ -457,7 +464,18 @@ final class CopilotUsageTests: XCTestCase {
                 } settings: {
                     ChatSettingsButton {}
                 } leading: {
-                    ChatTabsButton(isEnabled: true) {}
+                    Group {
+                        if lane == .home {
+                            ExecutionLaneBadge(lane: .home, iconOnly: true)
+                        } else {
+                            ChatTabsButton(isEnabled: true) {}
+                        }
+                    }
+                        .onGeometryChange(for: CGRect.self) {
+                            $0.frame(in: .global)
+                        } action: {
+                            leadingFrame = $0
+                        }
                 } trailing: {
                     Button {} label: { ChatMenuIcon() }
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
@@ -478,66 +496,56 @@ final class CopilotUsageTests: XCTestCase {
         defer { window.isHidden = true }
         controller.view.layoutIfNeeded()
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
-        XCTAssertEqual(usageFrame.height, 44, accuracy: 1)
-        XCTAssertGreaterThanOrEqual(usageFrame.width, compact ? 44 : 92)
-        XCTAssertLessThanOrEqual(usageFrame.maxX, width - (compact ? 4 : 12))
         if compact {
             XCTAssertEqual(connectionFrame, .zero)
             XCTAssertEqual(laneFrame, .zero)
+            XCTAssertEqual(usageFrame, .zero)
+            XCTAssertEqual(deliveryFrame, .zero)
+            XCTAssertEqual(refreshFrame, .zero)
             XCTAssertEqual(titleFrame.height, 44, accuracy: 1)
-            XCTAssertGreaterThan(titleFrame.width, 85)
-            XCTAssertEqual(titleFrame.midY, usageFrame.midY, accuracy: 0.5)
-            XCTAssertGreaterThanOrEqual(titleFrame.minX, 4)
-            XCTAssertLessThanOrEqual(titleFrame.maxX, usageFrame.minX)
+            XCTAssertEqual(titleFrame.midX, width / 2, accuracy: 1)
+            XCTAssertEqual(leadingFrame.size, CGSize(width: 44, height: 44))
+            XCTAssertEqual(menuFrame.width, 44, accuracy: 0.5)
+            XCTAssertEqual(menuFrame.height, 44, accuracy: 0.5)
+            XCTAssertEqual(leadingFrame.minX, 12, accuracy: 1)
+            XCTAssertEqual(menuFrame.maxX, width - 12, accuracy: 1)
+            XCTAssertEqual(leadingFrame.midY, titleFrame.midY, accuracy: 0.5)
+            XCTAssertEqual(menuFrame.midY, titleFrame.midY, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(headerFrame.height, 48)
+            XCTAssertEqual(contentFrame.minY, headerFrame.maxY, accuracy: 1)
         } else {
+            XCTAssertEqual(usageFrame.height, 44, accuracy: 1)
+            XCTAssertGreaterThanOrEqual(usageFrame.width, 92)
+            XCTAssertLessThanOrEqual(usageFrame.maxX, width - 12)
             XCTAssertEqual(laneFrame.height, 44, accuracy: 1)
             XCTAssertEqual(laneFrame.midY, usageFrame.midY, accuracy: 0.5)
             XCTAssertLessThanOrEqual(laneFrame.maxX, usageFrame.minX)
             XCTAssertGreaterThanOrEqual(laneFrame.minX, 12)
-        }
-        if lane.usesCantripRemote {
-            XCTAssertEqual(refreshFrame.width, 44, accuracy: 0.5)
-            XCTAssertEqual(refreshFrame.height, 44, accuracy: 0.5)
-            XCTAssertEqual(refreshFrame.midY, usageFrame.midY, accuracy: 0.5)
-            if compact {
-                XCTAssertLessThanOrEqual(menuFrame.maxX, width - 4)
-                XCTAssertGreaterThanOrEqual(menuFrame.maxX, width - 50)
-            } else {
+            if lane.usesCantripRemote {
+                XCTAssertEqual(refreshFrame.width, 44, accuracy: 0.5)
+                XCTAssertEqual(refreshFrame.height, 44, accuracy: 0.5)
+                XCTAssertEqual(refreshFrame.midY, usageFrame.midY, accuracy: 0.5)
                 XCTAssertEqual(refreshFrame.maxX, width - 12, accuracy: 0.5)
-            }
-            XCTAssertLessThanOrEqual(usageFrame.maxX, refreshFrame.minX)
-            if !compact {
+                XCTAssertLessThanOrEqual(usageFrame.maxX, refreshFrame.minX)
                 XCTAssertEqual(connectionFrame.height, 44, accuracy: 1)
                 XCTAssertGreaterThanOrEqual(connectionFrame.width, 44)
                 XCTAssertEqual(connectionFrame.midY, usageFrame.midY, accuracy: 0.5)
                 XCTAssertEqual(connectionFrame.minX, 12, accuracy: 0.5)
                 XCTAssertLessThanOrEqual(connectionFrame.maxX, laneFrame.minX)
-            }
-            if hasSession {
-                XCTAssertEqual(deliveryFrame.width, 64, accuracy: 0.5)
-                XCTAssertEqual(deliveryFrame.height, 44, accuracy: 0.5)
-                XCTAssertEqual(usageFrame.midY, deliveryFrame.midY, accuracy: 0.5)
-                XCTAssertLessThanOrEqual(usageFrame.maxX, deliveryFrame.minX)
-                XCTAssertLessThanOrEqual(deliveryFrame.maxX, refreshFrame.minX)
+                if hasSession {
+                    XCTAssertEqual(deliveryFrame.width, 64, accuracy: 0.5)
+                    XCTAssertEqual(deliveryFrame.height, 44, accuracy: 0.5)
+                    XCTAssertEqual(usageFrame.midY, deliveryFrame.midY, accuracy: 0.5)
+                    XCTAssertLessThanOrEqual(usageFrame.maxX, deliveryFrame.minX)
+                    XCTAssertLessThanOrEqual(deliveryFrame.maxX, refreshFrame.minX)
+                } else {
+                    XCTAssertEqual(deliveryFrame, .zero)
+                }
             } else {
+                XCTAssertEqual(connectionFrame, .zero)
                 XCTAssertEqual(deliveryFrame, .zero)
+                XCTAssertEqual(refreshFrame, .zero)
             }
-            if compact {
-                XCTAssertEqual(usageFrame.width, 44, accuracy: 0.5)
-                XCTAssertEqual(usageFrame.height, 44, accuracy: 0.5)
-                XCTAssertEqual(menuFrame.width, 44, accuracy: 0.5)
-                XCTAssertEqual(menuFrame.height, 44, accuracy: 0.5)
-                XCTAssertEqual(menuFrame.midY, usageFrame.midY, accuracy: 0.5)
-                XCTAssertLessThanOrEqual(refreshFrame.maxX, menuFrame.minX)
-                XCTAssertLessThanOrEqual(headerFrame.height, 48)
-                XCTAssertEqual(contentFrame.minY, headerFrame.maxY, accuracy: 1)
-            }
-        } else {
-            XCTAssertEqual(connectionFrame, .zero)
-            XCTAssertEqual(deliveryFrame, .zero)
-            XCTAssertEqual(refreshFrame, .zero)
-        }
-        if !compact {
             XCTAssertGreaterThanOrEqual(titleFrame.minY, controller.view.safeAreaInsets.top + 8)
             XCTAssertGreaterThanOrEqual(titleFrame.minX, 64)
             XCTAssertLessThanOrEqual(titleFrame.maxX, width - 64)
