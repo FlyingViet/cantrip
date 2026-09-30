@@ -19,6 +19,7 @@ enum CantripHomeSection: String, CaseIterable, Identifiable {
 }
 
 struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: View>: View {
+    @Environment(\.chatDisplayTraits) private var displayTraits
     @Binding var selection: CantripHomeSection
     let runningTasks: Int
     private let chat: ChatContent
@@ -46,14 +47,14 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
                 systemImage: CantripHomeSection.chat.systemImage,
                 value: CantripHomeSection.chat
             ) {
-                chat
+                chat.toolbar(systemTabBarVisibility, for: .tabBar)
             }
             Tab(
                 CantripHomeSection.tasks.title,
                 systemImage: CantripHomeSection.tasks.systemImage,
                 value: CantripHomeSection.tasks
             ) {
-                tasks
+                tasks.toolbar(systemTabBarVisibility, for: .tabBar)
             }
             .badge(runningTasks)
             Tab(
@@ -61,12 +62,77 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
                 systemImage: CantripHomeSection.artifacts.systemImage,
                 value: CantripHomeSection.artifacts
             ) {
-                artifacts
+                artifacts.toolbar(systemTabBarVisibility, for: .tabBar)
             }
         }
         .tabViewStyle(.tabBarOnly)
-        .tabBarMinimizeBehavior(.onScrollDown)
+        .tabBarMinimizeBehavior(.never)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !displayTraits.hasVerticalBar {
+                CantripHomeCompactTabBar(
+                    selection: $selection,
+                    runningTasks: runningTasks
+                )
+                .padding(.horizontal, 12)
+                .padding(.vertical, 3)
+            }
+        }
         .accessibilityIdentifier("home.tabView")
+    }
+
+    private var systemTabBarVisibility: Visibility {
+        displayTraits.hasVerticalBar ? .visible : .hidden
+    }
+}
+
+struct CantripHomeCompactTabBar: View {
+    @Binding var selection: CantripHomeSection
+    let runningTasks: Int
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(CantripHomeSection.allCases) { section in
+                Button {
+                    selection = section
+                } label: {
+                    Label(section.title, systemImage: section.systemImage)
+                        .font(.caption.weight(selection == section ? .semibold : .regular))
+                        .lineLimit(1)
+                        .foregroundStyle(selection == section ? Color.accentColor : .secondary)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(
+                            selection == section ? Color.accentColor.opacity(0.16) : .clear,
+                            in: Capsule()
+                        )
+                        .overlay(alignment: .topTrailing) {
+                            if section == .tasks, runningTasks > 0 {
+                                Text("\(min(runningTasks, 99))")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .frame(minWidth: 16, minHeight: 16)
+                                    .background(.red, in: Capsule())
+                                    .offset(x: 3, y: -3)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selection == section ? .isSelected : [])
+                .accessibilityValue(
+                    section == .tasks && runningTasks > 0
+                        ? "\(runningTasks) running"
+                        : ""
+                )
+            }
+        }
+        .padding(2)
+        .frame(height: 48)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Cantrip Home")
+        .accessibilityIdentifier("home.compactTabBar")
     }
 }
 
