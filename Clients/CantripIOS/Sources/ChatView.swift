@@ -1113,12 +1113,14 @@ struct ChatView: View {
     @State private var showCantripMemory = false
     @State private var showCantripMaintenance = false
     @State private var showRemoteTabs = false
+    @State private var showCopilotUsage = false
     @State private var homeSection = CantripHomeSection.chat
     @State private var renamingRemoteSession: CantripRemoteSession?
     @State private var showRenameLocalTab = false
     @State private var tabName = ""
     @FocusState private var composerFocused: Bool
     @State private var commands: [HermesCommand] = []
+    @StateObject private var menuUsageModel: CopilotUsageModel
     /// When paused, the app sends nothing — guards against unintentional requests
     /// (stray taps, ambient voice) that would otherwise burn the agent's budget.
     @AppStorage("hermes.paused") private var paused = false
@@ -1136,6 +1138,7 @@ struct ChatView: View {
         _remote = ObservedObject(wrappedValue: remote)
         let v = VoiceController()
         _voice = StateObject(wrappedValue: v)
+        _menuUsageModel = StateObject(wrappedValue: CopilotUsageModel())
         _vm = StateObject(
             wrappedValue: ChatViewModel(env: env, remote: remote, voice: v)
         )
@@ -1236,6 +1239,9 @@ struct ChatView: View {
             }
             .sheet(isPresented: $showCantripMaintenance) {
                 CantripMaintenanceSheet(remote: remote)
+            }
+            .sheet(isPresented: $showCopilotUsage) {
+                CopilotUsageView(model: menuUsageModel, remote: remote)
             }
             .alert("Rename Tab", isPresented: $showRenameLocalTab) {
                 TextField("Tab name", text: $tabName)
@@ -1392,32 +1398,19 @@ struct ChatView: View {
     }
 
     private var chatHeader: some View {
-        ChatHeader(compact: vm.activeLane == .home) {
+        ChatHeader(compact: vm.activeLane == .home || vm.activeLane == .cantrip) {
             if vm.activeLane == .cantrip {
-                Button { showRemoteTabs = true } label: {
-                    ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
-                                    isWorking: remote.selectedSession?.isStreaming == true,
-                                    isLocalPrivate: remote.selectedSession?.isLocalPrivate == true)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .contentShape(Rectangle())
-                }
-                .disabled(!remoteTabsEnabled)
-                .accessibilityLabel("Switch tab")
-                .accessibilityValue([
-                    vm.tabTitle, remote.selectedSession?.isLocalPrivate == true ? "Self-hosted, saved" : vm.isTabLocked ? "Locked" : nil,
-                    remote.selectedSession?.isStreaming == true ? "Working" : nil
-                ].compactMap { $0 }.joined(separator: ", "))
-                .accessibilityHint("Shows tabs. Touch and hold for tab actions.")
-                .contextMenu {
-                    if let session = remote.selectedSession {
-                        CantripTabActions(model: remote, session: session,
-                            onRename: { renamingRemoteSession = session },
-                            onClose: { closeRemoteSession(session.id) })
-                    }
-                }
+                CantripCenteredHeaderTitle(
+                    title: "Cantrip Remote",
+                    isConnected: remote.isConnected,
+                    isWorking: remote.selectedSession?.isStreaming == true
+                )
             } else if vm.activeLane == .home {
-                ExecutionLanePicker(env: env, remote: remote, showsHomeTitle: true)
-                    .disabled(vm.sending || importingImages || submittingRemote)
+                CantripCenteredHeaderTitle(
+                    title: "Cantrip Home",
+                    isConnected: remote.isConnected,
+                    isWorking: remote.selectedSession?.isStreaming == true
+                )
             } else {
                 ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
                                 isWorking: vm.isWorking)
@@ -1462,6 +1455,9 @@ struct ChatView: View {
         } leading: {
             if vm.activeLane == .cantrip {
                 ChatTabsButton(isEnabled: remoteTabsEnabled) { showRemoteTabs = true }
+            } else if vm.activeLane == .home {
+                ExecutionLanePicker(env: env, remote: remote)
+                    .disabled(vm.sending || importingImages || submittingRemote)
             }
         } trailing: {
             chatMenu
@@ -1470,6 +1466,9 @@ struct ChatView: View {
 
     /// Everything `chatMenu` renders. The menu only rebuilds when this changes.
     private struct ChatMenuState: Equatable {
+        let activeLane: ExecutionLane
+        let selectableLanes: [ExecutionLane]
+        let localAvailable: Bool
         let isCantrip: Bool
         let isHome: Bool
         let selectedSessionID: String?
@@ -1483,10 +1482,14 @@ struct ChatView: View {
         let settingsDisabled: Bool
         let isTabLocked: Bool
         let newConversationDisabled: Bool
+        let deliveryMode: CantripDeliveryMode
     }
 
     private var chatMenuState: ChatMenuState {
         ChatMenuState(
+            activeLane: vm.activeLane,
+            selectableLanes: env.selectableLanes,
+            localAvailable: env.isAvailable(.local),
             isCantrip: vm.activeLane == .cantrip,
             isHome: vm.activeLane == .home,
             selectedSessionID: remote.selectedSession?.id,
@@ -1499,13 +1502,34 @@ struct ChatView: View {
             macControlsEnabled: remote.isConfigured,
             settingsDisabled: vm.sending || importingImages || submittingRemote,
             isTabLocked: vm.isTabLocked,
-            newConversationDisabled: newConversationDisabled
+            newConversationDisabled: newConversationDisabled,
+            deliveryMode: vm.remoteDeliveryMode
         )
     }
 
     private var chatMenu: some View {
         let state = chatMenuState
         return StableMenu(state: state) {
+            Menu {
+                ForEach(state.selectableLanes) { lane in
+                    Button {
+                        env.select(lane)
+                    } label: {
+                        Label(
+                            lane.title,
+                            systemImage: lane == state.activeLane
+                                ? "checkmark.circle.fill"
+                                : lane.systemImage
+                        )
+                    }
+                    .disabled(lane == .local && !state.localAvailable)
+                }
+            } label: {
+                Label(
+                    "Backend: \(state.activeLane.title)",
+                    systemImage: state.activeLane.systemImage
+                )
+            }
             if state.isCantrip || state.isHome {
                 if state.selectedSessionID != nil {
                     Button {
@@ -1518,6 +1542,51 @@ struct ChatView: View {
                     }
                     .disabled(state.isRemoteMutating)
                 }
+                if !state.isLocalPrivate {
+                    Button {
+                        composerFocused = false
+                        menuUsageModel.useSource(remote.usageIdentity)
+                        showCopilotUsage = true
+                        Task {
+                            await menuUsageModel.refresh {
+                                try await remote.copilotUsage()
+                            }
+                        }
+                    } label: {
+                        Label(
+                            "Copilot Usage",
+                            systemImage: "gauge.with.dots.needle.33percent"
+                        )
+                    }
+                    .disabled(!state.macControlsEnabled)
+                    Menu {
+                        ForEach(CantripDeliveryMode.allCases) { mode in
+                            Button {
+                                vm.remoteDeliveryMode = mode
+                            } label: {
+                                Label(
+                                    mode.title,
+                                    systemImage: mode == state.deliveryMode
+                                        ? "checkmark.circle.fill"
+                                        : "circle"
+                                )
+                            }
+                        }
+                    } label: {
+                        Label(
+                            "Delivery: \(state.deliveryMode.title)",
+                            systemImage: "paperplane"
+                        )
+                    }
+                    .disabled(state.selectedSessionID == nil || state.isRemoteMutating)
+                }
+                Button {
+                    composerFocused = false
+                    Task { await remote.refreshNow() }
+                } label: {
+                    Label("Refresh Cantrip", systemImage: "arrow.clockwise")
+                }
+                .disabled(!state.macControlsEnabled || state.isRemoteMutating)
                 if state.isCantrip {
                     Button {
                         showRemoteTabs = true
@@ -2279,12 +2348,12 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     var body: some View {
         VStack(spacing: 0) {
             if compact {
-                HStack(alignment: .center, spacing: 1) {
-                    title()
-                    usage()
-                    delivery()
+                HStack(spacing: 8) {
                     if !displayTraits.hasVerticalBar {
-                        refresh()
+                        leading().frame(width: 44, height: 44)
+                    }
+                    title().frame(maxWidth: .infinity, minHeight: 44)
+                    if !displayTraits.hasVerticalBar {
                         trailing().frame(width: 44, height: 44)
                     }
                 }
@@ -2310,7 +2379,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         }
         .buttonStyle(.plain)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-        .padding(.horizontal, compact ? 4 : 12)
+        .padding(.horizontal, 12)
         .padding(.top, compact ? 2 : 8)
         .padding(.bottom, compact ? 2 : 4)
         .frame(maxWidth: .infinity)
@@ -2484,7 +2553,6 @@ struct ExecutionLaneBadge: View {
 private struct ExecutionLanePicker: View {
     @ObservedObject var env: HermesEnv
     @ObservedObject var remote: CantripRemoteModel
-    var showsHomeTitle = false
 
     var body: some View {
         if env.selectableLanes.count == 1 {
@@ -2517,11 +2585,7 @@ private struct ExecutionLanePicker: View {
     }
 
     @ViewBuilder private var currentLabel: some View {
-        if showsHomeTitle, env.executionLane == .home {
-            CantripHomeHeaderTitle(isConnected: remote.isConnected)
-        } else {
-            ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
-        }
+        ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
     }
 
     private func pickerTitle(_ lane: ExecutionLane) -> String {
@@ -2542,31 +2606,38 @@ private struct ExecutionLanePicker: View {
     }
 }
 
-struct CantripHomeHeaderTitle: View {
+struct CantripCenteredHeaderTitle: View {
+    let title: String
     let isConnected: Bool
+    let isWorking: Bool
 
     var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "house.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.purple)
-            Text("Cantrip Home")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-            Circle()
-                .fill(isConnected ? Color.green : Color.gray)
-                .frame(width: 6, height: 6)
-        }
-        .layoutPriority(1)
-        .dynamicTypeSize(...DynamicTypeSize.large)
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .overlay(alignment: .trailing) {
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(isConnected ? Color.green : Color.gray)
+                        .frame(width: 6, height: 6)
+                    if isWorking {
+                        ThinkingView(size: 14)
+                    }
+                }
+                .fixedSize()
+                .offset(x: isWorking ? 30 : 12)
+            }
+            .dynamicTypeSize(...DynamicTypeSize.large)
         .frame(minHeight: 44)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Cantrip Home")
-        .accessibilityValue(isConnected ? "Connected" : "Disconnected")
-        .accessibilityIdentifier("home.header.title")
+        .accessibilityLabel(title)
+        .accessibilityValue([
+            isConnected ? "Connected" : "Disconnected",
+            isWorking ? "Working" : nil
+        ].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityIdentifier("cantrip.header.title")
     }
 }
 
