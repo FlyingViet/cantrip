@@ -377,12 +377,15 @@ selection, tools, attachments, voice, input requests and streaming chat, but
 removes session switching and uses bottom **Chat**, **Tasks**, and **Artifacts**
 destinations.
 
-Create scheduled work conversationally in Chat. Once timing is clear, Home saves
-the task for a one-time, interval, or weekday schedule; Tasks lets you review,
-edit, pause, resume, or delete it and shows recent outcomes. Scheduled results
-also appear in the Home conversation. Documents and media created as Home
-deliverables are collected automatically in Artifacts and open with the system
-preview. Scheduled work runs only while Cantrip is running on the Mac.
+Create automations or structured trackers conversationally in Chat. Automations
+can use one-time, interval, or weekday schedules. A tracker carries a validated
+field and presentation schema, so Tasks renders native searchable list, detail,
+add and edit screens without task-specific app code; records can also be updated
+through Chat. Tasks still supports review, editing, pause, resume, deletion and
+recent run outcomes. Scheduled results appear in the Home conversation.
+Documents and media created as Home deliverables are collected automatically in
+Artifacts and open with the system preview. Scheduled work runs only while
+Cantrip is running on the Mac.
 
 ### Reasoning steps in replies
 
