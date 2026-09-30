@@ -70,8 +70,10 @@ final class CopilotBackend: Backend {
     watcher is continuing and finish the root turn. Cantrip keeps that run available, wakes \
     you when the watcher finishes, and asks you to read its result once so you can continue \
     from the exact point you paused. Never use the `watch-` prefix for implementation, \
-    research, or other delegated work. Wait for every other background agent before finishing \
-    your reply.
+    research, or other delegated work. While only `watch-*` agents remain, Cantrip may deliver \
+    new user prompts immediately into the idle root; handle them as normal new work without \
+    waiting for the watcher or describing them as queued. Wait for every other background \
+    agent before finishing your reply.
     """
 
     init(bridgeScript: String = CopilotSessionBridge.script) {

@@ -124,6 +124,7 @@ final class ChatSession: ObservableObject {
     private(set) var remoteMessageRevision = UUID()
     private(set) var remoteQueueRevision = UUID()
     @Published var isStreaming = false
+    @Published private(set) var isWaitingOnBackgroundWatchers = false
     @Published var statusText: String?
     @Published var focusRequested = false
     /// Image file paths pasted (⌘V) to attach to the next query.
@@ -1027,6 +1028,16 @@ final class ChatSession: ObservableObject {
         if !isLocalPrivate, includesAmbientContext, wasBusy, !prompt.hasPrefix("!"), !prompt.hasPrefix("/") {
             prompt = consumeStagedContext(onto: prompt, backendKind: runningBackendKind ?? settings.backend)
         }
+        if mode == .auto, isStreaming, isWaitingOnBackgroundWatchers,
+           currentRunMode == .single, !councilRunning,
+           !prompt.hasPrefix("!"), !prompt.hasPrefix("/"), prompt.count <= 6_000,
+           activeBackend.supportsMidTurnInjection, preparationTask == nil {
+            injectWhileWaitingOnWatchers(
+                prompt,
+                includesAmbientContext: includesAmbientContext
+            )
+            return
+        }
         guard mode == .auto, isStreaming else {
             submit(prompt, interrupt: mode == .interrupt, inject: mode == .inject,
                    includesAmbientContext: includesAmbientContext,
@@ -1289,6 +1300,109 @@ final class ChatSession: ObservableObject {
                 self.deliveryStatus = "Context delivery paused: run history could not be saved."
             }
         }
+    }
+
+    private func injectWhileWaitingOnWatchers(
+        _ prompt: String,
+        includesAmbientContext: Bool
+    ) {
+        let item = QueuedPrompt(
+            text: prompt,
+            includesAmbientContext: includesAmbientContext
+        )
+        let generation = streamGeneration
+        let privacy = isPrivate
+        let predecessor = injectionTask
+        appendRunMessage(ChatMessage(role: .user, text: prompt))
+        let assistantID = appendRunMessage(ChatMessage(role: .assistant, text: ""))
+        pendingInjections.insert(item.id)
+        isWaitingOnBackgroundWatchers = false
+        deliveryStatus = "Sending while the background watcher continues..."
+        recordInjection(item, status: "submitting")
+        injectionTask = Task { [weak self] in
+            await predecessor?.value
+            guard let self else { return }
+            var dispatched = false
+            defer {
+                self.pendingInjections.remove(item.id)
+                if self.streamGeneration == generation, self.pendingInjections.isEmpty,
+                   self.deferredInjectionDone {
+                    self.deferredInjectionDone = false
+                    self.handle(.done)
+                }
+            }
+            do {
+                try await self.flushJournal()
+                guard !Task.isCancelled, self.streamGeneration == generation,
+                      self.isPrivate == privacy, self.isStreaming else {
+                    self.isWaitingOnBackgroundWatchers =
+                        self.isStreaming && self.hasActiveBackgroundWatcher
+                    self.markWatcherInjectionFailure(
+                        assistantID,
+                        "The watcher state changed before this message could be sent. Send again."
+                    )
+                    return
+                }
+                dispatched = true
+                let result = await withCheckedContinuation { continuation in
+                    self.activeBackend.injectMidTurn(item.text) { result in
+                        continuation.resume(returning: result)
+                    }
+                }
+                guard self.streamGeneration == generation, self.isPrivate == privacy else {
+                    return
+                }
+                switch result {
+                case .accepted(let messageID):
+                    self.recordInjection(
+                        item,
+                        status: "accepted",
+                        nativeMessageID: messageID
+                    )
+                    self.deliveryStatus = "Sent while the background watcher continues."
+                case .notSent:
+                    self.recordInjection(item, status: "not_sent")
+                    self.isWaitingOnBackgroundWatchers =
+                        self.isStreaming && self.hasActiveBackgroundWatcher
+                    self.markWatcherInjectionFailure(
+                        assistantID,
+                        "The watcher is still running, but the main thread was not ready. Send again."
+                    )
+                case .uncertain(let message):
+                    self.recordInjection(item, status: "uncertain", reason: message)
+                    self.markWatcherInjectionFailure(
+                        assistantID,
+                        "Message delivery is uncertain; it was not resent. \(message)"
+                    )
+                }
+                self.persistTranscript()
+                try await self.flushJournal()
+            } catch {
+                guard self.streamGeneration == generation else {
+                    self.markWatcherInjectionFailure(
+                        assistantID,
+                        "The run changed before this message could be confirmed."
+                    )
+                    return
+                }
+                self.reportJournalFailure(error)
+                if !dispatched {
+                    self.isWaitingOnBackgroundWatchers =
+                        self.isStreaming && self.hasActiveBackgroundWatcher
+                }
+                self.markWatcherInjectionFailure(
+                    assistantID,
+                    "Could not send while the watcher continued because run history was unavailable."
+                )
+            }
+        }
+    }
+
+    private func markWatcherInjectionFailure(_ assistantID: UUID, _ message: String) {
+        if let index = messages.firstIndex(where: { $0.id == assistantID }) {
+            messages[index].text = message
+        }
+        deliveryStatus = message
     }
 
     private func recordInjection(_ item: QueuedPrompt, status: String,
@@ -2213,6 +2327,12 @@ final class ChatSession: ObservableObject {
             statusText = currentActivity?.title ?? "Thinking…"
         case .status(let status):
             statusText = status
+            if status == "Background watcher running"
+                || status.hasSuffix(" background watchers running") {
+                isWaitingOnBackgroundWatchers = true
+            } else if status == "Watcher finished; resuming..." {
+                isWaitingOnBackgroundWatchers = false
+            }
         case .activity(let activity):
             updateActivity(activity)
             shell.mirror(activity)
@@ -2228,6 +2348,7 @@ final class ChatSession: ObservableObject {
         case .approval(let approval):
             recordApproval(approval)
         case .done:
+            isWaitingOnBackgroundWatchers = false
             if !pendingInjections.isEmpty {
                 deferredInjectionDone = true
                 return
@@ -2237,6 +2358,7 @@ final class ChatSession: ObservableObject {
             completeRun(status: "succeeded", summary: summary)
             finishStream()
         case .failure(let message):
+            isWaitingOnBackgroundWatchers = false
             handleRunInterruption(errorText: message)
         }
     }
@@ -2453,6 +2575,7 @@ final class ChatSession: ObservableObject {
             onTurnCompleted?(completion.runID, completion.status, visibleSummary)
         }
         isStreaming = false
+        isWaitingOnBackgroundWatchers = false
         statusText = nil
         // Session layer: log the completed exchange for future grep.
         if settings.memoryEnabled, !isPrivate, !isLocalPrivate,
