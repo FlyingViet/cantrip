@@ -133,10 +133,12 @@ The macOS app includes:
   ordinary Mac and Remote tab lists. Enable it in Mac Settings to power Cantrip
   Agent's focused **Chat / Tasks / Artifacts** mode with the same backend,
   per-session model controls, tools, attachments, input requests and history as
-  Cantrip Remote. Explicit scheduling requests become durable one-time,
-  interval or weekday tasks; due runs post back into Home chat. Deliverable files
-  the agent saves in Home's guarded artifact folder appear automatically in the
-  Artifacts tab. Cantrip must remain running for scheduled work.
+  Cantrip Remote. Tasks can be one-time, interval or weekday automations, or
+  structured workspaces such as trackers. Workspace tasks use a validated
+  declarative schema for native list, detail and edit screens; their records can
+  be updated conversationally or through the mobile UI. Due runs post back into
+  Home chat. Deliverable files the agent saves in Home's guarded artifact folder
+  appear automatically in Artifacts. Cantrip must remain running for scheduled work.
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a
   `cantrip` command for asking questions from Terminal. With Copilot, MCP
   tools that return interactive views (such as Mobbin's screen galleries)
