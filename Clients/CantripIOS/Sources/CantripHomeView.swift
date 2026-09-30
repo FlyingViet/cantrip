@@ -18,6 +18,12 @@ enum CantripHomeSection: String, CaseIterable, Identifiable {
     }
 }
 
+enum CantripHomeLayout {
+    static let compactBarHeight: CGFloat = 54
+    static let composerGap: CGFloat = 8
+    static let chatBottomClearance = compactBarHeight + composerGap
+}
+
 struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: View>: View {
     @Environment(\.chatDisplayTraits) private var displayTraits
     @Binding var selection: CantripHomeSection
@@ -47,7 +53,12 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
                 systemImage: CantripHomeSection.chat.systemImage,
                 value: CantripHomeSection.chat
             ) {
-                chat.toolbar(systemTabBarVisibility, for: .tabBar)
+                chat
+                    .safeAreaPadding(
+                        .bottom,
+                        displayTraits.hasVerticalBar ? 0 : CantripHomeLayout.chatBottomClearance
+                    )
+                    .toolbar(systemTabBarVisibility, for: .tabBar)
             }
             Tab(
                 CantripHomeSection.tasks.title,
