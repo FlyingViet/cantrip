@@ -3056,6 +3056,12 @@ final class CantripRemoteModel: ObservableObject {
             expandedHistory.formIntersection(publicIDs)
             automaticHistoryRemaining = automaticHistoryRemaining.filter { publicIDs.contains($0.key) }
             guard selection == selectionRevision else { return }
+            if isHomeSelected,
+               requestedID == nil || selectedSession?.isCantripHome != true {
+                await selectHome()
+                recoverTailscale()
+                return
+            }
             let chosenID = isHomeSelected ? requestedID : requestedID.flatMap { id in
                 listed.contains(where: { $0.id == id }) ? id : nil
             } ?? listed.first?.id

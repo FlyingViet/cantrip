@@ -104,6 +104,61 @@ final class CantripHomeTests: XCTestCase {
         )
     }
 
+    func testPollingRetriesDefaultHomeAfterColdLaunchRouteFailure() async throws {
+        let client = client()
+        let model = CantripRemoteModel(urlSession: client)
+        var failFirstHomeRequest = true
+        CantripHomeRequestProtocol.handler = { request in
+            let path = URLComponents(
+                url: request.url!,
+                resolvingAgainstBaseURL: false
+            )?.percentEncodedPath ?? ""
+            if path == "/api/v1/home", failFirstHomeRequest {
+                failFirstHomeRequest = false
+                throw URLError(.notConnectedToInternet)
+            }
+            switch path {
+            case "/api/v1/home":
+                return (200, self.homeSessionPayload())
+            case "/api/v1/home/tasks":
+                return (200, self.tasksPayload(enabled: true))
+            case "/api/v1/home/artifacts":
+                return (200, self.artifactsPayload())
+            default:
+                return (200, Data(#"{"sessions":[]}"#.utf8))
+            }
+        }
+        addTeardownBlock { @MainActor in
+            model.setAppActive(false)
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            CantripHomeRequestProtocol.handler = nil
+        }
+        let configured = await model.configure(
+            url: "https://cantrip.example",
+            pairingToken: "cold-home-token",
+            tailscaleOnly: true
+        )
+        XCTAssertTrue(configured)
+
+        await model.selectHome()
+        XCTAssertTrue(model.isHomeSelected)
+        XCTAssertNil(model.selectedSessionID)
+        XCTAssertNotNil(model.detailError)
+
+        model.setAppActive(true)
+        let deadline = ContinuousClock.now + .seconds(3)
+        while model.selectedSession?.isCantripHome != true,
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        XCTAssertEqual(model.selectedSessionID, homeID)
+        XCTAssertEqual(model.selectedSession?.isCantripHome, true)
+        XCTAssertNil(model.detailError)
+        XCTAssertFalse(model.homeTasks.isEmpty)
+    }
+
     func testHomeUsesCompactBottomBarOnIPhone() async throws {
         let controller = UIHostingController(rootView:
             CantripHomeTabs(selection: .constant(.tasks), runningTasks: 2) {
