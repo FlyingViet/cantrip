@@ -397,6 +397,7 @@ final class CantripHomeStore: ObservableObject {
     private weak var manager: SessionManager?
     private weak var session: ChatSession?
     private var timer: Timer?
+    private var recoveredArtifacts: [CantripHomeArtifact] = []
 
     static var rootDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -449,6 +450,10 @@ final class CantripHomeStore: ObservableObject {
         guard self.session !== session else { return }
         self.session?.onTurnCompleted = nil
         self.session = session
+        if let session, !recoveredArtifacts.isEmpty {
+            session.repairRecoveredHomeArtifacts(recoveredArtifacts)
+            recoveredArtifacts.removeAll()
+        }
         session?.onTurnCompleted = { [weak self] runID, status, summary in
             self?.complete(runID: runID, status: status, summary: summary)
         }
@@ -779,6 +784,7 @@ final class CantripHomeStore: ObservableObject {
         artifacts.append(contentsOf: recovered)
         artifacts.sort { $0.createdAt > $1.createdAt }
         try save(artifacts, to: artifactsURL)
+        recoveredArtifacts.append(contentsOf: recovered)
     }
 
     func artifactData(id: UUID) throws -> (CantripHomeArtifact, Data) {
@@ -934,6 +940,27 @@ extension ChatSession {
         UUID(uuidString: "7EAE0CE5-8C8B-4652-9FD0-214867A90E5D")!
 
     var isCantripHome: Bool { id == Self.cantripHomeID }
+
+    func repairRecoveredHomeArtifacts(_ artifacts: [CantripHomeArtifact]) {
+        guard isCantripHome, !artifacts.isEmpty else { return }
+        let root = CantripHomeStore.artifactDirectory
+        let failure = "Could not save artifact: Artifacts must be saved in \(root.path)."
+        for index in messages.indices where messages[index].role == .assistant
+            && messages[index].text.contains(failure) {
+            let referenced = artifacts.filter {
+                messages[index].text.contains(
+                    root.appendingPathComponent($0.relativePath).path
+                )
+            }
+            guard !referenced.isEmpty else { continue }
+            let confirmations = referenced.map {
+                "Saved to Artifacts: **\($0.title)**"
+            }.joined(separator: "\n\n")
+            messages[index].text = messages[index].text.replacingOccurrences(
+                of: failure, with: confirmations
+            )
+        }
+    }
 
     var cantripHomeInstructions: String {
         let zone = TimeZone.current.identifier
