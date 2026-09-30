@@ -36,8 +36,13 @@ struct HermesApp: App {
         guard scenePhase == .active, let target = notifications.pendingTarget else { return }
         notifications.consumeTarget()
         Task {
-            env.select(.cantrip)
-            await remoteModel.openCompletionNotification(target)
+            if target.sessionID == CantripHomeIdentity.id {
+                env.select(.home)
+                await remoteModel.selectHome()
+            } else {
+                env.select(.cantrip)
+                await remoteModel.openCompletionNotification(target)
+            }
         }
     }
 }

@@ -78,7 +78,7 @@ struct SettingsView: View {
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: lane.systemImage)
-                            .foregroundStyle(lane.isPrivate ? .green : .orange)
+                            .foregroundStyle(laneTint(lane))
                             .frame(width: 24)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(lane.title)
@@ -115,8 +115,21 @@ struct SettingsView: View {
             "Connected to \(remote.endpointHost)."
         case .cantrip where remote.isConfigured:
             "Configured for \(remote.endpointHost), but not currently connected."
+        case .home where remote.isConnected:
+            "Uses the hidden Cantrip Home session on \(remote.endpointHost)."
+        case .home where remote.isConfigured:
+            "Configured for \(remote.endpointHost). Enable Cantrip Home on the Mac if needed."
         default:
             lane.detail
+        }
+    }
+
+    private func laneTint(_ lane: ExecutionLane) -> Color {
+        switch lane {
+        case .copilot: .orange
+        case .local: .green
+        case .cantrip: .cyan
+        case .home: .purple
         }
     }
 

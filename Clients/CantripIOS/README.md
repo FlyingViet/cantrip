@@ -368,6 +368,22 @@ reasoning step, elapsed time and token count.
 Expand a card for its reasoning steps, the latest subagent message or an error,
 and tap **Stop** on a running or waiting card to stop just that subagent.
 
+### Cantrip Home
+
+**Cantrip Home** is a focused fourth execution lane backed by one permanent,
+hidden session on the paired Mac. Turn it on in the Mac Cantrip settings, then
+choose **Cantrip Home** from the lane picker. It keeps Cantrip Remote's model
+selection, tools, attachments, voice, input requests and streaming chat, but
+removes session switching and uses bottom **Chat**, **Tasks**, and **Artifacts**
+destinations.
+
+Create scheduled work conversationally in Chat. Once timing is clear, Home saves
+the task for a one-time, interval, or weekday schedule; Tasks lets you review,
+edit, pause, resume, or delete it and shows recent outcomes. Scheduled results
+also appear in the Home conversation. Documents and media created as Home
+deliverables are collected automatically in Artifacts and open with the system
+preview. Scheduled work runs only while Cantrip is running on the Mac.
+
 ### Reasoning steps in replies
 
 Cantrip replies show a **Reasoning** section with one titled step for each

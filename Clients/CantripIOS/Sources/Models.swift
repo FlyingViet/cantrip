@@ -1,9 +1,15 @@
 import Foundation
 
+enum CantripHomeIdentity {
+    static let id = UUID(uuidString: "7EAE0CE5-8C8B-4652-9FD0-214867A90E5D")!
+    static let sessionID = id.uuidString
+}
+
 enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
     case copilot
     case local
     case cantrip
+    case home
 
     static let defaultLane: ExecutionLane = .copilot
 
@@ -14,6 +20,7 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         case .copilot: "Copilot"
         case .local: "Private Local"
         case .cantrip: "Cantrip Remote"
+        case .home: "Cantrip Home"
         }
     }
 
@@ -22,6 +29,7 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         case .copilot: "Coding · Copilot"
         case .local: "Private · Local"
         case .cantrip: "Remote · Cantrip"
+        case .home: "Home · Cantrip"
         }
     }
 
@@ -33,6 +41,8 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
             "Uses the explicitly configured local-private inference route."
         case .cantrip:
             "Controls an existing Cantrip session through its Remote server."
+        case .home:
+            "A focused always-on Cantrip assistant with Chat, Tasks, and Artifacts."
         }
     }
 
@@ -41,6 +51,7 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         case .copilot: "chevron.left.forwardslash.chevron.right"
         case .local: "lock.shield.fill"
         case .cantrip: "antenna.radiowaves.left.and.right"
+        case .home: "house.fill"
         }
     }
 
@@ -49,10 +60,12 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         case .copilot: "copilot-coding"
         case .local: "local-private"
         case .cantrip: "cantrip-remote"
+        case .home: "cantrip-home"
         }
     }
 
     var isPrivate: Bool { self == .local }
+    var usesCantripRemote: Bool { self == .cantrip || self == .home }
 }
 
 enum SpeechInputEngine: String, CaseIterable, Identifiable {

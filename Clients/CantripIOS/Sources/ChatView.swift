@@ -15,14 +15,19 @@ final class ChatViewModel: ObservableObject {
     @Published var tabActionError: String?
 
     var tabTitle: String {
-        if activeLane == .cantrip { return remote.selectedSession?.title ?? "Cantrip Remote" }
+        if activeLane.usesCantripRemote {
+            return activeLane == .home ? "Cantrip Home"
+                : remote.selectedSession?.title ?? "Cantrip Remote"
+        }
         return tabMetadata.customTitle
             ?? turns.first(where: { $0.role == .user }).map { String($0.text.prefix(34)) }
             ?? activeLane.title
     }
 
     var isTabLocked: Bool {
-        activeLane == .cantrip ? remote.selectedSession?.isLocked == true : tabMetadata.isLocked
+        activeLane.usesCantripRemote
+            ? activeLane == .home || remote.selectedSession?.isLocked == true
+            : tabMetadata.isLocked
     }
 
     func renameTab(_ name: String) {
@@ -66,7 +71,7 @@ final class ChatViewModel: ObservableObject {
         self.voice = voice
         activeLane = env.executionLane
         conversationID = UUID().uuidString
-        if activeLane == .cantrip {
+        if activeLane.usesCantripRemote {
             gatewayIdentity = nil
         } else {
             chatStorageID = env.chatStorageID
@@ -90,7 +95,8 @@ final class ChatViewModel: ObservableObject {
         voice.onFinalTranscript = { [weak self] text in self?.send(text, spoken: true) }
         Task { [weak self] in
             guard let self else { return }
-            if self.activeLane == .cantrip {
+            if self.activeLane.usesCantripRemote {
+                if self.activeLane == .home { await self.remote.selectHome() }
                 self.syncRemoteTranscript()
             } else {
                 self.resumeActiveRun()
@@ -104,7 +110,7 @@ final class ChatViewModel: ObservableObject {
         // an unintentional request at the agent.
         guard !UserDefaults.standard.bool(forKey: "hermes.paused") else { return }
         guard !text.isEmpty else { return }
-        if activeLane == .cantrip {
+        if activeLane.usesCantripRemote {
             let sessionID = remote.selectedSessionID
             Task {
                 await sendRemote(text, spoken: spoken, sessionID: sessionID)
@@ -176,7 +182,7 @@ final class ChatViewModel: ObservableObject {
         video: ChatVideoAttachment? = nil,
         sessionID: String? = nil
     ) async -> Bool {
-        guard activeLane == .cantrip,
+        guard activeLane.usesCantripRemote,
               !UserDefaults.standard.bool(forKey: "hermes.paused"),
               !sending, !remote.isMutating else { return false }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -206,14 +212,14 @@ final class ChatViewModel: ObservableObject {
             && remote.selectedSession?.isStreaming == true
         if !isQueuedSend {
             turns.append(ChatTurn(
-                role: .user, text: text + (video.map { "\n\nVideo: \($0.name)" } ?? ""), executionLane: .cantrip,
+                role: .user, text: text + (video.map { "\n\nVideo: \($0.name)" } ?? ""), executionLane: activeLane,
                 images: images.map(ChatMessageImage.init)
             ))
             turns.append(
                 ChatTurn(
                     role: .assistant,
                     streaming: true,
-                    executionLane: .cantrip
+                    executionLane: activeLane
                 )
             )
         }
@@ -253,13 +259,13 @@ final class ChatViewModel: ObservableObject {
 
     private func appendRemoteFailure(_ message: String, for input: String) {
         turns.append(
-            ChatTurn(role: .user, text: input, executionLane: .cantrip)
+            ChatTurn(role: .user, text: input, executionLane: activeLane)
         )
         turns.append(
             ChatTurn(
                 role: .assistant,
                 error: message,
-                executionLane: .cantrip
+                executionLane: activeLane
             )
         )
     }
@@ -273,7 +279,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func syncRemoteTranscript() {
-        guard activeLane == .cantrip else { return }
+        guard activeLane.usesCantripRemote else { return }
         let session = remote.selectedSession
         if remoteSessionID != session?.id {
             let changedExistingSession = remoteSessionID != nil
@@ -310,7 +316,7 @@ final class ChatViewModel: ObservableObject {
                 streaming: session?.isStreaming == true
                     && message.id == lastAssistantID,
                 error: isError ? message.text : nil,
-                executionLane: .cantrip,
+                executionLane: activeLane,
                 thinking: message.thinking.isEmpty ? nil : message.thinking,
                 author: message.author,
                 images: message.images?.map { $0.inSession(session?.id ?? "") }
@@ -383,7 +389,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func resumeActiveRun() {
-        guard activeLane != .cantrip else {
+        guard !activeLane.usesCantripRemote else {
             syncRemoteTranscript()
             return
         }
@@ -439,7 +445,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func suspendRunObservation() {
-        guard activeLane != .cantrip else { return }
+        guard !activeLane.usesCantripRemote else { return }
         cancelObservation()
         persist()
     }
@@ -653,7 +659,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func persist() {
-        guard activeLane != .cantrip else { return }
+        guard !activeLane.usesCantripRemote else { return }
         ChatStore.save(
             turns: turns,
             conversationID: conversationID,
@@ -879,7 +885,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func stop() {
-        if activeLane == .cantrip {
+        if activeLane.usesCantripRemote {
             guard let sessionID = remote.selectedSessionID else { return }
             stopRemote(sessionID: sessionID)
             return
@@ -932,7 +938,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func stopRemote(sessionID: String) {
-        guard activeLane == .cantrip,
+        guard activeLane.usesCantripRemote,
               remote.selectedSession?.id == sessionID,
               remote.selectedSession?.isStreaming == true,
               !remote.isMutating else { return }
@@ -953,7 +959,7 @@ final class ChatViewModel: ObservableObject {
             tabActionError = ChatTabError.locked.localizedDescription
             return
         }
-        if activeLane == .cantrip {
+        if activeLane.usesCantripRemote {
             guard !remote.isMutating else { return }
             Task { [weak self] in
                 guard let self else { return }
@@ -973,7 +979,7 @@ final class ChatViewModel: ObservableObject {
 
     func switchLane(to lane: ExecutionLane) {
         guard lane != activeLane, !sending else { return }
-        if activeLane == .cantrip {
+        if activeLane.usesCantripRemote {
             remoteSpeechActive = false
             voice.stopSpeaking()
         } else {
@@ -983,12 +989,22 @@ final class ChatViewModel: ObservableObject {
         tabMetadata = ChatTabMetadata()
         remoteIsStreaming = false
         runStatusText = nil
-        if lane == .cantrip {
+        if lane.usesCantripRemote {
             pendingRun = nil
             activeRun = nil
             gatewayIdentity = nil
             conversationID = UUID().uuidString
-            syncRemoteTranscript()
+            turns = []
+            Task { [weak self] in
+                guard let self else { return }
+                if lane == .home {
+                    await self.remote.selectHome()
+                } else {
+                    await self.remote.selectRegularSession()
+                }
+                guard self.activeLane == lane else { return }
+                self.syncRemoteTranscript()
+            }
             return
         }
         chatStorageID = env.chatStorageID
@@ -1017,7 +1033,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func gatewayDidChange() {
-        guard activeLane != .cantrip else { return }
+        guard !activeLane.usesCantripRemote else { return }
         guard !sending,
               gatewayIdentity != env.gatewayIdentity || chatStorageID != env.chatStorageID else { return }
         persist()
@@ -1097,6 +1113,7 @@ struct ChatView: View {
     @State private var showCantripMemory = false
     @State private var showCantripMaintenance = false
     @State private var showRemoteTabs = false
+    @State private var homeSection = CantripHomeSection.chat
     @State private var renamingRemoteSession: CantripRemoteSession?
     @State private var showRenameLocalTab = false
     @State private var tabName = ""
@@ -1142,32 +1159,55 @@ struct ChatView: View {
             )
         } content: {
             VStack(spacing: 0) {
-                if vm.activeLane == .cantrip {
-                    remoteNotices
-                        .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
+                if vm.activeLane == .home, homeSection == .tasks {
+                    CantripHomeTasksView(remote: remote, openChat: openHomeChat)
+                } else if vm.activeLane == .home, homeSection == .artifacts {
+                    CantripHomeArtifactsView(remote: remote, openChat: openHomeChat)
+                } else {
+                    if vm.activeLane.usesCantripRemote {
+                        remoteNotices
+                            .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
+                    }
+                    transcriptList
+                        .id(transcriptIdentity)
+                    if vm.activeLane.usesCantripRemote {
+                        CantripPinnedSubagents(
+                            remote: remote,
+                            sessionID: remote.selectedSessionID,
+                            subagents: CantripPinnedSubagents.liveForeground(
+                                in: remote.selectedSession?.transcript ?? []
+                            ),
+                            maxHeight: max(120, chatAvailableHeight * 0.35)
+                        )
+                    }
+                    inputBar
                 }
-                transcriptList
-                    .id(transcriptIdentity)
-                if vm.activeLane == .cantrip {
-                    CantripPinnedSubagents(
-                        remote: remote,
-                        sessionID: remote.selectedSessionID,
-                        subagents: CantripPinnedSubagents.liveForeground(
-                            in: remote.selectedSession?.transcript ?? []
-                        ),
-                        maxHeight: max(120, chatAvailableHeight * 0.35)
+                if vm.activeLane == .home {
+                    CantripHomeTabBar(
+                        selection: $homeSection,
+                        runningTasks: remote.homeTasks.filter { $0.state == "running" }.count
                     )
                 }
-                inputBar
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                 chatAvailableHeight = $0
             }
-            .safeAreaInset(edge: .top, spacing: 0) { chatHeader }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if vm.activeLane != .home || homeSection == .chat {
+                    chatHeader
+                }
+            }
             .sheet(
                 isPresented: $showSettings,
                 onDismiss: {
-                    vm.gatewayDidChange()
+                    if vm.activeLane == .home {
+                        Task {
+                            await remote.selectHome()
+                            vm.syncRemoteTranscript()
+                        }
+                    } else {
+                        vm.gatewayDidChange()
+                    }
                     reloadCommands()
                 }
             ) {
@@ -1259,19 +1299,26 @@ struct ChatView: View {
             }
         }
         .onChange(of: env.selectedServerID) { old, new in
-            guard vm.activeLane != .cantrip else { return }
+            guard !vm.activeLane.usesCantripRemote else { return }
             vm.gatewayDidChange()
             commands = []
             reloadCommands()
         }
         .onChange(of: remote.selectedServerID) { old, new in
-            guard vm.activeLane == .cantrip else { return }
+            guard vm.activeLane.usesCantripRemote else { return }
             vm.leaveVoiceMode()
-            vm.syncRemoteTranscript()
             vm.remoteDeliveryMode = .auto
             showRemoteTabs = false
             showQueue = false
             showBackgroundTasks = false
+            if vm.activeLane == .home {
+                Task {
+                    await remote.selectHome()
+                    vm.syncRemoteTranscript()
+                }
+            } else {
+                vm.syncRemoteTranscript()
+            }
         }
         .onAppear {
             voice.requestAuth()
@@ -1361,19 +1408,27 @@ struct ChatView: View {
                             onClose: { closeRemoteSession(session.id) })
                     }
                 }
+            } else if vm.activeLane == .home {
+                HStack(spacing: 8) {
+                    Image(systemName: "house.fill")
+                        .foregroundStyle(.tint)
+                    Text("Cantrip Home")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity, minHeight: 44)
             } else {
                 ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
                                 isWorking: vm.isWorking)
             }
         } connection: {
-            if vm.activeLane == .cantrip {
+            if vm.activeLane.usesCantripRemote {
                 ChatConnectionIndicator(host: remote.endpointHost, isConnected: remote.isConnected,
                                         statusOverride: remote.connectionLabel) {
                     composerFocused = false
                 }
             }
         } lane: {
-            if vm.activeLane == .cantrip, remote.selectedSession?.isLocalPrivate == true {
+            if vm.activeLane.usesCantripRemote, remote.selectedSession?.isLocalPrivate == true {
                 ChatHeaderIcon(systemName: "lock.shield.fill")
                     .accessibilityLabel("Private Local. Self-hosted models; history is saved and available remotely.")
             } else {
@@ -1385,12 +1440,12 @@ struct ChatView: View {
                 CopilotUsageButton(remote: remote) { composerFocused = false }
             }
         } delivery: {
-            if vm.activeLane == .cantrip, remote.selectedSession != nil {
+            if vm.activeLane.usesCantripRemote, remote.selectedSession != nil {
                 CantripDeliveryPicker(deliveryMode: $vm.remoteDeliveryMode, compact: true)
                     .disabled(remote.isMutating || vm.sending || importingImages || submittingRemote)
             }
         } refresh: {
-            if vm.activeLane == .cantrip {
+            if vm.activeLane.usesCantripRemote {
                 ChatRefreshButton(isConfigured: remote.isConfigured, isRefreshing: remote.isRefreshing) {
                     composerFocused = false
                     Task { await remote.refreshNow() }
@@ -1412,6 +1467,7 @@ struct ChatView: View {
     /// Everything `chatMenu` renders. The menu only rebuilds when this changes.
     private struct ChatMenuState: Equatable {
         let isCantrip: Bool
+        let isHome: Bool
         let selectedSessionID: String?
         let isLocalPrivate: Bool
         let canResume: Bool
@@ -1428,6 +1484,7 @@ struct ChatView: View {
     private var chatMenuState: ChatMenuState {
         ChatMenuState(
             isCantrip: vm.activeLane == .cantrip,
+            isHome: vm.activeLane == .home,
             selectedSessionID: remote.selectedSession?.id,
             isLocalPrivate: remote.selectedSession?.isLocalPrivate == true,
             canResume: remote.selectedSession?.canResume == true,
@@ -1445,7 +1502,7 @@ struct ChatView: View {
     private var chatMenu: some View {
         let state = chatMenuState
         return StableMenu(state: state) {
-            if state.isCantrip {
+            if state.isCantrip || state.isHome {
                 if state.selectedSessionID != nil {
                     Button {
                         composerFocused = false
@@ -1457,12 +1514,14 @@ struct ChatView: View {
                     }
                     .disabled(state.isRemoteMutating)
                 }
-                Button {
-                    showRemoteTabs = true
-                } label: {
-                    Label("Tabs", systemImage: "rectangle.stack")
+                if state.isCantrip {
+                    Button {
+                        showRemoteTabs = true
+                    } label: {
+                        Label("Tabs", systemImage: "rectangle.stack")
+                    }
+                    .disabled(!state.remoteTabsEnabled)
                 }
-                .disabled(!state.remoteTabsEnabled)
                 if state.macControlsEnabled {
                     CantripLiveActivityToggle()
                 }
@@ -1485,7 +1544,7 @@ struct ChatView: View {
             }
             Divider()
             Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
-                .disabled(state.paused || state.isCantrip)
+                .disabled(state.paused || state.isCantrip || state.isHome)
             Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
                 .disabled(state.voiceModeDisabled)
             Button {
@@ -1510,7 +1569,7 @@ struct ChatView: View {
             }
             .disabled(state.settingsDisabled)
             Divider()
-            if !state.isCantrip {
+            if !state.isCantrip && !state.isHome {
                 Button {
                     tabName = vm.tabMetadata.customTitle ?? vm.tabTitle
                     showRenameLocalTab = true
@@ -1525,10 +1584,12 @@ struct ChatView: View {
                 }
                 Divider()
             }
-            Button(role: .destructive) { vm.newConversation() } label: {
-                Label("New conversation", systemImage: "square.and.pencil")
+            if !state.isHome {
+                Button(role: .destructive) { vm.newConversation() } label: {
+                    Label("New conversation", systemImage: "square.and.pencil")
+                }
+                .disabled(state.newConversationDisabled)
             }
-            .disabled(state.newConversationDisabled)
         } label: {
             ChatMenuIcon(isPaused: state.paused)
         }
@@ -1542,7 +1603,7 @@ struct ChatView: View {
     /// non-empty result, so a transient failure (e.g. a 401 before the key is
     /// entered) doesn't wipe a good list — and it can be retried safely.
     private func reloadCommands() {
-        guard vm.activeLane != .cantrip else {
+        guard !vm.activeLane.usesCantripRemote else {
             commands = []
             return
         }
@@ -1553,7 +1614,7 @@ struct ChatView: View {
                !c.isEmpty,
                serverID == env.selectedServerID,
                gateway == env.gatewayIdentity,
-               vm.activeLane != .cantrip {
+               !vm.activeLane.usesCantripRemote {
                 commands = c
             }
         }
@@ -1565,7 +1626,7 @@ struct ChatView: View {
 
     private var newConversationDisabled: Bool {
         if vm.isTabLocked { return true }
-        if vm.activeLane == .cantrip {
+        if vm.activeLane.usesCantripRemote {
             return remote.selectedSessionID == nil
                 || remote.isMutating
                 || importingImages || submittingRemote || vm.sending || hasImageDraft
@@ -1575,7 +1636,7 @@ struct ChatView: View {
     }
 
     private var destinationReady: Bool {
-        if vm.activeLane == .cantrip {
+        if vm.activeLane.usesCantripRemote {
             return remote.isConfigured && remote.selectedSessionID != nil
         }
         return env.isConfigured
@@ -1650,6 +1711,17 @@ struct ChatView: View {
         }
     }
 
+    private func openHomeChat(prefill: String?) {
+        homeSection = .chat
+        if let prefill {
+            input = prefill
+            composerRevision = UUID()
+        }
+        DispatchQueue.main.async {
+            composerFocused = true
+        }
+    }
+
     private var transcriptList: some View {
         ChatTranscriptScrollView(
             scrollRequest: vm.scrollToLatestRequest,
@@ -1657,40 +1729,40 @@ struct ChatView: View {
             prependAnchor: vm.historyPrependAnchor,
             dismissKeyboard: { composerFocused = false },
             loadOlder: {
-                guard vm.activeLane == .cantrip else { return }
+                guard vm.activeLane.usesCantripRemote else { return }
                 Task { await remote.loadOlderMessages(automatically: true) }
             }
         ) {
-            if vm.activeLane == .cantrip {
+            if vm.activeLane.usesCantripRemote {
                 CantripHistoryControls(model: remote)
             }
             if vm.turns.isEmpty { emptyState }
             ForEach(vm.turns) { turn in
-                let remoteMessage = vm.activeLane == .cantrip ? vm.remoteMessage(for: turn.id) : nil
+                let remoteMessage = vm.activeLane.usesCantripRemote ? vm.remoteMessage(for: turn.id) : nil
                 TurnView(
                     turn: turn,
                     remote: remote,
-                    cantripSessionID: vm.activeLane == .cantrip ? remote.selectedSessionID : nil,
+                    cantripSessionID: vm.activeLane.usesCantripRemote ? remote.selectedSessionID : nil,
                     remoteMessage: remoteMessage,
                     onAction: { vm.send($0.command) },
                     onApproval: { vm.approveRun($0, for: turn.id) }
                 )
                 .id(turn.id)
-                if vm.activeLane == .cantrip, let message = remoteMessage,
+                if vm.activeLane.usesCantripRemote, let message = remoteMessage,
                    message.isPreview == true {
                     CantripMessageDetailsButton(model: remote, message: message,
                                                 sessionID: remote.selectedSessionID ?? "")
                 }
             }
-            if vm.activeLane == .cantrip {
+            if vm.activeLane.usesCantripRemote {
                 CantripInputTranscript(model: remote)
             }
         }
     }
 
     private var transcriptIdentity: String {
-        if vm.activeLane == .cantrip {
-            return "cantrip:\(remoteDraftKey(remote.selectedSessionID ?? ""))"
+        if vm.activeLane.usesCantripRemote {
+            return "\(vm.activeLane.rawValue):\(remoteDraftKey(remote.selectedSessionID ?? ""))"
         }
         return "\(vm.activeLane.rawValue):\(env.selectedServerID?.uuidString ?? "legacy")"
     }
@@ -1699,9 +1771,17 @@ struct ChatView: View {
         VStack(spacing: 10) {
             Image(systemName: emptyStateIcon)
                 .font(.system(size: 56)).foregroundStyle(.tint)
-            if vm.activeLane == .cantrip, !remote.isConfigured {
+            if vm.activeLane.usesCantripRemote, !remote.isConfigured {
                 Text("Connect to Cantrip").font(.title3.weight(.semibold))
                 Text("Open Settings and enter Cantrip's Remote URL and pairing token.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("Open Settings") { showSettings = true }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 4)
+            } else if vm.activeLane == .home {
+                Text("Cantrip Home").font(.title3.weight(.semibold))
+                Text(remote.detailError
+                     ?? "Turn on Cantrip Home in the Mac app's settings, then keep Cantrip running.")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Button("Open Settings") { showSettings = true }
                     .buttonStyle(.borderedProminent)
@@ -1734,7 +1814,7 @@ struct ChatView: View {
     }
 
     private var emptyStateIcon: String {
-        if vm.activeLane == .cantrip {
+        if vm.activeLane.usesCantripRemote {
             return remote.isConfigured
                 ? "rectangle.stack.badge.plus"
                 : "antenna.radiowaves.left.and.right.slash"
@@ -1744,13 +1824,13 @@ struct ChatView: View {
 
     private var inputBar: some View {
         VStack(spacing: 8) {
-            if vm.activeLane == .cantrip, !activeBackgroundTasks.isEmpty {
+            if vm.activeLane.usesCantripRemote, !activeBackgroundTasks.isEmpty {
                 CantripBackgroundTaskButton(subagents: activeBackgroundTasks) {
                     composerFocused = false
                     showBackgroundTasks = true
                 }
             }
-            if vm.activeLane == .cantrip,
+            if vm.activeLane.usesCantripRemote,
                let session = remote.selectedSession,
                session.id == remote.selectedSessionID,
                session.queuedCount > 0 {
@@ -1764,7 +1844,7 @@ struct ChatView: View {
             } else {
                 if !suggestions.isEmpty { suggestionList }
                 voiceStatus
-                if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
+                if vm.activeLane.usesCantripRemote, let sessionID = remote.selectedSessionID {
                     ImageAttachmentPreviews(
                         attachments: imageDraft(for: sessionID),
                         remote: remote,
@@ -1798,7 +1878,7 @@ struct ChatView: View {
     }
 
     private var activeBackgroundTasks: [CantripRemoteSubagent] {
-        guard vm.activeLane == .cantrip,
+        guard vm.activeLane.usesCantripRemote,
               remote.selectedSession?.id == remote.selectedSessionID else { return [] }
         return CantripPinnedSubagents.liveBackground(
             in: remote.selectedSession?.transcript ?? []
@@ -1807,7 +1887,7 @@ struct ChatView: View {
 
     private var messageComposer: some View {
         ChatComposer {
-            if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
+            if vm.activeLane.usesCantripRemote, let sessionID = remote.selectedSessionID {
                 ImageAttachmentPicker(
                     attachments: imageDraft(for: sessionID),
                     importID: $imageImportID,
@@ -1819,7 +1899,7 @@ struct ChatView: View {
                         ? remote.selectedSession?.supportsVideoAttachments : nil
                 )
                 .id(sessionID)
-            } else if vm.activeLane != .cantrip {
+            } else if !vm.activeLane.usesCantripRemote {
                 Button { showVoiceMode = true } label: {
                     Image(systemName: "infinity").font(.system(size: 20))
                         .frame(width: 44, height: 44)
@@ -1830,7 +1910,7 @@ struct ChatView: View {
             }
         } message: {
             TextField(
-                vm.activeLane == .cantrip
+                vm.activeLane.usesCantripRemote
                     ? CantripInputComposer.placeholder(for: remote.chatInputRequest, mode: vm.remoteDeliveryMode)
                     : "Message Hermes…",
                 text: $input,
@@ -1848,7 +1928,7 @@ struct ChatView: View {
             remoteStopButton
             composerAction
         } accessory: {
-            if vm.activeLane == .cantrip {
+            if vm.activeLane.usesCantripRemote {
                 CantripInputComposer(
                     model: remote, deliveryMode: vm.remoteDeliveryMode,
                     maxHeight: min(320, max(72, chatAvailableHeight * 0.45)),
@@ -1859,7 +1939,7 @@ struct ChatView: View {
     }
 
     private var composerAcceptsText: Bool {
-        vm.activeLane != .cantrip
+        !vm.activeLane.usesCantripRemote
             || CantripInputComposer.acceptsText(for: remote.chatInputRequest, mode: vm.remoteDeliveryMode)
     }
 
@@ -1878,7 +1958,7 @@ struct ChatView: View {
     }
 
     @ViewBuilder private var remoteStopButton: some View {
-        if vm.activeLane == .cantrip {
+        if vm.activeLane.usesCantripRemote {
             CantripStopButton(
                 session: remote.selectedSession,
                 isConnected: remote.isConnected,
@@ -1894,7 +1974,7 @@ struct ChatView: View {
 
     private var composerAction: some View {
         Group {
-            if vm.sending, vm.activeLane != .cantrip {
+            if vm.sending, !vm.activeLane.usesCantripRemote {
                 Button { vm.stop() } label: {
                     Image(systemName: "stop.circle.fill").font(.system(size: 24))
                         .frame(width: 44, height: 44).contentShape(Rectangle())
@@ -1917,7 +1997,7 @@ struct ChatView: View {
                         .frame(width: 44, height: 44).contentShape(Rectangle())
                 }
                 .disabled(!destinationReady || !composerAcceptsText || remote.isMutating)
-                .accessibilityLabel(vm.activeLane == .cantrip && vm.remoteDeliveryMode == .auto
+                .accessibilityLabel(vm.activeLane.usesCantripRemote && vm.remoteDeliveryMode == .auto
                     && remote.chatInputRequest != nil ? "Send reply" : "Send prompt")
             }
         }
@@ -1989,12 +2069,12 @@ struct ChatView: View {
                 Spacer(minLength: 0)
                 Button { voice.stopSpeaking() } label: { Image(systemName: "stop.circle").font(.title3) }
             }
-        } else if vm.isWorking && !(vm.activeLane == .cantrip && remote.chatInputRequest != nil) {
+        } else if vm.isWorking && !(vm.activeLane.usesCantripRemote && remote.chatInputRequest != nil) {
             HStack(spacing: 10) {
                 ThinkingView(size: 22, color: .accentColor)
                 Text(
                     vm.runStatusText
-                        ?? (vm.activeLane == .cantrip
+                        ?? (vm.activeLane.usesCantripRemote
                             ? "Cantrip is working…"
                             : "Hermes is thinking…")
                 )
@@ -2011,7 +2091,7 @@ struct ChatView: View {
               destinationReady, composerAcceptsText, !remote.isMutating,
               !text.isEmpty || hasImageDraft else { return }
         composerFocused = false
-        if vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID {
+        if vm.activeLane.usesCantripRemote, let sessionID = remote.selectedSessionID {
             let draftKey = remoteDraftKey(sessionID)
             let images = imageDrafts[draftKey] ?? []
             let video = videoDrafts[draftKey]
@@ -2041,7 +2121,7 @@ struct ChatView: View {
     }
 
     private var hasImageDraft: Bool {
-        guard vm.activeLane == .cantrip, let sessionID = remote.selectedSessionID else { return false }
+        guard vm.activeLane.usesCantripRemote, let sessionID = remote.selectedSessionID else { return false }
         return !(imageDrafts[remoteDraftKey(sessionID)] ?? []).isEmpty
             || videoDrafts[remoteDraftKey(sessionID)] != nil
     }
@@ -2328,6 +2408,7 @@ struct ExecutionLaneBadge: View {
         case .copilot: .orange
         case .local: .green
         case .cantrip: .cyan
+        case .home: .purple
         }
     }
 
@@ -2386,6 +2467,10 @@ private struct ExecutionLanePicker: View {
         case .cantrip where remote.isConnected:
             "\(lane.title) · Connected"
         case .cantrip where !remote.isConfigured:
+            "\(lane.title) · Set up"
+        case .home where remote.isConnected:
+            "\(lane.title) · Connected"
+        case .home where !remote.isConfigured:
             "\(lane.title) · Set up"
         default:
             lane.title
@@ -2485,12 +2570,12 @@ private struct TurnView: View {
                 }
                 if !cantripReasoning.isEmpty {
                     CantripReasoningSteps(steps: cantripReasoning, streaming: turn.streaming)
-                } else if turn.executionLane != .cantrip, hasIntermediateSteps {
+                } else if turn.executionLane?.usesCantripRemote != true, hasIntermediateSteps {
                     IntermediateStepsView(
                         thinking: turn.thinking,
                         tools: turn.tools,
                         streaming: turn.streaming,
-                        fullToolOutput: turn.executionLane == .cantrip
+                        fullToolOutput: turn.executionLane?.usesCantripRemote == true
                     )
                 }
                 if !cantripApps.isEmpty {
@@ -2573,12 +2658,12 @@ private struct TurnView: View {
 
     /// Cantrip replies show reasoning steps; tool calls stay on the Mac.
     private var cantripReasoning: [CantripRemoteReasoningStep] {
-        guard turn.role == .assistant, turn.executionLane == .cantrip else { return [] }
+        guard turn.role == .assistant, turn.executionLane?.usesCantripRemote == true else { return [] }
         return CantripReasoningFormat.steps(for: remoteMessage, thinking: turn.thinking)
     }
 
     private var showsWork: Bool {
-        turn.executionLane == .cantrip ? !cantripReasoning.isEmpty : !turn.tools.isEmpty
+        turn.executionLane?.usesCantripRemote == true ? !cantripReasoning.isEmpty : !turn.tools.isEmpty
     }
 
     private var cantripApps: [CantripRemoteMCPAppSummary] {
