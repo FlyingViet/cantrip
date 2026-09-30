@@ -285,15 +285,69 @@ final class CantripSubagentTests: XCTestCase {
     func testPinnedSubagentsKeepOnlyLiveOnesAcrossReplies() throws {
         let messages = try JSONDecoder().decode([CantripRemoteMessage].self, from: Data(#"""
         [{"id":"m1","role":"assistant","text":"First","thinking":"","activities":[],
-          "subagents":[{"id":"a","agentID":"a","status":"completed"},{"id":"b","agentID":"b","status":"running"}]},
+          "subagents":[{"id":"a","agentID":"a","status":"completed"},{"id":"b","agentID":"b","status":"running","background":true}]},
          {"id":"m2","role":"user","text":"Next","thinking":"","activities":[]},
          {"id":"m3","role":"assistant","text":"","thinking":"","activities":[],
           "subagents":[{"id":"c","agentID":"c","status":"idle"},{"id":"d","agentID":"d","status":"failed"},
-                       {"id":"e","agentID":"e","status":"cancelled"},{"id":"f","agentID":"f","status":"starting-soon"}]}]
+                       {"id":"e","agentID":"e","status":"cancelled"},{"id":"f","agentID":"f","status":"starting-soon","background":true}]}]
         """#.utf8))
 
         XCTAssertEqual(CantripPinnedSubagents.live(in: messages).map(\.id), ["b", "c", "f"])
+        XCTAssertEqual(CantripPinnedSubagents.background(in: messages).map(\.id), ["b", "f"])
+        XCTAssertEqual(CantripPinnedSubagents.liveBackground(in: messages).map(\.id), ["b", "f"])
+        XCTAssertEqual(CantripPinnedSubagents.liveForeground(in: messages).map(\.id), ["c"])
         XCTAssertEqual(CantripPinnedSubagents.live(in: [messages[1]]), [])
+    }
+
+    func testBackgroundTaskButtonScreenshotsAtPhoneWidth() async throws {
+        let artifactDirectory = ProcessInfo.processInfo.environment["TEST_RUNNER_SUBAGENTS_ARTIFACT_DIR"]
+        guard let artifactDirectory, !artifactDirectory.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_SUBAGENTS_ARTIFACT_DIR to write subagent screenshots.")
+        }
+        let output = URL(fileURLWithPath: artifactDirectory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let background = screenshotSubagents().filter(\.background)
+
+        for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", UIUserInterfaceStyle.dark)] {
+            let controller = UIHostingController(rootView:
+                VStack(spacing: 0) {
+                    ScrollView {
+                        Text(String(repeating: "The main conversation remains available while the watcher runs. ", count: 14))
+                            .padding()
+                    }
+                    VStack(spacing: 8) {
+                        CantripBackgroundTaskButton(subagents: background) {}
+                        Text("Composer")
+                            .frame(maxWidth: .infinity, minHeight: 52)
+                            .background(Color(.secondarySystemBackground),
+                                        in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .padding()
+                    .background(.bar)
+                }
+                .frame(width: 393)
+                .background(Color(.systemBackground))
+            )
+            controller.overrideUserInterfaceStyle = style
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 852))
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(250))
+            controller.view.frame = window.bounds
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let url = output.appendingPathComponent("background-task-button-\(name).png")
+            try XCTUnwrap(image.pngData()).write(to: url)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        }
     }
 
     func testFinishedSubagentsSitWhereTheyEndedInTheReply() throws {
