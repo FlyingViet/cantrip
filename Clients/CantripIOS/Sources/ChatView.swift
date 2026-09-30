@@ -1092,6 +1092,7 @@ struct ChatView: View {
     @State private var showVoiceMode = false
     @State private var showSkills = false
     @State private var showQueue = false
+    @State private var showBackgroundTasks = false
     @State private var showGitHubBuilds = false
     @State private var showCantripMemory = false
     @State private var showCantripMaintenance = false
@@ -1151,7 +1152,9 @@ struct ChatView: View {
                     CantripPinnedSubagents(
                         remote: remote,
                         sessionID: remote.selectedSessionID,
-                        subagents: CantripPinnedSubagents.live(in: remote.selectedSession?.transcript ?? []),
+                        subagents: CantripPinnedSubagents.liveForeground(
+                            in: remote.selectedSession?.transcript ?? []
+                        ),
                         maxHeight: max(120, chatAvailableHeight * 0.35)
                     )
                 }
@@ -1180,6 +1183,12 @@ struct ChatView: View {
             .sheet(isPresented: $showQueue) {
                 if let sessionID = remote.selectedSessionID {
                     CantripQueueView(remote: remote, sessionID: sessionID)
+                }
+            }
+            .sheet(isPresented: $showBackgroundTasks) {
+                if let sessionID = remote.selectedSessionID {
+                    CantripBackgroundTasksView(remote: remote, sessionID: sessionID)
+                        .presentationDetents([.medium, .large])
                 }
             }
             .sheet(isPresented: $showGitHubBuilds) {
@@ -1262,6 +1271,7 @@ struct ChatView: View {
             vm.remoteDeliveryMode = .auto
             showRemoteTabs = false
             showQueue = false
+            showBackgroundTasks = false
         }
         .onAppear {
             voice.requestAuth()
@@ -1290,6 +1300,7 @@ struct ChatView: View {
             vm.syncRemoteTranscript()
         }
         .onChange(of: remote.selectedSessionID) { _, _ in
+            showBackgroundTasks = false
             vm.syncRemoteTranscript()
         }
         .onChange(of: transcriptIdentity) { previous, current in
@@ -1305,6 +1316,7 @@ struct ChatView: View {
             showSettings = false
             showRemoteTabs = false
             showQueue = false
+            showBackgroundTasks = false
             showGitHubBuilds = false
             showCantripMemory = false
             showVoiceMode = false
@@ -1732,6 +1744,12 @@ struct ChatView: View {
 
     private var inputBar: some View {
         VStack(spacing: 8) {
+            if vm.activeLane == .cantrip, !activeBackgroundTasks.isEmpty {
+                CantripBackgroundTaskButton(subagents: activeBackgroundTasks) {
+                    composerFocused = false
+                    showBackgroundTasks = true
+                }
+            }
             if vm.activeLane == .cantrip,
                let session = remote.selectedSession,
                session.id == remote.selectedSessionID,
@@ -1777,6 +1795,14 @@ struct ChatView: View {
         }
         .padding(.horizontal).padding(.vertical, 8)
         .background(.bar)
+    }
+
+    private var activeBackgroundTasks: [CantripRemoteSubagent] {
+        guard vm.activeLane == .cantrip,
+              remote.selectedSession?.id == remote.selectedSessionID else { return [] }
+        return CantripPinnedSubagents.liveBackground(
+            in: remote.selectedSession?.transcript ?? []
+        )
     }
 
     private var messageComposer: some View {

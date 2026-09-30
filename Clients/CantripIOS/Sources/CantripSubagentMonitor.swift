@@ -145,6 +145,18 @@ struct CantripPinnedSubagents: View {
         messages.flatMap { $0.subagents ?? [] }.filter(\.status.isLive)
     }
 
+    static func background(in messages: [CantripRemoteMessage]) -> [CantripRemoteSubagent] {
+        messages.flatMap { $0.subagents ?? [] }.filter(\.background)
+    }
+
+    static func liveBackground(in messages: [CantripRemoteMessage]) -> [CantripRemoteSubagent] {
+        background(in: messages).filter(\.status.isLive)
+    }
+
+    static func liveForeground(in messages: [CantripRemoteMessage]) -> [CantripRemoteSubagent] {
+        live(in: messages).filter { !$0.background }
+    }
+
     var body: some View {
         if !subagents.isEmpty {
             ScrollView {
@@ -165,6 +177,144 @@ struct CantripPinnedSubagents: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Running subagents")
             .accessibilityIdentifier("chat.pinnedSubagents")
+        }
+    }
+}
+
+struct CantripBackgroundTaskButton: View {
+    let subagents: [CantripRemoteSubagent]
+    let action: () -> Void
+
+    private var active: [CantripRemoteSubagent] {
+        subagents.filter { $0.background && $0.status.isLive }
+    }
+
+    var body: some View {
+        if !active.isEmpty {
+            TimelineView(.periodic(from: Date(), by: 1)) { timeline in
+                Button(action: action) {
+                    HStack(spacing: 10) {
+                        statusIcon
+                            .frame(width: 20, height: 20)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(active.count) background \(active.count == 1 ? "task" : "tasks")")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text(summary(now: timeline.date))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .background(
+                        Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(accessibilityLabel(now: timeline.date))
+                .accessibilityHint("Opens background task details")
+                .accessibilityIdentifier("chat.backgroundTasks")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        if active.contains(where: { $0.status == .running || $0.status == .working }) {
+            ProgressView().controlSize(.small)
+        } else if active.allSatisfy({ $0.status == .queued }) {
+            Image(systemName: "clock").foregroundStyle(.secondary)
+        } else {
+            Image(systemName: "pause.circle.fill").foregroundStyle(.blue)
+        }
+    }
+
+    private func summary(now: Date) -> String {
+        guard let lead = active.first else { return "" }
+        let name = CantripSubagentFormat.displayName(for: lead)
+        let elapsed = CantripSubagentFormat.elapsedLabel(
+            startedAt: lead.startedAt, finishedAt: lead.finishedAt, now: now
+        )
+        return "\(name) · \(lead.status.displayText) · \(elapsed)"
+    }
+
+    private func accessibilityLabel(now: Date) -> String {
+        guard let lead = active.first else { return "No background tasks" }
+        return [
+            "\(active.count) background \(active.count == 1 ? "task" : "tasks")",
+            CantripSubagentFormat.displayName(for: lead),
+            lead.status.displayText,
+            CantripSubagentFormat.elapsedAccessibilityLabel(
+                startedAt: lead.startedAt, finishedAt: lead.finishedAt, now: now
+            ),
+        ].joined(separator: ", ")
+    }
+}
+
+struct CantripBackgroundTasksView: View {
+    @ObservedObject var remote: CantripRemoteModel
+    let sessionID: String
+    @Environment(\.dismiss) private var dismiss
+
+    private var tasks: [CantripRemoteSubagent] {
+        guard remote.selectedSession?.id == sessionID else { return [] }
+        return CantripPinnedSubagents.background(in: remote.selectedSession?.transcript ?? [])
+    }
+
+    private var activeCount: Int {
+        tasks.filter(\.status.isLive).count
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if tasks.isEmpty {
+                    ContentUnavailableView(
+                        "No background tasks",
+                        systemImage: "clock.badge.checkmark",
+                        description: Text("Build, upload, download, and other background watchers appear here.")
+                    )
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(activeCount == 0
+                                 ? "All background tasks have finished."
+                                 : "\(activeCount) \(activeCount == 1 ? "task is" : "tasks are") still running.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            CantripSubagentStack(
+                                remote: remote,
+                                sessionID: sessionID,
+                                subagents: tasks
+                            )
+                        }
+                        .padding()
+                    }
+                }
+            }
+            .navigationTitle("Background Tasks")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .safeAreaInset(edge: .top) {
+                if !remote.isConnected {
+                    Label("Disconnected. Showing the last known task status.", systemImage: "wifi.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding()
+                }
+            }
         }
     }
 }
