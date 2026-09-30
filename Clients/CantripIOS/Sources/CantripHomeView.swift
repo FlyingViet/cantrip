@@ -28,6 +28,7 @@ enum CantripHomeBadgeTone: Equatable {
     case accent
     case rejected
     case offer
+    case applied
     case inProgress
 
     init(value: String) {
@@ -38,11 +39,12 @@ enum CantripHomeBadgeTone: Equatable {
             self = .rejected
         } else if normalized.contains("offer") {
             self = .offer
+        } else if normalized == "applied" || normalized == "application received" {
+            self = .applied
         } else if [
-            "applied", "application", "interview", "screen", "conversation",
-            "scheduled", "assessment", "onsite", "on-site", "final round",
-            "in progress", "in-progress", "recruiter", "technical",
-            "hiring manager", "take-home", "phone"
+            "interview", "screen", "conversation", "scheduled", "assessment",
+            "onsite", "on-site", "final round", "in progress", "in-progress",
+            "recruiter", "technical", "hiring manager", "take-home", "phone"
         ].contains(where: normalized.contains) {
             self = .inProgress
         } else {
@@ -55,6 +57,7 @@ enum CantripHomeBadgeTone: Equatable {
         case .accent: .accentColor
         case .rejected: .red
         case .offer: .green
+        case .applied: .yellow
         case .inProgress: .blue
         }
     }

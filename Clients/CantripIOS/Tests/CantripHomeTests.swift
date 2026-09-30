@@ -52,7 +52,8 @@ final class CantripHomeTests: XCTestCase {
         XCTAssertEqual(CantripHomeBadgeTone(value: "Rejected"), .rejected)
         XCTAssertEqual(CantripHomeBadgeTone(value: "Application declined"), .rejected)
         XCTAssertEqual(CantripHomeBadgeTone(value: "Offer"), .offer)
-        XCTAssertEqual(CantripHomeBadgeTone(value: "Applied"), .inProgress)
+        XCTAssertEqual(CantripHomeBadgeTone(value: "Applied"), .applied)
+        XCTAssertEqual(CantripHomeBadgeTone(value: "Application received"), .applied)
         XCTAssertEqual(
             CantripHomeBadgeTone(value: "Recruiter conversation scheduled"),
             .inProgress
