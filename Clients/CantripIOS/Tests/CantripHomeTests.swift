@@ -61,7 +61,7 @@ final class CantripHomeTests: XCTestCase {
         XCTAssertTrue(vm.isTabLocked)
     }
 
-    func testHomeUsesNativeSystemTabBar() async throws {
+    func testHomeUsesCompactBottomBarOnIPhone() async throws {
         let controller = UIHostingController(rootView:
             CantripHomeTabs(selection: .constant(.tasks), runningTasks: 2) {
                 Text("Chat")
@@ -87,8 +87,33 @@ final class CantripHomeTests: XCTestCase {
         XCTAssertEqual(tabBar.items?.compactMap(\.title), ["Chat", "Tasks", "Artifacts"])
         XCTAssertEqual(tabBar.selectedItem?.title, "Tasks")
         XCTAssertEqual(tabBar.selectedItem?.badgeValue, "2")
+        let tabBarFrame = tabBar.convert(tabBar.bounds, to: window)
+        XCTAssertTrue(
+            tabBar.isHidden || tabBar.alpha == 0 || tabBarFrame.minY >= window.bounds.maxY,
+            "System tab bar remains visible: hidden=\(tabBar.isHidden), "
+                + "alpha=\(tabBar.alpha), frame=\(tabBarFrame)"
+        )
         let tabController: UITabBarController = try XCTUnwrap(firstViewController(in: controller))
-        XCTAssertEqual(tabController.tabBarMinimizeBehavior, .onScrollDown)
+        XCTAssertEqual(tabController.tabBarMinimizeBehavior, .never)
+
+        let compactBar = CantripHomeCompactTabBar(
+            selection: .constant(.tasks),
+            runningTasks: 2
+        )
+        let compactController = UIHostingController(rootView: compactBar)
+        XCTAssertEqual(
+            compactController.sizeThatFits(in: CGSize(width: 369, height: 100)).height,
+            48,
+            accuracy: 1
+        )
+        let accessibilityController = UIHostingController(
+            rootView: compactBar.environment(\.dynamicTypeSize, .accessibility5)
+        )
+        XCTAssertEqual(
+            accessibilityController.sizeThatFits(in: CGSize(width: 296, height: 100)).height,
+            48,
+            accuracy: 1
+        )
     }
 
     func testHomeNativeTabsAdaptToDuoVerticalBar() async throws {
@@ -108,6 +133,7 @@ final class CantripHomeTests: XCTestCase {
             } artifacts: {
                 Text("Artifacts")
             }
+            .environment(\.chatDisplayTraits, ChatDisplayTraits(hasVerticalBar: true))
         )
         let window = UIWindow(windowScene: scene)
         window.frame = scene.effectiveGeometry.coordinateSpace.bounds
