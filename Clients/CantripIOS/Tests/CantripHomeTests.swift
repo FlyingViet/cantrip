@@ -87,6 +87,8 @@ final class CantripHomeTests: XCTestCase {
         XCTAssertEqual(tabBar.items?.compactMap(\.title), ["Chat", "Tasks", "Artifacts"])
         XCTAssertEqual(tabBar.selectedItem?.title, "Tasks")
         XCTAssertEqual(tabBar.selectedItem?.badgeValue, "2")
+        let tabController: UITabBarController = try XCTUnwrap(firstViewController(in: controller))
+        XCTAssertEqual(tabController.tabBarMinimizeBehavior, .onScrollDown)
     }
 
     func testHomeNativeTabsAdaptToDuoVerticalBar() async throws {
@@ -408,6 +410,16 @@ final class CantripHomeTests: XCTestCase {
         if let match = view as? T { return match }
         for child in view.subviews {
             if let match: T = firstSubview(in: child) { return match }
+        }
+        return nil
+    }
+
+    private func firstViewController<T: UIViewController>(
+        in controller: UIViewController
+    ) -> T? {
+        if let match = controller as? T { return match }
+        for child in controller.children {
+            if let match: T = firstViewController(in: child) { return match }
         }
         return nil
     }

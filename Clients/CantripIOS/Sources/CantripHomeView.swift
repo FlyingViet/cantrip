@@ -65,6 +65,7 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
             }
         }
         .tabViewStyle(.tabBarOnly)
+        .tabBarMinimizeBehavior(.onScrollDown)
         .accessibilityIdentifier("home.tabView")
     }
 }
