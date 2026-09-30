@@ -217,6 +217,18 @@ extension SessionTabTests {
         let artifactData = try await call("/api/v1/home/artifacts/\(artifact.id.uuidString)")
         precondition(Data(base64Encoded: artifactData.1["data"] as? String ?? "")
                      == imageData)
+        let deletedArtifact = try await call(
+            "/api/v1/home/artifacts/\(artifact.id.uuidString)", method: "DELETE"
+        )
+        precondition(deletedArtifact.0 == 200
+                     && deletedArtifact.1["deleted"] as? Bool == true)
+        precondition(!store.artifacts.contains { $0.id == artifact.id }
+                     && !FileManager.default.fileExists(atPath: artifactURL.path),
+                     "Deleting an artifact must remove its registry entry and file")
+        let deletedArtifactData = try await call(
+            "/api/v1/home/artifacts/\(artifact.id.uuidString)"
+        )
+        precondition(deletedArtifactData.0 == 404)
         let deleted = try await call("/api/v1/home/tasks/\(task.id.uuidString)", method: "DELETE")
         precondition(deleted.1["deleted"] as? Bool == true)
         try store.delete(id: tracker.id)

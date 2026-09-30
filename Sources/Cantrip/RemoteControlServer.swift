@@ -1372,26 +1372,40 @@ final class RemoteControlServer {
                 sendEncoded(on: connection) { try JSONEncoder().encode(value) }
                 return
             }
-            guard parts.count == 5, request.method == "GET",
+            guard parts.count == 5,
                   let id = UUID(uuidString: String(parts[4])) else {
                 sendError(404, "artifact not found", on: connection)
                 return
             }
             do {
-                let (artifact, data) = try store.artifactData(id: id)
-                sendJSON([
-                    "artifact": [
-                        "id": artifact.id.uuidString,
-                        "title": artifact.title,
-                        "mimeType": artifact.mimeType,
-                    ],
-                    "data": data.base64EncodedString(),
-                ], on: connection)
+                switch request.method {
+                case "GET":
+                    let (artifact, data) = try store.artifactData(id: id)
+                    sendJSON([
+                        "artifact": [
+                            "id": artifact.id.uuidString,
+                            "title": artifact.title,
+                            "mimeType": artifact.mimeType,
+                        ],
+                        "data": data.base64EncodedString(),
+                    ], on: connection)
+                case "DELETE":
+                    try store.deleteArtifact(id: id)
+                    sendJSON(["deleted": true], on: connection)
+                default:
+                    sendError(405, "method not allowed", on: connection)
+                }
             } catch let error as CantripHomeError {
                 sendError(error.status, error.message, on: connection)
             } catch {
-                Log.write("home: artifact read failed: \(error.localizedDescription)")
-                sendError(404, "Artifact is no longer available on the Mac.", on: connection)
+                Log.write("home: artifact request failed: \(error.localizedDescription)")
+                sendError(
+                    request.method == "DELETE" ? 500 : 404,
+                    request.method == "DELETE"
+                        ? "Could not delete the artifact from the Mac."
+                        : "Artifact is no longer available on the Mac.",
+                    on: connection
+                )
             }
         default:
             sendError(404, "not found", on: connection)
