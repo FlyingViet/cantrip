@@ -24,6 +24,42 @@ enum CantripHomeLayout {
     static let chatBottomClearance = compactBarHeight + composerGap
 }
 
+enum CantripHomeBadgeTone: Equatable {
+    case accent
+    case rejected
+    case offer
+    case inProgress
+
+    init(value: String) {
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if normalized.contains("reject") || normalized.contains("declin") {
+            self = .rejected
+        } else if normalized.contains("offer") {
+            self = .offer
+        } else if [
+            "applied", "application", "interview", "screen", "conversation",
+            "scheduled", "assessment", "onsite", "on-site", "final round",
+            "in progress", "in-progress", "recruiter", "technical",
+            "hiring manager", "take-home", "phone"
+        ].contains(where: normalized.contains) {
+            self = .inProgress
+        } else {
+            self = .accent
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .accent: .accentColor
+        case .rejected: .red
+        case .offer: .green
+        case .inProgress: .blue
+        }
+    }
+}
+
 struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: View>: View {
     @Environment(\.chatDisplayTraits) private var displayTraits
     @Binding var selection: CantripHomeSection
@@ -616,12 +652,13 @@ struct CantripHomeTaskWorkspaceView: View {
                     Spacer(minLength: 8)
                     if let key = presentation.badgeField,
                        let badge = record.values[key], !badge.isEmpty {
+                        let tone = CantripHomeBadgeTone(value: badge)
                         Text(badge)
                             .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.tint)
+                            .foregroundStyle(tone.color)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 3)
-                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            .background(tone.color.opacity(0.12), in: Capsule())
                     }
                 }
                 if !subtitles.isEmpty {
