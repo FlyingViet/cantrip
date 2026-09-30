@@ -1158,35 +1158,20 @@ struct ChatView: View {
                 onClose: closeRemoteSession
             )
         } content: {
-            VStack(spacing: 0) {
-                if vm.activeLane == .home, homeSection == .tasks {
-                    CantripHomeTasksView(remote: remote, openChat: openHomeChat)
-                } else if vm.activeLane == .home, homeSection == .artifacts {
-                    CantripHomeArtifactsView(remote: remote, openChat: openHomeChat)
-                } else {
-                    if vm.activeLane.usesCantripRemote {
-                        remoteNotices
-                            .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
-                    }
-                    transcriptList
-                        .id(transcriptIdentity)
-                    if vm.activeLane.usesCantripRemote {
-                        CantripPinnedSubagents(
-                            remote: remote,
-                            sessionID: remote.selectedSessionID,
-                            subagents: CantripPinnedSubagents.liveForeground(
-                                in: remote.selectedSession?.transcript ?? []
-                            ),
-                            maxHeight: max(120, chatAvailableHeight * 0.35)
-                        )
-                    }
-                    inputBar
-                }
+            Group {
                 if vm.activeLane == .home {
-                    CantripHomeTabBar(
+                    CantripHomeTabs(
                         selection: $homeSection,
                         runningTasks: remote.homeTasks.filter { $0.state == "running" }.count
-                    )
+                    ) {
+                        conversationContent
+                    } tasks: {
+                        CantripHomeTasksView(remote: remote, openChat: openHomeChat)
+                    } artifacts: {
+                        CantripHomeArtifactsView(remote: remote, openChat: openHomeChat)
+                    }
+                } else {
+                    conversationContent
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
@@ -1382,6 +1367,28 @@ struct ChatView: View {
             reloadCommands()
         }
         .modifier(ChatDisplayObserver())
+    }
+
+    private var conversationContent: some View {
+        VStack(spacing: 0) {
+            if vm.activeLane.usesCantripRemote {
+                remoteNotices
+                    .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
+            }
+            transcriptList
+                .id(transcriptIdentity)
+            if vm.activeLane.usesCantripRemote {
+                CantripPinnedSubagents(
+                    remote: remote,
+                    sessionID: remote.selectedSessionID,
+                    subagents: CantripPinnedSubagents.liveForeground(
+                        in: remote.selectedSession?.transcript ?? []
+                    ),
+                    maxHeight: max(120, chatAvailableHeight * 0.35)
+                )
+            }
+            inputBar
+        }
     }
 
     private var chatHeader: some View {

@@ -61,6 +61,89 @@ final class CantripHomeTests: XCTestCase {
         XCTAssertTrue(vm.isTabLocked)
     }
 
+    func testHomeUsesNativeSystemTabBar() async throws {
+        let controller = UIHostingController(rootView:
+            CantripHomeTabs(selection: .constant(.tasks), runningTasks: 2) {
+                Text("Chat")
+            } tasks: {
+                Text("Tasks")
+            } artifacts: {
+                Text("Artifacts")
+            }
+        )
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 852))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(200))
+        controller.view.frame = window.bounds
+        controller.view.layoutIfNeeded()
+
+        let tabBar: UITabBar = try XCTUnwrap(firstSubview(in: controller.view))
+        XCTAssertEqual(tabBar.items?.compactMap(\.title), ["Chat", "Tasks", "Artifacts"])
+        XCTAssertEqual(tabBar.selectedItem?.title, "Tasks")
+        XCTAssertEqual(tabBar.selectedItem?.badgeValue, "2")
+    }
+
+    func testHomeNativeTabsAdaptToDuoVerticalBar() async throws {
+        #if AGENTGATEWAY_DUO_SDK
+        guard #available(iOS 27.1, *) else { throw XCTSkip("Requires the Duo runtime") }
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        guard scene.traitCollection.verticalBarEdge != .unspecified else {
+            throw XCTSkip("Run on iPhone Duo in a vertical-bar pose.")
+        }
+        let controller = UIHostingController(rootView:
+            CantripHomeTabs(selection: .constant(.chat), runningTasks: 1) {
+                Color(.systemBackground).overlay { Text("Cantrip Home") }
+            } tasks: {
+                Text("Tasks")
+            } artifacts: {
+                Text("Artifacts")
+            }
+        )
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.effectiveGeometry.coordinateSpace.bounds
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(450))
+        controller.view.frame = window.bounds
+        controller.view.layoutIfNeeded()
+
+        let tabBar: UITabBar = try XCTUnwrap(firstSubview(in: controller.view))
+        let frame = tabBar.convert(tabBar.bounds, to: window)
+        XCTAssertGreaterThan(frame.height, frame.width)
+        if scene.traitCollection.verticalBarEdge == .leading {
+            XCTAssertLessThan(frame.midX, window.bounds.midX)
+        } else {
+            XCTAssertGreaterThan(frame.midX, window.bounds.midX)
+        }
+
+        if let directory = ProcessInfo.processInfo.environment[
+            "TEST_RUNNER_HOME_DUO_ARTIFACT_DIR"
+        ], !directory.isEmpty {
+            let output = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: output, withIntermediateDirectories: true
+            )
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            try XCTUnwrap(image.pngData()).write(
+                to: output.appendingPathComponent("cantrip-home-duo-tabs.png")
+            )
+        }
+        #else
+        throw XCTSkip("Requires the Duo SDK")
+        #endif
+    }
+
     func testHomeAPIReadsSessionTasksArtifactsAndMutatesTask() async throws {
         let client = client()
         let api = CantripRemoteAPI(
@@ -217,11 +300,14 @@ final class CantripHomeTests: XCTestCase {
         )
         for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
             let controller = UIHostingController(rootView:
-                VStack(spacing: 0) {
+                CantripHomeTabs(selection: .constant(.tasks), runningTasks: 1) {
+                    Color.clear
+                } tasks: {
                     NavigationStack {
                         CantripHomeTasksView(remote: model, openChat: { _ in })
                     }
-                    CantripHomeTabBar(selection: .constant(.tasks), runningTasks: 1)
+                } artifacts: {
+                    Color.clear
                 }
                 .frame(width: 393)
                 .background(Color(.systemBackground))
@@ -266,11 +352,14 @@ final class CantripHomeTests: XCTestCase {
             )
 
             let artifactController = UIHostingController(rootView:
-                VStack(spacing: 0) {
+                CantripHomeTabs(selection: .constant(.artifacts), runningTasks: 0) {
+                    Color.clear
+                } tasks: {
+                    Color.clear
+                } artifacts: {
                     NavigationStack {
                         CantripHomeArtifactsView(remote: model, openChat: { _ in })
                     }
-                    CantripHomeTabBar(selection: .constant(.artifacts), runningTasks: 0)
                 }
                 .frame(width: 393)
                 .background(Color(.systemBackground))
@@ -297,6 +386,14 @@ final class CantripHomeTests: XCTestCase {
         "supportsAutoDelivery":true,"isLocked":true,"isCantripHome":true,
         "supportsModelSettings":true,"supportsPagedHistory":true}}
         """.utf8)
+    }
+
+    private func firstSubview<T: UIView>(in view: UIView) -> T? {
+        if let match = view as? T { return match }
+        for child in view.subviews {
+            if let match: T = firstSubview(in: child) { return match }
+        }
+        return nil
     }
 
     private func tasksPayload(enabled: Bool) -> Data {

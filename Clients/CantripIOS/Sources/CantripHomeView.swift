@@ -18,47 +18,54 @@ enum CantripHomeSection: String, CaseIterable, Identifiable {
     }
 }
 
-struct CantripHomeTabBar: View {
+struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: View>: View {
     @Binding var selection: CantripHomeSection
     let runningTasks: Int
+    private let chat: ChatContent
+    private let tasks: TasksContent
+    private let artifacts: ArtifactsContent
+
+    init(
+        selection: Binding<CantripHomeSection>,
+        runningTasks: Int,
+        @ViewBuilder chat: () -> ChatContent,
+        @ViewBuilder tasks: () -> TasksContent,
+        @ViewBuilder artifacts: () -> ArtifactsContent
+    ) {
+        _selection = selection
+        self.runningTasks = runningTasks
+        self.chat = chat()
+        self.tasks = tasks()
+        self.artifacts = artifacts()
+    }
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(CantripHomeSection.allCases) { section in
-                Button {
-                    selection = section
-                } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: section.systemImage)
-                            .font(.system(size: 18, weight: selection == section ? .semibold : .regular))
-                            .overlay(alignment: .topTrailing) {
-                                if section == .tasks, runningTasks > 0 {
-                                    Text("\(min(runningTasks, 99))")
-                                        .font(.caption2.weight(.bold))
-                                        .foregroundStyle(.white)
-                                        .padding(.horizontal, 4)
-                                        .frame(minWidth: 16, minHeight: 16)
-                                        .background(.orange, in: Capsule())
-                                        .offset(x: 10, y: -8)
-                                }
-                            }
-                        Text(section.title)
-                            .font(.caption2.weight(selection == section ? .semibold : .regular))
-                    }
-                    .foregroundStyle(selection == section ? Color.accentColor : .secondary)
-                    .frame(maxWidth: .infinity, minHeight: 52)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(selection == section ? .isSelected : [])
+        TabView(selection: $selection) {
+            Tab(
+                CantripHomeSection.chat.title,
+                systemImage: CantripHomeSection.chat.systemImage,
+                value: CantripHomeSection.chat
+            ) {
+                chat
+            }
+            Tab(
+                CantripHomeSection.tasks.title,
+                systemImage: CantripHomeSection.tasks.systemImage,
+                value: CantripHomeSection.tasks
+            ) {
+                tasks
+            }
+            .badge(runningTasks)
+            Tab(
+                CantripHomeSection.artifacts.title,
+                systemImage: CantripHomeSection.artifacts.systemImage,
+                value: CantripHomeSection.artifacts
+            ) {
+                artifacts
             }
         }
-        .padding(.horizontal, 8)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Cantrip Home")
-        .accessibilityIdentifier("home.tabBar")
+        .tabViewStyle(.tabBarOnly)
+        .accessibilityIdentifier("home.tabView")
     }
 }
 

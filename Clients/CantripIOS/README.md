@@ -379,7 +379,8 @@ hidden session on the paired Mac. Turn it on in the Mac Cantrip settings, then
 choose **Cantrip Home** from the lane picker. It keeps Cantrip Remote's model
 selection, tools, attachments, voice, input requests and streaming chat, but
 removes session switching and uses bottom **Chat**, **Tasks**, and **Artifacts**
-destinations.
+destinations. These use Apple's native Liquid Glass tab bar, which moves into
+the system vertical edge automatically on iPhone Duo.
 
 Create automations or structured trackers conversationally in Chat. Automations
 can use one-time, interval, or weekday schedules. A tracker carries a validated
