@@ -129,6 +129,14 @@ The macOS app includes:
   Tools, shell/slash execution, Council, shared memory/digests, push summaries,
   and automatic external content are disabled. Auto queues follow-ups locally.
   This is distinct from unsaved **Private mode**. See [setup and privacy limits](docs/remote-control.md#persistent-private-local-tab).
+- **Cantrip Home:** an optional permanent session that stays hidden from the
+  ordinary Mac and Remote tab lists. Enable it in Mac Settings to power Cantrip
+  Agent's focused **Chat / Tasks / Artifacts** mode with the same backend,
+  per-session model controls, tools, attachments, input requests and history as
+  Cantrip Remote. Explicit scheduling requests become durable one-time,
+  interval or weekday tasks; due runs post back into Home chat. Deliverable files
+  the agent saves in Home's guarded artifact folder appear automatically in the
+  Artifacts tab. Cantrip must remain running for scheduled work.
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a
   `cantrip` command for asking questions from Terminal. With Copilot, MCP
   tools that return interactive views (such as Mobbin's screen galleries)

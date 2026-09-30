@@ -3087,6 +3087,15 @@ struct SettingsView: View {
                 .font(.caption)
                 .toggleStyle(.checkbox)
             if settings.remoteControlEnabled {
+                Toggle("Cantrip Home — hidden always-on assistant for Chat, Tasks, and Artifacts",
+                       isOn: $settings.cantripHomeEnabled)
+                    .font(.caption)
+                    .toggleStyle(.checkbox)
+                if settings.cantripHomeEnabled {
+                    Text("Cantrip must remain running. Scheduled Home tasks use this Mac's selected backend and the Home session's model settings.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
                 MacAccessView()
                 HStack(spacing: 8) {
                     Text("Port")

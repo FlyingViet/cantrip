@@ -153,6 +153,8 @@ final class ChatSession: ObservableObject {
     /// Called when the whole run (including queue) completes; AppDelegate
     /// uses it for background notifications.
     var onRunFinished: (() -> Void)?
+    /// Called for every individual turn, including scheduled Home runs.
+    var onTurnCompleted: ((UUID, String, String) -> Void)?
     private(set) var remoteCompletion: RemoteCompletion?
     private var preparationTask: Task<Void, Never>?
     /// Orphans events and preparation from cancelled/superseded backend runs.
@@ -188,6 +190,7 @@ final class ChatSession: ObservableObject {
     private var currentRunMode: RunJournal.Mode?
     private var currentRunBackend: BackendKind?
     private var currentAttempt = 0
+    private var pendingTurnCompletion: (runID: UUID, status: String, summary: String)?
     private var runningBackendKind: BackendKind?
     /// The prompt whose line shows this run's context and token use.
     private var promptUsageMessageID: UUID?
@@ -223,8 +226,11 @@ final class ChatSession: ObservableObject {
     @Published private var automaticTitle = "New chat"
     @Published private(set) var tabMetadata = SessionTabMetadata()
     @Published var tabActionError: String?
-    var title: String { tabMetadata.customTitle ?? (isLocalPrivate ? "Private Local" : automaticTitle) }
-    var isLocked: Bool { isLocalPrivate || tabMetadata.isLocked }
+    var title: String {
+        if isCantripHome { return "Cantrip Home" }
+        return tabMetadata.customTitle ?? (isLocalPrivate ? "Private Local" : automaticTitle)
+    }
+    var isLocked: Bool { isLocalPrivate || isCantripHome || tabMetadata.isLocked }
     var effectiveBackendKind: BackendKind { isLocalPrivate ? .localModel : settings.backend }
     /// Per-session working directory: backends, ! commands, and git
     /// actions all run here. A session becomes "the agent in this repo".
@@ -691,6 +697,7 @@ final class ChatSession: ObservableObject {
         }
         event.summaryDigest = RunJournal.digest(summary)
         appendRunEvent(event, durable: true)
+        pendingTurnCompletion = (runID, status, summary)
         clearCurrentRun()
     }
 
@@ -710,6 +717,7 @@ final class ChatSession: ObservableObject {
             max(0, Int(Date().timeIntervalSince($0) * 1_000))
         }
         appendRunEvent(event, durable: true)
+        onTurnCompleted?(runID, "cancelled", reason)
         clearCurrentRun()
     }
 
@@ -930,6 +938,17 @@ final class ChatSession: ObservableObject {
             return
         }
         receive(text, mode: mode, includesAmbientContext: true)
+    }
+
+    func submitCantripHomeTask(id: UUID, title: String, prompt: String) {
+        guard isCantripHome, !isStreaming, queued.isEmpty else { return }
+        send(
+            "Scheduled task · \(title)\n\n\(prompt)",
+            preamble: """
+            (This is execution of saved Cantrip Home task \(id.uuidString), not a request to
+            create another task. Run it now and report the result.)
+            """
+        )
     }
 
     func submitInputReply(_ text: String, id: UUID) throws {
@@ -1464,6 +1483,9 @@ final class ChatSession: ObservableObject {
                                 consumesStagedContext: Bool = true) -> String {
         if isLocalPrivate { return prompt }
         var backendPrompt = prompt
+        if isCantripHome {
+            backendPrompt += cantripHomeInstructions
+        }
         if isFirstOfConversation,
            let digest = UserDefaults.standard.string(forKey: "lastConversationDigest"),
            !digest.isEmpty {
@@ -2422,6 +2444,13 @@ final class ChatSession: ObservableObject {
         councilFinished = []
         councilSynthesizing = false
         if !isLocalPrivate { processOverlayBlock() }
+        processCantripHomeBlocks()
+        if let completion = pendingTurnCompletion {
+            let visibleSummary = messages.last(where: { $0.role == .assistant })?.text
+                ?? completion.summary
+            pendingTurnCompletion = nil
+            onTurnCompleted?(completion.runID, completion.status, visibleSummary)
+        }
         isStreaming = false
         statusText = nil
         // Session layer: log the completed exchange for future grep.

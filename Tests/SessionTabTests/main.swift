@@ -19,6 +19,10 @@ struct SessionTabTests {
                 try await testBackgroundWatcherLive()
                 return
             }
+            if ProcessInfo.processInfo.environment["CANTRIP_HOME_LIVE_TEST"] == "1" {
+                try await testCantripHomeLive()
+                return
+            }
             if ProcessInfo.processInfo.environment["CANTRIP_QUOTA_LIVE_TEST"] == "1" {
                 let result = await withCheckedContinuation { continuation in
                     QuotaFetcher.fetchCopilotQuota { continuation.resume(returning: $0) }
@@ -135,6 +139,7 @@ struct SessionTabTests {
         try await testCopilotSteering()
         try await testMCPAppTranscripts()
         try await testMCPAppRemote()
+        try await testCantripHome()
         try testSubagentPlacement()
         try await testSubagentMonitor()
         try await testBackgroundWatcherContinuation()

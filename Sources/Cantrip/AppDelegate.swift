@@ -168,6 +168,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id.uuidString])
             UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id.uuidString])
         }
+        CantripHomeStore.shared.attach(manager: manager)
+        AppSettings.shared.$cantripHomeEnabled
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { _ in CantripHomeStore.shared.homeAvailabilityChanged() }
+            .store(in: &cancellables)
         MacAttention.shared.onAttention = { [weak self] issue in
             guard let self, !manager.active.isPrivate, !manager.active.isLocalPrivate else { return }
             remoteControlServer?.notifyMacAttention(sessionID: manager.active.id, issueID: issue.id)
