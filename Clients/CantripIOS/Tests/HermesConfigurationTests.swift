@@ -1,3 +1,5 @@
+import SwiftUI
+import UIKit
 import XCTest
 @testable import Hermes
 
@@ -21,6 +23,84 @@ final class HermesConfigurationTests: XCTestCase {
             ExecutionLane.copilot.modelAlias,
             ExecutionLane.local.modelAlias
         )
+    }
+
+    @MainActor
+    func testBackendVisibilityAndOrderPersistAndKeepOneVisible() throws {
+        let suite = "HermesConfigurationTests.backendPreferences.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(ExecutionLane.copilot.rawValue, forKey: "hermes.executionLane")
+
+        let env = HermesEnv(defaults: defaults)
+        XCTAssertEqual(env.backendOrder, ExecutionLane.allCases)
+        XCTAssertEqual(env.selectableLanes, ExecutionLane.allCases)
+
+        env.moveBackends(fromOffsets: IndexSet(integer: 0), toOffset: 4)
+        XCTAssertEqual(env.backendOrder, [.local, .cantrip, .home, .copilot])
+        env.setLaneVisible(.home, isVisible: false)
+        env.setLaneVisible(.copilot, isVisible: false)
+        XCTAssertEqual(env.selectableLanes, [.local, .cantrip])
+        XCTAssertEqual(env.executionLane, .cantrip)
+
+        let restored = HermesEnv(defaults: defaults)
+        XCTAssertEqual(restored.backendOrder, [.local, .cantrip, .home, .copilot])
+        XCTAssertEqual(restored.selectableLanes, [.local, .cantrip])
+        XCTAssertEqual(restored.executionLane, .cantrip)
+
+        restored.setLaneVisible(.local, isVisible: false)
+        restored.setLaneVisible(.cantrip, isVisible: false)
+        XCTAssertEqual(restored.selectableLanes, [.cantrip])
+        XCTAssertTrue(restored.isLaneVisible(.cantrip))
+        XCTAssertFalse(restored.canHide(.cantrip))
+    }
+
+    @MainActor
+    func testBackendSettingsScreenshot() async throws {
+        let directory = ProcessInfo.processInfo.environment[
+            "TEST_RUNNER_BACKEND_ARTIFACT_DIR"
+        ]
+        guard let directory, !directory.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_BACKEND_ARTIFACT_DIR to render backend settings.")
+        }
+        let suite = "HermesConfigurationTests.backendRender.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let env = HermesEnv(defaults: defaults)
+        env.moveBackends(fromOffsets: IndexSet(integer: 3), toOffset: 0)
+        env.setLaneVisible(.local, isVisible: false)
+
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
+            let controller = UIHostingController(rootView:
+                NavigationStack {
+                    BackendSettingsView(env: env)
+                }
+                .frame(width: 393)
+                .background(Color(.systemBackground))
+            )
+            controller.overrideUserInterfaceStyle = style
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 852))
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(200))
+            controller.view.frame = window.bounds
+            controller.view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            try XCTUnwrap(image.pngData()).write(
+                to: output.appendingPathComponent("backend-settings-\(name).png")
+            )
+        }
     }
 
     func testTransportAllowsEncryptedAndLoopbackEndpoints() throws {

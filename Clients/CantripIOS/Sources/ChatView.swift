@@ -2439,8 +2439,16 @@ private struct ExecutionLanePicker: View {
     @ObservedObject var remote: CantripRemoteModel
 
     var body: some View {
+        if env.selectableLanes.count == 1 {
+            ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
+        } else {
+            laneMenu
+        }
+    }
+
+    private var laneMenu: some View {
         Menu {
-            ForEach(ExecutionLane.allCases) { lane in
+            ForEach(env.selectableLanes) { lane in
                 Button {
                     env.select(lane)
                 } label: {

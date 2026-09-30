@@ -31,6 +31,9 @@ enum GatewayConnectionState: Equatable {
 /// API server (`/v1/responses`).
 @MainActor
 final class HermesEnv: ObservableObject {
+    private static let backendOrderKey = "hermes.backendOrder"
+    private static let hiddenBackendsKey = "hermes.hiddenBackends"
+
     // Each user points this at their own HTTPS Hermes gateway. No default server.
     @AppStorage("hermes.baseURL") var baseURL: String = ""
     /// Selected TTS voice identifier (empty = system default). `VoiceController`
@@ -42,20 +45,45 @@ final class HermesEnv: ObservableObject {
 
     @Published var apiKey: String = Keychain.get("hermes.apiKey") ?? ""
     @Published private(set) var executionLane: ExecutionLane
+    @Published private(set) var backendOrder: [ExecutionLane]
+    @Published private(set) var hiddenBackends: Set<ExecutionLane>
     @Published private(set) var availableModels: Set<String> = []
     @Published private(set) var connectionState: GatewayConnectionState = .notChecked
     let servers: ServerProfiles
     @Published private(set) var selectedServerID: UUID?
+    private let defaults: UserDefaults
     private var gatewayGeneration = 0
+
+    var selectableLanes: [ExecutionLane] {
+        backendOrder.filter { !hiddenBackends.contains($0) }
+    }
 
     var chatStorageID: UUID? {
         servers.selected?.usesLegacyHistory == true ? nil : selectedServerID
     }
 
-    init(servers: ServerProfiles? = nil) {
+    init(servers: ServerProfiles? = nil, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         self.servers = servers ?? ServerProfiles(kind: .hermes)
-        let storedLane = UserDefaults.standard.string(forKey: "hermes.executionLane")
-        executionLane = ExecutionLane(rawValue: storedLane ?? "") ?? .defaultLane
+        let order = Self.loadBackendOrder(from: defaults)
+        var hidden = Set(
+            (defaults.stringArray(forKey: Self.hiddenBackendsKey) ?? [])
+                .compactMap(ExecutionLane.init(rawValue:))
+        )
+        if hidden.count == ExecutionLane.allCases.count {
+            hidden.remove(ExecutionLane.defaultLane)
+        }
+        backendOrder = order
+        hiddenBackends = hidden
+        let storedLane = defaults.string(forKey: "hermes.executionLane")
+        let restoredLane = ExecutionLane(rawValue: storedLane ?? "") ?? .defaultLane
+        let visible = order.filter { !hidden.contains($0) }
+        executionLane = visible.contains(restoredLane)
+            ? restoredLane
+            : Self.fallbackLane(in: visible)
+        if executionLane.rawValue != storedLane {
+            defaults.set(executionLane.rawValue, forKey: "hermes.executionLane")
+        }
         do {
             if !self.servers.hasSavedState, !baseURL.isEmpty, !apiKey.isEmpty {
                 try self.servers.migrate(url: baseURL, credential: apiKey)
@@ -182,10 +210,37 @@ final class HermesEnv: ObservableObject {
         }
     }
 
+    func isLaneVisible(_ lane: ExecutionLane) -> Bool {
+        !hiddenBackends.contains(lane)
+    }
+
+    func canHide(_ lane: ExecutionLane) -> Bool {
+        !isLaneVisible(lane) || selectableLanes.count > 1
+    }
+
+    func setLaneVisible(_ lane: ExecutionLane, isVisible: Bool) {
+        if isVisible {
+            hiddenBackends.remove(lane)
+        } else {
+            guard canHide(lane) else { return }
+            hiddenBackends.insert(lane)
+        }
+        persistBackendPreferences()
+        guard hiddenBackends.contains(executionLane) else { return }
+        let fallback = selectableLanes.first(where: isAvailable)
+            ?? Self.fallbackLane(in: selectableLanes)
+        select(fallback)
+    }
+
+    func moveBackends(fromOffsets: IndexSet, toOffset: Int) {
+        backendOrder.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        persistBackendPreferences()
+    }
+
     func select(_ lane: ExecutionLane) {
         guard isAvailable(lane) else { return }
         executionLane = lane
-        UserDefaults.standard.set(lane.rawValue, forKey: "hermes.executionLane")
+        defaults.set(lane.rawValue, forKey: "hermes.executionLane")
     }
 
     @discardableResult
@@ -243,6 +298,26 @@ final class HermesEnv: ObservableObject {
         gatewayGeneration += 1
         availableModels.removeAll()
         connectionState = .notChecked
+    }
+
+    private func persistBackendPreferences() {
+        defaults.set(backendOrder.map(\.rawValue), forKey: Self.backendOrderKey)
+        defaults.set(
+            backendOrder.filter(hiddenBackends.contains).map(\.rawValue),
+            forKey: Self.hiddenBackendsKey
+        )
+    }
+
+    private static func loadBackendOrder(from defaults: UserDefaults) -> [ExecutionLane] {
+        var seen: Set<ExecutionLane> = []
+        let stored = (defaults.stringArray(forKey: backendOrderKey) ?? [])
+            .compactMap(ExecutionLane.init(rawValue:))
+            .filter { seen.insert($0).inserted }
+        return stored + ExecutionLane.allCases.filter { seen.insert($0).inserted }
+    }
+
+    private static func fallbackLane(in visible: [ExecutionLane]) -> ExecutionLane {
+        visible.first ?? .defaultLane
     }
 
     private func trimmed(_ s: String) -> String {

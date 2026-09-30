@@ -18,6 +18,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 executionSection
+                backendPreferencesSection
                 gatewaySection
                 CantripRemoteSettingsSection(model: remote)
                 CantripNotificationSettingsSection(remote: remote)
@@ -72,7 +73,7 @@ struct SettingsView: View {
 
     private var executionSection: some View {
         Section {
-            ForEach(ExecutionLane.allCases) { lane in
+            ForEach(env.selectableLanes) { lane in
                 Button {
                     env.select(lane)
                 } label: {
@@ -95,6 +96,7 @@ struct SettingsView: View {
                                 .foregroundStyle(.tint)
                         }
                     }
+
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -104,6 +106,23 @@ struct SettingsView: View {
             Text("Execution")
         } footer: {
             Text("Choose the agent behind the shared chat and voice interface. Each destination keeps its own conversation.")
+        }
+    }
+
+    private var backendPreferencesSection: some View {
+        Section {
+            NavigationLink {
+                BackendSettingsView(env: env)
+            } label: {
+                LabeledContent {
+                    Text("\(env.selectableLanes.count) shown")
+                        .foregroundStyle(.secondary)
+                } label: {
+                    Label("Backends", systemImage: "line.3.horizontal.decrease")
+                }
+            }
+        } footer: {
+            Text("Choose which backends appear in the picker and set their order.")
         }
     }
 
@@ -266,6 +285,62 @@ struct SettingsView: View {
     private var currentVoiceName: String {
         guard !env.voiceId.isEmpty, let v = AVSpeechSynthesisVoice(identifier: env.voiceId) else { return "Default" }
         return v.name
+    }
+}
+
+struct BackendSettingsView: View {
+    @ObservedObject var env: HermesEnv
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(env.backendOrder) { lane in
+                    Toggle(isOn: Binding(
+                        get: { env.isLaneVisible(lane) },
+                        set: { env.setLaneVisible(lane, isVisible: $0) }
+                    )) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(lane.title)
+                                Text(lane.detail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: lane.systemImage)
+                                .foregroundStyle(laneTint(lane))
+                        }
+                    }
+                    .disabled(!env.canHide(lane))
+                    .accessibilityHint(
+                        env.canHide(lane)
+                            ? "Controls whether this backend appears in the picker."
+                            : "At least one backend must remain visible."
+                    )
+                }
+                .onMove(perform: env.moveBackends)
+            } header: {
+                Text("Shown in picker")
+            } footer: {
+                Text("Tap Edit, then drag backends into the order you want. At least one backend stays visible.")
+            }
+        }
+        .navigationTitle("Backends")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                EditButton()
+            }
+        }
+    }
+
+    private func laneTint(_ lane: ExecutionLane) -> Color {
+        switch lane {
+        case .copilot: .orange
+        case .local: .green
+        case .cantrip: .cyan
+        case .home: .purple
+        }
     }
 }
 

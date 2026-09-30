@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import UIKit
 import XCTest
@@ -129,6 +130,54 @@ final class CantripHomeTests: XCTestCase {
         let data = try await api.homeArtifactData(id: try XCTUnwrap(artifacts.artifacts.first?.id))
         XCTAssertEqual(String(decoding: data, as: UTF8.self), "Report")
         XCTAssertTrue(requests.contains { $0.0 == "GET" && $0.1 == "/api/v1/home" })
+    }
+
+    func testUnchangedHomeRefreshDoesNotRepublishSnapshots() async throws {
+        let client = client()
+        let model = CantripRemoteModel(urlSession: client)
+        let unchangedTasks = tasksPayload(enabled: true)
+        let unchangedArtifacts = artifactsPayload()
+        CantripHomeRequestProtocol.handler = { request in
+            let path = URLComponents(
+                url: request.url!, resolvingAgainstBaseURL: false
+            )?.percentEncodedPath ?? ""
+            switch path {
+            case "/api/v1/home": return (200, self.homeSessionPayload())
+            case "/api/v1/home/tasks": return (200, unchangedTasks)
+            case "/api/v1/home/artifacts": return (200, unchangedArtifacts)
+            default: return (200, Data(#"{"sessions":[]}"#.utf8))
+            }
+        }
+        addTeardownBlock { @MainActor in
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            CantripHomeRequestProtocol.handler = nil
+        }
+        let configured = await model.configure(
+            url: "https://cantrip.example",
+            pairingToken: "home-refresh-token",
+            tailscaleOnly: true
+        )
+        XCTAssertTrue(configured)
+        await model.selectHome()
+        XCTAssertEqual(model.homeTasks.count, 2)
+        XCTAssertEqual(model.homeArtifacts.count, 1)
+
+        var taskPublishes = 0
+        var artifactPublishes = 0
+        var loadingPublishes = 0
+        var subscriptions: Set<AnyCancellable> = []
+        model.$homeTasks.dropFirst().sink { _ in taskPublishes += 1 }.store(in: &subscriptions)
+        model.$homeArtifacts.dropFirst().sink { _ in artifactPublishes += 1 }
+            .store(in: &subscriptions)
+        model.$isLoadingHomeData.dropFirst().sink { _ in loadingPublishes += 1 }
+            .store(in: &subscriptions)
+
+        await model.refreshHomeData()
+
+        XCTAssertEqual(taskPublishes, 0)
+        XCTAssertEqual(artifactPublishes, 0)
+        XCTAssertEqual(loadingPublishes, 0)
     }
 
     func testHomeFocusedScreenshots() async throws {
