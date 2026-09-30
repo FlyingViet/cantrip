@@ -356,11 +356,65 @@ struct CantripHomeTaskRun: Decodable, Equatable, Identifiable {
     let summary: String
 }
 
+struct CantripHomeTaskField: Decodable, Equatable, Identifiable {
+    enum Kind: String, Decodable {
+        case text
+        case longText
+        case number
+        case boolean
+        case date
+        case dateTime
+        case choice
+        case url
+    }
+
+    let key: String
+    let label: String
+    let kind: Kind
+    let required: Bool
+    let options: [String]?
+
+    var id: String { key }
+}
+
+struct CantripHomeTaskListPresentation: Decodable, Equatable {
+    let titleField: String
+    let subtitleFields: [String]
+    let badgeField: String?
+    let dateField: String?
+}
+
+struct CantripHomeTaskDetailSection: Decodable, Equatable, Identifiable {
+    let title: String?
+    let fields: [String]
+
+    var id: String { "\(title ?? ""):\(fields.joined(separator: ","))" }
+}
+
+struct CantripHomeTaskRecord: Decodable, Equatable, Identifiable {
+    let id: UUID
+    let values: [String: String]
+    let createdAt: Date
+    let updatedAt: Date
+}
+
+struct CantripHomeTaskWorkspace: Decodable, Equatable {
+    let recordLabel: String
+    let recordLabelPlural: String?
+    let icon: String
+    let fields: [CantripHomeTaskField]
+    let list: CantripHomeTaskListPresentation
+    let detailSections: [CantripHomeTaskDetailSection]
+    let records: [CantripHomeTaskRecord]
+}
+
 struct CantripHomeTask: Decodable, Equatable, Identifiable {
     let id: UUID
     var title: String
     var prompt: String
     let schedule: CantripHomeSchedule
+    let hasSchedule: Bool?
+    let workspace: CantripHomeTaskWorkspace?
     var enabled: Bool
     let createdAt: Date
     let updatedAt: Date
@@ -369,6 +423,8 @@ struct CantripHomeTask: Decodable, Equatable, Identifiable {
     let state: String
     let activeRunID: UUID?
     let runs: [CantripHomeTaskRun]
+
+    var isScheduled: Bool { hasSchedule != false }
 }
 
 struct CantripHomeArtifact: Decodable, Equatable, Identifiable {
@@ -1096,6 +1152,35 @@ struct CantripRemoteAPI {
             path: "/api/v1/home/tasks/\(id.uuidString)", method: "DELETE"
         )
         guard response.deleted else { throw CantripRemoteError.invalidResponse }
+    }
+
+    func createHomeTaskRecord(
+        taskID: UUID, values: [String: String]
+    ) async throws -> CantripHomeTask {
+        try await request(
+            path: "/api/v1/home/tasks/\(taskID.uuidString)/records",
+            method: "POST",
+            body: JSONSerialization.data(withJSONObject: ["values": values])
+        )
+    }
+
+    func updateHomeTaskRecord(
+        taskID: UUID, recordID: UUID, values: [String: String]
+    ) async throws -> CantripHomeTask {
+        try await request(
+            path: "/api/v1/home/tasks/\(taskID.uuidString)/records/\(recordID.uuidString)",
+            method: "PATCH",
+            body: JSONSerialization.data(withJSONObject: ["values": values])
+        )
+    }
+
+    func deleteHomeTaskRecord(
+        taskID: UUID, recordID: UUID
+    ) async throws -> CantripHomeTask {
+        try await request(
+            path: "/api/v1/home/tasks/\(taskID.uuidString)/records/\(recordID.uuidString)",
+            method: "DELETE"
+        )
     }
 
     func homeArtifactData(id: UUID) async throws -> Data {
@@ -2290,6 +2375,51 @@ final class CantripRemoteModel: ObservableObject {
                 try await $0.deleteHomeTask(id: task.id)
             }
             homeTasks.removeAll { $0.id == task.id }
+            homeDataError = nil
+            return true
+        } catch {
+            homeDataError = error.localizedDescription
+            return false
+        }
+    }
+
+    func saveHomeTaskRecord(
+        taskID: UUID, recordID: UUID?, values: [String: String]
+    ) async -> Bool {
+        guard !isMutating else { return false }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            let updated = try await performAuthenticated(allowFallback: false) { api in
+                if let recordID {
+                    return try await api.updateHomeTaskRecord(
+                        taskID: taskID, recordID: recordID, values: values
+                    )
+                }
+                return try await api.createHomeTaskRecord(taskID: taskID, values: values)
+            }
+            if let index = homeTasks.firstIndex(where: { $0.id == updated.id }) {
+                homeTasks[index] = updated
+            }
+            homeDataError = nil
+            return true
+        } catch {
+            homeDataError = error.localizedDescription
+            return false
+        }
+    }
+
+    func deleteHomeTaskRecord(taskID: UUID, recordID: UUID) async -> Bool {
+        guard !isMutating else { return false }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            let updated = try await performAuthenticated(allowFallback: false) {
+                try await $0.deleteHomeTaskRecord(taskID: taskID, recordID: recordID)
+            }
+            if let index = homeTasks.firstIndex(where: { $0.id == updated.id }) {
+                homeTasks[index] = updated
+            }
             homeDataError = nil
             return true
         } catch {
