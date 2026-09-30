@@ -164,6 +164,25 @@ do {
     expect(RemoteGeneratedImages.presentation(
         markdown + "\n" + markdown, messageID: messageID, root: generatedRoot
     ).images.count == 1, "deduplicate repeated references")
+    let homeArtifacts = generatedRoot.appendingPathComponent("home/artifacts", isDirectory: true)
+    try FileManager.default.createDirectory(at: homeArtifacts, withIntermediateDirectories: true)
+    let homeImage = homeArtifacts.appendingPathComponent("tracker.png")
+    try jpeg(type: .png).write(to: homeImage)
+    let homeMarkdown = "![Tracker](\(homeImage.path))"
+    expect(RemoteGeneratedImages.presentation(
+        homeMarkdown, messageID: messageID, root: generatedRoot
+    ).images.isEmpty, "nested directories remain excluded by default")
+    let homePreview = RemoteGeneratedImages.presentation(
+        homeMarkdown, messageID: messageID, root: generatedRoot,
+        additionalRoots: [homeArtifacts]
+    )
+    expect(homePreview.images.count == 1, "an explicitly allowed Home artifact directory is previewable")
+    expect(
+        try !RemoteGeneratedImages.read(
+            homePreview.images[0], sessionID: sessionID, thumbnail: true, root: cache
+        ).isEmpty,
+        "read a validated Home artifact preview"
+    )
     for text in [
         "```\n\(markdown)\n```", "~~~md\n\(markdown)\n~~~", "    ![Example](\(screenshot.path))",
         "`![Example](\(screenshot.path))`", "[Download](\(screenshot.path))",

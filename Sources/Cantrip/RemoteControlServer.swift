@@ -955,7 +955,11 @@ final class RemoteControlServer {
             let imageID = "previews/\(parts[2])/\(parts[3])"
             guard !session.isLocalPrivate, RemoteGeneratedImages.validID(imageID),
                   let message = session.messages.first(where: { $0.id == messageID && $0.role == .assistant }),
-                  let reference = RemoteGeneratedImages.presentation(message.text, messageID: messageID)
+                  let reference = RemoteGeneratedImages.presentation(
+                    message.text,
+                    messageID: messageID,
+                    additionalRoots: generatedImageRoots(sessionID: session.id)
+                  )
                     .images.first(where: { $0.id == imageID }) else {
                 sendError(404, "preview not found in this session", on: connection)
                 return
@@ -965,7 +969,11 @@ final class RemoteControlServer {
                     let data = try await generatedImages.read(reference, sessionID: id, thumbnail: parts.count == 5)
                     guard                     let current = manager.managedSession(id: id), !current.isPrivate,
                           let message = current.messages.first(where: { $0.id == messageID && $0.role == .assistant }),
-                          RemoteGeneratedImages.presentation(message.text, messageID: messageID)
+                          RemoteGeneratedImages.presentation(
+                            message.text,
+                            messageID: messageID,
+                            additionalRoots: generatedImageRoots(sessionID: current.id)
+                          )
                             .images.contains(where: { $0.id == imageID }) else {
                         sendError(404, "preview not found in this session", on: connection)
                         return
@@ -1516,13 +1524,23 @@ final class RemoteControlServer {
                 object["images"] = presentation.imageIDs.map { ["id": $0] }
             }
         } else if message.role == .assistant, sessionID != ChatSession.privateLocalID {
-            let presentation = RemoteGeneratedImages.presentation(message.text, messageID: message.id)
+            let presentation = RemoteGeneratedImages.presentation(
+                message.text,
+                messageID: message.id,
+                additionalRoots: generatedImageRoots(sessionID: sessionID)
+            )
             if !presentation.images.isEmpty {
                 object["displayText"] = presentation.text
                 object["images"] = presentation.images.map(\.snapshot)
             }
         }
         return object
+    }
+
+    private func generatedImageRoots(sessionID: UUID) -> [URL] {
+        sessionID == ChatSession.cantripHomeID
+            ? [RemoteGeneratedImages.homeArtifactRoot]
+            : []
     }
 
     @MainActor

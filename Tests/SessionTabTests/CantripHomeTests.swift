@@ -81,14 +81,27 @@ extension SessionTabTests {
                      && trackedApplication.values["round"] == "2")
         precondition(manager.homeSession.messages.last?.text.contains("1 record change") == true)
 
-        let artifactURL = CantripHomeStore.artifactDirectory.appendingPathComponent("home-test.txt")
-        try "Home artifact".write(to: artifactURL, atomically: true, encoding: .utf8)
+        let artifactURL = CantripHomeStore.artifactDirectory.appendingPathComponent("home-test.png")
+        let imageData = Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )!
+        try imageData.write(to: artifactURL)
         defer { try? FileManager.default.removeItem(at: artifactURL) }
         let artifact = try store.register(.init(
-            title: "Apartment summary", path: artifactURL.path, kind: "document"
+            title: "Apartment summary", path: artifactURL.lastPathComponent, kind: "image"
         ))
         let read = try store.artifactData(id: artifact.id)
-        precondition(String(decoding: read.1, as: UTF8.self) == "Home artifact")
+        precondition(read.1 == imageData, "Relative Home artifact paths must resolve under the guarded root")
+        let recoveredURL = CantripHomeStore.artifactDirectory
+            .appendingPathComponent("recovered-home-test.txt")
+        try "Recovered artifact".write(to: recoveredURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: recoveredURL) }
+        try store.recoverUnregisteredArtifacts()
+        let recovered = try requireHome(
+            store.artifacts.first { $0.relativePath == recoveredURL.lastPathComponent }
+        )
+        let recoveredData = try store.artifactData(id: recovered.id).1
+        precondition(String(decoding: recoveredData, as: UTF8.self) == "Recovered artifact")
         do {
             _ = try store.register(.init(
                 title: "Escape", path: "/tmp/not-home.txt", kind: "document"
@@ -127,6 +140,25 @@ extension SessionTabTests {
         let homeSession = try requireHome(home.1["session"] as? [String: Any])
         precondition(home.0 == 200 && homeSession["id"] as? String == ChatSession.cantripHomeID.uuidString
                      && homeSession["isCantripHome"] as? Bool == true)
+        let previewMessage = ChatMessage(
+            role: .assistant,
+            text: "![Apartment summary](\(artifactURL.path))"
+        )
+        manager.homeSession.messages.append(previewMessage)
+        let refreshedHome = try await call("/api/v1/home")
+        let refreshedSession = try requireHome(refreshedHome.1["session"] as? [String: Any])
+        let remoteMessages = try requireHome(refreshedSession["messages"] as? [[String: Any]])
+        let remotePreview = try requireHome(remoteMessages.first {
+            $0["id"] as? String == previewMessage.id.uuidString
+        })
+        let previewImages = try requireHome(remotePreview["images"] as? [[String: Any]])
+        let previewID = try requireHome(previewImages.first?["id"] as? String)
+        precondition((remotePreview["displayText"] as? String)?.contains("cantrip-preview://") == true)
+        let previewData = try await call(
+            "/api/v1/sessions/\(ChatSession.cantripHomeID.uuidString)/\(previewID)/thumbnail"
+        )
+        precondition(!(previewData.1["data"] as? String ?? "").isEmpty,
+                     "Home artifact images must be available as inline previews")
         let taskList = try await call("/api/v1/home/tasks")
         precondition((taskList.1["tasks"] as? [[String: Any]])?.contains {
             $0["id"] as? String == task.id.uuidString
@@ -169,7 +201,7 @@ extension SessionTabTests {
         } == true)
         let artifactData = try await call("/api/v1/home/artifacts/\(artifact.id.uuidString)")
         precondition(Data(base64Encoded: artifactData.1["data"] as? String ?? "")
-                     == Data("Home artifact".utf8))
+                     == imageData)
         let deleted = try await call("/api/v1/home/tasks/\(task.id.uuidString)", method: "DELETE")
         precondition(deleted.1["deleted"] as? Bool == true)
         try store.delete(id: tracker.id)

@@ -12,6 +12,8 @@ enum RemoteGeneratedImages {
     static let thumbnailDimension = 960
     static let sourceRoot = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".cache/Cantrip", isDirectory: true)
+    static let homeArtifactRoot = sourceRoot
+        .appendingPathComponent("home/artifacts", isDirectory: true)
     static let storageRoot = sourceRoot.appendingPathComponent("remote-previews", isDirectory: true)
 
     struct Reference {
@@ -34,7 +36,12 @@ enum RemoteGeneratedImages {
         pattern: #"^ {0,3}!\[([^\]\r\n]*)\]\((<[^>\r\n]+>|[^()\r\n]+)\)[ \t]*\r?$"#
     )
 
-    static func presentation(_ text: String, messageID: UUID, root: URL = sourceRoot) -> Presentation {
+    static func presentation(
+        _ text: String,
+        messageID: UUID,
+        root: URL = sourceRoot,
+        additionalRoots: [URL] = []
+    ) -> Presentation {
         guard text.contains("![") else { return Presentation(text: text, images: []) }
         var images: [Reference] = []
         var fence: (Character, Int)?
@@ -57,7 +64,9 @@ enum RemoteGeneratedImages {
             ) else { return line }
             var target = string.substring(with: match.range(at: 2))
             if target.hasPrefix("<"), target.hasSuffix(">") { target = String(target.dropFirst().dropLast()) }
-            guard let source = sourceURL(target, root: root) else { return line }
+            guard let source = sourceURL(
+                target, roots: [root] + additionalRoots
+            ) else { return line }
             let hash = SHA256.hash(data: Data(source.path.utf8)).map { String(format: "%02x", $0) }.joined()
             let id = "previews/\(messageID.uuidString)/\(hash).jpg"
             let reference: Reference
@@ -81,7 +90,7 @@ enum RemoteGeneratedImages {
         return hash.count == 64 && hash.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 
-    private static func sourceURL(_ target: String, root: URL) -> URL? {
+    private static func sourceURL(_ target: String, roots: [URL]) -> URL? {
         let url: URL
         if target.hasPrefix("file:") {
             guard let file = URL(string: target), file.isFileURL,
@@ -98,9 +107,11 @@ enum RemoteGeneratedImages {
                 return nil
             }
         }
+        let parent = url.deletingLastPathComponent().standardizedFileURL
+        let allowedParents = roots.map(\.standardizedFileURL)
         guard !url.path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
               !url.pathComponents.contains(".."),
-              url.deletingLastPathComponent().standardizedFileURL == root.standardizedFileURL,
+              allowedParents.contains(parent),
               ["png", "jpg", "jpeg"].contains(url.pathExtension.lowercased()) else { return nil }
         return url.standardizedFileURL
     }
