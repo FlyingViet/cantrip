@@ -676,17 +676,33 @@ private struct CantripHomeTaskRecordDetailView: View {
         _ field: CantripHomeTaskField, record: CantripHomeTaskRecord
     ) -> some View {
         let value = record.values[field.key]
-        LabeledContent {
-            if field.kind == .url, let value, let url = URL(string: value) {
-                Link(value, destination: url)
-                    .multilineTextAlignment(.trailing)
-            } else {
-                Text(value.map { CantripHomeTaskValueFormatter.display($0, for: field) } ?? "—")
+        if field.kind == .longText {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(field.label)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(value ?? "—")
                     .foregroundStyle(value == nil ? .secondary : .primary)
-                    .multilineTextAlignment(.trailing)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
             }
-        } label: {
-            Text(field.label)
+            .padding(.vertical, 2)
+        } else {
+            LabeledContent {
+                if field.kind == .url, let value, let url = URL(string: value) {
+                    Link(value, destination: url)
+                        .multilineTextAlignment(.trailing)
+                } else {
+                    Text(value.map {
+                        CantripHomeTaskValueFormatter.display($0, for: field)
+                    } ?? "—")
+                        .foregroundStyle(value == nil ? .secondary : .primary)
+                        .multilineTextAlignment(.trailing)
+                }
+            } label: {
+                Text(field.label)
+            }
         }
     }
 }
