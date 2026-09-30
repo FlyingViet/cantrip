@@ -74,6 +74,36 @@ final class CantripHomeTests: XCTestCase {
         XCTAssertTrue(vm.isTabLocked)
     }
 
+    func testHomeEmptyChatDistinguishesReadyOpeningAndUnavailable() {
+        XCTAssertEqual(
+            CantripHomeChatAvailability.resolve(
+                isConfigured: true,
+                isHomeSelected: true,
+                isHomeSession: true,
+                error: nil
+            ),
+            .ready
+        )
+        XCTAssertEqual(
+            CantripHomeChatAvailability.resolve(
+                isConfigured: true,
+                isHomeSelected: true,
+                isHomeSession: false,
+                error: nil
+            ),
+            .opening
+        )
+        XCTAssertEqual(
+            CantripHomeChatAvailability.resolve(
+                isConfigured: true,
+                isHomeSelected: true,
+                isHomeSession: false,
+                error: "Home is disabled on the Mac."
+            ),
+            .unavailable("Home is disabled on the Mac.")
+        )
+    }
+
     func testHomeUsesCompactBottomBarOnIPhone() async throws {
         let controller = UIHostingController(rootView:
             CantripHomeTabs(selection: .constant(.tasks), runningTasks: 2) {
