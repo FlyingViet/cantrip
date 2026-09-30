@@ -57,7 +57,9 @@ The macOS app includes:
   download, or similar job, the agent can hand passive monitoring to a dedicated
   watcher and continue independent work. The watcher stays visible in the subagent
   monitor; when it finishes, Cantrip wakes the same run and continues from where it
-  paused instead of making you send another message.
+  paused instead of making you send another message. The Mac Progress pane has
+  separate **Steps** and **Background** tabs, while Cantrip Agent shows active
+  background tasks in a compact button that opens their detail sheet.
 - **Live context:** local Copilot and Claude Code can accept **Inject** messages
   without stopping their current work, including from Cantrip Agent and Mac/browser
   Remote. Copilot uses a persistent native SDK session per tab; accepted context is

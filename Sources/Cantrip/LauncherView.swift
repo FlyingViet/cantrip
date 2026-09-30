@@ -21,6 +21,7 @@ struct LauncherView: View {
     var onKeepVisibleChange: (Bool) -> Void = { _ in }
     @State private var pinned = false
     @State private var showSteps = false
+    @State private var progressPaneSection = ProgressPaneSection.steps
     @StateObject private var fileSearch = FileSearch.shared
     @ObservedObject private var usage = UsageTracker.shared
     @ObservedObject private var updater = UpdateChecker.shared
@@ -505,14 +506,43 @@ struct LauncherView: View {
             .help("Usage & spending")
             .hoverHint("Usage — quotas & spending per backend", $toolbarHint)
 
-            Button(action: { withAnimation(.easeOut(duration: 0.15)) { showSteps.toggle() } }) {
+            Button(action: { toggleProgressPane(.steps) }) {
                 Image(systemName: "sidebar.trailing")
                     .font(.system(size: 15))
-                    .foregroundStyle(showSteps ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(showSteps && progressPaneSection == .steps
+                                     ? Color.accentColor : Color.secondary)
             }
             .buttonStyle(.plain)
-            .help(showSteps ? "Hide progress sidebar" : "Show progress sidebar (tool steps)")
+            .help(showSteps && progressPaneSection == .steps
+                  ? "Hide progress sidebar" : "Show tool steps")
             .hoverHint("Progress — live tool steps & diffs", $toolbarHint)
+
+            Button(action: { toggleProgressPane(.background) }) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "gearshape.2")
+                        .font(.system(size: 15))
+                        .foregroundStyle(showSteps && progressPaneSection == .background
+                                         ? Color.accentColor
+                                         : activeBackgroundTasks > 0 ? Color.orange : Color.secondary)
+                        .symbolEffect(.pulse, isActive: activeBackgroundTasks > 0
+                                      && (!showSteps || progressPaneSection != .background))
+                    if activeBackgroundTasks > 0 {
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 5, height: 5)
+                            .offset(x: 3, y: -3)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .help(showSteps && progressPaneSection == .background
+                  ? "Hide background tasks" : "Show background tasks")
+            .hoverHint(activeBackgroundTasks == 1
+                       ? "Background — 1 task running"
+                       : activeBackgroundTasks > 1
+                           ? "Background — \(activeBackgroundTasks) tasks running"
+                           : "Background — watchers and other background tasks",
+                       $toolbarHint)
 
             Button(action: { pinned.toggle() }) {
                 Image(systemName: pinned ? "pin.fill" : "pin")
@@ -822,6 +852,18 @@ struct LauncherView: View {
         allActivities.flatMap(\.subagentActivities)
     }
 
+    private var backgroundTasks: [ToolActivity] {
+        sessionSubagents.filter { $0.subagent?.background == true }
+    }
+
+    private var foregroundSubagents: [ToolActivity] {
+        sessionSubagents.filter { $0.subagent?.background != true }
+    }
+
+    private var activeBackgroundTasks: Int {
+        backgroundTasks.filter { $0.subagent?.isActive == true }.count
+    }
+
     /// Running subagents, pinned below the transcript until each one finishes.
     private var pinnedSubagents: [ToolActivity] {
         sessionSubagents.filter { $0.subagent?.isActive == true }
@@ -867,31 +909,49 @@ struct LauncherView: View {
                 }
                 .buttonStyle(.plain)
             }
-            let subagents = sessionSubagents
             let steps = allActivities.filter { $0.subagent == nil }
-            if allActivities.isEmpty {
-                Text("No steps yet — tool activity will appear here.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            if !subagents.isEmpty {
-                let running = subagents.filter { $0.subagent?.isActive == true }.count
-                progressSectionTitle("Subagents", detail: running > 0 ? "\(running) running" : nil)
-                ScrollView {
-                    SubagentMonitorView(activities: subagents, stop: stopSubagent)
-                }
-                .frame(maxHeight: 320)
-            }
-            if !steps.isEmpty {
-                if !subagents.isEmpty { progressSectionTitle("Steps").padding(.top, 4) }
-                ScrollViewReader { proxy in
+            ProgressPaneTabs(
+                selection: $progressPaneSection,
+                steps: steps.count + foregroundSubagents.count,
+                backgroundTasks: backgroundTasks.count
+            )
+            if progressPaneSection == .background {
+                if backgroundTasks.isEmpty {
+                    Text("No background tasks yet. Watchers for builds, uploads, and downloads appear here.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
                     ScrollView {
-                        ToolProgressView(activities: steps)
-                            .id("steps-end")
+                        SubagentMonitorView(activities: backgroundTasks, stop: stopSubagent)
                     }
-                    .frame(maxHeight: subagents.isEmpty ? 560 : 300)
-                    .onChange(of: steps.count) {
-                        proxy.scrollTo("steps-end", anchor: .bottom)
+                    .frame(maxHeight: 620)
+                }
+            } else {
+                if steps.isEmpty && foregroundSubagents.isEmpty {
+                    Text("No steps yet — tool activity will appear here.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                if !foregroundSubagents.isEmpty {
+                    let running = foregroundSubagents.filter { $0.subagent?.isActive == true }.count
+                    progressSectionTitle("Subagents", detail: running > 0 ? "\(running) running" : nil)
+                    ScrollView {
+                        SubagentMonitorView(activities: foregroundSubagents, stop: stopSubagent)
+                    }
+                    .frame(maxHeight: 320)
+                }
+                if !steps.isEmpty {
+                    if !foregroundSubagents.isEmpty { progressSectionTitle("Steps").padding(.top, 4) }
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            ToolProgressView(activities: steps)
+                                .id("steps-end")
+                        }
+                        .frame(maxHeight: foregroundSubagents.isEmpty ? 560 : 300)
+                        .onChange(of: steps.count) {
+                            proxy.scrollTo("steps-end", anchor: .bottom)
+                        }
                     }
                 }
             }
@@ -1714,6 +1774,24 @@ struct LauncherView: View {
         }
     }
 
+    private func toggleProgressPane(_ section: ProgressPaneSection) {
+        withAnimation(.easeOut(duration: 0.15)) {
+            if showSteps, progressPaneSection == section {
+                showSteps = false
+            } else {
+                progressPaneSection = section
+                showSteps = true
+            }
+        }
+    }
+
+    private func openProgressPane(_ section: ProgressPaneSection) {
+        withAnimation(.easeOut(duration: 0.15)) {
+            progressPaneSection = section
+            showSteps = true
+        }
+    }
+
     // MARK: - Terminal mode
 
     private var terminalView: some View {
@@ -2069,8 +2147,8 @@ struct LauncherView: View {
                     ForEach(transcriptMessages) { message in
                         MessageRow(message: message, localOnly: session.isLocalPrivate,
                                    appActions: settings.copilotMCPApps ? mcpAppActions : nil,
-                                   openSubagents: {
-                                       withAnimation(.easeOut(duration: 0.15)) { showSteps = true }
+                                   openSubagents: { background in
+                                       openProgressPane(background ? .background : .steps)
                                    })
                             .id(message.id)
                     }
@@ -2105,7 +2183,8 @@ struct LauncherView: View {
                 let pinned = pinnedSubagents
                 if !pinned.isEmpty {
                     SubagentStrip(activities: pinned, open: {
-                        withAnimation(.easeOut(duration: 0.15)) { showSteps = true }
+                        openProgressPane(pinned.contains { $0.subagent?.background == true }
+                                         ? .background : .steps)
                     })
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
@@ -2425,7 +2504,7 @@ private struct MessageRow: View {
     /// Nil while MCP App views are turned off: saved views stay hidden and inert.
     var appActions: MCPAppActions?
     /// Shows the Progress pane's subagent monitor.
-    var openSubagents: (() -> Void)?
+    var openSubagents: ((Bool) -> Void)?
 
     private var visibleApps: [MCPAppPayload] { appActions == nil ? [] : message.apps }
     /// Finished subagents grouped by the reply block they follow; running ones are pinned below the transcript.
@@ -2476,7 +2555,10 @@ private struct MessageRow: View {
                     // Each finished subagent's strip sits where the reply had got to when it ended.
                     ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
                         if index > 0, let openSubagents {
-                            SubagentStrip(activities: placed[index - 1].agents, open: openSubagents)
+                            let agents = placed[index - 1].agents
+                            SubagentStrip(activities: agents, open: {
+                                openSubagents(agents.contains { $0.subagent?.background == true })
+                            })
                         }
                         if !part.isEmpty {
                             if localOnly {
