@@ -16,8 +16,8 @@ final class HermesConfigurationTests: XCTestCase {
         )
     }
 
-    func testCopilotIsTheDefaultExecutionLane() {
-        XCTAssertEqual(ExecutionLane.defaultLane, .copilot)
+    func testHomeIsTheDefaultExecutionLane() {
+        XCTAssertEqual(ExecutionLane.defaultLane, .home)
         XCTAssertEqual(ExecutionLane.copilot.modelAlias, "copilot-coding")
         XCTAssertNotEqual(
             ExecutionLane.copilot.modelAlias,
@@ -32,6 +32,7 @@ final class HermesConfigurationTests: XCTestCase {
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(ExecutionLane.copilot.rawValue, forKey: "hermes.executionLane")
+        defaults.set(1, forKey: HermesEnv.homeDefaultVersionKey)
 
         let env = HermesEnv(defaults: defaults)
         XCTAssertEqual(env.backendOrder, ExecutionLane.allCases)
@@ -54,6 +55,22 @@ final class HermesConfigurationTests: XCTestCase {
         XCTAssertEqual(restored.selectableLanes, [.cantrip])
         XCTAssertTrue(restored.isLaneVisible(.cantrip))
         XCTAssertFalse(restored.canHide(.cantrip))
+    }
+
+    @MainActor
+    func testExistingInstallAdoptsHomeOnceThenPreservesSelection() throws {
+        let suite = "HermesConfigurationTests.homeDefault.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(ExecutionLane.copilot.rawValue, forKey: "hermes.executionLane")
+
+        let migrated = HermesEnv(defaults: defaults)
+        XCTAssertEqual(migrated.executionLane, .home)
+        migrated.select(.cantrip)
+
+        let restored = HermesEnv(defaults: defaults)
+        XCTAssertEqual(restored.executionLane, .cantrip)
     }
 
     @MainActor

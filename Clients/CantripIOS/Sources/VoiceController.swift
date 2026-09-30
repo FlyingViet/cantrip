@@ -20,20 +20,30 @@ final class VoiceController: NSObject, ObservableObject {
     /// Called with the finalized utterance when a listening turn ends.
     var onFinalTranscript: ((String) -> Void)?
 
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    private lazy var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var microphoneAuthorized = false
     private var appleSpeechAuthorized = false
-    // lazy: ChatView's init eagerly builds throwaway VoiceControllers on every
-    // parent re-render — allocating an AVAudioEngine + synthesizer per render
-    // is wasted work that shows up as jank. Real instances pay on first use.
-    private lazy var engine = AVAudioEngine()
+    private var audioEngine: AVAudioEngine?
+    private var engine: AVAudioEngine {
+        if let audioEngine { return audioEngine }
+        let audioEngine = AVAudioEngine()
+        self.audioEngine = audioEngine
+        return audioEngine
+    }
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
-    private lazy var synth: AVSpeechSynthesizer = {
+    private var speechSynthesizer: AVSpeechSynthesizer?
+    private var synth: AVSpeechSynthesizer {
+        if let speechSynthesizer { return speechSynthesizer }
         let s = AVSpeechSynthesizer()
         s.delegate = self
+        speechSynthesizer = s
         return s
-    }()
+    }
+    private var ownsAudioSession = false
+    var hasInitializedAudioResources: Bool {
+        audioEngine != nil || speechSynthesizer != nil || ownsAudioSession
+    }
     private var silenceTimer: Timer?
     private var maximumListenTimer: Timer?
     private var recognitionGeneration = UUID()
@@ -72,6 +82,7 @@ final class VoiceController: NSObject, ObservableObject {
             .sink { [weak self] engineSpeaking in
                 guard let self, !engineSpeaking, self.isSpeaking else { return }
                 self.isSpeaking = false
+                self.deactivateAudioSession()
                 self.resumeIfHandsFree()
             }
             .store(in: &cancellables)
@@ -310,10 +321,12 @@ final class VoiceController: NSObject, ObservableObject {
                 activeInputEngine = .parakeet
                 armMaximumListenTimer()
             } catch is CancellationError {
+                stopAudioInput()
                 isPreparingRecognition = false
                 recognitionStatusText = nil
             } catch {
                 await ParakeetSpeechEngine.shared.cancelSession()
+                stopAudioInput()
                 isPreparingRecognition = false
                 recognitionStatusText = nil
                 if appleSpeechAuthorized,
@@ -336,8 +349,7 @@ final class VoiceController: NSObject, ObservableObject {
         recognitionGeneration = UUID()
         parakeetStartTask?.cancel()
         parakeetStartTask = nil
-        if engine.isRunning { engine.stop() }
-        engine.inputNode.removeTap(onBus: 0)
+        stopAudioInput()
         request?.endAudio()
         task?.cancel()
         request = nil
@@ -431,6 +443,7 @@ final class VoiceController: NSObject, ObservableObject {
             options: [.duckOthers, .defaultToSpeaker]
         )
         try session.setActive(true, options: .notifyOthersOnDeactivation)
+        ownsAudioSession = true
     }
 
     private var selectedInputEngine: SpeechInputEngine {
@@ -516,7 +529,7 @@ final class VoiceController: NSObject, ObservableObject {
             QwenVoiceEngine.shared.finishReply()             // onIdle drives the resume
             return
         }
-        if pendingUtterances == 0 { isSpeaking = false; resumeIfHandsFree() }
+        finishSpeechIfIdle()
     }
 
     /// One-shot speak of a complete string (used outside the streaming path).
@@ -532,10 +545,11 @@ final class VoiceController: NSObject, ObservableObject {
     /// Stop all speech immediately and clear the queue (used by barge-in).
     func stopSpeaking() {
         QwenVoiceEngine.shared.stop()
-        synth.stopSpeaking(at: .immediate)
+        speechSynthesizer?.stopSpeaking(at: .immediate)
         pendingUtterances = 0
         replyStreamDone = true
         isSpeaking = false
+        deactivateAudioSession()
     }
 
     private func prepareForSpeech() {
@@ -543,12 +557,14 @@ final class VoiceController: NSObject, ObservableObject {
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
             try AVAudioSession.sharedInstance().setActive(true)
+            ownsAudioSession = true
         } catch {}
     }
 
     /// Speak a short sample with a given voice (used by the Settings preview).
     func preview(voiceId: String) {
         if isListening { stopListening(finalize: false) }
+        prepareForSpeech()
         let utt = AVSpeechUtterance(string: "Hey, this is how I'll sound.")
         utt.voice = AVSpeechSynthesisVoice(identifier: voiceId) ?? AVSpeechSynthesisVoice(language: "en-US")
         isSpeaking = true
@@ -576,6 +592,30 @@ final class VoiceController: NSObject, ObservableObject {
     private func resumeIfHandsFree() {
         if handsFree { startListening() }
     }
+
+    private func finishSpeechIfIdle() {
+        guard pendingUtterances == 0, replyStreamDone else { return }
+        isSpeaking = false
+        deactivateAudioSession()
+        resumeIfHandsFree()
+    }
+
+    private func deactivateAudioSession() {
+        guard ownsAudioSession else { return }
+        ownsAudioSession = false
+        try? AVAudioSession.sharedInstance().setActive(
+            false,
+            options: .notifyOthersOnDeactivation
+        )
+    }
+
+    private func stopAudioInput() {
+        if let audioEngine {
+            if audioEngine.isRunning { audioEngine.stop() }
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
+        deactivateAudioSession()
+    }
 }
 
 private enum VoiceInputError: LocalizedError {
@@ -592,13 +632,13 @@ extension VoiceController: AVSpeechSynthesizerDelegate {
             pendingUtterances = max(0, pendingUtterances - 1)
             // Only resume listening once the queue is empty AND the reply has
             // fully streamed — otherwise we'd cut off later queued chunks.
-            if pendingUtterances == 0, replyStreamDone {
-                isSpeaking = false
-                resumeIfHandsFree()
-            }
+            finishSpeechIfIdle()
         }
     }
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in pendingUtterances = max(0, pendingUtterances - 1) }
+        Task { @MainActor in
+            pendingUtterances = max(0, pendingUtterances - 1)
+            finishSpeechIfIdle()
+        }
     }
 }
