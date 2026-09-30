@@ -321,6 +321,7 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsModelSettings: Bool? = nil
     var modelSettingsRevision: String? = nil
     var isLocalPrivate: Bool? = nil
+    var isCantripHome: Bool? = nil
     var supportsPrivateLocalSettings: Bool? = nil
     var supportsInputRequests: Bool? = nil
     var pendingInputCount: Int? = nil
@@ -328,6 +329,77 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var pendingInputs: [CantripInputRequest]? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
+}
+
+struct CantripHomeSchedule: Decodable, Equatable {
+    enum Kind: String, Decodable {
+        case once
+        case interval
+        case weekdays
+    }
+
+    let kind: Kind
+    let summary: String
+    let timeZone: String
+    let startAt: Date?
+    let intervalMinutes: Int?
+    let weekdays: [Int]?
+    let hour: Int?
+    let minute: Int?
+}
+
+struct CantripHomeTaskRun: Decodable, Equatable, Identifiable {
+    let id: UUID
+    let startedAt: Date
+    let finishedAt: Date
+    let status: String
+    let summary: String
+}
+
+struct CantripHomeTask: Decodable, Equatable, Identifiable {
+    let id: UUID
+    var title: String
+    var prompt: String
+    let schedule: CantripHomeSchedule
+    var enabled: Bool
+    let createdAt: Date
+    let updatedAt: Date
+    let nextRunAt: Date?
+    let lastRunAt: Date?
+    let state: String
+    let activeRunID: UUID?
+    let runs: [CantripHomeTaskRun]
+}
+
+struct CantripHomeArtifact: Decodable, Equatable, Identifiable {
+    let id: UUID
+    let title: String
+    let relativePath: String
+    let kind: String
+    let mimeType: String
+    let size: Int
+    let createdAt: Date
+}
+
+private struct CantripHomeTasksResponse: Decodable {
+    let tasks: [CantripHomeTask]
+    let revision: String
+    let error: String?
+}
+
+private struct CantripHomeArtifactsResponse: Decodable {
+    let artifacts: [CantripHomeArtifact]
+    let revision: String
+}
+
+private struct CantripHomeArtifactDataResponse: Decodable {
+    struct Summary: Decodable {
+        let id: UUID
+        let title: String
+        let mimeType: String
+    }
+    let artifact: Summary
+    let data: Data
 }
 
 private struct CantripSessionsResponse: Decodable {
@@ -845,6 +917,7 @@ struct CantripRemoteAPI {
         let parts = (URLComponents(string: path)?.percentEncodedPath ?? "").split(separator: "/")
         return method == "GET" && (
             parts == ["api", "v1", "maintenance"]
+                || parts.starts(with: ["api", "v1", "home"])
                 || parts == ["api", "v1", "memory"] || parts == ["api", "v1", "memory", "document"]
                 || (parts.starts(with: ["api", "v1", "sessions"])
                     && (parts.count == 4 || (parts.count == 6 && (parts[4] == "messages" || parts[4] == "apps"))))
@@ -982,6 +1055,58 @@ struct CantripRemoteAPI {
             path: "/api/v1/sessions/\(id)", includeRecentExchanges: true
         )
         return response.session
+    }
+
+    func homeSession() async throws -> CantripRemoteSession {
+        let response: CantripSessionResponse = try await request(
+            path: "/api/v1/home", includeRecentExchanges: true
+        )
+        guard response.session.isCantripHome == true else {
+            throw CantripRemoteError.invalidResponse
+        }
+        return response.session
+    }
+
+    func homeTasks() async throws -> (tasks: [CantripHomeTask], revision: String, error: String?) {
+        let response: CantripHomeTasksResponse = try await request(path: "/api/v1/home/tasks")
+        return (response.tasks, response.revision, response.error)
+    }
+
+    func homeArtifacts() async throws -> (artifacts: [CantripHomeArtifact], revision: String) {
+        let response: CantripHomeArtifactsResponse = try await request(path: "/api/v1/home/artifacts")
+        return (response.artifacts, response.revision)
+    }
+
+    func updateHomeTask(id: UUID, title: String? = nil, prompt: String? = nil,
+                        enabled: Bool? = nil) async throws -> CantripHomeTask {
+        var object: [String: Any] = [:]
+        if let title { object["title"] = title }
+        if let prompt { object["prompt"] = prompt }
+        if let enabled { object["enabled"] = enabled }
+        guard !object.isEmpty else { throw CantripRemoteError.invalidResponse }
+        return try await request(
+            path: "/api/v1/home/tasks/\(id.uuidString)", method: "PATCH",
+            body: JSONSerialization.data(withJSONObject: object)
+        )
+    }
+
+    func deleteHomeTask(id: UUID) async throws {
+        struct Response: Decodable { let deleted: Bool }
+        let response: Response = try await request(
+            path: "/api/v1/home/tasks/\(id.uuidString)", method: "DELETE"
+        )
+        guard response.deleted else { throw CantripRemoteError.invalidResponse }
+    }
+
+    func homeArtifactData(id: UUID) async throws -> Data {
+        let response: CantripHomeArtifactDataResponse = try await request(
+            path: "/api/v1/home/artifacts/\(id.uuidString)"
+        )
+        guard response.artifact.id == id, !response.data.isEmpty,
+              response.data.count <= 20 * 1024 * 1024 else {
+            throw CantripRemoteError.invalidResponse
+        }
+        return response.data
     }
 
     func createSession() async throws -> CantripRemoteSession {
@@ -1510,6 +1635,11 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var sessions: [CantripRemoteSession] = []
     @Published private(set) var selectedSessionID: String?
     @Published private(set) var selectedSession: CantripRemoteSession?
+    @Published private(set) var isHomeSelected = false
+    @Published private(set) var homeTasks: [CantripHomeTask] = []
+    @Published private(set) var homeArtifacts: [CantripHomeArtifact] = []
+    @Published private(set) var homeDataError: String?
+    @Published private(set) var isLoadingHomeData = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var isMutating = false
@@ -1523,6 +1653,7 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var historyPrependRevision = 0
     private(set) var historyPrependAnchor: String?
     private var detailCache: [String: CantripRemoteSession] = [:]
+    private var regularSelectedSessionID: String?
     private var cacheOrder: [String] = []
     private var expandedHistory: Set<String> = []
     private var automaticHistoryRemaining: [String: Int] = [:]
@@ -1558,6 +1689,7 @@ final class CantripRemoteModel: ObservableObject {
     }
     var pollDelay: Duration {
         sessions.contains(where: { $0.isStreaming || $0.queuedCount > 0 })
+            || selectedSession?.isStreaming == true
             || detailError != nil || !isConnected ? Self.pollInterval : .seconds(5)
     }
     var hasConfiguration: Bool { baseURL != nil || token != nil }
@@ -1885,6 +2017,9 @@ final class CantripRemoteModel: ObservableObject {
             sessions = []
             selectedSessionID = nil
             selectedSession = nil
+            isHomeSelected = false
+            homeTasks = []
+            homeArtifacts = []
             transcriptRevision += 1
             if configuredURL.isEmpty {
                 UserDefaults.standard.removeObject(forKey: Self.endpointKey)
@@ -1934,6 +2069,9 @@ final class CantripRemoteModel: ObservableObject {
             sessions = []
             selectedSessionID = nil
             selectedSession = nil
+            isHomeSelected = false
+            homeTasks = []
+            homeArtifacts = []
             selectedServerID = nil
             errorMessage = nil
             transcriptRevision += 1
@@ -2023,6 +2161,8 @@ final class CantripRemoteModel: ObservableObject {
 
     func selectSession(_ id: String) async {
         guard id != selectedSessionID || selectedSession?.id != id else { return }
+        isHomeSelected = false
+        regularSelectedSessionID = id
         cancelDetailRefresh()
         selectionRevision += 1
         let selection = selectionRevision
@@ -2051,6 +2191,134 @@ final class CantripRemoteModel: ObservableObject {
             errorMessage = error.localizedDescription
             handleReadFailure(error, detailOnly: true)
         }
+    }
+
+    func selectHome() async {
+        if isHomeSelected, selectedSession?.isCantripHome == true { return }
+        if !isHomeSelected { regularSelectedSessionID = selectedSessionID }
+        cancelDetailRefresh()
+        selectionRevision += 1
+        let selection = selectionRevision
+        let revision = mutationRevision
+        isHomeSelected = true
+        selectedSessionID = nil
+        selectedSession = nil
+        detailError = nil
+        transcriptRevision += 1
+        do {
+            let detail = try await performHistoryRead { api in
+                try await api.homeSession()
+            }
+            guard isHomeSelected, selection == selectionRevision,
+                  revision == mutationRevision else { return }
+            selectedSessionID = detail.id
+            apply(detail)
+            await refreshHomeData()
+            errorMessage = nil
+        } catch is CancellationError {
+            return
+        } catch {
+            guard isHomeSelected, selection == selectionRevision else { return }
+            detailError = "Cantrip Home is unavailable. \(error.localizedDescription)"
+            errorMessage = error.localizedDescription
+            handleReadFailure(error, detailOnly: true)
+        }
+    }
+
+    func selectRegularSession() async {
+        isHomeSelected = false
+        let id = regularSelectedSessionID.flatMap { candidate in
+            sessions.contains(where: { $0.id == candidate }) ? candidate : nil
+        } ?? sessions.first?.id
+        guard let id else {
+            selectedSessionID = nil
+            selectedSession = nil
+            transcriptRevision += 1
+            return
+        }
+        await selectSession(id)
+    }
+
+    func refreshHomeData() async {
+        guard isHomeSelected, isConfigured, !isLoadingHomeData else { return }
+        isLoadingHomeData = true
+        defer { isLoadingHomeData = false }
+        do {
+            async let tasks = performHistoryRead { try await $0.homeTasks() }
+            async let artifacts = performHistoryRead { try await $0.homeArtifacts() }
+            let values = try await (tasks, artifacts)
+            guard isHomeSelected else { return }
+            homeTasks = values.0.tasks
+            homeArtifacts = values.1.artifacts
+            homeDataError = values.0.error
+        } catch is CancellationError {
+            return
+        } catch {
+            guard isHomeSelected else { return }
+            homeDataError = error.localizedDescription
+        }
+    }
+
+    func updateHomeTask(_ task: CantripHomeTask, title: String? = nil,
+                        prompt: String? = nil, enabled: Bool? = nil) async -> Bool {
+        guard !isMutating else { return false }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            let updated = try await performAuthenticated(allowFallback: false) { api in
+                try await api.updateHomeTask(
+                    id: task.id, title: title, prompt: prompt, enabled: enabled
+                )
+            }
+            if let index = homeTasks.firstIndex(where: { $0.id == updated.id }) {
+                homeTasks[index] = updated
+            }
+            homeDataError = nil
+            return true
+        } catch {
+            homeDataError = error.localizedDescription
+            return false
+        }
+    }
+
+    func deleteHomeTask(_ task: CantripHomeTask) async -> Bool {
+        guard !isMutating else { return false }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            try await performAuthenticated(allowFallback: false) {
+                try await $0.deleteHomeTask(id: task.id)
+            }
+            homeTasks.removeAll { $0.id == task.id }
+            homeDataError = nil
+            return true
+        } catch {
+            homeDataError = error.localizedDescription
+            return false
+        }
+    }
+
+    func homeArtifactFile(_ artifact: CantripHomeArtifact) async throws -> URL {
+        let data = try await performHistoryRead {
+            try await $0.homeArtifactData(id: artifact.id)
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CantripHomeArtifacts", isDirectory: true)
+            .appendingPathComponent(artifact.id.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        let source = URL(fileURLWithPath: artifact.relativePath)
+        let ext = source.pathExtension
+        let base = artifact.title.replacingOccurrences(
+            of: #"[^A-Za-z0-9._ -]"#, with: "_", options: .regularExpression
+        )
+        let url = directory.appendingPathComponent(
+            ext.isEmpty || base.lowercased().hasSuffix(".\(ext.lowercased())")
+                ? base : "\(base).\(ext)"
+        )
+        try data.write(to: url, options: [.atomic])
+        return url
     }
 
     func loadOlderMessages(automatically: Bool = false) async {
@@ -2617,22 +2885,26 @@ final class CantripRemoteModel: ObservableObject {
             sessions = listed
             errorMessage = nil
             syncLiveStatusPairing()
-            liveStatus?.refreshIfDue(anyStreaming: listed.contains { $0.isStreaming })
-            let publicIDs = Set(listed.map(\.id))
+            liveStatus?.refreshIfDue(anyStreaming: listed.contains { $0.isStreaming }
+                                    || selectedSession?.isStreaming == true)
+            var publicIDs = Set(listed.map(\.id))
+            if isHomeSelected, let selectedSessionID { publicIDs.insert(selectedSessionID) }
             detailCache = detailCache.filter { publicIDs.contains($0.key) }
             cacheOrder.removeAll { !publicIDs.contains($0) }
             expandedHistory.formIntersection(publicIDs)
             automaticHistoryRemaining = automaticHistoryRemaining.filter { publicIDs.contains($0.key) }
             guard selection == selectionRevision else { return }
-            let chosenID = requestedID.flatMap { id in
+            let chosenID = isHomeSelected ? requestedID : requestedID.flatMap { id in
                 listed.contains(where: { $0.id == id }) ? id : nil
             } ?? listed.first?.id
             selectedSessionID = chosenID
+            if !isHomeSelected { regularSelectedSessionID = chosenID }
             if selectedSession?.id != chosenID {
                 selectedSession = chosenID.flatMap { detailCache[$0] }
                 transcriptRevision += 1
             }
             if let chosenID, selectingSessionID == chosenID {
+                if isHomeSelected { await refreshHomeData() }
                 recoverTailscale()
                 return
             }
@@ -2681,6 +2953,7 @@ final class CantripRemoteModel: ObservableObject {
                 cancelDetailRefresh()
                 detailError = nil
             }
+            if isHomeSelected { await refreshHomeData() }
             recoverTailscale()
         } catch is CancellationError {
             return

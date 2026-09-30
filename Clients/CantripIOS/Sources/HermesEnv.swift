@@ -154,7 +154,7 @@ final class HermesEnv: ObservableObject {
     }
 
     func client(for lane: ExecutionLane) -> HermesClient? {
-        guard lane != .cantrip else { return nil }
+        guard !lane.usesCantripRemote else { return nil }
         guard let url = URL(string: trimmed(baseURL)),
               GatewayTransportPolicy.issue(for: url) == nil,
               !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -176,6 +176,8 @@ final class HermesEnv: ObservableObject {
         case .local:
             availableModels.contains(lane.modelAlias)
         case .cantrip:
+            true
+        case .home:
             true
         }
     }
