@@ -142,6 +142,7 @@ final class ChatSession: ObservableObject {
     var onInputNeeded: ((InputRequestSnapshot) -> Void)?
     var onInputResolved: ((UUID) -> Void)?
     func deliveryStatusForInput(_ message: String) { deliveryStatus = message }
+    func noteDelivery(_ message: String) { deliveryStatus = message }
     private var routingTask: Task<Void, Never>?
     private var routingItemID: UUID?
     private var routingRevision = 0

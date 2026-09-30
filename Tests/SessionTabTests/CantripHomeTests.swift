@@ -27,6 +27,55 @@ extension SessionTabTests {
         precondition(manager.managedSession(id: ChatSession.cantripHomeID) === manager.homeSession)
         precondition(manager.homeSession.title == "Cantrip Home")
         precondition(manager.homeSession.isLocked)
+        let bassID = UUID()
+        let plexaID = UUID()
+        let routeCandidates = [
+            CantripHomePromptRouter.Candidate(
+                id: bassID, title: "Bass Compass", workdir: "/tmp/Bass-Compass"
+            ),
+            CantripHomePromptRouter.Candidate(
+                id: plexaID, title: "Plexible", workdir: "/tmp/Plexa"
+            )
+        ]
+        precondition(
+            CantripHomePromptRouter.match(
+                prompt: "Can you fix the Bass Conpass lineup?", candidates: routeCandidates
+            ) == bassID,
+            "A clear project name with one typo should route to its open tab"
+        )
+        precondition(
+            CantripHomePromptRouter.match(
+                prompt: "Please update Plexible", candidates: routeCandidates
+            ) == plexaID
+        )
+        precondition(
+            CantripHomePromptRouter.match(
+                prompt: "What is the weather tomorrow?", candidates: routeCandidates
+            ) == nil,
+            "Unrelated Home prompts must remain in Home"
+        )
+        precondition(
+            CantripHomePromptRouter.match(
+                prompt: "/help Bass Compass", candidates: routeCandidates
+            ) == nil,
+            "Slash commands must remain in Home"
+        )
+        precondition(
+            CantripHomePromptRouter.match(
+                prompt: "Fix Bass Compass",
+                candidates: routeCandidates + [
+                    .init(id: UUID(), title: "Bass Compass", workdir: "/tmp/Bass-Compass")
+                ]
+            ) == nil,
+            "Ambiguous matches must remain in Home"
+        )
+
+        let routeBackend = CantripHomeBackendFixture()
+        let bassSession = ChatSession(copilotBackend: routeBackend)
+        try bassSession.updateTab(name: "Bass Compass")
+        bassSession.workdir = "/tmp/Bass-Compass"
+        manager.sessions = [bassSession]
+        defer { bassSession.cancel() }
 
         let store = CantripHomeStore.shared
         let marker = """
@@ -155,6 +204,34 @@ extension SessionTabTests {
         let homeSession = try requireHome(home.1["session"] as? [String: Any])
         precondition(home.0 == 200 && homeSession["id"] as? String == ChatSession.cantripHomeID.uuidString
                      && homeSession["isCantripHome"] as? Bool == true)
+        let homeMessageCount = manager.homeSession.messages.count
+        let routed = try await call(
+            "/api/v1/sessions/\(ChatSession.cantripHomeID.uuidString)/messages",
+            method: "POST",
+            body: Data(#"{"text":"Please fix the Bass Conpass lineup.","mode":"auto"}"#.utf8)
+        )
+        let routedHome = try requireHome(routed.1["session"] as? [String: Any])
+        precondition(routed.0 == 202
+                     && routedHome["id"] as? String == ChatSession.cantripHomeID.uuidString)
+        precondition(
+            (routedHome["deliveryStatus"] as? String)?.contains("Routed to Bass Compass") == true
+        )
+        try await waitForJournalTest { routeBackend.sink != nil }
+        precondition(
+            !manager.homeSession.isStreaming
+                && manager.homeSession.messages.count == homeMessageCount,
+            "A routed prompt must not occupy or enter the Home transcript"
+        )
+        precondition(
+            bassSession.isStreaming
+                && bassSession.messages.contains {
+                    $0.role == .user && $0.text.contains("Bass Conpass lineup")
+                },
+            "The matched open tab must own the routed prompt"
+        )
+        routeBackend.sink?(.textDelta("Routed work finished."))
+        routeBackend.sink?(.done)
+        try await waitForJournalTest { !bassSession.isStreaming }
         let previewMessage = ChatMessage(
             role: .assistant,
             text: "![Apartment summary](\(artifactURL.path))"
@@ -260,7 +337,7 @@ extension SessionTabTests {
         precondition(completed.enabled == false && completed.nextRunAt == nil
                      && completed.runs.first?.summary.contains("Scheduler finished.") == true)
         try store.delete(id: scheduled.id)
-        print("Cantrip Home: hidden session, schedules, task/artifact safety and authenticated APIs passed")
+        print("Cantrip Home: related-tab routing, hidden session, schedules, task/artifact safety and authenticated APIs passed")
     }
 
     private final class CantripHomeBackendFixture: Backend {
