@@ -11,7 +11,7 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
     case cantrip
     case home
 
-    static let defaultLane: ExecutionLane = .copilot
+    static let defaultLane: ExecutionLane = .home
 
     var id: String { rawValue }
 

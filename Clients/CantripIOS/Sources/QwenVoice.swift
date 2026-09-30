@@ -124,26 +124,37 @@ final class QwenVoiceEngine: ObservableObject {
         activeSynthesisTasks > 0
     }
 
-    private let player = AVAudioPlayerNode()
-    private let timePitch = AVAudioUnitTimePitch()   // speed without chipmunking
-    private let audioEngine = AVAudioEngine()
-    private var engineWired = false
-    private static let pcmFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                                 sampleRate: 24_000, channels: 1, interleaved: false)!
-
-    init() {
-        download = Self.modelOnDisk ? .ready : .idle
-        // The mic engine re-taking the audio session (hands-free resume) stops
-        // this engine out from under us, silently dropping scheduled buffers and
-        // their completion callbacks. Reconcile the counter or the reply flow
-        // hangs waiting for callbacks that will never fire.
-        NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
-                                               object: audioEngine, queue: .main) { [weak self] _ in
+    private lazy var player = AVAudioPlayerNode()
+    private lazy var timePitch = AVAudioUnitTimePitch()   // speed without chipmunking
+    private lazy var audioEngine: AVAudioEngine = {
+        let engine = AVAudioEngine()
+        hasInitializedAudioGraph = true
+        engineConfigurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.scheduledBuffers > 0 else { return }
                 self.scheduledBuffers = 0
                 self.checkIdle()
             }
+        }
+        return engine
+    }()
+    private var engineWired = false
+    private var engineConfigurationObserver: NSObjectProtocol?
+    private(set) var hasInitializedAudioGraph = false
+    private static let pcmFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                                 sampleRate: 24_000, channels: 1, interleaved: false)!
+
+    init() {
+        download = Self.modelOnDisk ? .ready : .idle
+    }
+
+    deinit {
+        if let engineConfigurationObserver {
+            NotificationCenter.default.removeObserver(engineConfigurationObserver)
         }
     }
 

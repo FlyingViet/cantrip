@@ -69,6 +69,19 @@ final class ChatMicrophoneTests: XCTestCase {
         }
     }
 
+    func testIdleVoiceCleanupDoesNotInitializeAudioResources() {
+        let qwen = QwenVoiceEngine()
+        XCTAssertFalse(qwen.hasInitializedAudioGraph)
+        qwen.stop()
+        XCTAssertFalse(qwen.hasInitializedAudioGraph)
+
+        let voice = VoiceController()
+        XCTAssertFalse(voice.hasInitializedAudioResources)
+        voice.stopListening(finalize: false)
+        voice.stopSpeaking()
+        XCTAssertFalse(voice.hasInitializedAudioResources)
+    }
+
     func testContinuousVoiceEntryAndDismissalPreserveConversationAndWork() {
         let env = HermesEnv()
         let voice = VoiceController()
