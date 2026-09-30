@@ -1392,7 +1392,7 @@ struct ChatView: View {
     }
 
     private var chatHeader: some View {
-        ChatHeader {
+        ChatHeader(compact: vm.activeLane == .home) {
             if vm.activeLane == .cantrip {
                 Button { showRemoteTabs = true } label: {
                     ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
@@ -1444,7 +1444,9 @@ struct ChatView: View {
             }
         } usage: {
             if remote.selectedSession?.isLocalPrivate != true {
-                CopilotUsageButton(remote: remote) { composerFocused = false }
+                CopilotUsageButton(remote: remote, compact: vm.activeLane == .home) {
+                    composerFocused = false
+                }
             }
         } delivery: {
             if vm.activeLane.usesCantripRemote, remote.selectedSession != nil {
@@ -2239,6 +2241,7 @@ struct ChatSettingsButton: View {
 struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delivery: View,
                   Refresh: View, Settings: View, Leading: View, Trailing: View>: View {
     @Environment(\.chatDisplayTraits) private var displayTraits
+    var compact = false
     @ViewBuilder var title: () -> Title
     @ViewBuilder var connection: () -> Connection
     @ViewBuilder var lane: () -> Lane
@@ -2251,28 +2254,42 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                if !displayTraits.hasVerticalBar {
-                    leading().frame(width: 44, height: 44)
+            if compact {
+                HStack(alignment: .center, spacing: 2) {
+                    connection()
+                    lane()
+                    usage()
+                    delivery()
+                    if !displayTraits.hasVerticalBar {
+                        refresh()
+                        trailing().frame(width: 44, height: 44)
+                    }
                 }
-                title().frame(maxWidth: .infinity, minHeight: 44)
-                if !displayTraits.hasVerticalBar {
-                    trailing().frame(width: 44, height: 44)
+                .frame(minHeight: 44)
+            } else {
+                HStack(spacing: 8) {
+                    if !displayTraits.hasVerticalBar {
+                        leading().frame(width: 44, height: 44)
+                    }
+                    title().frame(maxWidth: .infinity, minHeight: 44)
+                    if !displayTraits.hasVerticalBar {
+                        trailing().frame(width: 44, height: 44)
+                    }
                 }
-            }
-            HStack(alignment: .center, spacing: 2) {
-                connection()
-                lane()
-                usage()
-                delivery()
-                if !displayTraits.hasVerticalBar { refresh() }
+                HStack(alignment: .center, spacing: 2) {
+                    connection()
+                    lane()
+                    usage()
+                    delivery()
+                    if !displayTraits.hasVerticalBar { refresh() }
+                }
             }
         }
         .buttonStyle(.plain)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
+        .padding(.top, compact ? 2 : 8)
+        .padding(.bottom, compact ? 2 : 4)
         .frame(maxWidth: .infinity)
         .background(.bar)
         .accessibilityIdentifier("chat.header")

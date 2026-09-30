@@ -163,6 +163,7 @@ struct CopilotUsageButton: View {
     @ObservedObject var remote: CantripRemoteModel
     @StateObject private var model = CopilotUsageModel()
     @State private var isPresented = false
+    var compact = false
     var onOpen: () -> Void = {}
 
     var body: some View {
@@ -171,7 +172,10 @@ struct CopilotUsageButton: View {
                 onOpen()
                 isPresented = true
             } label: {
-                CopilotUsageButtonLabel(text: model.headerText(at: context.date))
+                CopilotUsageButtonLabel(
+                    text: model.headerText(at: context.date),
+                    compact: compact
+                )
             }
             .accessibilityLabel("Copilot account usage")
             .accessibilityValue(model.accessibilityValue(at: context.date))
@@ -196,21 +200,29 @@ struct CopilotUsageButton: View {
 
     struct CopilotUsageButtonLabel: View {
         let text: String
+        var compact = false
 
         var body: some View {
-            HStack(spacing: 4) {
-                ChatHeaderIcon(systemName: "gauge.with.dots.needle.33percent")
-                ViewThatFits(in: .horizontal) {
-                    amountText.fixedSize()
-                    amountText
-                        .dynamicTypeSize(.large)
-                        .minimumScaleFactor(0.5)
+            Group {
+                if compact {
+                    ChatHeaderIcon(systemName: "gauge.with.dots.needle.33percent")
+                        .frame(width: 44, height: 44)
+                } else {
+                    HStack(spacing: 4) {
+                        ChatHeaderIcon(systemName: "gauge.with.dots.needle.33percent")
+                        ViewThatFits(in: .horizontal) {
+                            amountText.fixedSize()
+                            amountText
+                                .dynamicTypeSize(.large)
+                                .minimumScaleFactor(0.5)
+                        }
+                        .frame(minWidth: 58, idealWidth: 90, maxWidth: 90, alignment: .leading)
+                    }
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    .frame(height: 44)
                 }
-                .frame(minWidth: 58, idealWidth: 90, maxWidth: 90, alignment: .leading)
             }
-            // The compact toolbar stays legible; full-size amounts remain in the accessible details sheet.
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-            .frame(height: 44)
+            // Full-size amounts remain in the accessible details sheet.
             .contentShape(Rectangle())
         }
 
