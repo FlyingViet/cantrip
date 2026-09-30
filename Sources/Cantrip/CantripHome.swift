@@ -418,8 +418,12 @@ final class CantripHomeStore: ObservableObject {
             tasks = try load([CantripHomeTask].self, from: tasksURL) ?? []
             artifacts = try load([CantripHomeArtifact].self, from: artifactsURL) ?? []
         } catch {
+            storageError = "Cantrip Home could not load its state. Scheduled work is paused until storage is readable."
             Log.write("home: state load failed: \(error.localizedDescription)")
+            return
         }
+        do { try recoverUnregisteredArtifacts() }
+        catch { recordStorageFailure(error) }
     }
 
     func attach(manager: SessionManager) {
@@ -697,8 +701,14 @@ final class CantripHomeStore: ObservableObject {
             throw CantripHomeError(400, "Artifacts need a title under 160 characters.")
         }
         let root = Self.artifactDirectory.standardizedFileURL.resolvingSymlinksInPath()
-        let raw = URL(fileURLWithPath: proposal.path)
-        let candidate = (raw.path.hasPrefix("/") ? raw : root.appendingPathComponent(proposal.path))
+        let path = proposal.path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty,
+              !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            throw CantripHomeError(400, "The artifact path is invalid.")
+        }
+        let candidate = (path.hasPrefix("/")
+            ? URL(fileURLWithPath: path)
+            : root.appendingPathComponent(path))
             .standardizedFileURL.resolvingSymlinksInPath()
         guard candidate.path.hasPrefix(root.path + "/") else {
             throw CantripHomeError(400, "Artifacts must be saved in \(root.path).")
@@ -727,6 +737,48 @@ final class CantripHomeStore: ObservableObject {
         artifacts.insert(artifact, at: 0)
         try persistArtifacts()
         return artifact
+    }
+
+    func recoverUnregisteredArtifacts() throws {
+        let root = Self.artifactDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [
+                .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey,
+                .contentModificationDateKey
+            ],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        )
+        var recovered: [CantripHomeArtifact] = []
+        for url in urls {
+            let candidate = url.standardizedFileURL.resolvingSymlinksInPath()
+            guard candidate.deletingLastPathComponent() == root else { continue }
+            let relative = candidate.lastPathComponent
+            guard !artifacts.contains(where: { $0.relativePath == relative }) else { continue }
+            let values = try candidate.resourceValues(forKeys: [
+                .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey,
+                .contentModificationDateKey
+            ])
+            guard values.isRegularFile == true, values.isSymbolicLink != true,
+                  let size = values.fileSize,
+                  (0...Self.maximumArtifactBytes).contains(size) else { continue }
+            let ext = candidate.pathExtension.lowercased()
+            let base = candidate.deletingPathExtension().lastPathComponent
+                .replacingOccurrences(of: "-", with: " ")
+                .replacingOccurrences(of: "_", with: " ")
+            recovered.append(.init(
+                title: base.localizedCapitalized,
+                relativePath: relative,
+                kind: Self.kind(ext),
+                mimeType: Self.mimeType(ext),
+                size: size,
+                createdAt: values.contentModificationDate ?? Date()
+            ))
+        }
+        guard !recovered.isEmpty else { return }
+        artifacts.append(contentsOf: recovered)
+        artifacts.sort { $0.createdAt > $1.createdAt }
+        try save(artifacts, to: artifactsURL)
     }
 
     func artifactData(id: UUID) throws -> (CantripHomeArtifact, Data) {
