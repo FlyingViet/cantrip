@@ -15,6 +15,10 @@ struct SessionTabTests {
                 try await testCopilotLiveSteering()
                 return
             }
+            if ProcessInfo.processInfo.environment["CANTRIP_WATCHER_LIVE_TEST"] == "1" {
+                try await testBackgroundWatcherLive()
+                return
+            }
             if ProcessInfo.processInfo.environment["CANTRIP_QUOTA_LIVE_TEST"] == "1" {
                 let result = await withCheckedContinuation { continuation in
                     QuotaFetcher.fetchCopilotQuota { continuation.resume(returning: $0) }
@@ -133,6 +137,7 @@ struct SessionTabTests {
         try await testMCPAppRemote()
         try testSubagentPlacement()
         try await testSubagentMonitor()
+        try await testBackgroundWatcherContinuation()
         try await testPromptUsage()
         try await testHostProtection(manager: manager)
         print("Session tab persistence, protection, privacy, and web controls passed")

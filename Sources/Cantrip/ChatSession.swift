@@ -281,6 +281,16 @@ final class ChatSession: ObservableObject {
         return nil
     }
 
+    private var hasActiveBackgroundWatcher: Bool {
+        messages.contains { message in
+            message.activities.contains { activity in
+                activity.subagentActivities.contains {
+                    $0.subagent?.isActive == true && $0.subagent?.isBackgroundWatcher == true
+                }
+            }
+        }
+    }
+
     private var activeBackend: Backend {
         backend(for: runningBackendKind ?? effectiveBackendKind)
     }
@@ -2131,6 +2141,11 @@ final class ChatSession: ObservableObject {
                                         repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.isStreaming else { return }
+                if self.hasActiveBackgroundWatcher {
+                    Log.write("watchdog: background watcher still active — keeping the run available")
+                    self.armWatchdog()
+                    return
+                }
                 Log.write("watchdog: no backend activity for \(Int(self.inactivityLimit))s — force-cancelling")
                 if let shell = self.shellProcess { // hung !/command runs too
                     shell.terminate()
