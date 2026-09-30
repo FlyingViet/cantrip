@@ -389,7 +389,8 @@ add and edit screens without task-specific app code; records can also be updated
 through Chat. Tasks still supports review, editing, pause, resume, deletion and
 recent run outcomes. Scheduled results appear in the Home conversation.
 Documents and media created as Home deliverables are collected automatically in
-Artifacts and open with the system preview. Scheduled work runs only while
+Artifacts and open with the system preview. The menu on each artifact can
+permanently delete its file from the paired Mac. Scheduled work runs only while
 Cantrip is running on the Mac.
 
 ### Reasoning steps in replies
