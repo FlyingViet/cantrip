@@ -1783,13 +1783,26 @@ struct ChatView: View {
                     .buttonStyle(.borderedProminent)
                     .padding(.top, 4)
             } else if vm.activeLane == .home {
-                Text("Cantrip Home").font(.title3.weight(.semibold))
-                Text(remote.detailError
-                     ?? "Turn on Cantrip Home in the Mac app's settings, then keep Cantrip running.")
-                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button("Open Settings") { showSettings = true }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.top, 4)
+                switch homeChatAvailability {
+                case .ready:
+                    Text("Cantrip Home").font(.title3.weight(.semibold))
+                    Text("Ask anything, create a task, or make an artifact.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                case .opening:
+                    Text("Opening Cantrip Home…").font(.title3.weight(.semibold))
+                    ProgressView().controlSize(.small)
+                case .unavailable(let message):
+                    Text("Cantrip Home unavailable").font(.title3.weight(.semibold))
+                    Text(message)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Open Settings") { showSettings = true }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.top, 4)
+                }
             } else if vm.activeLane == .cantrip {
                 Text("Choose a Cantrip session").font(.title3.weight(.semibold))
                 Text("Open Tabs from the header or left edge to select a session, or create one, then type or use voice as usual.")
@@ -1818,12 +1831,28 @@ struct ChatView: View {
     }
 
     private var emptyStateIcon: String {
+        if vm.activeLane == .home {
+            switch homeChatAvailability {
+            case .ready: return "house.fill"
+            case .opening: return "house"
+            case .unavailable: return "house.slash"
+            }
+        }
         if vm.activeLane.usesCantripRemote {
             return remote.isConfigured
                 ? "rectangle.stack.badge.plus"
                 : "antenna.radiowaves.left.and.right.slash"
         }
         return env.isConfigured ? "waveform.circle.fill" : "gearshape.circle.fill"
+    }
+
+    private var homeChatAvailability: CantripHomeChatAvailability {
+        .resolve(
+            isConfigured: remote.isConfigured,
+            isHomeSelected: remote.isHomeSelected,
+            isHomeSession: remote.selectedSession?.isCantripHome == true,
+            error: remote.detailError
+        )
     }
 
     private var inputBar: some View {

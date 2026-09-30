@@ -2,6 +2,26 @@ import Combine
 import QuickLook
 import SwiftUI
 
+enum CantripHomeChatAvailability: Equatable {
+    case ready
+    case opening
+    case unavailable(String)
+
+    static func resolve(
+        isConfigured: Bool,
+        isHomeSelected: Bool,
+        isHomeSession: Bool,
+        error: String?
+    ) -> Self {
+        if isHomeSelected, isHomeSession { return .ready }
+        if let error, !error.isEmpty { return .unavailable(error) }
+        if isConfigured { return .opening }
+        return .unavailable(
+            "Turn on Cantrip Home in the Mac app's settings, then keep Cantrip running."
+        )
+    }
+}
+
 enum CantripHomeSection: String, CaseIterable, Identifiable {
     case chat
     case tasks
@@ -209,7 +229,9 @@ struct CantripHomeTasksView: View {
 
     var body: some View {
         Group {
-            if !homeAvailable {
+            if !homeAvailable, detailError == nil, remote.isConfigured {
+                ProgressView("Opening Cantrip Home…")
+            } else if !homeAvailable {
                 ContentUnavailableView(
                     "Cantrip Home unavailable",
                     systemImage: "house.slash",
@@ -1040,7 +1062,9 @@ struct CantripHomeArtifactsView: View {
 
     var body: some View {
         Group {
-            if !homeAvailable {
+            if !homeAvailable, detailError == nil, remote.isConfigured {
+                ProgressView("Opening Cantrip Home…")
+            } else if !homeAvailable {
                 ContentUnavailableView(
                     "Cantrip Home unavailable",
                     systemImage: "house.slash",
