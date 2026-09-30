@@ -1275,36 +1275,79 @@ final class RemoteControlServer {
                 sendEncoded(on: connection) { try JSONEncoder().encode(value) }
                 return
             }
-            guard parts.count == 5, let id = UUID(uuidString: String(parts[4])) else {
+            guard parts.count >= 5, let id = UUID(uuidString: String(parts[4])) else {
                 sendError(404, "task not found", on: connection)
                 return
             }
             do {
-                switch request.method {
-                case "PATCH":
-                    guard request.body.count <= 16_384, let json,
-                          !json.isEmpty,
-                          Set(json.keys).isSubset(of: ["title", "prompt", "enabled"]),
-                          json["title"] == nil || json["title"] is String,
-                          json["prompt"] == nil || json["prompt"] is String,
-                          json["enabled"] == nil || (json["enabled"] as? NSNumber).map({
-                              CFGetTypeID($0) == CFBooleanGetTypeID()
-                          }) == true else {
-                        throw CantripHomeError(400, "Provide title, prompt, and/or enabled.")
+                if parts.count == 5 {
+                    switch request.method {
+                    case "PATCH":
+                        guard request.body.count <= 16_384, let json,
+                              !json.isEmpty,
+                              Set(json.keys).isSubset(of: ["title", "prompt", "enabled"]),
+                              json["title"] == nil || json["title"] is String,
+                              json["prompt"] == nil || json["prompt"] is String,
+                              json["enabled"] == nil || (json["enabled"] as? NSNumber).map({
+                                  CFGetTypeID($0) == CFBooleanGetTypeID()
+                              }) == true else {
+                            throw CantripHomeError(400, "Provide title, prompt, and/or enabled.")
+                        }
+                        let update = try JSONDecoder().decode(
+                            CantripHomeTaskUpdate.self, from: request.body
+                        )
+                        let task = try store.update(id: id, update: update)
+                        sendEncoded(on: connection) { try JSONEncoder().encode(task) }
+                    case "DELETE":
+                        try store.delete(id: id)
+                        sendJSON(["deleted": true], on: connection)
+                    default:
+                        sendError(405, "method not allowed", on: connection)
+                    }
+                    return
+                }
+                guard String(parts[5]) == "records" else {
+                    throw CantripHomeError(404, "task record not found")
+                }
+                if parts.count == 6 {
+                    guard request.method == "POST", request.body.count <= 65_536 else {
+                        throw CantripHomeError(405, "Use POST to create a task record.")
                     }
                     let update = try JSONDecoder().decode(
-                        CantripHomeTaskUpdate.self, from: request.body
+                        CantripHomeTaskRecordUpdate.self, from: request.body
                     )
-                    let task = try store.update(id: id, update: update)
+                    let task = try store.upsertRecord(
+                        taskID: id, recordID: nil, values: update.values
+                    )
                     sendEncoded(on: connection) { try JSONEncoder().encode(task) }
-                case "DELETE":
-                    try store.delete(id: id)
-                    sendJSON(["deleted": true], on: connection)
-                default:
-                    sendError(405, "method not allowed", on: connection)
+                    return
                 }
+                guard parts.count == 7,
+                      let recordID = UUID(uuidString: String(parts[6])) else {
+                    throw CantripHomeError(404, "task record not found")
+                }
+                let task: CantripHomeTask
+                switch request.method {
+                case "PATCH":
+                    guard request.body.count <= 65_536 else {
+                        throw CantripHomeError(413, "The task record update is too large.")
+                    }
+                    let update = try JSONDecoder().decode(
+                        CantripHomeTaskRecordUpdate.self, from: request.body
+                    )
+                    task = try store.upsertRecord(
+                        taskID: id, recordID: recordID, values: update.values
+                    )
+                case "DELETE":
+                    task = try store.deleteRecord(taskID: id, recordID: recordID)
+                default:
+                    throw CantripHomeError(405, "method not allowed")
+                }
+                sendEncoded(on: connection) { try JSONEncoder().encode(task) }
             } catch let error as CantripHomeError {
                 sendError(error.status, error.message, on: connection)
+            } catch is DecodingError {
+                sendError(400, "Task data must match the documented JSON shape.", on: connection)
             } catch {
                 Log.write("home: task update failed: \(error.localizedDescription)")
                 sendError(500, "Could not save the task on the Mac.", on: connection)

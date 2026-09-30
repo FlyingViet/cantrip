@@ -54,6 +54,33 @@ extension SessionTabTests {
         precondition(store.tasks.count == taskCount && updatedTask.schedule.intervalMinutes == 360,
                      "Conversational schedule edits must update the existing task")
 
+        manager.homeSession.messages.append(ChatMessage(role: .assistant, text: """
+        I created a flexible application tracker.
+        ```cantrip-task
+        {"id":null,"title":"Job applications","prompt":"Keep the user's job application lifecycle accurate.","schedule":null,"workspace":{"recordLabel":"Application","recordLabelPlural":"Applications","icon":"briefcase.fill","fields":[{"key":"company","label":"Company","kind":"text","required":true,"options":null},{"key":"appliedAt","label":"Applied","kind":"date","required":true,"options":null},{"key":"status","label":"Status","kind":"choice","required":true,"options":["Applied","Interview","Offer","Closed"]},{"key":"round","label":"Interview round","kind":"number","required":false,"options":null},{"key":"interviewAt","label":"Interview","kind":"dateTime","required":false,"options":null}],"list":{"titleField":"company","subtitleFields":["round"],"badgeField":"status","dateField":"appliedAt"},"detailSections":[{"title":"Lifecycle","fields":["appliedAt","status","round","interviewAt"]}]},"initialRecords":[{"company":"Example Co","appliedAt":"2026-09-29","status":"Applied"}]}
+        ```
+        """))
+        manager.homeSession.processCantripHomeBlocks()
+        let tracker = try requireHome(store.tasks.first { $0.title == "Job applications" })
+        let application = try requireHome(tracker.workspace?.records.first)
+        precondition(!tracker.isScheduled && tracker.state == .ready
+                     && tracker.workspace?.fields.count == 5)
+        precondition(manager.homeSession.messages.last?.text.contains("Workspace ready") == true)
+
+        manager.homeSession.messages.append(ChatMessage(role: .assistant, text: """
+        I moved Example Co into interviews.
+        ```cantrip-task-records
+        {"taskID":"\(tracker.id.uuidString)","changes":[{"operation":"upsert","id":"\(application.id.uuidString)","values":{"status":"Interview","round":"2","interviewAt":"2026-10-03T17:00:00Z"}}]}
+        ```
+        """))
+        manager.homeSession.processCantripHomeBlocks()
+        let trackedApplication = try requireHome(
+            store.tasks.first(where: { $0.id == tracker.id })?.workspace?.records.first
+        )
+        precondition(trackedApplication.values["status"] == "Interview"
+                     && trackedApplication.values["round"] == "2")
+        precondition(manager.homeSession.messages.last?.text.contains("1 record change") == true)
+
         let artifactURL = CantripHomeStore.artifactDirectory.appendingPathComponent("home-test.txt")
         try "Home artifact".write(to: artifactURL, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: artifactURL) }
@@ -109,6 +136,33 @@ extension SessionTabTests {
             body: Data(#"{"enabled":false}"#.utf8)
         )
         precondition(paused.0 == 200 && paused.1["enabled"] as? Bool == false)
+        let createdRecord = try await call(
+            "/api/v1/home/tasks/\(tracker.id.uuidString)/records", method: "POST",
+            body: Data(#"{"values":{"company":"Second Co","appliedAt":"2026-09-30","status":"Applied"}}"#.utf8)
+        )
+        let createdRecords = try requireHome(
+            (createdRecord.1["workspace"] as? [String: Any])?["records"] as? [[String: Any]]
+        )
+        let secondRecord = try requireHome(createdRecords.first(where: {
+            ($0["values"] as? [String: String])?["company"] == "Second Co"
+        }))
+        let secondRecordID = try requireHome(secondRecord["id"] as? String)
+        let advancedRecord = try await call(
+            "/api/v1/home/tasks/\(tracker.id.uuidString)/records/\(secondRecordID)",
+            method: "PATCH",
+            body: Data(#"{"values":{"status":"Interview","round":"1"}}"#.utf8)
+        )
+        let advancedRecords = try requireHome(
+            (advancedRecord.1["workspace"] as? [String: Any])?["records"] as? [[String: Any]]
+        )
+        precondition(advancedRecords.contains {
+            ($0["values"] as? [String: String])?["status"] == "Interview"
+        })
+        let removedRecord = try await call(
+            "/api/v1/home/tasks/\(tracker.id.uuidString)/records/\(secondRecordID)",
+            method: "DELETE"
+        )
+        precondition(removedRecord.0 == 200)
         let artifactList = try await call("/api/v1/home/artifacts")
         precondition((artifactList.1["artifacts"] as? [[String: Any]])?.contains {
             $0["id"] as? String == artifact.id.uuidString
@@ -118,6 +172,7 @@ extension SessionTabTests {
                      == Data("Home artifact".utf8))
         let deleted = try await call("/api/v1/home/tasks/\(task.id.uuidString)", method: "DELETE")
         precondition(deleted.1["deleted"] as? Bool == true)
+        try store.delete(id: tracker.id)
 
         let fixture = CantripHomeBackendFixture()
         let scheduledSession = ChatSession(
