@@ -418,10 +418,22 @@ extension SessionTabTests {
             agent("d", "Check iOS build", "task", .failed, tokens: 950, error: "xcodebuild exited with 65",
                   steps: [.failed]),
         ]
+        precondition(ProgressPaneSection.steps.title == "Steps"
+                     && ProgressPaneSection.background.title == "Background")
+        precondition(agents.filter { $0.subagent?.background == true }.map(\.id) == ["b", "q"],
+                     "background agents should be available to the dedicated tab")
         for dark in [false, true] {
             let content = VStack(alignment: .leading, spacing: 10) {
-                SubagentStrip(activities: agents, open: {})
-                SubagentMonitorView(activities: agents, stop: { _, done in done(nil) })
+                ProgressPaneTabs(
+                    selection: .constant(.background),
+                    steps: agents.count - 2,
+                    backgroundTasks: 2
+                )
+                SubagentStrip(activities: agents.filter { $0.subagent?.background == true }, open: {})
+                SubagentMonitorView(
+                    activities: agents.filter { $0.subagent?.background == true },
+                    stop: { _, done in done(nil) }
+                )
             }
             .padding(12)
             .frame(width: 300)

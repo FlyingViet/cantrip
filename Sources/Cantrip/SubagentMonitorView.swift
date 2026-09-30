@@ -1,5 +1,53 @@
 import SwiftUI
 
+enum ProgressPaneSection: String, CaseIterable, Identifiable {
+    case steps
+    case background
+
+    var id: Self { self }
+    var title: String { self == .steps ? "Steps" : "Background" }
+}
+
+struct ProgressPaneTabs: View {
+    @Binding var selection: ProgressPaneSection
+    let steps: Int
+    let backgroundTasks: Int
+
+    var body: some View {
+        HStack(spacing: 2) {
+            tab(.steps, count: steps)
+            tab(.background, count: backgroundTasks)
+        }
+        .padding(2)
+        .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 7))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Progress view")
+        .accessibilityIdentifier("progress.tabs")
+    }
+
+    private func tab(_ section: ProgressPaneSection, count: Int) -> some View {
+        Button {
+            selection = section
+        } label: {
+            Text("\(section.title)\(count > 0 ? " \(count)" : "")")
+                .font(.caption.weight(selection == section ? .semibold : .regular))
+                .foregroundStyle(selection == section ? .primary : .secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+                .background(
+                    selection == section ? Color.accentColor.opacity(0.16) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 5)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(section.title)
+        .accessibilityValue("\(count)")
+        .accessibilityAddTraits(selection == section ? .isSelected : [])
+    }
+}
+
 /// Live cards for the subagents a conversation spawned (Progress pane).
 struct SubagentMonitorView: View {
     let activities: [ToolActivity]
