@@ -138,7 +138,8 @@ The macOS app includes:
   declarative schema for native list, detail and edit screens; their records can
   be updated conversationally or through the mobile UI. Due runs post back into
   Home chat. Deliverable files the agent saves in Home's guarded artifact folder
-  appear automatically in Artifacts. Cantrip must remain running for scheduled work.
+  appear automatically in Artifacts and can be permanently deleted from the
+  mobile app. Cantrip must remain running for scheduled work.
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a
   `cantrip` command for asking questions from Terminal. With Copilot, MCP
   tools that return interactive views (such as Mobbin's screen galleries)

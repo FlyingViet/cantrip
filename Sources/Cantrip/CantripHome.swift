@@ -804,6 +804,50 @@ final class CantripHomeStore: ObservableObject {
         return (artifact, data)
     }
 
+    func deleteArtifact(id: UUID) throws {
+        guard let index = artifacts.firstIndex(where: { $0.id == id }) else {
+            throw CantripHomeError(404, "Artifact not found.")
+        }
+        let artifact = artifacts[index]
+        let root = Self.artifactDirectory.standardizedFileURL
+        let url = root.appendingPathComponent(artifact.relativePath).standardizedFileURL
+        guard url.path.hasPrefix(root.path + "/") else {
+            throw CantripHomeError(404, "Artifact not found.")
+        }
+
+        artifacts.remove(at: index)
+        do {
+            try persistArtifacts()
+        } catch {
+            artifacts.insert(artifact, at: index)
+            throw error
+        }
+
+        do {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true || values.isSymbolicLink == true else {
+                throw CantripHomeError(409, "The artifact path no longer points to a file.")
+            }
+            try FileManager.default.removeItem(at: url)
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain
+                && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code) {
+            return
+        } catch {
+            artifacts.insert(artifact, at: index)
+            do {
+                try persistArtifacts()
+            } catch {
+                recordStorageFailure(error)
+                throw CantripHomeError(
+                    500, "Could not restore the artifact after its file could not be deleted."
+                )
+            }
+            if let error = error as? CantripHomeError { throw error }
+            throw CantripHomeError(500, "Could not delete the artifact file from the Mac.")
+        }
+    }
+
     private func tick() {
         guard AppSettings.shared.cantripHomeEnabled,
               let session, !session.isStreaming, session.queued.isEmpty,
