@@ -53,6 +53,10 @@ composer, microphone, hands-free voice mode, and spoken replies as Hermes.
 The header, tab drawer, and composer provide session selection, new
 sessions and conversations, queued/redirected/injected prompts, stop, and resume.
 
+In **Settings → Backends**, choose which execution backends appear in the picker
+and tap **Edit** to drag them into your preferred order. At least one backend
+always remains visible.
+
 **Tap the mic** for single-turn dictation, or **touch and hold it** for half a
 second to open full-screen **continuous voice mode**. Once open, release the
 mic and talk hands-free through the existing *listen → think → speak* loop.

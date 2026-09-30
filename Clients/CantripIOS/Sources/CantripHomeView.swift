@@ -1,3 +1,4 @@
+import Combine
 import QuickLook
 import SwiftUI
 
@@ -62,21 +63,36 @@ struct CantripHomeTabBar: View {
 }
 
 struct CantripHomeTasksView: View {
-    @ObservedObject var remote: CantripRemoteModel
+    let remote: CantripRemoteModel
     let openChat: (String?) -> Void
+    @State private var tasks: [CantripHomeTask]
+    @State private var homeDataError: String?
+    @State private var isLoadingHomeData: Bool
+    @State private var homeAvailable: Bool
+    @State private var detailError: String?
     @State private var editing: CantripHomeTask?
     @State private var deleting: CantripHomeTask?
 
+    init(remote: CantripRemoteModel, openChat: @escaping (String?) -> Void) {
+        self.remote = remote
+        self.openChat = openChat
+        _tasks = State(initialValue: remote.homeTasks)
+        _homeDataError = State(initialValue: remote.homeDataError)
+        _isLoadingHomeData = State(initialValue: remote.isLoadingHomeData)
+        _homeAvailable = State(initialValue: remote.selectedSession?.isCantripHome == true)
+        _detailError = State(initialValue: remote.detailError)
+    }
+
     var body: some View {
         Group {
-            if remote.selectedSession?.isCantripHome != true {
+            if !homeAvailable {
                 ContentUnavailableView(
                     "Cantrip Home unavailable",
                     systemImage: "house.slash",
-                    description: Text(remote.detailError
+                    description: Text(detailError
                         ?? "Enable Cantrip Home in the Mac app's settings.")
                 )
-            } else if remote.homeTasks.isEmpty, !remote.isLoadingHomeData {
+            } else if tasks.isEmpty, !isLoadingHomeData {
                 ContentUnavailableView {
                     Label("No tasks yet", systemImage: "checklist")
                 } description: {
@@ -87,12 +103,12 @@ struct CantripHomeTasksView: View {
                 }
             } else {
                 List {
-                    if let error = remote.homeDataError {
+                    if let error = homeDataError {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
-                    ForEach(remote.homeTasks) { task in
+                    ForEach(tasks) { task in
                         if task.workspace != nil {
                             NavigationLink {
                                 CantripHomeTaskWorkspaceView(
@@ -134,6 +150,15 @@ struct CantripHomeTasksView: View {
         }
         .refreshable { await remote.refreshHomeData() }
         .task { await remote.refreshHomeData() }
+        .onReceive(remote.$homeTasks.removeDuplicates()) { tasks = $0 }
+        .onReceive(remote.$homeDataError.removeDuplicates()) { homeDataError = $0 }
+        .onReceive(remote.$isLoadingHomeData.removeDuplicates()) { isLoadingHomeData = $0 }
+        .onReceive(
+            remote.$selectedSession
+                .map { $0?.isCantripHome == true }
+                .removeDuplicates()
+        ) { homeAvailable = $0 }
+        .onReceive(remote.$detailError.removeDuplicates()) { detailError = $0 }
         .sheet(item: $editing) { task in
             CantripHomeTaskEditView(remote: remote, task: task, openChat: openChat)
         }
@@ -339,16 +364,27 @@ private struct CantripHomeRecordEditorTarget: Identifiable {
 }
 
 struct CantripHomeTaskWorkspaceView: View {
-    @ObservedObject var remote: CantripRemoteModel
+    let remote: CantripRemoteModel
     let taskID: UUID
     let openChat: (String?) -> Void
+    @State private var tasks: [CantripHomeTask]
     @State private var search = ""
     @State private var editorTarget: CantripHomeRecordEditorTarget?
     @State private var deleting: CantripHomeTaskRecord?
     @State private var showingSettings = false
 
+    init(
+        remote: CantripRemoteModel, taskID: UUID,
+        openChat: @escaping (String?) -> Void
+    ) {
+        self.remote = remote
+        self.taskID = taskID
+        self.openChat = openChat
+        _tasks = State(initialValue: remote.homeTasks)
+    }
+
     private var task: CantripHomeTask? {
-        remote.homeTasks.first { $0.id == taskID }
+        tasks.first { $0.id == taskID }
     }
 
     private var records: [CantripHomeTaskRecord] {
@@ -465,6 +501,7 @@ struct CantripHomeTaskWorkspaceView: View {
             }
             Button("Cancel", role: .cancel) { deleting = nil }
         }
+        .onReceive(remote.$homeTasks.removeDuplicates()) { tasks = $0 }
     }
 
     private func pluralLabel(_ workspace: CantripHomeTaskWorkspace) -> String {
@@ -834,8 +871,13 @@ private enum CantripHomeTaskValueFormatter {
 }
 
 struct CantripHomeArtifactsView: View {
-    @ObservedObject var remote: CantripRemoteModel
+    let remote: CantripRemoteModel
     let openChat: (String?) -> Void
+    @State private var artifacts: [CantripHomeArtifact]
+    @State private var homeDataError: String?
+    @State private var isLoadingHomeData: Bool
+    @State private var homeAvailable: Bool
+    @State private var detailError: String?
     @State private var previewURL: URL?
     @State private var loadingID: UUID?
     @State private var previewError: String?
@@ -844,16 +886,26 @@ struct CantripHomeArtifactsView: View {
         GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12)
     ]
 
+    init(remote: CantripRemoteModel, openChat: @escaping (String?) -> Void) {
+        self.remote = remote
+        self.openChat = openChat
+        _artifacts = State(initialValue: remote.homeArtifacts)
+        _homeDataError = State(initialValue: remote.homeDataError)
+        _isLoadingHomeData = State(initialValue: remote.isLoadingHomeData)
+        _homeAvailable = State(initialValue: remote.selectedSession?.isCantripHome == true)
+        _detailError = State(initialValue: remote.detailError)
+    }
+
     var body: some View {
         Group {
-            if remote.selectedSession?.isCantripHome != true {
+            if !homeAvailable {
                 ContentUnavailableView(
                     "Cantrip Home unavailable",
                     systemImage: "house.slash",
-                    description: Text(remote.detailError
+                    description: Text(detailError
                         ?? "Enable Cantrip Home in the Mac app's settings.")
                 )
-            } else if remote.homeArtifacts.isEmpty, !remote.isLoadingHomeData {
+            } else if artifacts.isEmpty, !isLoadingHomeData {
                 ContentUnavailableView {
                     Label("No artifacts yet", systemImage: "square.grid.2x2")
                 } description: {
@@ -864,14 +916,14 @@ struct CantripHomeArtifactsView: View {
                 }
             } else {
                 ScrollView {
-                    if let error = remote.homeDataError {
+                    if let error = homeDataError {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(remote.homeArtifacts) { artifact in
+                        ForEach(artifacts) { artifact in
                             artifactCard(artifact)
                         }
                     }
@@ -892,6 +944,15 @@ struct CantripHomeArtifactsView: View {
         }
         .refreshable { await remote.refreshHomeData() }
         .task { await remote.refreshHomeData() }
+        .onReceive(remote.$homeArtifacts.removeDuplicates()) { artifacts = $0 }
+        .onReceive(remote.$homeDataError.removeDuplicates()) { homeDataError = $0 }
+        .onReceive(remote.$isLoadingHomeData.removeDuplicates()) { isLoadingHomeData = $0 }
+        .onReceive(
+            remote.$selectedSession
+                .map { $0?.isCantripHome == true }
+                .removeDuplicates()
+        ) { homeAvailable = $0 }
+        .onReceive(remote.$detailError.removeDuplicates()) { detailError = $0 }
         .quickLookPreview($previewURL)
         .alert("Could not open artifact", isPresented: Binding(
             get: { previewError != nil },

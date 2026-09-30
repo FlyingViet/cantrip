@@ -1725,6 +1725,7 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var homeArtifacts: [CantripHomeArtifact] = []
     @Published private(set) var homeDataError: String?
     @Published private(set) var isLoadingHomeData = false
+    private var homeDataRefreshInFlight = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var isMutating = false
@@ -2325,22 +2326,28 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     func refreshHomeData() async {
-        guard isHomeSelected, isConfigured, !isLoadingHomeData else { return }
-        isLoadingHomeData = true
-        defer { isLoadingHomeData = false }
+        guard isHomeSelected, isConfigured, !homeDataRefreshInFlight else { return }
+        homeDataRefreshInFlight = true
+        let showsInitialLoading = homeTasks.isEmpty && homeArtifacts.isEmpty
+        if showsInitialLoading { isLoadingHomeData = true }
+        defer {
+            homeDataRefreshInFlight = false
+            if showsInitialLoading { isLoadingHomeData = false }
+        }
         do {
             async let tasks = performHistoryRead { try await $0.homeTasks() }
             async let artifacts = performHistoryRead { try await $0.homeArtifacts() }
             let values = try await (tasks, artifacts)
             guard isHomeSelected else { return }
-            homeTasks = values.0.tasks
-            homeArtifacts = values.1.artifacts
-            homeDataError = values.0.error
+            if homeTasks != values.0.tasks { homeTasks = values.0.tasks }
+            if homeArtifacts != values.1.artifacts { homeArtifacts = values.1.artifacts }
+            if homeDataError != values.0.error { homeDataError = values.0.error }
         } catch is CancellationError {
             return
         } catch {
             guard isHomeSelected else { return }
-            homeDataError = error.localizedDescription
+            let message = error.localizedDescription
+            if homeDataError != message { homeDataError = message }
         }
     }
 
