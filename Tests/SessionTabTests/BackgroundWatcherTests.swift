@@ -110,17 +110,24 @@ extension SessionTabTests {
                 && chat.subagent(agentID: "agent-release") != nil
         }
         precondition(chat.isStreaming, "The root may go idle while its background watcher keeps the run available")
+        precondition(chat.isWaitingOnBackgroundWatchers,
+                     "The session should expose that only passive watchers remain")
         guard let queued = chat.subagent(agentID: "agent-release") else {
             preconditionFailure("The queued watcher should be visible")
         }
         precondition(queued.isBackgroundWatcher && queued.isActive,
                      "Only an explicit watch-* task agent gets detached waiter behavior: \(queued)")
 
-        chat.submitRemote("Check the changelog too", mode: .inject)
+        chat.submitRemote("Check the changelog too", mode: .auto)
+        precondition(chat.queued.isEmpty,
+                     "Watcher-only Auto messages must bypass the queued-message path")
         try await waitForJournalTest {
             chat.messages.contains { $0.text.contains("checked the changelog") }
         }
         precondition(chat.isStreaming, "Injected work must not end or block the background watcher")
+        precondition(chat.queued.isEmpty,
+                     "A directly accepted watcher-time message must never appear queued")
+        try await waitForJournalTest { chat.isWaitingOnBackgroundWatchers }
 
         try await waitForJournalTest { !chat.isStreaming }
         let assistantText = chat.messages
