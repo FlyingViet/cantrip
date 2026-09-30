@@ -116,6 +116,51 @@ final class CantripHomeTests: XCTestCase {
         )
     }
 
+    func testHomeComposerClearsCompactBottomBar() async throws {
+        for size: DynamicTypeSize in [.large, .accessibility5] {
+            var composerFrame = CGRect.zero
+            let controller = UIHostingController(rootView:
+                CantripHomeTabs(selection: .constant(.chat), runningTasks: 0) {
+                    VStack(spacing: 0) {
+                        Spacer()
+                        Color.blue.opacity(0.2)
+                            .frame(height: 60)
+                            .onGeometryChange(for: CGRect.self) {
+                                $0.frame(in: .global)
+                            } action: {
+                                composerFrame = $0
+                            }
+                    }
+                } tasks: {
+                    Color.clear
+                } artifacts: {
+                    Color.clear
+                }
+                .environment(\.dynamicTypeSize, size)
+            )
+            let scene = try XCTUnwrap(
+                UIApplication.shared.connectedScenes.compactMap {
+                    $0 as? UIWindowScene
+                }.first
+            )
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 852))
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(250))
+            controller.view.frame = window.bounds
+            controller.view.layoutIfNeeded()
+
+            let safeBottom = controller.view.safeAreaLayoutGuide.layoutFrame.maxY
+            XCTAssertLessThanOrEqual(
+                composerFrame.maxY,
+                safeBottom - CantripHomeLayout.chatBottomClearance + 1
+            )
+            XCTAssertGreaterThan(composerFrame.height, 44)
+        }
+    }
+
     func testHomeNativeTabsAdaptToDuoVerticalBar() async throws {
         #if AGENTGATEWAY_DUO_SDK
         guard #available(iOS 27.1, *) else { throw XCTSkip("Requires the Duo runtime") }
@@ -125,9 +170,20 @@ final class CantripHomeTests: XCTestCase {
         guard scene.traitCollection.verticalBarEdge != .unspecified else {
             throw XCTSkip("Run on iPhone Duo in a vertical-bar pose.")
         }
+        var composerFrame = CGRect.zero
         let controller = UIHostingController(rootView:
             CantripHomeTabs(selection: .constant(.chat), runningTasks: 1) {
-                Color(.systemBackground).overlay { Text("Cantrip Home") }
+                VStack {
+                    Text("Cantrip Home")
+                    Spacer()
+                    Color.blue.opacity(0.2)
+                        .frame(height: 60)
+                        .onGeometryChange(for: CGRect.self) {
+                            $0.frame(in: .global)
+                        } action: {
+                            composerFrame = $0
+                        }
+                }
             } tasks: {
                 Text("Tasks")
             } artifacts: {
@@ -147,6 +203,11 @@ final class CantripHomeTests: XCTestCase {
         let tabBar: UITabBar = try XCTUnwrap(firstSubview(in: controller.view))
         let frame = tabBar.convert(tabBar.bounds, to: window)
         XCTAssertGreaterThan(frame.height, frame.width)
+        XCTAssertGreaterThanOrEqual(
+            composerFrame.maxY,
+            controller.view.safeAreaLayoutGuide.layoutFrame.maxY - 1,
+            "Duo's side tabs must not add phone-style bottom clearance"
+        )
         if scene.traitCollection.verticalBarEdge == .leading {
             XCTAssertLessThan(frame.midX, window.bounds.midX)
         } else {
