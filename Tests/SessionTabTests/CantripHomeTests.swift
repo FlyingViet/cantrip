@@ -96,12 +96,27 @@ extension SessionTabTests {
             .appendingPathComponent("recovered-home-test.txt")
         try "Recovered artifact".write(to: recoveredURL, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: recoveredURL) }
+        let failedArtifactMessage = ChatMessage(
+            role: .assistant,
+            text: """
+            [Recovered artifact](\(recoveredURL.path))
+
+            Could not save artifact: Artifacts must be saved in \(CantripHomeStore.artifactDirectory.path).
+            """
+        )
+        manager.homeSession.messages.append(failedArtifactMessage)
         try store.recoverUnregisteredArtifacts()
+        store.attach(manager: manager)
         let recovered = try requireHome(
             store.artifacts.first { $0.relativePath == recoveredURL.lastPathComponent }
         )
         let recoveredData = try store.artifactData(id: recovered.id).1
         precondition(String(decoding: recoveredData, as: UTF8.self) == "Recovered artifact")
+        let repairedMessage = try requireHome(
+            manager.homeSession.messages.first { $0.id == failedArtifactMessage.id }
+        )
+        precondition(repairedMessage.text.contains("Saved to Artifacts: **Recovered Home Test**")
+                     && !repairedMessage.text.contains("Could not save artifact"))
         do {
             _ = try store.register(.init(
                 title: "Escape", path: "/tmp/not-home.txt", kind: "document"
