@@ -347,6 +347,7 @@ struct CantripHomeTasksSnapshot: Encodable {
     let tasks: [CantripHomeTask]
     let revision: String
     let error: String?
+    var supportsReordering = true
 }
 
 struct CantripHomeArtifactsSnapshot: Encodable {
@@ -701,6 +702,27 @@ final class CantripHomeStore: ObservableObject {
         }
         tasks.remove(at: index)
         try persistTasks()
+    }
+
+    /// Relative placement keeps a stale client from discarding tasks created concurrently.
+    func move(id: UUID, relativeTo targetID: UUID, after: Bool) throws {
+        guard id != targetID else { return }
+        guard let source = tasks.firstIndex(where: { $0.id == id }),
+              tasks.contains(where: { $0.id == targetID }) else {
+            throw CantripHomeError(404, "Task not found. Refresh Tasks and try again.")
+        }
+        var reordered = tasks
+        let moved = reordered.remove(at: source)
+        let target = reordered.firstIndex(where: { $0.id == targetID })!
+        reordered.insert(moved, at: target + (after ? 1 : 0))
+        guard reordered.map(\.id) != tasks.map(\.id) else { return }
+        let previous = tasks
+        tasks = reordered
+        do { try persistTasks() }
+        catch {
+            tasks = previous
+            throw error
+        }
     }
 
     @discardableResult
