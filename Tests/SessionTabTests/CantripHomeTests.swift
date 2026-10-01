@@ -255,6 +255,46 @@ extension SessionTabTests {
         precondition((taskList.1["tasks"] as? [[String: Any]])?.contains {
             $0["id"] as? String == task.id.uuidString
         } == true)
+        precondition(taskList.1["supportsReordering"] as? Bool == true)
+        func taskIDs(_ response: [String: Any]) -> [String] {
+            (response["tasks"] as? [[String: Any]])?.compactMap { $0["id"] as? String } ?? []
+        }
+        let originalOrder = store.tasks.map(\.id)
+        precondition(originalOrder.firstIndex(of: tracker.id)! < originalOrder.firstIndex(of: task.id)!,
+                     "New tasks are listed first")
+        let moved = try await call(
+            "/api/v1/home/tasks/\(tracker.id.uuidString)/move", method: "POST",
+            body: Data(#"{"targetID":"\#(task.id.uuidString)","placement":"after"}"#.utf8)
+        )
+        let movedOrder = taskIDs(moved.1)
+        precondition(moved.0 == 200
+                     && movedOrder.firstIndex(of: task.id.uuidString)!
+                        < movedOrder.firstIndex(of: tracker.id.uuidString)!
+                     && movedOrder == store.tasks.map(\.id.uuidString)
+                     && moved.1["supportsReordering"] as? Bool == true,
+                     "Moving a task must return the reordered snapshot")
+        let persistedOrder = try JSONDecoder().decode(
+            [CantripHomeTask].self,
+            from: Data(contentsOf: CantripHomeStore.rootDirectory.appendingPathComponent("tasks.json"))
+        ).map(\.id.uuidString)
+        precondition(persistedOrder == movedOrder, "Task order must persist across host restarts")
+        let badPlacement = try await call(
+            "/api/v1/home/tasks/\(tracker.id.uuidString)/move", method: "POST",
+            body: Data(#"{"targetID":"\#(task.id.uuidString)","placement":"top"}"#.utf8)
+        )
+        let missingTarget = try await call(
+            "/api/v1/home/tasks/\(tracker.id.uuidString)/move", method: "POST",
+            body: Data(#"{"targetID":"\#(UUID().uuidString)","placement":"before"}"#.utf8)
+        )
+        let wrongMethod = try await call("/api/v1/home/tasks/\(tracker.id.uuidString)/move")
+        precondition(badPlacement.0 == 400 && missingTarget.0 == 404 && wrongMethod.0 == 405
+                     && store.tasks.map(\.id.uuidString) == movedOrder,
+                     "Rejected moves must leave the order unchanged")
+        let restored = try await call(
+            "/api/v1/home/tasks/\(tracker.id.uuidString)/move", method: "POST",
+            body: Data(#"{"targetID":"\#(task.id.uuidString)","placement":"before"}"#.utf8)
+        )
+        precondition(restored.0 == 200 && store.tasks.map(\.id) == originalOrder)
         let paused = try await call(
             "/api/v1/home/tasks/\(task.id.uuidString)", method: "PATCH",
             body: Data(#"{"enabled":false}"#.utf8)

@@ -1327,6 +1327,28 @@ final class RemoteControlServer {
                     }
                     return
                 }
+                if parts.count == 6, String(parts[5]) == "move" {
+                    guard request.method == "POST" else {
+                        throw CantripHomeError(405, "Use POST to move a task.")
+                    }
+                    guard request.body.count <= 4_096, let json,
+                          Set(json.keys) == ["targetID", "placement"],
+                          let rawTarget = json["targetID"] as? String,
+                          let targetID = UUID(uuidString: rawTarget),
+                          let placement = json["placement"] as? String,
+                          ["before", "after"].contains(placement) else {
+                        throw CantripHomeError(
+                            400, "targetID must be a task UUID and placement must be before or after."
+                        )
+                    }
+                    try store.move(id: id, relativeTo: targetID, after: placement == "after")
+                    let value = CantripHomeTasksSnapshot(
+                        tasks: store.tasks, revision: store.revision.uuidString,
+                        error: store.storageError
+                    )
+                    sendEncoded(on: connection) { try JSONEncoder().encode(value) }
+                    return
+                }
                 guard String(parts[5]) == "records" else {
                     throw CantripHomeError(404, "task record not found")
                 }

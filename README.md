@@ -139,7 +139,8 @@ The macOS app includes:
   one-time, interval or weekday automations, or
   structured workspaces such as trackers. Workspace tasks use a validated
   declarative schema for native list, detail and edit screens; their records can
-  be updated conversationally or through the mobile UI. Due runs post back into
+  be updated conversationally or through the mobile UI. Touch and hold a task to
+  drag it into a new order; the order is saved on the Mac. Due runs post back into
   Home chat. Deliverable files the agent saves in Home's guarded artifact folder
   appear automatically in Artifacts and can be permanently deleted from the
   mobile app. Cantrip must remain running for scheduled work.
