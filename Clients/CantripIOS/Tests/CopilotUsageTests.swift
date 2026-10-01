@@ -354,7 +354,7 @@ final class CopilotUsageTests: XCTestCase {
         }
     }
 
-    func testRemoteHeaderFloatsOnlyGlassActionsWithoutATitle() throws {
+    func testRemoteHeaderKeepsCenteredCompactTitle() throws {
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
@@ -400,11 +400,19 @@ final class CopilotUsageTests: XCTestCase {
             }
             .toolbar(.hidden, for: .navigationBar)
             .safeAreaInset(edge: .top, spacing: 0) {
-                ChatHeader(style: compact ? .floating : .standard) {
-                    ChatHeaderTitle(
-                        title: "Bass Compass project with a long tab name",
-                        isLocked: true, isWorking: true
-                    )
+                ChatHeader(style: compact ? .compact : .standard) {
+                    Group {
+                        if compact {
+                            CantripCenteredHeaderTitle(
+                                title: "Cantrip Remote", isConnected: isConnected
+                            )
+                        } else {
+                            ChatHeaderTitle(
+                                title: "Bass Compass project with a long tab name",
+                                isLocked: true, isWorking: true
+                            )
+                        }
+                    }
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                         titleFrame = $0
                     }
@@ -465,7 +473,7 @@ final class CopilotUsageTests: XCTestCase {
                             leadingFrame = $0
                         }
                 } trailing: {
-                    Button {} label: { ChatMenuIcon(isConnected: compact ? isConnected : nil) }
+                    Button {} label: { ChatMenuIcon() }
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                             menuFrame = $0
                         }
@@ -490,16 +498,16 @@ final class CopilotUsageTests: XCTestCase {
             XCTAssertEqual(usageFrame, .zero)
             XCTAssertEqual(deliveryFrame, .zero)
             XCTAssertEqual(refreshFrame, .zero)
-            XCTAssertEqual(titleFrame, .zero, "Cantrip Remote has no header title")
+            XCTAssertEqual(titleFrame.height, 44, accuracy: 1, "Cantrip Remote keeps its title")
+            XCTAssertEqual(titleFrame.midX, width / 2, accuracy: 1)
             XCTAssertEqual(leadingFrame.size, CGSize(width: 44, height: 44))
             XCTAssertEqual(menuFrame.width, 44, accuracy: 0.5)
             XCTAssertEqual(menuFrame.height, 44, accuracy: 0.5)
             XCTAssertEqual(leadingFrame.minX, 12, accuracy: 1)
             XCTAssertEqual(menuFrame.maxX, width - 12, accuracy: 1)
-            XCTAssertEqual(leadingFrame.minY, headerFrame.minY + 2, accuracy: 0.5,
-                           "The floating buttons hover at the top")
-            XCTAssertEqual(menuFrame.midY, leadingFrame.midY, accuracy: 0.5)
-            XCTAssertLessThanOrEqual(headerFrame.height, 52)
+            XCTAssertEqual(leadingFrame.midY, titleFrame.midY, accuracy: 0.5)
+            XCTAssertEqual(menuFrame.midY, titleFrame.midY, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(headerFrame.height, 48)
             XCTAssertEqual(contentFrame.minY, headerFrame.maxY, accuracy: 1)
         } else {
             XCTAssertEqual(usageFrame.height, 44, accuracy: 1)

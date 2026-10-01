@@ -422,16 +422,16 @@ final class CantripMascotTests: XCTestCase {
         )
     }
 
-    func testRealRemoteChatHasNoHeaderBar() async throws {
-        try await assertRemoteChatHasNoHeaderBar(streaming: false)
+    func testRealRemoteChatKeepsItsTitleHeader() async throws {
+        try await assertRemoteChatKeepsTitleHeader(streaming: false)
     }
 
-    /// The run status lives above the composer, so working must not add a solid band behind the header.
-    func testRemoteChatKeepsTranslucentHeaderWhileWorking() async throws {
-        try await assertRemoteChatHasNoHeaderBar(streaming: true)
+    /// The run status lives above the composer, so working must not add a second band under the header.
+    func testRemoteChatKeepsOneHeaderRowWhileWorking() async throws {
+        try await assertRemoteChatKeepsTitleHeader(streaming: true)
     }
 
-    private func assertRemoteChatHasNoHeaderBar(streaming: Bool) async throws {
+    private func assertRemoteChatKeepsTitleHeader(streaming: Bool) async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MascotRequestProtocol.self]
         let client = URLSession(configuration: configuration)
@@ -504,11 +504,9 @@ final class CantripMascotTests: XCTestCase {
         )
         let top = controller.view.safeAreaInsets.top
         XCTAssertGreaterThanOrEqual(transcript.adjustedContentInset.top, top + 44,
-                                    "The first message must rest below the floating buttons")
-        XCTAssertLessThanOrEqual(transcript.adjustedContentInset.top, top + 56,
-                                 "Remote has no title row or detail bar")
-        XCTAssertLessThanOrEqual(transcript.frame.minY, top,
-                                 "Messages scroll under the floating buttons")
+                                    "The first message must rest below the title header")
+        XCTAssertLessThanOrEqual(transcript.adjustedContentInset.top, top + 52,
+                                 "Remote keeps one compact title row, without a status band")
         let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_ARTIFACT_DIR"]
         guard let directory, !directory.isEmpty else { return }
         for (name, offset) in [("top", CGFloat(0)), ("scrolled", 260)] {
@@ -653,8 +651,8 @@ final class CantripMascotTests: XCTestCase {
                 }
                 .scrollDisabled(true)
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    ChatHeader(style: .floating) {
-                        EmptyView()
+                    ChatHeader(style: .compact) {
+                        CantripCenteredHeaderTitle(title: "Cantrip Remote", isConnected: true)
                     } connection: {
                         EmptyView()
                     } lane: {
@@ -670,7 +668,7 @@ final class CantripMascotTests: XCTestCase {
                     } leading: {
                         ChatTabsButton(isEnabled: true) {}
                     } trailing: {
-                        Button {} label: { ChatMenuIcon(isConnected: true) }
+                        Button {} label: { ChatMenuIcon() }
                     }
                 }
                 .background(Color(.systemBackground))

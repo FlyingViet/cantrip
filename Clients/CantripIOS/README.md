@@ -66,12 +66,11 @@ offers a **Continuous voice mode** action on the mic.
 
 The **Tabs** drawer marks the selected tab with a checkmark and includes tab
 names, locks, and queued counts. A blinking brain beside a tab's name in the
-drawer marks it as working, disappearing when work stops. Cantrip Remote has
-no header bar: glass **Tabs** and **menu** buttons float at the top corners while
-messages scroll softly beneath them, and a small dot on the menu button shows
-whether the Mac is connected (VoiceOver reads it with the menu). While the
-selected tab works, the "Cantrip is working…" status appears only above the
-composer. With Reduce
+drawer marks it as working, disappearing when work stops. Cantrip Remote keeps
+a compact header: **Tabs** on the left, the centered **Cantrip Remote** title
+with its connection dot, and the menu on the right. Tap the title to switch
+backends. While the selected tab works, the "Cantrip is working…" status
+appears only above the composer. With Reduce
 Motion enabled the
 brain stays still; VoiceOver continues to announce "Working".
 Locked tabs remain selectable. The **Auto** delivery dropdown sits immediately
