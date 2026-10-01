@@ -441,7 +441,12 @@ private struct CantripHomeTasksResponse: Decodable {
     let tasks: [CantripHomeTask]
     let revision: String
     let error: String?
+    let supportsReordering: Bool?
 }
+
+typealias CantripHomeTasksSnapshot = (
+    tasks: [CantripHomeTask], revision: String, error: String?, supportsReordering: Bool
+)
 
 private struct CantripHomeArtifactsResponse: Decodable {
     let artifacts: [CantripHomeArtifact]
@@ -1123,9 +1128,21 @@ struct CantripRemoteAPI {
         return response.session
     }
 
-    func homeTasks() async throws -> (tasks: [CantripHomeTask], revision: String, error: String?) {
+    func homeTasks() async throws -> CantripHomeTasksSnapshot {
         let response: CantripHomeTasksResponse = try await request(path: "/api/v1/home/tasks")
-        return (response.tasks, response.revision, response.error)
+        return (response.tasks, response.revision, response.error,
+                response.supportsReordering == true)
+    }
+
+    func moveHomeTask(id: UUID, targetID: UUID, after: Bool) async throws -> CantripHomeTasksSnapshot {
+        let response: CantripHomeTasksResponse = try await request(
+            path: "/api/v1/home/tasks/\(id.uuidString)/move", method: "POST",
+            body: JSONSerialization.data(withJSONObject: [
+                "targetID": targetID.uuidString, "placement": after ? "after" : "before",
+            ])
+        )
+        return (response.tasks, response.revision, response.error,
+                response.supportsReordering == true)
     }
 
     func homeArtifacts() async throws -> (artifacts: [CantripHomeArtifact], revision: String) {
@@ -1733,7 +1750,9 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var homeArtifacts: [CantripHomeArtifact] = []
     @Published private(set) var homeDataError: String?
     @Published private(set) var isLoadingHomeData = false
+    @Published private(set) var homeTasksSupportReordering = false
     private var homeDataRefreshInFlight = false
+    private var homeTaskOrderRevision = 0
     @Published private(set) var errorMessage: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var isMutating = false
@@ -2113,6 +2132,7 @@ final class CantripRemoteModel: ObservableObject {
             selectedSession = nil
             isHomeSelected = false
             homeTasks = []
+            homeTasksSupportReordering = false
             homeArtifacts = []
             transcriptRevision += 1
             if configuredURL.isEmpty {
@@ -2165,6 +2185,7 @@ final class CantripRemoteModel: ObservableObject {
             selectedSession = nil
             isHomeSelected = false
             homeTasks = []
+            homeTasksSupportReordering = false
             homeArtifacts = []
             selectedServerID = nil
             errorMessage = nil
@@ -2342,12 +2363,19 @@ final class CantripRemoteModel: ObservableObject {
             homeDataRefreshInFlight = false
             if showsInitialLoading { isLoadingHomeData = false }
         }
+        let orderRevision = homeTaskOrderRevision
         do {
             async let tasks = performHistoryRead { try await $0.homeTasks() }
             async let artifacts = performHistoryRead { try await $0.homeArtifacts() }
             let values = try await (tasks, artifacts)
             guard isHomeSelected else { return }
-            if homeTasks != values.0.tasks { homeTasks = values.0.tasks }
+            // A snapshot fetched across a reorder may still carry the old order.
+            if orderRevision == homeTaskOrderRevision, homeTasks != values.0.tasks {
+                homeTasks = values.0.tasks
+            }
+            if homeTasksSupportReordering != values.0.supportsReordering {
+                homeTasksSupportReordering = values.0.supportsReordering
+            }
             if homeArtifacts != values.1.artifacts { homeArtifacts = values.1.artifacts }
             if homeDataError != values.0.error { homeDataError = values.0.error }
         } catch is CancellationError {
@@ -2379,6 +2407,56 @@ final class CantripRemoteModel: ObservableObject {
             homeDataError = error.localizedDescription
             return false
         }
+    }
+
+    /// Applies the move locally first so List drops do not snap back while the Mac saves.
+    @discardableResult
+    func moveHomeTask(_ id: UUID, relativeTo targetID: UUID, after: Bool) async -> Bool {
+        guard id != targetID else { return true }
+        guard homeTasksSupportReordering else {
+            homeDataError = "Update Cantrip on the Mac to reorder tasks."
+            return false
+        }
+        guard !isMutating else { return false }
+        guard let source = homeTasks.firstIndex(where: { $0.id == id }),
+              let target = homeTasks.firstIndex(where: { $0.id == targetID }) else {
+            homeDataError = "A task changed on the Mac. Refresh Tasks and try again."
+            return false
+        }
+        let previousOrder = homeTasks
+        var preview = homeTasks
+        let moved = preview.remove(at: source)
+        preview.insert(moved, at: target - (source < target ? 1 : 0) + (after ? 1 : 0))
+        homeTasks = preview
+        homeTaskOrderRevision += 1
+        isMutating = true
+        defer {
+            isMutating = false
+            homeTaskOrderRevision += 1
+        }
+        do {
+            let snapshot = try await performAuthenticated(allowFallback: false) {
+                try await $0.moveHomeTask(id: id, targetID: targetID, after: after)
+            }
+            guard isHomeSelected else { return false }
+            if homeTasks != snapshot.tasks { homeTasks = snapshot.tasks }
+            homeTasksSupportReordering = snapshot.supportsReordering
+            homeDataError = snapshot.error
+            return true
+        } catch {
+            guard isHomeSelected else { return false }
+            if homeTasks == preview { homeTasks = previousOrder }
+            homeDataError = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    func moveHomeTask(_ id: UUID, offset: Int) async -> Bool {
+        guard [-1, 1].contains(offset),
+              let index = homeTasks.firstIndex(where: { $0.id == id }),
+              homeTasks.indices.contains(index + offset) else { return false }
+        return await moveHomeTask(id, relativeTo: homeTasks[index + offset].id, after: offset > 0)
     }
 
     func deleteHomeTask(_ task: CantripHomeTask) async -> Bool {

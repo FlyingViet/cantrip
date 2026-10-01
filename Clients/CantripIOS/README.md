@@ -389,7 +389,11 @@ add and edit screens without task-specific app code; records can also be updated
 through Chat. Long-text values use full-width, left-aligned blocks so generated
 bullets and multi-line summaries remain readable. Tasks still supports review,
 editing, pause, resume, deletion and
-recent run outcomes. Scheduled results appear in the Home conversation.
+recent run outcomes. Touch and hold any task, then drag it to reorder the list;
+VoiceOver offers **Move up** and **Move down** actions. The drop shows
+immediately, is saved on the Mac, and syncs to other devices; a failed save
+restores the previous order. Reordering needs an updated Mac host
+(`supportsReordering`). Scheduled results appear in the Home conversation.
 Documents and media created as Home deliverables are collected automatically in
 Artifacts and open with the system preview. The menu on each artifact can
 permanently delete its file from the paired Mac. Scheduled work runs only while

@@ -422,6 +422,115 @@ final class CantripHomeTests: XCTestCase {
         })
     }
 
+    func testTaskReorderMapsListDropsToRelativeMoves() {
+        let ids = (0..<4).map { _ in UUID() }
+        for source in ids.indices {
+            for destination in 0...ids.count {
+                let move = CantripHomeTaskReorder.move(
+                    ids: ids, fromOffsets: IndexSet(integer: source), toOffset: destination
+                )
+                var expected = ids
+                expected.move(fromOffsets: IndexSet(integer: source), toOffset: destination)
+                guard let move else {
+                    XCTAssertEqual(expected, ids, "Only no-op drops may be ignored")
+                    continue
+                }
+                var relative = ids
+                let moved = relative.remove(at: source)
+                let target = relative.firstIndex(of: move.targetID)!
+                relative.insert(moved, at: target + (move.after ? 1 : 0))
+                XCTAssertEqual(move.id, ids[source])
+                XCTAssertEqual(relative, expected, "\(source) -> \(destination)")
+            }
+        }
+        XCTAssertNil(CantripHomeTaskReorder.move(
+            ids: ids, fromOffsets: IndexSet([0, 1]), toOffset: 3
+        ))
+    }
+
+    func testHomeTaskReorderIsOptimisticPersistsAndRollsBack() async throws {
+        let client = client()
+        let model = CantripRemoteModel(urlSession: client)
+        let scheduledID = try XCTUnwrap(UUID(uuidString: "10000000-0000-0000-0000-000000000001"))
+        let trackerID = try XCTUnwrap(UUID(uuidString: "10000000-0000-0000-0000-000000000002"))
+        var supportsReordering: Bool? = true
+        var failMove = false
+        var moveBodies: [[String: String]] = []
+        CantripHomeRequestProtocol.handler = { request in
+            let path = URLComponents(
+                url: request.url!, resolvingAgainstBaseURL: false
+            )?.percentEncodedPath ?? ""
+            switch (request.httpMethod ?? "", path) {
+            case ("POST", "/api/v1/home/tasks/\(trackerID.uuidString)/move"):
+                XCTAssertEqual(model.homeTasks.map(\.id), [trackerID, scheduledID],
+                               "The drop must be visible before the Mac responds")
+                XCTAssertTrue(model.isMutating)
+                let body = try XCTUnwrap(request.httpBody ?? request.httpBodyStream.map {
+                    $0.open()
+                    defer { $0.close() }
+                    var data = Data()
+                    var buffer = [UInt8](repeating: 0, count: 1024)
+                    while $0.hasBytesAvailable {
+                        let count = $0.read(&buffer, maxLength: buffer.count)
+                        if count <= 0 { break }
+                        data.append(buffer, count: count)
+                    }
+                    return data
+                })
+                moveBodies.append(try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: body) as? [String: String]
+                ))
+                if failMove { return (500, Data(#"{"error":"Could not save the task on the Mac."}"#.utf8)) }
+                return (200, self.tasksPayload(enabled: true, reversed: true, supportsReordering: true))
+            case ("GET", "/api/v1/home"):
+                return (200, self.homeSessionPayload())
+            case ("GET", "/api/v1/home/tasks"):
+                return (200, self.tasksPayload(enabled: true, supportsReordering: supportsReordering))
+            case ("GET", "/api/v1/home/artifacts"):
+                return (200, self.artifactsPayload())
+            default:
+                return (200, Data(#"{"sessions":[]}"#.utf8))
+            }
+        }
+        addTeardownBlock { @MainActor in
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            CantripHomeRequestProtocol.handler = nil
+        }
+        let configured = await model.configure(
+            url: "https://cantrip.example", pairingToken: "home-reorder-token", tailscaleOnly: true
+        )
+        XCTAssertTrue(configured)
+        await model.selectHome()
+        XCTAssertTrue(model.homeTasksSupportReordering)
+        XCTAssertEqual(model.homeTasks.map(\.id), [scheduledID, trackerID])
+
+        let moved = await model.moveHomeTask(trackerID, relativeTo: scheduledID, after: false)
+        XCTAssertTrue(moved)
+        XCTAssertEqual(moveBodies.last, ["targetID": scheduledID.uuidString, "placement": "before"])
+        XCTAssertEqual(model.homeTasks.map(\.id), [trackerID, scheduledID])
+        XCTAssertNil(model.homeDataError)
+        XCTAssertFalse(model.isMutating)
+
+        // Reset to the server's original order, then prove a failed save rolls back.
+        await model.refreshHomeData()
+        XCTAssertEqual(model.homeTasks.map(\.id), [scheduledID, trackerID])
+        failMove = true
+        let failed = await model.moveHomeTask(trackerID, offset: -1)
+        XCTAssertFalse(failed)
+        XCTAssertEqual(moveBodies.count, 2)
+        XCTAssertEqual(model.homeTasks.map(\.id), [scheduledID, trackerID])
+        XCTAssertNotNil(model.homeDataError)
+
+        supportsReordering = nil
+        await model.refreshHomeData()
+        XCTAssertFalse(model.homeTasksSupportReordering, "Older Macs do not advertise reordering")
+        let unsupported = await model.moveHomeTask(trackerID, offset: -1)
+        XCTAssertFalse(unsupported)
+        XCTAssertEqual(moveBodies.count, 2, "An older Mac must not receive a move request")
+        XCTAssertEqual(model.homeTasks.map(\.id), [scheduledID, trackerID])
+    }
+
     func testUnchangedHomeRefreshDoesNotRepublishSnapshots() async throws {
         let client = client()
         let model = CantripRemoteModel(urlSession: client)
@@ -623,11 +732,18 @@ final class CantripHomeTests: XCTestCase {
         return nil
     }
 
-    private func tasksPayload(enabled: Bool) -> Data {
-        Data("""
-        {"tasks":[\(String(decoding: taskPayload(enabled: enabled), as: UTF8.self)),
-        \(String(decoding: workspaceTaskPayload(), as: UTF8.self))],
-        "revision":"task-revision"}
+    private func tasksPayload(
+        enabled: Bool, reversed: Bool = false, supportsReordering: Bool? = nil
+    ) -> Data {
+        var tasks = [
+            String(decoding: taskPayload(enabled: enabled), as: UTF8.self),
+            String(decoding: workspaceTaskPayload(), as: UTF8.self),
+        ]
+        if reversed { tasks.reverse() }
+        let flag = supportsReordering.map { #","supportsReordering":\#($0)"# } ?? ""
+        return Data("""
+        {"tasks":[\(tasks.joined(separator: ",\n"))],
+        "revision":"task-revision"\(flag)}
         """.utf8)
     }
 

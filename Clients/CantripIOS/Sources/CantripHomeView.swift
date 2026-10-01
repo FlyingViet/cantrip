@@ -212,6 +212,22 @@ struct CantripHomeCompactTabBar: View {
     }
 }
 
+enum CantripHomeTaskReorder {
+    struct Move: Equatable {
+        let id: UUID
+        let targetID: UUID
+        let after: Bool
+    }
+
+    static func move(ids: [UUID], fromOffsets offsets: IndexSet, toOffset destination: Int) -> Move? {
+        guard offsets.count == 1, let source = offsets.first, ids.indices.contains(source),
+              (0...ids.count).contains(destination),
+              destination != source, destination != source + 1 else { return nil }
+        let target = source < destination ? destination - 1 : destination
+        return Move(id: ids[source], targetID: ids[target], after: source < target)
+    }
+}
+
 struct CantripHomeTasksView: View {
     let remote: CantripRemoteModel
     let openChat: (String?) -> Void
@@ -222,11 +238,15 @@ struct CantripHomeTasksView: View {
     @State private var detailError: String?
     @State private var editing: CantripHomeTask?
     @State private var deleting: CantripHomeTask?
+    @State private var supportsReordering: Bool
+    @State private var isMutating: Bool
 
     init(remote: CantripRemoteModel, openChat: @escaping (String?) -> Void) {
         self.remote = remote
         self.openChat = openChat
         _tasks = State(initialValue: remote.homeTasks)
+        _supportsReordering = State(initialValue: remote.homeTasksSupportReordering)
+        _isMutating = State(initialValue: remote.isMutating)
         _homeDataError = State(initialValue: remote.homeDataError)
         _isLoadingHomeData = State(initialValue: remote.isLoadingHomeData)
         _homeAvailable = State(initialValue: remote.selectedSession?.isCantripHome == true)
@@ -261,30 +281,20 @@ struct CantripHomeTasksView: View {
                             .foregroundStyle(.orange)
                     }
                     ForEach(tasks) { task in
-                        if task.workspace != nil {
-                            NavigationLink {
-                                CantripHomeTaskWorkspaceView(
-                                    remote: remote, taskID: task.id, openChat: openChat
-                                )
-                            } label: {
-                                taskRow(task)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button("Delete", systemImage: "trash", role: .destructive) {
-                                    deleting = task
-                                }
-                            }
-                        } else {
-                            taskRow(task)
-                                .contentShape(Rectangle())
-                                .onTapGesture { editing = task }
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    Button("Delete", systemImage: "trash", role: .destructive) {
-                                        deleting = task
+                        taskListRow(task)
+                            .accessibilityActions {
+                                if canReorderTasks,
+                                   let index = tasks.firstIndex(where: { $0.id == task.id }) {
+                                    if index > 0 {
+                                        Button("Move up") { moveTask(task.id, offset: -1) }
+                                    }
+                                    if index < tasks.count - 1 {
+                                        Button("Move down") { moveTask(task.id, offset: 1) }
                                     }
                                 }
-                        }
+                            }
                     }
+                    .onMove(perform: canReorderTasks ? moveTasks : nil)
                 }
                 .listStyle(.plain)
             }
@@ -303,6 +313,10 @@ struct CantripHomeTasksView: View {
         .refreshable { await remote.refreshHomeData() }
         .task { await remote.refreshHomeData() }
         .onReceive(remote.$homeTasks.removeDuplicates()) { tasks = $0 }
+        .onReceive(remote.$homeTasksSupportReordering.removeDuplicates()) {
+            supportsReordering = $0
+        }
+        .onReceive(remote.$isMutating.removeDuplicates()) { isMutating = $0 }
         .onReceive(remote.$homeDataError.removeDuplicates()) { homeDataError = $0 }
         .onReceive(remote.$isLoadingHomeData.removeDuplicates()) { isLoadingHomeData = $0 }
         .onReceive(
@@ -330,6 +344,55 @@ struct CantripHomeTasksView: View {
                 }
             }
             Button("Cancel", role: .cancel) { deleting = nil }
+        }
+    }
+
+    private var canReorderTasks: Bool {
+        supportsReordering && !isMutating && tasks.count > 1
+    }
+
+    private func moveTasks(from offsets: IndexSet, to destination: Int) {
+        guard let move = CantripHomeTaskReorder.move(
+            ids: tasks.map(\.id), fromOffsets: offsets, toOffset: destination
+        ) else { return }
+        tasks.move(fromOffsets: offsets, toOffset: destination)
+        Task {
+            if !(await remote.moveHomeTask(move.id, relativeTo: move.targetID, after: move.after)) {
+                tasks = remote.homeTasks
+            }
+        }
+    }
+
+    private func moveTask(_ id: UUID, offset: Int) {
+        Task {
+            if !(await remote.moveHomeTask(id, offset: offset)) { tasks = remote.homeTasks }
+        }
+    }
+
+    @ViewBuilder
+    private func taskListRow(_ task: CantripHomeTask) -> some View {
+        if task.workspace != nil {
+            NavigationLink {
+                CantripHomeTaskWorkspaceView(
+                    remote: remote, taskID: task.id, openChat: openChat
+                )
+            } label: {
+                taskRow(task)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    deleting = task
+                }
+            }
+        } else {
+            taskRow(task)
+                .contentShape(Rectangle())
+                .onTapGesture { editing = task }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        deleting = task
+                    }
+                }
         }
     }
 
