@@ -87,6 +87,8 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
     @Environment(\.chatDisplayTraits) private var displayTraits
     @Binding var selection: CantripHomeSection
     let runningTasks: Int
+    /// The shared header sits outside the TabView, whose children do not inherit its inset.
+    var chatTopClearance: CGFloat = 0
     private let chat: ChatContent
     private let tasks: TasksContent
     private let artifacts: ArtifactsContent
@@ -94,12 +96,14 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
     init(
         selection: Binding<CantripHomeSection>,
         runningTasks: Int,
+        chatTopClearance: CGFloat = 0,
         @ViewBuilder chat: () -> ChatContent,
         @ViewBuilder tasks: () -> TasksContent,
         @ViewBuilder artifacts: () -> ArtifactsContent
     ) {
         _selection = selection
         self.runningTasks = runningTasks
+        self.chatTopClearance = chatTopClearance
         self.chat = chat()
         self.tasks = tasks()
         self.artifacts = artifacts()
@@ -113,6 +117,7 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
                 value: CantripHomeSection.chat
             ) {
                 tabContent(chat)
+                    .safeAreaPadding(.top, chatTopClearance)
             }
             Tab(
                 CantripHomeSection.tasks.title,

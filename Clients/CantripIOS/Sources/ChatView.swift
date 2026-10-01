@@ -1104,6 +1104,7 @@ struct ChatView: View {
     @State private var imageSendError: String?
     @State private var composerRevision = UUID()
     @State private var chatAvailableHeight: CGFloat = 600
+    @State private var chatHeaderHeight: CGFloat = 0
     @State private var showSettings = false
     @State private var showVoiceMode = false
     @State private var showSkills = false
@@ -1165,7 +1166,8 @@ struct ChatView: View {
                 if vm.activeLane == .home {
                     CantripHomeTabs(
                         selection: $homeSection,
-                        runningTasks: remote.homeTasks.filter { $0.state == "running" }.count
+                        runningTasks: remote.homeTasks.filter { $0.state == "running" }.count,
+                        chatTopClearance: chatHeaderHeight
                     ) {
                         conversationContent
                     } tasks: {
@@ -1183,6 +1185,9 @@ struct ChatView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 if vm.activeLane != .home || homeSection == .chat {
                     chatHeader
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                            chatHeaderHeight = $0
+                        }
                 }
             }
             .sheet(
@@ -1398,7 +1403,10 @@ struct ChatView: View {
     }
 
     private var chatHeader: some View {
-        ChatHeader(compact: vm.activeLane == .home || vm.activeLane == .cantrip) {
+        ChatHeader(
+            compact: vm.activeLane == .home || vm.activeLane == .cantrip,
+            mascot: vm.activeLane == .home
+        ) {
             if vm.activeLane == .cantrip {
                 ExecutionLanePicker(
                     env: env,
@@ -1412,7 +1420,14 @@ struct ChatView: View {
                     env: env,
                     remote: remote,
                     centeredTitle: "Cantrip Home",
-                    isWorking: remote.selectedSession?.isStreaming == true
+                    isWorking: remote.selectedSession?.isStreaming == true,
+                    mascotMood: .resolve(
+                        isConnected: remote.isConnected,
+                        isWorking: remote.selectedSession?.isStreaming == true,
+                        isListening: voice.isListening,
+                        isSpeaking: voice.isSpeaking,
+                        needsInput: (remote.selectedSession?.pendingInputCount ?? 0) > 0
+                    )
                 )
                 .disabled(vm.sending || importingImages || submittingRemote)
             } else {
@@ -2339,6 +2354,8 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                   Refresh: View, Settings: View, Leading: View, Trailing: View>: View {
     @Environment(\.chatDisplayTraits) private var displayTraits
     var compact = false
+    /// Cantrip Home's Muse-style row: floating glass actions around a hanging mascot title.
+    var mascot = false
     @ViewBuilder var title: () -> Title
     @ViewBuilder var connection: () -> Connection
     @ViewBuilder var lane: () -> Lane
@@ -2349,9 +2366,30 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var trailing: () -> Trailing
 
+    /// Centers the 44pt side actions on the mascot avatar rather than the whole title.
+    static var mascotActionInset: CGFloat { (CantripMascotHeaderTitle.avatarSize - 44) / 2 }
+
     var body: some View {
         VStack(spacing: 0) {
-            if compact {
+            if mascot {
+                HStack(alignment: .top, spacing: 8) {
+                    if !displayTraits.hasVerticalBar {
+                        leading()
+                            .environment(\.chatHeaderGlassAction, true)
+                            .frame(width: 44, height: 44)
+                            .glassEffect(.regular.interactive(), in: Circle())
+                            .padding(.top, Self.mascotActionInset)
+                    }
+                    title().frame(maxWidth: .infinity)
+                    if !displayTraits.hasVerticalBar {
+                        trailing()
+                            .environment(\.chatHeaderGlassAction, true)
+                            .frame(width: 44, height: 44)
+                            .glassEffect(.regular.interactive(), in: Circle())
+                            .padding(.top, Self.mascotActionInset)
+                    }
+                }
+            } else if compact {
                 HStack(spacing: 8) {
                     if !displayTraits.hasVerticalBar {
                         leading().frame(width: 44, height: 44)
@@ -2384,10 +2422,11 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         .buttonStyle(.plain)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .padding(.horizontal, 12)
-        .padding(.top, compact ? 2 : 8)
-        .padding(.bottom, compact ? 2 : 4)
+        .padding(.top, compact || mascot ? 2 : 8)
+        .padding(.bottom, mascot ? 6 : compact ? 2 : 4)
         .frame(maxWidth: .infinity)
-        .background(.bar)
+        .background(mascot ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.bar))
+        .background { if mascot { CantripMascotHeaderFade() } }
         .accessibilityIdentifier("chat.header")
         .modifier(ChatNavigationActions(
             leading: leading, refresh: refresh, settings: settings, trailing: trailing
@@ -2506,17 +2545,28 @@ struct ChatHeaderTitle: View {
 }
 
 struct ChatHeaderIcon: View {
+    @Environment(\.chatHeaderGlassAction) private var inGlass
     let systemName: String
 
     var body: some View {
-        Image(systemName: systemName)
-            .font(.system(size: 12, weight: .semibold))
-            .imageScale(.medium)
-            .frame(width: 16, height: 16)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(.tint.opacity(0.12), in: Capsule())
+        if inGlass {
+            Image(systemName: systemName)
+                .font(.system(size: 17, weight: .semibold))
+        } else {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .semibold))
+                .imageScale(.medium)
+                .frame(width: 16, height: 16)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(.tint.opacity(0.12), in: Capsule())
+        }
     }
+}
+
+extension EnvironmentValues {
+    /// Set inside Cantrip Home's glass circles, which already provide the icon's backing.
+    @Entry var chatHeaderGlassAction = false
 }
 
 struct ExecutionLaneBadge: View {
@@ -2559,17 +2609,20 @@ struct ExecutionLanePicker: View {
     @ObservedObject var remote: CantripRemoteModel
     var centeredTitle: String?
     var isWorking = false
+    var mascotMood: CantripMascotMood?
 
     init(
         env: HermesEnv,
         remote: CantripRemoteModel,
         centeredTitle: String? = nil,
-        isWorking: Bool = false
+        isWorking: Bool = false,
+        mascotMood: CantripMascotMood? = nil
     ) {
         self.env = env
         self.remote = remote
         self.centeredTitle = centeredTitle
         self.isWorking = isWorking
+        self.mascotMood = mascotMood
     }
 
     var body: some View {
@@ -2604,7 +2657,13 @@ struct ExecutionLanePicker: View {
     }
 
     @ViewBuilder private var currentLabel: some View {
-        if let centeredTitle {
+        if let centeredTitle, let mascotMood {
+            CantripMascotHeaderTitle(
+                title: centeredTitle,
+                isConnected: remote.isConnected,
+                mood: mascotMood
+            )
+        } else if let centeredTitle {
             CantripCenteredHeaderTitle(
                 title: centeredTitle,
                 isConnected: remote.isConnected,
