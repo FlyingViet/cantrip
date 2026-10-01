@@ -382,6 +382,16 @@ removes session switching and uses bottom **Chat**, **Tasks**, and **Artifacts**
 destinations. These use Apple's native Liquid Glass tab bar, which moves into
 the system vertical edge automatically on iPhone Duo.
 
+Home's chat header features a mascot: a fluffy purple hooded plush with a star
+pin, centered above the conversation with a glass **Cantrip Home** name pill and
+floating glass lane and menu buttons. Messages rest below it and scroll softly
+underneath. Tap the mascot or pill to switch backends. Its expression follows
+the session: blinking at rest, thinking with sparkles while working, leaning in
+while you dictate, chatting while a reply is read aloud, curious when Cantrip
+needs your answer, and dozing while disconnected; it hops happily when a reply
+finishes. VoiceOver reads the same status, and Reduce Motion or Low Power Mode
+holds a still pose.
+
 Create automations or structured trackers conversationally in Chat. Automations
 can use one-time, interval, or weekday schedules. A tracker carries a validated
 field and presentation schema, so Tasks renders native searchable list, detail,
