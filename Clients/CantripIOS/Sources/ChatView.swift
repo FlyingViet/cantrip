@@ -1410,9 +1410,16 @@ struct ChatView: View {
     private var chatHeader: some View {
         ChatHeader(
             style: vm.activeLane == .home ? .mascot
-                : vm.activeLane == .cantrip ? .floating : .standard
+                : vm.activeLane == .cantrip ? .compact : .standard
         ) {
-            if vm.activeLane == .home {
+            if vm.activeLane == .cantrip {
+                ExecutionLanePicker(
+                    env: env,
+                    remote: remote,
+                    centeredTitle: "Cantrip Remote"
+                )
+                .disabled(vm.sending || importingImages || submittingRemote)
+            } else if vm.activeLane == .home {
                 ExecutionLanePicker(
                     env: env,
                     remote: remote,
@@ -1432,7 +1439,7 @@ struct ChatView: View {
                     )
                 )
                 .disabled(vm.sending || importingImages || submittingRemote)
-            } else if vm.activeLane != .cantrip {
+            } else {
                 ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
                                 isWorking: vm.isWorking)
             }
@@ -1504,7 +1511,6 @@ struct ChatView: View {
         let isTabLocked: Bool
         let newConversationDisabled: Bool
         let deliveryMode: CantripDeliveryMode
-        let remoteConnected: Bool?
     }
 
     private var chatMenuState: ChatMenuState {
@@ -1525,8 +1531,7 @@ struct ChatView: View {
             settingsDisabled: vm.sending || importingImages || submittingRemote,
             isTabLocked: vm.isTabLocked,
             newConversationDisabled: newConversationDisabled,
-            deliveryMode: vm.remoteDeliveryMode,
-            remoteConnected: vm.activeLane == .cantrip ? remote.isConnected : nil
+            deliveryMode: vm.remoteDeliveryMode
         )
     }
 
@@ -1696,14 +1701,11 @@ struct ChatView: View {
                 .disabled(state.newConversationDisabled)
             }
         } label: {
-            ChatMenuIcon(isPaused: state.paused, isConnected: state.remoteConnected)
+            ChatMenuIcon(isPaused: state.paused)
         }
         .equatable()
         .accessibilityLabel("Chat menu")
-        .accessibilityValue([
-            state.remoteConnected.map { $0 ? "Connected" : "Disconnected" },
-            state.paused ? "Agent paused" : nil,
-        ].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityValue(state.paused ? "Agent paused" : "")
         .accessibilityIdentifier("chat.menu")
     }
 
@@ -2351,23 +2353,11 @@ struct StableMenu<State: Equatable, Content: View, MenuLabel: View>: View, Equat
 
 struct ChatMenuIcon: View {
     var isPaused = false
-    /// Cantrip Remote has no title, so its connection dot rides on the menu button.
-    var isConnected: Bool? = nil
 
     var body: some View {
         Image(systemName: "line.3.horizontal")
             .foregroundStyle(.white)
             .frame(width: 44, height: 44)
-            .overlay(alignment: .topTrailing) {
-                if let isConnected {
-                    Circle()
-                        .fill(isConnected ? Color.green : Color.gray)
-                        .frame(width: 9, height: 9)
-                        .overlay { Circle().strokeBorder(.black.opacity(0.55), lineWidth: 1.5) }
-                        .padding(7)
-                        .accessibilityHidden(true)
-                }
-            }
             .overlay(alignment: .bottomTrailing) {
                 if isPaused {
                     Image(systemName: "pause.circle.fill")
@@ -2398,8 +2388,8 @@ struct ChatSettingsButton: View {
 enum ChatHeaderStyle {
     /// Title row plus a connection, usage and delivery row on an opaque bar.
     case standard
-    /// Cantrip Remote: no bar or title, only glass side actions floating near the top.
-    case floating
+    /// Cantrip Remote: one 48pt bar row with side actions around a centered title.
+    case compact
     /// Cantrip Home: a large Muse-style mascot between floating glass actions.
     case mascot
 }
@@ -2418,9 +2408,6 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var trailing: () -> Trailing
 
-    /// On a vertical bar the floating actions live in the system rail, leaving nothing here.
-    private var isEmpty: Bool { style == .floating && displayTraits.hasVerticalBar }
-
     var body: some View {
         VStack(spacing: 0) {
             switch style {
@@ -2429,8 +2416,17 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                     title().frame(maxWidth: .infinity)
                     floatingActions
                 }
-            case .floating:
-                floatingActions
+            case .compact:
+                HStack(spacing: 8) {
+                    if !displayTraits.hasVerticalBar {
+                        leading().frame(width: 44, height: 44)
+                    }
+                    title().frame(maxWidth: .infinity, minHeight: 44)
+                    if !displayTraits.hasVerticalBar {
+                        trailing().frame(width: 44, height: 44)
+                    }
+                }
+                .frame(minHeight: 44)
             case .standard:
                 HStack(spacing: 8) {
                     if !displayTraits.hasVerticalBar {
@@ -2453,11 +2449,11 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         .buttonStyle(.plain)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .padding(.horizontal, 12)
-        .padding(.top, style == .standard ? 8 : isEmpty ? 0 : 2)
-        .padding(.bottom, style == .standard ? 4 : isEmpty ? 0 : 6)
+        .padding(.top, style == .standard ? 8 : 2)
+        .padding(.bottom, style == .mascot ? 6 : style == .compact ? 2 : 4)
         .frame(maxWidth: .infinity)
-        .background(style == .standard ? AnyShapeStyle(.bar) : AnyShapeStyle(Color.clear))
-        .background { if style != .standard, !isEmpty { CantripMascotHeaderFade() } }
+        .background(style == .mascot ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.bar))
+        .background { if style == .mascot { CantripMascotHeaderFade() } }
         .accessibilityIdentifier("chat.header")
         .modifier(ChatNavigationActions(
             leading: leading, refresh: refresh, settings: settings, trailing: trailing
@@ -2708,6 +2704,11 @@ struct ExecutionLanePicker: View {
                 isConnected: remote.isConnected,
                 mood: mascotMood
             )
+        } else if let centeredTitle {
+            CantripCenteredHeaderTitle(
+                title: centeredTitle,
+                isConnected: remote.isConnected
+            )
         } else {
             ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
         }
@@ -2728,6 +2729,32 @@ struct ExecutionLanePicker: View {
         default:
             lane.title
         }
+    }
+}
+
+/// Working status lives only in the status row above the composer, not here.
+struct CantripCenteredHeaderTitle: View {
+    let title: String
+    let isConnected: Bool
+
+    var body: some View {
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .overlay(alignment: .trailing) {
+                Circle()
+                    .fill(isConnected ? Color.green : Color.gray)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 12)
+            }
+            .dynamicTypeSize(...DynamicTypeSize.large)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(isConnected ? "Connected" : "Disconnected")
+        .accessibilityIdentifier("cantrip.header.title")
     }
 }
 

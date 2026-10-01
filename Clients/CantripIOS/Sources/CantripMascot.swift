@@ -834,7 +834,7 @@ struct CantripMascotHeaderTitle: View {
     }
 }
 
-/// Replaces the opaque bar behind floating headers so content softly fades under them.
+/// Replaces the opaque bar behind the mascot so content softly fades under it.
 struct CantripMascotHeaderFade: View {
     var body: some View {
         Rectangle()
