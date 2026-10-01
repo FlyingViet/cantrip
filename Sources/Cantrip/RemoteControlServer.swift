@@ -1176,20 +1176,7 @@ final class RemoteControlServer {
                     text, images: images, sessionID: session.id
                 )
                 if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
-                else if session.isCantripHome, mode == .auto, images.isEmpty,
-                        let target = CantripHomePromptRouter.target(for: prompt, in: manager) {
-                    target.submitRemote(prompt, mode: .auto)
-                    session.noteDelivery(
-                        "Routed to \(target.title). Home is ready for another prompt."
-                    )
-                    sendSession(
-                        session, status: 202, recentExchanges: recentExchanges,
-                        afterJournal: target, on: connection
-                    )
-                    return
-                } else {
-                    session.submitRemote(prompt, mode: mode)
-                }
+                else { session.submitRemote(prompt, mode: mode) }
             } catch let error as InputRequestError {
                 sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
                 return

@@ -26,6 +26,9 @@ enum RemoteHistory {
         if message.role == .user, let usage = message.promptUsage, !usage.isEmpty {
             result["promptUsage"] = usage.snapshot
         }
+        if !message.delegations.isEmpty {
+            result["delegations"] = message.delegations.map(\.snapshot)
+        }
         let reasoning = ReasoningStep.steps(from: message.reasoningBlocks)
         if !reasoning.isEmpty {
             result["reasoning"] = reasoning.enumerated().map { $1.snapshot(number: $0 + 1) }

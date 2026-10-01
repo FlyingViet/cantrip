@@ -25,13 +25,17 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var apps: [MCPAppPayload] = []
     /// A prompt's context size and its run's token use.
     var promptUsage: PromptUsage?
+    /// Cantrip Home work handed to project tabs from this reply.
+    var delegations: [CantripHomeDelegation] = []
     enum Role: String, Codable { case user, assistant, error }
     struct ReasoningMark: Equatable {
         let activities: Int
         let textBytes: Int
     }
     // Activities and thinking are runtime-only; transcripts skip them.
-    private enum CodingKeys: String, CodingKey { case id, role, text, author, runID, apps, promptUsage }
+    private enum CodingKeys: String, CodingKey {
+        case id, role, text, author, runID, apps, promptUsage, delegations
+    }
 }
 
 extension ChatMessage {
@@ -88,6 +92,9 @@ extension ChatMessage {
         runID = try container.decodeIfPresent(UUID.self, forKey: .runID)
         apps = (try? container.decodeIfPresent([MCPAppPayload].self, forKey: .apps)) ?? []
         promptUsage = try? container.decodeIfPresent(PromptUsage.self, forKey: .promptUsage)
+        delegations = (try? container.decodeIfPresent(
+            [CantripHomeDelegation].self, forKey: .delegations
+        )) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -99,6 +106,7 @@ extension ChatMessage {
         try container.encodeIfPresent(runID, forKey: .runID)
         if !apps.isEmpty { try container.encode(apps, forKey: .apps) }
         try container.encodeIfPresent(promptUsage, forKey: .promptUsage)
+        if !delegations.isEmpty { try container.encode(delegations, forKey: .delegations) }
     }
 }
 
@@ -143,7 +151,6 @@ final class ChatSession: ObservableObject {
     var onInputNeeded: ((InputRequestSnapshot) -> Void)?
     var onInputResolved: ((UUID) -> Void)?
     func deliveryStatusForInput(_ message: String) { deliveryStatus = message }
-    func noteDelivery(_ message: String) { deliveryStatus = message }
     private var routingTask: Task<Void, Never>?
     private var routingItemID: UUID?
     private var routingRevision = 0
@@ -366,13 +373,14 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    private func persistTranscript() {
+    func persistTranscript() {
         guard !isPrivate, privateStorageError == nil else { return }
         tabMetadata.save(id: id)
         // Thinking/activities don't persist, so assistant messages whose
         // only content was runtime-only would reload as invisible husks.
         let persistable = messages.filter {
-            !($0.role == .assistant && $0.text.isEmpty && $0.apps.isEmpty)
+            !($0.role == .assistant && $0.text.isEmpty && $0.apps.isEmpty
+              && $0.delegations.isEmpty)
         }
         do {
             if isLocalPrivate {
@@ -2626,7 +2634,8 @@ final class ChatSession: ObservableObject {
         if let idx = messages.lastIndex(where: { $0.role == .assistant }),
            messages[idx].text.isEmpty,
            messages[idx].activities.isEmpty,
-           messages[idx].thinking.isEmpty {
+           messages[idx].thinking.isEmpty,
+           messages[idx].delegations.isEmpty {
             messages.remove(at: idx)
         }
         persistTranscript()
