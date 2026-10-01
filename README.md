@@ -133,9 +133,11 @@ The macOS app includes:
   ordinary Mac and Remote tab lists. Enable it in Mac Settings to power Cantrip
   Agent's focused **Chat / Tasks / Artifacts** mode with the same backend,
   per-session model controls, tools, attachments, input requests and history as
-  Cantrip Remote. Plain Home prompts that clearly name an already-open project
-  tab are routed to that tab, leaving Home free for another request; ambiguous
-  prompts, commands, attachments and input replies stay in Home. Tasks can be
+  Cantrip Remote. Home decides from each message's intent: references,
+  questions and status checks about a project are answered in Home, while
+  requests to change a project with an open tab are handed to that tab as a
+  nested task. Home keeps a live card for each handoff with the tab's status and
+  final result, and scheduled or automated runs never hand off. Tasks can be
   one-time, interval or weekday automations, or
   structured workspaces such as trackers. Workspace tasks use a validated
   declarative schema for native list, detail and edit screens; their records can

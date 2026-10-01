@@ -1,111 +1,5 @@
 import Foundation
 
-enum CantripHomePromptRouter {
-    struct Candidate: Equatable {
-        let id: UUID
-        let title: String
-        let workdir: String
-    }
-
-    private static let ignoredTerms: Set<String> = [
-        "a", "an", "and", "app", "application", "can", "cantrip", "chat", "do",
-        "fix", "for", "home", "in", "it", "new", "of", "on", "open", "please",
-        "project", "remote", "repo", "repository", "tab", "task", "the", "this",
-        "to", "update", "with", "you"
-    ]
-
-    static func match(prompt: String, candidates: [Candidate]) -> UUID? {
-        let promptTerms = terms(in: prompt)
-        guard !promptTerms.isEmpty,
-              !prompt.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/"),
-              !prompt.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("!")
-        else { return nil }
-
-        let scored = candidates.compactMap { candidate -> (UUID, Int)? in
-            let titleTerms = terms(in: candidate.title)
-            let folderTerms = terms(in: URL(fileURLWithPath: candidate.workdir).lastPathComponent)
-            let groups = [titleTerms, folderTerms].filter { !$0.isEmpty }
-            let groupScores = groups.compactMap { group -> Int? in
-                let matched = group.filter { term in
-                    promptTerms.contains { promptTerm in related(promptTerm, term) }
-                }.count
-                let required = group.count == 1 ? 1 : 2
-                guard matched >= required, group.count > 1 || group[0].count >= 5 else {
-                    return nil
-                }
-                return matched * 10
-                    + (matched == group.count ? 10 : 0)
-                    - (group.count - matched) * 3
-            }
-            guard var score = groupScores.max() else { return nil }
-            let normalizedTitle = normalized(candidate.title)
-            if normalizedTitle.count >= 5, normalized(prompt).contains(normalizedTitle) {
-                score += 20
-            }
-            return (candidate.id, score)
-        }.sorted { $0.1 > $1.1 }
-
-        guard let best = scored.first,
-              scored.dropFirst().first?.1 != best.1 else { return nil }
-        return best.0
-    }
-
-    @MainActor
-    static func target(for prompt: String, in manager: SessionManager) -> ChatSession? {
-        let eligible = manager.sessions.filter {
-            !$0.isPrivate && !$0.isLocalPrivate && $0.privateStorageError == nil
-                && $0.chatInputRequest == nil
-        }
-        let candidates = eligible.map {
-            Candidate(id: $0.id, title: $0.title, workdir: $0.workdir)
-        }
-        guard let id = match(prompt: prompt, candidates: candidates) else { return nil }
-        return eligible.first { $0.id == id }
-    }
-
-    private static func terms(in value: String) -> [String] {
-        normalized(value)
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count >= 3 && !ignoredTerms.contains($0) }
-    }
-
-    private static func normalized(_ value: String) -> String {
-        value.replacingOccurrences(
-            of: #"(?<=[a-z0-9])(?=[A-Z])"#,
-            with: " ",
-            options: .regularExpression
-        )
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .lowercased()
-    }
-
-    private static func related(_ lhs: String, _ rhs: String) -> Bool {
-        if lhs == rhs { return true }
-        guard lhs.count >= 5, rhs.count >= 5, abs(lhs.count - rhs.count) <= 1 else {
-            return false
-        }
-        let left = Array(lhs), right = Array(rhs)
-        var i = 0, j = 0, edits = 0
-        while i < left.count, j < right.count {
-            if left[i] == right[j] {
-                i += 1
-                j += 1
-                continue
-            }
-            edits += 1
-            guard edits <= 1 else { return false }
-            if left.count > right.count { i += 1 }
-            else if right.count > left.count { j += 1 }
-            else {
-                i += 1
-                j += 1
-            }
-        }
-        if i < left.count || j < right.count { edits += 1 }
-        return edits <= 1
-    }
-}
-
 struct CantripHomeSchedule: Codable, Equatable {
     enum Kind: String, Codable, CaseIterable {
         case once
@@ -551,6 +445,7 @@ final class CantripHomeStore: ObservableObject {
     func attach(manager: SessionManager) {
         self.manager = manager
         attach(session: manager.homeSession)
+        CantripHomeDelegations.shared.attach(manager: manager)
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -992,6 +887,7 @@ final class CantripHomeStore: ObservableObject {
 
     private func tick() {
         drainIncidentInbox()
+        CantripHomeDelegations.shared.refresh()
         guard AppSettings.shared.cantripHomeEnabled,
               let session, !session.isStreaming, session.queued.isEmpty,
               !session.shell.isRunning,
@@ -1275,7 +1171,8 @@ extension ChatSession {
         \(CantripHomeStore.artifactDirectory.path). For every final document, image, audio,
         or video saved there, end the reply with a fenced `cantrip-artifact` JSON object:
         {"title":"display title","path":"absolute or artifact-directory-relative path",
-        "kind":"document|image|audio|video"}. Do not register source-code edits or temporary files.)
+        "kind":"document|image|audio|video"}. Do not register source-code edits or temporary files.
+        \(CantripHomeDelegations.shared.instructions))
         """
     }
 
@@ -1283,7 +1180,7 @@ extension ChatSession {
         guard isCantripHome,
               let index = messages.lastIndex(where: { $0.role == .assistant }) else { return }
         var text = messages[index].text
-        var confirmations: [String] = []
+        var confirmations = processCantripHomeDelegations(in: &text, messageIndex: index)
         for (language, action) in [
             ("cantrip-task-records", { (payload: String) throws -> String in
                 let batch = try JSONDecoder().decode(
