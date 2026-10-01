@@ -4,29 +4,43 @@ import SwiftUI
 enum CantripMascotMood: Equatable, CaseIterable {
     case idle
     case thinking
+    case searching
+    case working
+    case writing
     case listening
     case speaking
     case curious
+    case concerned
     case sleeping
 
     static func resolve(
-        isConnected: Bool, isWorking: Bool, isListening: Bool,
-        isSpeaking: Bool, needsInput: Bool
+        isConnected: Bool, isWorking: Bool, activity: CantripMascotActivity = .thinking,
+        isListening: Bool, isSpeaking: Bool, needsInput: Bool, hasProblem: Bool = false
     ) -> Self {
         if !isConnected { return .sleeping }
         if needsInput { return .curious }
         if isListening { return .listening }
         if isSpeaking { return .speaking }
-        return isWorking ? .thinking : .idle
+        if isWorking { return activity.mood }
+        return hasProblem ? .concerned : .idle
+    }
+
+    /// Moods shown while a turn runs; finishing one of them earns a celebration hop.
+    var isBusy: Bool {
+        switch self {
+        case .thinking, .searching, .working, .writing: true
+        default: false
+        }
     }
 
     /// What the header announces after the lane. Working is announced only by the status row above the composer.
     var accessibilityStatus: String? {
         switch self {
-        case .idle, .sleeping, .thinking: nil
+        case .idle, .sleeping, .thinking, .searching, .working, .writing: nil
         case .listening: "Listening"
         case .speaking: "Speaking"
         case .curious: "Waiting for your answer"
+        case .concerned: "Something went wrong"
         }
     }
 
@@ -34,9 +48,13 @@ enum CantripMascotMood: Equatable, CaseIterable {
         switch self {
         case .idle: "Resting"
         case .thinking: "Thinking"
+        case .searching: "Searching"
+        case .working: "Working"
+        case .writing: "Writing"
         case .listening: "Listening"
         case .speaking: "Speaking"
         case .curious: "Curious"
+        case .concerned: "Concerned"
         case .sleeping: "Asleep"
         }
     }
@@ -45,11 +63,51 @@ enum CantripMascotMood: Equatable, CaseIterable {
         switch self {
         case .idle: "face.smiling"
         case .thinking: "sparkles"
+        case .searching: "magnifyingglass"
+        case .working: "gearshape.2"
+        case .writing: "pencil.line"
         case .listening: "ear"
         case .speaking: "waveform"
         case .curious: "questionmark.bubble"
+        case .concerned: "exclamationmark.bubble"
         case .sleeping: "moon.zzz"
         }
+    }
+}
+
+/// What a running turn is doing right now, read from the Mac's live transcript and status.
+enum CantripMascotActivity: Equatable {
+    case thinking
+    case searching
+    case working
+    case writing
+
+    var mood: CantripMascotMood {
+        switch self {
+        case .thinking: .thinking
+        case .searching: .searching
+        case .working: .working
+        case .writing: .writing
+        }
+    }
+
+    static func current(status: String?, transcript: [CantripRemoteMessage]) -> Self {
+        guard let reply = transcript.last, reply.role == "assistant" else { return .thinking }
+        if let tool = reply.activities.last(where: { $0.state == "running" }) {
+            return isLookup(tool.toolName) ? .searching : .working
+        }
+        // The Mac clears its status while reply text streams and says "Thinking…" while reasoning.
+        let isQuiet = status?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        if isQuiet && !reply.text.isEmpty { return .writing }
+        if reply.subagents?.contains(where: { $0.status.isLive }) == true { return .working }
+        return .thinking
+    }
+
+    /// Tools that read, search or fetch rather than change anything.
+    static func isLookup(_ toolName: String) -> Bool {
+        let name = toolName.lowercased()
+        if ["view", "read", "grep", "glob", "rg", "ls", "find", "fetch"].contains(name) { return true }
+        return ["search", "fetch", "get_", "list_", "lookup", "browse"].contains { name.contains($0) }
     }
 }
 
@@ -170,7 +228,7 @@ struct CantripMascotView: View {
         .overlay { Circle().strokeBorder(.white.opacity(0.7), lineWidth: 1) }
         .shadow(color: .black.opacity(0.2), radius: 8, y: 3)
         .onChange(of: mood) { old, new in
-            guard old == .thinking, new == .idle else { return }
+            guard old.isBusy, new == .idle else { return }
             let start = Date()
             celebrationStart = start
             Task { @MainActor in
@@ -250,9 +308,13 @@ struct CantripMascotRenderer {
         let tilt: Double = switch mood {
         case .idle: 1.5 * sin(t * 2 * .pi / 7)
         case .thinking: 4 * sin(t * 2 * .pi / 2.6)
+        case .searching: 3 * sin(t * 2.2)
+        case .working: 1.6 * sin(t * 7)
+        case .writing: -2 + 1.2 * sin(t * 1.8)
         case .listening: 6 + 1.5 * sin(t * 2)
         case .speaking: 2 * sin(t * 3)
         case .curious: -9 + 1.5 * sin(t * 1.7)
+        case .concerned: -4 + sin(t * 1.3)
         case .sleeping: 5
         }
 
@@ -324,6 +386,7 @@ struct CantripMascotRenderer {
         }
 
         drawEyes(&figure, s: s, progress: progress)
+        drawBrows(&figure, s: s)
         drawMouth(&figure, s: s)
 
         let paw = Gradient(colors: palette.paw)
@@ -492,8 +555,12 @@ struct CantripMascotRenderer {
             }
             let (gx, gy, scale): (Double, Double, Double) = switch mood {
             case .thinking: (0.7, -0.8 + 0.1 * sin(t * 3), 1)
+            case .searching: (1.1 * sin(t * 2.2), -0.2, 1.06)
+            case .working: (0.2, 0.7, 0.92)
+            case .writing: (-0.5 + 0.25 * sin(t * 1.4), 0.8, 1)
             case .listening: (-0.15, 0, 1.12)
             case .curious: (0.35, -0.35, 1.16)
+            case .concerned: (0, -0.2, 0.95)
             case .speaking: (0, 0.1, 1)
             default: (sin(t * 0.55) * sin(t * 0.21) * 1.4, 0, 1)
             }
@@ -521,6 +588,20 @@ struct CantripMascotRenderer {
         }
     }
 
+    /// Focused brows slope inward while working; worried brows lift inward when something went wrong.
+    private func drawBrows(_ context: inout GraphicsContext, s: CGFloat) {
+        guard celebration == nil, mood == .working || mood == .concerned else { return }
+        let inner = mood == .working ? 0.503 : 0.484
+        let outer = mood == .working ? 0.49 : 0.503
+        let line = StrokeStyle(lineWidth: 0.011 * s, lineCap: .round)
+        for (outerX, innerX) in [(0.392, 0.448), (0.608, 0.552)] {
+            var brow = Path()
+            brow.move(to: CGPoint(x: outerX * s, y: outer * s))
+            brow.addLine(to: CGPoint(x: innerX * s, y: inner * s))
+            context.stroke(brow, with: .color(Self.ink.opacity(0.85)), style: line)
+        }
+    }
+
     private func drawMouth(_ context: inout GraphicsContext, s: CGFloat) {
         let t = motion ? time : 1
         let line = StrokeStyle(lineWidth: 0.013 * s, lineCap: .round)
@@ -542,6 +623,29 @@ struct CantripMascotRenderer {
             mouth.move(to: CGPoint(x: 0.49 * s, y: 0.618 * s))
             mouth.addQuadCurve(to: CGPoint(x: 0.53 * s, y: 0.612 * s),
                                control: CGPoint(x: 0.51 * s, y: 0.624 * s))
+            context.stroke(mouth, with: .color(Self.ink), style: line)
+        case .searching:
+            var mouth = Path()
+            mouth.move(to: CGPoint(x: 0.478 * s, y: 0.613 * s))
+            mouth.addQuadCurve(to: CGPoint(x: 0.522 * s, y: 0.606 * s),
+                               control: CGPoint(x: 0.505 * s, y: 0.628 * s))
+            context.stroke(mouth, with: .color(Self.ink), style: line)
+        case .working:
+            var mouth = Path()
+            mouth.move(to: CGPoint(x: 0.484 * s, y: 0.616 * s))
+            mouth.addLine(to: CGPoint(x: 0.518 * s, y: 0.613 * s))
+            context.stroke(mouth, with: .color(Self.ink), style: line)
+        case .writing:
+            var mouth = Path()
+            mouth.move(to: CGPoint(x: 0.484 * s, y: 0.609 * s))
+            mouth.addQuadCurve(to: CGPoint(x: 0.516 * s, y: 0.609 * s),
+                               control: CGPoint(x: 0.5 * s, y: 0.624 * s))
+            context.stroke(mouth, with: .color(Self.ink), style: line)
+        case .concerned:
+            var mouth = Path()
+            mouth.move(to: CGPoint(x: 0.477 * s, y: 0.624 * s))
+            mouth.addQuadCurve(to: CGPoint(x: 0.523 * s, y: 0.624 * s),
+                               control: CGPoint(x: 0.5 * s, y: 0.604 * s))
             context.stroke(mouth, with: .color(Self.ink), style: line)
         default:
             let wide = celebration != nil ? 0.034 : 0.024
@@ -593,9 +697,70 @@ struct CantripMascotRenderer {
                 context.stroke(arc, with: .color(accent.opacity(0.35 + 0.5 * pulse)),
                                style: StrokeStyle(lineWidth: 0.018 * s, lineCap: .round))
             }
+        case .searching:
+            let lens = CGPoint(x: (0.79 + 0.025 * cos(t * 2.2)) * s, y: (0.22 + 0.02 * sin(t * 2.2)) * s)
+            let radius = 0.048 * s
+            var handle = Path()
+            handle.move(to: CGPoint(x: lens.x + radius * 0.72, y: lens.y + radius * 0.72))
+            handle.addLine(to: CGPoint(x: lens.x + radius * 1.75, y: lens.y + radius * 1.75))
+            context.stroke(handle, with: .color(accent), style: StrokeStyle(lineWidth: 0.024 * s, lineCap: .round))
+            let glass = Path(ellipseIn: CGRect(x: lens.x - radius, y: lens.y - radius, width: radius * 2, height: radius * 2))
+            context.fill(glass, with: .color(.white.opacity(0.55)))
+            context.stroke(glass, with: .color(accent), lineWidth: 0.017 * s)
+        case .working:
+            for (x, y, outer, teeth, speed) in [(0.8, 0.19, 0.055, 8, 80.0), (0.885, 0.3, 0.036, 6, -120.0)] {
+                var gear = context
+                gear.translateBy(x: x * s, y: y * s)
+                gear.rotate(by: .degrees(t * speed))
+                gear.fill(
+                    Self.gear(teeth: teeth, outer: outer * s, inner: outer * 0.74 * s, hole: outer * 0.32 * s),
+                    with: .color(accent), style: FillStyle(eoFill: true)
+                )
+            }
+        case .writing:
+            let bubble = CGRect(x: 0.69 * s, y: 0.16 * s, width: 0.17 * s, height: 0.095 * s)
+            context.fill(Path(roundedRect: bubble, cornerRadius: 0.05 * s), with: .color(.white.opacity(0.92)))
+            for index in 0..<3 {
+                let bounce = motion ? max(0, sin(t * 6 - Double(index) * 0.9)) : (index == 1 ? 1 : 0)
+                let center = CGPoint(x: bubble.minX + (0.035 + 0.05 * Double(index)) * s,
+                                     y: bubble.midY - 0.014 * bounce * s)
+                context.fill(Path(ellipseIn: CGRect(x: center.x - 0.014 * s, y: center.y - 0.014 * s,
+                                                    width: 0.028 * s, height: 0.028 * s)),
+                             with: .color(accent.opacity(0.55 + 0.45 * bounce)))
+            }
+        case .concerned:
+            let slide = motion ? (t / 2.2).truncatingRemainder(dividingBy: 1) : 0.4
+            var drop = context
+            drop.opacity = 1 - slide * 0.6
+            drop.translateBy(x: 0.765 * s, y: (0.36 + 0.06 * slide) * s)
+            var path = Path()
+            path.move(to: CGPoint(x: 0, y: -0.045 * s))
+            path.addQuadCurve(to: CGPoint(x: 0.024 * s, y: 0.01 * s), control: CGPoint(x: 0.02 * s, y: -0.015 * s))
+            path.addArc(center: CGPoint(x: 0, y: 0.01 * s), radius: 0.024 * s,
+                        startAngle: .degrees(0), endAngle: .degrees(180), clockwise: false)
+            path.addQuadCurve(to: CGPoint(x: 0, y: -0.045 * s), control: CGPoint(x: -0.02 * s, y: -0.015 * s))
+            drop.fill(path, with: .color(Color(red: 0.55, green: 0.8, blue: 1.0)))
+            drop.stroke(path, with: .color(.white.opacity(0.8)), lineWidth: 0.006 * s)
         default:
             break
         }
+    }
+
+    static func gear(teeth: Int, outer: CGFloat, inner: CGFloat, hole: CGFloat) -> Path {
+        var path = Path()
+        let step = 2 * Double.pi / Double(teeth)
+        for index in 0..<teeth {
+            let start = Double(index) * step
+            let corners = [(start, inner), (start + step * 0.18, outer), (start + step * 0.5, outer),
+                           (start + step * 0.68, inner)]
+            for (offset, corner) in corners.enumerated() {
+                let point = CGPoint(x: cos(corner.0) * corner.1, y: sin(corner.0) * corner.1)
+                if index == 0 && offset == 0 { path.move(to: point) } else { path.addLine(to: point) }
+            }
+        }
+        path.closeSubpath()
+        path.addEllipse(in: CGRect(x: -hole, y: -hole, width: hole * 2, height: hole * 2))
+        return path
     }
 
     static func openness(_ t: Double) -> Double {

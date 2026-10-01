@@ -40,9 +40,56 @@ final class CantripMascotTests: XCTestCase {
         XCTAssertEqual(mood(working: true, listening: true, speaking: true), .listening)
         XCTAssertEqual(mood(working: true, listening: true, input: true), .curious)
         XCTAssertEqual(mood(connected: false, working: true, input: true), .sleeping)
+        for activity in [CantripMascotActivity.thinking, .searching, .working, .writing] {
+            let busy = CantripMascotMood.resolve(
+                isConnected: true, isWorking: true, activity: activity,
+                isListening: false, isSpeaking: false, needsInput: false, hasProblem: true
+            )
+            XCTAssertEqual(busy, activity.mood, "A live run shows what it is doing, not a stale problem")
+            XCTAssertTrue(busy.isBusy)
+        }
+        XCTAssertEqual(
+            CantripMascotMood.resolve(isConnected: true, isWorking: false, activity: .writing, isListening: false,
+                                      isSpeaking: false, needsInput: false, hasProblem: true),
+            .concerned
+        )
+        XCTAssertFalse(CantripMascotMood.concerned.isBusy)
         XCTAssertNil(CantripMascotMood.thinking.accessibilityStatus, "Working is announced by the composer status row")
+        XCTAssertNil(CantripMascotMood.writing.accessibilityStatus)
         XCTAssertEqual(CantripMascotMood.curious.accessibilityStatus, "Waiting for your answer")
+        XCTAssertEqual(CantripMascotMood.concerned.accessibilityStatus, "Something went wrong")
         XCTAssertNil(CantripMascotMood.idle.accessibilityStatus)
+    }
+
+    func testActivityFollowsTheLiveRun() throws {
+        func reply(text: String = "", tools: [(String, String)] = [], role: String = "assistant") throws -> [CantripRemoteMessage] {
+            let activities = tools.enumerated().map { index, tool in
+                ["id": "\(index)", "title": tool.0, "toolName": tool.0, "state": tool.1]
+            }
+            let message: [String: Any] = [
+                "id": "reply", "role": role, "text": text, "thinking": "", "activities": activities,
+            ]
+            let ask: [String: Any] = ["id": "ask", "role": "user", "text": "Go", "thinking": "", "activities": []]
+            let data = try JSONSerialization.data(withJSONObject: [ask, message])
+            return try JSONDecoder().decode([CantripRemoteMessage].self, from: data)
+        }
+        func activity(_ status: String?, _ transcript: [CantripRemoteMessage]) -> CantripMascotActivity {
+            .current(status: status, transcript: transcript)
+        }
+        XCTAssertEqual(activity("Preparing context...", try reply()), .thinking)
+        XCTAssertEqual(activity(nil, try reply()), .thinking, "Nothing streamed yet")
+        XCTAssertEqual(activity("Search", try reply(tools: [("grep", "running")])), .searching)
+        XCTAssertEqual(activity("Fetch", try reply(tools: [("web_fetch", "running")])), .searching)
+        XCTAssertEqual(activity("Read", try reply(tools: [("github-mcp-server-get_file_contents", "running")])), .searching)
+        XCTAssertEqual(activity("Build", try reply(tools: [("grep", "succeeded"), ("bash", "running")])), .working)
+        XCTAssertEqual(activity("Edit", try reply(text: "Fixing it.", tools: [("edit", "running")])), .working)
+        XCTAssertEqual(activity(nil, try reply(text: "Here's what changed", tools: [("bash", "succeeded")])), .writing)
+        XCTAssertEqual(activity("Thinking…", try reply(text: "First pass done.")), .thinking)
+        XCTAssertEqual(activity(nil, try reply(text: "Hi", role: "user")), .thinking)
+        XCTAssertTrue(CantripMascotActivity.isLookup("WebSearch"))
+        XCTAssertTrue(CantripMascotActivity.isLookup("view"))
+        XCTAssertFalse(CantripMascotActivity.isLookup("create"))
+        XCTAssertFalse(CantripMascotActivity.isLookup("read_bash"))
     }
 
     func testBlinkIsBriefAndStaticPoseHasOpenEyes() {
@@ -376,6 +423,15 @@ final class CantripMascotTests: XCTestCase {
     }
 
     func testRealRemoteChatHasNoHeaderBar() async throws {
+        try await assertRemoteChatHasNoHeaderBar(streaming: false)
+    }
+
+    /// The run status lives above the composer, so working must not add a solid band behind the header.
+    func testRemoteChatKeepsTranslucentHeaderWhileWorking() async throws {
+        try await assertRemoteChatHasNoHeaderBar(streaming: true)
+    }
+
+    private func assertRemoteChatHasNoHeaderBar(streaming: Bool) async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MascotRequestProtocol.self]
         let client = URLSession(configuration: configuration)
@@ -395,8 +451,8 @@ final class CantripMascotTests: XCTestCase {
             case "/api/v1/sessions/\(tabID)":
                 return Data("""
                 {"session":{"id":"\(tabID)","title":"Bass Compass","workdir":"/tmp",
-                "isStreaming":false,"canResume":false,"councilMode":false,"queuedCount":0,
-                "status":null,"queued":[],"supportsAutoDelivery":true,
+                "isStreaming":\(streaming),"canResume":false,"councilMode":false,"queuedCount":0,
+                "status":\(streaming ? #""Thinking…""# : "null"),"queued":[],"supportsAutoDelivery":true,
                 "messages":[{"id":"ask","role":"user","text":"Fix the lineup sorting",
                 "thinking":"","activities":[]},{"id":"reply","role":"assistant","text":"\(reply)",
                 "thinking":"","activities":[]}]}}
@@ -465,7 +521,7 @@ final class CantripMascotTests: XCTestCase {
             }
             try XCTUnwrap(image.pngData()).write(
                 to: URL(fileURLWithPath: directory)
-                    .appendingPathComponent("cantrip-remote-chat-\(name).png")
+                    .appendingPathComponent("cantrip-remote-chat-\(streaming ? "working-" : "")\(name).png")
             )
         }
     }
@@ -483,8 +539,10 @@ final class CantripMascotTests: XCTestCase {
         for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
             let sheet = UIHostingController(rootView:
                 VStack(spacing: 18) {
-                    ForEach([[CantripMascotMood.idle, .thinking, .listening],
-                             [.speaking, .curious, .sleeping]], id: \.self) { row in
+                    ForEach([[CantripMascotMood.idle, .thinking, .searching],
+                             [.working, .writing, .listening],
+                             [.speaking, .curious, .concerned],
+                             [.sleeping]], id: \.self) { row in
                         HStack(spacing: 18) {
                             ForEach(row, id: \.self) { mood in
                                 VStack(spacing: 6) {
@@ -500,17 +558,19 @@ final class CantripMascotTests: XCTestCase {
                     }
                 }
                 .padding(24)
-                .frame(width: 440, height: 560)
+                .frame(width: 440, height: 1010)
                 .background(Color(.systemBackground))
             )
             sheet.overrideUserInterfaceStyle = style
-            try await capture(sheet, size: CGSize(width: 440, height: 560), scene: scene,
+            try await capture(sheet, size: CGSize(width: 440, height: 1010), scene: scene,
                               to: output.appendingPathComponent("cantrip-mascot-moods-\(name).png"))
 
             let dino = UIHostingController(rootView:
                 VStack(spacing: 18) {
-                    ForEach([[CantripMascotMood.idle, .thinking, .listening],
-                             [.speaking, .curious, .sleeping]], id: \.self) { row in
+                    ForEach([[CantripMascotMood.idle, .thinking, .searching],
+                             [.working, .writing, .listening],
+                             [.speaking, .curious, .concerned],
+                             [.sleeping]], id: \.self) { row in
                         HStack(spacing: 18) {
                             ForEach(row, id: \.self) { mood in
                                 VStack(spacing: 6) {
@@ -527,11 +587,11 @@ final class CantripMascotTests: XCTestCase {
                     }
                 }
                 .padding(24)
-                .frame(width: 440, height: 560)
+                .frame(width: 440, height: 1010)
                 .background(Color(.systemBackground))
             )
             dino.overrideUserInterfaceStyle = style
-            try await capture(dino, size: CGSize(width: 440, height: 560), scene: scene,
+            try await capture(dino, size: CGSize(width: 440, height: 1010), scene: scene,
                               to: output.appendingPathComponent("cantrip-mascot-dino-\(name).png"))
 
             let picker = UIHostingController(rootView: CantripMascotCustomizationView())
