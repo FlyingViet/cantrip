@@ -66,9 +66,12 @@ offers a **Continuous voice mode** action on the mic.
 
 The **Tabs** drawer marks the selected tab with a checkmark and includes tab
 names, locks, and queued counts. A blinking brain beside a tab's name in the
-drawer marks it as working, disappearing when work stops. The Cantrip Remote
-and Cantrip Home headers stay plain; while the selected tab works, the
-"Cantrip is working…" status appears only above the composer. With Reduce
+drawer marks it as working, disappearing when work stops. Cantrip Remote has
+no header bar: glass **Tabs** and **menu** buttons float at the top corners while
+messages scroll softly beneath them, and a small dot on the menu button shows
+whether the Mac is connected (VoiceOver reads it with the menu). While the
+selected tab works, the "Cantrip is working…" status appears only above the
+composer. With Reduce
 Motion enabled the
 brain stays still; VoiceOver continues to announce "Working".
 Locked tabs remain selectable. The **Auto** delivery dropdown sits immediately
@@ -95,8 +98,7 @@ the Remote error banner; it is never automatically retried.
 
 Tap the **stacked-tabs icon at the top left** or swipe right from the **left edge**
 to open the Cantrip **Tabs** drawer. The **hamburger menu is at the top right**,
-with **Settings** inside it. You can also tap the header title or choose
-**hamburger menu > Tabs**. On Duo's vertical toolbar, **Tabs sits near the bottom**,
+with **Settings** inside it. You can also choose **hamburger menu > Tabs**. On Duo's vertical toolbar, **Tabs sits near the bottom**,
 with a separate **Settings gear**, Refresh, and the **white hamburger menu at the top**.
 The hamburger stays white when paused, with a small orange pause badge. Select a
 tab to return to chat; swipe left on the drawer header or backdrop, tap outside,
@@ -115,16 +117,14 @@ Settings keeps connection, notification, voice, and reply preferences.
 
 In regular-width iPad layouts, **Tabs** becomes a native sidebar beside the chat.
 Selecting, creating, or renaming a tab leaves this sidebar open; **Close tabs**
-hides it, and tapping the header title or the menu's **Tabs** action brings it
-back. All iPhone layouts (including expanded Duo) and compact iPad windows retain
+hides it, and the menu's **Tabs** action brings it back. All iPhone layouts (including expanded Duo) and compact iPad windows retain
 the left-edge drawer. Resizing uses the same
 detail navigation hierarchy, preserving the composer and conversation rather
 than rebuilding them. Tab switching remains disabled during sends and image
 imports.
 
-Touch and hold the header title or a drawer row to **Rename Tab**, **Lock Tab** /
-**Unlock Tab**, or **Close Session** (delete the tab). A regular tap opens only
-the drawer from the title, or selects a tab from a drawer row. Each row's
+Touch and hold a drawer row to **Rename Tab**, **Lock Tab** / **Unlock Tab**, or
+**Close Session** (delete the tab). A regular tap selects the tab. Each row's
 **...** menu also keeps these actions.
 To reorder tabs, drag a row's **three-line handle** to its new position, or use
 **Move Tab Up** / **Move Tab Down** in its actions menu. This works in both the
@@ -385,8 +385,8 @@ destinations. These use Apple's native Liquid Glass tab bar, which moves into
 the system vertical edge automatically on iPhone Duo.
 
 Home's chat header features **Pip**, a mascot: a fluffy purple hooded plush with
-a star pin, centered above the conversation with a name pill and floating glass
-lane and menu buttons. Pip also greets you in an empty chat and names the
+a star pin, shown large and centered above the conversation with a bold name
+pill, Muse-style, while glass lane and menu buttons float in the top corners. Pip also greets you in an empty chat and names the
 composer ("Message Pip…"). Messages rest below it and scroll softly
 underneath. Tap the mascot or pill to switch backends. Its expression follows
 the session: blinking at rest, thinking with sparkles while working, leaning in

@@ -71,7 +71,7 @@ final class CantripMascotTests: XCTestCase {
                     contentFrame = $0
                 }
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    ChatHeader(compact: true, mascot: true) {
+                    ChatHeader(style: .mascot) {
                         CantripMascotHeaderTitle(title: "Cantrip Home", isConnected: true, mood: .idle)
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                                 titleFrame = $0
@@ -117,21 +117,27 @@ final class CantripMascotTests: XCTestCase {
 
                 let label = "\(Int(width))pt \(size)"
                 let avatar = CantripMascotHeaderTitle.avatarSize
+                let avatarMinX = width / 2 - avatar / 2
                 XCTAssertEqual(titleFrame.midX, width / 2, accuracy: 1, label)
                 XCTAssertGreaterThan(titleFrame.height, avatar, label)
+                XCTAssertLessThanOrEqual(titleFrame.width, width - 24, label)
                 XCTAssertLessThanOrEqual(titleFrame.maxY, headerFrame.maxY, label)
                 XCTAssertGreaterThanOrEqual(titleFrame.minY, headerFrame.minY, label)
-                XCTAssertLessThanOrEqual(headerFrame.height, avatar + 34, "\(label): header stays compact")
+                XCTAssertLessThanOrEqual(headerFrame.height, avatar + 40, "\(label): header stays compact")
                 XCTAssertEqual(leadingFrame.size, CGSize(width: 44, height: 44), label)
                 XCTAssertEqual(trailingFrame.width, 44, accuracy: 0.5, label)
                 XCTAssertEqual(trailingFrame.height, 44, accuracy: 0.5, label)
                 XCTAssertEqual(leadingFrame.minX, 12, accuracy: 1, label)
                 XCTAssertEqual(trailingFrame.maxX, width - 12, accuracy: 1, label)
-                XCTAssertEqual(leadingFrame.midY, titleFrame.minY + avatar / 2, accuracy: 1,
-                               "\(label): actions align with the avatar center")
+                XCTAssertEqual(leadingFrame.minY, titleFrame.minY, accuracy: 1,
+                               "\(label): actions hover at the top beside the mascot")
                 XCTAssertEqual(trailingFrame.midY, leadingFrame.midY, accuracy: 0.5, label)
-                XCTAssertLessThanOrEqual(leadingFrame.maxX, titleFrame.minX, label)
-                XCTAssertGreaterThanOrEqual(trailingFrame.minX, titleFrame.maxX, label)
+                XCTAssertLessThanOrEqual(leadingFrame.maxX, avatarMinX, "\(label): avatar clears the actions")
+                XCTAssertGreaterThanOrEqual(trailingFrame.minX, width - avatarMinX, label)
+                XCTAssertLessThanOrEqual(
+                    leadingFrame.maxY, titleFrame.minY + avatar - CantripMascotHeaderTitle.pillOverlap,
+                    "\(label): actions stay above the name pill"
+                )
                 XCTAssertEqual(contentFrame.minY, headerFrame.maxY, accuracy: 1,
                                "\(label): the first message starts below the mascot")
             }
@@ -147,7 +153,7 @@ final class CantripMascotTests: XCTestCase {
         var headerFrame = CGRect.zero
         let content = Color.clear
             .safeAreaInset(edge: .top, spacing: 0) {
-                ChatHeader(compact: true, mascot: true) {
+                ChatHeader(style: .mascot) {
                     CantripMascotHeaderTitle(title: "Cantrip Home", isConnected: true, mood: .thinking)
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                             titleFrame = $0
@@ -255,6 +261,12 @@ final class CantripMascotTests: XCTestCase {
         XCTAssertNotEqual(try header(), pip, "A custom name replaces Pip in the pill")
         defaults.set("   ", forKey: CantripMascotName.storageKey)
         XCTAssertEqual(try header(), pip, "A blank name falls back to Pip")
+        defaults.set(String(repeating: "W", count: 20), forKey: CantripMascotName.storageKey)
+        let longest = UIHostingController(rootView:
+            CantripMascotHeaderTitle(title: "Cantrip Home", isConnected: true, mood: .idle)
+        ).sizeThatFits(in: CGSize(width: 320, height: 400))
+        XCTAssertLessThanOrEqual(longest.width, CantripMascotHeaderTitle.pillMaxWidth + 0.5,
+                                 "The widest 20-character name still fits a 320pt screen")
     }
 
     func testHeaderWearsTheSavedOutfit() throws {
@@ -363,6 +375,101 @@ final class CantripMascotTests: XCTestCase {
         )
     }
 
+    func testRealRemoteChatHasNoHeaderBar() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MascotRequestProtocol.self]
+        let client = URLSession(configuration: configuration)
+        let model = CantripRemoteModel(urlSession: client)
+        let tabID = "50000000-0000-0000-0000-000000000001"
+        let reply = (1...12).map {
+            "\($0). Updated the lineup sorting and reran the festival schedule tests for stage \($0)."
+        }.joined(separator: "\\n\\n")
+        MascotRequestProtocol.handler = { request in
+            switch request.url?.path ?? "" {
+            case "/api/v1/sessions":
+                return Data("""
+                {"sessions":[{"id":"\(tabID)","title":"Bass Compass","workdir":"/tmp",
+                "isStreaming":false,"canResume":false,"councilMode":false,"queuedCount":0,
+                "supportsAutoDelivery":true}]}
+                """.utf8)
+            case "/api/v1/sessions/\(tabID)":
+                return Data("""
+                {"session":{"id":"\(tabID)","title":"Bass Compass","workdir":"/tmp",
+                "isStreaming":false,"canResume":false,"councilMode":false,"queuedCount":0,
+                "status":null,"queued":[],"supportsAutoDelivery":true,
+                "messages":[{"id":"ask","role":"user","text":"Fix the lineup sorting",
+                "thinking":"","activities":[]},{"id":"reply","role":"assistant","text":"\(reply)",
+                "thinking":"","activities":[]}]}}
+                """.utf8)
+            case "/api/v1/copilot/usage": return Data(#"{"isRefreshing":false}"#.utf8)
+            default: return Data(#"{"sessions":[]}"#.utf8)
+            }
+        }
+        let env = HermesEnv()
+        let originalLane = env.executionLane
+        addTeardownBlock { @MainActor in
+            env.select(originalLane)
+            model.setAppActive(false)
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            MascotRequestProtocol.handler = nil
+        }
+        let configured = await model.configure(
+            url: "https://cantrip.example", pairingToken: "remote-token", tailscaleOnly: true
+        )
+        XCTAssertTrue(configured)
+        model.setAppActive(true)
+        await model.refreshNow()
+        env.select(.cantrip)
+        await model.selectSession(tabID)
+        XCTAssertEqual(model.selectedSession?.title, "Bass Compass")
+
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let controller = UIHostingController(rootView: ChatView(env: env, remote: model))
+        controller.overrideUserInterfaceStyle = .dark
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 852))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(600))
+        controller.view.layoutIfNeeded()
+
+        func scrollViews(in view: UIView) -> [UIScrollView] {
+            ((view as? UIScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews)
+        }
+        let transcript = try XCTUnwrap(
+            scrollViews(in: controller.view)
+                .filter { $0.bounds.height > 300 && $0.contentSize.height > 0 }
+                .max { $0.bounds.height < $1.bounds.height },
+            "The Remote transcript scroll view should exist"
+        )
+        let top = controller.view.safeAreaInsets.top
+        XCTAssertGreaterThanOrEqual(transcript.adjustedContentInset.top, top + 44,
+                                    "The first message must rest below the floating buttons")
+        XCTAssertLessThanOrEqual(transcript.adjustedContentInset.top, top + 56,
+                                 "Remote has no title row or detail bar")
+        XCTAssertLessThanOrEqual(transcript.frame.minY, top,
+                                 "Messages scroll under the floating buttons")
+        let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_ARTIFACT_DIR"]
+        guard let directory, !directory.isEmpty else { return }
+        for (name, offset) in [("top", CGFloat(0)), ("scrolled", 260)] {
+            transcript.setContentOffset(
+                CGPoint(x: 0, y: offset - transcript.adjustedContentInset.top), animated: false
+            )
+            try await Task.sleep(for: .milliseconds(200))
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            try XCTUnwrap(image.pngData()).write(
+                to: URL(fileURLWithPath: directory)
+                    .appendingPathComponent("cantrip-remote-chat-\(name).png")
+            )
+        }
+    }
+
     func testMascotArtifacts() async throws {
         let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_ARTIFACT_DIR"]
         guard let directory, !directory.isEmpty else {
@@ -450,7 +557,7 @@ final class CantripMascotTests: XCTestCase {
                 }
                 .scrollDisabled(true)
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    ChatHeader(compact: true, mascot: true) {
+                    ChatHeader(style: .mascot) {
                         CantripMascotHeaderTitle(title: "Cantrip Home", isConnected: true, mood: .idle)
                     } connection: {
                         EmptyView()
@@ -475,6 +582,42 @@ final class CantripMascotTests: XCTestCase {
             header.overrideUserInterfaceStyle = style
             try await capture(header, size: CGSize(width: 393, height: 340), scene: scene,
                               to: output.appendingPathComponent("cantrip-mascot-header-\(name).png"))
+
+            let remoteHeader = UIHostingController(rootView:
+                ScrollView {
+                    Text(transcript)
+                        .font(.body)
+                        .padding(.horizontal, 20)
+                        .padding(.top, -20)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .scrollDisabled(true)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    ChatHeader(style: .floating) {
+                        EmptyView()
+                    } connection: {
+                        EmptyView()
+                    } lane: {
+                        EmptyView()
+                    } usage: {
+                        EmptyView()
+                    } delivery: {
+                        EmptyView()
+                    } refresh: {
+                        EmptyView()
+                    } settings: {
+                        EmptyView()
+                    } leading: {
+                        ChatTabsButton(isEnabled: true) {}
+                    } trailing: {
+                        Button {} label: { ChatMenuIcon(isConnected: true) }
+                    }
+                }
+                .background(Color(.systemBackground))
+            )
+            remoteHeader.overrideUserInterfaceStyle = style
+            try await capture(remoteHeader, size: CGSize(width: 393, height: 340), scene: scene,
+                              to: output.appendingPathComponent("cantrip-remote-header-\(name).png"))
         }
     }
 

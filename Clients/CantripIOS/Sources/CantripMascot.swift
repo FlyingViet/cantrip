@@ -630,23 +630,27 @@ struct CantripMascotHeaderTitle: View {
     let isConnected: Bool
     let mood: CantripMascotMood
 
-    static let avatarSize: CGFloat = 58
-    static let pillOverlap: CGFloat = 10
+    static let avatarSize: CGFloat = 96
+    static let pillOverlap: CGFloat = 14
+    /// Keeps the longest allowed name inside a 320pt screen.
+    static let pillMaxWidth: CGFloat = 280
 
     var body: some View {
         VStack(spacing: -Self.pillOverlap) {
             CantripMascotView(mood: mood, outfit: outfit, size: Self.avatarSize)
-            HStack(spacing: 5) {
+            HStack(spacing: 7) {
                 Circle()
                     .fill(isConnected ? Color.green : Color.gray)
-                    .frame(width: 7, height: 7)
+                    .frame(width: 9, height: 9)
                 Text(CantripMascotName.display(storedName))
-                    .font(.subheadline.weight(.semibold))
+                    .font(.title3.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .frame(maxWidth: Self.pillMaxWidth)
             // Material, not glassEffect: SDK 27.1 hoists glass inside a Menu label onto the whole label.
             .background(.regularMaterial, in: Capsule())
             .overlay { Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.5) }
@@ -665,7 +669,7 @@ struct CantripMascotHeaderTitle: View {
     }
 }
 
-/// Replaces the opaque bar behind the mascot so content softly fades under it.
+/// Replaces the opaque bar behind floating headers so content softly fades under them.
 struct CantripMascotHeaderFade: View {
     var body: some View {
         Rectangle()
