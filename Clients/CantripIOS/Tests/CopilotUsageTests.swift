@@ -407,8 +407,7 @@ final class CopilotUsageTests: XCTestCase {
                         if compact {
                             CantripCenteredHeaderTitle(
                                 title: lane == .home ? "Cantrip Home" : "Cantrip Remote",
-                                isConnected: isConnected,
-                                isWorking: isRefreshing
+                                isConnected: isConnected
                             )
                         } else {
                             ChatHeaderTitle(

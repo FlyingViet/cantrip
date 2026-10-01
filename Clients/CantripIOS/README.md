@@ -65,9 +65,11 @@ Private Local; **hamburger menu > Voice mode** remains available, and VoiceOver
 offers a **Continuous voice mode** action on the mic.
 
 The **Tabs** drawer marks the selected tab with a checkmark and includes tab
-names, locks, and queued counts. A blinking brain beside the tab name replaces
-the "Working" suffix in both the header title and drawer, disappearing when
-work stops. With Reduce Motion enabled the
+names, locks, and queued counts. A blinking brain beside a tab's name in the
+drawer marks it as working, disappearing when work stops. The Cantrip Remote
+and Cantrip Home headers stay plain; while the selected tab works, the
+"Cantrip is working…" status appears only above the composer. With Reduce
+Motion enabled the
 brain stays still; VoiceOver continues to announce "Working".
 Locked tabs remain selectable. The **Auto** delivery dropdown sits immediately
 to the right of the usage limit in the header; choose a manual mode there for
@@ -390,7 +392,8 @@ underneath. Tap the mascot or pill to switch backends. Its expression follows
 the session: blinking at rest, thinking with sparkles while working, leaning in
 while you dictate, chatting while a reply is read aloud, curious when Cantrip
 needs your answer, and dozing while disconnected; it hops happily when a reply
-finishes. VoiceOver reads the same status, and Reduce Motion or Low Power Mode
+finishes. VoiceOver reads the same status, except working, which is announced
+only by the status row above the composer; Reduce Motion or Low Power Mode
 holds a still pose. Choose **Customize Mascot** from Home's menu to switch
 outfits: the default **Starry Plush** or a green **Dino Hoodie** with felt
 spikes, hood eyes and soft teeth. A live preview cycles through each mood, and

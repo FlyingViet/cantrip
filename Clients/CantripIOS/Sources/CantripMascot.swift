@@ -20,10 +20,10 @@ enum CantripMascotMood: Equatable, CaseIterable {
         return isWorking ? .thinking : .idle
     }
 
+    /// What the header announces after the lane. Working is announced only by the status row above the composer.
     var accessibilityStatus: String? {
         switch self {
-        case .idle, .sleeping: nil
-        case .thinking: "Working"
+        case .idle, .sleeping, .thinking: nil
         case .listening: "Listening"
         case .speaking: "Speaking"
         case .curious: "Waiting for your answer"
