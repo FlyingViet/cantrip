@@ -389,12 +389,17 @@ a star pin, shown large and centered above the conversation with a bold name
 pill, Muse-style, while glass lane and menu buttons float in the top corners. Pip also greets you in an empty chat and names the
 composer ("Message Pip…"). Messages rest below it and scroll softly
 underneath. Tap the mascot or pill to switch backends. Its expression follows
-the session: blinking at rest, thinking with sparkles while working, leaning in
-while you dictate, chatting while a reply is read aloud, curious when Cantrip
-needs your answer, and dozing while disconnected; it hops happily when a reply
-finishes. VoiceOver reads the same status, except working, which is announced
-only by the status row above the composer; Reduce Motion or Low Power Mode
-holds a still pose. Choose **Customize Mascot** from Home's menu to switch
+the session and changes as a run moves between steps: blinking at rest,
+thinking with sparkles while reasoning, scanning with a magnifying glass while
+reading or searching, spinning gears with focused brows while running commands
+or editing, a typing bubble while the reply streams, leaning in while you
+dictate, chatting while a reply is read aloud, curious when Cantrip needs your
+answer, worried with a sweat drop after an error, and dozing while
+disconnected; it hops happily when a reply finishes. VoiceOver reads the same
+status, except work, which is announced only by the status row above the
+composer; Reduce Motion or Low Power Mode holds a still pose. While a run
+streams, its status shows only above the composer, so the header stays
+translucent. Choose **Customize Mascot** from Home's menu to switch
 outfits: the default **Starry Plush** or a green **Dino Hoodie** with felt
 spikes, hood eyes and soft teeth. A live preview cycles through each mood, and
 you can rename Pip there too (up to 20 characters; blank restores Pip). Choices

@@ -1420,9 +1420,15 @@ struct ChatView: View {
                     mascotMood: .resolve(
                         isConnected: remote.isConnected,
                         isWorking: remote.selectedSession?.isStreaming == true,
+                        activity: .current(
+                            status: remote.selectedSession?.status,
+                            transcript: remote.selectedSession?.transcript ?? []
+                        ),
                         isListening: voice.isListening,
                         isSpeaking: voice.isSpeaking,
-                        needsInput: (remote.selectedSession?.pendingInputCount ?? 0) > 0
+                        needsInput: (remote.selectedSession?.pendingInputCount ?? 0) > 0,
+                        hasProblem: remote.errorMessage != nil
+                            || remote.selectedSession?.transcript.last?.role == "error"
                     )
                 )
                 .disabled(vm.sending || importingImages || submittingRemote)
@@ -1744,8 +1750,15 @@ struct ChatView: View {
         return env.isConfigured
     }
 
+    /// While a run streams, its status already shows above the composer.
+    private var remoteIdleStatus: String? {
+        guard let session = remote.selectedSession, !session.isStreaming,
+              let status = session.status, !status.isEmpty else { return nil }
+        return status
+    }
+
     private var hasRemoteNotices: Bool {
-        remote.selectedSession?.status?.isEmpty == false
+        remoteIdleStatus != nil
             || remote.selectedSession?.deliveryStatus != nil
             || remote.errorMessage != nil
             || remote.detailError != nil
@@ -1754,7 +1767,7 @@ struct ChatView: View {
     @ViewBuilder private var remoteNotices: some View {
         if hasRemoteNotices {
             VStack(spacing: 8) {
-                if let status = remote.selectedSession?.status, !status.isEmpty {
+                if let status = remoteIdleStatus {
                     Text(status)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -1777,7 +1790,8 @@ struct ChatView: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
-            .background(.thinMaterial)
+            // Leaves the top inset clear so floating headers stay translucent above a notice.
+            .background(.thinMaterial, ignoresSafeAreaEdges: .horizontal)
             Divider()
         }
     }
