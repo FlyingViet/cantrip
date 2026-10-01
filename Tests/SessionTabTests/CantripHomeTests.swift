@@ -455,6 +455,10 @@ extension SessionTabTests {
         try await Task.sleep(for: .milliseconds(250))
         store.checkNow()
         try await waitForJournalTest { fixture.sink != nil }
+        let scheduledUser = scheduledSession.messages.last { $0.role == .user }?.text ?? ""
+        precondition(scheduledUser == "Scheduled task · One-time scheduler test\nOnce shortly · running saved instructions"
+                     && fixture.lastPrompt?.contains("Return the exact scheduler result.") == true,
+                     "Home chat must show a short task label while the agent receives the full prompt")
         fixture.sink?(.textDelta("Scheduler finished."))
         fixture.sink?(.done)
         try await waitForJournalTest {
@@ -469,8 +473,10 @@ extension SessionTabTests {
 
     private final class CantripHomeBackendFixture: Backend {
         var sink: ((BackendEvent) -> Void)?
+        var lastPrompt: String?
         func send(_ request: BackendRequest, workdir: String,
                   onEvent: @escaping (BackendEvent) -> Void) {
+            lastPrompt = request.prompt
             sink = onEvent
         }
         func cancel() {}
