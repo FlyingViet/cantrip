@@ -1112,6 +1112,7 @@ struct ChatView: View {
     @State private var showBackgroundTasks = false
     @State private var showGitHubBuilds = false
     @State private var showCantripMemory = false
+    @State private var showMascotCustomization = false
     @State private var showCantripMaintenance = false
     @State private var showRemoteTabs = false
     @State private var showCopilotUsage = false
@@ -1229,6 +1230,9 @@ struct ChatView: View {
             }
             .sheet(isPresented: $showCantripMemory) {
                 CantripMemoryView(remote: remote)
+            }
+            .sheet(isPresented: $showMascotCustomization) {
+                CantripMascotCustomizationView()
             }
             .sheet(item: $renamingRemoteSession) { session in
                 CantripTabRenameSheet(model: remote, session: session)
@@ -1652,6 +1656,15 @@ struct ChatView: View {
                 Label("Cantrip Memory", systemImage: "brain")
             }
             .accessibilityIdentifier("chat.cantripMemory")
+            if state.isHome {
+                Button {
+                    composerFocused = false
+                    showMascotCustomization = true
+                } label: {
+                    Label("Customize Mascot", systemImage: "tshirt")
+                }
+                .accessibilityIdentifier("chat.customizeMascot")
+            }
             CantripMacMenuActions(remote: remote, showingMaintenance: $showCantripMaintenance) {
                 composerFocused = false
                 vm.leaveVoiceMode()

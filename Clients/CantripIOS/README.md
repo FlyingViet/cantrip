@@ -390,7 +390,10 @@ the session: blinking at rest, thinking with sparkles while working, leaning in
 while you dictate, chatting while a reply is read aloud, curious when Cantrip
 needs your answer, and dozing while disconnected; it hops happily when a reply
 finishes. VoiceOver reads the same status, and Reduce Motion or Low Power Mode
-holds a still pose.
+holds a still pose. Choose **Customize Mascot** from Home's menu to switch
+outfits: the default **Starry Plush** or a green **Dino Hoodie** with felt
+spikes, hood eyes and soft teeth. A live preview cycles through each mood, and
+the choice is saved on the device.
 
 Create automations or structured trackers conversationally in Chat. Automations
 can use one-time, interval, or weekday schedules. A tracker carries a validated
