@@ -41,7 +41,7 @@ enum CantripHomeSection: String, CaseIterable, Identifiable {
 enum CantripHomeLayout {
     static let compactBarHeight: CGFloat = 54
     static let composerGap: CGFloat = 8
-    static let chatBottomClearance = compactBarHeight + composerGap
+    static let compactContentBottomClearance = compactBarHeight + composerGap
 }
 
 enum CantripHomeBadgeTone: Equatable {
@@ -112,19 +112,14 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
                 systemImage: CantripHomeSection.chat.systemImage,
                 value: CantripHomeSection.chat
             ) {
-                chat
-                    .safeAreaPadding(
-                        .bottom,
-                        displayTraits.hasVerticalBar ? 0 : CantripHomeLayout.chatBottomClearance
-                    )
-                    .toolbar(systemTabBarVisibility, for: .tabBar)
+                tabContent(chat)
             }
             Tab(
                 CantripHomeSection.tasks.title,
                 systemImage: CantripHomeSection.tasks.systemImage,
                 value: CantripHomeSection.tasks
             ) {
-                tasks.toolbar(systemTabBarVisibility, for: .tabBar)
+                tabContent(tasks)
             }
             .badge(runningTasks)
             Tab(
@@ -132,7 +127,7 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
                 systemImage: CantripHomeSection.artifacts.systemImage,
                 value: CantripHomeSection.artifacts
             ) {
-                artifacts.toolbar(systemTabBarVisibility, for: .tabBar)
+                tabContent(artifacts)
             }
         }
         .tabViewStyle(.tabBarOnly)
@@ -152,6 +147,17 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
 
     private var systemTabBarVisibility: Visibility {
         displayTraits.hasVerticalBar ? .visible : .hidden
+    }
+
+    private func tabContent<Content: View>(_ content: Content) -> some View {
+        content
+            .safeAreaPadding(
+                .bottom,
+                displayTraits.hasVerticalBar
+                    ? 0
+                    : CantripHomeLayout.compactContentBottomClearance
+            )
+            .toolbar(systemTabBarVisibility, for: .tabBar)
     }
 }
 

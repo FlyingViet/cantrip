@@ -214,48 +214,62 @@ final class CantripHomeTests: XCTestCase {
         )
     }
 
-    func testHomeComposerClearsCompactBottomBar() async throws {
-        for size: DynamicTypeSize in [.large, .accessibility5] {
-            var composerFrame = CGRect.zero
-            let controller = UIHostingController(rootView:
-                CantripHomeTabs(selection: .constant(.chat), runningTasks: 0) {
-                    VStack(spacing: 0) {
-                        Spacer()
-                        Color.blue.opacity(0.2)
-                            .frame(height: 60)
-                            .onGeometryChange(for: CGRect.self) {
-                                $0.frame(in: .global)
-                            } action: {
-                                composerFrame = $0
-                            }
+    func testEveryHomeTabClearsCompactBottomBar() async throws {
+        for section in CantripHomeSection.allCases {
+            for size: DynamicTypeSize in [.large, .accessibility5] {
+                var chatFrame = CGRect.zero
+                var tasksFrame = CGRect.zero
+                var artifactsFrame = CGRect.zero
+                let controller = UIHostingController(rootView:
+                    CantripHomeTabs(selection: .constant(section), runningTasks: 0) {
+                        bottomContentProbe(frame: { chatFrame = $0 })
+                    } tasks: {
+                        bottomContentProbe(frame: { tasksFrame = $0 })
+                    } artifacts: {
+                        bottomContentProbe(frame: { artifactsFrame = $0 })
                     }
-                } tasks: {
-                    Color.clear
-                } artifacts: {
-                    Color.clear
-                }
-                .environment(\.dynamicTypeSize, size)
-            )
-            let scene = try XCTUnwrap(
-                UIApplication.shared.connectedScenes.compactMap {
-                    $0 as? UIWindowScene
-                }.first
-            )
-            let window = UIWindow(windowScene: scene)
-            window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 852))
-            window.rootViewController = controller
-            window.makeKeyAndVisible()
-            defer { window.isHidden = true }
-            try await Task.sleep(for: .milliseconds(250))
-            controller.view.frame = window.bounds
-            controller.view.layoutIfNeeded()
+                    .environment(\.dynamicTypeSize, size)
+                )
+                let scene = try XCTUnwrap(
+                    UIApplication.shared.connectedScenes.compactMap {
+                        $0 as? UIWindowScene
+                    }.first
+                )
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 852))
+                window.rootViewController = controller
+                window.makeKeyAndVisible()
+                defer { window.isHidden = true }
+                try await Task.sleep(for: .milliseconds(250))
+                controller.view.frame = window.bounds
+                controller.view.layoutIfNeeded()
 
-            let safeBottom = controller.view.safeAreaLayoutGuide.layoutFrame.maxY
-            XCTAssertLessThanOrEqual(
-                composerFrame.maxY,
-                safeBottom - CantripHomeLayout.chatBottomClearance + 1
-            )
-            XCTAssertGreaterThan(composerFrame.height, 44)
+                let contentFrame = switch section {
+                case .chat: chatFrame
+                case .tasks: tasksFrame
+                case .artifacts: artifactsFrame
+                }
+                let safeBottom = controller.view.safeAreaLayoutGuide.layoutFrame.maxY
+                XCTAssertLessThanOrEqual(
+                    contentFrame.maxY,
+                    safeBottom - CantripHomeLayout.compactContentBottomClearance + 1,
+                    "\(section.title) must clear the compact Home tab bar"
+                )
+                XCTAssertGreaterThan(contentFrame.height, 44)
+            }
+        }
+    }
+
+    private func bottomContentProbe(frame: @escaping (CGRect) -> Void) -> some View {
+        VStack(spacing: 0) {
+            Spacer()
+            Color.blue.opacity(0.2)
+                .frame(height: 60)
+                .onGeometryChange(for: CGRect.self) {
+                    $0.frame(in: .global)
+                } action: {
+                    frame($0)
+                }
         }
     }
 
