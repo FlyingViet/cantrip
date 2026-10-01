@@ -382,9 +382,10 @@ removes session switching and uses bottom **Chat**, **Tasks**, and **Artifacts**
 destinations. These use Apple's native Liquid Glass tab bar, which moves into
 the system vertical edge automatically on iPhone Duo.
 
-Home's chat header features a mascot: a fluffy purple hooded plush with a star
-pin, centered above the conversation with a glass **Cantrip Home** name pill and
-floating glass lane and menu buttons. Messages rest below it and scroll softly
+Home's chat header features **Pip**, a mascot: a fluffy purple hooded plush with
+a star pin, centered above the conversation with a name pill and floating glass
+lane and menu buttons. Pip also greets you in an empty chat and names the
+composer ("Message Pip…"). Messages rest below it and scroll softly
 underneath. Tap the mascot or pill to switch backends. Its expression follows
 the session: blinking at rest, thinking with sparkles while working, leaning in
 while you dictate, chatting while a reply is read aloud, curious when Cantrip
@@ -393,7 +394,9 @@ finishes. VoiceOver reads the same status, and Reduce Motion or Low Power Mode
 holds a still pose. Choose **Customize Mascot** from Home's menu to switch
 outfits: the default **Starry Plush** or a green **Dino Hoodie** with felt
 spikes, hood eyes and soft teeth. A live preview cycles through each mood, and
-the choice is saved on the device.
+you can rename Pip there too (up to 20 characters; blank restores Pip). Choices
+are saved on the device. Backend menus and Settings still call the lane Cantrip
+Home.
 
 Create automations or structured trackers conversationally in Chat. Automations
 can use one-time, interval, or weekday schedules. A tracker carries a validated

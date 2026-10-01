@@ -222,6 +222,40 @@ final class CantripMascotTests: XCTestCase {
                        "Each outfit and mood should look different")
     }
 
+    func testNameDefaultsToPipAndIsSanitized() {
+        XCTAssertEqual(CantripMascotName.display(""), "Pip")
+        XCTAssertEqual(CantripMascotName.display("   \n "), "Pip")
+        XCTAssertEqual(CantripMascotName.display("  Mochi \n"), "Mochi")
+        XCTAssertEqual(CantripMascotName.display("Sir\nPip"), "Sir Pip")
+        XCTAssertEqual(CantripMascotName.display(String(repeating: "a", count: 40)).count,
+                       CantripMascotName.maximumLength)
+        XCTAssertEqual(CantripInputComposer.placeholder(for: nil, mode: .auto, recipient: "Pip"), "Message Pip…")
+        XCTAssertEqual(CantripInputComposer.placeholder(for: nil, mode: .auto), "Message Cantrip…")
+    }
+
+    func testHeaderShowsTheSavedName() throws {
+        let defaults = UserDefaults.standard
+        let original = defaults.string(forKey: CantripMascotName.storageKey)
+        defer {
+            if let original {
+                defaults.set(original, forKey: CantripMascotName.storageKey)
+            } else {
+                defaults.removeObject(forKey: CantripMascotName.storageKey)
+            }
+        }
+        func header() throws -> Data {
+            try render(CantripMascotHeaderTitle(title: "Cantrip Home", isConnected: true, mood: .idle))
+        }
+        defaults.removeObject(forKey: CantripMascotName.storageKey)
+        let pip = try header()
+        defaults.set("Pip", forKey: CantripMascotName.storageKey)
+        XCTAssertEqual(try header(), pip, "Pip is the default name")
+        defaults.set("Mochi", forKey: CantripMascotName.storageKey)
+        XCTAssertNotEqual(try header(), pip, "A custom name replaces Pip in the pill")
+        defaults.set("   ", forKey: CantripMascotName.storageKey)
+        XCTAssertEqual(try header(), pip, "A blank name falls back to Pip")
+    }
+
     func testHeaderWearsTheSavedOutfit() throws {
         let defaults = UserDefaults.standard
         let original = defaults.string(forKey: CantripMascotOutfit.storageKey)

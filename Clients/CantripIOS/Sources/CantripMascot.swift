@@ -53,6 +53,19 @@ enum CantripMascotMood: Equatable, CaseIterable {
     }
 }
 
+/// The mascot's display name, stored per device. Blank or whitespace falls back to Pip.
+enum CantripMascotName {
+    static let storageKey = "cantrip.mascot.name"
+    static let defaultName = "Pip"
+    static let maximumLength = 20
+
+    static func display(_ stored: String) -> String {
+        let trimmed = stored.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .newlines).joined(separator: " ")
+        return trimmed.isEmpty ? defaultName : String(trimmed.prefix(maximumLength))
+    }
+}
+
 /// Outfits are stored per device by raw value, so keep existing raw values stable.
 enum CantripMascotOutfit: String, CaseIterable, Identifiable {
     case starryPlush
@@ -611,6 +624,8 @@ struct CantripMascotRenderer {
 /// Muse-style centered avatar with a glass name pill; used as Cantrip Home's backend menu label.
 struct CantripMascotHeaderTitle: View {
     @AppStorage(CantripMascotOutfit.storageKey) private var outfit: CantripMascotOutfit = .starryPlush
+    @AppStorage(CantripMascotName.storageKey) private var storedName = ""
+    /// The backend lane this mascot represents; announced alongside the mascot's name.
     let title: String
     let isConnected: Bool
     let mood: CantripMascotMood
@@ -625,7 +640,7 @@ struct CantripMascotHeaderTitle: View {
                 Circle()
                     .fill(isConnected ? Color.green : Color.gray)
                     .frame(width: 7, height: 7)
-                Text(title)
+                Text(CantripMascotName.display(storedName))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -641,9 +656,9 @@ struct CantripMascotHeaderTitle: View {
         .fixedSize()
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
+        .accessibilityLabel(CantripMascotName.display(storedName))
         .accessibilityValue(
-            [isConnected ? "Connected" : "Disconnected", mood.accessibilityStatus]
+            [title, isConnected ? "Connected" : "Disconnected", mood.accessibilityStatus]
                 .compactMap { $0 }.joined(separator: ", ")
         )
         .accessibilityIdentifier("cantrip.header.title")
@@ -674,7 +689,12 @@ struct CantripMascotHeaderFade: View {
 struct CantripMascotCustomizationView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage(CantripMascotOutfit.storageKey) private var outfit: CantripMascotOutfit = .starryPlush
+    @AppStorage(CantripMascotName.storageKey) private var storedName = ""
     @State private var previewMood: CantripMascotMood = .idle
+    @State private var draftName = ""
+    @FocusState private var nameFocused: Bool
+
+    private var name: String { CantripMascotName.display(storedName) }
 
     var body: some View {
         NavigationStack {
@@ -682,16 +702,21 @@ struct CantripMascotCustomizationView: View {
                 VStack(spacing: 22) {
                     VStack(spacing: 10) {
                         CantripMascotView(mood: previewMood, outfit: outfit, size: 168)
+                        Text(name)
+                            .font(.title2.weight(.bold))
                         Text(outfit.title)
-                            .font(.title3.weight(.semibold))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
                     .padding(.top, 8)
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(outfit.title) mascot, \(previewMood.title.lowercased())")
+                    .accessibilityLabel("\(name) in \(outfit.title), \(previewMood.title.lowercased())")
                     .accessibilityAddTraits(.isImage)
                     .accessibilityIdentifier("mascot.preview")
 
                     moodPicker
+
+                    nameField
 
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Outfits")
@@ -718,7 +743,58 @@ struct CantripMascotCustomizationView: View {
                 }
             }
             .sensoryFeedback(.selection, trigger: outfit)
+            .onAppear { draftName = storedName.isEmpty ? CantripMascotName.defaultName : name }
+            .onDisappear(perform: commitName)
         }
+    }
+
+    private var nameField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Name")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            HStack(spacing: 10) {
+                TextField("Pip", text: $draftName)
+                    .font(.body)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .focused($nameFocused)
+                    .onSubmit(commitName)
+                    .onChange(of: draftName) { _, value in
+                        if value.count > CantripMascotName.maximumLength {
+                            draftName = String(value.prefix(CantripMascotName.maximumLength))
+                        }
+                    }
+                    .onChange(of: nameFocused) { _, focused in
+                        if !focused { commitName() }
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+                    .accessibilityLabel("Mascot name")
+                    .accessibilityIdentifier("mascot.name")
+                if name != CantripMascotName.defaultName {
+                    Button("Reset") {
+                        storedName = ""
+                        draftName = CantripMascotName.defaultName
+                        nameFocused = false
+                    }
+                    .frame(minHeight: 44)
+                    .accessibilityLabel("Reset name to \(CantripMascotName.defaultName)")
+                }
+            }
+            Text("Shown in the Cantrip Home header and chat.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal)
+    }
+
+    private func commitName() {
+        let display = CantripMascotName.display(draftName)
+        storedName = display == CantripMascotName.defaultName ? "" : display
+        draftName = display
     }
 
     private var moodPicker: some View {

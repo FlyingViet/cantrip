@@ -88,8 +88,10 @@ struct CantripInputComposer: View {
         }
     }
 
-    static func placeholder(for question: CantripInputRequest?, mode: CantripDeliveryMode) -> String {
-        guard mode == .auto, let question else { return "Message Cantrip…" }
+    static func placeholder(
+        for question: CantripInputRequest?, mode: CantripDeliveryMode, recipient: String = "Cantrip"
+    ) -> String {
+        guard mode == .auto, let question else { return "Message \(recipient)…" }
         return question.allowsFreeform ? "Your reply…" : "Choose an answer above…"
     }
 

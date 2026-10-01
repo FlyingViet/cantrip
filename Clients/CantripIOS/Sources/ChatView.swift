@@ -1113,6 +1113,7 @@ struct ChatView: View {
     @State private var showGitHubBuilds = false
     @State private var showCantripMemory = false
     @State private var showMascotCustomization = false
+    @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
     @State private var showCantripMaintenance = false
     @State private var showRemoteTabs = false
     @State private var showCopilotUsage = false
@@ -1886,7 +1887,7 @@ struct ChatView: View {
             } else if vm.activeLane == .home {
                 switch homeChatAvailability {
                 case .ready:
-                    Text("Cantrip Home").font(.title3.weight(.semibold))
+                    Text("Hi, I'm \(CantripMascotName.display(mascotName))").font(.title3.weight(.semibold))
                     Text("Ask anything, create a task, or make an artifact.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -2045,7 +2046,10 @@ struct ChatView: View {
         } message: {
             TextField(
                 vm.activeLane.usesCantripRemote
-                    ? CantripInputComposer.placeholder(for: remote.chatInputRequest, mode: vm.remoteDeliveryMode)
+                    ? CantripInputComposer.placeholder(
+                        for: remote.chatInputRequest, mode: vm.remoteDeliveryMode,
+                        recipient: vm.activeLane == .home ? CantripMascotName.display(mascotName) : "Cantrip"
+                    )
                     : "Message Hermes…",
                 text: $input,
                 axis: .vertical
