@@ -40,7 +40,8 @@ final class CantripMascotTests: XCTestCase {
         XCTAssertEqual(mood(working: true, listening: true, speaking: true), .listening)
         XCTAssertEqual(mood(working: true, listening: true, input: true), .curious)
         XCTAssertEqual(mood(connected: false, working: true, input: true), .sleeping)
-        XCTAssertEqual(CantripMascotMood.thinking.accessibilityStatus, "Working")
+        XCTAssertNil(CantripMascotMood.thinking.accessibilityStatus, "Working is announced by the composer status row")
+        XCTAssertEqual(CantripMascotMood.curious.accessibilityStatus, "Waiting for your answer")
         XCTAssertNil(CantripMascotMood.idle.accessibilityStatus)
     }
 

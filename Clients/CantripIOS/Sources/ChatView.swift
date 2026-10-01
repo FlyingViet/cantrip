@@ -1416,8 +1416,7 @@ struct ChatView: View {
                 ExecutionLanePicker(
                     env: env,
                     remote: remote,
-                    centeredTitle: "Cantrip Remote",
-                    isWorking: remote.selectedSession?.isStreaming == true
+                    centeredTitle: "Cantrip Remote"
                 )
                 .disabled(vm.sending || importingImages || submittingRemote)
             } else if vm.activeLane == .home {
@@ -1425,7 +1424,6 @@ struct ChatView: View {
                     env: env,
                     remote: remote,
                     centeredTitle: "Cantrip Home",
-                    isWorking: remote.selectedSession?.isStreaming == true,
                     mascotMood: .resolve(
                         isConnected: remote.isConnected,
                         isWorking: remote.selectedSession?.isStreaming == true,
@@ -2625,20 +2623,17 @@ struct ExecutionLanePicker: View {
     @ObservedObject var env: HermesEnv
     @ObservedObject var remote: CantripRemoteModel
     var centeredTitle: String?
-    var isWorking = false
     var mascotMood: CantripMascotMood?
 
     init(
         env: HermesEnv,
         remote: CantripRemoteModel,
         centeredTitle: String? = nil,
-        isWorking: Bool = false,
         mascotMood: CantripMascotMood? = nil
     ) {
         self.env = env
         self.remote = remote
         self.centeredTitle = centeredTitle
-        self.isWorking = isWorking
         self.mascotMood = mascotMood
     }
 
@@ -2683,8 +2678,7 @@ struct ExecutionLanePicker: View {
         } else if let centeredTitle {
             CantripCenteredHeaderTitle(
                 title: centeredTitle,
-                isConnected: remote.isConnected,
-                isWorking: isWorking
+                isConnected: remote.isConnected
             )
         } else {
             ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
@@ -2709,10 +2703,10 @@ struct ExecutionLanePicker: View {
     }
 }
 
+/// Working status lives only in the status row above the composer, not here.
 struct CantripCenteredHeaderTitle: View {
     let title: String
     let isConnected: Bool
-    let isWorking: Bool
 
     var body: some View {
         Text(title)
@@ -2720,26 +2714,17 @@ struct CantripCenteredHeaderTitle: View {
             .foregroundStyle(.primary)
             .lineLimit(1)
             .overlay(alignment: .trailing) {
-                HStack(spacing: 3) {
-                    Circle()
-                        .fill(isConnected ? Color.green : Color.gray)
-                        .frame(width: 6, height: 6)
-                    if isWorking {
-                        ThinkingView(size: 14)
-                    }
-                }
-                .fixedSize()
-                .offset(x: isWorking ? 30 : 12)
+                Circle()
+                    .fill(isConnected ? Color.green : Color.gray)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 12)
             }
             .dynamicTypeSize(...DynamicTypeSize.large)
         .frame(minHeight: 44)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
-        .accessibilityValue([
-            isConnected ? "Connected" : "Disconnected",
-            isWorking ? "Working" : nil
-        ].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityValue(isConnected ? "Connected" : "Disconnected")
         .accessibilityIdentifier("cantrip.header.title")
     }
 }
