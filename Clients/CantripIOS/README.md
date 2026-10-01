@@ -401,6 +401,12 @@ you can rename Pip there too (up to 20 characters; blank restores Pip). Choices
 are saved on the device. Backend menus and Settings still call the lane Cantrip
 Home.
 
+Home reads each message for intent. Questions, status checks and other
+references to a project are answered right in Home. When you ask for changes to
+a project that has an open Cantrip Remote tab, Home hands the work to that tab
+and shows a nested task card under its reply: live status while the tab works,
+the tab's result when it finishes, and **Open tab** to jump straight to it.
+
 Create automations or structured trackers conversationally in Chat. Automations
 can use one-time, interval, or weekday schedules. A tracker carries a validated
 field and presentation schema, so Tasks renders native searchable list, detail,
