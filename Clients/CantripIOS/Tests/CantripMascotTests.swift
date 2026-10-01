@@ -192,25 +192,57 @@ final class CantripMascotTests: XCTestCase {
         XCTAssertLessThanOrEqual(titleFrame.maxY, headerFrame.maxY)
     }
 
-    func testEveryMoodRendersADistinctFrame() throws {
-        var images: [CantripMascotMood: Data] = [:]
-        for mood in CantripMascotMood.allCases {
-            let renderer = ImageRenderer(content:
-                CantripMascotView(mood: mood, size: 120, frameTime: 1)
-                    .padding(12)
-            )
-            renderer.scale = 2
-            let data = try XCTUnwrap(renderer.uiImage?.pngData(), "\(mood)")
-            images[mood] = data
+    func testOutfitsKeepStableStoredValuesAndDefaultToStarryPlush() {
+        XCTAssertEqual(CantripMascotOutfit.allCases.map(\.rawValue), ["starryPlush", "dinoHoodie"])
+        XCTAssertEqual(CantripMascotOutfit.storageKey, "cantrip.mascot.outfit")
+        XCTAssertNil(CantripMascotOutfit(rawValue: "unknownOutfit"))
+        XCTAssertEqual(CantripMascotOutfit.dinoHoodie.title, "Dino Hoodie")
+        XCTAssertEqual(Set(CantripMascotMood.allCases.map(\.title)).count, CantripMascotMood.allCases.count)
+    }
+
+    private func render(_ view: some View, scale: CGFloat = 2) throws -> Data {
+        let renderer = ImageRenderer(content: view.padding(12))
+        renderer.scale = scale
+        return try XCTUnwrap(renderer.uiImage?.pngData())
+    }
+
+    func testEveryOutfitAndMoodRendersADistinctFrame() throws {
+        var images: Set<Data> = []
+        for outfit in CantripMascotOutfit.allCases {
+            for mood in CantripMascotMood.allCases {
+                images.insert(try render(CantripMascotView(mood: mood, outfit: outfit, size: 120, frameTime: 1)))
+            }
+            let idle = try render(CantripMascotView(mood: .idle, outfit: outfit, size: 120, frameTime: 1))
+            let hop = try render(CantripMascotView(
+                mood: .idle, outfit: outfit, size: 120, frameTime: 1, celebrationProgress: 0.3
+            ))
+            XCTAssertNotEqual(hop, idle, "\(outfit) should celebrate visibly")
         }
-        XCTAssertEqual(Set(images.values).count, CantripMascotMood.allCases.count,
-                       "Each mood should look different")
-        let celebration = ImageRenderer(content:
-            CantripMascotView(mood: .idle, size: 120, frameTime: 1, celebrationProgress: 0.3)
-                .padding(12)
-        )
-        celebration.scale = 2
-        XCTAssertNotEqual(celebration.uiImage?.pngData(), images[.idle])
+        XCTAssertEqual(images.count, CantripMascotOutfit.allCases.count * CantripMascotMood.allCases.count,
+                       "Each outfit and mood should look different")
+    }
+
+    func testHeaderWearsTheSavedOutfit() throws {
+        let defaults = UserDefaults.standard
+        let original = defaults.string(forKey: CantripMascotOutfit.storageKey)
+        defer {
+            if let original {
+                defaults.set(original, forKey: CantripMascotOutfit.storageKey)
+            } else {
+                defaults.removeObject(forKey: CantripMascotOutfit.storageKey)
+            }
+        }
+        func header() throws -> Data {
+            try render(CantripMascotHeaderTitle(title: "Cantrip Home", isConnected: true, mood: .idle))
+        }
+        defaults.removeObject(forKey: CantripMascotOutfit.storageKey)
+        let unset = try header()
+        defaults.set(CantripMascotOutfit.starryPlush.rawValue, forKey: CantripMascotOutfit.storageKey)
+        XCTAssertEqual(try header(), unset, "Starry Plush stays the default")
+        defaults.set(CantripMascotOutfit.dinoHoodie.rawValue, forKey: CantripMascotOutfit.storageKey)
+        XCTAssertNotEqual(try header(), unset, "The header should switch to the saved outfit")
+        defaults.set("retiredOutfit", forKey: CantripMascotOutfit.storageKey)
+        XCTAssertEqual(try header(), unset, "Unknown saved outfits fall back to the default")
     }
 
     func testRealHomeChatRestsTranscriptBelowMascot() async throws {
@@ -332,6 +364,38 @@ final class CantripMascotTests: XCTestCase {
             sheet.overrideUserInterfaceStyle = style
             try await capture(sheet, size: CGSize(width: 440, height: 560), scene: scene,
                               to: output.appendingPathComponent("cantrip-mascot-moods-\(name).png"))
+
+            let dino = UIHostingController(rootView:
+                VStack(spacing: 18) {
+                    ForEach([[CantripMascotMood.idle, .thinking, .listening],
+                             [.speaking, .curious, .sleeping]], id: \.self) { row in
+                        HStack(spacing: 18) {
+                            ForEach(row, id: \.self) { mood in
+                                VStack(spacing: 6) {
+                                    CantripMascotView(mood: mood, outfit: .dinoHoodie, size: 112, frameTime: 1)
+                                    Text(mood.title).font(.caption)
+                                }
+                            }
+                        }
+                    }
+                    HStack(spacing: 18) {
+                        CantripMascotView(mood: .idle, outfit: .dinoHoodie, size: 112, frameTime: 1,
+                                          celebrationProgress: 0.3)
+                        CantripMascotView(mood: .idle, outfit: .starryPlush, size: 112, frameTime: 1)
+                    }
+                }
+                .padding(24)
+                .frame(width: 440, height: 560)
+                .background(Color(.systemBackground))
+            )
+            dino.overrideUserInterfaceStyle = style
+            try await capture(dino, size: CGSize(width: 440, height: 560), scene: scene,
+                              to: output.appendingPathComponent("cantrip-mascot-dino-\(name).png"))
+
+            let picker = UIHostingController(rootView: CantripMascotCustomizationView())
+            picker.overrideUserInterfaceStyle = style
+            try await capture(picker, size: CGSize(width: 393, height: 852), scene: scene,
+                              to: output.appendingPathComponent("cantrip-mascot-picker-\(name).png"))
 
             let transcript = """
             • 238 E 106th St #3D, East Harlem — $3,000, just cut from $3,100 today, 1ba, central air, \

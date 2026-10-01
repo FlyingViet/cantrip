@@ -29,6 +29,92 @@ enum CantripMascotMood: Equatable, CaseIterable {
         case .curious: "Waiting for your answer"
         }
     }
+
+    var title: String {
+        switch self {
+        case .idle: "Resting"
+        case .thinking: "Thinking"
+        case .listening: "Listening"
+        case .speaking: "Speaking"
+        case .curious: "Curious"
+        case .sleeping: "Asleep"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .idle: "face.smiling"
+        case .thinking: "sparkles"
+        case .listening: "ear"
+        case .speaking: "waveform"
+        case .curious: "questionmark.bubble"
+        case .sleeping: "moon.zzz"
+        }
+    }
+}
+
+/// Outfits are stored per device by raw value, so keep existing raw values stable.
+enum CantripMascotOutfit: String, CaseIterable, Identifiable {
+    case starryPlush
+    case dinoHoodie
+
+    static let storageKey = "cantrip.mascot.outfit"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .starryPlush: "Starry Plush"
+        case .dinoHoodie: "Dino Hoodie"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .starryPlush: "Fluffy purple hood with a gold star pin"
+        case .dinoHoodie: "Green fleece hood with spikes and soft teeth"
+        }
+    }
+
+    struct Palette {
+        let background: [Color]
+        let darkBackground: [Color]
+        let hood: [Color]
+        let recess: Color
+        let paw: [Color]
+        let accent: Color
+        let fluff: Double
+        let fur: Bool
+    }
+
+    var palette: Palette {
+        switch self {
+        case .starryPlush:
+            Palette(
+                background: [.white, Color(red: 0.96, green: 0.94, blue: 1.0), Color(red: 0.87, green: 0.84, blue: 0.98)],
+                darkBackground: [Color(red: 0.98, green: 0.97, blue: 1.0), Color(red: 0.91, green: 0.88, blue: 0.99),
+                                 Color(red: 0.8, green: 0.75, blue: 0.96)],
+                hood: [Color(red: 0.86, green: 0.79, blue: 1.0), Color(red: 0.67, green: 0.55, blue: 0.95),
+                       Color(red: 0.48, green: 0.35, blue: 0.83)],
+                recess: Color(red: 0.36, green: 0.24, blue: 0.66),
+                paw: [Color(red: 0.84, green: 0.76, blue: 1.0), Color(red: 0.7, green: 0.59, blue: 0.97)],
+                accent: Color(red: 0.48, green: 0.33, blue: 0.86),
+                fluff: 1, fur: true
+            )
+        case .dinoHoodie:
+            Palette(
+                background: [.white, Color(red: 0.93, green: 0.98, blue: 0.92), Color(red: 0.82, green: 0.93, blue: 0.82)],
+                darkBackground: [Color(red: 0.97, green: 1.0, blue: 0.96), Color(red: 0.88, green: 0.96, blue: 0.87),
+                                 Color(red: 0.74, green: 0.88, blue: 0.74)],
+                hood: [Color(red: 0.64, green: 0.9, blue: 0.52), Color(red: 0.39, green: 0.75, blue: 0.37),
+                       Color(red: 0.22, green: 0.55, blue: 0.27)],
+                recess: Color(red: 0.12, green: 0.38, blue: 0.18),
+                paw: [Color(red: 0.6, green: 0.87, blue: 0.5), Color(red: 0.4, green: 0.72, blue: 0.38)],
+                accent: Color(red: 0.16, green: 0.5, blue: 0.24),
+                fluff: 0.25, fur: false
+            )
+        }
+    }
 }
 
 /// A fluffy hooded plush with a star pin, drawn natively so it stays crisp and animates
@@ -38,6 +124,7 @@ struct CantripMascotView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var colorScheme
     let mood: CantripMascotMood
+    var outfit: CantripMascotOutfit = .starryPlush
     var size: CGFloat = 58
     /// Renders one deterministic frame for tests and previews.
     var frameTime: TimeInterval? = nil
@@ -56,7 +143,7 @@ struct CantripMascotView: View {
             let time = frameTime ?? (animates ? timeline.date.timeIntervalSinceReferenceDate : 1)
             Canvas { context, canvasSize in
                 CantripMascotRenderer(
-                    mood: mood, time: time,
+                    mood: mood, outfit: outfit, time: time,
                     celebration: celebrationProgress ?? celebration(at: timeline.date),
                     motion: animates || frameTime != nil,
                     dark: colorScheme == .dark
@@ -90,13 +177,13 @@ struct CantripMascotView: View {
 
 struct CantripMascotRenderer {
     let mood: CantripMascotMood
+    var outfit: CantripMascotOutfit = .starryPlush
     let time: TimeInterval
     let celebration: TimeInterval?
     let motion: Bool
     let dark: Bool
 
     private static let ink = Color(red: 0.16, green: 0.12, blue: 0.24)
-    private static let recess = Color(red: 0.36, green: 0.24, blue: 0.66)
 
     private struct Tuft {
         let x: Double
@@ -133,13 +220,11 @@ struct CantripMascotRenderer {
             Path(ellipseIn: CGRect(x: (x - rx) * s, y: (y - ry) * s, width: rx * 2 * s, height: ry * 2 * s))
         }
 
+        let palette = outfit.palette
         context.fill(
             Path(ellipseIn: CGRect(x: 0, y: 0, width: s, height: s)),
             with: .radialGradient(
-                Gradient(colors: dark
-                    ? [Color(red: 0.98, green: 0.97, blue: 1.0), Color(red: 0.91, green: 0.88, blue: 0.99),
-                       Color(red: 0.8, green: 0.75, blue: 0.96)]
-                    : [.white, Color(red: 0.96, green: 0.94, blue: 1.0), Color(red: 0.87, green: 0.84, blue: 0.98)]),
+                Gradient(colors: dark ? palette.darkBackground : palette.background),
                 center: p(0.36, 0.28), startRadius: 0, endRadius: 0.78 * s
             )
         )
@@ -164,27 +249,29 @@ struct CantripMascotRenderer {
         figure.scaleBy(x: 1 - breathe * 0.008, y: 1 + breathe * (mood == .sleeping ? 0.03 : 0.018))
         figure.translateBy(x: -0.5 * s, y: -0.98 * s - hop * s)
 
-        let hood = hoodPath(s)
+        if outfit == .dinoHoodie {
+            drawSpikes(&figure, s: s, t: t, progress: progress)
+        }
+        let hood = hoodPath(s, fluff: palette.fluff)
         figure.drawLayer { fluff in
-            fluff.addFilter(.blur(radius: 0.0045 * s))
+            fluff.addFilter(.blur(radius: (palette.fur ? 0.0045 : 0.002) * s))
             fluff.fill(hood, with: .radialGradient(
-                Gradient(colors: [
-                    Color(red: 0.86, green: 0.79, blue: 1.0), Color(red: 0.67, green: 0.55, blue: 0.95),
-                    Color(red: 0.48, green: 0.35, blue: 0.83),
-                ]),
+                Gradient(colors: palette.hood),
                 center: p(0.36, 0.3), startRadius: 0, endRadius: 0.8 * s
             ))
         }
-        figure.drawLayer { fur in
-            fur.addFilter(.blur(radius: 0.005 * s))
-            for tuft in Self.tufts {
-                var strand = fur
-                strand.translateBy(x: tuft.x * s, y: tuft.y * s)
-                strand.rotate(by: .radians(tuft.angle))
-                strand.fill(
-                    Path(ellipseIn: CGRect(x: -0.026 * s, y: -0.007 * s, width: 0.052 * s, height: 0.014 * s)),
-                    with: .color(tuft.light ? .white.opacity(0.2) : Self.recess.opacity(0.13))
-                )
+        if palette.fur {
+            figure.drawLayer { fur in
+                fur.addFilter(.blur(radius: 0.005 * s))
+                for tuft in Self.tufts {
+                    var strand = fur
+                    strand.translateBy(x: tuft.x * s, y: tuft.y * s)
+                    strand.rotate(by: .radians(tuft.angle))
+                    strand.fill(
+                        Path(ellipseIn: CGRect(x: -0.026 * s, y: -0.007 * s, width: 0.052 * s, height: 0.014 * s)),
+                        with: .color(tuft.light ? .white.opacity(0.2) : palette.recess.opacity(0.13))
+                    )
+                }
             }
         }
         figure.drawLayer { rim in
@@ -192,10 +279,17 @@ struct CantripMascotRenderer {
             rim.stroke(hood, with: .color(.white.opacity(0.4)), lineWidth: 0.02 * s)
         }
 
+        if outfit == .dinoHoodie {
+            figure.fill(ellipse(0.5, 0.9, 0.165, 0.1), with: .linearGradient(
+                Gradient(colors: [Color(red: 0.9, green: 0.97, blue: 0.7), Color(red: 0.78, green: 0.9, blue: 0.52)]),
+                startPoint: p(0.5, 0.8), endPoint: p(0.5, 1.0)
+            ))
+            drawHoodEyes(&figure, s: s)
+        }
         figure.drawLayer { shadow in
             shadow.addFilter(.blur(radius: 0.03 * s))
-            shadow.fill(ellipse(0.5, 0.585, 0.24, 0.21), with: .color(Self.recess.opacity(0.75)))
-            shadow.fill(ellipse(0.5, 0.79, 0.17, 0.035), with: .color(Self.recess.opacity(0.35)))
+            shadow.fill(ellipse(0.5, 0.585, 0.24, 0.21), with: .color(palette.recess.opacity(0.75)))
+            shadow.fill(ellipse(0.5, 0.79, 0.17, 0.035), with: .color(palette.recess.opacity(0.35)))
         }
         figure.fill(ellipse(0.5, 0.57, 0.205, 0.178), with: .radialGradient(
             Gradient(colors: [
@@ -204,6 +298,9 @@ struct CantripMascotRenderer {
             ]),
             center: p(0.45, 0.49), startRadius: 0, endRadius: 0.25 * s
         ))
+        if outfit == .dinoHoodie {
+            drawTeeth(&figure, s: s)
+        }
 
         figure.drawLayer { blush in
             blush.addFilter(.blur(radius: 0.018 * s))
@@ -216,15 +313,28 @@ struct CantripMascotRenderer {
         drawEyes(&figure, s: s, progress: progress)
         drawMouth(&figure, s: s)
 
-        let paw = Gradient(colors: [Color(red: 0.84, green: 0.76, blue: 1.0), Color(red: 0.7, green: 0.59, blue: 0.97)])
+        let paw = Gradient(colors: palette.paw)
         for x in [0.375, 0.625] {
             figure.fill(ellipse(x, 0.905, 0.066, 0.05), with: .linearGradient(
                 paw, startPoint: p(x, 0.855), endPoint: p(x, 0.955)
             ))
-            figure.stroke(ellipse(x, 0.905, 0.066, 0.05), with: .color(Self.recess.opacity(0.18)),
+            figure.stroke(ellipse(x, 0.905, 0.066, 0.05), with: .color(palette.recess.opacity(0.18)),
                           lineWidth: 0.007 * s)
+            if outfit == .dinoHoodie {
+                for (dx, dy) in [(-0.03, 0.866), (0, 0.86), (0.03, 0.866)] {
+                    figure.fill(ellipse(x + dx, dy, 0.009, 0.012), with: .color(.white.opacity(0.95)))
+                }
+            }
         }
 
+        if outfit == .starryPlush {
+            drawStar(&figure, s: s, t: t, progress: progress)
+        }
+
+        drawAccents(&context, s: s, t: t, progress: progress)
+    }
+
+    private func drawStar(_ figure: inout GraphicsContext, s: CGFloat, t: Double, progress: Double?) {
         var star = figure
         let twinkle = 1 + 0.07 * sin(t * 2.2)
         let spin: Double = if let progress { progress * 360 } else if mood == .thinking { t * 60 } else { 0 }
@@ -245,17 +355,100 @@ struct CantripMascotRenderer {
         star.stroke(starPath, with: .color(Color(red: 0.85, green: 0.55, blue: 0.16)), lineWidth: 0.008 * s)
         star.fill(Path(ellipseIn: CGRect(x: -0.03 * s, y: -0.035 * s, width: 0.02 * s, height: 0.02 * s)),
                   with: .color(.white.opacity(0.85)))
-
-        drawAccents(&context, s: s, t: t, progress: progress)
     }
 
-    private func hoodPath(_ s: CGFloat) -> Path {
+    /// Soft felt plates along the hood's crown, drawn behind the hood so their bases tuck in.
+    private func drawSpikes(_ figure: inout GraphicsContext, s: CGFloat, t: Double, progress: Double?) {
+        let exponent = 2 / 2.35
+        let wiggle = motion ? (progress.map { sin($0 * 4 * .pi) * 0.12 } ?? 0) : 0
+        let fill = GraphicsContext.Shading.linearGradient(
+            Gradient(colors: [Color(red: 1.0, green: 0.88, blue: 0.45), Color(red: 0.98, green: 0.68, blue: 0.26)]),
+            startPoint: CGPoint(x: 0, y: 0.1 * s), endPoint: CGPoint(x: 0, y: 0.26 * s)
+        )
+        for (index, height) in [0.052, 0.07, 0.082, 0.07, 0.052].enumerated() {
+            let theta = 1.5 * .pi + Double(index - 2) * 0.34 + wiggle * Double(index - 2)
+            let c = cos(theta)
+            let n = sin(theta)
+            let base = CGPoint(
+                x: 0.5 + 0.385 * (c < 0 ? -1 : 1) * pow(abs(c), exponent),
+                y: 0.69 + 0.5 * (n < 0 ? -1 : 1) * pow(abs(n), exponent)
+            )
+            var normal = CGVector(dx: (base.x - 0.5) / pow(0.385, 2), dy: (base.y - 0.69) / pow(0.5, 2))
+            let length = hypot(normal.dx, normal.dy)
+            normal = CGVector(dx: normal.dx / length, dy: normal.dy / length)
+            let tangent = CGVector(dx: -normal.dy, dy: normal.dx)
+            func point(_ along: Double, _ out: Double) -> CGPoint {
+                CGPoint(x: (base.x + tangent.dx * along + normal.dx * out) * s,
+                        y: (base.y + tangent.dy * along + normal.dy * out) * s)
+            }
+            var spike = Path()
+            spike.move(to: point(-0.042, -0.02))
+            spike.addLine(to: point(-0.011, height - 0.012))
+            spike.addQuadCurve(to: point(0.011, height - 0.012), control: point(0, height + 0.006))
+            spike.addLine(to: point(0.042, -0.02))
+            spike.closeSubpath()
+            figure.fill(spike, with: fill)
+            figure.stroke(spike, with: .color(Color(red: 0.86, green: 0.52, blue: 0.16).opacity(0.7)),
+                          lineWidth: 0.006 * s)
+        }
+    }
+
+    /// The hoodie's own felt eyes, glancing down at the wearer.
+    private func drawHoodEyes(_ figure: inout GraphicsContext, s: CGFloat) {
+        for (x, lean) in [(0.405, 0.008), (0.595, -0.008)] {
+            let eye = Path(ellipseIn: CGRect(x: (x - 0.04) * s, y: 0.262 * s, width: 0.08 * s, height: 0.076 * s))
+            figure.fill(eye, with: .color(.white))
+            figure.stroke(eye, with: .color(Color(red: 0.12, green: 0.38, blue: 0.18).opacity(0.35)),
+                          lineWidth: 0.006 * s)
+            figure.fill(
+                Path(ellipseIn: CGRect(x: (x + lean - 0.019) * s, y: 0.293 * s, width: 0.038 * s, height: 0.04 * s)),
+                with: .color(Self.ink)
+            )
+            figure.fill(
+                Path(ellipseIn: CGRect(x: (x + lean - 0.006) * s, y: 0.297 * s, width: 0.013 * s, height: 0.013 * s)),
+                with: .color(.white.opacity(0.9))
+            )
+        }
+    }
+
+    /// Rounded felt teeth framing the face like the hoodie's open jaw.
+    private func drawTeeth(_ figure: inout GraphicsContext, s: CGFloat) {
+        func tooth(at degrees: Double, length: Double, width: Double) {
+            let theta = degrees * .pi / 180
+            let edge = CGPoint(x: 0.5 + 0.205 * cos(theta), y: 0.57 + 0.178 * sin(theta))
+            var inward = CGVector(dx: 0.5 - edge.x, dy: 0.57 - edge.y)
+            let length2 = hypot(inward.dx, inward.dy)
+            inward = CGVector(dx: inward.dx / length2, dy: inward.dy / length2)
+            let side = CGVector(dx: -inward.dy, dy: inward.dx)
+            func point(_ along: Double, _ into: Double) -> CGPoint {
+                CGPoint(x: (edge.x + side.dx * along + inward.dx * into) * s,
+                        y: (edge.y + side.dy * along + inward.dy * into) * s)
+            }
+            var path = Path()
+            path.move(to: point(-width / 2, -0.012))
+            path.addLine(to: point(-width * 0.12, length - 0.006))
+            path.addQuadCurve(to: point(width * 0.12, length - 0.006), control: point(0, length + 0.004))
+            path.addLine(to: point(width / 2, -0.012))
+            path.closeSubpath()
+            figure.fill(path, with: .color(.white))
+            figure.stroke(path, with: .color(Color(red: 0.12, green: 0.38, blue: 0.18).opacity(0.22)),
+                          lineWidth: 0.005 * s)
+        }
+        for degrees in stride(from: 212.0, through: 328.0, by: 23.2) {
+            tooth(at: degrees, length: 0.036, width: 0.05)
+        }
+        for degrees in [62.0, 90.0, 118.0] {
+            tooth(at: degrees, length: 0.026, width: 0.04)
+        }
+    }
+
+    private func hoodPath(_ s: CGFloat, fluff amount: Double = 1) -> Path {
         var path = Path()
         let steps = 240
         let exponent = 2 / 2.35
         for step in 0...steps {
             let theta = Double(step) / Double(steps) * 2 * .pi
-            let fluff = 1 + 0.014 * sin(theta * 24) + 0.007 * sin(theta * 37 + 1)
+            let fluff = 1 + amount * (0.014 * sin(theta * 24) + 0.007 * sin(theta * 37 + 1))
             let c = cos(theta)
             let n = sin(theta)
             let point = CGPoint(
@@ -348,7 +541,7 @@ struct CantripMascotRenderer {
     }
 
     private func drawAccents(_ context: inout GraphicsContext, s: CGFloat, t: Double, progress: Double?) {
-        let accent = Color(red: 0.48, green: 0.33, blue: 0.86)
+        let accent = outfit.palette.accent
         if mood == .thinking || progress != nil {
             let spots = [(0.8, 0.16, 0.0), (0.87, 0.33, 2.1), (0.2, 0.22, 4.2)]
             for (x, y, phase) in spots {
@@ -417,6 +610,7 @@ struct CantripMascotRenderer {
 
 /// Muse-style centered avatar with a glass name pill; used as Cantrip Home's backend menu label.
 struct CantripMascotHeaderTitle: View {
+    @AppStorage(CantripMascotOutfit.storageKey) private var outfit: CantripMascotOutfit = .starryPlush
     let title: String
     let isConnected: Bool
     let mood: CantripMascotMood
@@ -426,7 +620,7 @@ struct CantripMascotHeaderTitle: View {
 
     var body: some View {
         VStack(spacing: -Self.pillOverlap) {
-            CantripMascotView(mood: mood, size: Self.avatarSize)
+            CantripMascotView(mood: mood, outfit: outfit, size: Self.avatarSize)
             HStack(spacing: 5) {
                 Circle()
                     .fill(isConnected ? Color.green : Color.gray)
@@ -473,5 +667,128 @@ struct CantripMascotHeaderFade: View {
             }
             .ignoresSafeArea(edges: .top)
             .allowsHitTesting(false)
+    }
+}
+
+/// Outfit picker with a live preview. The choice is saved on this device and applies immediately.
+struct CantripMascotCustomizationView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage(CantripMascotOutfit.storageKey) private var outfit: CantripMascotOutfit = .starryPlush
+    @State private var previewMood: CantripMascotMood = .idle
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 22) {
+                    VStack(spacing: 10) {
+                        CantripMascotView(mood: previewMood, outfit: outfit, size: 168)
+                        Text(outfit.title)
+                            .font(.title3.weight(.semibold))
+                    }
+                    .padding(.top, 8)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(outfit.title) mascot, \(previewMood.title.lowercased())")
+                    .accessibilityAddTraits(.isImage)
+                    .accessibilityIdentifier("mascot.preview")
+
+                    moodPicker
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Outfits")
+                            .font(.headline)
+                            .accessibilityAddTraits(.isHeader)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+                            ForEach(CantripMascotOutfit.allCases) { option in
+                                outfitCard(option)
+                            }
+                        }
+                        Text("Your outfit is saved on this device and shows in Cantrip Home.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.bottom, 24)
+            }
+            .navigationTitle("Mascot")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .sensoryFeedback(.selection, trigger: outfit)
+        }
+    }
+
+    private var moodPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(CantripMascotMood.allCases, id: \.self) { mood in
+                    Button { previewMood = mood } label: {
+                        Label(mood.title, systemImage: mood.systemImage)
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 44)
+                            .background(
+                                previewMood == mood
+                                    ? AnyShapeStyle(Color.accentColor.opacity(0.22))
+                                    : AnyShapeStyle(Color(.secondarySystemBackground)),
+                                in: Capsule()
+                            )
+                            .overlay {
+                                Capsule().strokeBorder(previewMood == mood ? Color.accentColor : .clear, lineWidth: 1.5)
+                            }
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Preview \(mood.title.lowercased())")
+                    .accessibilityAddTraits(previewMood == mood ? .isSelected : [])
+                }
+            }
+            .padding(.horizontal)
+        }
+        .accessibilityIdentifier("mascot.moods")
+    }
+
+    private func outfitCard(_ option: CantripMascotOutfit) -> some View {
+        let selected = option == outfit
+        return Button {
+            outfit = option
+        } label: {
+            VStack(spacing: 8) {
+                CantripMascotView(mood: .idle, outfit: option, size: 92, frameTime: 1)
+                Text(option.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(option.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 190, alignment: .top)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20)
+                    .strokeBorder(selected ? Color.accentColor : Color.clear, lineWidth: 2)
+            }
+            .overlay(alignment: .topTrailing) {
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white, Color.accentColor)
+                        .padding(10)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 20))
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(option.title)
+        .accessibilityHint(option.summary)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityIdentifier("mascot.outfit.\(option.rawValue)")
     }
 }
