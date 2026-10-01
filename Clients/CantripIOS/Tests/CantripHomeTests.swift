@@ -589,6 +589,172 @@ final class CantripHomeTests: XCTestCase {
         XCTAssertEqual(artifactPublishes, 1)
     }
 
+    func testHomeHandoffCardsDecodeAndOpenTheirTab() async throws {
+        let bassID = "40000000-0000-0000-0000-000000000001"
+        let otherID = "40000000-0000-0000-0000-000000000002"
+        let client = client()
+        let model = CantripRemoteModel(urlSession: client)
+        CantripHomeRequestProtocol.handler = { request in
+            let path = URLComponents(
+                url: request.url!, resolvingAgainstBaseURL: false
+            )?.percentEncodedPath ?? ""
+            switch path {
+            case "/api/v1/home":
+                return (200, self.homeSessionPayload(messages: self.handoffMessages(bassID: bassID)))
+            case "/api/v1/home/tasks": return (200, self.tasksPayload(enabled: true))
+            case "/api/v1/home/artifacts": return (200, self.artifactsPayload())
+            case "/api/v1/sessions": return (200, self.tabListPayload([otherID, bassID]))
+            case "/api/v1/sessions/\(bassID)": return (200, self.tabPayload(id: bassID))
+            case "/api/v1/sessions/\(otherID)": return (200, self.tabPayload(id: otherID))
+            default: return (200, Data(#"{"sessions":[]}"#.utf8))
+            }
+        }
+        addTeardownBlock { @MainActor in
+            model.setAppActive(false)
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            CantripHomeRequestProtocol.handler = nil
+        }
+        let configured = await model.configure(
+            url: "https://cantrip.example", pairingToken: "handoff-token", tailscaleOnly: true
+        )
+        XCTAssertTrue(configured)
+        model.setAppActive(true)
+        await model.refreshNow()
+        model.setAppActive(false)
+        XCTAssertEqual(model.sessions.map(\.id), [otherID, bassID])
+        await model.selectSession(otherID)
+        await model.selectHome()
+        let transcript = model.selectedSession?.transcript ?? []
+        XCTAssertNil(transcript.first { $0.id == "h1" }?.delegations,
+                     "Plain Home answers carry no handoff cards")
+        let handoffs = try XCTUnwrap(transcript.first { $0.id == "h2" }?.delegations)
+        XCTAssertEqual(handoffs.first, CantripRemoteDelegation(
+            id: "d1", tabID: bassID, tabTitle: "Bass Compass",
+            summary: "Fix lineup sorting",
+            prompt: "Fix the Bass Compass lineup sorting so headliners appear first.",
+            status: .completed, startedAt: 100, finishedAt: 160,
+            result: "Headliners now sort first."
+        ))
+        XCTAssertEqual(handoffs.count, 2, "A malformed card must not drop the message")
+        XCTAssertEqual(handoffs[1].status, .running)
+        XCTAssertEqual(handoffs[1].tabTitle, "")
+        XCTAssertFalse(handoffs[1].id.isEmpty)
+
+        model.prepareToOpenTab(bassID)
+        await model.selectRegularSession()
+        XCTAssertFalse(model.isHomeSelected)
+        XCTAssertEqual(model.selectedSessionID, bassID,
+                       "Open tab must win over the previously selected Remote tab")
+    }
+
+    func testHandoffCardsFitNarrowAndAccessibilityWidths() {
+        for dynamicType in [DynamicTypeSize.large, .accessibility5] {
+            for width in [CGFloat(320), 393] {
+                let controller = UIHostingController(rootView:
+                    CantripHandoffStack(handoffs: sampleHandoffs(), onOpenTab: { _ in })
+                        .environment(\.dynamicTypeSize, dynamicType)
+                        .frame(width: width)
+                )
+                let fitted = controller.sizeThatFits(
+                    in: CGSize(width: width, height: .greatestFiniteMagnitude)
+                )
+                XCTAssertLessThanOrEqual(fitted.width, width + 0.5)
+                XCTAssertGreaterThan(fitted.height, 200)
+            }
+        }
+    }
+
+    func testHomeHandoffCardScreenshots() async throws {
+        let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_ARTIFACT_DIR"]
+        guard let directory, !directory.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_HOME_ARTIFACT_DIR to render Home handoff cards.")
+        }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let variants: [(String, UIUserInterfaceStyle, DynamicTypeSize)] = [
+            ("light", .light, .large), ("dark", .dark, .large), ("ax", .light, .accessibility3),
+        ]
+        for (name, style, dynamicType) in variants {
+            let controller = UIHostingController(rootView:
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("The Bass Compass tab is taking this.")
+                        CantripHandoffStack(handoffs: sampleHandoffs(), onOpenTab: { _ in })
+                    }
+                    .padding(16)
+                }
+                .environment(\.dynamicTypeSize, dynamicType)
+                .background(Color(.systemBackground))
+            )
+            controller.overrideUserInterfaceStyle = style
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 852))
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(250))
+            controller.view.frame = window.bounds
+            controller.view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            try XCTUnwrap(image.pngData()).write(
+                to: output.appendingPathComponent("cantrip-home-handoffs-\(name).png")
+            )
+        }
+    }
+
+    private func sampleHandoffs() -> [CantripRemoteDelegation] {
+        let now = Date().timeIntervalSince1970
+        return [
+            .init(id: "running", tabID: "tab-1", tabTitle: "Bass Compass",
+                  summary: "Fix lineup sorting", status: .running, startedAt: now - 95,
+                  latestStatus: "Running xcodebuild test"),
+            .init(id: "done", tabID: "tab-1", tabTitle: "Bass Compass",
+                  summary: "Collapse past sets in the lineup", status: .completed,
+                  startedAt: now - 900, finishedAt: now - 420,
+                  result: "Past sets now collapse under an Earlier today header. Tests pass, and the change is pushed to master as 1a2b3c4 for the next OTA update."),
+            .init(id: "stopped", tabID: "tab-2", tabTitle: "Plexible",
+                  summary: "Fix the player scrubber", status: .cancelled,
+                  startedAt: now - 300, finishedAt: now - 240, error: "Stopped in the tab."),
+        ]
+    }
+
+    private func handoffMessages(bassID: String) -> String {
+        """
+        [{"id":"h0","role":"user","text":"How many users does Bass Compass have?","thinking":"","activities":[]},
+        {"id":"h1","role":"assistant","text":"Bass Compass has 109 users.","thinking":"","activities":[]},
+        {"id":"h2","role":"assistant","text":"The Bass Compass tab is taking this.","thinking":"",
+        "activities":[],"delegations":[
+        {"id":"d1","tabID":"\(bassID)","tabTitle":"Bass Compass","summary":"Fix lineup sorting",
+        "prompt":"Fix the Bass Compass lineup sorting so headliners appear first.",
+        "status":"completed","startedAt":100,"finishedAt":160,"result":"Headliners now sort first."},
+        {"tabID":"\(bassID)","status":"paused","tabTitle":7}]}]
+        """
+    }
+
+    private func tabListPayload(_ ids: [String]) -> Data {
+        let tabs = ids.map { id in
+            """
+            {"id":"\(id)","title":"Tab \(id.suffix(1))","workdir":"/tmp","isStreaming":false,
+            "canResume":false,"councilMode":false,"queuedCount":0,"supportsAutoDelivery":true}
+            """
+        }
+        return Data(#"{"sessions":[\#(tabs.joined(separator: ","))]}"#.utf8)
+    }
+
+    private func tabPayload(id: String) -> Data {
+        Data("""
+        {"session":{"id":"\(id)","title":"Tab \(id.suffix(1))","workdir":"/tmp",
+        "isStreaming":false,"canResume":false,"councilMode":false,"queuedCount":0,
+        "status":null,"messages":[],"queued":[],"supportsAutoDelivery":true}}
+        """.utf8)
+    }
+
     func testHomeFocusedScreenshots() async throws {
         let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_ARTIFACT_DIR"]
         guard let directory, !directory.isEmpty else {
@@ -704,11 +870,11 @@ final class CantripHomeTests: XCTestCase {
         }
     }
 
-    private func homeSessionPayload() -> Data {
+    private func homeSessionPayload(messages: String = "[]") -> Data {
         Data("""
         {"session":{"id":"\(homeID)","title":"Cantrip Home","workdir":"/tmp",
         "isStreaming":false,"canResume":false,"councilMode":false,"queuedCount":0,
-        "status":null,"messages":[],"supportsImageAttachments":true,"queued":[],
+        "status":null,"messages":\(messages),"supportsImageAttachments":true,"queued":[],
         "supportsAutoDelivery":true,"isLocked":true,"isCantripHome":true,
         "supportsModelSettings":true,"supportsPagedHistory":true}}
         """.utf8)

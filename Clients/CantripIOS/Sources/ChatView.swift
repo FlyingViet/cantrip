@@ -1849,7 +1849,13 @@ struct ChatView: View {
                     cantripSessionID: vm.activeLane.usesCantripRemote ? remote.selectedSessionID : nil,
                     remoteMessage: remoteMessage,
                     onAction: { vm.send($0.command) },
-                    onApproval: { vm.approveRun($0, for: turn.id) }
+                    onApproval: { vm.approveRun($0, for: turn.id) },
+                    onOpenTab: vm.activeLane == .home && env.selectableLanes.contains(.cantrip)
+                        ? { id in
+                            remote.prepareToOpenTab(id)
+                            env.select(.cantrip)
+                        }
+                        : nil
                 )
                 .id(turn.id)
                 if vm.activeLane.usesCantripRemote, let message = remoteMessage,
@@ -2777,6 +2783,7 @@ private struct TurnView: View {
     var remoteMessage: CantripRemoteMessage?
     var onAction: (ChatAction) -> Void = { _ in }
     var onApproval: (String) -> Void = { _ in }
+    var onOpenTab: ((String) -> Void)? = nil
 
     /// Parse inline markdown (bold/italic/code/links) while preserving the
     /// newlines streamed from the agent; falls back to plain text on a partial
@@ -2847,6 +2854,9 @@ private struct TurnView: View {
                             ChatAssistantText(text: part, images: turn.images ?? [], remote: remote)
                         }
                     }
+                }
+                if let handoffs = remoteMessage?.delegations, !handoffs.isEmpty {
+                    CantripHandoffStack(handoffs: handoffs, onOpenTab: onOpenTab)
                 }
                 if !turn.actions.isEmpty {
                     HStack(spacing: 8) {

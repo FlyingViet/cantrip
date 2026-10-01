@@ -254,6 +254,75 @@ struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
     }
 }
 
+/// Work Cantrip Home handed to an open project tab, tracked as a nested task.
+struct CantripRemoteDelegation: Decodable, Equatable, Identifiable {
+    enum Status: String, Decodable, Equatable {
+        case queued, running, completed, failed, cancelled
+
+        var isActive: Bool { self == .queued || self == .running }
+    }
+
+    let id: String
+    let tabID: String
+    let tabTitle: String
+    let summary: String
+    let prompt: String
+    let status: Status
+    let startedAt: TimeInterval?
+    let finishedAt: TimeInterval?
+    let latestStatus: String?
+    let result: String?
+    let error: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, tabID, tabTitle, summary, prompt, status, startedAt, finishedAt
+        case latestStatus, result, error
+    }
+
+    init(
+        id: String,
+        tabID: String,
+        tabTitle: String = "",
+        summary: String = "",
+        prompt: String = "",
+        status: Status = .running,
+        startedAt: TimeInterval? = nil,
+        finishedAt: TimeInterval? = nil,
+        latestStatus: String? = nil,
+        result: String? = nil,
+        error: String? = nil
+    ) {
+        self.id = id
+        self.tabID = tabID
+        self.tabTitle = tabTitle
+        self.summary = summary
+        self.prompt = prompt
+        self.status = status
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.latestStatus = latestStatus
+        self.result = result
+        self.error = error
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: container.decodeLenient(String.self, forKey: .id, default: UUID().uuidString),
+            tabID: container.decodeLenient(String.self, forKey: .tabID, default: ""),
+            tabTitle: container.decodeLenient(String.self, forKey: .tabTitle, default: ""),
+            summary: container.decodeLenient(String.self, forKey: .summary, default: ""),
+            prompt: container.decodeLenient(String.self, forKey: .prompt, default: ""),
+            status: container.decodeLenient(Status.self, forKey: .status, default: .running),
+            startedAt: container.decodeLenient(TimeInterval.self, forKey: .startedAt),
+            finishedAt: container.decodeLenient(TimeInterval.self, forKey: .finishedAt),
+            latestStatus: container.decodeLenient(String.self, forKey: .latestStatus),
+            result: container.decodeLenient(String.self, forKey: .result),
+            error: container.decodeLenient(String.self, forKey: .error)
+        )
+    }
+}
+
 private extension KeyedDecodingContainer {
     func decodeLenient<T: Decodable>(_ type: T.Type, forKey key: Key, default defaultValue: @autoclosure () -> T) -> T {
         (try? decodeIfPresent(type, forKey: key)) ?? defaultValue()
@@ -281,6 +350,8 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var isLocalPrivate: Bool? = nil
     /// Context size and token use for a prompt; absent from older Mac hosts.
     var promptUsage: CantripPromptUsage? = nil
+    /// Cantrip Home work handed to project tabs; absent from older Mac hosts.
+    var delegations: [CantripRemoteDelegation]? = nil
 
     var presentedText: String { displayText ?? text }
 }
@@ -2306,6 +2377,11 @@ final class CantripRemoteModel: ObservableObject {
             errorMessage = error.localizedDescription
             handleReadFailure(error, detailOnly: true)
         }
+    }
+
+    /// Makes the next switch to the Remote lane open this tab instead of the last one.
+    func prepareToOpenTab(_ id: String) {
+        regularSelectedSessionID = id
     }
 
     func selectHome() async {
