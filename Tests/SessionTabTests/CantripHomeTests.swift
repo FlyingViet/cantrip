@@ -356,6 +356,38 @@ extension SessionTabTests {
         )
         let scheduledManager = SessionManager(homeSession: scheduledSession)
         store.attach(manager: scheduledManager)
+        let incidentID = UUID()
+        let incidentURL = CantripHomeStore.incidentDirectory
+            .appendingPathComponent("\(incidentID.uuidString.lowercased()).json")
+        let incidentPrompt = """
+        AUTOMATED BASS COMPASS INGESTION INCIDENT [incident:\(incidentID.uuidString.lowercased())]
+        Investigate the fixture without making changes.
+        """
+        let incidentEnvelope: [String: Any] = [
+            "version": 1,
+            "id": incidentID.uuidString,
+            "prompt": incidentPrompt,
+            "createdAt": "2026-09-30T23:00:00.000Z",
+        ]
+        try JSONSerialization.data(withJSONObject: incidentEnvelope)
+            .write(to: incidentURL, options: .atomic)
+        store.checkNow()
+        try await waitForJournalTest { fixture.sink != nil }
+        precondition(!FileManager.default.fileExists(atPath: incidentURL.path))
+        precondition(scheduledSession.messages.contains {
+            $0.text.contains("[incident:\(incidentID.uuidString.lowercased())]")
+        })
+        fixture.sink?(.textDelta("Incident fixture finished."))
+        fixture.sink?(.done)
+        try await waitForJournalTest { !scheduledSession.isStreaming }
+        fixture.sink = nil
+        try JSONSerialization.data(withJSONObject: incidentEnvelope)
+            .write(to: incidentURL, options: .atomic)
+        store.checkNow()
+        precondition(!FileManager.default.fileExists(atPath: incidentURL.path)
+                     && fixture.sink == nil,
+                     "A previously accepted incident must not run twice")
+
         let scheduled = try store.create(.init(
             id: nil,
             title: "One-time scheduler test",

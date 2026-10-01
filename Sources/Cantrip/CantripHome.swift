@@ -350,6 +350,13 @@ struct CantripHomeTasksSnapshot: Encodable {
     var supportsReordering = true
 }
 
+private struct CantripHomeIncidentEnvelope: Decodable {
+    let version: Int
+    let id: UUID
+    let prompt: String
+    let createdAt: String
+}
+
 struct CantripHomeArtifactsSnapshot: Encodable {
     let artifacts: [CantripHomeArtifact]
     let revision: String
@@ -515,6 +522,10 @@ final class CantripHomeStore: ObservableObject {
         rootDirectory.appendingPathComponent("artifacts", isDirectory: true)
     }
 
+    static var incidentDirectory: URL {
+        rootDirectory.appendingPathComponent("incidents", isDirectory: true)
+    }
+
     private var tasksURL: URL { Self.rootDirectory.appendingPathComponent("tasks.json") }
     private var artifactsURL: URL { Self.rootDirectory.appendingPathComponent("artifacts.json") }
 
@@ -522,6 +533,9 @@ final class CantripHomeStore: ObservableObject {
         do {
             try FileManager.default.createDirectory(
                 at: Self.artifactDirectory, withIntermediateDirectories: true
+            )
+            try FileManager.default.createDirectory(
+                at: Self.incidentDirectory, withIntermediateDirectories: true
             )
             tasks = try load([CantripHomeTask].self, from: tasksURL) ?? []
             artifacts = try load([CantripHomeArtifact].self, from: artifactsURL) ?? []
@@ -977,6 +991,7 @@ final class CantripHomeStore: ObservableObject {
     }
 
     private func tick() {
+        drainIncidentInbox()
         guard AppSettings.shared.cantripHomeEnabled,
               let session, !session.isStreaming, session.queued.isEmpty,
               !session.shell.isRunning,
@@ -1016,6 +1031,62 @@ final class CantripHomeStore: ObservableObject {
         tasks[index].activeRunID = runID
         do { try persistTasks() }
         catch { recordStorageFailure(error) }
+    }
+
+    private func drainIncidentInbox() {
+        guard AppSettings.shared.cantripHomeEnabled, let session else { return }
+        let keys: Set<URLResourceKey> = [
+            .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey,
+        ]
+        let files: [URL]
+        do {
+            let root = try Self.incidentDirectory.resourceValues(
+                forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+            )
+            guard root.isDirectory == true, root.isSymbolicLink != true else {
+                throw CantripHomeError(400, "Incident inbox must be a real directory.")
+            }
+            files = try FileManager.default.contentsOfDirectory(
+                at: Self.incidentDirectory,
+                includingPropertiesForKeys: Array(keys),
+                options: [.skipsHiddenFiles]
+            )
+                .filter { $0.pathExtension == "json" }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        } catch {
+            Log.write("home: incident inbox read failed: \(error.localizedDescription)")
+            return
+        }
+        for url in files.prefix(10) {
+            do {
+                let values = try url.resourceValues(forKeys: keys)
+                guard values.isRegularFile == true, values.isSymbolicLink != true,
+                      let size = values.fileSize, size > 0, size <= 16_384 else {
+                    throw CantripHomeError(400, "Incident envelope is not a bounded regular file.")
+                }
+                let envelope = try JSONDecoder().decode(
+                    CantripHomeIncidentEnvelope.self, from: Data(contentsOf: url)
+                )
+                guard envelope.version == 1,
+                      url.deletingPathExtension().lastPathComponent
+                        .caseInsensitiveCompare(envelope.id.uuidString) == .orderedSame,
+                      !envelope.createdAt.isEmpty,
+                      session.submitCantripHomeIncident(
+                        id: envelope.id, prompt: envelope.prompt
+                      ) else {
+                    throw CantripHomeError(400, "Incident envelope failed validation.")
+                }
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                Log.write(
+                    "home: incident inbox rejected \(url.lastPathComponent): "
+                        + error.localizedDescription
+                )
+                try? FileManager.default.moveItem(
+                    at: url, to: url.appendingPathExtension("rejected")
+                )
+            }
+        }
     }
 
     private func complete(runID: UUID, status: String, summary: String) {
