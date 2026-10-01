@@ -950,10 +950,14 @@ final class ChatSession: ObservableObject {
         receive(text, mode: mode, includesAmbientContext: true)
     }
 
-    func submitCantripHomeTask(id: UUID, title: String, prompt: String) {
+    func submitCantripHomeTask(id: UUID, title: String, scheduleSummary: String, prompt: String) {
         guard isCantripHome, !isStreaming, queued.isEmpty else { return }
+        // The chat shows only a short label; the agent still receives the full saved prompt.
+        let schedule = scheduleSummary.trimmingCharacters(in: .whitespacesAndNewlines)
         send(
             "Scheduled task · \(title)\n\n\(prompt)",
+            displayText: "Scheduled task · \(title)"
+                + (schedule.isEmpty ? "" : "\n\(schedule) · running saved instructions"),
             preamble: """
             (This is execution of saved Cantrip Home task \(id.uuidString), not a request to
             create another task. Run it now and report the result.)
@@ -1449,7 +1453,7 @@ final class ChatSession: ObservableObject {
         appendRunEvent(event, durable: true)
     }
 
-    private func send(_ text: String, interrupted: Bool = false,
+    private func send(_ text: String, displayText: String? = nil, interrupted: Bool = false,
                       preamble: String? = nil, isResume: Bool = false,
                       includesAmbientContext: Bool = true,
                       consumesStagedContext: Bool = true,
@@ -1530,7 +1534,7 @@ final class ChatSession: ObservableObject {
         let isFirstOfConversation = messages.isEmpty
         let previousTurns = completedConversationTurns()
         if automaticTitle == "New chat" { automaticTitle = String(prompt.prefix(34)) }
-        promptUsageMessageID = appendRunMessage(ChatMessage(role: .user, text: prompt))
+        promptUsageMessageID = appendRunMessage(ChatMessage(role: .user, text: displayText ?? prompt))
         appendRunMessage(ChatMessage(role: .assistant, text: ""))
         isStreaming = true
         statusText = "Thinking…"

@@ -912,7 +912,8 @@ final class CantripHomeStore: ObservableObject {
             return
         }
         session.submitCantripHomeTask(
-            id: taskID, title: tasks[index].title, prompt: tasks[index].prompt
+            id: taskID, title: tasks[index].title,
+            scheduleSummary: tasks[index].schedule.summary, prompt: tasks[index].prompt
         )
         guard let runID = session.currentRunIdentifier else {
             tasks[index].state = .failed
