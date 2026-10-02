@@ -164,6 +164,8 @@ final class ChatSession: ObservableObject {
     var onRunFinished: (() -> Void)?
     /// Called for every individual turn, including scheduled Home runs.
     var onTurnCompleted: ((UUID, String, String) -> Void)?
+    /// Called when the Home background conversation starts a scheduled task or incident.
+    var onCantripHomeRunStarted: ((UUID, CantripHomeAutomatedRun) -> Void)?
     private(set) var remoteCompletion: RemoteCompletion?
     private var preparationTask: Task<Void, Never>?
     /// Orphans events and preparation from cancelled/superseded backend runs.
@@ -1560,6 +1562,9 @@ final class ChatSession: ObservableObject {
         appendRunMessage(ChatMessage(role: .assistant, text: ""))
         isStreaming = true
         statusText = "Thinking…"
+        if let automatedRun, let runID = currentRunID {
+            onCantripHomeRunStarted?(runID, automatedRun)
+        }
 
         // Attach context (shown to the backend, not in the UI).
         var backendPrompt = prompt

@@ -1432,6 +1432,28 @@ final class RemoteControlServer {
                     on: connection
                 )
             }
+        case "background":
+            guard parts.count == 4 else {
+                sendError(404, "not found", on: connection)
+                return
+            }
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            let background = manager.homeBackgroundSession
+            let value = CantripHomeBackgroundSnapshot(
+                sessionID: background.id,
+                runs: store.backgroundRuns,
+                queued: background.queued.compactMap { item in
+                    ChatSession.cantripHomeAutomatedRun(for: item.text).map {
+                        .init(id: item.id, kind: $0.isIncident ? .incident : .task, label: $0.label)
+                    }
+                },
+                activity: background.isStreaming ? background.statusText : nil,
+                revision: store.backgroundRevision.uuidString
+            )
+            sendEncoded(on: connection) { try JSONEncoder().encode(value) }
         default:
             sendError(404, "not found", on: connection)
         }
@@ -1514,6 +1536,11 @@ final class RemoteControlServer {
         ]
         if let status = session.statusText { result["status"] = status }
         if let status = session.deliveryStatus { result["deliveryStatus"] = status }
+        if session.isCantripHome, let background = manager?.homeBackgroundSession {
+            // Drives the Background button badge without fetching the run list.
+            result["supportsBackgroundRuns"] = true
+            result["backgroundActiveCount"] = (background.isStreaming ? 1 : 0) + background.queued.count
+        }
         // Hash only small metadata and mutation tokens, never the full transcript.
         var hasher = SHA256()
         for key in result.keys.sorted() {
