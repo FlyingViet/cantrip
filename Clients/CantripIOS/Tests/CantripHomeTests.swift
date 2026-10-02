@@ -755,6 +755,167 @@ final class CantripHomeTests: XCTestCase {
         """.utf8)
     }
 
+    func testHomeBackgroundListsRunsCountsBadgeAndOpensLog() async throws {
+        let client = client()
+        let model = CantripRemoteModel(urlSession: client)
+        var supportsRuns = true
+        var paths: [String] = []
+        CantripHomeRequestProtocol.handler = { request in
+            let path = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .percentEncodedPath ?? ""
+            paths.append(path)
+            switch path {
+            case "/api/v1/home":
+                return (200, self.homeSessionPayload(
+                    messages: self.backgroundWatcher,
+                    extra: supportsRuns ? #","supportsBackgroundRuns":true,"backgroundActiveCount":2"# : ""
+                ))
+            case "/api/v1/home/tasks": return (200, self.tasksPayload(enabled: true))
+            case "/api/v1/home/artifacts": return (200, self.artifactsPayload())
+            case "/api/v1/home/background": return (200, self.backgroundPayload())
+            case "/api/v1/sessions/\(self.backgroundID)":
+                return (200, Data("""
+                {"session":{"id":"\(self.backgroundID)","title":"Cantrip Home background",
+                "workdir":"/tmp","isStreaming":false,"canResume":false,"councilMode":false,
+                "queuedCount":0,"status":null,"messages":[],"queued":[],"isLocked":true,
+                "isCantripHomeBackground":true}}
+                """.utf8))
+            default: return (200, Data(#"{"sessions":[]}"#.utf8))
+            }
+        }
+        addTeardownBlock { @MainActor in
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            CantripHomeRequestProtocol.handler = nil
+        }
+        let configured = await model.configure(
+            url: "https://cantrip.example", pairingToken: "home-token", tailscaleOnly: true
+        )
+        XCTAssertTrue(configured)
+        await model.selectHome()
+        XCTAssertEqual(model.selectedSession?.supportsBackgroundRuns, true)
+        XCTAssertEqual(
+            CantripHomeBackgroundCount.active(
+                transcript: model.selectedSession?.transcript ?? [], session: model.selectedSession
+            ),
+            3, "The badge counts the chat's live watcher plus the Mac's running and queued runs"
+        )
+
+        await model.refreshHomeBackground()
+        let snapshot = try XCTUnwrap(model.homeBackground)
+        XCTAssertEqual(snapshot.sessionID, backgroundID)
+        XCTAssertEqual(snapshot.activity, "Reading the incident file")
+        XCTAssertEqual(snapshot.queued.map(\.label), ["Daily trip tracker"])
+        XCTAssertEqual(snapshot.runs.map(\.label), [
+            "Automated Bass Compass Ingestion Incident", "Daily interview tracker", "Daily trip tracker",
+        ])
+        XCTAssertTrue(snapshot.runs[0].isIncident && snapshot.runs[0].isRunning)
+        XCTAssertNil(snapshot.runs[0].finishedAt)
+        XCTAssertEqual(snapshot.runs[1].taskID, UUID(uuidString: "10000000-0000-0000-0000-000000000002"))
+        XCTAssertEqual(snapshot.runs[2].status, "failed")
+
+        let finished = CantripHomeBackgroundRunRow(run: snapshot.runs[1], isExpanded: .constant(false))
+        XCTAssertEqual(finished.statusText, "Done")
+        XCTAssertTrue(finished.detail(now: Date()).hasPrefix("Scheduled task · Done "))
+        XCTAssertTrue(finished.detail(now: Date()).hasSuffix("· took 3m 20s"))
+        let running = CantripHomeBackgroundRunRow(run: snapshot.runs[0], isExpanded: .constant(false))
+        XCTAssertTrue(running.detail(now: Date()).hasPrefix("Incident · Running for 1m"))
+
+        model.prepareToOpenHomeBackgroundLog()
+        await model.selectRegularSession()
+        XCTAssertFalse(model.isHomeSelected)
+        XCTAssertEqual(model.selectedSessionID, backgroundID,
+                       "Full Log opens the background conversation even though it is not a tab")
+        await model.selectRegularSession()
+        XCTAssertNotEqual(model.selectedSessionID, backgroundID, "The log opens once, not on every lane switch")
+
+        supportsRuns = false
+        await model.selectHome()
+        paths.removeAll()
+        await model.refreshHomeBackground()
+        XCTAssertFalse(paths.contains("/api/v1/home/background"),
+                       "Older Macs without the run list are never asked for it")
+        XCTAssertEqual(
+            CantripHomeBackgroundCount.active(
+                transcript: model.selectedSession?.transcript ?? [], session: model.selectedSession
+            ),
+            1
+        )
+    }
+
+    func testHomeBackgroundScreenshots() async throws {
+        let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_ARTIFACT_DIR"]
+        guard let directory, !directory.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_HOME_ARTIFACT_DIR to render the Home Background sheet.")
+        }
+        let client = client()
+        let model = CantripRemoteModel(urlSession: client)
+        CantripHomeRequestProtocol.handler = { request in
+            switch URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? "" {
+            case "/api/v1/home":
+                return (200, self.homeSessionPayload(
+                    messages: self.backgroundWatcher,
+                    extra: #","supportsBackgroundRuns":true,"backgroundActiveCount":2"#
+                ))
+            case "/api/v1/home/tasks": return (200, self.tasksPayload(enabled: true))
+            case "/api/v1/home/artifacts": return (200, self.artifactsPayload())
+            case "/api/v1/home/background": return (200, self.backgroundPayload())
+            case "/api/v1/copilot/usage": return (200, Data(#"{"isRefreshing":false}"#.utf8))
+            default: return (200, Data(#"{"sessions":[]}"#.utf8))
+            }
+        }
+        let env = HermesEnv()
+        let originalLane = env.executionLane
+        addTeardownBlock { @MainActor in
+            env.select(originalLane)
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            CantripHomeRequestProtocol.handler = nil
+        }
+        let configured = await model.configure(
+            url: "https://cantrip.example", pairingToken: "home-token", tailscaleOnly: true
+        )
+        XCTAssertTrue(configured)
+        env.select(.home)
+        await model.selectHome()
+        await model.refreshHomeBackground()
+        XCTAssertNotNil(model.homeBackground)
+
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        func capture(_ view: some View, _ name: String, style: UIUserInterfaceStyle,
+                     size: DynamicTypeSize = .large) async throws {
+            let controller = UIHostingController(rootView: view.dynamicTypeSize(size))
+            controller.overrideUserInterfaceStyle = style
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 852))
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(500))
+            controller.view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            try XCTUnwrap(image.pngData()).write(to: output.appendingPathComponent("\(name).png"))
+        }
+        for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
+            try await capture(
+                CantripHomeBackgroundView(remote: model, openLog: {}),
+                "cantrip-home-background-\(name)", style: style
+            )
+            try await capture(ChatView(env: env, remote: model), "cantrip-home-background-header-\(name)",
+                              style: style)
+        }
+        try await capture(
+            CantripHomeBackgroundView(remote: model, openLog: {}),
+            "cantrip-home-background-ax", style: .light, size: .accessibility3
+        )
+    }
+
     func testHomeFocusedScreenshots() async throws {
         let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_ARTIFACT_DIR"]
         guard let directory, !directory.isEmpty else {
@@ -870,13 +1031,45 @@ final class CantripHomeTests: XCTestCase {
         }
     }
 
-    private func homeSessionPayload(messages: String = "[]") -> Data {
+    private func homeSessionPayload(messages: String = "[]", extra: String = "") -> Data {
         Data("""
         {"session":{"id":"\(homeID)","title":"Cantrip Home","workdir":"/tmp",
         "isStreaming":false,"canResume":false,"councilMode":false,"queuedCount":0,
         "status":null,"messages":\(messages),"supportsImageAttachments":true,"queued":[],
         "supportsAutoDelivery":true,"isLocked":true,"isCantripHome":true,
-        "supportsModelSettings":true,"supportsPagedHistory":true}}
+        "supportsModelSettings":true,"supportsPagedHistory":true\(extra)}}
+        """.utf8)
+    }
+
+    private let backgroundID = "231C484E-0E50-43E0-9ADF-4295F3AC8956"
+
+    private let backgroundWatcher = #"""
+    [{"id":"w","role":"assistant","text":"Watching the build.","thinking":"","activities":[],
+      "subagents":[{"id":"call_w","agentID":"a1","name":"watch-testflight","agentType":"task",
+      "summary":"Wait for TestFlight processing","background":true,"status":"running",
+      "startedAt":1790501259,"canCancel":true,"latestMessage":"Build 100118 is processing."}]}]
+    """#
+
+    private func backgroundPayload() -> Data {
+        let now = Date().timeIntervalSinceReferenceDate.rounded(.down)
+        return Data("""
+        {"sessionID":"\(backgroundID)","revision":"b1","activity":"Reading the incident file",
+         "queued":[{"id":"30000000-0000-0000-0000-000000000003","kind":"task","label":"Daily trip tracker"}],
+         "runs":[
+          {"id":"30000000-0000-0000-0000-000000000001","kind":"incident",
+           "label":"Automated Bass Compass Ingestion Incident","startedAt":\(now - 95),
+           "status":"running","summary":""},
+          {"id":"30000000-0000-0000-0000-000000000002","kind":"task",
+           "label":"Daily interview tracker","taskID":"10000000-0000-0000-0000-000000000002",
+           "startedAt":\(now - 3_900),
+           "finishedAt":\(now - 3_700),
+           "status":"succeeded",
+           "summary":"Two new emails. **Rippling** booked an intro call for Thu Oct 8 at 9:30 AM, and Anthropic sent a follow-up for Software Engineer, Business Technology.\\n\\n- Rippling added as the third upcoming call\\n- Bloomberg moved to Applied"},
+          {"id":"30000000-0000-0000-0000-000000000004","kind":"task","label":"Daily trip tracker",
+           "startedAt":\(now - 90_000),
+           "finishedAt":\(now - 89_900),
+           "status":"failed","summary":"Calendar access timed out."}
+         ]}
         """.utf8)
     }
 

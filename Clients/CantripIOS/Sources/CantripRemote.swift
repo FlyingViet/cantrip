@@ -397,6 +397,10 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsInputRequests: Bool? = nil
     var pendingInputCount: Int? = nil
     var supportsChatInputReplies: Bool? = nil
+    /// Cantrip Home only: the Mac lists scheduled-task and incident runs.
+    var supportsBackgroundRuns: Bool? = nil
+    /// Cantrip Home only: background runs running or waiting on the Mac.
+    var backgroundActiveCount: Int? = nil
     var pendingInputs: [CantripInputRequest]? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
@@ -425,6 +429,35 @@ struct CantripHomeTaskRun: Decodable, Equatable, Identifiable {
     let finishedAt: Date
     let status: String
     let summary: String
+}
+
+/// A scheduled-task or incident run in Cantrip Home's background conversation on the Mac.
+struct CantripHomeBackgroundRun: Decodable, Equatable, Identifiable {
+    let id: UUID
+    let kind: String
+    let label: String
+    var taskID: UUID? = nil
+    let startedAt: Date
+    var finishedAt: Date? = nil
+    let status: String
+    let summary: String
+
+    var isIncident: Bool { kind == "incident" }
+    var isRunning: Bool { status == "running" }
+}
+
+struct CantripHomeBackgroundQueuedRun: Decodable, Equatable, Identifiable {
+    let id: UUID
+    let kind: String
+    let label: String
+}
+
+struct CantripHomeBackgroundSnapshot: Decodable, Equatable {
+    let sessionID: String
+    let runs: [CantripHomeBackgroundRun]
+    let queued: [CantripHomeBackgroundQueuedRun]
+    var activity: String? = nil
+    let revision: String
 }
 
 struct CantripHomeTaskField: Decodable, Equatable, Identifiable {
@@ -1216,6 +1249,10 @@ struct CantripRemoteAPI {
                 response.supportsReordering == true)
     }
 
+    func homeBackground() async throws -> CantripHomeBackgroundSnapshot {
+        try await request(path: "/api/v1/home/background")
+    }
+
     func homeArtifacts() async throws -> (artifacts: [CantripHomeArtifact], revision: String) {
         let response: CantripHomeArtifactsResponse = try await request(path: "/api/v1/home/artifacts")
         return (response.artifacts, response.revision)
@@ -1822,6 +1859,11 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var homeDataError: String?
     @Published private(set) var isLoadingHomeData = false
     @Published private(set) var homeTasksSupportReordering = false
+    @Published private(set) var homeBackground: CantripHomeBackgroundSnapshot?
+    @Published private(set) var homeBackgroundError: String?
+    private var homeBackgroundRefreshInFlight = false
+    /// Opened once by the next regular-lane selection even though it is not a tab.
+    private var pendingUnlistedSessionID: String?
     private var homeDataRefreshInFlight = false
     private var homeTaskOrderRevision = 0
     @Published private(set) var errorMessage: String?
@@ -2205,6 +2247,8 @@ final class CantripRemoteModel: ObservableObject {
             homeTasks = []
             homeTasksSupportReordering = false
             homeArtifacts = []
+            homeBackground = nil
+            homeBackgroundError = nil
             transcriptRevision += 1
             if configuredURL.isEmpty {
                 UserDefaults.standard.removeObject(forKey: Self.endpointKey)
@@ -2258,6 +2302,8 @@ final class CantripRemoteModel: ObservableObject {
             homeTasks = []
             homeTasksSupportReordering = false
             homeArtifacts = []
+            homeBackground = nil
+            homeBackgroundError = nil
             selectedServerID = nil
             errorMessage = nil
             transcriptRevision += 1
@@ -2384,6 +2430,11 @@ final class CantripRemoteModel: ObservableObject {
         regularSelectedSessionID = id
     }
 
+    /// Home's background log is reachable by ID but never listed as a tab.
+    func prepareToOpenHomeBackgroundLog() {
+        pendingUnlistedSessionID = homeBackground?.sessionID
+    }
+
     func selectHome() async {
         if isHomeSelected, selectedSession?.isCantripHome == true { return }
         if !isHomeSelected { regularSelectedSessionID = selectedSessionID }
@@ -2418,6 +2469,11 @@ final class CantripRemoteModel: ObservableObject {
 
     func selectRegularSession() async {
         isHomeSelected = false
+        if let id = pendingUnlistedSessionID {
+            pendingUnlistedSessionID = nil
+            await selectSession(id)
+            return
+        }
         let id = regularSelectedSessionID.flatMap { candidate in
             sessions.contains(where: { $0.id == candidate }) ? candidate : nil
         } ?? sessions.first?.id
@@ -2460,6 +2516,25 @@ final class CantripRemoteModel: ObservableObject {
             guard isHomeSelected else { return }
             let message = error.localizedDescription
             if homeDataError != message { homeDataError = message }
+        }
+    }
+
+    func refreshHomeBackground() async {
+        guard isHomeSelected, isConfigured, selectedSession?.supportsBackgroundRuns == true,
+              !homeBackgroundRefreshInFlight else { return }
+        homeBackgroundRefreshInFlight = true
+        defer { homeBackgroundRefreshInFlight = false }
+        do {
+            let snapshot = try await performHistoryRead { try await $0.homeBackground() }
+            guard isHomeSelected else { return }
+            if homeBackground != snapshot { homeBackground = snapshot }
+            if homeBackgroundError != nil { homeBackgroundError = nil }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard isHomeSelected else { return }
+            let message = error.localizedDescription
+            if homeBackgroundError != message { homeBackgroundError = message }
         }
     }
 

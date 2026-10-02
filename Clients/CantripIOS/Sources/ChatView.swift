@@ -1110,6 +1110,7 @@ struct ChatView: View {
     @State private var showSkills = false
     @State private var showQueue = false
     @State private var showBackgroundTasks = false
+    @State private var showHomeBackground = false
     @State private var showGitHubBuilds = false
     @State private var showCantripMemory = false
     @State private var showMascotCustomization = false
@@ -1226,6 +1227,14 @@ struct ChatView: View {
                         .presentationDetents([.medium, .large])
                 }
             }
+            .sheet(isPresented: $showHomeBackground) {
+                CantripHomeBackgroundView(remote: remote) {
+                    showHomeBackground = false
+                    remote.prepareToOpenHomeBackgroundLog()
+                    env.select(.cantrip)
+                }
+                .presentationDetents([.medium, .large])
+            }
             .sheet(isPresented: $showGitHubBuilds) {
                 GitHubBuildsView(remote: remote)
             }
@@ -1312,6 +1321,7 @@ struct ChatView: View {
             showRemoteTabs = false
             showQueue = false
             showBackgroundTasks = false
+            showHomeBackground = false
             if vm.activeLane == .home {
                 Task {
                     await remote.selectHome()
@@ -1341,6 +1351,7 @@ struct ChatView: View {
             }
         }
         .onChange(of: env.executionLane) { _, lane in
+            showHomeBackground = false
             vm.switchLane(to: lane)
             reloadCommands()
         }
@@ -1365,6 +1376,7 @@ struct ChatView: View {
             showRemoteTabs = false
             showQueue = false
             showBackgroundTasks = false
+            showHomeBackground = false
             showGitHubBuilds = false
             showCantripMemory = false
             showVoiceMode = false
@@ -1484,8 +1496,11 @@ struct ChatView: View {
             if vm.activeLane == .cantrip {
                 ChatTabsButton(isEnabled: remoteTabsEnabled) { showRemoteTabs = true }
             } else if vm.activeLane == .home {
-                ExecutionLanePicker(env: env, remote: remote)
-                    .disabled(vm.sending || importingImages || submittingRemote)
+                // The Pip title is already the lane menu, so this slot opens background work.
+                CantripHomeBackgroundButton(activeCount: homeBackgroundCount) {
+                    composerFocused = false
+                    showHomeBackground = true
+                }
             }
         } trailing: {
             chatMenu
@@ -1977,7 +1992,8 @@ struct ChatView: View {
 
     private var inputBar: some View {
         VStack(spacing: 8) {
-            if vm.activeLane.usesCantripRemote, !activeBackgroundTasks.isEmpty {
+            // Home keeps background work behind its top-left Background button.
+            if vm.activeLane == .cantrip, !activeBackgroundTasks.isEmpty {
                 CantripBackgroundTaskButton(subagents: activeBackgroundTasks) {
                     composerFocused = false
                     showBackgroundTasks = true
@@ -2028,6 +2044,14 @@ struct ChatView: View {
         }
         .padding(.horizontal).padding(.vertical, 8)
         .background(.bar)
+    }
+
+    private var homeBackgroundCount: Int {
+        guard vm.activeLane == .home, remote.selectedSession?.isCantripHome == true else { return 0 }
+        return CantripHomeBackgroundCount.active(
+            transcript: remote.selectedSession?.transcript ?? [],
+            session: remote.selectedSession
+        )
     }
 
     private var activeBackgroundTasks: [CantripRemoteSubagent] {
