@@ -720,6 +720,121 @@ extension SessionTabTests {
                      && seeded.first?.summary == completed.runs.first?.summary,
                      "The first Background list starts from recorded task runs")
         try store.delete(id: scheduled.id)
+
+        // One task, several daily times: Home's protocol, the schedule-edit inbox and catch-up.
+        for task in store.tasks where task.isScheduled && task.enabled {
+            _ = try store.update(id: task.id, update: .init(title: nil, prompt: nil, enabled: false))
+        }
+        homeChat.messages.append(ChatMessage(role: .assistant, text: """
+        Your tracker will run twice a day.
+        ```cantrip-task
+        {"id":null,"title":"Interview tracker","prompt":"Refresh the interview records.","schedule":{"kind":"weekdays","summary":"Twice daily","timeZone":"America/Los_Angeles","startAt":null,"intervalMinutes":null,"weekdays":[1,2,3,4,5,6,7],"times":[{"hour":22,"minute":0},{"hour":8,"minute":30}]}}
+        ```
+        """))
+        homeChat.processCantripHomeBlocks()
+        let twice = try requireHome(store.tasks.first { $0.title == "Interview tracker" })
+        precondition(twice.schedule.runTimes.map(\.hour) == [8, 22]
+                     && twice.schedule.hour == 8 && twice.schedule.minute == 30
+                     && homeChat.messages.last?.text.hasSuffix(
+                        "Task created: **Interview tracker** · Every day at 8:30 AM and 10:00 PM"
+                     ) == true,
+                     "Home creates one task with several run times and a natural summary")
+        let taskCountBeforeEdit = store.tasks.count
+        homeChat.messages.append(ChatMessage(role: .assistant, text: """
+        Weekdays only now.
+        ```cantrip-task
+        {"id":"\(twice.id.uuidString)","schedule":{"kind":"weekdays","summary":"","timeZone":"America/Los_Angeles","weekdays":[2,3,4,5,6],"times":["07:00","19:00"]}}
+        ```
+        """))
+        homeChat.processCantripHomeBlocks()
+        let retimed = try requireHome(store.tasks.first { $0.id == twice.id })
+        precondition(store.tasks.count == taskCountBeforeEdit
+                     && retimed.prompt == "Refresh the interview records."
+                     && retimed.title == "Interview tracker"
+                     && retimed.schedule.summary == "Weekdays at 7:00 AM and 7:00 PM"
+                     && homeChat.messages.last?.text.contains("Task updated") == true,
+                     "Editing by id may send only the schedule and keeps the saved prompt")
+        let protocolText = homeChat.cantripHomeInstructions
+        precondition(protocolText.contains(#""times":[{"hour":0-23,"minute":0-59}]"#)
+                     && protocolText.contains("never create a second task for another time")
+                     && protocolText.contains(
+                        "Weekdays at 7:00 AM and 7:00 PM (times 07:00,19:00; weekdays 2,3,4,5,6; America/Los_Angeles)"
+                     ),
+                     "Home's protocol documents run times and lists each task's exact times")
+        let tasksAPI = try await call("/api/v1/home/tasks")
+        let apiSchedule = ((tasksAPI.1["tasks"] as? [[String: Any]])?
+            .first { $0["id"] as? String == twice.id.uuidString })?["schedule"] as? [String: Any]
+        precondition(apiSchedule?["hour"] as? Int == 7 && apiSchedule?["minute"] as? Int == 0
+                     && (apiSchedule?["times"] as? [[String: Int]])?.count == 2,
+                     "The tasks API keeps hour/minute for older iPhone builds alongside times")
+
+        func writeScheduleEdit(_ name: String, _ body: String) throws -> URL {
+            let url = CantripHomeStore.scheduleEditDirectory.appendingPathComponent(name)
+            try Data(body.utf8).write(to: url, options: .atomic)
+            return url
+        }
+        func dailyEdit(_ taskID: UUID, _ times: String) -> String {
+            #"{"version":1,"taskID":"\#(taskID.uuidString)","schedule":{"kind":"weekdays","summary":"","timeZone":"America/Los_Angeles","weekdays":[1,2,3,4,5,6,7],"times":\#(times)}}"#
+        }
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: CantripHomeStore.scheduleEditDirectory.path
+        )
+        precondition((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700,
+                     "The schedule edit inbox is private to the user")
+        // Sunday, October 4 2026 at noon, Los Angeles.
+        let base = Date(timeIntervalSince1970: 1_791_140_400)
+        store.clock = { base }
+        defer { store.clock = { Date() } }
+        let editURL = try writeScheduleEdit("1-interview.json", dailyEdit(twice.id, #"["08:30","22:00"]"#))
+        let unknownURL = try writeScheduleEdit("2-unknown.json", dailyEdit(UUID(), #"["08:30"]"#))
+        let brokenURL = try writeScheduleEdit("3-broken.json", #"{"version":1}"#)
+        store.checkNow()
+        let migrated = try requireHome(store.tasks.first { $0.id == twice.id })
+        precondition(!FileManager.default.fileExists(atPath: editURL.path)
+                     && migrated.schedule.summary == "Every day at 8:30 AM and 10:00 PM"
+                     && migrated.prompt == retimed.prompt && migrated.enabled
+                     && migrated.nextRunAt == base.addingTimeInterval(10 * 3_600),
+                     "A queued schedule edit replaces only the schedule")
+        precondition(FileManager.default.fileExists(atPath: unknownURL.path + ".rejected")
+                     && FileManager.default.fileExists(atPath: brokenURL.path + ".rejected")
+                     && !FileManager.default.fileExists(atPath: unknownURL.path),
+                     "Edits for missing tasks or malformed files are set aside")
+
+        // The Mac slept through six slots; Wednesday 1 PM it runs once, then waits for 9 PM.
+        let woke = base.addingTimeInterval(3 * 86_400 + 3_600)
+        try await waitForJournalTest { !scheduledSession.isStreaming }
+        store.clock = { woke }
+        fixture.sink = nil
+        store.checkNow()
+        try await waitForJournalTest { fixture.sink != nil }
+        let catchUpPrompt = fixture.lastPrompt
+        precondition(store.tasks.first { $0.id == twice.id }?.state == .running
+                     && scheduledSession.queued.isEmpty
+                     && catchUpPrompt?.contains("Refresh the interview records.") == true,
+                     "An overdue multi-time task starts one catch-up run")
+        let queuedEditURL = try writeScheduleEdit("4-later.json", dailyEdit(twice.id, #"["08:30","21:00"]"#))
+        store.checkNow()
+        precondition(scheduledSession.queued.isEmpty && fixture.lastPrompt == catchUpPrompt
+                     && FileManager.default.fileExists(atPath: queuedEditURL.path),
+                     "A running task is never started again, and its schedule edit waits")
+        let catchUp = fixture.sink
+        fixture.sink = nil
+        catchUp?(.textDelta("Caught up."))
+        catchUp?(.done)
+        try await waitForJournalTest {
+            store.tasks.first(where: { $0.id == twice.id })?.runs.first?.status == "succeeded"
+        }
+        let caughtUp = try requireHome(store.tasks.first { $0.id == twice.id })
+        precondition(caughtUp.runs.count == 1
+                     && !FileManager.default.fileExists(atPath: queuedEditURL.path)
+                     && caughtUp.schedule.runTimes.map(\.hour) == [8, 21]
+                     && caughtUp.nextRunAt == woke.addingTimeInterval(8 * 3_600),
+                     "Missed slots collapse into one run; the next run is the next future slot")
+        try await waitForJournalTest { !scheduledSession.isStreaming }
+        store.checkNow()
+        precondition(fixture.sink == nil && scheduledSession.queued.isEmpty,
+                     "No second catch-up run for the other missed slots")
+        try store.delete(id: twice.id)
         print("Cantrip Home: content-aware tab handoffs, hidden session, schedules, task/artifact safety and authenticated APIs passed")
     }
 
@@ -770,7 +885,7 @@ extension SessionTabTests {
         let chat = ChatSession(id: ChatSession.cantripHomeID)
         defer { chat.cancel() }
         chat.submitRemote(
-            "Create a task named Home live fixture that checks the lowest round-trip economy price for one adult from SFO to JFK, outbound October 20 2026 and returning October 27 2026, every weekday at 8 AM in America/Los_Angeles. Report the lowest price and source; do not run it now."
+            "Create a task named Home live fixture that checks the lowest round-trip economy price for one adult from SFO to JFK, outbound October 20 2026 and returning October 27 2026, every weekday at 8 AM and again at 6 PM in America/Los_Angeles. Report the lowest price and source; do not run it now."
         )
         let deadline = Date().addingTimeInterval(180)
         while chat.isStreaming, Date() < deadline {
@@ -787,10 +902,11 @@ extension SessionTabTests {
             )
         }
         precondition(task.schedule.weekdays == [2, 3, 4, 5, 6]
-                     && task.schedule.hour == 8
+                     && task.schedule.runTimes == [.init(hour: 8, minute: 0), .init(hour: 18, minute: 0)]
+                     && task.schedule.summary == "Weekdays at 8:00 AM and 6:00 PM"
                      && !answer.contains("cantrip-task"),
-                     "The live Home protocol did not create and hide the task marker")
+                     "The live Home protocol did not create one two-time task and hide the marker: \(task.schedule)")
         try CantripHomeStore.shared.delete(id: task.id)
-        print("Live Cantrip Home: conversational weekday task created and control marker hidden")
+        print("Live Cantrip Home: conversational two-time weekday task created and control marker hidden")
     }
 }

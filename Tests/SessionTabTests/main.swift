@@ -140,6 +140,7 @@ struct SessionTabTests {
         try await testCopilotSteering()
         try await testMCPAppTranscripts()
         try await testMCPAppRemote()
+        try testCantripHomeSchedules()
         try await testCantripHome()
         try testSubagentPlacement()
         try await testSubagentMonitor()
