@@ -50,7 +50,9 @@ targets:
         CFBundleIconName: AppIcon
         ITSAppUsesNonExemptEncryption: false
         CantripPushEnvironment: "$(APS_ENVIRONMENT)"
-        UILaunchScreen: {}
+        UILaunchScreen:
+          UIColorName: LaunchBackground   # dark in every appearance; the app is dark-only
+          UIImageName: LaunchPip          # rendered from CantripLaunchPipBadge (see README)
         UIBackgroundModes:
           - audio
         UISupportedInterfaceOrientations:
