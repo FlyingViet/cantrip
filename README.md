@@ -135,8 +135,10 @@ The macOS app includes:
   per-session model controls, tools, attachments, input requests and history as
   Cantrip Remote. Home decides from each message's intent: references,
   questions and status checks about a project are answered in Home, while
-  requests to change a project with an open tab are handed to that tab as a
-  nested task. Home keeps a live card for each handoff with the tab's status and
+  requests to change a project are handed to the open tab that owns it as a
+  nested task. Home matches tabs by meaning, using each tab's title, the
+  repositories its conversation works in and its latest requests, and a busy
+  tab queues the handoff instead of being interrupted. Home keeps a live card for each handoff with the tab's status and
   final result, and scheduled or automated runs never hand off. Tasks can be
   one-time, interval or weekday automations, or
   structured workspaces such as trackers. Workspace tasks use a validated

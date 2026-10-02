@@ -164,9 +164,31 @@ extension SessionTabTests {
         let delegations = CantripHomeDelegations.shared
         let homeInstructions = manager.homeSession.cantripHomeInstructions
         precondition(homeInstructions.contains(bassSession.id.uuidString)
-                     && homeInstructions.contains("\"Bass Compass\" — /tmp/Bass-Compass (idle)")
+                     && homeInstructions.contains(
+                        "\"Bass Compass\" (idle); folder /tmp/Bass-Compass; projects Bass-Compass"
+                     )
                      && homeInstructions.contains("cantrip-delegate"),
                      "Home must see open project tabs and the handoff protocol")
+        let contextTab = UUID()
+        let contextSummary = CantripHomeDelegations.tabSummary(
+            id: contextTab, title: "Cantrip", workdir: NSHomeDirectory(), state: "busy",
+            projects: CantripHomeDelegations.projects(in: [
+                "Edited ~/Coding/Hermes/Sources/ChatView.swift",
+                "Pushed FlyingViet/Hermes and rebuilt /Users/me/Coding/Hermes",
+                "Mentioned ~/Coding/Alter once",
+            ], workdir: NSHomeDirectory()),
+            messages: [
+                ChatMessage(role: .user, text: "Add an animated mascot to Cantrip Home\nwith outfits"),
+                ChatMessage(role: .user, text: "! make test"),
+                ChatMessage(role: .user, text: "Deploy to TestFlight (Recommended)"),
+                ChatMessage(role: .user, text: "Cantrip remote on cantrip agent should keep its header"),
+                ChatMessage(role: .user, text: "Ok"),
+            ]
+        )
+        precondition(contextSummary == "- \(contextTab.uuidString): \"Cantrip\" (busy); "
+                     + "projects Hermes; started \"Add an animated mascot to Cantrip Home\"; "
+                     + "recent \"Cantrip remote on cantrip agent should keep its header\"",
+                     "Tab context must show recurring projects and substantive requests only: \(contextSummary)")
         func homeReply(user: String, assistant: String) -> UUID {
             let reply = ChatMessage(role: .assistant, text: assistant)
             manager.homeSession.messages.append(ChatMessage(role: .user, text: user))
@@ -223,10 +245,33 @@ extension SessionTabTests {
                      && liveCard["summary"] as? String == "Fix lineup sorting"
                      && liveCard["latestStatus"] as? String != nil,
                      "The phone must receive the live handoff card")
-        routeBackend.sink?(.textDelta("Headliners now sort first."))
+        let firstRunSink = routeBackend.sink
+        routeBackend.sink = nil
+        let queuedPrompt = "Make the Bass Compass lineup collapsible."
+        let queuedID = homeReply(
+            user: "Also make the Bass Compass lineup collapsible.",
+            assistant: delegateBlock(bassSession.id, "Collapsible lineup", queuedPrompt)
+        )
+        let queuedHandoff = try requireHome(homeMessage(queuedID).delegations.first)
+        precondition(queuedHandoff.status == .queued
+                     && bassSession.isStreaming
+                     && bassSession.queued.map(\.text) == [queuedPrompt]
+                     && bassSession.messages.filter { $0.role == .user }.map(\.text) == [handoffPrompt],
+                     "A handoff to a busy tab must wait in its queue without interrupting it")
+        firstRunSink?(.textDelta("Headliners now sort first."))
+        firstRunSink?(.done)
+        try await waitForJournalTest { routeBackend.sink != nil }
+        delegations.refresh()
+        let startedQueued = try homeMessage(queuedID).delegations.first
+        precondition(startedQueued?.status == .running,
+                     "The queued handoff must start once the tab is free")
+        routeBackend.sink?(.textDelta("Past sets now collapse."))
         routeBackend.sink?(.done)
         try await waitForJournalTest { !bassSession.isStreaming }
         delegations.refresh()
+        let finishedQueued = try homeMessage(queuedID).delegations.first
+        precondition(finishedQueued?.status == .completed
+                     && finishedQueued?.result == "Past sets now collapse.")
         let finished = try requireHome(homeMessage(handoffID).delegations.first)
         precondition(finished.status == .completed && finished.finishedAt != nil
                      && finished.result == "Headliners now sort first."
@@ -245,9 +290,9 @@ extension SessionTabTests {
 
         routeBackend.sink = nil
         let stoppedID = homeReply(
-            user: "Also make the Bass Compass lineup collapsible.",
-            assistant: delegateBlock(bassSession.id, "Collapsible lineup",
-                                     "Make the Bass Compass lineup collapsible.")
+            user: "Also add stage filters to the Bass Compass lineup.",
+            assistant: delegateBlock(bassSession.id, "Stage filters",
+                                     "Add stage filters to the Bass Compass lineup.")
         )
         let stoppedMessage = try homeMessage(stoppedID)
         precondition(stoppedMessage.text.isEmpty && stoppedMessage.delegations.count == 1,
