@@ -1228,11 +1228,24 @@ struct ChatView: View {
                 }
             }
             .sheet(isPresented: $showHomeBackground) {
-                CantripHomeBackgroundView(remote: remote) {
-                    showHomeBackground = false
-                    remote.prepareToOpenHomeBackgroundLog()
-                    env.select(.cantrip)
-                }
+                CantripHomeBackgroundView(
+                    remote: remote,
+                    openLog: {
+                        showHomeBackground = false
+                        remote.prepareToOpenHomeBackgroundLog()
+                        env.select(.cantrip)
+                    },
+                    openSession: { id in
+                        showHomeBackground = false
+                        remote.prepareToOpenHomeRun(sessionID: id)
+                        env.select(.cantrip)
+                    },
+                    openTab: { id in
+                        showHomeBackground = false
+                        remote.prepareToOpenTab(id)
+                        env.select(.cantrip)
+                    }
+                )
                 .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showGitHubBuilds) {
