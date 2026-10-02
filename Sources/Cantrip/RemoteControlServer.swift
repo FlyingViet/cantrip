@@ -139,6 +139,19 @@ final class RemoteControlServer {
         }
     }
 
+    /// Pushes a notice that isn't a session's own completion, such as a Home handoff.
+    @MainActor
+    func notify(_ completion: RemoteCompletion) {
+        guard !token.isEmpty else { return }
+        notificationLifecycleLock.lock()
+        let activation = notificationLifecycleTask
+        notificationLifecycleLock.unlock()
+        Task {
+            await activation?.value
+            await notifications.enqueue(completion)
+        }
+    }
+
     @MainActor
     func notifyInput(for session: ChatSession, request: InputRequestSnapshot) {
         guard !token.isEmpty, !session.isPrivate, !session.isLocalPrivate else { return }
@@ -688,7 +701,7 @@ final class RemoteControlServer {
               let id = UUID(uuidString: String(rawID)),
               let session = manager.managedSession(id: id),
               !session.isPrivate,
-              (!SessionManager.isCantripHomeReserved(id) || AppSettings.shared.cantripHomeEnabled)
+              (!SessionManager.isCantripHomeReserved(session) || AppSettings.shared.cantripHomeEnabled)
         else {
             sendError(404, "session not found", on: connection)
             return
@@ -1433,6 +1446,27 @@ final class RemoteControlServer {
                 )
             }
         case "background":
+            if parts.count == 6, parts[5] == "stop" {
+                // POST /api/v1/home/background/<run id>/stop
+                guard request.method == "POST" else {
+                    sendError(405, "method not allowed", on: connection)
+                    return
+                }
+                guard request.body.count <= 1024, let runID = UUID(uuidString: String(parts[4])) else {
+                    sendError(400, "Stopping a background run takes its ID and no body.", on: connection)
+                    return
+                }
+                do {
+                    try store.stopBackgroundRun(id: runID)
+                    let value = store.backgroundSnapshot()
+                    sendEncoded(on: connection) { try JSONEncoder().encode(value) }
+                } catch let error as CantripHomeError {
+                    sendError(error.status, error.message, on: connection)
+                } catch {
+                    sendError(500, "Could not stop the background run.", on: connection)
+                }
+                return
+            }
             guard parts.count == 4 else {
                 sendError(404, "not found", on: connection)
                 return
@@ -1441,18 +1475,7 @@ final class RemoteControlServer {
                 sendError(405, "method not allowed", on: connection)
                 return
             }
-            let background = manager.homeBackgroundSession
-            let value = CantripHomeBackgroundSnapshot(
-                sessionID: background.id,
-                runs: store.backgroundRuns,
-                queued: background.queued.compactMap { item in
-                    ChatSession.cantripHomeAutomatedRun(for: item.text).map {
-                        .init(id: item.id, kind: $0.isIncident ? .incident : .task, label: $0.label)
-                    }
-                },
-                activity: background.isStreaming ? background.statusText : nil,
-                revision: store.backgroundRevision.uuidString
-            )
+            let value = store.backgroundSnapshot()
             sendEncoded(on: connection) { try JSONEncoder().encode(value) }
         default:
             sendError(404, "not found", on: connection)
@@ -1519,8 +1542,8 @@ final class RemoteControlServer {
             "supportsInputRequests": true,
             "supportsChatInputReplies": true,
             "pendingInputCount": session.pendingInputs.count,
-            "supportsTabMetadata": !SessionManager.isCantripHomeReserved(session.id),
-            "supportsTabReordering": !SessionManager.isCantripHomeReserved(session.id),
+            "supportsTabMetadata": !SessionManager.isCantripHomeReserved(session),
+            "supportsTabReordering": !SessionManager.isCantripHomeReserved(session),
             "supportsModelSettings": !session.isLocalPrivate && !session.isCantripHomeBackground,
             "modelSettingsRevision": session.modelSettingsRevision,
             "workdir": session.workdir,
@@ -1536,10 +1559,10 @@ final class RemoteControlServer {
         ]
         if let status = session.statusText { result["status"] = status }
         if let status = session.deliveryStatus { result["deliveryStatus"] = status }
-        if session.isCantripHome, let background = manager?.homeBackgroundSession {
+        if session.isCantripHome {
             // Drives the Background button badge without fetching the run list.
             result["supportsBackgroundRuns"] = true
-            result["backgroundActiveCount"] = (background.isStreaming ? 1 : 0) + background.queued.count
+            result["backgroundActiveCount"] = CantripHomeStore.shared.runner.activeCount
         }
         // Hash only small metadata and mutation tokens, never the full transcript.
         var hasher = SHA256()

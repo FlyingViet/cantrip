@@ -3095,6 +3095,15 @@ struct SettingsView: View {
                     Text("Cantrip must remain running. Scheduled Home tasks use this Mac's selected backend and the Home session's model settings.")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                    Stepper(value: $settings.cantripHomeParallelRuns,
+                            in: 1...CantripHomeBackgroundRunner.maximumParallelLimit) {
+                        Text("Background jobs at once: \(settings.cantripHomeParallelRuns)")
+                            .font(.caption)
+                    }
+                    .help("Each scheduled task or incident runs in its own hidden session. Lower this if the Mac is short on memory.")
+                    .onChange(of: settings.cantripHomeParallelRuns) { _, _ in
+                        CantripHomeStore.shared.checkNow()
+                    }
                 }
                 MacAccessView()
                 HStack(spacing: 8) {
