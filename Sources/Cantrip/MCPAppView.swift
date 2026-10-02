@@ -348,15 +348,8 @@ struct MCPAppWebView: NSViewRepresentable {
                 if accepted { self.actions?.sendMessage(self.app, text) }
                 completion(accepted && self.actions != nil)
             }
-            guard let window = webView?.window else {
-                finish(alert.runModal() == .alertFirstButtonReturn)
-                return
-            }
-            let panel = window as? LauncherPanel
-            panel?.beginAttachedModalPresentation()
-            alert.beginSheetModal(for: window) { response in
-                finish(response == .alertFirstButtonReturn)
-                DispatchQueue.main.async { panel?.endAttachedModalPresentation() }
+            alert.presentKeepingPanelOpen(on: webView?.window) {
+                finish($0 == .alertFirstButtonReturn)
             }
         }
 

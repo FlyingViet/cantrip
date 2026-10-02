@@ -240,3 +240,22 @@ final class LauncherPanel: NSPanel {
         isProgrammaticMove = false
     }
 }
+
+extension NSAlert {
+    /// Shows the alert as a sheet on `window` (modal when there is none). An attached
+    /// sheet takes key focus, so the launcher panel is told to stay open until it ends.
+    func presentKeepingPanelOpen(
+        on window: NSWindow?, completion: @escaping (NSApplication.ModalResponse) -> Void
+    ) {
+        guard let window else {
+            completion(runModal())
+            return
+        }
+        let panel = window as? LauncherPanel
+        panel?.beginAttachedModalPresentation()
+        beginSheetModal(for: window) { response in
+            completion(response)
+            DispatchQueue.main.async { panel?.endAttachedModalPresentation() }
+        }
+    }
+}

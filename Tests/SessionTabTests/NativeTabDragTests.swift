@@ -80,3 +80,36 @@ extension SessionTabTests {
         }
     }
 }
+
+extension SessionTabTests {
+    /// Web confirm() sheets (e.g. Stop on a background task) must not hide the launcher panel.
+    @MainActor
+    static func testPanelStaysOpenForAttachedConfirmation() async throws {
+        _ = NSApplication.shared
+        let panel = LauncherPanel()
+        panel.isReleasedWhenClosed = false
+        defer { panel.close() }
+        panel.setContentSize(NSSize(width: 680, height: 400))
+        panel.orderFrontRegardless()
+        let resignKey = { NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: panel) }
+
+        var response: NSApplication.ModalResponse?
+        let alert = NSAlert()
+        alert.messageText = "Stop the watcher?"
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.presentKeepingPanelOpen(on: panel) { response = $0 }
+        try await waitForJournalTest { panel.attachedSheet != nil }
+        resignKey()
+        precondition(panel.isVisible && panel.attachedSheet != nil,
+                     "The confirmation sheet taking focus must not hide the panel")
+        panel.endSheet(panel.attachedSheet!, returnCode: .alertFirstButtonReturn)
+        try await waitForJournalTest { response != nil && panel.attachedSheet == nil }
+        precondition(response == .alertFirstButtonReturn && panel.isVisible,
+                     "Answering the confirmation must report the choice and leave the panel open")
+        try await Task.sleep(for: .milliseconds(50))
+        resignKey()
+        precondition(!panel.isVisible, "After the sheet ends, losing focus dismisses the panel again")
+        print("Launcher panel: attached confirmations keep it open, then normal dismissal resumes")
+    }
+}

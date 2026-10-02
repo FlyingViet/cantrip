@@ -385,10 +385,8 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
         alert.informativeText = String(message.prefix(2_400))
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
-        if let window = webView.window {
-            alert.beginSheetModal(for: window) { completionHandler($0 == .alertFirstButtonReturn) }
-        } else {
-            completionHandler(alert.runModal() == .alertFirstButtonReturn)
+        alert.presentKeepingPanelOpen(on: webView.window) {
+            completionHandler($0 == .alertFirstButtonReturn)
         }
     }
 
