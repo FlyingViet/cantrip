@@ -407,6 +407,22 @@ you can rename Pip there too (up to 20 characters; blank restores Pip). Choices
 are saved on the device. Backend menus and Settings still call the lane Cantrip
 Home.
 
+On a cold launch (not when resuming from the background), the launch screen
+shows Pip in the Dino Hoodie on black, in light and dark mode alike, since the
+app is dark-only. The splash then picks up from that exact frame: Pip hops
+hello and the **Cantrip** wordmark fades in, and about a second later
+everything fades into the app. The app restores and reconnects underneath the
+whole time. The splash leaves as soon as the visible chat is ready (1–1.5 s
+total), never waits on a slow reconnection, and skips straight to the target
+for notification and link launches. Tap it to skip. With Reduce Motion or Low
+Power Mode, Pip stays still and the splash only crossfades. VoiceOver ignores
+it. `LaunchPip` in the asset catalog is rendered from `CantripLaunchPipBadge`.
+After changing Pip's renderer, regenerate it with
+`TEST_RUNNER_CANTRIP_LAUNCH_ART_DIR=<dir> xcodebuild test ...
+-only-testing:HermesTests/CantripLaunchSplashTests/testRenderLaunchArt`, then
+copy the PNGs into `LaunchPip.imageset`. A pixel test fails if the asset and
+the splash's first frame drift apart.
+
 Background work stays out of Home's chat. The top-left **Background** button
 shows a count and pulses while anything runs; tap it for one sheet with the
 chat's own watchers (with **Stop**), queued runs, and recent scheduled-task and
