@@ -139,23 +139,40 @@ The macOS app includes:
   nested task. Home matches tabs by meaning, using each tab's title, the
   repositories its conversation works in and its latest requests, and a busy
   tab queues the handoff instead of being interrupted. Home keeps a live card for each handoff with the tab's status and
-  final result, and scheduled or automated runs never hand off. Tasks can be
+  final result. Tasks can be
   one-time, interval or weekday automations, or
   structured workspaces such as trackers. A weekday task can run at several
   local times a day in its own time zone, with DST handled. After sleep or a
   quit, an overdue task runs once rather than once per missed time, and a task
-  never runs twice at the same time. Local maintenance can queue a schedule
-  change for an existing task by writing
-  `{"version":1,"taskID":"…","schedule":{…}}` into
-  `~/.cache/Cantrip/home/schedule-edits/`; it is applied once that task is idle.
+  never runs twice at the same time. A task can list other tasks in
+  `runsAfter` (for example a morning briefing that reviews the trackers): it
+  starts after their runs due at or before it finish, or 30 minutes after its
+  own time at the latest. Local maintenance can queue a change for an existing
+  task by writing `{"version":1,"taskID":"…","schedule":{…}}` (and/or
+  `"runsAfter":["…"]`, `"runsAfterTimeoutMinutes":45`) into
+  `~/.cache/Cantrip/home/task-edits/` (schedule-only edits also work in
+  `schedule-edits/`); it is applied once that task is idle.
   Workspace tasks use a validated
   declarative schema for native list, detail and edit screens; their records can
   be updated conversationally or through the mobile UI. Touch and hold a task to
-  drag it into a new order; the order is saved on the Mac. Due runs and local
-  ingestion incidents run in a separate hidden background conversation, each
-  with a fresh model context, so they never add turns to Home chat. Their results
-  appear in task run summaries, workspaces and completion notifications (which
-  open the run's report), and Home can still discuss or rerun them on request.
+  drag it into a new order; the order is saved on the Mac. Each due run and
+  local ingestion incident runs in its own hidden, single-use session with a
+  fresh model context, so unrelated jobs run in parallel (3 at once by default;
+  change it under Mac Settings > Remote control) and never add turns to Home
+  chat or wait for it. Jobs that write the same task workspace or concern the
+  same failing job run one after another, and a repeated trigger folds into the
+  run already queued or running. An incident in a repository that an open tab
+  clearly owns (by title, folder or the repositories it works in) is handed to
+  that tab's queue instead, using Home's handoff cards and a notification; an
+  incident whose file is already resolved is skipped. Hidden runs follow the same
+  handoff rules for change work they discover. Concurrent jobs refresh Apple
+  Mail through `Scripts/mail-refresh`, which shares one refresh between them.
+  Results appear in the Background list (with per-run Stop), task run summaries,
+  workspaces and completion notifications (which open the run's report in
+  Home's background log); finished sessions are removed and their transcripts
+  kept in that log. After a quit, interrupted tasks run once more and an
+  interrupted incident is retried once. Home can still discuss or rerun any of
+  them on request.
   Deliverable files the agent saves in Home's guarded artifact folder
   appear automatically in Artifacts and can be permanently deleted from the
   mobile app. Cantrip must remain running for scheduled work.

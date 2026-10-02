@@ -193,6 +193,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
         }
         self.remoteControlServer = remoteControlServer
+        CantripHomeStore.shared.onHandoff = { [weak self] run, handoff in
+            let title = "Handed to \(handoff.tabTitle)"
+            let state = handoff.status == .running ? "Running now" : "Waiting in the tab's queue"
+            let summary = "\(run.label) · \(state)"
+            // Tapping opens the tab that took the work.
+            self?.remoteControlServer?.notify(RemoteCompletion(
+                id: handoff.id, sessionID: handoff.tabID, title: title,
+                summary: RemoteCompletion.preview(summary), completedAt: Date()
+            ))
+            let content = UNMutableNotificationContent()
+            content.title = "Cantrip — \(title)"
+            content.body = summary
+            content.userInfo = ["sessionID": handoff.tabID.uuidString]
+            UNUserNotificationCenter.current().add(UNNotificationRequest(
+                identifier: handoff.id.uuidString, content: content, trigger: nil
+            ))
+        }
         AppSettings.shared.$remoteControlEnabled
             .removeDuplicates()
             .receive(on: DispatchQueue.main)

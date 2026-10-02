@@ -47,6 +47,15 @@ final class AppSettings: ObservableObject {
     @Published var cantripHomeEnabled: Bool {
         didSet { d.set(cantripHomeEnabled, forKey: "cantripHomeEnabled") }
     }
+    /// How many Home background jobs may run at once, each in its own hidden session.
+    @Published var cantripHomeParallelRuns: Int {
+        didSet {
+            let clamped = min(max(cantripHomeParallelRuns, 1),
+                              CantripHomeBackgroundRunner.maximumParallelLimit)
+            if clamped != cantripHomeParallelRuns { cantripHomeParallelRuns = clamped }
+            d.set(cantripHomeParallelRuns, forKey: "cantripHomeParallelRuns")
+        }
+    }
 
     var remoteControlToken: String {
         do { return try RemoteControlCredentials.load() ?? "" }
@@ -414,6 +423,7 @@ final class AppSettings: ObservableObject {
             "remoteControlEnabled": remoteControlEnabled,
             "remoteControlPort": remoteControlPort,
             "cantripHomeEnabled": cantripHomeEnabled,
+            "cantripHomeParallelRuns": cantripHomeParallelRuns,
         ]
         if let data = try? JSONSerialization.data(
             withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]) {
@@ -463,6 +473,9 @@ final class AppSettings: ObservableObject {
         bool("fileRAGEnabled") { self.fileRAGEnabled = $0 }
         bool("remoteControlEnabled") { self.remoteControlEnabled = $0 }
         bool("cantripHomeEnabled") { self.cantripHomeEnabled = $0 }
+        if let runs = dict["cantripHomeParallelRuns"] as? Int {
+            cantripHomeParallelRuns = runs
+        }
         if let port = dict["remoteControlPort"] as? Int {
             remoteControlPort = port
         }
@@ -539,6 +552,10 @@ final class AppSettings: ObservableObject {
         let storedRemotePort = d.integer(forKey: "remoteControlPort")
         remoteControlPort = storedRemotePort == 0 ? 8765 : storedRemotePort
         cantripHomeEnabled = d.bool(forKey: "cantripHomeEnabled")
+        let storedParallelRuns = d.integer(forKey: "cantripHomeParallelRuns")
+        cantripHomeParallelRuns = storedParallelRuns == 0
+            ? CantripHomeBackgroundRunner.defaultParallelRuns
+            : min(max(storedParallelRuns, 1), CantripHomeBackgroundRunner.maximumParallelLimit)
         backend = BackendKind(rawValue: d.string(forKey: "backend") ?? "") ?? .claudeCode
         claudePath = d.string(forKey: "claudePath") ?? ""
         claudeWorkdir = d.string(forKey: "claudeWorkdir") ?? NSHomeDirectory()

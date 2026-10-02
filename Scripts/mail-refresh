@@ -1,0 +1,83 @@
+#!/bin/bash
+# Coalesced Apple Mail refresh for Cantrip jobs that may run at the same time.
+#
+# Usage: mail-refresh [--max-age SECONDS] [--settle-timeout SECONDS]
+#
+# One caller at a time asks Mail to check for new mail and waits until the Envelope Index
+# stops changing. Callers that arrive while a refresh is running wait for it, and any caller
+# within --max-age (default 180s) of the last refresh reuses it instead of asking again.
+# Mail's index should then be read read-only (sqlite "file:...?mode=ro").
+set -u
+
+MAX_AGE=180
+SETTLE_TIMEOUT=45
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --max-age) MAX_AGE="${2:?}"; shift 2 ;;
+        --settle-timeout) SETTLE_TIMEOUT="${2:?}"; shift 2 ;;
+        -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+        *) echo "mail-refresh: unknown option $1" >&2; exit 64 ;;
+    esac
+done
+
+STATE_DIR="${CANTRIP_MAIL_REFRESH_DIR:-$HOME/.cache/Cantrip/mail-refresh}"
+STAMP="$STATE_DIR/last-refresh"
+LOCK="$STATE_DIR/lock"
+INDEX="${CANTRIP_MAIL_INDEX:-$HOME/Library/Mail/V10/MailData/Envelope Index}"
+CHECK_COMMAND="${CANTRIP_MAIL_CHECK_COMMAND:-}"
+
+mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"
+
+age() {
+    [ -f "$STAMP" ] || { echo 999999; return; }
+    echo $(( $(date +%s) - $(stat -f %m "$STAMP") ))
+}
+
+if [ "$(age)" -lt "$MAX_AGE" ]; then
+    echo "Mail was refreshed $(age)s ago by another job; using that refresh."
+    exit 0
+fi
+
+if [ "${CANTRIP_MAIL_REFRESH_LOCKED:-}" != 1 ]; then
+    # Wait for a refresh already in progress rather than starting a second one.
+    CANTRIP_MAIL_REFRESH_LOCKED=1 exec /usr/bin/lockf -k -t $((SETTLE_TIMEOUT + 90)) "$LOCK" \
+        "$0" --max-age "$MAX_AGE" --settle-timeout "$SETTLE_TIMEOUT"
+fi
+
+if [ "$(age)" -lt "$MAX_AGE" ]; then
+    echo "Mail was refreshed $(age)s ago by another job; using that refresh."
+    exit 0
+fi
+
+signature() {
+    stat -f '%m:%z' "$INDEX" "$INDEX-wal" 2>/dev/null | tr '\n' ' '
+}
+
+before="$(signature)"
+started=$(date +%s)
+if [ -n "$CHECK_COMMAND" ]; then
+    /bin/bash -c "$CHECK_COMMAND" || { echo "mail-refresh: check command failed" >&2; exit 1; }
+else
+    /usr/bin/osascript -e 'with timeout of 60 seconds' \
+        -e 'tell application "Mail" to check for new mail' -e 'end timeout' >/dev/null \
+        || { echo "mail-refresh: Mail did not accept the refresh request" >&2; exit 1; }
+fi
+
+# Mail syncs in the background: wait until the index has been quiet for 5 seconds.
+last="$(signature)"
+quiet=0
+while [ $(( $(date +%s) - started )) -lt "$SETTLE_TIMEOUT" ]; do
+    sleep 1
+    current="$(signature)"
+    if [ "$current" = "$last" ]; then
+        quiet=$((quiet + 1))
+        [ "$quiet" -ge 5 ] && [ $(( $(date +%s) - started )) -ge 8 ] && break
+    else
+        quiet=0
+        last="$current"
+    fi
+done
+touch "$STAMP"
+changed="no new index writes"
+[ "$(signature)" != "$before" ] && changed="index updated"
+echo "Mail refreshed in $(( $(date +%s) - started ))s ($changed)."

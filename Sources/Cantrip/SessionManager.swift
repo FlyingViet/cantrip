@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import os
 
 /// Multiple independent chat sessions: each has its own backends and
 /// message list, so long-running work continues in one while you use
@@ -10,6 +11,9 @@ final class SessionManager: ObservableObject {
     let homeSession: ChatSession
     /// Runs Home's scheduled tasks and incidents out of sight of the Home chat.
     let homeBackgroundSession: ChatSession
+    /// Live hidden sessions, one per running Home background job; never tabs.
+    @Published private(set) var homeRuns: [ChatSession] = []
+    private var homeRunSubscriptions: [UUID: [AnyCancellable]] = [:]
     @Published var activeIndex = 0
     @Published var showingRemote = false
     @Published private(set) var anyStreaming = false
@@ -20,17 +24,43 @@ final class SessionManager: ObservableObject {
     var onAnyInputResolved: ((UUID) -> Void)?
     private var cancellables: Set<AnyCancellable> = []
 
-    var managedSessions: [ChatSession] { sessions + [homeSession, homeBackgroundSession] }
+    var managedSessions: [ChatSession] {
+        sessions + [homeSession, homeBackgroundSession] + homeRuns
+    }
 
     func managedSession(id: UUID) -> ChatSession? {
         if id == homeSession.id { return homeSession }
         if id == homeBackgroundSession.id { return homeBackgroundSession }
+        if let run = homeRuns.first(where: { $0.id == id }) { return run }
         return sessions.first(where: { $0.id == id })
     }
 
-    /// Home's conversations are never regular tabs or archived history.
+    /// Live hidden-run IDs, readable off the main actor (history encoding runs on a queue).
+    private nonisolated static let liveHomeRunIDs = OSAllocatedUnfairLock(initialState: Set<UUID>())
+
+    /// Home's conversations and its live background runs are never regular tabs or archived history.
     nonisolated static func isCantripHomeReserved(_ id: UUID) -> Bool {
         id == ChatSession.cantripHomeID || id == ChatSession.cantripHomeBackgroundID
+            || liveHomeRunIDs.withLock { $0.contains(id) }
+    }
+
+    static func isCantripHomeReserved(_ session: ChatSession) -> Bool {
+        isCantripHomeReserved(session.id) || session.isCantripHomeRun
+    }
+
+    /// Starts tracking a hidden background run so pushes, input replies and Stop reach it.
+    func adoptCantripHomeRun(_ session: ChatSession) {
+        guard session.isCantripHomeRun, !homeRuns.contains(where: { $0 === session }) else { return }
+        homeRunSubscriptions[session.id] = configure(session)
+        homeRuns.append(session)
+        Self.liveHomeRunIDs.withLock { _ = $0.insert(session.id) }
+    }
+
+    func releaseCantripHomeRun(_ session: ChatSession) {
+        homeRunSubscriptions[session.id] = nil
+        homeRuns.removeAll { $0 === session }
+        Self.liveHomeRunIDs.withLock { _ = $0.remove(session.id) }
+        anyStreaming = managedSessions.contains { $0.isStreaming }
     }
 
     var active: ChatSession {
@@ -117,7 +147,8 @@ final class SessionManager: ObservableObject {
         return dir
     }
 
-    private func configure(_ session: ChatSession) {
+    @discardableResult
+    private func configure(_ session: ChatSession) -> [AnyCancellable] {
         session.onRunFinished = { [weak self, weak session] in
             if let session { self?.onAnyRunFinished?(session) }
         }
@@ -126,15 +157,17 @@ final class SessionManager: ObservableObject {
         }
         session.onInputResolved = { [weak self] id in self?.onAnyInputResolved?(id) }
         // Forward child changes so views observing the manager re-render.
-        session.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-        session.$isStreaming
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.anyStreaming = self?.managedSessions.contains { $0.isStreaming } ?? false
-            }
-            .store(in: &cancellables)
+        let subscriptions = [
+            session.objectWillChange
+                .sink { [weak self] _ in self?.objectWillChange.send() },
+            session.$isStreaming
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    self?.anyStreaming = self?.managedSessions.contains { $0.isStreaming } ?? false
+                },
+        ]
+        if !session.isCantripHomeRun { cancellables.formUnion(subscriptions) }
+        return subscriptions
     }
 
     private func adopt(_ session: ChatSession) {

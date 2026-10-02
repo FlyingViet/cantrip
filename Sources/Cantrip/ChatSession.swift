@@ -234,6 +234,10 @@ final class ChatSession: ObservableObject {
 
     let settings = AppSettings.shared
     let id: UUID
+    /// A hidden, single-use session running one Home background job; never a tab.
+    let isCantripHomeRun: Bool
+    /// Set once a finished background run is torn down, so nothing writes its files again.
+    private var cantripHomeRunDiscarded = false
     @Published private var automaticTitle = "New chat"
     @Published private(set) var tabMetadata = SessionTabMetadata()
     @Published var tabActionError: String?
@@ -333,8 +337,10 @@ final class ChatSession: ObservableObject {
     }
 
     init(id: UUID = UUID(), copilotBackend: Backend = CopilotBackend(),
+         cantripHomeRun: Bool = false,
          makeJournal: @escaping (UUID) throws -> RunJournal = { try RunJournal(sessionID: $0) }) {
         self.id = id
+        self.isCantripHomeRun = cantripHomeRun
         self.copilot = copilotBackend
         self.makeJournal = makeJournal
         self.lastRunOutcome = Self.loadLastRunOutcome(id: id)
@@ -359,7 +365,21 @@ final class ChatSession: ObservableObject {
     // MARK: - Transcript persistence (survives app restarts)
 
     private var transcriptURL: URL {
-        SessionManager.chatsDir.appendingPathComponent("\(id.uuidString).json")
+        // Background runs live outside chats/, so they never appear in tabs or archives.
+        (isCantripHomeRun ? CantripHomeStore.runsDirectory : SessionManager.chatsDir)
+            .appendingPathComponent("\(id.uuidString).json")
+    }
+
+    /// Tears down a finished background run: its backend process, transcript, journal and
+    /// per-session defaults. Its report already lives in Home's background log.
+    func discardCantripHomeRun() {
+        guard isCantripHomeRun, !cantripHomeRunDiscarded else { return }
+        cantripHomeRunDiscarded = true
+        watchdog?.invalidate()
+        watchdog = nil
+        cancelInputs()
+        resetBackendConversations()
+        deleteTranscript()
     }
 
     func deleteTranscript() {
@@ -385,7 +405,7 @@ final class ChatSession: ObservableObject {
     }
 
     func persistTranscript() {
-        guard !isPrivate, privateStorageError == nil else { return }
+        guard !isPrivate, privateStorageError == nil, !cantripHomeRunDiscarded else { return }
         tabMetadata.save(id: id)
         // Thinking/activities don't persist, so assistant messages whose
         // only content was runtime-only would reload as invisible husks.
@@ -707,8 +727,11 @@ final class ChatSession: ObservableObject {
                 recordLastRunOutcome(.init(status: .failed, finishedAt: finishedAt))
             }
         }
+        // A background run's report moves to Home's background log when it finishes.
         remoteCompletion = status == "succeeded" && !isPrivate && !isLocalPrivate
-            ? RemoteCompletion(id: runID, sessionID: id, title: notificationTitle,
+            ? RemoteCompletion(id: runID,
+                               sessionID: isCantripHomeRun ? Self.cantripHomeBackgroundID : id,
+                               title: notificationTitle,
                                summary: RemoteCompletion.preview(summary), completedAt: finishedAt)
             : nil
         var event = RunJournal.Event(
@@ -965,17 +988,20 @@ final class ChatSession: ObservableObject {
         receive(text, mode: mode, includesAmbientContext: true)
     }
 
-    func submitCantripHomeTask(id: UUID, title: String, scheduleSummary: String, prompt: String) {
+    func submitCantripHomeTask(
+        id: UUID, title: String, scheduleSummary: String, prompt: String, note: String? = nil
+    ) {
         guard isCantripHomeBackground, !isStreaming, queued.isEmpty else { return }
         // The transcript shows only a short label; the agent still receives the full saved prompt.
         let schedule = scheduleSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let note = note.map { "\n\($0)" } ?? ""
         send(
             Self.cantripHomeScheduledTaskPrefix + "\(title)\n\n\(prompt)",
             displayText: Self.cantripHomeScheduledTaskPrefix + title
                 + (schedule.isEmpty ? "" : "\n\(schedule) · running saved instructions"),
             preamble: """
             (This is execution of saved Cantrip Home task \(id.uuidString), not a request to
-            create another task. Run it now and report the result.)
+            create another task. Run it now and report the result.)\(note)
             """
         )
     }
@@ -2451,6 +2477,12 @@ final class ChatSession: ObservableObject {
             finishStream()
             return
         }
+        if isCantripHomeRun, autoResumeSpent || journalError != nil {
+            // A hidden background run has no Resume button: it ends here as failed.
+            completeRun(status: "failed", summary: errorText)
+            finishStream()
+            return
+        }
         if !autoResumeSpent {
             autoResumeSpent = true
             // Queue waits for the resumed run; no notification/speech for
@@ -2707,6 +2739,17 @@ final class ChatSession: ObservableObject {
 
     func cancel() {
         cancel(keepQueue: false)
+    }
+
+    /// Stops only the running turn; queued prompts (other handoffs) still run after it.
+    func stopCurrentRun() {
+        cancel(keepQueue: true)
+        guard !queued.isEmpty else { return }
+        let generation = streamGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isStreaming, self.streamGeneration == generation else { return }
+            self.drainQueue()
+        }
     }
 
     private func cancel(keepQueue: Bool) {
