@@ -153,9 +153,11 @@ extension SessionTabTests {
         let client = URLSession(configuration: .ephemeral)
         defer { client.invalidateAndCancel() }
 
-        func call(_ path: String, method: String = "GET", body: Data? = nil) async throws
-            -> (Int, [String: Any]) {
-            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
+        func call(_ path: String, method: String = "GET", body: Data? = nil,
+                  serverPort: Int? = nil) async throws -> (Int, [String: Any]) {
+            var request = URLRequest(
+                url: URL(string: "http://127.0.0.1:\(serverPort ?? port)\(path)")!
+            )
             request.httpMethod = method
             request.httpBody = body
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -524,6 +526,11 @@ extension SessionTabTests {
                      && homeChat.moveAutomatedCantripHomeTurns(to: scheduledSession) == 0,
                      "Automated turns older builds left in Home must move once to the background log")
         store.attach(manager: scheduledManager)
+        let backgroundServer = RemoteControlServer(manager: scheduledManager)
+        let backgroundPort = port == 65535 ? port - 1 : port + 1
+        backgroundServer.start(port: backgroundPort, token: token)
+        defer { backgroundServer.stop() }
+        try await Task.sleep(for: .milliseconds(250))
         let homeGuidance = homeChat.cantripHomeInstructions
         precondition(homeGuidance.contains(
             "- Automated Bass Compass Ingestion Incident: Investigating the timeout.\n"
@@ -576,6 +583,12 @@ extension SessionTabTests {
                      && fixture.lastTurnCount == 0 && fixture.resets > resetsBefore
                      && scheduledSession.notificationTitle == "Automated Bass Compass Ingestion Incident",
                      "Each automated run starts from a fresh, labeled context")
+        let startedRun = try requireHome(store.backgroundRuns.first)
+        precondition(startedRun.id == scheduledSession.currentRunIdentifier
+                     && startedRun.kind == .incident && startedRun.status == "running"
+                     && startedRun.label == "Automated Bass Compass Ingestion Incident"
+                     && startedRun.finishedAt == nil,
+                     "The Background list records an incident as soon as it starts")
 
         let (queuedURL, queuedMarker, _) = try writeIncident(UUID())
         store.checkNow()
@@ -583,6 +596,22 @@ extension SessionTabTests {
                      && scheduledSession.queued.count == 1
                      && fixture.lastPrompt?.contains(incidentMarker) == true,
                      "A second incident waits behind the running one")
+        let backgroundList = try await call("/api/v1/home/background", serverPort: backgroundPort)
+        let listedQueue = backgroundList.1["queued"] as? [[String: Any]] ?? []
+        let listedRuns = backgroundList.1["runs"] as? [[String: Any]] ?? []
+        precondition(backgroundList.0 == 200
+                     && backgroundList.1["sessionID"] as? String
+                        == ChatSession.cantripHomeBackgroundID.uuidString
+                     && listedQueue.count == 1 && listedQueue.first?["kind"] as? String == "incident"
+                     && listedQueue.first?["label"] as? String == "Automated Bass Compass Ingestion Incident"
+                     && listedRuns.first?["status"] as? String == "running"
+                     && backgroundList.1["activity"] is String,
+                     "The Background API lists the running run, its activity and the queue")
+        let busyHome = try await call("/api/v1/home", serverPort: backgroundPort)
+        let busyHomeSession = try requireHome(busyHome.1["session"] as? [String: Any])
+        precondition(busyHomeSession["supportsBackgroundRuns"] as? Bool == true
+                     && busyHomeSession["backgroundActiveCount"] as? Int == 2,
+                     "Home's snapshot counts running and queued background work for the badge")
         let firstIncident = fixture.sink
         fixture.sink = nil
         firstIncident?(.textDelta("Incident fixture finished."))
@@ -599,6 +628,13 @@ extension SessionTabTests {
                      && scheduledSession.remoteCompletion?.title
                         == "Automated Bass Compass Ingestion Incident",
                      "Completion notifications name the run and open its background report")
+        precondition(store.backgroundRuns.prefix(2).map(\.status) == ["succeeded", "succeeded"]
+                     && store.backgroundRuns.prefix(2).map(\.summary)
+                        == ["Second incident finished.", "Incident fixture finished."]
+                     && store.backgroundRuns.prefix(2).allSatisfy { $0.finishedAt != nil },
+                     "Finished incidents keep their full result, newest first")
+        let idleHome = try await call("/api/v1/home", serverPort: backgroundPort)
+        precondition((idleHome.1["session"] as? [String: Any])?["backgroundActiveCount"] as? Int == 0)
         fixture.sink = nil
         try JSONSerialization.data(withJSONObject: incidentEnvelope)
             .write(to: incidentURL, options: .atomic)
@@ -635,6 +671,11 @@ extension SessionTabTests {
         let completed = try requireHome(store.tasks.first { $0.id == scheduled.id })
         precondition(completed.enabled == false && completed.nextRunAt == nil
                      && completed.runs.first?.summary.contains("Scheduler finished.") == true)
+        let taskRun = try requireHome(store.backgroundRuns.first)
+        precondition(taskRun.kind == .task && taskRun.taskID == scheduled.id
+                     && taskRun.label == "One-time scheduler test"
+                     && taskRun.status == "succeeded" && taskRun.summary == "Scheduler finished.",
+                     "Scheduled runs appear in the Background list linked to their task")
         try await waitForJournalTest { !scheduledSession.isStreaming }
         precondition(scheduledSession.remoteCompletion?.title == "One-time scheduler test"
                      && homeChat.cantripHomeInstructions
@@ -648,6 +689,36 @@ extension SessionTabTests {
         precondition(homeChat.messages.map(\.text) == [
             "Hello", "Hi there.", "Can you run the interview tracker again?", "Tracker refreshed again.",
         ], "Home holds only the user's own conversation")
+
+        fixture.sink = nil
+        let (_, interruptedMarker, _) = try writeIncident(UUID())
+        store.checkNow()
+        try await waitForJournalTest { fixture.sink != nil }
+        precondition(fixture.lastPrompt?.contains(interruptedMarker) == true)
+        // Separate journals keep the stand-in sessions from touching the live run's journal.
+        let relaunched = SessionManager(
+            homeSession: ChatSession(
+                id: ChatSession.cantripHomeID, copilotBackend: CantripHomeBackendFixture(),
+                makeJournal: { _ in try RunJournal(sessionID: UUID()) }
+            ),
+            homeBackgroundSession: ChatSession(
+                id: ChatSession.cantripHomeBackgroundID, copilotBackend: CantripHomeBackendFixture(),
+                makeJournal: { _ in try RunJournal(sessionID: UUID()) }
+            )
+        )
+        store.attach(manager: relaunched)
+        precondition(store.backgroundRuns.first?.status == "interrupted"
+                     && store.backgroundRuns.first?.finishedAt != nil,
+                     "A run that was live when Cantrip quit must not stay running forever")
+        store.attach(manager: scheduledManager)
+        fixture.sink?(.textDelta("Late finish."))
+        fixture.sink?(.done)
+        try await waitForJournalTest { store.backgroundRuns.first?.status == "succeeded" }
+        let seeded = CantripHomeStore.seededBackgroundRuns(from: [completed])
+        precondition(seeded.count == completed.runs.count
+                     && seeded.first?.taskID == completed.id && seeded.first?.kind == .task
+                     && seeded.first?.summary == completed.runs.first?.summary,
+                     "The first Background list starts from recorded task runs")
         try store.delete(id: scheduled.id)
         print("Cantrip Home: content-aware tab handoffs, hidden session, schedules, task/artifact safety and authenticated APIs passed")
     }

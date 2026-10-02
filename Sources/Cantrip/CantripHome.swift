@@ -256,6 +256,37 @@ struct CantripHomeArtifactsSnapshot: Encodable {
     let revision: String
 }
 
+/// One scheduled-task or incident run in Home's background conversation.
+struct CantripHomeBackgroundRun: Codable, Equatable, Identifiable {
+    enum Kind: String, Codable {
+        case task
+        case incident
+    }
+
+    let id: UUID
+    let kind: Kind
+    var label: String
+    var taskID: UUID?
+    let startedAt: Date
+    var finishedAt: Date?
+    var status: String
+    var summary: String
+}
+
+struct CantripHomeBackgroundSnapshot: Encodable {
+    struct Queued: Encodable {
+        let id: UUID
+        let kind: CantripHomeBackgroundRun.Kind
+        let label: String
+    }
+
+    let sessionID: UUID
+    let runs: [CantripHomeBackgroundRun]
+    let queued: [Queued]
+    let activity: String?
+    let revision: String
+}
+
 struct CantripHomeError: LocalizedError {
     let status: Int
     let message: String
@@ -401,6 +432,10 @@ final class CantripHomeStore: ObservableObject {
     @Published private(set) var artifacts: [CantripHomeArtifact] = []
     @Published private(set) var revision = UUID()
     @Published private(set) var storageError: String?
+    /// Newest first; what the Background sheet lists.
+    @Published private(set) var backgroundRuns: [CantripHomeBackgroundRun] = []
+    private(set) var backgroundRevision = UUID()
+    static let maximumBackgroundRuns = 30
 
     private weak var manager: SessionManager?
     /// Runs scheduled tasks and incidents; never the Home chat itself.
@@ -425,6 +460,9 @@ final class CantripHomeStore: ObservableObject {
 
     private var tasksURL: URL { Self.tasksFile }
     private var artifactsURL: URL { Self.rootDirectory.appendingPathComponent("artifacts.json") }
+    private var backgroundRunsURL: URL {
+        Self.rootDirectory.appendingPathComponent("background-runs.json")
+    }
 
     private init() {
         do {
@@ -440,6 +478,14 @@ final class CantripHomeStore: ObservableObject {
             storageError = "Cantrip Home could not load its state. Scheduled work is paused until storage is readable."
             Log.write("home: state load failed: \(error.localizedDescription)")
             return
+        }
+        do {
+            backgroundRuns = try load([CantripHomeBackgroundRun].self, from: backgroundRunsURL)
+                ?? Self.seededBackgroundRuns(from: tasks)
+        } catch {
+            // A damaged run list is only history; rebuild it instead of pausing work.
+            Log.write("home: background run list unreadable: \(error.localizedDescription)")
+            backgroundRuns = Self.seededBackgroundRuns(from: tasks)
         }
         do { try recoverUnregisteredArtifacts() }
         catch { recordStorageFailure(error) }
@@ -468,6 +514,7 @@ final class CantripHomeStore: ObservableObject {
     private func attach(background session: ChatSession?) {
         guard backgroundSession !== session else { return }
         backgroundSession?.onTurnCompleted = nil
+        backgroundSession?.onCantripHomeRunStarted = nil
         backgroundSession = session
         if let session, !recoveredArtifacts.isEmpty {
             // Older builds ran tasks in Home, so its history may hold the failed save too.
@@ -477,6 +524,20 @@ final class CantripHomeStore: ObservableObject {
         }
         session?.onTurnCompleted = { [weak self] runID, status, summary in
             self?.complete(runID: runID, status: status, summary: summary)
+        }
+        session?.onCantripHomeRunStarted = { [weak self] runID, run in
+            self?.backgroundRunStarted(runID: runID, run: run)
+        }
+        if session?.isStreaming != true {
+            let finished = Date()
+            var changed = false
+            for index in backgroundRuns.indices where backgroundRuns[index].status == "running" {
+                backgroundRuns[index].status = "interrupted"
+                backgroundRuns[index].finishedAt = finished
+                backgroundRuns[index].summary = "Cantrip quit before this run finished."
+                changed = true
+            }
+            if changed { persistBackgroundRuns() }
         }
         if let runID = session?.currentRunIdentifier,
            let index = tasks.firstIndex(where: { $0.activeRunID == runID }) {
@@ -931,6 +992,10 @@ final class CantripHomeStore: ObservableObject {
             return
         }
         tasks[index].activeRunID = runID
+        if let run = backgroundRuns.firstIndex(where: { $0.id == runID }) {
+            backgroundRuns[run].taskID = taskID
+            persistBackgroundRuns()
+        }
         do { try persistTasks() }
         catch { recordStorageFailure(error) }
     }
@@ -992,6 +1057,14 @@ final class CantripHomeStore: ObservableObject {
     }
 
     private func complete(runID: UUID, status: String, summary: String) {
+        if let run = backgroundRuns.firstIndex(where: { $0.id == runID }) {
+            backgroundRuns[run].status = status
+            backgroundRuns[run].finishedAt = Date()
+            backgroundRuns[run].summary = String(
+                summary.trimmingCharacters(in: .whitespacesAndNewlines).prefix(4_000)
+            )
+            persistBackgroundRuns()
+        }
         guard let index = tasks.firstIndex(where: { $0.activeRunID == runID }) else { return }
         let finished = Date()
         let clipped = RemoteCompletion.preview(summary)
@@ -1018,6 +1091,40 @@ final class CantripHomeStore: ObservableObject {
         do { try persistTasks() }
         catch { recordStorageFailure(error) }
         tick()
+    }
+
+    private func backgroundRunStarted(runID: UUID, run: ChatSession.CantripHomeAutomatedRun) {
+        guard !backgroundRuns.contains(where: { $0.id == runID }) else { return }
+        backgroundRuns.insert(.init(
+            id: runID, kind: run.isIncident ? .incident : .task, label: run.label,
+            startedAt: Date(), status: "running", summary: ""
+        ), at: 0)
+        persistBackgroundRuns()
+    }
+
+    private func persistBackgroundRuns() {
+        if backgroundRuns.count > Self.maximumBackgroundRuns {
+            backgroundRuns.removeLast(backgroundRuns.count - Self.maximumBackgroundRuns)
+        }
+        backgroundRevision = UUID()
+        do { try save(backgroundRuns, to: backgroundRunsURL) }
+        catch { Log.write("home: background run list save failed: \(error.localizedDescription)") }
+    }
+
+    /// First launch with the run list: start from the task runs Home already recorded.
+    static func seededBackgroundRuns(from tasks: [CantripHomeTask]) -> [CantripHomeBackgroundRun] {
+        tasks.flatMap { task in
+            task.runs.map {
+                CantripHomeBackgroundRun(
+                    id: $0.id, kind: .task, label: task.title, taskID: task.id,
+                    startedAt: $0.startedAt, finishedAt: $0.finishedAt,
+                    status: $0.status, summary: $0.summary
+                )
+            }
+        }
+        .sorted { $0.startedAt > $1.startedAt }
+        .prefix(maximumBackgroundRuns)
+        .map { $0 }
     }
 
     private func persistTasks() throws {
