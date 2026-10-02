@@ -27,6 +27,17 @@ extension SessionTabTests {
         precondition(manager.managedSession(id: ChatSession.cantripHomeID) === manager.homeSession)
         precondition(manager.homeSession.title == "Cantrip Home")
         precondition(manager.homeSession.isLocked)
+        let background = manager.homeBackgroundSession
+        precondition(manager.managedSession(id: ChatSession.cantripHomeBackgroundID) === background
+                     && !manager.sessions.contains { $0.id == ChatSession.cantripHomeBackgroundID }
+                     && background.isLocked && background.title == "Cantrip Home background",
+                     "Home's background conversation must be reachable by ID but never a tab")
+        background.messages = [ChatMessage(role: .user, text: "Background log")]
+        background.persistTranscript()
+        precondition(!manager.archivedSessions().contains { $0.id == background.id },
+                     "Home's background log must stay out of archived history")
+        background.messages = []
+        background.persistTranscript()
         let routeBackend = CantripHomeBackendFixture()
         let bassSession = ChatSession(copilotBackend: routeBackend)
         try bassSession.updateTab(name: "Bass Compass")
@@ -156,7 +167,22 @@ extension SessionTabTests {
 
         let listed = try await call("/api/v1/sessions")
         let listedIDs = (listed.1["sessions"] as? [[String: Any]])?.compactMap { $0["id"] as? String } ?? []
-        precondition(!listedIDs.contains(ChatSession.cantripHomeID.uuidString))
+        precondition(!listedIDs.contains(ChatSession.cantripHomeID.uuidString)
+                     && !listedIDs.contains(ChatSession.cantripHomeBackgroundID.uuidString))
+        let backgroundRoute = try await call(
+            "/api/v1/sessions/\(ChatSession.cantripHomeBackgroundID.uuidString)"
+        )
+        let backgroundSnapshot = try requireHome(backgroundRoute.1["session"] as? [String: Any])
+        precondition(backgroundRoute.0 == 200
+                     && backgroundSnapshot["isCantripHomeBackground"] as? Bool == true
+                     && backgroundSnapshot["isCantripHome"] as? Bool == false
+                     && backgroundSnapshot["supportsTabMetadata"] as? Bool == false
+                     && backgroundSnapshot["supportsModelSettings"] as? Bool == false,
+                     "Notification taps must be able to open the background report")
+        let backgroundModel = try await call(
+            "/api/v1/sessions/\(ChatSession.cantripHomeBackgroundID.uuidString)/model-settings"
+        )
+        precondition(backgroundModel.0 == 409, "Background runs follow Home's model")
         let home = try await call("/api/v1/home")
         let homeSession = try requireHome(home.1["session"] as? [String: Any])
         precondition(home.0 == 200 && homeSession["id"] as? String == ChatSession.cantripHomeID.uuidString
@@ -323,6 +349,19 @@ extension SessionTabTests {
                      && unknown.text.contains("That project tab is no longer open.")
                      && routeBackend.sink == nil && !bassSession.isStreaming,
                      "Automated runs and closed tabs must not dispatch work")
+        background.messages = [
+            ChatMessage(role: .user, text: "Follow up on that run."),
+            ChatMessage(role: .assistant, text: "Handing off.\n\n"
+                + delegateBlock(bassSession.id, "Background", "Fix it.")),
+        ]
+        background.processCantripHomeBlocks()
+        try await Task.sleep(for: .milliseconds(100))
+        precondition(background.messages.last?.text
+                        .contains("Scheduled and automated runs can't hand work to tabs.") == true
+                     && background.messages.last?.delegations.isEmpty == true
+                     && routeBackend.sink == nil && !bassSession.isStreaming,
+                     "The background conversation must never hand work to tabs")
+        background.messages = []
         let orphan = CantripHomeDelegations.evaluate(
             CantripHomeDelegation(
                 tabID: UUID(), tabTitle: "Closed", summary: "Closed tab",
@@ -451,35 +490,115 @@ extension SessionTabTests {
         try store.delete(id: tracker.id)
 
         let fixture = CantripHomeBackendFixture()
+        let homeFixture = CantripHomeBackendFixture()
+        let homeChat = ChatSession(id: ChatSession.cantripHomeID, copilotBackend: homeFixture)
         let scheduledSession = ChatSession(
-            id: ChatSession.cantripHomeID, copilotBackend: fixture
+            id: ChatSession.cantripHomeBackgroundID, copilotBackend: fixture
         )
-        let scheduledManager = SessionManager(homeSession: scheduledSession)
-        store.attach(manager: scheduledManager)
-        let incidentID = UUID()
-        let incidentURL = CantripHomeStore.incidentDirectory
-            .appendingPathComponent("\(incidentID.uuidString.lowercased()).json")
-        let incidentPrompt = """
-        AUTOMATED BASS COMPASS INGESTION INCIDENT [incident:\(incidentID.uuidString.lowercased())]
-        Investigate the fixture without making changes.
-        """
-        let incidentEnvelope: [String: Any] = [
-            "version": 1,
-            "id": incidentID.uuidString,
-            "prompt": incidentPrompt,
-            "createdAt": "2026-09-30T23:00:00.000Z",
+        scheduledSession.messages = []
+        let legacyMarker = "[incident:\(UUID().uuidString.lowercased())]"
+        let legacyScheduled = "Scheduled task · Daily interview tracker\n\nRefresh Mail."
+        let legacyIncident = "AUTOMATED BASS COMPASS INGESTION INCIDENT \(legacyMarker)\nInvestigate."
+        homeChat.messages = [
+            ChatMessage(role: .user, text: legacyScheduled),
+            ChatMessage(role: .assistant, text: "Tracker refreshed."),
+            ChatMessage(role: .user, text: "Hello"),
+            ChatMessage(role: .assistant, text: "Hi there."),
+            ChatMessage(role: .user, text: legacyIncident),
+            ChatMessage(role: .assistant, text: "Investigating the timeout."),
         ]
-        try JSONSerialization.data(withJSONObject: incidentEnvelope)
-            .write(to: incidentURL, options: .atomic)
+        let scheduledManager = SessionManager(
+            homeSession: homeChat, homeBackgroundSession: scheduledSession
+        )
+        let savedHomeAfterMove = try JSONDecoder().decode(
+            [ChatMessage].self,
+            from: Data(contentsOf: SessionManager.chatsDir
+                .appendingPathComponent("\(ChatSession.cantripHomeID.uuidString).json"))
+        )
+        precondition(homeChat.messages.map(\.text) == ["Hello", "Hi there."]
+                     && savedHomeAfterMove.map(\.text) == ["Hello", "Hi there."]
+                     && scheduledSession.messages.map(\.text) == [
+                        legacyScheduled, "Tracker refreshed.",
+                        legacyIncident, "Investigating the timeout.",
+                     ]
+                     && homeChat.moveAutomatedCantripHomeTurns(to: scheduledSession) == 0,
+                     "Automated turns older builds left in Home must move once to the background log")
+        store.attach(manager: scheduledManager)
+        let homeGuidance = homeChat.cantripHomeInstructions
+        precondition(homeGuidance.contains(
+            "- Automated Bass Compass Ingestion Incident: Investigating the timeout.\n"
+                + "- Daily interview tracker: Tracker refreshed.")
+                     && homeGuidance.contains(CantripHomeStore.tasksFile.path)
+                     && homeGuidance.contains("Project tabs —"),
+                     "Home must know recent background results and where saved task prompts live")
+        let backgroundGuidance = scheduledSession.cantripHomeInstructions
+        precondition(backgroundGuidance.contains("CANTRIP HOME BACKGROUND")
+                     && !backgroundGuidance.contains("Project tabs —")
+                     && !backgroundGuidance.contains("Recent background runs"),
+                     "Background runs get the task/artifact protocol without handoffs")
+
+        homeChat.submit("Can you run the interview tracker again?")
+        try await waitForJournalTest { homeFixture.sink != nil }
+        precondition(homeChat.isStreaming
+                     && homeChat.messages.last(where: { $0.role == .user })?.text
+                        == "Can you run the interview tracker again?"
+                     && homeFixture.lastPrompt?.contains("Recent background runs") == true,
+                     "A request typed in Home must run in the Home chat")
+
+        func writeIncident(_ id: UUID) throws -> (URL, String, [String: Any]) {
+            let url = CantripHomeStore.incidentDirectory
+                .appendingPathComponent("\(id.uuidString.lowercased()).json")
+            let marker = "[incident:\(id.uuidString.lowercased())]"
+            let envelope: [String: Any] = [
+                "version": 1,
+                "id": id.uuidString,
+                "prompt": """
+                AUTOMATED BASS COMPASS INGESTION INCIDENT \(marker)
+                Investigate the fixture without making changes.
+                """,
+                "createdAt": "2026-09-30T23:00:00.000Z",
+            ]
+            try JSONSerialization.data(withJSONObject: envelope).write(to: url, options: .atomic)
+            return (url, marker, envelope)
+        }
+        let homeMessageCount = homeChat.messages.count
+        let resetsBefore = fixture.resets
+        let (incidentURL, incidentMarker, incidentEnvelope) = try writeIncident(UUID())
         store.checkNow()
         try await waitForJournalTest { fixture.sink != nil }
-        precondition(!FileManager.default.fileExists(atPath: incidentURL.path))
-        precondition(scheduledSession.messages.contains {
-            $0.text.contains("[incident:\(incidentID.uuidString.lowercased())]")
-        })
-        fixture.sink?(.textDelta("Incident fixture finished."))
+        precondition(!FileManager.default.fileExists(atPath: incidentURL.path)
+                     && scheduledSession.messages.contains { $0.text.contains(incidentMarker) }
+                     && homeChat.messages.count == homeMessageCount
+                     && !homeChat.messages.contains { $0.text.contains(incidentMarker) },
+                     "Incidents must run in the background conversation, not the Home chat")
+        precondition(fixture.lastPrompt?.contains("untrusted evidence") == true
+                     && fixture.lastPrompt?.contains("CANTRIP HOME BACKGROUND") == true
+                     && fixture.lastTurnCount == 0 && fixture.resets > resetsBefore
+                     && scheduledSession.notificationTitle == "Automated Bass Compass Ingestion Incident",
+                     "Each automated run starts from a fresh, labeled context")
+
+        let (queuedURL, queuedMarker, _) = try writeIncident(UUID())
+        store.checkNow()
+        precondition(!FileManager.default.fileExists(atPath: queuedURL.path)
+                     && scheduledSession.queued.count == 1
+                     && fixture.lastPrompt?.contains(incidentMarker) == true,
+                     "A second incident waits behind the running one")
+        let firstIncident = fixture.sink
+        fixture.sink = nil
+        firstIncident?(.textDelta("Incident fixture finished."))
+        firstIncident?(.done)
+        try await waitForJournalTest { fixture.sink != nil }
+        precondition(fixture.lastPrompt?.contains(queuedMarker) == true
+                     && fixture.lastPrompt?.contains("untrusted evidence") == true
+                     && fixture.lastTurnCount == 0,
+                     "Queued incidents keep their untrusted-evidence framing and fresh context")
+        fixture.sink?(.textDelta("Second incident finished."))
         fixture.sink?(.done)
         try await waitForJournalTest { !scheduledSession.isStreaming }
+        precondition(scheduledSession.remoteCompletion?.sessionID == ChatSession.cantripHomeBackgroundID
+                     && scheduledSession.remoteCompletion?.title
+                        == "Automated Bass Compass Ingestion Incident",
+                     "Completion notifications name the run and open its background report")
         fixture.sink = nil
         try JSONSerialization.data(withJSONObject: incidentEnvelope)
             .write(to: incidentURL, options: .atomic)
@@ -502,8 +621,12 @@ extension SessionTabTests {
         try await waitForJournalTest { fixture.sink != nil }
         let scheduledUser = scheduledSession.messages.last { $0.role == .user }?.text ?? ""
         precondition(scheduledUser == "Scheduled task · One-time scheduler test\nOnce shortly · running saved instructions"
-                     && fixture.lastPrompt?.contains("Return the exact scheduler result.") == true,
-                     "Home chat must show a short task label while the agent receives the full prompt")
+                     && fixture.lastPrompt?.contains("Return the exact scheduler result.") == true
+                     && fixture.lastTurnCount == 0,
+                     "The background log shows a short task label while the agent receives the full prompt")
+        precondition(homeChat.isStreaming && homeChat.messages.count == homeMessageCount
+                     && store.tasks.first(where: { $0.id == scheduled.id })?.state == .running,
+                     "Scheduled runs must not wait for, or write into, the Home chat")
         fixture.sink?(.textDelta("Scheduler finished."))
         fixture.sink?(.done)
         try await waitForJournalTest {
@@ -512,6 +635,19 @@ extension SessionTabTests {
         let completed = try requireHome(store.tasks.first { $0.id == scheduled.id })
         precondition(completed.enabled == false && completed.nextRunAt == nil
                      && completed.runs.first?.summary.contains("Scheduler finished.") == true)
+        try await waitForJournalTest { !scheduledSession.isStreaming }
+        precondition(scheduledSession.remoteCompletion?.title == "One-time scheduler test"
+                     && homeChat.cantripHomeInstructions
+                        .contains("- One-time scheduler test: Scheduler finished.")
+                     && homeChat.cantripHomeInstructions.contains("last run succeeded"),
+                     "Home must see the finished run summary")
+
+        homeFixture.sink?(.textDelta("Tracker refreshed again."))
+        homeFixture.sink?(.done)
+        try await waitForJournalTest { !homeChat.isStreaming }
+        precondition(homeChat.messages.map(\.text) == [
+            "Hello", "Hi there.", "Can you run the interview tracker again?", "Tracker refreshed again.",
+        ], "Home holds only the user's own conversation")
         try store.delete(id: scheduled.id)
         print("Cantrip Home: content-aware tab handoffs, hidden session, schedules, task/artifact safety and authenticated APIs passed")
     }
@@ -519,13 +655,16 @@ extension SessionTabTests {
     private final class CantripHomeBackendFixture: Backend {
         var sink: ((BackendEvent) -> Void)?
         var lastPrompt: String?
+        var lastTurnCount = 0
+        var resets = 0
         func send(_ request: BackendRequest, workdir: String,
                   onEvent: @escaping (BackendEvent) -> Void) {
             lastPrompt = request.prompt
+            lastTurnCount = request.previousTurns.count
             sink = onEvent
         }
         func cancel() {}
-        func reset() {}
+        func reset() { resets += 1 }
     }
 
     private static func requireHome<T>(_ value: T?, line: UInt = #line) throws -> T {
