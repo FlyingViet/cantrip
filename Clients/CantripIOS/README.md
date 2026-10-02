@@ -366,7 +366,8 @@ With **both Cantrip Agent and the Mac Cantrip host updated**, replies that spawn
 Copilot subagents show live monitor cards. Foreground cards stay pinned above
 the composer, so they don't scroll away as the reply grows. Active background
 tasks use a compact **Background task** button above the composer; tap it to open
-a sheet with every running watcher and its details. When a subagent finishes,
+a sheet with every running watcher and its details. Cantrip Home moves this into
+its top-left **Background** button instead. When a subagent finishes,
 its card moves into its reply at the point it ended, after the paragraph that
 was being written. Each card shows the subagent name, status, its latest
 reasoning step, elapsed time and token count.
@@ -385,7 +386,8 @@ the system vertical edge automatically on iPhone Duo.
 
 Home's chat header features **Pip**, a mascot: a fluffy purple hooded plush with
 a star pin, shown large and centered above the conversation with a bold name
-pill, Muse-style, while glass lane and menu buttons float in the top corners. Pip also greets you in an empty chat and names the
+pill, Muse-style, while glass **Background** and menu buttons float in the top
+corners. Pip also greets you in an empty chat and names the
 composer ("Message Pip…"). Messages rest below it and scroll softly
 underneath. Tap the mascot or pill to switch backends. Its expression follows
 the session and changes as a run moves between steps: blinking at rest,
@@ -404,6 +406,13 @@ spikes, hood eyes and soft teeth. A live preview cycles through each mood, and
 you can rename Pip there too (up to 20 characters; blank restores Pip). Choices
 are saved on the device. Backend menus and Settings still call the lane Cantrip
 Home.
+
+Background work stays out of Home's chat. The top-left **Background** button
+shows a count and pulses while anything runs; tap it for one sheet with the
+chat's own watchers (with **Stop**), queued runs, and recent scheduled-task and
+incident runs from the Mac's hidden background conversation with their status,
+timing and full result. **Full Log** opens that conversation. Scheduled and
+incident runs need Cantrip host v1.0-121 or later.
 
 Home reads each message for intent. Questions, status checks and other
 references to a project are answered right in Home. When you ask for changes to
