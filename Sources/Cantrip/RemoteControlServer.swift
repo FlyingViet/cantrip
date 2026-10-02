@@ -688,7 +688,7 @@ final class RemoteControlServer {
               let id = UUID(uuidString: String(rawID)),
               let session = manager.managedSession(id: id),
               !session.isPrivate,
-              (!session.isCantripHome || AppSettings.shared.cantripHomeEnabled)
+              (!SessionManager.isCantripHomeReserved(id) || AppSettings.shared.cantripHomeEnabled)
         else {
             sendError(404, "session not found", on: connection)
             return
@@ -873,6 +873,9 @@ final class RemoteControlServer {
             do {
                 guard !session.isLocalPrivate else {
                     throw SessionModelSettingsError(409, "Private Local cannot use cloud models. Open Private Local Settings.")
+                }
+                guard !session.isCantripHomeBackground else {
+                    throw SessionModelSettingsError(409, "Background runs use Cantrip Home's model. Change it in Home.")
                 }
                 if request.method == "GET" {
                     if request.query("refresh") == "true" {
@@ -1489,13 +1492,14 @@ final class RemoteControlServer {
             "isLocked": session.isLocked,
             "isLocalPrivate": session.isLocalPrivate,
             "isCantripHome": session.isCantripHome,
+            "isCantripHomeBackground": session.isCantripHomeBackground,
             "supportsPrivateLocalSettings": session.isLocalPrivate,
             "supportsInputRequests": true,
             "supportsChatInputReplies": true,
             "pendingInputCount": session.pendingInputs.count,
-            "supportsTabMetadata": !session.isCantripHome,
-            "supportsTabReordering": !session.isCantripHome,
-            "supportsModelSettings": !session.isLocalPrivate,
+            "supportsTabMetadata": !SessionManager.isCantripHomeReserved(session.id),
+            "supportsTabReordering": !SessionManager.isCantripHomeReserved(session.id),
+            "supportsModelSettings": !session.isLocalPrivate && !session.isCantripHomeBackground,
             "modelSettingsRevision": session.modelSettingsRevision,
             "workdir": session.workdir,
             "isStreaming": session.isStreaming,
@@ -1574,7 +1578,7 @@ final class RemoteControlServer {
     }
 
     private func generatedImageRoots(sessionID: UUID) -> [URL] {
-        sessionID == ChatSession.cantripHomeID
+        SessionManager.isCantripHomeReserved(sessionID)
             ? [RemoteGeneratedImages.homeArtifactRoot]
             : []
     }

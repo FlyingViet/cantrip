@@ -294,7 +294,7 @@ final class CantripHomeDelegations {
             guard $0.role == .user else { return false }
             let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
             return !text.isEmpty && !text.hasPrefix("!") && !text.hasPrefix("/")
-                && !text.hasPrefix("Scheduled task · ")
+                && !text.hasPrefix(ChatSession.cantripHomeScheduledTaskPrefix)
         }
         // Picked choices and short acknowledgements say little about what a tab owns.
         let substantive = requests.filter {
@@ -380,7 +380,9 @@ extension ChatSession {
     func processCantripHomeDelegations(in text: inout String, messageIndex index: Int) -> [String] {
         let language = "cantrip-delegate"
         let trigger = messages[..<index].last(where: { $0.role == .user })?.text ?? ""
-        let automated = trigger.hasPrefix("Scheduled task · ")
+        // Background runs never hand off; the trigger checks cover runs older builds left in Home.
+        let automated = isCantripHomeBackground
+            || trigger.hasPrefix(Self.cantripHomeScheduledTaskPrefix)
             || trigger.lowercased().contains("[incident:")
         var notices: [String] = []
         var handed = 0

@@ -144,8 +144,12 @@ The macOS app includes:
   structured workspaces such as trackers. Workspace tasks use a validated
   declarative schema for native list, detail and edit screens; their records can
   be updated conversationally or through the mobile UI. Touch and hold a task to
-  drag it into a new order; the order is saved on the Mac. Due runs post back into
-  Home chat. Deliverable files the agent saves in Home's guarded artifact folder
+  drag it into a new order; the order is saved on the Mac. Due runs and local
+  ingestion incidents run in a separate hidden background conversation, each
+  with a fresh model context, so they never add turns to Home chat. Their results
+  appear in task run summaries, workspaces and completion notifications (which
+  open the run's report), and Home can still discuss or rerun them on request.
+  Deliverable files the agent saves in Home's guarded artifact folder
   appear automatically in Artifacts and can be permanently deleted from the
   mobile app. Cantrip must remain running for scheduled work.
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a

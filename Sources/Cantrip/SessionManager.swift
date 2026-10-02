@@ -8,6 +8,8 @@ import Combine
 final class SessionManager: ObservableObject {
     @Published var sessions: [ChatSession] = []
     let homeSession: ChatSession
+    /// Runs Home's scheduled tasks and incidents out of sight of the Home chat.
+    let homeBackgroundSession: ChatSession
     @Published var activeIndex = 0
     @Published var showingRemote = false
     @Published private(set) var anyStreaming = false
@@ -18,10 +20,17 @@ final class SessionManager: ObservableObject {
     var onAnyInputResolved: ((UUID) -> Void)?
     private var cancellables: Set<AnyCancellable> = []
 
-    var managedSessions: [ChatSession] { sessions + [homeSession] }
+    var managedSessions: [ChatSession] { sessions + [homeSession, homeBackgroundSession] }
 
     func managedSession(id: UUID) -> ChatSession? {
-        id == homeSession.id ? homeSession : sessions.first(where: { $0.id == id })
+        if id == homeSession.id { return homeSession }
+        if id == homeBackgroundSession.id { return homeBackgroundSession }
+        return sessions.first(where: { $0.id == id })
+    }
+
+    /// Home's conversations are never regular tabs or archived history.
+    nonisolated static func isCantripHomeReserved(_ id: UUID) -> Bool {
+        id == ChatSession.cantripHomeID || id == ChatSession.cantripHomeBackgroundID
     }
 
     var active: ChatSession {
@@ -35,8 +44,10 @@ final class SessionManager: ObservableObject {
     private static let openIDsKey = "openSessionIDs"
     private static let activeIDKey = "activeSessionID"
 
-    init(homeSession: ChatSession? = nil) {
+    init(homeSession: ChatSession? = nil, homeBackgroundSession: ChatSession? = nil) {
         self.homeSession = homeSession ?? ChatSession(id: ChatSession.cantripHomeID)
+        self.homeBackgroundSession = homeBackgroundSession
+            ?? ChatSession(id: ChatSession.cantripHomeBackgroundID)
         let files = ((try? FileManager.default.contentsOfDirectory(
             at: Self.chatsDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
             .filter { $0.pathExtension == "json" }
@@ -55,7 +66,7 @@ final class SessionManager: ObservableObject {
             })
             for idString in saved {
                 guard let id = UUID(uuidString: idString),
-                      id != ChatSession.cantripHomeID,
+                      !Self.isCantripHomeReserved(id),
                       onDisk.contains(id.uuidString.uppercased()) else { continue }
                 adopt(ChatSession(id: id))
             }
@@ -64,7 +75,7 @@ final class SessionManager: ObservableObject {
             // fall back once to the old recent-files behavior.
             for file in files.suffix(6) {
                 if let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent),
-                   id != ChatSession.cantripHomeID {
+                   !Self.isCantripHomeReserved(id) {
                     adopt(ChatSession(id: id))
                 }
             }
@@ -82,6 +93,8 @@ final class SessionManager: ObservableObject {
             adopt(ChatSession(id: ChatSession.privateLocalID))
         }
         configure(self.homeSession)
+        configure(self.homeBackgroundSession)
+        self.homeSession.moveAutomatedCantripHomeTurns(to: self.homeBackgroundSession)
         persistOpenSessions()
     }
 
@@ -259,7 +272,7 @@ final class SessionManager: ObservableObject {
         var result: [ArchivedSession] = []
         for file in files {
             guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent),
-                  id != ChatSession.cantripHomeID,
+                  !Self.isCantripHomeReserved(id),
                   !openIDs.contains(id),
                   let data = try? Data(contentsOf: file),
                   let messages = try? JSONDecoder().decode([ChatMessage].self, from: data)
@@ -278,7 +291,7 @@ final class SessionManager: ObservableObject {
 
     /// Reopen an archived session as a tab (or select it if already open).
     func restore(_ id: UUID) {
-        guard id != ChatSession.cantripHomeID else {
+        guard !Self.isCantripHomeReserved(id) else {
             tabActionError = "Cantrip Home is available only through its focused Remote mode."
             return
         }
@@ -293,7 +306,7 @@ final class SessionManager: ObservableObject {
     }
 
     func deleteArchived(_ id: UUID) {
-        guard id != ChatSession.privateLocalID, id != ChatSession.cantripHomeID,
+        guard id != ChatSession.privateLocalID, !Self.isCantripHomeReserved(id),
               !sessions.contains(where: { $0.id == id }),
               !SessionTabMetadata.load(id: id).isLocked else {
             tabActionError = "Open tabs and locked tabs cannot be deleted from history."

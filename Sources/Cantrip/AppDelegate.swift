@@ -331,7 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let preview = finished.messages.last(where: { $0.role == .assistant && !$0.text.isEmpty })?.text
             ?? finished.messages.last(where: { $0.role == .error })?.text
             ?? "Response ready"
-        let title = finished.title
+        let title = finished.notificationTitle
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
             guard granted else { return }
             let content = UNMutableNotificationContent()
