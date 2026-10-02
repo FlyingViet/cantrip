@@ -141,7 +141,14 @@ The macOS app includes:
   tab queues the handoff instead of being interrupted. Home keeps a live card for each handoff with the tab's status and
   final result, and scheduled or automated runs never hand off. Tasks can be
   one-time, interval or weekday automations, or
-  structured workspaces such as trackers. Workspace tasks use a validated
+  structured workspaces such as trackers. A weekday task can run at several
+  local times a day in its own time zone, with DST handled. After sleep or a
+  quit, an overdue task runs once rather than once per missed time, and a task
+  never runs twice at the same time. Local maintenance can queue a schedule
+  change for an existing task by writing
+  `{"version":1,"taskID":"…","schedule":{…}}` into
+  `~/.cache/Cantrip/home/schedule-edits/`; it is applied once that task is idle.
+  Workspace tasks use a validated
   declarative schema for native list, detail and edit screens; their records can
   be updated conversationally or through the mobile UI. Touch and hold a task to
   drag it into a new order; the order is saved on the Mac. Due runs and local

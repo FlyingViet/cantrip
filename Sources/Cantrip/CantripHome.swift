@@ -1,5 +1,46 @@
 import Foundation
 
+/// A local wall-clock run time; decodes `{"hour":22,"minute":0}` or `"22:00"`.
+struct CantripHomeScheduleTime: Codable, Hashable, Comparable {
+    var hour: Int
+    var minute: Int
+
+    init(hour: Int, minute: Int) {
+        self.hour = hour
+        self.minute = minute
+    }
+
+    private enum CodingKeys: String, CodingKey { case hour, minute }
+
+    init(from decoder: Decoder) throws {
+        if let text = try? decoder.singleValueContainer().decode(String.self) {
+            let parts = text.split(separator: ":")
+            guard parts.count == 2, let hour = Int(parts[0]), let minute = Int(parts[1]) else {
+                throw CantripHomeError(400, "Run times use 24-hour HH:mm.")
+            }
+            self.init(hour: hour, minute: minute)
+            return
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            hour: try container.decode(Int.self, forKey: .hour),
+            minute: try container.decode(Int.self, forKey: .minute)
+        )
+    }
+
+    var isValid: Bool { (0...23).contains(hour) && (0...59).contains(minute) }
+
+    /// "8:30 AM", "12:00 PM".
+    var label: String {
+        let twelveHour = hour % 12 == 0 ? 12 : hour % 12
+        return String(format: "%d:%02d %@", twelveHour, minute, hour < 12 ? "AM" : "PM")
+    }
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        (lhs.hour, lhs.minute) < (rhs.hour, rhs.minute)
+    }
+}
+
 struct CantripHomeSchedule: Codable, Equatable {
     enum Kind: String, Codable, CaseIterable {
         case once
@@ -7,20 +48,75 @@ struct CantripHomeSchedule: Codable, Equatable {
         case weekdays
     }
 
+    static let maximumDailyTimes = 24
+
     var kind: Kind
     var summary: String
     var timeZone: String
     var startAt: Date?
     var intervalMinutes: Int?
     var weekdays: [Int]?
+    /// The earliest run time; kept for older clients and tasks saved before `times`.
     var hour: Int?
     var minute: Int?
+    /// Every daily run time for `weekdays` schedules, earliest first.
+    var times: [CantripHomeScheduleTime]? = nil
+
+    var runTimes: [CantripHomeScheduleTime] {
+        if let times, !times.isEmpty { return times }
+        guard let hour, let minute else { return [] }
+        return [.init(hour: hour, minute: minute)]
+    }
+
+    init(
+        kind: Kind, summary: String, timeZone: String, startAt: Date? = nil,
+        intervalMinutes: Int? = nil, weekdays: [Int]? = nil, hour: Int? = nil,
+        minute: Int? = nil, times: [CantripHomeScheduleTime]? = nil
+    ) {
+        self.kind = kind
+        self.summary = summary
+        self.timeZone = timeZone
+        self.startAt = startAt
+        self.intervalMinutes = intervalMinutes
+        self.weekdays = weekdays
+        self.hour = hour
+        self.minute = minute
+        self.times = times
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, summary, timeZone, startAt, intervalMinutes, weekdays, hour, minute, times
+    }
+
+    /// tasks.json stores `startAt` as a reference-date number; Home's model writes ISO-8601.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        summary = try container.decode(String.self, forKey: .summary)
+        timeZone = try container.decode(String.self, forKey: .timeZone)
+        if let text = try? container.decodeIfPresent(String.self, forKey: .startAt) {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            guard let date = formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text) else {
+                throw CantripHomeError(400, "Start times must be ISO-8601 with a time zone offset.")
+            }
+            startAt = date
+        } else {
+            startAt = try container.decodeIfPresent(Date.self, forKey: .startAt)
+        }
+        intervalMinutes = try container.decodeIfPresent(Int.self, forKey: .intervalMinutes)
+        weekdays = try container.decodeIfPresent([Int].self, forKey: .weekdays)
+        hour = try container.decodeIfPresent(Int.self, forKey: .hour)
+        minute = try container.decodeIfPresent(Int.self, forKey: .minute)
+        times = try container.decodeIfPresent([CantripHomeScheduleTime].self, forKey: .times)
+    }
 
     func validated(now: Date = Date()) throws -> Self {
         guard summary.trimmingCharacters(in: .whitespacesAndNewlines).count <= 160,
               TimeZone(identifier: timeZone) != nil else {
             throw CantripHomeError(400, "The task schedule or time zone is invalid.")
         }
+        var normalized = self
         switch kind {
         case .once:
             guard let startAt, startAt > now.addingTimeInterval(-60) else {
@@ -31,15 +127,63 @@ struct CantripHomeSchedule: Codable, Equatable {
                 throw CantripHomeError(400, "Intervals must be between five minutes and one year.")
             }
         case .weekdays:
+            let times = Array(Set(runTimes)).sorted()
             guard let weekdays, !weekdays.isEmpty, weekdays.count <= 7,
                   Set(weekdays).count == weekdays.count,
                   weekdays.allSatisfy({ (1...7).contains($0) }),
-                  let hour, (0...23).contains(hour),
-                  let minute, (0...59).contains(minute) else {
-                throw CantripHomeError(400, "A weekday task needs valid weekdays and a local time.")
+                  let first = times.first, times.count <= Self.maximumDailyTimes,
+                  times.allSatisfy(\.isValid) else {
+                throw CantripHomeError(
+                    400,
+                    "A weekday task needs valid weekdays and 1–\(Self.maximumDailyTimes) local times."
+                )
+            }
+            normalized.weekdays = weekdays.sorted()
+            normalized.times = times
+            normalized.hour = first.hour
+            normalized.minute = first.minute
+            normalized.summary = Self.summary(
+                weekdays: weekdays, times: times, timeZone: timeZone
+            )
+        }
+        return normalized
+    }
+
+    /// "Every day at 8:30 AM and 10:00 PM", "Weekdays at 9:00 AM Eastern Time".
+    static func summary(
+        weekdays: [Int], times: [CantripHomeScheduleTime], timeZone: String,
+        localZone: TimeZone = .current
+    ) -> String {
+        let names = [
+            "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+        ]
+        let days = Set(weekdays)
+        let dayText: String
+        switch days {
+        case Set(1...7): dayText = "Every day"
+        case [2, 3, 4, 5, 6]: dayText = "Weekdays"
+        case [1, 7]: dayText = "Weekends"
+        default:
+            if days.count == 6, let missing = Set(1...7).subtracting(days).first {
+                dayText = "Every day except \(names[missing - 1])"
+            } else {
+                dayText = "Every " + Self.list(days.sorted().map { names[$0 - 1] })
             }
         }
-        return self
+        let sorted = times.sorted()
+        var text = sorted.count <= 4
+            ? "\(dayText) at \(Self.list(sorted.map(\.label)))"
+            : "\(dayText), \(sorted.count) times from \(sorted[0].label) to \(sorted[sorted.count - 1].label)"
+        if let zone = TimeZone(identifier: timeZone), zone.identifier != localZone.identifier,
+           let name = zone.localizedName(for: .generic, locale: Locale(identifier: "en_US")) {
+            text += " \(name)"
+        }
+        return text
+    }
+
+    private static func list(_ items: [String]) -> String {
+        guard items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + " and " + items[items.count - 1]
     }
 
     func next(after date: Date) -> Date? {
@@ -55,7 +199,8 @@ struct CantripHomeSchedule: Codable, Equatable {
             let elapsed = date.timeIntervalSince(baseline)
             return baseline.addingTimeInterval((floor(elapsed / interval) + 1) * interval)
         case .weekdays:
-            guard let weekdays, let hour, let minute,
+            let times = runTimes
+            guard let weekdays, !times.isEmpty,
                   let zone = TimeZone(identifier: timeZone) else { return nil }
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = zone
@@ -63,12 +208,17 @@ struct CantripHomeSchedule: Codable, Equatable {
                 guard let day = calendar.date(byAdding: .day, value: offset, to: date) else { continue }
                 let weekday = calendar.component(.weekday, from: day)
                 guard weekdays.contains(weekday) else { continue }
-                var components = calendar.dateComponents([.year, .month, .day], from: day)
-                components.hour = hour
-                components.minute = minute
-                components.second = 0
-                if let candidate = calendar.date(from: components), candidate > date {
-                    return candidate
+                // Wall-clock slots in the task's zone: a time skipped by DST runs when clocks
+                // resume, and a repeated hour runs only at its first occurrence.
+                let candidates = times.compactMap { time -> Date? in
+                    var components = calendar.dateComponents([.year, .month, .day], from: day)
+                    components.hour = time.hour
+                    components.minute = time.minute
+                    components.second = 0
+                    return calendar.date(from: components)
+                }
+                if let soonest = candidates.filter({ $0 > date }).min() {
+                    return soonest
                 }
             }
             return nil
@@ -176,14 +326,15 @@ struct CantripHomeArtifact: Codable, Equatable, Identifiable {
 
 struct CantripHomeTaskProposal: Decodable {
     let id: UUID?
-    let title: String
-    let prompt: String
+    /// Edits by `id` may omit the title or prompt to keep the saved one.
+    let title: String?
+    let prompt: String?
     let schedule: CantripHomeSchedule?
     let workspace: CantripHomeTaskWorkspaceProposal?
     let initialRecords: [[String: String]]?
 
     init(
-        id: UUID?, title: String, prompt: String, schedule: CantripHomeSchedule?,
+        id: UUID?, title: String?, prompt: String?, schedule: CantripHomeSchedule?,
         workspace: CantripHomeTaskWorkspaceProposal? = nil,
         initialRecords: [[String: String]]? = nil
     ) {
@@ -249,6 +400,13 @@ private struct CantripHomeIncidentEnvelope: Decodable {
     let id: UUID
     let prompt: String
     let createdAt: String
+}
+
+/// A local maintenance edit dropped in `schedule-edits/`: replaces one task's schedule.
+private struct CantripHomeScheduleEditEnvelope: Decodable {
+    let version: Int
+    let taskID: UUID
+    let schedule: CantripHomeSchedule
 }
 
 struct CantripHomeArtifactsSnapshot: Encodable {
@@ -442,6 +600,10 @@ final class CantripHomeStore: ObservableObject {
     private(set) weak var backgroundSession: ChatSession?
     private var timer: Timer?
     private var recoveredArtifacts: [CantripHomeArtifact] = []
+    /// The scheduler's notion of now; tests move it to simulate sleep.
+    var clock: () -> Date = { Date() }
+    /// False when tasks.json was unreadable, so nothing may rewrite it.
+    private var tasksLoaded = false
 
     static var rootDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -454,6 +616,11 @@ final class CantripHomeStore: ObservableObject {
 
     static var incidentDirectory: URL {
         rootDirectory.appendingPathComponent("incidents", isDirectory: true)
+    }
+
+    /// Local maintenance drops `CantripHomeScheduleEditEnvelope` files here.
+    static var scheduleEditDirectory: URL {
+        rootDirectory.appendingPathComponent("schedule-edits", isDirectory: true)
     }
 
     static var tasksFile: URL { rootDirectory.appendingPathComponent("tasks.json") }
@@ -472,8 +639,13 @@ final class CantripHomeStore: ObservableObject {
             try FileManager.default.createDirectory(
                 at: Self.incidentDirectory, withIntermediateDirectories: true
             )
+            try FileManager.default.createDirectory(
+                at: Self.scheduleEditDirectory, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
             tasks = try load([CantripHomeTask].self, from: tasksURL) ?? []
             artifacts = try load([CantripHomeArtifact].self, from: artifactsURL) ?? []
+            tasksLoaded = true
         } catch {
             storageError = "Cantrip Home could not load its state. Scheduled work is paused until storage is readable."
             Log.write("home: state load failed: \(error.localizedDescription)")
@@ -556,8 +728,17 @@ final class CantripHomeStore: ObservableObject {
 
     @discardableResult
     func create(_ proposal: CantripHomeTaskProposal, now: Date = Date()) throws -> CantripHomeTask {
-        let title = proposal.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prompt = proposal.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        var existing: CantripHomeTask?
+        if let id = proposal.id {
+            guard let task = tasks.first(where: { $0.id == id }) else {
+                throw CantripHomeError(404, "The task being edited no longer exists.")
+            }
+            existing = task
+        }
+        let title = (proposal.title ?? existing?.title ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = (proposal.prompt ?? existing?.prompt ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title.count <= 120, !prompt.isEmpty, prompt.count <= 12_000 else {
             throw CantripHomeError(400, "Tasks need a short title and a prompt under 12,000 characters.")
         }
@@ -659,7 +840,7 @@ final class CantripHomeStore: ObservableObject {
             tasks[index].enabled = enabled
             tasks[index].state = enabled ? .scheduled : .paused
             if enabled, tasks[index].nextRunAt == nil {
-                tasks[index].nextRunAt = tasks[index].schedule.next(after: Date())
+                tasks[index].nextRunAt = tasks[index].schedule.next(after: clock())
             }
         }
         tasks[index].updatedAt = Date()
@@ -952,8 +1133,12 @@ final class CantripHomeStore: ObservableObject {
     }
 
     private func tick() {
+        applyScheduleEdits()
         drainIncidentInbox()
         CantripHomeDelegations.shared.refresh()
+        let now = clock()
+        // One task at a time; a task overdue from sleep or a quit runs once, then its next
+        // slot is computed from when that run finishes.
         guard AppSettings.shared.cantripHomeEnabled,
               let session = backgroundSession, !session.isStreaming, session.queued.isEmpty,
               !session.shell.isRunning,
@@ -962,11 +1147,11 @@ final class CantripHomeStore: ObservableObject {
                     tasks[$0].isScheduled && tasks[$0].enabled
                         && tasks[$0].state != .running
                 })
-                .filter({ (tasks[$0].nextRunAt ?? .distantFuture) <= Date() })
+                .filter({ (tasks[$0].nextRunAt ?? .distantFuture) <= now })
                 .min(by: { (tasks[$0].nextRunAt ?? .distantFuture)
                     < (tasks[$1].nextRunAt ?? .distantFuture) }) else { return }
         let taskID = tasks[index].id
-        let started = Date()
+        let started = now
         tasks[index].state = .running
         tasks[index].lastRunAt = started
         tasks[index].activeRunID = nil
@@ -998,6 +1183,68 @@ final class CantripHomeStore: ObservableObject {
         }
         do { try persistTasks() }
         catch { recordStorageFailure(error) }
+    }
+
+    /// Applies schedule edits queued by local maintenance (a Cantrip tab can't reach the
+    /// authenticated API). An edit for a running task waits for that run to finish.
+    private func applyScheduleEdits() {
+        guard tasksLoaded else { return }
+        let keys: Set<URLResourceKey> = [
+            .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey,
+        ]
+        let files: [URL]
+        do {
+            let root = try Self.scheduleEditDirectory.resourceValues(
+                forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+            )
+            guard root.isDirectory == true, root.isSymbolicLink != true else {
+                throw CantripHomeError(400, "The schedule edit inbox must be a real directory.")
+            }
+            files = try FileManager.default.contentsOfDirectory(
+                at: Self.scheduleEditDirectory,
+                includingPropertiesForKeys: Array(keys),
+                options: [.skipsHiddenFiles]
+            )
+                .filter { $0.pathExtension == "json" }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        } catch {
+            if (error as NSError).code != NSFileReadNoSuchFileError {
+                Log.write("home: schedule edit inbox read failed: \(error.localizedDescription)")
+            }
+            return
+        }
+        for url in files.prefix(10) {
+            do {
+                let values = try url.resourceValues(forKeys: keys)
+                guard values.isRegularFile == true, values.isSymbolicLink != true,
+                      let size = values.fileSize, size > 0, size <= 16_384 else {
+                    throw CantripHomeError(400, "Schedule edit is not a bounded regular file.")
+                }
+                let edit = try JSONDecoder().decode(
+                    CantripHomeScheduleEditEnvelope.self, from: Data(contentsOf: url)
+                )
+                guard edit.version == 1 else {
+                    throw CantripHomeError(400, "Unsupported schedule edit version.")
+                }
+                if tasks.first(where: { $0.id == edit.taskID })?.state == .running { continue }
+                let task = try create(.init(
+                    id: edit.taskID, title: nil, prompt: nil, schedule: edit.schedule
+                ), now: clock())
+                try FileManager.default.removeItem(at: url)
+                Log.write(
+                    "home: applied schedule edit \(url.lastPathComponent) to \(task.id.uuidString): "
+                        + task.schedule.summary
+                )
+            } catch {
+                Log.write(
+                    "home: schedule edit rejected \(url.lastPathComponent): "
+                        + error.localizedDescription
+                )
+                try? FileManager.default.moveItem(
+                    at: url, to: url.appendingPathExtension("rejected")
+                )
+            }
+        }
     }
 
     private func drainIncidentInbox() {
@@ -1066,7 +1313,7 @@ final class CantripHomeStore: ObservableObject {
             persistBackgroundRuns()
         }
         guard let index = tasks.firstIndex(where: { $0.activeRunID == runID }) else { return }
-        let finished = Date()
+        let finished = clock()
         let clipped = RemoteCompletion.preview(summary)
         tasks[index].runs.insert(.init(
             startedAt: tasks[index].lastRunAt ?? finished,
@@ -1310,7 +1557,14 @@ extension ChatSession {
     var cantripHomeInstructions: String {
         let zone = TimeZone.current.identifier
         let savedTasks = CantripHomeStore.shared.tasks.prefix(20).map {
-            let mode = $0.isScheduled ? $0.schedule.summary : "no schedule"
+            var mode = $0.isScheduled ? $0.schedule.summary : "no schedule"
+            if $0.isScheduled, $0.schedule.kind == .weekdays {
+                let times = $0.schedule.runTimes
+                    .map { String(format: "%02d:%02d", $0.hour, $0.minute) }
+                    .joined(separator: ",")
+                let days = ($0.schedule.weekdays ?? []).map(String.init).joined(separator: ",")
+                mode += " (times \(times); weekdays \(days); \($0.schedule.timeZone))"
+            }
             let workspace = $0.workspace.map {
                 "; \($0.recordLabel) fields: "
                     + $0.fields.map { "\($0.key):\($0.kind.rawValue)" }.joined(separator: ",")
@@ -1358,7 +1612,7 @@ extension ChatSession {
         "prompt":"standalone task instructions","schedule":null or {
         "kind":"once|interval|weekdays","summary":"natural schedule label",
         "timeZone":"IANA zone","startAt":"ISO-8601 or null","intervalMinutes":null,
-        "weekdays":[1-7] or null,"hour":0-23 or null,"minute":0-59 or null},
+        "weekdays":[1-7] or null,"times":[{"hour":0-23,"minute":0-59}] or null},
         "workspace":null or {"recordLabel":"singular item name",
         "recordLabelPlural":"plural item name","icon":"SF Symbol",
         "fields":[{"key":"stableKey","label":"Display label",
@@ -1369,6 +1623,12 @@ extension ChatSession {
         "detailSections":[{"title":"optional heading","fields":["key"]}]},
         "initialRecords":[{"fieldKey":"string value"}] or null}
         Sunday is 1 and Saturday is 7. Current time zone: \(zone).
+        A weekdays schedule runs at every local time in `times` (up to \(CantripHomeSchedule.maximumDailyTimes)) on each
+        listed weekday. When the same work should happen several times a day, use one task with
+        several times; never create a second task for another time. Cantrip writes the summary
+        for weekdays schedules. To change an existing task, use its UUID in `id`; omit `title`
+        or `prompt` to keep the saved ones. A schedule you send replaces the old one, so list
+        every run time the task should keep (for example add 22:00 to an existing 08:30).
         A task needs a schedule, a workspace, or both. Workspaces are declarative native mobile
         screens; choose only the fields necessary for the user's workflow. Date values use
         YYYY-MM-DD, dateTime uses ISO-8601, booleans use "true"/"false", and every stored value
