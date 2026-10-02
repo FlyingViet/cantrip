@@ -431,7 +431,8 @@ struct CantripHomeTaskRun: Decodable, Equatable, Identifiable {
     let summary: String
 }
 
-/// A scheduled-task or incident run in Cantrip Home's background conversation on the Mac.
+/// A scheduled-task or incident run on the Mac: in its own hidden session, or handed to the
+/// project tab that owns it.
 struct CantripHomeBackgroundRun: Decodable, Equatable, Identifiable {
     let id: UUID
     let kind: String
@@ -441,15 +442,28 @@ struct CantripHomeBackgroundRun: Decodable, Equatable, Identifiable {
     var finishedAt: Date? = nil
     let status: String
     let summary: String
+    /// The live hidden session, while it runs.
+    var sessionID: String? = nil
+    /// "hidden" or "tab"; older Macs omit it.
+    var route: String? = nil
+    var repeats: Int? = nil
+    var handoffs: [CantripRemoteDelegation]? = nil
+    /// This run's own live status; older Macs send one shared activity instead.
+    var activity: String? = nil
+    var canStop: Bool? = nil
 
     var isIncident: Bool { kind == "incident" }
     var isRunning: Bool { status == "running" }
+    var isHandedOff: Bool { route == "tab" }
+    var tabHandoff: CantripRemoteDelegation? { isHandedOff ? handoffs?.last : nil }
 }
 
 struct CantripHomeBackgroundQueuedRun: Decodable, Equatable, Identifiable {
     let id: UUID
     let kind: String
     let label: String
+    var reason: String? = nil
+    var repeats: Int? = nil
 }
 
 struct CantripHomeBackgroundSnapshot: Decodable, Equatable {
@@ -458,6 +472,9 @@ struct CantripHomeBackgroundSnapshot: Decodable, Equatable {
     let queued: [CantripHomeBackgroundQueuedRun]
     var activity: String? = nil
     let revision: String
+    var maxParallel: Int? = nil
+    var runningCount: Int? = nil
+    var supportsStop: Bool? = nil
 }
 
 struct CantripHomeTaskField: Decodable, Equatable, Identifiable {
@@ -1251,6 +1268,10 @@ struct CantripRemoteAPI {
 
     func homeBackground() async throws -> CantripHomeBackgroundSnapshot {
         try await request(path: "/api/v1/home/background")
+    }
+
+    func stopHomeBackgroundRun(id: UUID) async throws -> CantripHomeBackgroundSnapshot {
+        try await request(path: "/api/v1/home/background/\(id.uuidString)/stop", method: "POST")
     }
 
     func homeArtifacts() async throws -> (artifacts: [CantripHomeArtifact], revision: String) {
@@ -2433,6 +2454,29 @@ final class CantripRemoteModel: ObservableObject {
     /// Home's background log is reachable by ID but never listed as a tab.
     func prepareToOpenHomeBackgroundLog() {
         pendingUnlistedSessionID = homeBackground?.sessionID
+    }
+
+    /// A live hidden background run is reachable by ID while it runs.
+    func prepareToOpenHomeRun(sessionID: String) {
+        pendingUnlistedSessionID = sessionID
+    }
+
+    /// Stops one background run (or skips one still waiting) and refreshes the list.
+    func stopHomeBackgroundRun(_ id: UUID) async -> Bool {
+        guard homeBackground?.supportsStop == true, !isMutating else { return false }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            let snapshot = try await performAuthenticated(allowFallback: false) {
+                try await $0.stopHomeBackgroundRun(id: id)
+            }
+            if homeBackground != snapshot { homeBackground = snapshot }
+            homeBackgroundError = nil
+            return true
+        } catch {
+            homeBackgroundError = error.localizedDescription
+            return false
+        }
     }
 
     func selectHome() async {

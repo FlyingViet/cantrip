@@ -843,6 +843,132 @@ final class CantripHomeTests: XCTestCase {
         )
     }
 
+    func testHomeBackgroundParallelRunsStopAndHandoffs() async throws {
+        let client = client()
+        let model = CantripRemoteModel(urlSession: client)
+        var stopped = false
+        var requests: [(method: String, path: String)] = []
+        CantripHomeRequestProtocol.handler = { request in
+            let path = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .percentEncodedPath ?? ""
+            requests.append((request.httpMethod ?? "GET", path))
+            switch path {
+            case "/api/v1/home":
+                return (200, self.homeSessionPayload(
+                    extra: #","supportsBackgroundRuns":true,"backgroundActiveCount":3"#
+                ))
+            case "/api/v1/home/tasks": return (200, self.tasksPayload(enabled: true))
+            case "/api/v1/home/artifacts": return (200, self.artifactsPayload())
+            case "/api/v1/home/background": return (200, self.parallelBackgroundPayload(stopped: stopped))
+            case "/api/v1/home/background/30000000-0000-0000-0000-000000000011/stop":
+                stopped = true
+                return (200, self.parallelBackgroundPayload(stopped: true))
+            case "/api/v1/sessions/\(self.runSessionID)":
+                return (200, Data("""
+                {"session":{"id":"\(self.runSessionID)","title":"Cantrip Home background",
+                "workdir":"/tmp","isStreaming":true,"canResume":false,"councilMode":false,
+                "queuedCount":0,"status":"Reading Mail","messages":[],"queued":[],"isLocked":true,
+                "isCantripHomeBackground":true}}
+                """.utf8))
+            default: return (200, Data(#"{"sessions":[]}"#.utf8))
+            }
+        }
+        addTeardownBlock { @MainActor in
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            CantripHomeRequestProtocol.handler = nil
+        }
+        let configured = await model.configure(
+            url: "https://cantrip.example", pairingToken: "home-token", tailscaleOnly: true
+        )
+        XCTAssertTrue(configured)
+        await model.selectHome()
+        await model.refreshHomeBackground()
+        let snapshot = try XCTUnwrap(model.homeBackground)
+        XCTAssertEqual(snapshot.maxParallel, 3)
+        XCTAssertEqual(snapshot.supportsStop, true)
+        XCTAssertNil(snapshot.activity, "Parallel Macs send each run's own activity")
+
+        let bills = snapshot.runs[0]
+        XCTAssertEqual(bills.activity, "Reading Mail")
+        XCTAssertEqual(bills.canStop, true)
+        XCTAssertEqual(bills.sessionID, runSessionID)
+        XCTAssertFalse(bills.isHandedOff)
+        let billsRow = CantripHomeBackgroundRunRow(run: bills, isExpanded: .constant(false))
+        XCTAssertTrue(billsRow.detail(now: Date()).hasPrefix("Scheduled task · Running for 1m"))
+
+        let handed = snapshot.runs[1]
+        XCTAssertTrue(handed.isHandedOff)
+        XCTAssertEqual(handed.tabHandoff?.tabTitle, "Bass Compass")
+        XCTAssertEqual(handed.tabHandoff?.status, .queued)
+        XCTAssertEqual(handed.tabHandoff?.tabID, bassTabID)
+        let handedRow = CantripHomeBackgroundRunRow(run: handed, isExpanded: .constant(false))
+        let handedDetail = handedRow.detail(now: Date())
+        XCTAssertTrue(handedDetail.hasPrefix("Incident · Queued in Bass Compass for 3m"), handedDetail)
+        XCTAssertTrue(handedDetail.hasSuffix("· reported 2 times"), handedDetail)
+
+        let skipped = CantripHomeBackgroundRunRow(run: snapshot.runs[2], isExpanded: .constant(false))
+        XCTAssertEqual(skipped.statusText, "Skipped")
+        XCTAssertTrue(skipped.detail(now: Date()).hasPrefix("Incident · Skipped "))
+
+        let waiting = CantripHomeBackgroundQueuedRow(item: snapshot.queued[0])
+        XCTAssertEqual(waiting.detail,
+                       "Scheduled task · Waiting for Bills and subscriptions monitor (until 8:30 AM)")
+
+        let didStop = await model.stopHomeBackgroundRun(bills.id)
+        XCTAssertTrue(didStop)
+        XCTAssertTrue(requests.contains {
+            $0.method == "POST"
+                && $0.path == "/api/v1/home/background/30000000-0000-0000-0000-000000000011/stop"
+        })
+        XCTAssertEqual(model.homeBackground?.runs.first?.status, "cancelled",
+                       "Stop refreshes the list from the Mac's reply")
+        XCTAssertNil(model.homeBackgroundError)
+
+        model.prepareToOpenHomeRun(sessionID: runSessionID)
+        await model.selectRegularSession()
+        XCTAssertEqual(model.selectedSessionID, runSessionID,
+                       "Open shows a live hidden run even though it is not a tab")
+    }
+
+    func testHomeBackgroundStopNeedsASupportingMac() async throws {
+        let client = client()
+        let model = CantripRemoteModel(urlSession: client)
+        var stopRequests = 0
+        CantripHomeRequestProtocol.handler = { request in
+            let path = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .percentEncodedPath ?? ""
+            if path.hasSuffix("/stop") { stopRequests += 1 }
+            switch path {
+            case "/api/v1/home":
+                return (200, self.homeSessionPayload(
+                    extra: #","supportsBackgroundRuns":true,"backgroundActiveCount":2"#
+                ))
+            case "/api/v1/home/background": return (200, self.backgroundPayload())
+            default: return (200, Data(#"{"sessions":[]}"#.utf8))
+            }
+        }
+        addTeardownBlock { @MainActor in
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            CantripHomeRequestProtocol.handler = nil
+        }
+        _ = await model.configure(
+            url: "https://cantrip.example", pairingToken: "home-token", tailscaleOnly: true
+        )
+        await model.selectHome()
+        await model.refreshHomeBackground()
+        let run = try XCTUnwrap(model.homeBackground?.runs.first)
+        XCTAssertNil(run.canStop)
+        XCTAssertEqual(run.route, nil)
+        let didStop = await model.stopHomeBackgroundRun(run.id)
+        XCTAssertFalse(didStop)
+        XCTAssertEqual(stopRequests, 0, "Older Macs without per-run Stop are never asked to stop")
+        let row = CantripHomeBackgroundRunRow(run: run, activity: model.homeBackground?.activity,
+                                              isExpanded: .constant(false))
+        XCTAssertTrue(row.detail(now: Date()).hasPrefix("Incident · Running for 1m"))
+    }
+
     func testHomeBackgroundScreenshots() async throws {
         let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_ARTIFACT_DIR"]
         guard let directory, !directory.isEmpty else {
@@ -859,7 +985,9 @@ final class CantripHomeTests: XCTestCase {
                 ))
             case "/api/v1/home/tasks": return (200, self.tasksPayload(enabled: true))
             case "/api/v1/home/artifacts": return (200, self.artifactsPayload())
-            case "/api/v1/home/background": return (200, self.backgroundPayload())
+            case "/api/v1/home/background":
+                return (200, ProcessInfo.processInfo.environment["HOME_BACKGROUND_LEGACY"] == "1"
+                    ? self.backgroundPayload() : self.parallelBackgroundPayload())
             case "/api/v1/copilot/usage": return (200, Data(#"{"isRefreshing":false}"#.utf8))
             default: return (200, Data(#"{"sessions":[]}"#.utf8))
             }
@@ -904,14 +1032,16 @@ final class CantripHomeTests: XCTestCase {
         }
         for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
             try await capture(
-                CantripHomeBackgroundView(remote: model, openLog: {}),
+                CantripHomeBackgroundView(remote: model, openLog: {}, openSession: { _ in },
+                                          openTab: { _ in }),
                 "cantrip-home-background-\(name)", style: style
             )
             try await capture(ChatView(env: env, remote: model), "cantrip-home-background-header-\(name)",
                               style: style)
         }
         try await capture(
-            CantripHomeBackgroundView(remote: model, openLog: {}),
+            CantripHomeBackgroundView(remote: model, openLog: {}, openSession: { _ in },
+                                      openTab: { _ in }),
             "cantrip-home-background-ax", style: .light, size: .accessibility3
         )
     }
@@ -1049,6 +1179,42 @@ final class CantripHomeTests: XCTestCase {
       "summary":"Wait for TestFlight processing","background":true,"status":"running",
       "startedAt":1790501259,"canCancel":true,"latestMessage":"Build 100118 is processing."}]}]
     """#
+
+    private let runSessionID = "40000000-0000-0000-0000-0000000000AA"
+    private let bassTabID = "50000000-0000-0000-0000-0000000000BB"
+
+    /// A Mac that runs background jobs in parallel hidden sessions and hands incidents to tabs.
+    private func parallelBackgroundPayload(stopped: Bool = false) -> Data {
+        let now = Date().timeIntervalSinceReferenceDate.rounded(.down)
+        let epoch = Date().timeIntervalSince1970.rounded(.down)
+        let bills = stopped
+            ? #""status":"cancelled","summary":"Stopped.","finishedAt":\#(now - 5),"canStop":false"#
+            : #""status":"running","summary":"","activity":"Reading Mail","canStop":true,"sessionID":"\#(runSessionID)""#
+        return Data("""
+        {"sessionID":"\(backgroundID)","revision":"\(stopped ? "b3" : "b2")","maxParallel":3,
+         "runningCount":\(stopped ? 1 : 2),"supportsStop":true,
+         "queued":[{"id":"30000000-0000-0000-0000-000000000013","kind":"task",
+           "label":"Personal operations briefing",
+           "reason":"Waiting for Bills and subscriptions monitor (until 8:30 AM)"}],
+         "runs":[
+          {"id":"30000000-0000-0000-0000-000000000011","kind":"task","label":"Bills and subscriptions monitor",
+           "taskID":"10000000-0000-0000-0000-000000000002","startedAt":\(now - 70),"route":"hidden",
+           "handoffs":[],\(bills)},
+          {"id":"30000000-0000-0000-0000-000000000012","kind":"incident",
+           "label":"Automated Bass Compass Ingestion Incident","startedAt":\(now - 200),
+           "status":"running","summary":"","route":"tab","repeats":1,"canStop":true,
+           "activity":"Queued in Bass Compass",
+           "handoffs":[{"id":"60000000-0000-0000-0000-000000000001","tabID":"\(bassTabID)",
+             "tabTitle":"Bass Compass","summary":"Automated Bass Compass Ingestion Incident",
+             "prompt":"AUTOMATED BASS COMPASS INGESTION INCIDENT","status":"queued",
+             "startedAt":\(epoch - 200),"latestStatus":"Waiting for the tab's current work to finish."}]},
+          {"id":"30000000-0000-0000-0000-000000000014","kind":"incident",
+           "label":"Automated Bass Compass Ingestion Incident","startedAt":\(now - 900),
+           "finishedAt":\(now - 900),"status":"skipped","route":"hidden","canStop":false,
+           "summary":"Already resolved: the Insomniac timeouts were transient."}
+         ]}
+        """.utf8)
+    }
 
     private func backgroundPayload() -> Data {
         let now = Date().timeIntervalSinceReferenceDate.rounded(.down)
