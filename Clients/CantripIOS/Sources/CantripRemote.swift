@@ -406,6 +406,8 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsBackgroundRuns: Bool? = nil
     /// Cantrip Home only: background runs running or waiting on the Mac.
     var backgroundActiveCount: Int? = nil
+    /// Cantrip Home only: requests from background runs waiting on the user.
+    var backgroundInputCount: Int? = nil
     var pendingInputs: [CantripInputRequest]? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
@@ -456,11 +458,14 @@ struct CantripHomeBackgroundRun: Decodable, Equatable, Identifiable {
     /// This run's own live status; older Macs send one shared activity instead.
     var activity: String? = nil
     var canStop: Bool? = nil
+    /// Approvals and questions the live run waits on, answered through its `sessionID`.
+    var inputs: [CantripInputRequest]? = nil
 
     var isIncident: Bool { kind == "incident" }
     var isRunning: Bool { status == "running" }
     var isHandedOff: Bool { route == "tab" }
     var tabHandoff: CantripRemoteDelegation? { isHandedOff ? handoffs?.last : nil }
+    var needsInput: Bool { isRunning && (!(inputs ?? []).isEmpty || activity == "Needs your input") }
 }
 
 struct CantripHomeBackgroundQueuedRun: Decodable, Equatable, Identifiable {
@@ -1902,10 +1907,15 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var isLoadingHomeData = false
     @Published private(set) var homeTasksSupportReordering = false
     @Published private(set) var homeBackground: CantripHomeBackgroundSnapshot?
+    /// The hidden run (by session ID) the Background sheet should reveal, e.g. from a push.
+    @Published var homeBackgroundFocus: String?
     @Published private(set) var homeBackgroundError: String?
     private var homeBackgroundRefreshInFlight = false
     /// Opened once by the next regular-lane selection even though it is not a tab.
     private var pendingUnlistedSessionID: String?
+    /// A hidden run or log opened explicitly by ID. Polling keeps it selected even though it is
+    /// never listed, instead of falling back to the first tab, until it is gone or replaced.
+    private var unlistedSessionID: String?
     private var homeDataRefreshInFlight = false
     private var homeTaskOrderRevision = 0
     @Published private(set) var errorMessage: String?
@@ -2221,17 +2231,35 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
+    private func selectNotificationServer(_ target: CantripNotificationTarget) async throws {
+        await notificationRegistrationTask?.value
+        guard let server = servers.servers.first(where: { $0.id == target.serverID }),
+              CantripLANProtocol.tokenFingerprint(try servers.credential(for: server)) == target.fingerprint else {
+            throw ServerConfigurationError(message: "This notification belongs to a removed or re-paired Cantrip server.")
+        }
+        try await selectServer(server)
+        guard !isMutating, !isUploadingVideo else {
+            throw ServerConfigurationError(message: "Finish the current upload or request before opening this notification.")
+        }
+    }
+
+    /// A background run's request opens Home's Background list on that run, where it is
+    /// answered in place; the run's hidden session never opens as a tab.
+    func openHomeRunNotification(_ target: CantripNotificationTarget) async {
+        do {
+            try await selectNotificationServer(target)
+            await selectHome()
+            homeBackgroundFocus = target.sessionID.uuidString
+            await refreshHomeBackground()
+            notificationNavigationID = UUID()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func openCompletionNotification(_ target: CantripNotificationTarget) async {
         do {
-            await notificationRegistrationTask?.value
-            guard let server = servers.servers.first(where: { $0.id == target.serverID }),
-                  CantripLANProtocol.tokenFingerprint(try servers.credential(for: server)) == target.fingerprint else {
-                throw ServerConfigurationError(message: "This notification belongs to a removed or re-paired Cantrip server.")
-            }
-            try await selectServer(server)
-            guard !isMutating, !isUploadingVideo else {
-                throw ServerConfigurationError(message: "Finish the current upload or request before opening this notification.")
-            }
+            try await selectNotificationServer(target)
             await selectSession(target.sessionID.uuidString)
             if target.kind == "input" {
                 showingMacAccess = false
@@ -2443,6 +2471,7 @@ final class CantripRemoteModel: ObservableObject {
         guard id != selectedSessionID || selectedSession?.id != id else { return }
         isHomeSelected = false
         regularSelectedSessionID = id
+        unlistedSessionID = sessions.contains(where: { $0.id == id }) ? nil : id
         cancelDetailRefresh()
         selectionRevision += 1
         let selection = selectionRevision
@@ -2581,6 +2610,10 @@ final class CantripRemoteModel: ObservableObject {
             }
             if homeArtifacts != values.1.artifacts { homeArtifacts = values.1.artifacts }
             if homeDataError != values.0.error { homeDataError = values.0.error }
+            if (selectedSession?.backgroundInputCount ?? 0) > 0
+                || homeBackground?.runs.contains(where: \.needsInput) == true {
+                await refreshHomeBackground()
+            }
         } catch is CancellationError {
             return
         } catch {
@@ -3378,6 +3411,9 @@ final class CantripRemoteModel: ObservableObject {
                                     || selectedSession?.isStreaming == true)
             var publicIDs = Set(listed.map(\.id))
             if isHomeSelected, let selectedSessionID { publicIDs.insert(selectedSessionID) }
+            if !isHomeSelected, let unlistedSessionID, unlistedSessionID == selectedSessionID {
+                publicIDs.insert(unlistedSessionID)
+            }
             detailCache = detailCache.filter { publicIDs.contains($0.key) }
             cacheOrder.removeAll { !publicIDs.contains($0) }
             expandedHistory.formIntersection(publicIDs)
@@ -3392,7 +3428,7 @@ final class CantripRemoteModel: ObservableObject {
                 return
             }
             let chosenID = isHomeSelected ? requestedID : requestedID.flatMap { id in
-                listed.contains(where: { $0.id == id }) ? id : nil
+                listed.contains(where: { $0.id == id }) || id == unlistedSessionID ? id : nil
             } ?? listed.first?.id
             selectedSessionID = chosenID
             if !isHomeSelected { regularSelectedSessionID = chosenID }
@@ -3440,6 +3476,12 @@ final class CantripRemoteModel: ObservableObject {
                                       generation == self.configurationGeneration,
                                       revision == self.mutationRevision, selection == self.selectionRevision,
                                       self.selectedSessionID == chosenID else { return }
+                                if case CantripRemoteError.http(404, _) = error, chosenID == self.unlistedSessionID {
+                                    // A finished background run's session is gone; its report is in Home.
+                                    self.unlistedSessionID = nil
+                                    self.detailError = "This background run has finished. Its report is in Home's Background list."
+                                    return
+                                }
                                 self.detailError = "Could not update this conversation. \(error.localizedDescription)"
                                 self.handleReadFailure(error, detailOnly: true)
                             }
@@ -3655,6 +3697,7 @@ final class CantripRemoteModel: ObservableObject {
         cacheOrder.removeAll()
         expandedHistory.removeAll()
         olderHistoryFailures.removeAll()
+        unlistedSessionID = nil
         detailError = nil
         selectionRevision += 1
         selectingSessionID = nil
@@ -4399,3 +4442,12 @@ enum CantripRemoteTabIcon {
         return image.withRenderingMode(.alwaysOriginal)
     }
 }
+
+#if DEBUG
+extension CantripRemoteModel {
+    /// UI tests build push payloads the paired server would send.
+    static func notificationFingerprintForUITest(_ token: String) -> String {
+        CantripLANProtocol.tokenFingerprint(token)
+    }
+}
+#endif

@@ -30,7 +30,9 @@ final class CantripNotificationTests: XCTestCase {
         SHA256.hash(data: Data(token.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
-    private func fixture(permission: Bool = true) throws -> (CantripRemoteModel, CantripNotifications, SavedServer, SavedServer, UserDefaults) {
+    private func fixture(
+        permission: Bool = true, authorize: ((String) async throws -> Void)? = nil
+    ) throws -> (CantripRemoteModel, CantripNotifications, SavedServer, SavedServer, UserDefaults) {
         let suite = "CantripNotificationTests.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         var values: [String: String] = [:]
@@ -44,7 +46,8 @@ final class CantripNotificationTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [NotificationTestProtocol.self]
         let session = URLSession(configuration: configuration)
-        let model = CantripRemoteModel(urlSession: session, servers: servers, completionAlerts: alerts)
+        let model = CantripRemoteModel(urlSession: session, servers: servers, completionAlerts: alerts,
+                                       authorizeSensitiveAction: authorize ?? CantripBiometrics.authorize)
         let keys = ["cantrip.remote.base-url", "cantrip.remote.tailscale-only"]
         let previous = keys.map { UserDefaults.standard.object(forKey: $0) }
         addTeardownBlock { @MainActor in
@@ -251,5 +254,146 @@ final class CantripNotificationTests: XCTestCase {
         XCTAssertNil(model.inputRequestsSession)
         XCTAssertFalse(model.showingMacAccess)
         XCTAssertNotEqual(model.notificationNavigationID, navigation)
+    }
+
+    // MARK: - Home background run requests
+
+    private let runSession = "40000000-0000-0000-0000-000000000021"
+    private let runRequest = "50000000-0000-0000-0000-000000000021"
+    private let followUpTask = "10000000-0000-0000-0000-000000000009"
+
+    private func homeSession(waiting: Bool) -> Data {
+        Data("""
+        {"session":{"id":"\(CantripHomeIdentity.sessionID)","title":"Cantrip Home","workdir":"/tmp",
+         "isStreaming":false,"canResume":false,"councilMode":false,"queuedCount":0,"messages":[],
+         "isCantripHome":true,"isLocked":true,"supportsBackgroundRuns":true,"backgroundActiveCount":1,
+         "backgroundInputCount":\(waiting ? 1 : 0)}}
+        """.utf8)
+    }
+
+    private func background(waiting: Bool) -> Data {
+        let started = Date().timeIntervalSinceReferenceDate.rounded(.down) - 60
+        let inputs = waiting ? """
+        ,"inputs":[{"id":"\(runRequest)","kind":"approval","source":"Cantrip Home",
+          "title":"Daily follow-up tracker wants to send a message","detail":"messages-send '+15551234567' 'On my way'",
+          "choices":[],"allowsFreeform":false,"expiresAt":9999999999}]
+        """ : ""
+        return Data("""
+        {"sessionID":"231C484E-0E50-43E0-9ADF-4295F3AC8956","revision":"b1","maxParallel":3,"runningCount":1,
+         "supportsStop":true,"queued":[],
+         "runs":[{"id":"30000000-0000-0000-0000-000000000021","kind":"task","label":"Daily follow-up tracker",
+           "taskID":"\(followUpTask)","startedAt":\(started),"status":"running","summary":"","route":"hidden",
+           "canStop":true,"sessionID":"\(runSession)","handoffs":[],
+           "activity":"\(waiting ? "Needs your input" : "Sending the message")"\(inputs)}]}
+        """.utf8)
+    }
+
+    func testHomeRunInputPushOpensHomeAndIsAnsweredInPlace() async throws {
+        var authorizations = 0
+        let (model, _, a, _, _) = try fixture(authorize: { _ in authorizations += 1 })
+        var waiting = true
+        var requests: [(method: String, path: String, body: [String: Any])] = []
+        NotificationTestProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            let body = request.httpMethod == "POST" ? ((try? self.body(request)) ?? [:]) : [:]
+            requests.append((request.httpMethod ?? "GET", path, body))
+            switch path {
+            case "/api/v1/home": return (200, self.homeSession(waiting: waiting))
+            case "/api/v1/home/tasks": return (200, Data(#"{"tasks":[],"revision":"r"}"#.utf8))
+            case "/api/v1/home/artifacts": return (200, Data(#"{"artifacts":[],"revision":"r"}"#.utf8))
+            case "/api/v1/home/background": return (200, self.background(waiting: waiting))
+            case "/api/v1/sessions/\(self.runSession)/input":
+                return (200, Data(waiting ? """
+                {"requests":[{"id":"\(self.runRequest)","kind":"approval","source":"Cantrip Home",
+                  "title":"Daily follow-up tracker wants to send a message","detail":"messages-send",
+                  "choices":[],"allowsFreeform":false,"expiresAt":9999999999}]}
+                """.utf8 : #"{"requests":[]}"#.utf8))
+            case "/api/v1/sessions/\(self.runSession)/input/\(self.runRequest)":
+                waiting = false
+                return (200, Data(#"{"accepted":true}"#.utf8))
+            default: return (200, Data(#"{"sessions":[]}"#.utf8))
+            }
+        }
+        let payload: [String: String] = [
+            "kind": "input", "home": "run", "eventID": runRequest, "sessionID": runSession,
+            "serverID": a.id.uuidString, "fingerprint": fingerprint("paired-a"),
+        ]
+        let target = try XCTUnwrap(CantripNotificationTarget(userInfo: ["cantrip": payload]))
+        XCTAssertTrue(target.isHomeRun)
+        var ordinary = payload
+        ordinary["home"] = nil
+        XCTAssertFalse(try XCTUnwrap(CantripNotificationTarget(userInfo: ["cantrip": ordinary])).isHomeRun)
+
+        let navigation = model.notificationNavigationID
+        await model.openHomeRunNotification(target)
+        XCTAssertTrue(model.isHomeSelected, "A background run's push opens Home, not Cantrip Remote")
+        XCTAssertEqual(model.selectedSessionID, CantripHomeIdentity.sessionID)
+        XCTAssertEqual(model.homeBackgroundFocus, runSession, "The Background list opens on that run")
+        XCTAssertNotEqual(model.notificationNavigationID, navigation)
+        XCTAssertFalse(requests.contains { $0.path == "/api/v1/sessions/\(runSession)" },
+                       "The hidden run's session is never opened as a tab")
+        let run = try XCTUnwrap(model.homeBackground?.runs.first)
+        XCTAssertTrue(run.needsInput)
+        XCTAssertEqual(run.inputs?.first?.title, "Daily follow-up tracker wants to send a message")
+        XCTAssertEqual(CantripHomeTasksView.waitingRuns(model.homeBackground)[UUID(uuidString: followUpTask)!], runSession,
+                       "Tasks shows which task's run waits, and opens it")
+        XCTAssertEqual(model.selectedSession?.backgroundInputCount, 1)
+
+        let request = try XCTUnwrap(run.inputs?.first)
+        let accepted = await model.respondToInput(sessionID: runSession, id: request.id,
+                                                  answer: CantripInputAnswer(decision: "approve"),
+                                                  identity: model.usageIdentity)
+        XCTAssertTrue(accepted, model.errorMessage ?? "")
+        XCTAssertEqual(authorizations, 1, "Approving still asks for Face ID")
+        let answer = try XCTUnwrap(requests.last { $0.method == "POST" })
+        XCTAssertEqual(answer.path, "/api/v1/sessions/\(runSession)/input/\(runRequest)")
+        XCTAssertEqual(answer.body["decision"] as? String, "approve")
+        await model.refreshHomeBackground()
+        XCTAssertEqual(model.homeBackground?.runs.first?.needsInput, false, "The answered run continues")
+        XCTAssertNil(model.homeBackground?.runs.first?.inputs)
+        XCTAssertTrue(CantripHomeTasksView.waitingRuns(model.homeBackground).isEmpty)
+    }
+
+    func testOpenedHiddenRunStaysSelectedWhilePollingUntilItFinishes() async throws {
+        let (model, _, a, _, _) = try fixture()
+        let tab = "60000000-0000-0000-0000-000000000001"
+        var finished = false
+        NotificationTestProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            if path == "/api/v1/sessions" {
+                return (200, Data("""
+                {"sessions":[{"id":"\(tab)","title":"Bass Compass","workdir":"/tmp","isStreaming":false,
+                 "canResume":false,"councilMode":false,"queuedCount":0,"historyRevision":"t1"}]}
+                """.utf8))
+            }
+            if path == "/api/v1/sessions/\(self.runSession)" {
+                if finished { return (404, Data(#"{"error":"session not found"}"#.utf8)) }
+                return (200, Data("""
+                {"session":{"id":"\(self.runSession)","title":"Cantrip Home background","workdir":"/tmp",
+                 "isStreaming":true,"canResume":false,"councilMode":false,"queuedCount":0,"messages":[],
+                 "isLocked":true,"isCantripHomeBackground":true,"historyRevision":"h1"}}
+                """.utf8))
+            }
+            return (200, Data("""
+            {"session":{"id":"\(tab)","title":"Bass Compass","workdir":"/tmp","isStreaming":false,
+             "canResume":false,"councilMode":false,"queuedCount":0,"messages":[],"historyRevision":"t1"}}
+            """.utf8))
+        }
+        try await model.selectServer(a)
+        model.setAppActive(true)
+        await model.refreshNow()
+        XCTAssertEqual(model.selectedSessionID, tab, model.errorMessage ?? model.detailError ?? "")
+        model.prepareToOpenHomeRun(sessionID: runSession)
+        await model.selectRegularSession()
+        XCTAssertEqual(model.selectedSessionID, runSession)
+        for _ in 0..<3 { await model.refreshNow() }
+        XCTAssertEqual(model.selectedSessionID, runSession,
+                       "Polling keeps an opened hidden run instead of jumping to the first tab")
+        finished = true
+        await model.refreshNow()
+        for _ in 0..<50 where model.detailError == nil { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(model.detailError, "This background run has finished. Its report is in Home's Background list.")
+        await model.refreshNow()
+        XCTAssertEqual(model.selectedSessionID, tab, "A finished run falls back to the tabs")
     }
 }

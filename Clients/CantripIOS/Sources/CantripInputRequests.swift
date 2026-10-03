@@ -318,7 +318,9 @@ struct CantripInputRequestsView: View {
     }
 }
 
-private struct CantripInputCard: View {
+/// One pending approval, question, password or sign-in, with its answers. Chat answers
+/// questions in the composer; elsewhere (Home's Background list) the card answers them itself.
+struct CantripInputCard: View {
     let request: CantripInputRequest
     let busy: Bool
     let send: (CantripInputAnswer) -> Void
@@ -336,6 +338,20 @@ private struct CantripInputCard: View {
                     .accessibilityIdentifier("cantrip.input.secret")
                 Text("Sent only to the verified waiting program on the Mac. Not added to chat or saved by Cantrip.")
                     .font(.footnote).foregroundStyle(.secondary)
+            }
+            if request.kind == "question" {
+                ForEach(request.choices, id: \.self) { choice in
+                    Button(choice) { send(CantripInputAnswer(decision: "submit", text: choice)) }
+                        .buttonStyle(.bordered)
+                        .frame(minHeight: 44)
+                }
+                if request.allowsFreeform {
+                    TextField("Your answer", text: $text, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(1...4)
+                        .accessibilityLabel("Answer: \(request.title)")
+                        .accessibilityIdentifier("cantrip.input.answer")
+                }
             }
             if let raw = request.url, let url = URL(string: raw), url.scheme == "https" {
                 if let code = request.code { Text("Device code: \(code)").monospaced().textSelection(.enabled) }
@@ -362,13 +378,19 @@ private struct CantripInputCard: View {
             Button("Approve once") { answer("approve") }.buttonStyle(.borderedProminent).frame(minHeight: 44)
         } else if request.kind == "secret" {
             Button("Submit") { answer("submit") }.buttonStyle(.borderedProminent).disabled(text.isEmpty).frame(minHeight: 44)
-        } else if request.kind != "question" {
+        } else if request.kind == "question" {
+            if request.allowsFreeform {
+                Button("Send") { answer("submit") }.buttonStyle(.borderedProminent)
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).frame(minHeight: 44)
+            }
+        } else {
             Button(request.kind == "login" ? "I've signed in" : "Done on Mac") { answer("approve") }.frame(minHeight: 44)
         }
     }
 
     private func answer(_ decision: String) {
-        let value = CantripInputAnswer(decision: decision, text: decision == "submit" ? text : nil)
+        let reply = request.kind == "question" ? text.trimmingCharacters(in: .whitespacesAndNewlines) : text
+        let value = CantripInputAnswer(decision: decision, text: decision == "submit" ? reply : nil)
         text = ""
         send(value)
     }

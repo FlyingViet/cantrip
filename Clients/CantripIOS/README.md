@@ -436,6 +436,16 @@ incident runs from the Mac's hidden background conversation with their status,
 timing and full result. **Full Log** opens that conversation. Scheduled and
 incident runs need Cantrip host v1.0-121 or later.
 
+When a background run needs you, the **Background** button shows a **?** badge,
+and the sheet lists the run under **Needs your input** with its approval or
+question right there: **Approve once**, **Deny**, a choice, or a typed answer.
+The answer goes to that run's hidden session, which continues; nothing opens as a
+Remote tab. A Tasks row whose run is waiting shows **Needs your input** with
+**Respond**, which opens the same request. The push for a background run's
+request (**Cantrip Home needs your input**) opens Home's Background list on that
+run. Answering in place needs Cantrip host v1.0-131 or later; on older hosts,
+**Open** shows the live run, which now stays open while it polls.
+
 Home reads each message for intent. Questions, status checks and other
 references to a project are answered right in Home. When you ask for changes to
 a project that has an open Cantrip Remote tab, Home hands the work to that tab

@@ -1174,7 +1174,7 @@ struct ChatView: View {
                     ) {
                         conversationContent
                     } tasks: {
-                        CantripHomeTasksView(remote: remote, openChat: openHomeChat)
+                        CantripHomeTasksView(remote: remote, openChat: openHomeChat, openRun: openHomeRun)
                     } artifacts: {
                         CantripHomeArtifactsView(remote: remote, openChat: openHomeChat)
                     }
@@ -1396,6 +1396,14 @@ struct ChatView: View {
             composerFocused = false
             vm.leaveVoiceMode()
             vm.syncRemoteTranscript()
+            // A background run's request opens Home's Background list on that run, after the
+            // other sheets have closed.
+            if remote.homeBackgroundFocus != nil, vm.activeLane == .home {
+                DispatchQueue.main.async { showHomeBackground = true }
+            }
+        }
+        .onChange(of: remote.homeBackgroundFocus) { _, focus in
+            if focus != nil, vm.activeLane == .home { showHomeBackground = true }
         }
         .onChange(of: scenePhase) { _, phase in
             vm.setAppActive(phase == .active)
@@ -1510,7 +1518,7 @@ struct ChatView: View {
                 ChatTabsButton(isEnabled: remoteTabsEnabled) { showRemoteTabs = true }
             } else if vm.activeLane == .home {
                 // The Pip title is already the lane menu, so this slot opens background work.
-                CantripHomeBackgroundButton(activeCount: homeBackgroundCount) {
+                CantripHomeBackgroundButton(activeCount: homeBackgroundCount, inputCount: homeBackgroundInputCount) {
                     composerFocused = false
                     showHomeBackground = true
                 }
@@ -1857,6 +1865,13 @@ struct ChatView: View {
         }
     }
 
+    /// Shows a waiting background run's request in Home's Background list.
+    private func openHomeRun(_ sessionID: String) {
+        composerFocused = false
+        remote.homeBackgroundFocus = sessionID
+        showHomeBackground = true
+    }
+
     private func openHomeChat(prefill: String?) {
         homeSection = .chat
         if let prefill {
@@ -2057,6 +2072,13 @@ struct ChatView: View {
         }
         .padding(.horizontal).padding(.vertical, 8)
         .background(.bar)
+    }
+
+    /// Background-run requests waiting on the user, shown on Home's Background button.
+    private var homeBackgroundInputCount: Int {
+        guard vm.activeLane == .home, remote.selectedSession?.isCantripHome == true else { return 0 }
+        return remote.selectedSession?.backgroundInputCount
+            ?? (remote.homeBackground?.runs.filter(\.needsInput).count ?? 0)
     }
 
     private var homeBackgroundCount: Int {

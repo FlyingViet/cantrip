@@ -9,20 +9,57 @@ enum CantripUITestFixtures {
         ProcessInfo.processInfo.arguments.contains("-CantripUITestImageViewer")
     }
 
+    static var pairsWithFixtureHost: Bool {
+        ProcessInfo.processInfo.arguments.contains("-CantripUITestRemoteURL")
+    }
+
+    /// Face ID can't be satisfied from a UI test on the simulator; only fixture-host runs skip it.
+    static let authorizeSensitiveAction: (String) async throws -> Void = { reason in
+        if pairsWithFixtureHost { return }
+        try await CantripBiometrics.authorize(reason)
+    }
+
     /// `-CantripUITestRemoteURL http://127.0.0.1:<port> -CantripUITestRemoteToken <token>` pairs
-    /// with a local fixture host, so UI tests can scroll real paged history on the simulator.
+    /// with a local fixture host (saved like a server added in Settings), so UI tests can drive real
+    /// Remote and Home flows on the simulator. `-CantripUITestLane home` opens Cantrip Home, and
+    /// `-CantripUITestNotifyHomeRun <session> -CantripUITestNotifyAfter <seconds>` taps a Home
+    /// background-run input push through the same handler as a real notification.
     @MainActor
     static func pairRemoteIfRequested(_ remote: CantripRemoteModel, env: HermesEnv) async {
         let defaults = UserDefaults.standard
         guard let url = defaults.string(forKey: "CantripUITestRemoteURL"),
               let token = defaults.string(forKey: "CantripUITestRemoteToken") else { return }
-        guard await remote.configure(url: url, pairingToken: token, tailscaleOnly: true) else { return }
-        env.select(.cantrip)
-        for _ in 0..<50 where remote.sessions.isEmpty {
-            try? await Task.sleep(for: .milliseconds(100))
+        func trimmed(_ value: String) -> String { value.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+        func saved() -> SavedServer? {
+            remote.servers.servers.first {
+                trimmed($0.url) == trimmed(url) && (try? remote.servers.credential(for: $0)) == token
+            }
         }
-        if remote.selectedSession == nil, let first = remote.sessions.first {
-            await remote.selectSession(first.id)
+        if saved() == nil {
+            try? remote.addServer(ServerDraft(name: "UI test host", url: url, credential: token, tailscaleOnly: true))
+        }
+        guard let server = saved() else { return }
+        do { try await remote.selectServer(server) } catch { return }
+        if defaults.string(forKey: "CantripUITestLane") == "home" {
+            env.select(.home)
+            await remote.selectHome()
+        } else {
+            env.select(.cantrip)
+            for _ in 0..<50 where remote.sessions.isEmpty {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            if remote.selectedSession == nil, let first = remote.sessions.first {
+                await remote.selectSession(first.id)
+            }
+        }
+        if let sessionID = defaults.string(forKey: "CantripUITestNotifyHomeRun"), let serverID = remote.selectedServerID {
+            try? await Task.sleep(for: .seconds(defaults.double(forKey: "CantripUITestNotifyAfter")))
+            CantripNotifications.shared.simulateTapForUITest([
+                "cantrip": [
+                    "eventID": UUID().uuidString, "serverID": serverID.uuidString, "sessionID": sessionID,
+                    "fingerprint": CantripRemoteModel.notificationFingerprintForUITest(token), "kind": "input", "home": "run",
+                ],
+            ])
         }
     }
 }

@@ -236,6 +236,10 @@ enum CantripHomeTaskReorder {
 struct CantripHomeTasksView: View {
     let remote: CantripRemoteModel
     let openChat: (String?) -> Void
+    /// Opens Home's Background list on a waiting run (by its hidden session ID).
+    var openRun: ((String) -> Void)? = nil
+    /// Task ID → the hidden session of its live run that waits on the user.
+    @State private var waitingRuns: [UUID: String] = [:]
     @State private var tasks: [CantripHomeTask]
     @State private var homeDataError: String?
     @State private var isLoadingHomeData: Bool
@@ -246,9 +250,12 @@ struct CantripHomeTasksView: View {
     @State private var supportsReordering: Bool
     @State private var isMutating: Bool
 
-    init(remote: CantripRemoteModel, openChat: @escaping (String?) -> Void) {
+    init(remote: CantripRemoteModel, openChat: @escaping (String?) -> Void,
+         openRun: ((String) -> Void)? = nil) {
         self.remote = remote
         self.openChat = openChat
+        self.openRun = openRun
+        _waitingRuns = State(initialValue: Self.waitingRuns(remote.homeBackground))
         _tasks = State(initialValue: remote.homeTasks)
         _supportsReordering = State(initialValue: remote.homeTasksSupportReordering)
         _isMutating = State(initialValue: remote.isMutating)
@@ -318,6 +325,7 @@ struct CantripHomeTasksView: View {
         .refreshable { await remote.refreshHomeData() }
         .task { await remote.refreshHomeData() }
         .onReceive(remote.$homeTasks.removeDuplicates()) { tasks = $0 }
+        .onReceive(remote.$homeBackground.map(Self.waitingRuns).removeDuplicates()) { waitingRuns = $0 }
         .onReceive(remote.$homeTasksSupportReordering.removeDuplicates()) {
             supportsReordering = $0
         }
@@ -350,6 +358,14 @@ struct CantripHomeTasksView: View {
             }
             Button("Cancel", role: .cancel) { deleting = nil }
         }
+    }
+
+    static func waitingRuns(_ snapshot: CantripHomeBackgroundSnapshot?) -> [UUID: String] {
+        var waiting: [UUID: String] = [:]
+        for run in snapshot?.runs ?? [] where run.needsInput {
+            if let task = run.taskID, let session = run.sessionID { waiting[task] = session }
+        }
+        return waiting
     }
 
     private var canReorderTasks: Bool {
@@ -464,6 +480,10 @@ struct CantripHomeTasksView: View {
                     .lineLimit(3)
                     .padding(.leading, 32)
             }
+            if let session = waitingRuns[task.id], let openRun {
+                CantripHomeRunNeedsInput(title: task.title) { openRun(session) }
+                    .padding(.leading, 32)
+            }
         }
         .padding(.vertical, 6)
     }
@@ -477,6 +497,10 @@ struct CantripHomeTasksView: View {
     @ViewBuilder
     private func taskStatus(_ task: CantripHomeTask) -> some View {
         switch task.state {
+        case "running" where waitingRuns[task.id] != nil:
+            Image(systemName: "questionmark.bubble.fill")
+                .foregroundStyle(CantripHomeBackgroundStyle.activeTint)
+                .accessibilityLabel("Needs your input")
         case "running":
             ProgressView().controlSize(.small)
         case "failed":
@@ -1341,5 +1365,31 @@ struct CantripArtifactCardLabel: View {
         if let duration { parts.append(CantripArtifactThumbnailView.spokenDuration(duration)) }
         parts.append(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))
         return parts.joined(separator: ", ")
+    }
+}
+
+/// A task's live run waits on the user: say so and open its request in the Background list.
+struct CantripHomeRunNeedsInput: View {
+    let title: String
+    let respond: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label("Needs your input", systemImage: "questionmark.bubble.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(CantripHomeBackgroundStyle.activeTint)
+            Spacer(minLength: 4)
+            Button(action: respond) {
+                // Black on orange in dark mode, white on deep orange in light mode: both AA.
+                Text("Respond").foregroundStyle(CantripHomeBackgroundStyle.badgeText)
+            }
+                .buttonStyle(.borderedProminent)
+                .tint(CantripHomeBackgroundStyle.activeTint)
+                .controlSize(.small)
+                .frame(minHeight: 44)
+                .accessibilityLabel("Respond to \(title)")
+                .accessibilityHint("Shows the run's request so you can answer it here")
+                .accessibilityIdentifier("home.task.respond")
+        }
     }
 }
