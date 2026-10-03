@@ -77,13 +77,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     }
 
     /// Appended once to the session's system message, so images reach the Remote apps.
-    static let previewGuidance = """
-    Cantrip's iPhone, browser and Mac Remote apps show images from this Mac inline. To show \
-    the user a screenshot or generated image, save it as PNG or JPEG in this session's files \
-    folder (subfolders are fine) or directly in ~/.cache/Cantrip/, then put a Markdown image \
-    on its own line with the absolute path: `![Short description](/absolute/path.png)`. A \
-    Markdown link to the same file opens it full size. Paths in backticks are not shown.
-    """
+    static let previewGuidance = RemoteGeneratedImages.agentGuidance(sessionFilesFolder: true)
 
     /// Appended once to the session's system message (not to every prompt).
     static let subagentGuidance = """

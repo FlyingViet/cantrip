@@ -15,11 +15,34 @@ enum RemoteGeneratedImages {
     static let homeArtifactRoot = sourceRoot
         .appendingPathComponent("home/artifacts", isDirectory: true)
     static let storageRoot = sourceRoot.appendingPathComponent("remote-previews", isDirectory: true)
+    /// Every Copilot CLI session (each tab's and Home's) keeps agent output in
+    /// `<copilotStateRoot>/<session UUID>/files/`.
+    static let copilotStateRoot = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".copilot/session-state", isDirectory: true)
 
-    /// Session-owned folders (Home artifacts, a tab's agent files folder) may contain
-    /// subfolders. The shared output folder stays flat: Cantrip keeps per-session
-    /// uploads, preview caches and transcripts in folders beneath it.
+    /// Allowed folders may contain subfolders, up to this depth.
     static let maximumNestedDirectories = 8
+    /// Cantrip's own folders inside the shared output folder: per-session uploads, preview
+    /// caches, transcripts and Home's state. Agents' subfolders preview; these never do.
+    static let reservedSharedFolders: Set<String> = [
+        "chats", "home", "maintenance", "notifications", "recovery",
+        "remote-attachments", "remote-previews", "remote-videos", "runs"
+    ]
+
+    /// Agent-facing instructions; every backend that can reach the Remote apps gets them.
+    static func agentGuidance(sessionFilesFolder: Bool) -> String {
+        let folders = sessionFilesFolder
+            ? "in this session's files folder or in ~/.cache/Cantrip/ (subfolders are fine in both)"
+            : "in ~/.cache/Cantrip/ (subfolders are fine)"
+        return """
+        Cantrip's iPhone, browser and Mac Remote apps show images from this Mac inline. To show \
+        the user a screenshot or generated image, save it as PNG or JPEG \(folders), then put a \
+        Markdown image on its own line with the absolute path: \
+        `![Short description](/absolute/path.png)`. A Markdown link to the same file opens it full \
+        size. Paths in backticks are not shown, and images elsewhere on the Mac don't preview, so \
+        copy them into one of those folders first.
+        """
+    }
 
     struct Reference {
         let id: String
@@ -47,21 +70,24 @@ enum RemoteGeneratedImages {
         pattern: #"(?<![!\\])\[([^\[\]\r\n]*)\]\((<[^>\r\n]+>|[^()\s]+)\)"#
     )
 
-    /// `root` is the shared output folder (direct children only); `additionalRoots` are
-    /// folders owned by this session, where nested subfolders are allowed.
+    /// Images preview from `root` (the shared output folder, minus Cantrip's reserved folders),
+    /// any Copilot session's `<sessionStateRoot>/<UUID>/files/` folder, and `additionalRoots`
+    /// owned by this session (Home artifacts). Subfolders are allowed in all of them.
     static func presentation(
         _ text: String,
         messageID: UUID,
         root: URL = sourceRoot,
+        sessionStateRoot: URL = copilotStateRoot,
         additionalRoots: [URL] = []
     ) -> Presentation {
         guard text.contains("](") else { return Presentation(text: text, images: []) }
-        let roots = [(url: root, nested: false)] + additionalRoots.map { (url: $0, nested: true) }
+        let roots = [(url: root, reserved: reservedSharedFolders)] + additionalRoots.map { (url: $0, reserved: []) }
         var images: [Reference] = []
         func reference(_ target: String, altText: String) -> Reference? {
             var target = target
             if target.hasPrefix("<"), target.hasSuffix(">") { target = String(target.dropFirst().dropLast()) }
-            guard let (source, base) = sourceURL(target, roots: roots) else { return nil }
+            guard let (source, base) = sourceURL(target, roots: roots, sessionStateRoot: sessionStateRoot)
+            else { return nil }
             let hash = SHA256.hash(data: Data(source.path.utf8)).map { String(format: "%02x", $0) }.joined()
             let id = "previews/\(messageID.uuidString)/\(hash).jpg"
             if let existing = images.first(where: { $0.id == id }) { return existing }
@@ -164,7 +190,8 @@ enum RemoteGeneratedImages {
         return hash.count == 64 && hash.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 
-    private static func sourceURL(_ target: String, roots: [(url: URL, nested: Bool)]) -> (URL, URL)? {
+    private static func sourceURL(_ target: String, roots: [(url: URL, reserved: Set<String>)],
+                                  sessionStateRoot: URL) -> (URL, URL)? {
         let url: URL
         if target.hasPrefix("file:") {
             guard let file = URL(string: target), file.isFileURL,
@@ -186,17 +213,31 @@ enum RemoteGeneratedImages {
               ["png", "jpg", "jpeg"].contains(url.pathExtension.lowercased()) else { return nil }
         let file = url.standardizedFileURL
         let components = file.pathComponents
+        func allowed(_ directories: ArraySlice<String>, reserved: Set<String>) -> Bool {
+            guard directories.count <= maximumNestedDirectories,
+                  directories.allSatisfy({ !$0.hasPrefix(".") }) else { return false }
+            // The Mac's file system ignores case, so "Remote-Attachments" is the same folder.
+            guard let first = directories.first else { return true }
+            return !reserved.contains(first.folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil
+            ))
+        }
         for root in roots {
             let base = root.url.standardizedFileURL
             let prefix = base.pathComponents
-            guard components.count > prefix.count, Array(components.prefix(prefix.count)) == prefix else { continue }
-            let directories = components.dropFirst(prefix.count).dropLast()
-            if directories.isEmpty { return (file, base) }
-            guard root.nested, directories.count <= maximumNestedDirectories,
-                  directories.allSatisfy({ !$0.hasPrefix(".") }) else { continue }
+            guard components.count > prefix.count, Array(components.prefix(prefix.count)) == prefix,
+                  allowed(components.dropFirst(prefix.count).dropLast(), reserved: root.reserved) else { continue }
             return (file, base)
         }
-        return nil
+        // <sessionStateRoot>/<CLI session UUID>/files/... for any tab's or Home's CLI session.
+        let state = sessionStateRoot.standardizedFileURL
+        let prefix = state.pathComponents
+        guard components.count > prefix.count + 2, Array(components.prefix(prefix.count)) == prefix,
+              UUID(uuidString: components[prefix.count]) != nil, components[prefix.count + 1] == "files",
+              allowed(components.dropFirst(prefix.count + 2).dropLast(), reserved: []) else { return nil }
+        let base = state.appendingPathComponent(components[prefix.count], isDirectory: true)
+            .appendingPathComponent("files", isDirectory: true)
+        return (file, base)
     }
 
     actor Store {

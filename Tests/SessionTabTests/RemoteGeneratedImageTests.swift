@@ -110,8 +110,8 @@ extension SessionTabTests {
         print("Generated previews: paired reads, message ownership, history, privacy, durable images and browser previews/viewer passed")
     }
 
-    /// A tab's own Copilot files folder (and its subfolders) previews remotely; another tab
-    /// quoting the same path gets nothing, and links open the full-size viewer.
+    /// Every tab's and Home's Copilot files folder (and its subfolders) previews remotely in any
+    /// tab, recorded or not, as do agents' subfolders of ~/.cache/Cantrip. Links open the viewer.
     @MainActor
     private static func checkSessionFilesFolder(
         manager: SessionManager,
@@ -147,7 +147,8 @@ extension SessionTabTests {
             return ((result.1["session"] as! [String: Any])["messages"] as! [[String: Any]]).last!
         }
         let unrecorded = try await snapshot(owner.id)
-        precondition(unrecorded["images"] == nil, "unrecorded folders are not previewable")
+        precondition((unrecorded["images"] as? [[String: String]])?.count == 1,
+                     "a files folder previews before (or without) Cantrip recording it: \(unrecorded)")
         SessionOutputFolders.shared.record(cli, for: owner.id)
         let owned = try await snapshot(owner.id)
         let images = owned["images"] as! [[String: String]]
@@ -163,10 +164,13 @@ extension SessionTabTests {
         )! as NSDictionary
         precondition(size[kCGImagePropertyPixelHeight] as? Int == 2048)
         let foreign = try await snapshot(other.id)
-        precondition(foreign["images"] == nil && foreign["displayText"] == nil,
-                     "another tab quoting the same folder gets no preview")
-        let denied = try await request(path, other.id, true, "GET")
-        precondition(denied.0 == 404, "another tab cannot read the owner's preview")
+        precondition((foreign["images"] as? [[String: String]]) == images
+                     && foreign["displayText"] as? String == owned["displayText"] as? String,
+                     "another tab (or Home) quoting the same folder previews it too: \(foreign)")
+        let shared = try await request(path, other.id, true, "GET")
+        precondition(shared.0 == 200 && shared.1["data"] as? String == full.1["data"] as? String,
+                     "another tab reads the image through its own reply")
+        try await checkSharedSubfolder(chat: other, request: request)
         try await checkBrowserPreviewLink(chat: owner, port: port, token: token)
         try await checkQuestionImages(owner: owner, other: other, image: image, request: request,
                                       port: port, token: token)
@@ -175,6 +179,42 @@ extension SessionTabTests {
         owner.deleteTranscript()
         precondition(SessionOutputFolders.shared.roots(for: owner.id).isEmpty, "deleting a tab forgets its folders")
         try? FileManager.default.removeItem(at: files.deletingLastPathComponent().deletingLastPathComponent())
+    }
+
+    /// An agent's subfolder of ~/.cache/Cantrip (job-apply/) previews in any tab; Cantrip's
+    /// per-session upload folder below it stays private.
+    @MainActor
+    private static func checkSharedSubfolder(
+        chat: ChatSession, request: (String, UUID?, Bool, String) async throws -> (Int, [String: Any])
+    ) async throws {
+        let folder = RemoteGeneratedImages.sourceRoot.appendingPathComponent("job-apply", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let part = folder.appendingPathComponent("block-form-part1.jpg")
+        let context = CGContext(data: nil, width: 1100, height: 1500, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        context.setFillColor(CGColor(red: 0.2, green: 0.6, blue: 0.3, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 1100, height: 1500))
+        let jpeg = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(jpeg, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        precondition(CGImageDestinationFinalize(destination))
+        try (jpeg as Data).write(to: part)
+        let upload = RemoteImageAttachments.storageRoot.appendingPathComponent("\(UUID())/image-1.jpg")
+        let saved = chat.messages
+        defer { chat.messages = saved }
+        var reply = ChatMessage(role: .assistant, text: "**Part 1: contact**\n![Block form part 1](\(part.path))\n\n"
+            + "![Upload](\(upload.path))")
+        reply.id = UUID()
+        chat.messages = [ChatMessage(role: .user, text: "Show the form"), reply]
+        let result = try await request("", chat.id, true, "GET")
+        let message = ((result.1["session"] as! [String: Any])["messages"] as! [[String: Any]]).last!
+        let images = message["images"] as? [[String: String]] ?? []
+        precondition(images.count == 1 && images[0]["altText"] == "Block form part 1",
+                     "a ~/.cache/Cantrip subfolder previews; the upload cache does not: \(message)")
+        let thumbnail = try await request("/\(images[0]["id"]!)/thumbnail", chat.id, true, "GET")
+        precondition(thumbnail.0 == 200, "the shared-subfolder image is served")
     }
 
     /// "Copilot needs your answer" questions preview images from the tab's files folder in the
@@ -214,10 +254,10 @@ extension SessionTabTests {
         let thumbnail = try await request("/\(imageID)/thumbnail", owner.id, true, "GET")
         precondition(thumbnail.0 == 200, "the question's preview is served by its own tab")
         let foreign = try await pending(other.id)
-        precondition(foreign["images"] == nil && foreign["displayText"] == nil,
-                     "another tab's question naming the same folder gets no previews")
-        let denied = try await request("/\(imageID)", other.id, true, "GET")
-        precondition(denied.0 == 404, "another tab cannot read the question's preview")
+        precondition((foreign["images"] as? [[String: String]]) == images,
+                     "another tab's question naming the same folder previews it too: \(foreign)")
+        let shared = try await request("/\(imageID)/thumbnail", other.id, true, "GET")
+        precondition(shared.0 == 200, "another tab's waiting question serves its own preview")
         owner.pendingInputs = [InputRequestSnapshot(
             id: question.id, kind: .approval, source: "Copilot", title: "Allow shell?", detail: detail,
             expiresAt: question.expiresAt
@@ -346,7 +386,7 @@ extension SessionTabTests {
         let prompt = try RemoteImageAttachments.preparePrompt(
             "Compare with this", images: [RemoteImageUpload(data: jpeg as Data)], sessionID: chat.id)
         var withOtherImage = reply
-        withOtherImage.text = markdown + "\n\n![Elsewhere](~/.cache/Cantrip/nested/other.png)"
+        withOtherImage.text = markdown + "\n\n![Elsewhere](~/Desktop/nested/other.png)"
         chat.messages = [ChatMessage(role: .user, text: prompt), withOtherImage]
 
         _ = NSApplication.shared

@@ -1690,7 +1690,8 @@ final class RemoteControlServer {
         return object
     }
 
-    /// Folders this session's assistant replies may preview from, besides ~/.cache/Cantrip.
+    /// Folders only this session's replies may preview from, besides ~/.cache/Cantrip and every
+    /// Copilot session's files folder (RemoteGeneratedImages allows those for all sessions).
     nonisolated static func generatedImageRoots(sessionID: UUID) -> [URL] {
         (SessionManager.isCantripHomeReserved(sessionID) ? [RemoteGeneratedImages.homeArtifactRoot] : [])
             + SessionOutputFolders.shared.roots(for: sessionID)
