@@ -682,7 +682,7 @@ private extension CantripHomeTaskWorkspace {
 @MainActor
 final class CantripHomeStore: ObservableObject {
     static let shared = CantripHomeStore()
-    static let maximumArtifactBytes = 20 * 1024 * 1024
+    nonisolated static let maximumArtifactBytes = 20 * 1024 * 1024
 
     @Published private(set) var tasks: [CantripHomeTask] = []
     @Published private(set) var artifacts: [CantripHomeArtifact] = []
@@ -707,12 +707,12 @@ final class CantripHomeStore: ObservableObject {
     /// False when tasks.json was unreadable, so nothing may rewrite it.
     private var tasksLoaded = false
 
-    static var rootDirectory: URL {
+    nonisolated static var rootDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cache/Cantrip/home", isDirectory: true)
     }
 
-    static var artifactDirectory: URL {
+    nonisolated static var artifactDirectory: URL {
         rootDirectory.appendingPathComponent("artifacts", isDirectory: true)
     }
 
@@ -1269,6 +1269,7 @@ final class CantripHomeStore: ObservableObject {
             artifacts.insert(artifact, at: index)
             throw error
         }
+        Task { await CantripHomeArtifactThumbnails.shared.remove(artifact.id) }
 
         do {
             let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
