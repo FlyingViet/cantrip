@@ -356,6 +356,14 @@ require a current reference in that session's assistant history. Older replies
 can display previews if their source images remain available. Update and reopen
 the host to activate delivery; a Cantrip Agent-only update cannot read Mac files.
 
+Questions that wait for your answer ("Copilot needs your answer") show their
+images too, in the reply panel above the composer and in Cantrip Home's
+Background list. The question reads like a reply, and its images sit in one
+row of thumbnails above the answers. A bold label right above an image becomes
+its caption. Tap a thumbnail for the full-screen viewer. An image placed right
+under a line of text, with no blank line between, also shows in replies.
+Approvals keep their exact text.
+
 ### Interactive views in replies
 
 With **both Cantrip Agent and the Mac Cantrip host updated**, interactive MCP

@@ -11,6 +11,17 @@ struct CantripInputRequest: Decodable, Equatable, Identifiable {
     let url: String?
     let code: String?
     let expiresAt: Double
+    /// `detail` with Mac images rewritten to previews; absent from older Macs and without images.
+    var displayText: String? = nil
+    var images: [ChatMessageImage]? = nil
+
+    /// A question's Markdown with its standalone previews pulled out for a thumbnail row.
+    func presentation(sessionID: String) -> (text: String, images: [ChatMessageImage], previews: [ChatPreviewTile]) {
+        let images = (images ?? []).map { $0.inSession(sessionID) }
+        let text = images.isEmpty ? detail : (displayText ?? detail)
+        let split = ChatMarkdownImages.extractingPreviews(text, images: images)
+        return (split.text, images, split.previews)
+    }
 }
 
 struct CantripInputAnswer: Encodable {
@@ -56,6 +67,7 @@ struct CantripInputComposer: View {
                     questions: model.pendingInputRequests.filter { $0.kind == "question" },
                     deliveryMode: deliveryMode, maxHeight: maxHeight,
                     busy: busy || model.isMutating,
+                    sessionID: session.id, remote: model,
                     select: { model.inputReplyID = $0 }
                 ) { answer in
                     let identity = model.usageIdentity
@@ -106,6 +118,9 @@ struct CantripQuestionPanel: View {
     var deliveryMode: CantripDeliveryMode = .auto
     var maxHeight: CGFloat = 300
     var busy = false
+    /// Loads the question's Mac images; without them the text shows verbatim.
+    var sessionID: String? = nil
+    var remote: CantripRemoteModel? = nil
     var select: (UUID) -> Void = { _ in }
     let send: (CantripInputAnswer) -> Void
     @State private var contentHeight: CGFloat?
@@ -164,10 +179,7 @@ struct CantripQuestionPanel: View {
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Cancel question")
             }
-            Text(verbatim: request.detail)
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
+            CantripInputDetail(request: request, sessionID: sessionID, remote: remote)
             ForEach(Array(request.choices.enumerated()), id: \.offset) { index, choice in
                 Button {
                     send(.init(decision: "submit", text: choice))
@@ -184,6 +196,128 @@ struct CantripQuestionPanel: View {
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 12)
+    }
+}
+
+/// A question reads like a reply, with its Mac images in one compact row so the answers stay
+/// in reach. Approvals, sign-ins and passwords keep their exact text.
+struct CantripInputDetail: View {
+    let request: CantripInputRequest
+    var sessionID: String?
+    var remote: CantripRemoteModel?
+    var verbatimFont: Font = .callout
+
+    var body: some View {
+        if request.kind == "question", let remote, let sessionID {
+            let parts = request.presentation(sessionID: sessionID)
+            VStack(alignment: .leading, spacing: 10) {
+                if !parts.text.isEmpty {
+                    ChatAssistantText(text: parts.text, images: parts.images, remote: remote)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !parts.previews.isEmpty {
+                    CantripInputImageRow(tiles: parts.previews, remote: remote)
+                }
+            }
+        } else {
+            Text(verbatim: request.detail)
+                .font(verbatimFont)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+    }
+}
+
+/// Fixed-size thumbnails that scroll sideways; each opens the full-screen viewer.
+struct CantripInputImageRow: View {
+    let tiles: [ChatPreviewTile]
+    @ObservedObject var remote: CantripRemoteModel
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(tiles) { tile in
+                    CantripInputImageThumbnail(source: tile.image, caption: tile.caption, remote: remote)
+                }
+            }
+        }
+        .scrollIndicators(.hidden)
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(tiles.count == 1 ? "Image" : "\(tiles.count) images")
+        .accessibilityIdentifier("cantrip.input.images")
+        .id(remote.usageIdentity)
+    }
+}
+
+struct CantripInputImageThumbnail: View {
+    static let size = CGSize(width: 96, height: 120)
+    let source: ChatMessageImage
+    let caption: String
+    @ObservedObject var remote: CantripRemoteModel
+    @State private var image: UIImage?
+    @State private var errorMessage: String?
+    @State private var retry = 0
+    @State private var viewerSource = CantripViewerSource()
+
+    /// The caption, plus the image's own description when the caption came from a label.
+    private var label: String {
+        guard let alt = source.altText?.trimmingCharacters(in: .whitespacesAndNewlines), !alt.isEmpty,
+              alt != caption else { return caption }
+        return "\(caption), \(alt)"
+    }
+
+    var body: some View {
+        Button {
+            if let image {
+                ChatImageViewer.present(source, remote: remote, index: 0,
+                                        placeholder: image, sourceFrame: viewerSource.frame)
+            } else if errorMessage != nil { retry += 1 }
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Group {
+                    if let image {
+                        Image(uiImage: image).resizable().scaledToFit()
+                            .cantripViewerSource(viewerSource)
+                    } else if errorMessage != nil {
+                        VStack(spacing: 4) {
+                            Image(systemName: "photo.badge.exclamationmark")
+                            Text("Retry").font(.caption)
+                        }
+                    } else {
+                        ProgressView()
+                    }
+                }
+                .frame(width: Self.size.width, height: Self.size.height)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                Text(caption)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(width: Self.size.width, alignment: .leading)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(label)
+        .accessibilityValue(errorMessage ?? (image == nil ? "Loading" : ""))
+        .accessibilityHint(errorMessage == nil ? "View full image. Pinch to zoom." : "Double-tap to retry loading")
+        .accessibilityIdentifier("cantrip.input.image")
+        .task(id: "\(remote.usageIdentity)/\(source.sessionID ?? "")/\(source.id)/\(retry)") {
+            image = nil
+            errorMessage = nil
+            do {
+                image = try await ChatImageDecoder.load(source, remote: remote, thumbnail: true)
+            } catch is CancellationError {
+                return
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 }
 
@@ -226,7 +360,8 @@ struct CantripInputTranscript: View {
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.roundedRectangle(radius: 8))
                     } else {
-                        CantripInputCard(request: request, busy: model.isMutating) { answer in
+                        CantripInputCard(request: request, busy: model.isMutating,
+                                         sessionID: session.id, remote: model) { answer in
                             let identity = model.usageIdentity
                             Task {
                                 if await model.respondToInput(sessionID: session.id, id: request.id, answer: answer,
@@ -323,6 +458,9 @@ struct CantripInputRequestsView: View {
 struct CantripInputCard: View {
     let request: CantripInputRequest
     let busy: Bool
+    /// Loads a question's Mac images; without them the text shows verbatim.
+    var sessionID: String? = nil
+    var remote: CantripRemoteModel? = nil
     let send: (CantripInputAnswer) -> Void
     @State private var text = ""
 
@@ -330,7 +468,7 @@ struct CantripInputCard: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(request.title).font(.headline)
             Text(request.source).font(.caption).foregroundStyle(.secondary)
-            Text(verbatim: request.detail).textSelection(.enabled)
+            CantripInputDetail(request: request, sessionID: sessionID, remote: remote, verbatimFont: .body)
             if request.kind == "secret" {
                 SecureField("Password or passphrase", text: $text)
                     .textContentType(.password)
