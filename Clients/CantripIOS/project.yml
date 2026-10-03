@@ -34,6 +34,14 @@ schemes:
     test:
       targets:
         - HermesTests
+  HermesUITests:
+    build:
+      targets:
+        Hermes: all
+        HermesUITests: [test]
+    test:
+      targets:
+        - HermesUITests
 targets:
   Hermes:
     type: application
@@ -118,6 +126,20 @@ targets:
           APS_ENVIRONMENT: development
         Release:
           APS_ENVIRONMENT: production
+  HermesUITests:
+    # Real-touch checks against DEBUG-only fixture screens; run with the HermesUITests scheme.
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Hermes
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.hermbot.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Hermes
   HermesTests:
     type: bundle.unit-test
     platform: iOS

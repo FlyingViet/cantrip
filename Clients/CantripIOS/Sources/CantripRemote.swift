@@ -1340,6 +1340,21 @@ struct CantripRemoteAPI {
         return response.data
     }
 
+    /// nil when the Mac has no thumbnail for it: documents, audio, unreadable media, or a
+    /// Mac that predates thumbnails.
+    func homeArtifactThumbnail(id: UUID) async throws -> CantripHomeArtifactThumbnailPayload? {
+        do {
+            let response: CantripHomeArtifactThumbnailPayload = try await request(
+                path: "/api/v1/home/artifacts/\(id.uuidString)/thumbnail"
+            )
+            guard !response.data.isEmpty, response.data.count <= CantripArtifactThumbnailStore.maximumBytes,
+                  response.width > 0, response.height > 0 else { throw CantripRemoteError.invalidResponse }
+            return response
+        } catch CantripRemoteError.http(404, _) {
+            return nil
+        }
+    }
+
     func deleteHomeArtifact(id: UUID) async throws {
         struct Response: Decodable { let deleted: Bool }
         let response: Response = try await request(
@@ -1877,6 +1892,7 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var isHomeSelected = false
     @Published private(set) var homeTasks: [CantripHomeTask] = []
     @Published private(set) var homeArtifacts: [CantripHomeArtifact] = []
+    let artifactThumbnails = CantripArtifactThumbnailStore()
     @Published private(set) var homeDataError: String?
     @Published private(set) var isLoadingHomeData = false
     @Published private(set) var homeTasksSupportReordering = false
@@ -2250,6 +2266,7 @@ final class CantripRemoteModel: ObservableObject {
             configurationGeneration += 1
             usageIdentity = UUID()
             imageCache.removeAllObjects()
+            artifactThumbnails.removeAll()
             resetHistory()
             router.reset()
             baseURL = normalized
@@ -2304,6 +2321,7 @@ final class CantripRemoteModel: ObservableObject {
             configurationGeneration += 1
             usageIdentity = UUID()
             imageCache.removeAllObjects()
+            artifactThumbnails.removeAll()
             resetHistory()
             router.reset()
             UserDefaults.standard.removeObject(forKey: Self.endpointKey)
@@ -2731,6 +2749,30 @@ final class CantripRemoteModel: ObservableObject {
             homeDataError = error.localizedDescription
             return false
         }
+    }
+
+    func homeArtifactThumbnail(_ artifact: CantripHomeArtifact) async -> CantripArtifactThumbnail? {
+        let generation = configurationGeneration
+        return await artifactThumbnails.thumbnail(for: artifact) { [weak self] in
+            guard let self, generation == self.configurationGeneration else { throw CancellationError() }
+            return try await self.performHistoryRead { try await $0.homeArtifactThumbnail(id: artifact.id) }
+        }
+    }
+
+    /// The full image for the viewer, decoded off the main actor and kept in the image cache.
+    func homeArtifactImage(_ artifact: CantripHomeArtifact) async throws -> UIImage {
+        let identity = usageIdentity
+        let key = "\(identity)/artifact/\(CantripArtifactThumbnailStore.key(artifact))" as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
+        let data = try await performHistoryRead { try await $0.homeArtifactData(id: artifact.id) }
+        let image = try await Task.detached(priority: .userInitiated) {
+            try ChatImageDecoder.decode(data, maximumDimension: GeneratedImagePreview.maximumDimension,
+                                        maximumBytes: 20 * 1024 * 1024)
+        }.value
+        try Task.checkCancellation()
+        guard identity == usageIdentity else { throw CancellationError() }
+        imageCache.setObject(image, forKey: key, cost: image.cgImage.map { $0.bytesPerRow * $0.height } ?? data.count)
+        return image
     }
 
     func homeArtifactFile(_ artifact: CantripHomeArtifact) async throws -> URL {

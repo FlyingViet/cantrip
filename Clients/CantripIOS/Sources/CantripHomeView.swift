@@ -1119,9 +1119,12 @@ struct CantripHomeArtifactsView: View {
     @State private var loadingID: UUID?
     @State private var previewError: String?
     @State private var deleting: CantripHomeArtifact?
+    @State private var viewerSources = CantripViewerSources()
 
+    // Top-aligned so a two-line title doesn't push its neighbor's thumbnail down; a single
+    // column (narrow phones, large text) uses the full width.
     private let columns = [
-        GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12)
+        GridItem(.adaptive(minimum: 150, maximum: 320), spacing: 12, alignment: .top)
     ]
 
     init(remote: CantripRemoteModel, openChat: @escaping (String?) -> Void) {
@@ -1182,7 +1185,10 @@ struct CantripHomeArtifactsView: View {
                 .accessibilityLabel("Create artifact in Chat")
             }
         }
-        .refreshable { await remote.refreshHomeData() }
+        .refreshable {
+            remote.artifactThumbnails.resetFailures()
+            await remote.refreshHomeData()
+        }
         .task { await remote.refreshHomeData() }
         .onReceive(remote.$homeArtifacts.removeDuplicates()) { artifacts = $0 }
         .onReceive(remote.$homeDataError.removeDuplicates()) { homeDataError = $0 }
@@ -1226,49 +1232,15 @@ struct CantripHomeArtifactsView: View {
     private func artifactCard(_ artifact: CantripHomeArtifact) -> some View {
         ZStack(alignment: .topTrailing) {
             Button {
-                guard loadingID == nil else { return }
-                loadingID = artifact.id
-                Task {
-                    defer { loadingID = nil }
-                    do { previewURL = try await remote.homeArtifactFile(artifact) }
-                    catch { previewError = error.localizedDescription }
-                }
+                open(artifact)
             } label: {
-                VStack(alignment: .leading, spacing: 10) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.accentColor.opacity(0.1))
-                        if loadingID == artifact.id {
-                            ProgressView()
-                        } else {
-                            Image(systemName: artifactIcon(artifact))
-                                .font(.system(size: 34))
-                                .foregroundStyle(.tint)
-                        }
-                    }
-                    .frame(height: 104)
-                    Text(artifact.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                    HStack {
-                        Text(artifact.kind.capitalized)
-                        Spacer()
-                        Text(ByteCountFormatter.string(
-                            fromByteCount: Int64(artifact.size), countStyle: .file
-                        ))
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                }
-                .padding(10)
-                .background(Color(.secondarySystemBackground),
-                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .contentShape(Rectangle())
+                CantripArtifactCardLabel(
+                    artifact: artifact, remote: remote, isOpening: loadingID == artifact.id,
+                    source: viewerSources.source(artifact.id)
+                )
             }
             .buttonStyle(.plain)
             .disabled(loadingID != nil)
-            .accessibilityLabel("\(artifact.title), \(artifact.kind)")
 
             Menu {
                 Button("Delete", systemImage: "trash", role: .destructive) {
@@ -1292,13 +1264,82 @@ struct CantripHomeArtifactsView: View {
         }
     }
 
-    private func artifactIcon(_ artifact: CantripHomeArtifact) -> String {
-        switch artifact.kind {
-        case "image": "photo"
-        case "video": "play.rectangle.fill"
-        case "audio": "waveform"
-        default:
-            artifact.mimeType == "application/pdf" ? "doc.richtext.fill" : "doc.text.fill"
+    /// Images open in the zoomable viewer (swipe to dismiss); everything else in Quick Look.
+    private func open(_ artifact: CantripHomeArtifact) {
+        guard loadingID == nil else { return }
+        if CantripArtifactThumbnailStore.isImage(artifact) {
+            let remote = remote
+            CantripImageViewerPresenter.present(
+                title: artifact.title, imageLabel: artifact.title,
+                placeholder: remote.artifactThumbnails.cached(artifact)?.image,
+                sourceFrame: viewerSources.source(artifact.id).frame,
+                loadID: CantripArtifactThumbnailStore.key(artifact),
+                load: { try await remote.homeArtifactImage(artifact) }
+            )
+            return
         }
+        loadingID = artifact.id
+        Task {
+            defer { loadingID = nil }
+            do { previewURL = try await remote.homeArtifactFile(artifact) }
+            catch { previewError = error.localizedDescription }
+        }
+    }
+}
+
+/// An artifact card's tappable content: thumbnail, title, and type, duration and size.
+struct CantripArtifactCardLabel: View {
+    let artifact: CantripHomeArtifact
+    let remote: CantripRemoteModel
+    let isOpening: Bool
+    let source: CantripViewerSource
+    @State private var duration: Double?
+
+    init(artifact: CantripHomeArtifact, remote: CantripRemoteModel, isOpening: Bool, source: CantripViewerSource) {
+        self.artifact = artifact
+        self.remote = remote
+        self.isOpening = isOpening
+        self.source = source
+        _duration = State(initialValue: remote.artifactThumbnails.cached(artifact)?.durationSeconds)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            CantripArtifactThumbnailView(artifact: artifact, remote: remote) { duration = $0?.durationSeconds }
+                .overlay {
+                    if isOpening {
+                        ProgressView()
+                            .padding(10)
+                            .background(.regularMaterial, in: Circle())
+                    }
+                }
+                .cantripViewerSource(source)
+            Text(artifact.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            HStack {
+                Text(artifact.kind.capitalized)
+                Spacer()
+                Text(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.accessibilityText(artifact, duration: duration))
+        .accessibilityHint(CantripArtifactThumbnailStore.isImage(artifact)
+            ? "Opens the image. Swipe down to close it." : "Opens a preview")
+    }
+
+    static func accessibilityText(_ artifact: CantripHomeArtifact, duration: Double?) -> String {
+        var parts = [artifact.title, artifact.kind.capitalized]
+        if let duration { parts.append(CantripArtifactThumbnailView.spokenDuration(duration)) }
+        parts.append(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))
+        return parts.joined(separator: ", ")
     }
 }
