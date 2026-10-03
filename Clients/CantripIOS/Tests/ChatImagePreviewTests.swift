@@ -77,6 +77,33 @@ final class ChatImagePreviewTests: XCTestCase {
         XCTAssertEqual(restored.images, [image])
     }
 
+    func testPreviewLinksOpenTheViewerAndOtherLinksKeepTheirBehavior() throws {
+        let id = "previews/\(UUID().uuidString)/\(String(repeating: "d", count: 64)).jpg"
+        let url = try XCTUnwrap(URL(string: "cantrip-preview://image/\(id)"))
+        let message = try JSONDecoder().decode(CantripRemoteMessage.self, from: JSONSerialization.data(withJSONObject: [
+            "id": UUID().uuidString, "role": "assistant", "thinking": "", "activities": [],
+            "text": "[Open the full-size preview](file:///Users/mac/.copilot/session-state/x/files/a.png)",
+            "displayText": "[Open the full-size preview](\(url.absoluteString))",
+            "images": [["id": id, "altText": "Open the full-size preview"]],
+        ]))
+        let images = (message.images ?? []).map { $0.inSession("session") }
+        XCTAssertEqual(ChatPreviewLink.action(for: url, images: images), .preview(images[0]),
+                       "A link-only reference opens the full-size viewer")
+        XCTAssertEqual(ChatPreviewLink.action(for: url, images: []), .discard,
+                       "An unknown preview never reaches the system URL handler")
+        XCTAssertEqual(ChatPreviewLink.action(
+            for: try XCTUnwrap(URL(string: "file:///Users/mac/.cache/Cantrip/a.png")), images: images
+        ), .discard, "Mac file links from older hosts cannot open on the phone")
+        XCTAssertEqual(ChatPreviewLink.action(
+            for: try XCTUnwrap(URL(string: "https://example.com/a.png")), images: images
+        ), .inherited)
+        XCTAssertEqual(ChatPreviewLink.action(
+            for: try XCTUnwrap(URL(string: "mailto:alex@example.com")), images: images
+        ), .inherited)
+        let galleryImages = (message.images ?? []).filter { !ChatMessageImage.validPreviewID($0.id) }
+        XCTAssertTrue(galleryImages.isEmpty, "Link-only previews never appear as attachment thumbnails")
+    }
+
     func testGeneratedPreviewsRenderInlineAndLoadFullImageThroughPairing() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ImageRequestProtocol.self]

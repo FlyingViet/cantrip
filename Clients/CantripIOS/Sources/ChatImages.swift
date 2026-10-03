@@ -41,15 +41,47 @@ enum ChatImageDecoder {
     }
 }
 
+/// Markdown links to a Mac image open the full-size viewer instead of a dead file link.
+enum ChatPreviewLink {
+    enum Action: Equatable {
+        case preview(ChatMessageImage)
+        case discard
+        case inherited
+    }
+
+    static func action(for url: URL, images: [ChatMessageImage]) -> Action {
+        if let source = ChatMessageImage.preview(for: url, images: images) { return .preview(source) }
+        // Unknown preview IDs and Mac file paths from older hosts cannot open on this device.
+        return url.scheme == "cantrip-preview" || url.isFileURL ? .discard : .inherited
+    }
+}
+
 struct ChatAssistantText: View {
     let text: String
     let images: [ChatMessageImage]
     @ObservedObject var remote: CantripRemoteModel
+    @Environment(\.openURL) private var openURL
+    @State private var linkedPreview: ChatMessageImage?
 
     var body: some View {
         Markdown(text)
             .markdownImageProvider(ChatPreviewImageProvider(images: images, remote: remote))
             .textSelection(.enabled)
+            .environment(\.openURL, OpenURLAction { url in
+                switch ChatPreviewLink.action(for: url, images: images) {
+                case .preview(let source):
+                    linkedPreview = source
+                    return .handled
+                case .discard:
+                    return .discarded
+                case .inherited:
+                    openURL(url)
+                    return .handled
+                }
+            })
+            .fullScreenCover(item: $linkedPreview) { source in
+                ChatImageViewer(source: source, remote: remote, index: 0)
+            }
     }
 }
 
