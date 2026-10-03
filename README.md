@@ -193,7 +193,10 @@ The macOS app includes:
   unattended background runs sending messages or email, pushing, deploying,
   deleting files outside temporary folders and Artifacts, and system changes wait
   for approval through a push-notified input request; unanswered after 10
-  minutes, the step is skipped. Local models keep these pauses whatever the
+  minutes, the step is skipped. Those requests are answered in place: in Cantrip
+  Agent's Home Background list (the push opens it on that run; Tasks shows
+  Respond) and in a header panel in browser and Mac Remote, never by opening the
+  hidden run as a tab. Local models keep these pauses whatever the
   setting. Questions the agent asks you always reach you.
   Background runs can't create or change tasks. Codex and Copilot Remote (ACP) can
   run commands Cantrip never sees, so on them background runs fail closed with an

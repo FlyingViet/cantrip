@@ -279,6 +279,15 @@ deduplicated, and unsent retries are removed when resolved. Already-delivered
 Apple banners may remain. Older registration clients do not opt in to input
 alerts until updated. Unsaved Private tabs and Private Local are excluded.
 
+Cantrip Home's background runs (scheduled tasks and incident investigations)
+run in hidden sessions that are never tabs. Their input pushes read **Cantrip
+Home needs your input** and open Cantrip Agent's Home Background list on that
+run, where the approval or question is answered in place; Tasks marks the
+waiting task with **Respond**. Browser Remote and Mac Remote show the same
+requests in a **Cantrip Home needs your input** panel in the sticky header,
+whichever tab is open, with **Approve once**, **Deny**, choices or a typed
+answer. Answers go to the run's own session and the run continues.
+
 This needs **updated native Cantrip Agent and Mac builds**, plus Apple Push
 Notification service (APNs) configuration on the Mac. Foreground polling cannot
 deliver alerts while iOS suspends the app. Enable the Push Notifications

@@ -198,6 +198,7 @@ extension SessionTabTests {
         try await testRecentExchangeWindow(webView: webView)
         try await testRemoteHistoryNavigation(webView: webView)
         try await testAutomaticHistoryNavigation(webView: webView)
+        try await testHomeInputs(webView: webView)
         print("Remote tabs (\(sidebar ? "Mac sidebar" : "browser strip")): WebKit scrolling, progress, polling, selection, focus, and controls passed at 320-1100pt widths and 340-700pt heights")
     }
 
@@ -387,6 +388,65 @@ extension SessionTabTests {
           api=originalAPI;token=originalToken;window.requestAnimationFrame=originalFrame;
           if(timer)clearTimeout(timer);timer=null;historyCache.clear();expandedHistory.clear();historyPaused.clear();
           $("historyError").textContent="";selected=null;render(null);renderSessions([]);
+        }
+        """, arguments: [:], in: nil, contentWorld: .page)
+    }
+
+    /// Cantrip Home background runs live in hidden sessions, so their approvals and questions
+    /// are answered in a panel in the sticky header instead of opening the run as a tab.
+    @MainActor
+    private static func testHomeInputs(webView: WKWebView) async throws {
+        _ = try await webView.callAsyncJavaScript("""
+        const originalAPI=api,originalToken=token,originalFrame=requestAnimationFrame;
+        const settle=()=>new Promise(resolve=>setTimeout(resolve,100));
+        window.requestAnimationFrame=callback=>setTimeout(callback,0);
+        const expires=Date.now()/1000+600;
+        const entries=[{runID:"run-1",sessionID:"run-session-1",label:"Daily follow-up tracker",requests:[
+          {id:"req-approve",kind:"approval",source:"Cantrip Home",title:"Daily follow-up tracker wants to send a message",detail:"messages-send '+15551234567' 'On my way'",choices:[],allowsFreeform:false,expiresAt:expires},
+          {id:"req-question",kind:"question",source:"Copilot",title:"Which inbox should I check?",detail:"",choices:["Work","Personal"],allowsFreeform:true,expiresAt:expires}]}];
+        const calls=[];const buttons=label=>Array.from($("homeInputCards").querySelectorAll("button")).filter(b=>b.textContent===label);
+        try{
+          token="home-inputs";
+          api=async(path,options={})=>{calls.push([path,options.method||"GET",options.body]);return path==="/api/v1/sessions"?{sessions:[],homeInputs:entries}:{accepted:true}};
+          renderHomeInputs([]);
+          check($("homeInputs").classList.contains("hidden"),"Nothing shows while no background run waits");
+          renderHomeInputs(entries);
+          check(!$("homeInputs").classList.contains("hidden")&&$("homeInputCards").children.length===2
+                &&$("homeInputsTitle").textContent==="Cantrip Home needs your input (2)"
+                &&$("homeInputs").closest("header.workspace")
+                &&$("homeInputCards").textContent.includes("Daily follow-up tracker · background run")
+                &&$("homeInputCards").textContent.includes("messages-send"),
+                "Each waiting request shows in place, in the sticky header, with its run and detail");
+          check(buttons("Approve once").length===1&&buttons("Deny").length===1&&buttons("Work").length===1
+                &&buttons("Send").length===1&&buttons("Skip").length===1,"Approvals and questions get their own actions");
+          const text=$("homeInputCards").querySelector("input[type=text]");text.value="Use work";renderHomeInputs(entries);
+          check($("homeInputCards").querySelector("input[type=text]")===text&&text.value==="Use work"&&$("homeInputCards").children.length===2,
+                "Polling keeps cards and typed answers");
+          buttons("Approve once")[0].click();await settle();
+          const approval=calls.find(c=>c[1]==="POST"&&c[0].includes("req-approve"));
+          check(approval&&approval[0]==="/api/v1/sessions/run-session-1/input/req-approve"&&JSON.parse(approval[2]).decision==="approve",
+                "Approving answers the hidden run's own session");
+          check($("homeInputCards").children.length===1&&$("homeInputsStatus").textContent.includes("Approved")
+                &&$("homeInputsTitle").textContent==="Cantrip Home needs your input",
+                "The answered card leaves and the result is announced");
+          renderHomeInputs(entries);
+          check($("homeInputCards").children.length===1,"A stale poll never re-shows an answered request");
+          buttons("Send")[0].click();await settle();
+          const reply=calls.find(c=>c[1]==="POST"&&c[0].includes("req-question"));
+          check(reply&&JSON.parse(reply[2]).decision==="submit"&&JSON.parse(reply[2]).text==="Use work"
+                &&$("homeInputs").classList.contains("hidden"),"Free-text answers send, and the panel hides when nothing waits");
+          const late=[{...entries[0],requests:[{...entries[0].requests[0],id:"req-late"}]}];
+          api=async(path,options={})=>{if(options.method==="POST")throw Error("This request already expired.");return {sessions:[],homeInputs:late}};
+          renderHomeInputs(late);
+          buttons("Deny")[0].click();await settle();
+          check($("homeInputCards").children.length===1&&$("homeInputCards").textContent.includes("already expired")
+                &&!buttons("Deny")[0].disabled,"A failed answer keeps the card usable and says why");
+          renderHomeInputs([]);
+          check($("homeInputs").classList.contains("hidden"),"A request that moved on disappears");
+        }finally{
+          api=originalAPI;token=originalToken;window.requestAnimationFrame=originalFrame;
+          if(timer)clearTimeout(timer);timer=null;answeredHomeInputs.clear();renderHomeInputs([]);
+          selected=null;render(null);renderSessions([]);
         }
         """, arguments: [:], in: nil, contentWorld: .page)
     }

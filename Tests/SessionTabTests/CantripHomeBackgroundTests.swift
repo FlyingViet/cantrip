@@ -215,6 +215,54 @@ extension SessionTabTests {
         precondition((busyHome.1["session"] as? [String: Any])?["backgroundActiveCount"] as? Int == 3,
                      "Home's badge counts running and queued background work")
 
+        // A run that needs the user is answered in place: the Background list, Home's badge and
+        // the tab list (for clients without Home) carry the request, and answering it through the
+        // hidden run's own session resumes that run. The run never becomes a tab.
+        var approvalAnswer: InputRequestAnswer.Decision?
+        fixture(forRun: runA)?.sink?(.inputRequired(BackendInputRequest(
+            kind: .approval, source: "Cantrip Home", title: "Parallel A wants to push to a git remote",
+            detail: "git push origin main"
+        ) { approvalAnswer = $0.decision }))
+        try await waitForJournalTest { !sessionA.pendingInputs.isEmpty }
+        let requestID = sessionA.pendingInputs[0].id.uuidString
+        let asking = try await call("/api/v1/home/background")
+        let askingA = (asking.1["runs"] as? [[String: Any]] ?? []).first { $0["id"] as? String == runA.uuidString }
+        let askingInputs = askingA?["inputs"] as? [[String: Any]] ?? []
+        let otherInputs = (asking.1["runs"] as? [[String: Any]] ?? []).first { $0["id"] as? String == runB.uuidString }?["inputs"]
+        precondition(askingA?["activity"] as? String == "Needs your input"
+                     && askingInputs.count == 1 && askingInputs[0]["id"] as? String == requestID
+                     && askingInputs[0]["kind"] as? String == "approval"
+                     && askingInputs[0]["title"] as? String == "Parallel A wants to push to a git remote"
+                     && askingInputs[0]["detail"] as? String == "git push origin main"
+                     && askingA?["sessionID"] as? String == sessionA.id.uuidString && otherInputs == nil,
+                     "The Background list carries a run's pending approval with the session that answers it")
+        let askingHome = try await call("/api/v1/home")
+        precondition((askingHome.1["session"] as? [String: Any])?["backgroundInputCount"] as? Int == 1,
+                     "Home's snapshot says how many background requests wait for the user")
+        let askingTabs = try await call("/api/v1/sessions")
+        let homeInputs = askingTabs.1["homeInputs"] as? [[String: Any]] ?? []
+        precondition(homeInputs.count == 1 && homeInputs[0]["runID"] as? String == runA.uuidString
+                     && homeInputs[0]["sessionID"] as? String == sessionA.id.uuidString
+                     && homeInputs[0]["label"] as? String == "Parallel A"
+                     && (homeInputs[0]["requests"] as? [[String: Any]])?.first?["id"] as? String == requestID
+                     && !((askingTabs.1["sessions"] as? [[String: Any]]) ?? []).contains { $0["id"] as? String == sessionA.id.uuidString },
+                     "The tab list carries Home's waiting requests without listing the hidden run")
+        var answer = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/v1/sessions/\(sessionA.id.uuidString)/input/\(requestID)")!)
+        answer.httpMethod = "POST"
+        answer.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        answer.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        answer.httpBody = Data(#"{"decision":"approve"}"#.utf8)
+        let (_, answered) = try await client.data(for: answer)
+        try await waitForJournalTest { approvalAnswer != nil }
+        precondition((answered as? HTTPURLResponse)?.statusCode == 200 && approvalAnswer == .approve
+                     && sessionA.pendingInputs.isEmpty && run(runA)?.status == "running",
+                     "Approving through the hidden run's session reaches that run, which keeps going")
+        let resolved = try await call("/api/v1/sessions")
+        let resolvedHome = try await call("/api/v1/home")
+        precondition(resolved.1["homeInputs"] == nil
+                     && (resolvedHome.1["session"] as? [String: Any])?["backgroundInputCount"] as? Int == 0,
+                     "Answered requests leave every list")
+
         // Finishing A frees a slot for C; A's session is torn down and its report kept.
         try await finish(runA, "A finished.")
         try await waitForJournalTest { runningRun(forTask: taskC.id) != nil }

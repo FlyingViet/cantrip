@@ -162,7 +162,8 @@ final class RemoteControlServer {
             await activation?.value
             guard session.pendingInputs.contains(where: { $0.id == request.id }) else { return }
             await notifications.enqueueInput(id: request.id, sessionID: session.id,
-                                            expiresAt: Date(timeIntervalSince1970: request.expiresAt))
+                                            expiresAt: Date(timeIntervalSince1970: request.expiresAt),
+                                            homeRun: session.isCantripHomeRun)
             if !session.pendingInputs.contains(where: { $0.id == request.id }) {
                 await notifications.resolveInput(request.id)
             }
@@ -677,7 +678,10 @@ final class RemoteControlServer {
                 let sessions = manager.sessions
                     .filter { !$0.isPrivate }
                     .map { snapshot($0, includeMessages: false, on: connection) }
-                sendJSON(["sessions": sessions, "uiRevision": Self.webAppRevision], on: connection)
+                var listing: [String: Any] = ["sessions": sessions, "uiRevision": Self.webAppRevision]
+                let homeInputs = Self.homeInputs()
+                if !homeInputs.isEmpty { listing["homeInputs"] = homeInputs }
+                sendJSON(listing, on: connection)
             case "POST":
                 let session = manager.newSession()
                 sendSession(session, status: 201, recentExchanges: recentExchanges, on: connection)
@@ -1553,6 +1557,29 @@ final class RemoteControlServer {
         return difference == 0
     }
 
+    static func inputObject(_ request: InputRequestSnapshot) -> [String: Any] {
+        var object: [String: Any] = [
+            "id": request.id.uuidString, "kind": request.kind.rawValue,
+            "source": request.source, "title": request.title, "detail": request.detail,
+            "choices": request.choices, "allowsFreeform": request.allowsFreeform,
+            "expiresAt": request.expiresAt
+        ]
+        if let url = request.url { object["url"] = url }
+        if let code = request.code { object["code"] = code }
+        return object
+    }
+
+    /// Home background runs waiting on the user. Their sessions are never tabs, so the tab list
+    /// carries them for clients without a Home view (browser and Mac Remote).
+    @MainActor
+    static func homeInputs() -> [[String: Any]] {
+        guard AppSettings.shared.cantripHomeEnabled else { return [] }
+        return CantripHomeStore.shared.runner.runsNeedingInput.map { entry in
+            ["runID": entry.run.id.uuidString, "sessionID": entry.session.id.uuidString,
+             "label": entry.run.label, "requests": entry.session.pendingInputs.map(inputObject)]
+        }
+    }
+
     @MainActor
     private func snapshot(
         _ session: ChatSession,
@@ -1594,6 +1621,8 @@ final class RemoteControlServer {
             // Drives the Background button badge without fetching the run list.
             result["supportsBackgroundRuns"] = true
             result["backgroundActiveCount"] = CantripHomeStore.shared.runner.activeCount
+            result["backgroundInputCount"] = CantripHomeStore.shared.runner.runsNeedingInput
+                .reduce(0) { $0 + $1.session.pendingInputs.count }
         }
         // Hash only small metadata and mutation tokens, never the full transcript.
         var hasher = SHA256()
@@ -1604,17 +1633,7 @@ final class RemoteControlServer {
         hasher.update(data: Data(session.remoteMessageRevision.uuidString.utf8))
         hasher.update(data: Data(session.remoteQueueRevision.uuidString.utf8))
         result["historyRevision"] = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        result["pendingInputs"] = session.pendingInputs.map { request -> [String: Any] in
-            var object: [String: Any] = [
-                "id": request.id.uuidString, "kind": request.kind.rawValue,
-                "source": request.source, "title": request.title, "detail": request.detail,
-                "choices": request.choices, "allowsFreeform": request.allowsFreeform,
-                "expiresAt": request.expiresAt
-            ]
-            if let url = request.url { object["url"] = url }
-            if let code = request.code { object["code"] = code }
-            return object
-        }
+        result["pendingInputs"] = session.pendingInputs.map(Self.inputObject)
         if includeMessages {
             result["queued"] = session.queued.map { prompt in
                 let presentation = RemoteImageAttachments.presentation(prompt.text, sessionID: session.id)
@@ -1965,7 +1984,8 @@ private extension RemoteControlServer {
     .subagents{display:grid;gap:6px;margin:8px 0}.live-subagents{position:sticky;bottom:0;z-index:3;display:grid;gap:6px;max-height:45vh;overflow-y:auto;padding:8px 16px;background:var(--chrome);border-top:1px solid var(--line);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.subagent{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-size:12px}.subagent.active{border-left:3px solid var(--accent)}.subagent-head{display:flex;align-items:flex-start;gap:7px}.subagent-head>.status-icon{flex:none;margin-top:2px}.subagent-title{display:flex;flex:1;flex-wrap:wrap;align-items:center;gap:3px 6px;min-width:0}.subagent-title strong{font-size:13px;overflow-wrap:anywhere}.subagent-badge{padding:0 5px;border-radius:4px;background:var(--surface-2);color:var(--secondary);font-size:10px}.subagent-stop{flex:none;min-height:32px;min-width:52px}.subagent-body{display:grid;gap:3px;margin:4px 0 0 21px;color:var(--secondary)}.subagent-now{color:var(--text);overflow-wrap:anywhere}.subagent-meta{font-variant-numeric:tabular-nums}.subagent-error{color:var(--red);font-weight:600;overflow-wrap:anywhere}.subagent-latest{margin:0 0 6px;color:var(--secondary);white-space:pre-wrap;overflow-wrap:anywhere}.subagent-step{display:flex;align-items:center;gap:7px;padding:2px 0;min-width:0}.subagent .disclosure{margin-top:3px}.status-icon.idle{color:var(--secondary)}
     .steps{margin-top:8px}.status-icon{display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;font-size:10px;font-weight:800;color:var(--tertiary)}.status-icon.succeeded{color:var(--green)}.status-icon.failed{color:var(--red)}.status-icon.cancelled{color:var(--secondary)}.status-icon.running{color:var(--accent);animation:pulse 1.1s ease-in-out infinite}@keyframes pulse{50%{opacity:.35}}
     .step{margin:5px 0;border:1px solid var(--line);border-radius:7px;background:var(--surface)}.step>summary,.step-static{display:flex;align-items:center;gap:7px;padding:7px 9px;font-size:12px}.step>summary:after{content:"›";margin-left:auto;color:var(--tertiary);font-size:16px;transition:transform .12s}.step[open]>summary:after{transform:rotate(90deg)}.step-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tool-name{margin-left:auto;color:var(--tertiary);font:10px ui-monospace,SFMono-Regular,Menlo,monospace}.step>summary .tool-name{margin-left:8px}.step-details{display:grid;gap:8px;padding:0 9px 9px 30px}.detail-label{margin-bottom:4px;color:var(--secondary);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}.step-details pre{max-height:180px;margin:0;padding:8px;border-radius:5px;background:var(--surface);overflow:auto;white-space:pre-wrap;word-break:break-word;color:var(--secondary);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
-    .run-status{display:flex;align-items:center;gap:7px;color:var(--secondary);font-size:13px}.older-history{display:flex;align-items:center;justify-content:center;gap:8px;min-height:28px;margin:0 0 8px;color:var(--secondary);font-size:13px}.older-history .spinner{visibility:hidden}.older-history[data-state=loading] .spinner{visibility:visible}.older-history.has-retry{justify-content:space-between}.older-history.has-retry .control{min-height:36px;padding:4px 14px}.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+    .run-status{display:flex;align-items:center;gap:7px;color:var(--secondary);font-size:13px}.home-inputs{margin:8px 12px;padding:10px 12px;border:1px solid var(--accent);border-radius:10px;background:var(--surface);max-height:45vh;overflow:auto}.home-inputs h2{margin:0;font-size:14px}.home-inputs .input-card{margin:8px 0;gap:8px}.home-inputs pre{max-height:9em;overflow:auto;white-space:pre-wrap;margin:0}.home-inputs input{min-height:36px}.home-inputs .control{min-height:36px;padding:4px 14px}.home-input-status:empty{display:none}
+    .older-history{display:flex;align-items:center;justify-content:center;gap:8px;min-height:28px;margin:0 0 8px;color:var(--secondary);font-size:13px}.older-history .spinner{visibility:hidden}.older-history[data-state=loading] .spinner{visibility:visible}.older-history.has-retry{justify-content:space-between}.older-history.has-retry .control{min-height:36px;padding:4px 14px}.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
     .spinner{width:12px;height:12px;border:1.5px solid rgba(255,255,255,.2);border-top-color:var(--secondary);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.empty{margin:auto;color:var(--tertiary)}
     #pair{width:min(calc(100% - 32px),430px);margin:18vh auto 0;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.2)}#pair h2{margin:0 0 7px;font-size:18px}#pair p{line-height:1.45}#pairControls{display:flex;gap:7px;margin-top:15px}#pair input{min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;outline:0;background:var(--surface)}#pair input:focus{border-color:var(--accent)}
     #tabEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#tabEditor::backdrop{background:rgba(0,0,0,.35)}#tabEditor form{display:grid;gap:12px}#tabName{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}.tab-actions{display:flex;justify-content:flex-end;gap:8px}#tabError,#actionError{color:var(--orange);font-size:12px}#actionError:not(:empty){padding:8px 14px}.session-close:disabled{opacity:.65;cursor:default}.session-menu{border:0;background:transparent;color:var(--secondary);padding:2px 5px}
@@ -2012,7 +2032,8 @@ private extension RemoteControlServer {
     <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
-    <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div></header>
+    <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div>
+    <section id="homeInputs" class="home-inputs hidden" aria-labelledby="homeInputsTitle"><h2 id="homeInputsTitle" tabindex="-1">Cantrip Home needs your input</h2><div id="homeInputCards"></div></section><div id="homeInputsStatus" class="sr-only" role="status" aria-live="polite"></div></header>
     <div id="uiUpdateStatus" class="muted" role="status" aria-live="polite"></div><div id="actionError" role="alert"></div><button id="inputBanner" class="control hidden">Your input is needed</button><div id="historyError" role="alert"></div><div id="olderHistory" class="older-history hidden" data-state="idle"><span class="spinner" aria-hidden="true"></span><span id="olderHistoryText" role="status" aria-live="polite"></span><button id="olderMessages" class="control hidden" aria-label="Retry loading older messages">Retry</button><button id="olderHistoryReader" class="sr-only" tabindex="-1">Load older messages</button></div><section id="messages"></section><section id="liveSubagents" class="live-subagents hidden" aria-label="Running subagents"></section></main>
     <dialog id="inputEditor" aria-labelledby="inputTitle"><strong id="inputTitle">Secure Input</strong>
     <p class="muted">Only passwords and passphrases belong here. Questions and other actions appear in chat.</p>
@@ -2223,7 +2244,7 @@ private extension RemoteControlServer {
     function refresh(){refreshRequested=true;if(refreshTask)return refreshTask;
       refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision;
         let listedSuccessfully=false,requestSelection=requestedID;
-        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);
+        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);renderHomeInputs(listed.homeInputs||[]);
           for(const id of historyCache.keys())if(!listed.sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}
           if(selected!==requestedID){refreshRequested=true;continue}
           if(!selected||!listed.sessions.some(s=>s.id===selected))selectTab(listed.sessions[0]?.id||null);
@@ -2240,6 +2261,44 @@ private extension RemoteControlServer {
           $("historyError").textContent=`${listedSuccessfully?"Could not update this conversation":"Could not refresh tabs"}: ${error.message}. Retrying...`;
           if(error.status===401){refreshRequested=false;pair(true)}}}
       })().finally(()=>{refreshTask=null;scheduleRefresh();scheduleUIReload()});return refreshTask}
+    // Cantrip Home background runs live in hidden sessions that are never tabs, so their approvals
+    // and questions are answered here, in place, against the run's own session.
+    const answeredHomeInputs=new Map();
+    function renderHomeInputs(entries){const cards=$("homeInputCards"),now=Date.now();
+      for(const [id,at] of answeredHomeInputs)if(now-at>60000)answeredHomeInputs.delete(id);
+      const items=entries.flatMap(entry=>(entry.requests||[]).map(request=>({entry,request}))).filter(item=>!answeredHomeInputs.has(item.request.id));
+      const ids=new Set(items.map(item=>item.request.id)),before=cards.children.length;
+      for(const card of Array.from(cards.children))if(!ids.has(card.dataset.id)&&!card.dataset.saving)card.remove();
+      for(const {entry,request} of items)if(!Array.from(cards.children).some(card=>card.dataset.id===request.id))cards.append(homeInputCard(entry,request));
+      const count=cards.children.length;$("homeInputs").classList.toggle("hidden",!count);
+      setText($("homeInputsTitle"),count>1?`Cantrip Home needs your input (${count})`:"Cantrip Home needs your input");
+      if(count>before)setText($("homeInputsStatus"),count===1?"A Cantrip Home background run needs your input.":`${count} Cantrip Home requests need your input.`)}
+    function homeInputCard(entry,request){const card=document.createElement("section"),status=document.createElement("div"),actions=document.createElement("div");
+      card.className="input-card home-input";card.dataset.id=request.id;card.setAttribute("aria-label",`${entry.label}: ${request.title}`);
+      const run=document.createElement("span"),title=document.createElement("strong");run.className="muted";run.textContent=`${entry.label} · background run`;title.textContent=request.title;card.append(run,title);
+      if(request.detail){const detail=document.createElement("pre");detail.textContent=request.detail;card.append(detail)}
+      status.className="home-input-status";status.setAttribute("role","alert");actions.className="tab-actions";let field=null;
+      const button=(label,body,primary)=>{const node=document.createElement("button");node.className=primary?"control primary":"control";node.textContent=label;
+        node.onclick=()=>answerHomeInput(entry,request,typeof body==="function"?body():body,card,status);actions.append(node)};
+      const input=(type,label)=>{field=document.createElement("input");field.type=type;field.autocomplete="off";field.spellcheck=false;field.setAttribute("aria-label",label);card.append(field)};
+      if(request.kind==="approval"){button("Approve once",{decision:"approve"},true);button("Deny",{decision:"deny"})}
+      else if(request.kind==="question"){for(const choice of request.choices||[])button(choice,{decision:"submit",text:choice},false);
+        if(request.allowsFreeform){input("text",`Answer: ${request.title}`);button("Send",()=>({decision:"submit",text:field.value.trim()}),true)}
+        button("Skip",{decision:"cancel"})}
+      else if(request.kind==="secret"){input("password","Password or passphrase");button("Submit",()=>({decision:"submit",text:field.value}),true);button("Cancel",{decision:"cancel"})}
+      else{if(request.url){const url=safeURL(request.url);if(url?.startsWith("https:")){const link=document.createElement("a");link.href=url;link.textContent="Open sign-in page";link.target="_blank";link.rel="noopener noreferrer";card.append(link)}}
+        if(request.code){const code=document.createElement("pre");code.textContent=`Device code: ${request.code}`;card.append(code)}
+        button(request.kind==="login"?"I've signed in":"Done on Mac",{decision:"approve"},true);button("Cancel",{decision:"cancel"})}
+      card.append(actions,status);return card}
+    async function answerHomeInput(entry,request,body,card,status){if(card.dataset.saving)return;
+      if(body.decision==="submit"&&!body.text){status.textContent="Enter an answer first.";return}
+      const requestToken=token,controls=card.querySelectorAll("button,input");card.dataset.saving="1";for(const control of controls)control.disabled=true;status.textContent="";
+      try{await api(`/api/v1/sessions/${entry.sessionID}/input/${request.id}`,{method:"POST",body:JSON.stringify(body)});if(token!==requestToken)return;
+        answeredHomeInputs.set(request.id,Date.now());const next=card.nextElementSibling||card.previousElementSibling;card.remove();
+        setText($("homeInputsStatus"),`${body.decision==="approve"?"Approved":body.decision==="deny"?"Denied":body.decision==="cancel"?"Skipped":"Answered"}: ${request.title}. The run continues.`);
+        if(!$("homeInputCards").children.length)$("homeInputs").classList.add("hidden");else next?.querySelector("button")?.focus()}
+      catch(error){if(token===requestToken){delete card.dataset.saving;for(const control of controls)control.disabled=false;status.textContent=`${error.message} Not retried. It refreshes on its own if the run moved on.`}}
+      finally{delete body.text;const secret=card.querySelector("input[type=password]");if(secret)secret.value="";refresh()}}
     async function loadOlderMessages(automatically=false){const current=historyCache.get(selected),before=current?.messages[0]?.id;if(loadingHistory||!current?.hasOlderMessages||!before||(automatically&&!canAutomaticallyLoadHistory(current)))return;
       const requestToken=token,orderRevision=tabOrderRevision;let loaded=false;loadingHistory=true;updateHistoryControls(current);
       try{const data=await api(`/api/v1/sessions/${current.id}?before=${encodeURIComponent(before)}`),latest=historyCache.get(current.id);

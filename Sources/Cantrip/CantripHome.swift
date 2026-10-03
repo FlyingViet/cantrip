@@ -513,8 +513,12 @@ struct CantripHomeBackgroundSnapshot: Encodable {
         let handoffs: [Handoff]
         let activity: String?
         let canStop: Bool
+        /// Approvals and questions the live run is waiting on, answered through
+        /// `/api/v1/sessions/<sessionID>/input/<id>` without opening the hidden session.
+        let inputs: [InputRequestSnapshot]?
 
-        init(run: CantripHomeBackgroundRun, activity: String?, canStop: Bool) {
+        init(run: CantripHomeBackgroundRun, activity: String?, canStop: Bool,
+             inputs: [InputRequestSnapshot]? = nil) {
             id = run.id
             kind = run.kind
             label = run.label
@@ -530,6 +534,7 @@ struct CantripHomeBackgroundSnapshot: Encodable {
             handoffs = (run.handoffs ?? []).map(Handoff.init)
             self.activity = activity
             self.canStop = canStop
+            self.inputs = inputs.flatMap { $0.isEmpty ? nil : $0 }
         }
     }
 
