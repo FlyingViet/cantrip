@@ -54,6 +54,26 @@ private func expectUnreadable(_ reference: RemoteGeneratedImages.Reference, cach
 }
 
 /// Markdown links open previews; session-owned folders allow subfolders, the shared one doesn't.
+/// "**Before**\n![..](..)" parses as one paragraph, where clients drop the image. Every
+/// rewritten image line becomes its own block; text, code and unpublished images stay as written.
+private func checkStandaloneImageBlocks(generatedRoot: URL, screenshot: URL, messageID: UUID) {
+    let markdown = "Copilot needs your answer\n\n**Light — before**\n![Before](\(screenshot.path))\n"
+        + "![Before, dark](<\(screenshot.path)>)\n**Light — after**\n  ![After](\(screenshot.absoluteString))\n\n"
+        + "Ship it?\n![Elsewhere](/tmp/elsewhere.png)\n```\n**Code**\n![Code](\(screenshot.path))\n```"
+    let presented = RemoteGeneratedImages.presentation(markdown, messageID: messageID, root: generatedRoot)
+    let url = presented.images.first?.markdownURL ?? "missing"
+    expect(presented.images.count == 1, "one source, one reference")
+    expect(presented.text == "Copilot needs your answer\n\n**Light — before**\n\n![Before](\(url))\n"
+        + "![Before, dark](\(url))\n\n**Light — after**\n\n  ![After](\(url))\n\n"
+        + "Ship it?\n![Elsewhere](/tmp/elsewhere.png)\n```\n**Code**\n![Code](\(screenshot.path))\n```",
+           "separate rewritten images from adjacent text only: \(presented.text)")
+    let again = RemoteGeneratedImages.presentation(presented.text, messageID: messageID, root: generatedRoot)
+    expect(again.text == presented.text, "already separated images gain no extra lines")
+    let crlf = RemoteGeneratedImages.presentation("**A**\r\n![A](\(screenshot.path))\r\nB",
+                                                  messageID: messageID, root: generatedRoot)
+    expect(crlf.text == "**A**\r\n\n![A](\(url))\r\n\nB", "CRLF text separates too: \(crlf.text.debugDescription)")
+}
+
 private func checkLinksAndNesting(generatedRoot: URL, screenshot: URL, cache: URL,
                                   messageID: UUID, sessionID: UUID) throws {
     let imageID = RemoteGeneratedImages.presentation(
@@ -389,6 +409,7 @@ do {
     }
     try checkLinksAndNesting(generatedRoot: generatedRoot, screenshot: screenshot, cache: cache,
                              messageID: messageID, sessionID: sessionID)
+    checkStandaloneImageBlocks(generatedRoot: generatedRoot, screenshot: screenshot, messageID: messageID)
     try checkSessionOutputFolders(base: root.resolvingSymlinksInPath().appendingPathComponent("registry"))
     let many = (0..<20).map { "![\($0)](\(generatedRoot.path)/\($0).png)" }.joined(separator: "\n\n")
     expect(RemoteGeneratedImages.presentation(many, messageID: messageID, root: generatedRoot).images.count == 8,

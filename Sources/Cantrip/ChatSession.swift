@@ -1071,7 +1071,10 @@ final class ChatSession: ObservableObject {
 
     func recordInputConversation(_ request: InputRequestSnapshot, answer: String) {
         let question = request.detail.isEmpty ? request.title : "\(request.title)\n\n\(request.detail)"
-        appendRunMessage(ChatMessage(role: .assistant, text: question))
+        var echo = ChatMessage(role: .assistant, text: question)
+        // Same ID as the request, so its image previews keep their IDs and cached copies.
+        if !messages.contains(where: { $0.id == request.id }) { echo.id = request.id }
+        appendRunMessage(echo)
         appendRunMessage(ChatMessage(role: .user, text: answer))
         appendRunMessage(ChatMessage(role: .assistant, text: ""))
         persistTranscript()

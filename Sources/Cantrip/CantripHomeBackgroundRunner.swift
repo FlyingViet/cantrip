@@ -687,7 +687,7 @@ final class CantripHomeBackgroundRunner {
             var canStop = false
             var inputs: [InputRequestSnapshot]?
             if let session = live[run.id] {
-                inputs = session.pendingInputs
+                inputs = RemoteControlServer.presentedInputs(session)
                 canStop = true
                 activity = !session.pendingInputs.isEmpty ? "Needs your input"
                     : session.isWaitingOnBackgroundWatchers ? "Waiting on a background task"

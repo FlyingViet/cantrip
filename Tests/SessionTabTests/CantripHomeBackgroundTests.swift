@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 extension SessionTabTests {
     final class CantripHomeRunPool {
@@ -262,6 +264,8 @@ extension SessionTabTests {
         precondition(resolved.1["homeInputs"] == nil
                      && (resolvedHome.1["session"] as? [String: Any])?["backgroundInputCount"] as? Int == 0,
                      "Answered requests leave every list")
+        try await checkBackgroundQuestionImage(call: call, sessionB: sessionB, runB: runB,
+                                               sink: fixture(forRun: runB)?.sink)
 
         // Finishing A frees a slot for C; A's session is torn down and its report kept.
         try await finish(runA, "A finished.")
@@ -929,5 +933,54 @@ extension SessionTabTests {
         precondition(checkCount == 1
                      && outputs.filter { $0.contains("using that refresh") }.count == 2,
                      "Three concurrent jobs must trigger exactly one Mail refresh: \(outputs)")
+    }
+
+    /// A background run's question previews its Home artifact images in the Background list
+    /// and the tab list's Home requests, read through the run's own session.
+    @MainActor
+    private static func checkBackgroundQuestionImage(
+        call: (String, String) async throws -> (Int, [String: Any]),
+        sessionB: ChatSession, runB: UUID, sink: ((BackendEvent) -> Void)?
+    ) async throws {
+        let artifact = RemoteGeneratedImages.homeArtifactRoot.appendingPathComponent("audit/after.png")
+        try FileManager.default.createDirectory(at: artifact.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let context = CGContext(data: nil, width: 300, height: 600, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        context.setFillColor(CGColor(red: 0.2, green: 0.6, blue: 0.3, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 300, height: 600))
+        let png = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(png, UTType.png.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        precondition(CGImageDestinationFinalize(destination))
+        try (png as Data).write(to: artifact)
+        defer { try? FileManager.default.removeItem(at: artifact.deletingLastPathComponent()) }
+        var decision: InputRequestAnswer.Decision?
+        sink?(.inputRequired(BackendInputRequest(
+            kind: .question, source: "Copilot", title: "Copilot needs your answer",
+            detail: "Audit done.\n**After**\n![After, light](\(artifact.path))\nShip it?", choices: ["Ship", "Hold"]
+        ) { decision = $0.decision }))
+        try await waitForJournalTest { !sessionB.pendingInputs.isEmpty }
+        let requestID = sessionB.pendingInputs[0].id.uuidString
+        let listed = try await call("/api/v1/home/background", "GET")
+        let inputs = (listed.1["runs"] as? [[String: Any]] ?? [])
+            .first { $0["id"] as? String == runB.uuidString }?["inputs"] as? [[String: Any]] ?? []
+        let images = inputs.first?["images"] as? [[String: Any]] ?? []
+        let imageID = images.first?["id"] as? String ?? ""
+        precondition(images.count == 1 && images[0]["altText"] as? String == "After, light"
+                     && imageID.hasPrefix("previews/\(requestID)/")
+                     && inputs[0]["detail"] as? String == "Audit done.\n**After**\n![After, light](\(artifact.path))\nShip it?"
+                     && inputs[0]["displayText"] as? String
+                        == "Audit done.\n**After**\n\n![After, light](cantrip-preview://image/\(imageID))\n\nShip it?",
+                     "The Background list previews a run's question images: \(inputs)")
+        let tabs = try await call("/api/v1/sessions", "GET")
+        let homeRequest = ((tabs.1["homeInputs"] as? [[String: Any]])?.first?["requests"] as? [[String: Any]])?.first
+        precondition((homeRequest?["images"] as? [[String: String]]) == [["id": imageID, "altText": "After, light"]],
+                     "Browser Home cards get the same previews: \(String(describing: homeRequest))")
+        let thumbnail = try await call("/api/v1/sessions/\(sessionB.id.uuidString)/\(imageID)/thumbnail", "GET")
+        precondition(thumbnail.0 == 200 && Data(base64Encoded: thumbnail.1["data"] as? String ?? "") != nil,
+                     "The run's own session serves the question's preview")
+        try sessionB.respondToInput(id: UUID(uuidString: requestID)!, answer: .init(decision: .cancel))
+        try await waitForJournalTest { decision == .cancel && sessionB.pendingInputs.isEmpty }
     }
 }

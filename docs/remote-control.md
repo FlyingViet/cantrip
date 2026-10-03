@@ -920,13 +920,28 @@ Codex have no per-session output folder, so they use `~/.cache/Cantrip/`.
 
 The host preserves original transcript text and adds `displayText` with
 `cantrip-preview://image/previews/{messageID}/{hash}.jpg` references plus `images`
-metadata (`id`, `altText`). The pairing-authenticated read-only route
+metadata (`id`, `altText`). In `displayText`, a blank line separates each image
+line from adjacent text, so `**Before**` directly above `![...](...)` still shows
+the image as its own block. The pairing-authenticated read-only route
 `GET /api/v1/sessions/{sessionID}/previews/{messageID}/{hash}.jpg` returns
 base64 JPEG JSON (`data`); append `/thumbnail` for a 960-pixel inline preview.
 Each request requires that assistant message to remain in the same public
 session, including when serving a cached image. No client-supplied file path is
 accepted. Symlinks (including a symlinked subfolder, checked as each folder is
 opened), hard links, non-images and oversized sources are rejected.
+
+Waiting **questions** ("Copilot needs your answer") preview images the same
+way, in tabs and in Cantrip Home background runs. Each pending question in
+`pendingInputs`, `GET /api/v1/sessions/{sessionID}/input`, the tab list's
+`homeInputs` and the Background list's run `inputs` carries `displayText` and
+`images`, with the request ID in place of the message ID. The preview route
+accepts that ID only while the question is waiting in that session. Once
+answered, the question's transcript copy keeps the request ID, so its previews
+keep their IDs and cached copies. Approvals, sign-ins and passwords never get
+previews. Clients render the question as Markdown with its images in a compact
+row of thumbnails above the answers. A bold or heading label directly above an
+image becomes that thumbnail's caption. Tap or click a thumbnail for the
+full-screen viewer.
 
 Image reads and conversion run off the main actor. Source files are limited to
 30 MiB, 64 million pixels and 16,384 pixels per side. Delivery is re-encoded

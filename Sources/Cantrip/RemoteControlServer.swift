@@ -746,7 +746,7 @@ final class RemoteControlServer {
 
         if parts.count >= 2, parts[1] == "input" {
             if parts.count == 2, request.method == "GET" {
-                let requests = session.pendingInputs
+                let requests = Self.presentedInputs(session)
                 sendEncoded(on: connection) { try JSONEncoder().encode(["requests": requests]) }
             } else if parts.count == 3, request.method == "POST",
                       let requestID = UUID(uuidString: String(parts[2])) {
@@ -974,9 +974,9 @@ final class RemoteControlServer {
             }
             let imageID = "previews/\(parts[2])/\(parts[3])"
             guard !session.isLocalPrivate, RemoteGeneratedImages.validID(imageID),
-                  let message = session.messages.first(where: { $0.id == messageID && $0.role == .assistant }),
+                  let text = Self.previewSourceText(in: session, id: messageID),
                   let reference = RemoteGeneratedImages.presentation(
-                    message.text,
+                    text,
                     messageID: messageID,
                     additionalRoots: generatedImageRoots(sessionID: session.id)
                   )
@@ -988,9 +988,9 @@ final class RemoteControlServer {
                 do {
                     let data = try await generatedImages.read(reference, sessionID: id, thumbnail: parts.count == 5)
                     guard                     let current = manager.managedSession(id: id), !current.isPrivate,
-                          let message = current.messages.first(where: { $0.id == messageID && $0.role == .assistant }),
+                          let text = Self.previewSourceText(in: current, id: messageID),
                           RemoteGeneratedImages.presentation(
-                            message.text,
+                            text,
                             messageID: messageID,
                             additionalRoots: generatedImageRoots(sessionID: current.id)
                           )
@@ -1566,6 +1566,10 @@ final class RemoteControlServer {
         ]
         if let url = request.url { object["url"] = url }
         if let code = request.code { object["code"] = code }
+        if let displayText = request.displayText, let images = request.images, !images.isEmpty {
+            object["displayText"] = displayText
+            object["images"] = images.map { ["id": $0.id, "altText": $0.altText] }
+        }
         return object
     }
 
@@ -1576,7 +1580,7 @@ final class RemoteControlServer {
         guard AppSettings.shared.cantripHomeEnabled else { return [] }
         return CantripHomeStore.shared.runner.runsNeedingInput.map { entry in
             ["runID": entry.run.id.uuidString, "sessionID": entry.session.id.uuidString,
-             "label": entry.run.label, "requests": entry.session.pendingInputs.map(inputObject)]
+             "label": entry.run.label, "requests": presentedInputs(entry.session).map(inputObject)]
         }
     }
 
@@ -1633,7 +1637,7 @@ final class RemoteControlServer {
         hasher.update(data: Data(session.remoteMessageRevision.uuidString.utf8))
         hasher.update(data: Data(session.remoteQueueRevision.uuidString.utf8))
         result["historyRevision"] = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        result["pendingInputs"] = session.pendingInputs.map(Self.inputObject)
+        result["pendingInputs"] = Self.presentedInputs(session).map(Self.inputObject)
         if includeMessages {
             result["queued"] = session.queued.map { prompt in
                 let presentation = RemoteImageAttachments.presentation(prompt.text, sessionID: session.id)
@@ -1652,6 +1656,15 @@ final class RemoteControlServer {
             }
         }
         return result
+    }
+
+    /// Text whose image refs a preview ID may name: an assistant reply, or a waiting question.
+    @MainActor
+    private static func previewSourceText(in session: ChatSession, id: UUID) -> String? {
+        if let message = session.messages.first(where: { $0.id == id && $0.role == .assistant }) {
+            return message.text
+        }
+        return session.pendingInputs.first(where: { $0.id == id && $0.kind == .question })?.detail
     }
 
     private func messageSnapshot(_ message: ChatMessage, sessionID: UUID) -> [String: Any] {
@@ -1678,9 +1691,37 @@ final class RemoteControlServer {
     }
 
     /// Folders this session's assistant replies may preview from, besides ~/.cache/Cantrip.
-    private func generatedImageRoots(sessionID: UUID) -> [URL] {
+    nonisolated static func generatedImageRoots(sessionID: UUID) -> [URL] {
         (SessionManager.isCantripHomeReserved(sessionID) ? [RemoteGeneratedImages.homeArtifactRoot] : [])
             + SessionOutputFolders.shared.roots(for: sessionID)
+    }
+
+    private func generatedImageRoots(sessionID: UUID) -> [URL] {
+        Self.generatedImageRoots(sessionID: sessionID)
+    }
+
+    /// A question's detail previews Mac images like an assistant reply. The request ID stands in
+    /// for the message ID, and the answered question's transcript copy keeps that ID.
+    nonisolated static func presentedInput(_ request: InputRequestSnapshot, sessionID: UUID,
+                                           isLocalPrivate: Bool) -> InputRequestSnapshot {
+        guard request.kind == .question, !isLocalPrivate, sessionID != ChatSession.privateLocalID else {
+            return request
+        }
+        let presentation = RemoteGeneratedImages.presentation(
+            request.detail, messageID: request.id, additionalRoots: generatedImageRoots(sessionID: sessionID)
+        )
+        guard !presentation.images.isEmpty else { return request }
+        var presented = request
+        presented.displayText = presentation.text
+        presented.images = presentation.images.map { .init(id: $0.id, altText: $0.altText) }
+        return presented
+    }
+
+    @MainActor
+    static func presentedInputs(_ session: ChatSession) -> [InputRequestSnapshot] {
+        session.pendingInputs.map {
+            presentedInput($0, sessionID: session.id, isLocalPrivate: session.isLocalPrivate)
+        }
     }
 
     @MainActor
@@ -2023,6 +2064,10 @@ private extension RemoteControlServer {
     #desktopText{width:100%;box-sizing:border-box;min-height:44px}#desktopPermissions>div{margin:12px 0}
     .input-card input,.input-card textarea,.input-card select{box-sizing:border-box;width:100%;max-width:none;min-height:44px;background:Canvas;color:var(--text);border:1px solid var(--line);padding:8px;font:inherit}
     .input-card .tab-actions{flex-wrap:wrap}.input-card pre{max-height:240px;overflow:auto;white-space:pre-wrap}
+    .input-detail{max-height:240px;overflow:auto;min-width:0}.input-detail .prose>:first-child{margin-top:0}.input-detail .prose>:last-child{margin-bottom:0}
+    .input-images{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}.input-image{display:flex;flex:none;flex-direction:column;align-items:flex-start;gap:4px;width:min-content;min-width:96px;margin:0}
+    .input-image figcaption{font-size:12px;line-height:1.3;color:var(--secondary);overflow-wrap:anywhere}.input-images .mac-image{flex:none;margin:0;max-width:none}
+    .input-images .mac-image img{height:120px;width:auto;max-width:200px;max-height:none}.input-images .mac-image-status{width:96px;min-height:120px;padding:6px;text-align:center}
     #uiUpdateStatus:not(:empty){padding:8px 14px}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
@@ -2276,7 +2321,7 @@ private extension RemoteControlServer {
     function homeInputCard(entry,request){const card=document.createElement("section"),status=document.createElement("div"),actions=document.createElement("div");
       card.className="input-card home-input";card.dataset.id=request.id;card.setAttribute("aria-label",`${entry.label}: ${request.title}`);
       const run=document.createElement("span"),title=document.createElement("strong");run.className="muted";run.textContent=`${entry.label} · background run`;title.textContent=request.title;card.append(run,title);
-      if(request.detail){const detail=document.createElement("pre");detail.textContent=request.detail;card.append(detail)}
+      appendInputDetail(card,request,entry.sessionID);
       status.className="home-input-status";status.setAttribute("role","alert");actions.className="tab-actions";let field=null;
       const button=(label,body,primary)=>{const node=document.createElement("button");node.className=primary?"control primary":"control";node.textContent=label;
         node.onclick=()=>answerHomeInput(entry,request,typeof body==="function"?body():body,card,status);actions.append(node)};
@@ -2480,6 +2525,25 @@ private extension RemoteControlServer {
     $("inputBanner").onclick=showInputs;$("inputReload").onclick=loadInputs;$("inputDone").onclick=closeInputs;
     $("inputEditor").addEventListener("cancel",event=>{if(inputState?.saving)event.preventDefault();else closeInputs()});
     let chatInputReply=null,chatInputSaving=false;
+    // Questions read like replies. Their Mac images sit in one compact row so the answers stay in reach;
+    // a bold or heading label right above an image ("**Light — before**") becomes its caption.
+    function appendInputDetail(card,request,sessionID){
+      if(request.kind!=="question"){if(request.detail){const pre=document.createElement("pre");pre.textContent=request.detail;card.append(pre)}return}
+      const images=request.images||[],byID=new Map(images.map(image=>[image.id,image])),tiles=[],removed=new Set();
+      const lines=((byID.size&&request.displayText)||request.detail||"").split("\\n");
+      lines.forEach((line,index)=>{
+        const match=line.match(/^ {0,3}!\\[[^\\]]*\\]\\(cantrip-preview:\\/\\/image\\/([^)\\s]+)\\)\\s*$/),image=match&&byID.get(match[1]);if(!image)return;removed.add(index);
+        let above=index-1;while(above>=0&&!lines[above].trim())above--;let caption=(image.altText||"").trim();
+        const label=above>=0&&!removed.has(above)&&lines[above].match(/^ {0,3}(?:#{1,6}[ \\t]+(.+?)[ \\t]*#*|\\*\\*([^*]+)\\*\\*|__([^_]+)__)[ \\t]*\\r?$/);
+        if(label){const text=(label[1]||label[2]||label[3]).trim().replace(/:$/,"");if(text){removed.add(above);caption=text}}
+        if(!tiles.some(tile=>tile.image===image))tiles.push({image,caption:caption||"Image"})});
+      const text=lines.filter((line,index)=>!removed.has(index)).join("\\n").trim();
+      if(text){const detail=document.createElement("div");detail.className="input-detail";inlineImages=byID.size?{sessionID,images:byID}:null;
+        try{appendProse(detail,text)}finally{inlineImages=null}card.append(detail)}
+      if(!tiles.length)return;const row=document.createElement("div");row.className="input-images";row.setAttribute("role","group");
+      row.setAttribute("aria-label",tiles.length===1?"Image":`${tiles.length} images`);
+      for(const {image,caption} of tiles){const figure=document.createElement("figure"),label=document.createElement("figcaption");figure.className="input-image";
+        label.textContent=caption;figure.append(macImage(sessionID,image,"preview",caption),label);row.append(figure)}card.append(row)}
     function appendChatInputs(parent,session){
       const requests=session.pendingInputs||[],questions=requests.filter(r=>r.kind==="question");
       const previous=chatInputReply?.sessionID===session.id&&chatInputReply.token===token?chatInputReply:null;
@@ -2494,7 +2558,7 @@ private extension RemoteControlServer {
         const title=document.createElement("strong");title.textContent=request.title;card.append(title);
         const button=(label,action)=>{const node=document.createElement("button");node.className="control";node.textContent=label;node.disabled=chatInputSaving||request.expiresAt<=Date.now()/1000;node.onclick=action;card.append(node)};
         if(request.kind==="secret"){button("Enter password securely",showInputs);parent.append(card);continue}
-        const detail=document.createElement("pre");detail.textContent=request.detail;card.append(detail);
+        appendInputDetail(card,request,session.id);
         const state={sessionID:session.id,token};
         if(request.kind==="question"){
           for(const choice of request.choices)button(choice,()=>respondChatInput(state,request,{decision:"submit",text:choice}));
