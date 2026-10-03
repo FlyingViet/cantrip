@@ -157,8 +157,14 @@ final class RunJournal {
             .appendingPathComponent(".cache/Cantrip/runs")
     }
 
+    /// Long-lived tabs otherwise accumulate every streamed delta and tool
+    /// snapshot, and opening a multi-GB journal stalls launch.
+    static let defaultCompactionThreshold: UInt64 = 4 << 20
+    private static let terminalKinds: Set<EventKind> = [.result, .cancelled, .conversationReset]
+
     let sessionID: UUID
     let fileURL: URL
+    private let compactionThreshold: UInt64
 
     private static let writer = DispatchQueue(label: "cantrip.run-journal", qos: .utility)
     private final class WeakJournal {
@@ -174,9 +180,11 @@ final class RunJournal {
     private let synchronize: (FileHandle) throws -> Void
 
     init(sessionID: UUID, directory: URL = RunJournal.defaultDirectory,
+         compactionThreshold: UInt64 = RunJournal.defaultCompactionThreshold,
          synchronize: @escaping (FileHandle) throws -> Void = { try $0.synchronize() }) throws {
         self.sessionID = sessionID
         fileURL = directory.appendingPathComponent("\(sessionID.uuidString).jsonl")
+        self.compactionThreshold = compactionThreshold
         self.synchronize = synchronize
         try Self.writer.sync {
             try open(directory: directory)
@@ -222,6 +230,7 @@ final class RunJournal {
             needsSynchronization = true
         }
         try handle?.seekToEnd()
+        compactIfNeeded(loaded: events)
     }
 
     deinit {
@@ -255,6 +264,116 @@ final class RunJournal {
             failure = error
             throw error
         }
+        if Self.terminalKinds.contains(event.kind) {
+            // Queued after this write so its acknowledgement is not delayed.
+            Self.writer.async { self.compactIfNeeded() }
+        }
+    }
+
+    /// Atomically rewrites an oversized journal to the events replay needs.
+    /// Any failure before the swap leaves the original journal untouched.
+    private func compactIfNeeded(loaded: [Event]? = nil) {
+        guard failure == nil, let handle,
+              let size = try? handle.offset(), size > compactionThreshold else { return }
+        guard let kept = Self.compacted(loaded ?? Self.loadEvents(from: fileURL)) else { return }
+        let temporaryURL = fileURL.deletingLastPathComponent()
+            .appendingPathComponent(".\(fileURL.lastPathComponent).compacting")
+        do {
+            var data = Data()
+            for event in kept {
+                data.append(try Self.encoder.encode(event))
+                data.append(0x0A)
+            }
+            guard FileManager.default.createFile(
+                atPath: temporaryURL.path,
+                contents: nil,
+                attributes: [.posixPermissions: 0o600]
+            ) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            let temporary = try FileHandle(forWritingTo: temporaryURL)
+            do {
+                try temporary.write(contentsOf: data)
+                try synchronize(temporary)
+                try temporary.close()
+            } catch {
+                try? temporary.close()
+                throw error
+            }
+            guard rename(temporaryURL.path, fileURL.path) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: temporaryURL)
+            NSLog("run-journal: compaction skipped (code %ld)", (error as NSError).code)
+            return
+        }
+        do {
+            try? handle.close()
+            self.handle = try FileHandle(forWritingTo: fileURL)
+            try self.handle?.seekToEnd()
+            needsSynchronization = false
+        } catch {
+            self.handle = nil
+            failure = error
+            NSLog("run-journal: reopen after compaction failed (code %ld)", (error as NSError).code)
+        }
+    }
+
+    /// The fewest original events whose replay yields the same recovery state,
+    /// including for events appended later. Nil when nothing would shrink.
+    static func compacted(_ events: [Event]) -> [Event]? {
+        guard let lastIndex = events.indices.last else { return nil }
+        let state = recoveryState(from: events)
+        let lastStart = events.lastIndex { $0.kind == .turnStarted }
+        var keep: Set<Int>
+        if state?.activeRun != nil, let start = lastStart {
+            // An unfinished run replays from every event after its start.
+            keep = queueRecords(in: events[..<start]).union(start...lastIndex)
+        } else {
+            keep = queueRecords(in: events[...]).union([lastIndex])
+            if let start = lastStart {
+                let runID = events[start].runID
+                keep.insert(start)
+                keep.formUnion(events.indices[start...].filter {
+                    events[$0].runID == runID && terminalKinds.contains(events[$0].kind)
+                })
+            }
+        }
+        guard keep.count < events.count else { return nil }
+        let kept = keep.sorted().map { events[$0] }
+        return recoveryState(from: kept) == state ? kept : nil
+    }
+
+    /// For each still-queued item: the add that set its position and the add
+    /// that set its current content.
+    private static func queueRecords(in events: ArraySlice<Event>) -> Set<Int> {
+        var placed: [UUID: Int] = [:]
+        var latest: [UUID: Int] = [:]
+        for index in events.indices {
+            let event = events[index]
+            var claimed: UUID?
+            switch event.kind {
+            case .queueAdded:
+                guard let id = event.queueItem?.id else { break }
+                if placed[id] == nil { placed[id] = index }
+                latest[id] = index
+            case .queueRemoved:
+                claimed = event.queueItem?.id
+            case .queueCleared:
+                placed.removeAll()
+                latest.removeAll()
+            case .turnStarted, .messageStarted:
+                claimed = event.queueItemID
+            default:
+                break
+            }
+            if let claimed {
+                placed[claimed] = nil
+                latest[claimed] = nil
+            }
+        }
+        return Set(placed.values).union(latest.values)
     }
 
     private func writeRecord(_ event: Event, durable: Bool) throws {

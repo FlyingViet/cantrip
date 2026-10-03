@@ -345,6 +345,89 @@ do {
            "privacy deletion must drain queued writes without recreating the journal")
     expect(!RunJournal.drainForTermination().isEmpty,
            "exit drain must surface the injected failed journals")
+
+    let compactID = UUID()
+    let compactRun = UUID()
+    let keptFirst = RunJournal.QueueItem(id: UUID(), text: "first", includesAmbientContext: false)
+    let dropped = RunJournal.QueueItem(id: UUID(), text: "dropped", includesAmbientContext: false)
+    let keptLast = RunJournal.QueueItem(id: UUID(), text: "last", includesAmbientContext: true)
+    let editedFirst = RunJournal.QueueItem(id: keptFirst.id, text: "first, edited", includesAmbientContext: true)
+    var history: [RunJournal.Event] = []
+    let compacting = try RunJournal(sessionID: compactID, directory: directory, compactionThreshold: 0)
+    func record(_ event: RunJournal.Event, in journal: RunJournal) throws {
+        try journal.append(event, durable: true)
+        history.append(event)
+    }
+    var compactStart = RunJournal.Event(sessionID: compactID, runID: compactRun, kind: .turnStarted)
+    compactStart.prompt = "long task"
+    compactStart.mode = .single
+    try record(compactStart, in: compacting)
+    let compactMessage = UUID()
+    var compactAssistant = RunJournal.Event(sessionID: compactID, runID: compactRun, kind: .messageStarted)
+    compactAssistant.messageID = compactMessage
+    compactAssistant.role = "assistant"
+    try record(compactAssistant, in: compacting)
+    for index in 0..<50 {
+        var delta = RunJournal.Event(sessionID: compactID, runID: compactRun, kind: .output)
+        delta.messageID = compactMessage
+        delta.text = "chunk-\(index) "
+        try record(delta, in: compacting)
+    }
+    for item in [keptFirst, dropped, keptLast, editedFirst] {
+        var added = RunJournal.Event(sessionID: compactID, runID: compactRun, kind: .queueAdded)
+        added.queueItem = item
+        try record(added, in: compacting)
+    }
+    var droppedRemoval = RunJournal.Event(sessionID: compactID, runID: compactRun, kind: .queueRemoved)
+    droppedRemoval.queueItem = dropped
+    try record(droppedRemoval, in: compacting)
+    try record(RunJournal.Event(sessionID: compactID, runID: compactRun, kind: .result), in: compacting)
+    let expectedAfterRun = RunJournal.recoveryState(from: history)
+    expect(compacting.recoveryState() == expectedAfterRun,
+           "compaction after a finished run must not change recovery")
+    expect(expectedAfterRun?.queued == [editedFirst, keptLast],
+           "compaction keeps each queued item's position and latest content")
+    let compactedEvents = RunJournal.loadEvents(from: compacting.fileURL)
+    expect(compactedEvents.count < 10 && !compactedEvents.contains { $0.kind == .output },
+           "finished runs should drop streamed output")
+    expect(compactedEvents.last?.sequence == history.count,
+           "compaction must keep the latest sequence number")
+    let compactedAttributes = try FileManager.default.attributesOfItem(atPath: compacting.fileURL.path)
+    expect((compactedAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o600,
+           "compacted journals stay owner-only")
+    expect(!FileManager.default.fileExists(atPath: directory
+        .appendingPathComponent(".\(compacting.fileURL.lastPathComponent).compacting").path),
+           "compaction must not leave its temporary file behind")
+
+    let nextRun = UUID()
+    var nextStart = RunJournal.Event(sessionID: compactID, runID: nextRun, kind: .turnStarted)
+    nextStart.prompt = editedFirst.text
+    nextStart.mode = .single
+    nextStart.queueItemID = editedFirst.id
+    try record(nextStart, in: compacting)
+    let nextMessage = UUID()
+    var nextAssistant = RunJournal.Event(sessionID: compactID, runID: nextRun, kind: .messageStarted)
+    nextAssistant.messageID = nextMessage
+    nextAssistant.role = "assistant"
+    try record(nextAssistant, in: compacting)
+    var nextDelta = RunJournal.Event(sessionID: compactID, runID: nextRun, kind: .output)
+    nextDelta.messageID = nextMessage
+    nextDelta.text = "in progress"
+    try record(nextDelta, in: compacting)
+    expect(RunJournal.loadEvents(from: compacting.fileURL).last?.sequence == history.count,
+           "appends after compaction continue the sequence")
+    let expectedActive = compacting.recoveryState()
+    let eventsBeforeReopen = RunJournal.loadEvents(from: compacting.fileURL).count
+    let reopenedCompact = try RunJournal(
+        sessionID: compactID, directory: directory, compactionThreshold: 0
+    )
+    expect(reopenedCompact.recoveryState() == expectedActive,
+           "opening a journal compacts history without losing the unfinished run")
+    expect(RunJournal.loadEvents(from: reopenedCompact.fileURL).count < eventsBeforeReopen,
+           "opening an oversized journal should compact it")
+    expect(expectedActive?.activeRun?.messages.first?.text == "in progress"
+            && expectedActive?.queued == [keptLast],
+           "the unfinished run and remaining queue replay after reopening")
 } catch {
     failures += 1
     fputs("FAIL: unexpected error: \(error)\n", stderr)
