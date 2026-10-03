@@ -335,12 +335,15 @@ Tap to open the full-screen viewer and pinch or double-tap to zoom. Failed
 loads show a retry action. No public image hosting or temporary Safari gallery
 is required; images use the existing paired Tailscale/LAN connection.
 
-The agent should save output directly under `~/.cache/Cantrip/` and include
-a standalone Markdown image, for example
+The agent should save output directly under `~/.cache/Cantrip/` or in its own
+Copilot session files folder (subfolders are fine) and include a standalone
+Markdown image, for example
 `![Landscape preview](~/.cache/Cantrip/landscape-preview.png)`. Absolute paths
-and local `file:` URLs are supported too. Up to eight previews per message
-are supported; arbitrary paths, upload directories and code examples do not
-grant file access. Private Local retains its plain-text output behavior.
+and local `file:` URLs are supported too. Tapping a Markdown link to the same
+kind of image opens the full-screen viewer. Up to eight previews per message
+are supported; arbitrary paths, other tabs' folders, upload directories and
+code examples do not grant file access. Private Local retains its plain-text
+output behavior.
 
 Inline previews are at most 960 pixels; full-screen images retain up to 4096
 pixels per side, with a 4 MiB delivery limit and source metadata removed.
