@@ -362,6 +362,19 @@ extension SessionTabTests {
             registration: subscriber, fingerprint: "paired", authorization: "fixture")
         let text = String(data: request.httpBody!, encoding: .utf8)!
         precondition(text.contains("needs your input") && !text.contains("must-not-appear"))
+        precondition(!text.contains("\"home\""), "Ordinary tab input pushes carry no Home marker")
+        var homeEvent = event
+        homeEvent.homeRun = true
+        let homeRequest = try RemoteNotifications.request(deliveryID: UUID(), completion: homeEvent,
+            registration: subscriber, fingerprint: "paired", authorization: "fixture")
+        let homeBody = try JSONSerialization.jsonObject(with: homeRequest.httpBody!) as! [String: Any]
+        let homeText = String(data: homeRequest.httpBody!, encoding: .utf8)!
+        precondition((homeBody["cantrip"] as? [String: String])?["home"] == "run"
+                     && (homeBody["cantrip"] as? [String: String])?["kind"] == "input"
+                     && ((homeBody["aps"] as? [String: Any])?["alert"] as? [String: String])?["title"]
+                        == "Cantrip Home needs your input"
+                     && !homeText.contains("must-not-appear"),
+                     "A Home background run's input push says so, so the app answers it in Home")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("input-push-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         actor Count {

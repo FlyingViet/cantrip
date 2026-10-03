@@ -685,7 +685,9 @@ final class CantripHomeBackgroundRunner {
         let runs = store.backgroundRuns.map { run -> CantripHomeBackgroundSnapshot.Run in
             var activity: String?
             var canStop = false
+            var inputs: [InputRequestSnapshot]?
             if let session = live[run.id] {
+                inputs = session.pendingInputs
                 canStop = true
                 activity = !session.pendingInputs.isEmpty ? "Needs your input"
                     : session.isWaitingOnBackgroundWatchers ? "Waiting on a background task"
@@ -696,7 +698,7 @@ final class CantripHomeBackgroundRunner {
                     ?? (handoff.status == .queued
                         ? "Queued in \(handoff.tabTitle)" : "Working in \(handoff.tabTitle)")
             }
-            return .init(run: run, activity: activity, canStop: canStop)
+            return .init(run: run, activity: activity, canStop: canStop, inputs: inputs)
         }
         let hiddenRunning = runs.filter { live[$0.id] != nil }
         return CantripHomeBackgroundSnapshot(
@@ -713,6 +715,14 @@ final class CantripHomeBackgroundRunner {
             maxParallel: maximumParallelRuns,
             runningCount: runningCount
         )
+    }
+
+    /// Live hidden runs waiting on the user, newest first. Clients answer them in place, since
+    /// the runs' sessions are never listed as tabs.
+    var runsNeedingInput: [(run: CantripHomeBackgroundRun, session: ChatSession)] {
+        store.backgroundRuns.compactMap { run in
+            live[run.id].flatMap { $0.pendingInputs.isEmpty ? nil : (run, $0) }
+        }
     }
 
     /// Hidden runs, queued jobs and active tab handoffs, for the Home Background badge.

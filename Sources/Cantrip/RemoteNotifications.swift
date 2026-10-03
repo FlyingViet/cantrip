@@ -9,6 +9,8 @@ struct RemoteCompletion: Codable, Equatable {
     let completedAt: Date
     var kind: String? = nil
     var expiresAt: Date? = nil
+    /// A hidden Cantrip Home background run asked; the app answers it in Home, not as a tab.
+    var homeRun: Bool? = nil
     var isAttention: Bool { kind == "input" || kind == "macAttention" }
 
     static func preview(_ text: String) -> String {
@@ -227,11 +229,12 @@ actor RemoteNotifications {
         } catch { report(error.localizedDescription) }
     }
 
-    func enqueueInput(id: UUID, sessionID: UUID, expiresAt: Date, kind: String = "input") {
+    func enqueueInput(id: UUID, sessionID: UUID, expiresAt: Date, kind: String = "input", homeRun: Bool = false) {
         guard expiresAt > Date() else { return }
         pendingInputs.insert(id)
         enqueue(RemoteCompletion(id: id, sessionID: sessionID, title: "", summary: "",
-                                 completedAt: Date(), kind: kind, expiresAt: expiresAt))
+                                 completedAt: Date(), kind: kind, expiresAt: expiresAt,
+                                 homeRun: homeRun ? true : nil))
     }
 
     func resolveInput(_ id: UUID) {
@@ -379,8 +382,11 @@ actor RemoteNotifications {
         request.setValue(String(Int((completion.expiresAt ?? completion.completedAt.addingTimeInterval(3600)).timeIntervalSince1970)),
                          forHTTPHeaderField: "apns-expiration")
         let input = completion.isAttention
-        let alert = input ? ["title": completion.kind == "macAttention" ? "Cantrip Mac needs attention" : "Cantrip needs your input",
-                             "body": "Open Cantrip Agent to review the request on your Mac."]
+        let alert = input ? ["title": completion.kind == "macAttention" ? "Cantrip Mac needs attention"
+                                : completion.homeRun == true ? "Cantrip Home needs your input" : "Cantrip needs your input",
+                             "body": completion.homeRun == true
+                                ? "A background run is waiting. Open Cantrip Agent to answer it in Home."
+                                : "Open Cantrip Agent to review the request on your Mac."]
             : ["title": "Cantrip finished", "subtitle": String(completion.title.prefix(80)), "body": completion.summary]
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "aps": [
@@ -389,7 +395,8 @@ actor RemoteNotifications {
             ],
             "cantrip": ["eventID": completion.id.uuidString, "sessionID": completion.sessionID.uuidString,
                         "serverID": registration.serverID.uuidString, "fingerprint": fingerprint,
-                        "kind": input ? (completion.kind ?? "input") : "completion"],
+                        "kind": input ? (completion.kind ?? "input") : "completion"]
+                .merging(completion.homeRun == true ? ["home": "run"] : [:]) { current, _ in current },
         ])
         guard request.httpBody!.count <= 4096 else {
             throw RemotePushError(status: 400, message: "The completion alert exceeds Apple's payload limit.")
