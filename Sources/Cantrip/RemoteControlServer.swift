@@ -1627,10 +1627,10 @@ final class RemoteControlServer {
         return object
     }
 
+    /// Folders this session's assistant replies may preview from, besides ~/.cache/Cantrip.
     private func generatedImageRoots(sessionID: UUID) -> [URL] {
-        SessionManager.isCantripHomeReserved(sessionID)
-            ? [RemoteGeneratedImages.homeArtifactRoot]
-            : []
+        (SessionManager.isCantripHomeReserved(sessionID) ? [RemoteGeneratedImages.homeArtifactRoot] : [])
+            + SessionOutputFolders.shared.roots(for: sessionID)
     }
 
     @MainActor
@@ -1924,7 +1924,7 @@ private extension RemoteControlServer {
     .message{width:100%;overflow-wrap:anywhere}.message.user{color:var(--secondary);font-size:13px;font-weight:600;line-height:1.4}.message.assistant{color:var(--text);line-height:1.5}.message.error{color:var(--orange);padding-left:21px;position:relative}.message.error:before{content:"!";position:absolute;left:3px;font-weight:800}.author{display:block;margin-bottom:5px;color:var(--tertiary);font-size:11px;font-weight:600}
     .mcp-app{margin:0;width:100%;display:flex;flex-direction:column;gap:5px}.mcp-app figcaption{color:var(--tertiary);font-size:11px;font-weight:600}.mcp-app iframe{display:block;width:100%;border:0;border-radius:10px;background:transparent}.mcp-app-status{color:var(--secondary);font-size:12px}.mcp-app-link{align-self:flex-start;color:var(--accent);font-size:11px}
     .prose p{margin:0 0 8px}.prose p:last-child{margin-bottom:0}.prose h1,.prose h2,.prose h3{margin:12px 0 6px;line-height:1.25}.prose h1:first-child,.prose h2:first-child,.prose h3:first-child{margin-top:0}.prose h1{font-size:17px}.prose h2{font-size:15px}.prose h3{font-size:13.5px}.prose ul,.prose ol{margin:4px 0 8px;padding-left:22px}.prose li{margin:3px 0}.prose blockquote{margin:7px 0;padding-left:10px;border-left:3px solid rgba(107,140,255,.55);color:var(--secondary)}.prose a{color:var(--accent);text-decoration:none}.prose a:hover{text-decoration:underline}.prose code{padding:1px 4px;border-radius:4px;background:var(--surface-2);font:12px ui-monospace,SFMono-Regular,Menlo,monospace}.prose pre{margin:8px 0;padding:8px;border:0;border-radius:6px;background:var(--surface-2);overflow:auto}.prose pre code{padding:0;background:transparent;white-space:pre}.prose hr{margin:10px 0;border:0;border-top:1px solid var(--line)}.prose table{display:block;width:max-content;max-width:100%;margin:8px 0;border-collapse:collapse;border-radius:8px;background:var(--surface);overflow-x:auto;font-size:13px}.prose th,.prose td{padding:6px 10px;border:0;text-align:left;vertical-align:top}.prose th{font-weight:600;border-bottom:1px solid var(--line)}.prose img{display:block;max-width:min(100%,440px);max-height:280px;margin:8px 0;border-radius:8px;object-fit:contain}
-    .mac-image{display:block;max-width:min(100%,600px);margin:8px 0;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden;color:var(--secondary);text-align:left;cursor:zoom-in}.mac-image:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.mac-image.failed{cursor:pointer}
+    .mac-image{display:block;max-width:min(100%,600px);margin:8px 0;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden;color:var(--secondary);text-align:left;cursor:zoom-in}.mac-image:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.mac-image.failed{cursor:pointer}.preview-link{display:inline;margin:0;padding:0;border:0;border-radius:0;background:none;color:var(--accent);font:inherit;text-align:inherit;cursor:zoom-in}.preview-link:hover{text-decoration:underline}.preview-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     .mac-image img,.prose .mac-image img{display:block;max-width:100%;max-height:360px;margin:0;border-radius:0;object-fit:contain}.mac-image-status{display:grid;place-items:center;width:min(100vw - 48px,360px);min-height:160px;padding:12px;font-size:12px;line-height:1.4}.mac-image.failed .mac-image-status{min-height:88px;place-items:center start}
     .mac-image-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:7px}.mac-image.attachment{width:88px;height:88px;margin:0}.mac-image.attachment img{width:100%;height:100%;max-height:none;object-fit:cover}.mac-image.attachment .mac-image-status{width:100%;height:100%;min-height:0;padding:4px;text-align:center;place-items:center}.image-unavailable{color:var(--secondary);font-style:italic}
     #imageViewer{position:fixed;inset:0;width:auto;height:auto;max-width:none;max-height:none;margin:0;padding:0;border:0;background:#000;color:#fff}#imageViewer[open]{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}#imageViewer::backdrop{background:#000}
@@ -2482,7 +2482,9 @@ private extension RemoteControlServer {
           // Mac file paths are not served; show the description instead of a broken image.
           else{const note=document.createElement("span");note.className="image-unavailable";note.textContent=image[1]?`Image on the Mac: ${image[1]}`:"Image on the Mac";parent.append(note)}
           cursor+=image[0].length;continue}
-        const link=source.slice(cursor).match(/^\\[([^\\]]+)\\]\\(([^)\\s]+)(?:\\s+["'][^"']*["'])?\\)/),linkURL=link&&safeURL(link[2]);if(linkURL){flush();const anchor=document.createElement("a");anchor.href=linkURL;anchor.target="_blank";anchor.rel="noopener noreferrer";appendInline(anchor,link[1]);parent.append(anchor);cursor+=link[0].length;continue}
+        const link=source.slice(cursor).match(/^\\[([^\\]]+)\\]\\(([^)\\s]+)(?:\\s+["'][^"']*["'])?\\)/),linkPreview=link&&inlineImages&&link[2].startsWith("cantrip-preview://image/")?inlineImages.images.get(link[2].slice(24)):null;
+        if(linkPreview){flush();parent.append(previewLink(inlineImages.sessionID,linkPreview,link[1]));cursor+=link[0].length;continue}
+        const linkURL=link&&safeURL(link[2]);if(linkURL){flush();const anchor=document.createElement("a");anchor.href=linkURL;anchor.target="_blank";anchor.rel="noopener noreferrer";appendInline(anchor,link[1]);parent.append(anchor);cursor+=link[0].length;continue}
         const auto=source.slice(cursor).match(/^<(https?:\\/\\/[^ >]+|mailto:[^ >]+)>/),autoURL=auto&&safeURL(auto[1]);if(autoURL){flush();const anchor=document.createElement("a");anchor.href=autoURL;anchor.target="_blank";anchor.rel="noopener noreferrer";anchor.textContent=auto[1];parent.append(anchor);cursor+=auto[0].length;continue}
         if(source.startsWith("**",cursor)&&paired("**","strong"))continue;if(source.startsWith("__",cursor)&&paired("__","strong"))continue;if(source.startsWith("~~",cursor)&&paired("~~","del"))continue;
         if(source[cursor]==="*"&&paired("*","em"))continue;if(source[cursor]==="_"&&paired("_","em"))continue;
@@ -2563,6 +2565,9 @@ private extension RemoteControlServer {
         button.onclick=()=>{if(state.img)openImageViewer(state);else if(state.error)loadMacImage(state)};
         if(macImageObserver)macImageObserver.observe(button);else loadMacImage(state)}
       state.label=label;macImageLabel(state);return state.button}
+    // A Markdown link to a Mac image opens the same full-size viewer as an inline preview.
+    function previewLink(sessionID,image,text){const button=document.createElement("button");button.type="button";button.className="preview-link";button.setAttribute("aria-haspopup","dialog");appendInline(button,text);
+      const label=image.altText||button.textContent||"Preview";button.onclick=()=>{const key=`${sessionID}:${image.id}`;openImageViewer(macImages.get(key)||{key,sessionID,id:image.id,kind:"preview",label,img:null})};return button}
     function macImageLabel(state){state.button.setAttribute("aria-label",state.error?`${state.label}. Could not load. Activate to retry.`:state.img?`${state.label}. Open full size.`:`${state.label}. Loading.`);if(state.img)state.img.alt=state.label}
     async function loadMacImage(state){if(state.loading||state.img)return;state.loading=true;state.error=null;state.button.classList.remove("failed");state.status.textContent=state.kind==="preview"?"Loading preview…":"Loading…";macImageLabel(state);const requestToken=token;
       try{let url=macImageData.get(state.key);if(!url){const data=await mcpFetch(macImagePath(state.sessionID,state.id,false));url=`data:image/jpeg;base64,${data.data}`}

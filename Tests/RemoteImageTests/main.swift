@@ -43,6 +43,197 @@ private func jpeg(width: Int = 16, height: Int = 8, type: UTType = .jpeg) throws
     return output as Data
 }
 
+private func expectUnreadable(_ reference: RemoteGeneratedImages.Reference, cache: URL, _ message: String) {
+    do {
+        _ = try RemoteGeneratedImages.read(reference, sessionID: UUID(), thumbnail: false, root: cache)
+        expect(false, message)
+    } catch is RemoteImageAttachmentError {
+    } catch {
+        expect(false, "\(message): unexpected error \(error)")
+    }
+}
+
+/// Markdown links open previews; session-owned folders allow subfolders, the shared one doesn't.
+private func checkLinksAndNesting(generatedRoot: URL, screenshot: URL, cache: URL,
+                                  messageID: UUID, sessionID: UUID) throws {
+    let imageID = RemoteGeneratedImages.presentation(
+        "![Duo](\(screenshot.path))", messageID: messageID, root: generatedRoot
+    ).images[0].id
+    let linked = RemoteGeneratedImages.presentation(
+        "Saved. [Open the full-size preview](\(screenshot.absoluteString)) or `[raw](\(screenshot.path))`.",
+        messageID: messageID, root: generatedRoot
+    )
+    expect(linked.images.map(\.id) == [imageID], "a link to an eligible image becomes a viewer reference")
+    expect(linked.text == "Saved. [Open the full-size preview](\(linked.images[0].markdownURL)) or "
+        + "`[raw](\(screenshot.path))`.", "rewrite only the link target, never inline code")
+    expect(linked.images[0].altText == "Open the full-size preview", "link text labels the viewer")
+    let both = RemoteGeneratedImages.presentation(
+        "![Header](\(screenshot.path))\n[Full size](<\(screenshot.path)>) and [site](https://example.com)",
+        messageID: messageID, root: generatedRoot
+    )
+    expect(both.images.count == 1 && both.images[0].altText == "Header",
+           "an image and a link to the same file share one reference")
+    expect(both.text.hasSuffix("[Full size](\(both.images[0].markdownURL)) and [site](https://example.com)"),
+           "web links stay untouched")
+
+    // Agent files folder: ~/.copilot/session-state/<id>/files with nested subfolders.
+    let state = generatedRoot.deletingLastPathComponent().appendingPathComponent("session-state", isDirectory: true)
+    let files = state.appendingPathComponent("\(UUID())/files", isDirectory: true)
+    let nested = files.appendingPathComponent("screens/ios", isDirectory: true)
+    try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+    let nestedImage = nested.appendingPathComponent("header preview.png")
+    try jpeg(width: 943, height: 2048, type: .png).write(to: nestedImage)
+    let direct = files.appendingPathComponent("direct.jpg")
+    try jpeg().write(to: direct)
+    let nestedMarkdown = "![Header](<\(nestedImage.path)>)\n[Open](\(nestedImage.absoluteString))\n![Direct](\(direct.path))"
+    expect(RemoteGeneratedImages.presentation(nestedMarkdown, messageID: messageID, root: generatedRoot).images.isEmpty,
+           "another session's files folder is not an allowed root")
+    let owned = RemoteGeneratedImages.presentation(
+        nestedMarkdown, messageID: messageID, root: generatedRoot, additionalRoots: [files]
+    )
+    expect(owned.images.count == 2 && owned.images.allSatisfy { $0.root.path == files.path },
+           "own files folder previews nested and direct images")
+    let full = try RemoteGeneratedImages.read(owned.images[0], sessionID: sessionID, thumbnail: false, root: cache)
+    let size = CGImageSourceCopyPropertiesAtIndex(CGImageSourceCreateWithData(full as CFData, nil)!, 0, nil)! as NSDictionary
+    expect(size[kCGImagePropertyPixelHeight] as? Int == 2048, "read a nested session image at full size")
+    let deep = files.appendingPathComponent((1...9).map { "d\($0)" }.joined(separator: "/"), isDirectory: true)
+    try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
+    try jpeg(type: .png).write(to: deep.appendingPathComponent("deep.png"))
+    let hidden = files.appendingPathComponent(".git", isDirectory: true)
+    try FileManager.default.createDirectory(at: hidden, withIntermediateDirectories: true)
+    try jpeg(type: .png).write(to: hidden.appendingPathComponent("hidden.png"))
+    for target in [
+        deep.appendingPathComponent("deep.png").path, hidden.appendingPathComponent("hidden.png").path,
+        files.path + "/screens/../../../outside.png", files.path + "/screens/%2E%2E/%2E%2E/escape.png",
+        files.path + "/./screens/ios/header%20preview.png", files.deletingLastPathComponent().path + "/sibling.png",
+        files.path + "-evil/screens/x.png"
+    ] {
+        let rejected = RemoteGeneratedImages.presentation(
+            "![x](\(target))\n[x](\(target))", messageID: messageID, root: generatedRoot, additionalRoots: [files]
+        )
+        expect(rejected.images.isEmpty, "reject traversal, hidden, too-deep or sibling paths: \(target)")
+    }
+    let sharedNested = generatedRoot.appendingPathComponent("remote-attachments/\(UUID())", isDirectory: true)
+    try FileManager.default.createDirectory(at: sharedNested, withIntermediateDirectories: true)
+    try jpeg().write(to: sharedNested.appendingPathComponent("image-1.jpg"))
+    expect(RemoteGeneratedImages.presentation(
+        "[Upload](\(sharedNested.path)/image-1.jpg)", messageID: messageID, root: generatedRoot,
+        additionalRoots: [files]
+    ).images.isEmpty, "the shared output folder stays flat, so per-session caches below it stay private")
+
+    // A subfolder swapped for a symlink is refused when read, even after it was validated.
+    let outsideDirectory = generatedRoot.deletingLastPathComponent().appendingPathComponent("outside-dir")
+    try FileManager.default.createDirectory(at: outsideDirectory, withIntermediateDirectories: true)
+    try jpeg(type: .png).write(to: outsideDirectory.appendingPathComponent("swap.png"))
+    let swapped = files.appendingPathComponent("swap", isDirectory: true)
+    try FileManager.default.createDirectory(at: swapped, withIntermediateDirectories: true)
+    try jpeg(type: .png).write(to: swapped.appendingPathComponent("swap.png"))
+    let swappedReference = RemoteGeneratedImages.presentation(
+        "![Swap](\(swapped.path)/swap.png)", messageID: messageID, root: generatedRoot, additionalRoots: [files]
+    ).images[0]
+    try FileManager.default.removeItem(at: swapped)
+    try FileManager.default.createSymbolicLink(at: swapped, withDestinationURL: outsideDirectory)
+    expectUnreadable(swappedReference, cache: cache, "reject a symlinked subfolder")
+    let linkedFiles = state.appendingPathComponent("\(UUID())/files", isDirectory: true)
+    try FileManager.default.createDirectory(at: linkedFiles.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: linkedFiles, withDestinationURL: outsideDirectory)
+    let linkedRoot = RemoteGeneratedImages.presentation(
+        "![Root](\(linkedFiles.path)/swap.png)", messageID: messageID, root: generatedRoot,
+        additionalRoots: [linkedFiles]
+    ).images
+    expect(linkedRoot.count == 1, "the symlinked root path is recognized before reading")
+    if let first = linkedRoot.first { expectUnreadable(first, cache: cache, "reject a symlinked files folder") }
+}
+
+/// Each session previews only the CLI sessions recorded for it; the backfill never guesses.
+private func checkSessionOutputFolders(base: URL) throws {
+    let state = base.appendingPathComponent("session-state", isDirectory: true)
+    let file = base.appendingPathComponent("folders.json")
+    let tab = UUID(), other = UUID(), run = UUID(), log = UUID()
+    let cli = UUID().uuidString.lowercased(), second = UUID().uuidString.lowercased()
+    var folders = SessionOutputFolders(file: file, copilotStateRoot: state)
+    folders.record(cli.uppercased(), for: tab)
+    folders.record(cli, for: tab)
+    folders.record("../../etc", for: tab)
+    folders.record("", for: tab)
+    folders.record(second, for: tab)
+    expect(folders.roots(for: tab).map(\.path) == [
+        state.appendingPathComponent("\(second)/files").path, state.appendingPathComponent("\(cli)/files").path
+    ], "record canonical CLI session IDs once, newest first, rejecting unsafe IDs")
+    expect(folders.roots(for: other).isEmpty, "another session gets none of them")
+    let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int
+    expect(mode == 0o600, "the registry is owner-only")
+    folders = SessionOutputFolders(file: file, copilotStateRoot: state)
+    expect(folders.roots(for: tab).count == 2, "records survive a restart")
+    for _ in 0..<(SessionOutputFolders.maximumPerSession + 5) { folders.record(UUID().uuidString, for: other) }
+    expect(folders.roots(for: other).count == SessionOutputFolders.maximumPerSession, "bound folders per session")
+    folders.record(UUID().uuidString, for: run)
+    let runRoots = folders.roots(for: run)
+    folders.transfer(from: run, to: log)
+    expect(folders.roots(for: run).isEmpty && folders.roots(for: log) == runRoots,
+           "a retired Home run's folders move to the background log")
+    folders.remove(tab)
+    expect(SessionOutputFolders(file: file, copilotStateRoot: state).roots(for: tab).isEmpty,
+           "deleting a session forgets its folders")
+
+    // Backfill: transcripts reference folders; only prompt evidence assigns them.
+    let chats = base.appendingPathComponent("chats", isDirectory: true)
+    try FileManager.default.createDirectory(at: chats, withIntermediateDirectories: true)
+    func session(_ cli: String, client: String = "Cantrip", prompts: [String]) throws {
+        let folder = state.appendingPathComponent(cli, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("files"), withIntermediateDirectories: true)
+        try "id: \(cli)\ncwd: /tmp\nclient_name: \(client)\n".write(
+            to: folder.appendingPathComponent("workspace.yaml"), atomically: true, encoding: .utf8)
+        var lines = [#"{"type":"session.start","data":{"sessionId":"\#(cli)"}}"#]
+        for prompt in prompts {
+            // The CLI writes "type" first; the reader relies on that prefix.
+            let content = try JSONSerialization.data(withJSONObject: prompt, options: .fragmentsAllowed)
+            lines.append(#"{"type":"user.message","data":{"content":"# + String(decoding: content, as: UTF8.self) + "}}")
+            lines.append(#"{"type":"assistant.message","data":{"content":"ok"}}"#)
+        }
+        try lines.joined(separator: "\n").appending("\n").write(
+            to: folder.appendingPathComponent("events.jsonl"), atomically: true, encoding: .utf8)
+    }
+    func transcript(_ id: UUID, _ messages: [(String, String)]) throws {
+        let data = try JSONSerialization.data(withJSONObject: messages.map { ["id": UUID().uuidString, "role": $0.0, "text": $0.1] })
+        try data.write(to: chats.appendingPathComponent("\(id.uuidString).json"))
+    }
+    let bass = UUID(), home = UUID(), quiet = UUID(), copied = UUID()
+    let owned = UUID().uuidString.lowercased(), homeCLI = UUID().uuidString.lowercased()
+    let foreignClient = UUID().uuidString.lowercased(), ambiguous = UUID().uuidString.lowercased()
+    let bassAsk = "Can you show me a preview of the Niteharts set times header?"
+    let shared = "Please rerun the nightly ingestion check for every festival."
+    try session(owned, prompts: ["Context - selected earlier turns\n\(bassAsk)\n(Persistent memory ...)"])
+    try session(homeCLI, prompts: ["Context\nSummarize the Home inbox and list every open follow-up."])
+    try session(foreignClient, client: "copilot-cli", prompts: ["Context\n\(bassAsk)"])
+    try session(ambiguous, prompts: ["Context\n\(shared)"])
+    func image(_ cli: String) -> String { "![Preview](file://\(state.path)/\(cli)/files/sub/a.png)" }
+    try transcript(bass, [("user", bassAsk), ("assistant", image(owned) + "\n" + image(foreignClient)),
+                          ("user", shared), ("assistant", image(ambiguous))])
+    // Home quotes the tab's image and another session's folder, but its prompts never reached them.
+    try transcript(home, [("user", "Summarize the Home inbox and list every open follow-up?"),
+                          ("assistant", image(owned) + "\n" + image(homeCLI))])
+    try transcript(copied, [("user", shared), ("assistant", image(ambiguous))])
+    try transcript(quiet, [("user", "short"), ("assistant", "No images.")])
+    let fresh = base.appendingPathComponent("fresh.json")
+    folders = SessionOutputFolders(file: fresh, copilotStateRoot: state)
+    folders.backfillIfNeeded(transcripts: chats)
+    expect(folders.roots(for: bass) == [state.appendingPathComponent("\(owned)/files")],
+           "backfill assigns a folder only to the session whose unique prompts it received")
+    expect(folders.roots(for: home).isEmpty, "a session quoting another session's folder gets nothing")
+    expect(folders.roots(for: copied).isEmpty, "shared prompt text is not evidence")
+    try transcript(home, [("user", "Summarize the Home inbox and list every open follow-up."),
+                          ("assistant", image(homeCLI))])
+    folders.backfillIfNeeded(transcripts: chats)
+    expect(folders.roots(for: home).isEmpty, "the backfill runs only once")
+    expect(SessionOutputFolders(file: fresh, copilotStateRoot: state).roots(for: bass).count == 1,
+           "backfilled folders persist")
+    let rerun = SessionOutputFolders(file: base.appendingPathComponent("again.json"), copilotStateRoot: state)
+    rerun.backfillIfNeeded(transcripts: chats)
+    expect(rerun.roots(for: home) == [state.appendingPathComponent("\(homeCLI)/files")],
+           "exact unique prompt evidence assigns the folder")
+}
+
 let root = FileManager.default.temporaryDirectory
     .appendingPathComponent("cantrip-image-tests-\(UUID().uuidString)", isDirectory: true)
 do {
@@ -185,7 +376,9 @@ do {
     )
     for text in [
         "```\n\(markdown)\n```", "~~~md\n\(markdown)\n~~~", "    ![Example](\(screenshot.path))",
-        "`![Example](\(screenshot.path))`", "[Download](\(screenshot.path))",
+        "`![Example](\(screenshot.path))`", "`[Download](\(screenshot.path))`",
+        "``a ` [Download](\(screenshot.path)) ``", "\\[Escaped](\(screenshot.path))",
+        "```\n[Download](\(screenshot.path))\n```", "[Outside](/etc/secret.png)",
         "![Outside](/etc/secret.png)", "![Outside](\(generatedRoot.path)/../secret.png)",
         "![Upload](\(generatedRoot.path)/remote-attachments/\(sessionID)/image-1.jpg)",
         "![SVG](\(generatedRoot.path)/unsafe.svg)", "![Remote](https://example.com/image.png)",
@@ -194,6 +387,9 @@ do {
         let ignored = RemoteGeneratedImages.presentation(text, messageID: messageID, root: generatedRoot)
         expect(ignored.images.isEmpty && ignored.text == text, "do not publish unsupported or quoted image paths")
     }
+    try checkLinksAndNesting(generatedRoot: generatedRoot, screenshot: screenshot, cache: cache,
+                             messageID: messageID, sessionID: sessionID)
+    try checkSessionOutputFolders(base: root.resolvingSymlinksInPath().appendingPathComponent("registry"))
     let many = (0..<20).map { "![\($0)](\(generatedRoot.path)/\($0).png)" }.joined(separator: "\n\n")
     expect(RemoteGeneratedImages.presentation(many, messageID: messageID, root: generatedRoot).images.count == 8,
            "bound generated previews per message")

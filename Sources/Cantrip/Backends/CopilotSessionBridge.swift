@@ -170,7 +170,7 @@ enum CopilotSessionBridge {
         enableMcpApps: config.mcpApps === true,
         availableTools: config.readOnly ? [] : config.allowTools ? undefined : ['view', 'glob', 'grep'],
         excludedTools: config.allowSubagents === false ? subagentTools : undefined,
-        systemMessage: config.subagentGuidance ? { mode: 'append', content: config.subagentGuidance } : undefined,
+        systemMessage: config.systemGuidance ? { mode: 'append', content: config.systemGuidance } : undefined,
         includeSubAgentStreamingEvents: false,
         enableFileHooks: config.allowTools && !config.readOnly,
         onPermissionRequest: request => {
@@ -220,7 +220,7 @@ enum CopilotSessionBridge {
           const messageID = await session.send({
             prompt: fresh ? command.initialPrompt : command.prompt, mode: 'enqueue'
           });
-          emit({ kind: 'started', runID, messageID });
+          emit({ kind: 'started', runID, messageID, sessionID: session.sessionId });
         } finally {
           sending--;
           finishIfIdle();

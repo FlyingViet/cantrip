@@ -8,6 +8,8 @@ final class CopilotBackend: Backend {
     var effortOverride: String?
     var contextTierOverride: String?
     var readOnly = false
+    /// Receives each CLI session ID this backend runs on (called on the backend queue).
+    var onAgentSession: ((String) -> Void)?
     private let settings = AppSettings.shared
     private let queue = DispatchQueue(label: "copilot-backend")
     private var process: Process?
@@ -47,9 +49,22 @@ final class CopilotBackend: Backend {
              "effort": effort, "contextTier": contextTier,
              "allowTools": allowTools, "readOnly": readOnly, "autoApprove": autoApprove,
              "allowSubagents": allowSubagents, "mcpApps": mcpApps,
-             "subagentGuidance": allowSubagents ? CopilotBackend.subagentGuidance : ""]
+             "systemGuidance": CopilotBackend.systemGuidance(allowSubagents: allowSubagents)]
         }
     }
+
+    static func systemGuidance(allowSubagents: Bool) -> String {
+        allowSubagents ? previewGuidance + "\n\n" + subagentGuidance : previewGuidance
+    }
+
+    /// Appended once to the session's system message, so images reach the Remote apps.
+    static let previewGuidance = """
+    Cantrip's iPhone, browser and Mac Remote apps show images from this Mac inline. To show \
+    the user a screenshot or generated image, save it as PNG or JPEG in this session's files \
+    folder (subfolders are fine) or directly in ~/.cache/Cantrip/, then put a Markdown image \
+    on its own line with the absolute path: `![Short description](/absolute/path.png)`. A \
+    Markdown link to the same file opens it full size. Paths in backticks are not shown.
+    """
 
     /// Appended once to the session's system message (not to every prompt).
     static let subagentGuidance = """
@@ -356,6 +371,7 @@ final class CopilotBackend: Backend {
                     if let id = object["id"] as? String { inputRequests.removeValue(forKey: id)?.cancel() }
                 case "started":
                     ready = true
+                    if let session = object["sessionID"] as? String { onAgentSession?(session) }
                     onEvent?(.status("Thinking..."))
                 case "watcherWaiting":
                     let count = object["count"] as? Int ?? 1

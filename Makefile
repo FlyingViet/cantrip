@@ -44,7 +44,7 @@ test-remote-routing:
 test-remote-images:
 	@BIN="/tmp/cantrip-remote-image-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/RemoteImageAttachments.swift Sources/Cantrip/RemoteGeneratedImages.swift Tests/RemoteImageTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/Log.swift Sources/Cantrip/RemoteImageAttachments.swift Sources/Cantrip/RemoteGeneratedImages.swift Sources/Cantrip/SessionOutputFolders.swift Tests/RemoteImageTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-context:
 	@BIN="/tmp/cantrip-context-tests-$$$$"; \

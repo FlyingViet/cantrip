@@ -130,6 +130,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
             .store(in: &cancellables)
 
+        // Older replies point at agent files folders recorded before Cantrip tracked them.
+        let transcripts = SessionManager.chatsDir
+        DispatchQueue.global(qos: .utility).async {
+            SessionOutputFolders.shared.backfillIfNeeded(transcripts: transcripts)
+        }
+
         // Menu bar icon reflects streaming state.
         UNUserNotificationCenter.current().delegate = self
         manager.$anyStreaming

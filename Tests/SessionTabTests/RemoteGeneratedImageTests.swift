@@ -105,7 +105,106 @@ extension SessionTabTests {
         let removed = try await request(path)
         precondition(removed.0 == 404, "Cached files still require a current assistant-message reference")
         precondition(message.text == markdown)
+        try await checkSessionFilesFolder(manager: manager, request: { try await request($0, sessionID: $1, auth: $2, method: $3) },
+                                          port: port, token: token)
         print("Generated previews: paired reads, message ownership, history, privacy, durable images and browser previews/viewer passed")
+    }
+
+    /// A tab's own Copilot files folder (and its subfolders) previews remotely; another tab
+    /// quoting the same path gets nothing, and links open the full-size viewer.
+    @MainActor
+    private static func checkSessionFilesFolder(
+        manager: SessionManager,
+        request: (String, UUID?, Bool, String) async throws -> (Int, [String: Any]),
+        port: Int, token: String
+    ) async throws {
+        let owner = manager.newSession(), other = manager.newSession()
+        let cli = UUID().uuidString.lowercased()
+        let files = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".copilot/session-state/\(cli)/files/previews", isDirectory: true)
+        try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+        let image = files.appendingPathComponent("niteharts header.png")
+        let context = CGContext(data: nil, width: 943, height: 2048, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        context.setFillColor(CGColor(red: 0.3, green: 0.1, blue: 0.5, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 943, height: 2048))
+        let png = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(png, UTType.png.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        precondition(CGImageDestinationFinalize(destination))
+        try (png as Data).write(to: image)
+        let markdown = "Here it is:\n\n![Niteharts header](\(image.absoluteString))\n\n"
+            + "[Open the full-size preview](\(image.absoluteString))"
+        var reply = ChatMessage(role: .assistant, text: markdown)
+        let replyID = UUID()
+        reply.id = replyID
+        for chat in [owner, other] { chat.messages = [ChatMessage(role: .user, text: "Show me"), reply] }
+
+        func snapshot(_ id: UUID) async throws -> [String: Any] {
+            let result = try await request("", id, true, "GET")
+            precondition(result.0 == 200)
+            return ((result.1["session"] as! [String: Any])["messages"] as! [[String: Any]]).last!
+        }
+        let unrecorded = try await snapshot(owner.id)
+        precondition(unrecorded["images"] == nil, "unrecorded folders are not previewable")
+        SessionOutputFolders.shared.record(cli, for: owner.id)
+        let owned = try await snapshot(owner.id)
+        let images = owned["images"] as! [[String: String]]
+        precondition(images.count == 1 && images[0]["altText"] == "Niteharts header", "\(owned)")
+        let previewURL = "cantrip-preview://image/\(images[0]["id"]!)"
+        precondition(owned["displayText"] as? String == "Here it is:\n\n![Niteharts header](\(previewURL))\n\n"
+                     + "[Open the full-size preview](\(previewURL))", "image and link share the preview")
+        let path = "/" + images[0]["id"]!
+        let full = try await request(path, owner.id, true, "GET")
+        precondition(full.0 == 200)
+        let size = CGImageSourceCopyPropertiesAtIndex(
+            CGImageSourceCreateWithData(Data(base64Encoded: full.1["data"] as! String)! as CFData, nil)!, 0, nil
+        )! as NSDictionary
+        precondition(size[kCGImagePropertyPixelHeight] as? Int == 2048)
+        let foreign = try await snapshot(other.id)
+        precondition(foreign["images"] == nil && foreign["displayText"] == nil,
+                     "another tab quoting the same folder gets no preview")
+        let denied = try await request(path, other.id, true, "GET")
+        precondition(denied.0 == 404, "another tab cannot read the owner's preview")
+        try await checkBrowserPreviewLink(chat: owner, port: port, token: token)
+        manager.close(owner.id)
+        precondition(SessionOutputFolders.shared.roots(for: owner.id).count == 1, "closing a tab keeps history previews")
+        owner.deleteTranscript()
+        precondition(SessionOutputFolders.shared.roots(for: owner.id).isEmpty, "deleting a tab forgets its folders")
+        try? FileManager.default.removeItem(at: files.deletingLastPathComponent().deletingLastPathComponent())
+    }
+
+    /// Browser and Mac Remote: a link to a Mac image opens the full-size viewer.
+    @MainActor
+    private static func checkBrowserPreviewLink(chat: ChatSession, port: Int, token: String) async throws {
+        _ = NSApplication.shared
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let delegate = GeneratedImagePageDelegate()
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 700, height: 700), configuration: configuration)
+        webView.navigationDelegate = delegate
+        let window = NSWindow(contentRect: webView.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = webView
+        defer { webView.stopLoading(); window.close() }
+        webView.load(URLRequest(url: URL(string: "http://127.0.0.1:\(port)/")!))
+        for _ in 0..<200 where !delegate.finished && delegate.error == nil { try await Task.sleep(for: .milliseconds(50)) }
+        precondition(delegate.finished, "Remote page should load: \(String(describing: delegate.error))")
+        let json = try await webView.callAsyncJavaScript("""
+        localStorage.cantripToken=pairing;token=pairing;pair(false);selected=sessionID;
+        const data=await api(`/api/v1/sessions/${sessionID}`),wait=ms=>new Promise(r=>setTimeout(r,ms));render(data.session);
+        const link=document.querySelector('#messages .preview-link'),anchors=[...document.querySelectorAll('#messages a')].map(a=>a.href);
+        link?.click();for(let i=0;i<60&&$("imageFull").naturalHeight!==2048;i++)await wait(100);
+        const result={text:link?.textContent||'',popup:link?.getAttribute('aria-haspopup')||'',anchors,open:$("imageViewer").open,
+          height:$("imageFull").naturalHeight,title:$("imageViewerTitle").textContent};
+        $("imageDone").click();return JSON.stringify(result);
+        """, arguments: ["pairing": token, "sessionID": chat.id.uuidString], contentWorld: .page) as? String ?? "{}"
+        let result = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] ?? [:]
+        precondition(result["text"] as? String == "Open the full-size preview" && result["popup"] as? String == "dialog"
+                     && (result["anchors"] as? [String])?.isEmpty == true, "the link renders as a viewer button: \(result)")
+        precondition(result["open"] as? Bool == true && result["height"] as? Int == 2048
+                     && result["title"] as? String == "Niteharts header", "the link opens the full-size viewer: \(result)")
     }
 
     /// The browser (and Mac Remote tab) Remote shows previews and uploads inline

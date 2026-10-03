@@ -464,7 +464,10 @@ final class CantripHomeBackgroundRunner {
     }
 
     private func retire(_ session: ChatSession) {
-        manager?.homeBackgroundSession.appendCantripHomeRun(session.messages)
+        if let log = manager?.homeBackgroundSession {
+            SessionOutputFolders.shared.transfer(from: session.id, to: log.id)
+            log.appendCantripHomeRun(session.messages)
+        }
         session.discardCantripHomeRun()
         manager?.releaseCantripHomeRun(session)
     }
@@ -636,6 +639,7 @@ final class CantripHomeBackgroundRunner {
                     )
                 }
             }
+            SessionOutputFolders.shared.transfer(from: id, to: log.id)
             if !messages.isEmpty {
                 log.appendCantripHomeRun(messages + [ChatMessage(
                     role: .error, text: "Cantrip quit before this background run finished."
