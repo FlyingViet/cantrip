@@ -493,8 +493,8 @@ struct CantripHomeHandoffBrief: Equatable {
             sections.append("Constraints:\n" + constraints.map { "- \($0)" }.joined(separator: "\n"))
         }
         if let doneWhen = clean(doneWhen) { sections.append("Done when: \(doneWhen)") }
-        let closing = "When you finish, begin your reply with the outcome in one or two sentences; "
-            + "Cantrip Home shows it on the handoff card."
+        let closing = "When you finish, end your final reply with the outcome in one or two sentences; "
+            + "Cantrip Home reads it to report back."
         var body = sections.joined(separator: "\n\n")
         if case .home(let request) = origin, let request = clean(request),
            !Self.normalized(core).contains(Self.normalized(request)) {
