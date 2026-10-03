@@ -61,7 +61,6 @@ struct ChatAssistantText: View {
     let images: [ChatMessageImage]
     @ObservedObject var remote: CantripRemoteModel
     @Environment(\.openURL) private var openURL
-    @State private var linkedPreview: ChatMessageImage?
 
     var body: some View {
         Markdown(text)
@@ -70,7 +69,7 @@ struct ChatAssistantText: View {
             .environment(\.openURL, OpenURLAction { url in
                 switch ChatPreviewLink.action(for: url, images: images) {
                 case .preview(let source):
-                    linkedPreview = source
+                    ChatImageViewer.present(source, remote: remote, index: 0)
                     return .handled
                 case .discard:
                     return .discarded
@@ -79,9 +78,6 @@ struct ChatAssistantText: View {
                     return .handled
                 }
             })
-            .fullScreenCover(item: $linkedPreview) { source in
-                ChatImageViewer(source: source, remote: remote, index: 0)
-            }
     }
 }
 
@@ -108,8 +104,8 @@ struct ChatGeneratedImagePreview: View {
     @ObservedObject var remote: CantripRemoteModel
     @State private var image: UIImage?
     @State private var errorMessage: String?
-    @State private var showingImage = false
     @State private var retry = 0
+    @State private var viewerSource = CantripViewerSource()
 
     private var label: String {
         if let alt = source.altText, !alt.isEmpty { return alt }
@@ -118,8 +114,10 @@ struct ChatGeneratedImagePreview: View {
 
     var body: some View {
         Button {
-            if image != nil { showingImage = true }
-            else if errorMessage != nil { retry += 1 }
+            if let image {
+                ChatImageViewer.present(source, remote: remote, index: 0,
+                                        placeholder: image, sourceFrame: viewerSource.frame)
+            } else if errorMessage != nil { retry += 1 }
         } label: {
             Group {
                 if let image {
@@ -127,6 +125,7 @@ struct ChatGeneratedImagePreview: View {
                         .resizable()
                         .scaledToFit()
                         .frame(maxWidth: 600, maxHeight: 360, alignment: .leading)
+                        .cantripViewerSource(viewerSource)
                 } else if let errorMessage {
                     VStack(alignment: .leading, spacing: 8) {
                         Label("Preview unavailable", systemImage: "photo.badge.exclamationmark")
@@ -149,9 +148,6 @@ struct ChatGeneratedImagePreview: View {
         .accessibilityValue(errorMessage ?? (image == nil ? "Loading" : ""))
         .accessibilityHint(errorMessage == nil ? "View full image. Pinch to zoom." : "Double-tap to retry loading")
         .accessibilityIdentifier("chat.generatedPreview")
-        .fullScreenCover(isPresented: $showingImage) {
-            ChatImageViewer(source: source, remote: remote, index: 0)
-        }
         .task(id: "\(remote.usageIdentity)/\(source.sessionID ?? "")/\(source.id)/\(retry)") {
             image = nil
             errorMessage = nil
@@ -191,13 +187,15 @@ struct ChatImageThumbnail: View {
     var size: CGFloat = 104
     @State private var image: UIImage?
     @State private var errorMessage: String?
-    @State private var showingImage = false
     @State private var retry = 0
+    @State private var viewerSource = CantripViewerSource()
 
     var body: some View {
         Button {
-            if image != nil { showingImage = true }
-            else if errorMessage != nil { retry += 1 }
+            if let image {
+                ChatImageViewer.present(source, remote: remote, index: index,
+                                        placeholder: image, sourceFrame: viewerSource.frame)
+            } else if errorMessage != nil { retry += 1 }
         } label: {
             Group {
                 if let image {
@@ -214,6 +212,7 @@ struct ChatImageThumbnail: View {
                 }
             }
             .frame(width: size, height: size)
+            .cantripViewerSource(viewerSource)
             .background(.quaternary)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .contentShape(RoundedRectangle(cornerRadius: 10))
@@ -222,9 +221,6 @@ struct ChatImageThumbnail: View {
         .accessibilityLabel("Attached image \(index + 1)")
         .accessibilityValue(errorMessage ?? (image == nil ? "Loading" : ""))
         .accessibilityHint(errorMessage == nil ? "View full image" : "Double-tap to retry loading")
-        .fullScreenCover(isPresented: $showingImage) {
-            ChatImageViewer(source: source, remote: remote, index: index)
-        }
         .task(id: "\(remote.usageIdentity)/\(source.sessionID ?? "")/\(source.id)/\(retry)") {
             image = nil
             errorMessage = nil
@@ -239,69 +235,51 @@ struct ChatImageThumbnail: View {
     }
 }
 
+/// A chat image (upload or Mac preview) in the shared full-screen viewer.
 struct ChatImageViewer: View {
     let source: ChatMessageImage
     @ObservedObject var remote: CantripRemoteModel
     let index: Int
+    var placeholder: UIImage?
+    var sourceFrame: CGRect?
+    var onDismiss: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
-    @State private var image: UIImage?
-    @State private var errorMessage: String?
-    @State private var retry = 0
+
+    static func title(_ source: ChatMessageImage, index: Int) -> String {
+        ChatMessageImage.validPreviewID(source.id) ? "Preview" : "Image \(index + 1)"
+    }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
-                if let image {
-                    ZoomableChatImage(image: image)
-                        .accessibilityLabel(source.altText ?? "Attached image \(index + 1)")
-                } else if let errorMessage {
-                    VStack(spacing: 16) {
-                        Label("Image unavailable", systemImage: "photo.badge.exclamationmark")
-                        Text(errorMessage).font(.callout).multilineTextAlignment(.center)
-                        Button("Retry") { retry += 1 }.buttonStyle(.bordered)
-                    }
-                    .foregroundStyle(.white)
-                    .padding()
-                } else {
-                    ProgressView("Loading image...").tint(.white).foregroundStyle(.white)
-                }
-            }
-            .navigationTitle(ChatMessageImage.validPreviewID(source.id) ? "Preview" : "Image \(index + 1)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbarBackground(.black, for: .navigationBar)
-            .toolbarBackgroundVisibility(.visible, for: .navigationBar)
-        }
-        .task(id: "\(remote.usageIdentity)/\(source.sessionID ?? "")/\(source.id)/\(retry)") {
-            image = nil
-            errorMessage = nil
-            do {
-                image = try await ChatImageDecoder.load(source, remote: remote, thumbnail: false)
-            } catch is CancellationError {
-                return
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
+        CantripImageViewer(
+            title: Self.title(source, index: index),
+            imageLabel: source.altText ?? "Attached image \(index + 1)",
+            placeholder: placeholder, sourceFrame: sourceFrame,
+            loadID: "\(remote.usageIdentity)/\(source.sessionID ?? "")/\(source.id)",
+            load: { [source, remote] in try await ChatImageDecoder.load(source, remote: remote, thumbnail: false) },
+            onDismiss: onDismiss ?? { dismiss() }
+        )
     }
-}
 
-struct ZoomableChatImage: UIViewRepresentable {
-    let image: UIImage
-
-    func makeUIView(context: Context) -> ChatImageScrollView { ChatImageScrollView() }
-    func updateUIView(_ view: ChatImageScrollView, context: Context) { view.setImage(image) }
+    @MainActor
+    static func present(_ source: ChatMessageImage, remote: CantripRemoteModel, index: Int,
+                        placeholder: UIImage? = nil, sourceFrame: CGRect? = nil) {
+        CantripImageViewerPresenter.present(
+            title: title(source, index: index),
+            imageLabel: source.altText ?? "Attached image \(index + 1)",
+            placeholder: placeholder, sourceFrame: sourceFrame,
+            loadID: "\(remote.usageIdentity)/\(source.sessionID ?? "")/\(source.id)",
+            load: { try await ChatImageDecoder.load(source, remote: remote, thumbnail: false) }
+        )
+    }
 }
 
 final class ChatImageScrollView: UIScrollView, UIScrollViewDelegate {
     private let imageView = UIImageView()
     private var fittedSize: CGSize = .zero
+    /// VoiceOver's two-finger scrub closes the viewer.
+    var onEscape: (() -> Bool)?
+
+    var image: UIImage? { imageView.image }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -355,6 +333,8 @@ final class ChatImageScrollView: UIScrollView, UIScrollViewDelegate {
         )
         accessibilityValue = "\(Int(zoomScale / max(minimumZoomScale, 0.001) * 100)) percent"
     }
+
+    override func accessibilityPerformEscape() -> Bool { onEscape?() ?? false }
 
     override func accessibilityIncrement() {
         setZoomScale(min(maximumZoomScale, zoomScale * 2), animated: true)

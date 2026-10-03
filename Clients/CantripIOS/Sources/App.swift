@@ -14,27 +14,39 @@ struct HermesApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ChatView(env: env, remote: remoteModel)
-            .cantripLaunchSplash(launchSplash) { [env, remoteModel] in
-                CantripLaunchSplash.isReady(lane: env.executionLane, remote: remoteModel)
+            #if DEBUG
+            if CantripUITestFixtures.showsImageViewer {
+                CantripImageViewerFixtureView().preferredColorScheme(.dark)
+            } else {
+                content
             }
-            .preferredColorScheme(.dark)
-            .onAppear {
-                remoteModel.setAppActive(scenePhase == .active)
-                openNotification()
-            }
-            .onChange(of: scenePhase) { _, phase in
-                remoteModel.setAppActive(phase == .active)
-                if phase == .active { openNotification() }
-            }
-            .onChange(of: notifications.pendingTarget) { _, _ in openNotification() }
-            .onChange(of: notifications.deviceToken) { _, _ in remoteModel.refreshCompletionNotificationRegistration(force: true) }
-            .onOpenURL { url in
-                guard let target = CantripDeepLink.parse(url) else { return }
-                launchSplash.skip()
-                env.select(.cantrip)
-                Task { await remoteModel.openLiveStatusLink(target) }
-            }
+            #else
+            content
+            #endif
+        }
+    }
+
+    private var content: some View {
+        ChatView(env: env, remote: remoteModel)
+        .cantripLaunchSplash(launchSplash) { [env, remoteModel] in
+            CantripLaunchSplash.isReady(lane: env.executionLane, remote: remoteModel)
+        }
+        .preferredColorScheme(.dark)
+        .onAppear {
+            remoteModel.setAppActive(scenePhase == .active)
+            openNotification()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            remoteModel.setAppActive(phase == .active)
+            if phase == .active { openNotification() }
+        }
+        .onChange(of: notifications.pendingTarget) { _, _ in openNotification() }
+        .onChange(of: notifications.deviceToken) { _, _ in remoteModel.refreshCompletionNotificationRegistration(force: true) }
+        .onOpenURL { url in
+            guard let target = CantripDeepLink.parse(url) else { return }
+            launchSplash.skip()
+            env.select(.cantrip)
+            Task { await remoteModel.openLiveStatusLink(target) }
         }
     }
 

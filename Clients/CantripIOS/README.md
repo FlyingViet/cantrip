@@ -452,8 +452,22 @@ immediately, is saved on the Mac, and syncs to other devices; a failed save
 restores the previous order. Reordering needs an updated Mac host
 (`supportsReordering`). Scheduled results appear in the Home conversation.
 Documents and media created as Home deliverables are collected automatically in
-Artifacts and open with the system preview. The menu on each artifact can
-permanently delete its file from the paired Mac. Scheduled work runs only while
+Artifacts. Images and videos show thumbnails (videos with a play badge and
+duration); documents and audio keep type icons. Thumbnails load lazily, at most
+three at a time, and are cached in memory and on disk until the file changes;
+unpairing deletes them. An updated Mac host is needed for thumbnails; older hosts
+show the type icons. Images open in the full-screen viewer, and everything else
+opens in the system preview. The menu on each artifact can permanently delete
+its file from the paired Mac.
+
+The full-screen image viewer (Artifacts and chat images) works like Photos: at
+minimum zoom, drag the image up or down and it shrinks while the screen behind
+shows through; let go past a short distance or flick to close it back into its
+thumbnail, or let go early to spring back. While zoomed in, drags pan instead.
+**Done** and VoiceOver's two-finger scrub (or the **Close image** action) also
+close it, and Reduce Motion replaces the zoom and shrink with fades. Real-touch
+checks live in the `HermesUITests` scheme, which launches a DEBUG-only fixture
+(`-CantripUITestImageViewer`). Scheduled work runs only while
 Cantrip is running on the Mac.
 
 ### Reasoning steps in replies
