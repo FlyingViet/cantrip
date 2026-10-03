@@ -1410,6 +1410,37 @@ final class RemoteControlServer {
                 sendEncoded(on: connection) { try JSONEncoder().encode(value) }
                 return
             }
+            if parts.count == 6, parts[5] == "thumbnail" {
+                // GET /api/v1/home/artifacts/<id>/thumbnail: a cached JPEG for images and videos.
+                guard request.method == "GET" else {
+                    sendError(405, "method not allowed", on: connection)
+                    return
+                }
+                guard let id = UUID(uuidString: String(parts[4])),
+                      let artifact = store.artifacts.first(where: { $0.id == id }) else {
+                    sendError(404, "artifact not found", on: connection)
+                    return
+                }
+                guard CantripHomeArtifactThumbnails.supports(artifact) else {
+                    sendError(404, "This artifact has no thumbnail.", on: connection)
+                    return
+                }
+                Task {
+                    do {
+                        let thumbnail = try await CantripHomeArtifactThumbnails.shared.thumbnail(for: artifact)
+                        var object: [String: Any] = [
+                            "data": thumbnail.jpeg.base64EncodedString(),
+                            "width": thumbnail.width, "height": thumbnail.height,
+                        ]
+                        if let duration = thumbnail.durationSeconds { object["durationSeconds"] = duration }
+                        sendJSON(object, on: connection)
+                    } catch {
+                        Log.write("home: thumbnail for \(id.uuidString.prefix(8)) unavailable: \(error)")
+                        sendError(404, "A thumbnail is not available for this artifact.", on: connection)
+                    }
+                }
+                return
+            }
             guard parts.count == 5,
                   let id = UUID(uuidString: String(parts[4])) else {
                 sendError(404, "artifact not found", on: connection)

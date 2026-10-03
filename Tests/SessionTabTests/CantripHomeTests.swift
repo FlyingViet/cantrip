@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 
 extension SessionTabTests {
     @MainActor
@@ -475,6 +476,30 @@ extension SessionTabTests {
         let artifactData = try await call("/api/v1/home/artifacts/\(artifact.id.uuidString)")
         precondition(Data(base64Encoded: artifactData.1["data"] as? String ?? "")
                      == imageData)
+        let thumbnailRoute = "/api/v1/home/artifacts/\(artifact.id.uuidString)/thumbnail"
+        let thumbnail = try await call(thumbnailRoute)
+        let thumbnailJPEG = Data(base64Encoded: thumbnail.1["data"] as? String ?? "") ?? Data()
+        let thumbnailSource = CGImageSourceCreateWithData(thumbnailJPEG as CFData, nil)
+        precondition(thumbnail.0 == 200 && thumbnail.1["width"] as? Int == 1 && thumbnail.1["height"] as? Int == 1
+                     && thumbnail.1["durationSeconds"] == nil
+                     && thumbnailSource.flatMap { CGImageSourceGetType($0) as String? } == "public.jpeg",
+                     "Image artifacts get a JPEG thumbnail: \(thumbnail)")
+        let thumbnailCache = CantripHomeStore.rootDirectory
+            .appendingPathComponent("thumbnails/\(artifact.id.uuidString).json")
+        precondition(FileManager.default.fileExists(atPath: thumbnailCache.path), "Thumbnails are cached on the Mac")
+        var anonymous = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(thumbnailRoute)")!)
+        anonymous.httpMethod = "GET"
+        let (_, anonymousResponse) = try await client.data(for: anonymous)
+        let wrongThumbnailMethod = try await call(thumbnailRoute, method: "POST")
+        let unknownThumbnail = try await call("/api/v1/home/artifacts/\(UUID().uuidString)/thumbnail")
+        let notesURL = CantripHomeStore.artifactDirectory.appendingPathComponent("home-notes.md")
+        try Data("# Notes".utf8).write(to: notesURL)
+        let notes = try store.register(.init(title: "Notes", path: notesURL.lastPathComponent, kind: nil))
+        let notesThumbnail = try await call("/api/v1/home/artifacts/\(notes.id.uuidString)/thumbnail")
+        try store.deleteArtifact(id: notes.id)
+        precondition((anonymousResponse as! HTTPURLResponse).statusCode == 401 && wrongThumbnailMethod.0 == 405
+                     && unknownThumbnail.0 == 404 && notesThumbnail.0 == 404,
+                     "Thumbnails need pairing, GET, a known artifact, and an image or video")
         let deletedArtifact = try await call(
             "/api/v1/home/artifacts/\(artifact.id.uuidString)", method: "DELETE"
         )
@@ -483,6 +508,11 @@ extension SessionTabTests {
         precondition(!store.artifacts.contains { $0.id == artifact.id }
                      && !FileManager.default.fileExists(atPath: artifactURL.path),
                      "Deleting an artifact must remove its registry entry and file")
+        for _ in 0..<50 where FileManager.default.fileExists(atPath: thumbnailCache.path) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        precondition(!FileManager.default.fileExists(atPath: thumbnailCache.path),
+                     "Deleting an artifact must remove its cached thumbnail")
         let deletedArtifactData = try await call(
             "/api/v1/home/artifacts/\(artifact.id.uuidString)"
         )

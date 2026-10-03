@@ -175,7 +175,15 @@ The macOS app includes:
   them on request.
   Deliverable files the agent saves in Home's guarded artifact folder
   appear automatically in Artifacts and can be permanently deleted from the
-  mobile app. Cantrip must remain running for scheduled work.
+  mobile app. Images and videos show thumbnails (a video's poster frame about
+  one second in, with its duration), built on the Mac by the paired
+  `GET /api/v1/home/artifacts/{id}/thumbnail` route (JPEG of at most 600 pixels; 404
+  for documents, audio or unreadable media). Sources get the remote-preview
+  guards (regular single-link files below the artifact folder, every folder
+  opened without following symlinks, 20 MB and 64-megapixel limits; videos decode
+  from a private copy with a 15-second limit), and thumbnails are cached in
+  `~/.cache/Cantrip/home/thumbnails/` until the file changes or is deleted.
+  Cantrip must remain running for scheduled work.
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a
   `cantrip` command for asking questions from Terminal. With Copilot, MCP
   tools that return interactive views (such as Mobbin's screen galleries)

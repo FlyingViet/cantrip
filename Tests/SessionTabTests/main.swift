@@ -142,6 +142,7 @@ struct SessionTabTests {
         try await testMCPAppRemote()
         try testCantripHomeSchedules()
         try await testCantripHome()
+        try await testCantripHomeArtifactThumbnails()
         try testSubagentPlacement()
         try await testSubagentMonitor()
         try await testBackgroundWatcherContinuation()
