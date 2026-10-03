@@ -88,10 +88,9 @@ The macOS app includes:
   another Mac, or a browser. Recent messages load with full text and tool details.
   Cantrip Agent can send one MOV/MP4 video (100 MB / five minutes) for analysis,
   preserving the original and providing four timestamped preview frames.
-  Scrolling up automatically pages back through ten earlier prompt-response
-  groups, counting those already loaded. Beyond that, **Load more messages**
-  retrieves earlier history. Opening a tab or polling never prefetches history;
-  failed automatic loads pause for manual retry.
+  Scrolling up automatically pages back through the whole conversation, with no
+  button to tap and no jump in what you are reading. Opening a tab or polling
+  never prefetches history; a failed page pauses automatic loading and shows Retry.
   Page and cache boundaries retain the prompt before its responses, even when
   a large answer exceeds the soft page limits.
   Mac Remote uses an expanded, vertically scrollable

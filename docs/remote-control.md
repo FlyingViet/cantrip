@@ -356,10 +356,14 @@ of repeatedly downloading the entire live transcript. **Cantrip Agent and the na
 Mac Remote tab start with the latest three prompt-and-reply exchanges**, including all
 continuation or council replies belonging to each prompt. A new prompt counts
 as the current exchange while its reply is still running.
-Scroll up near the top to load older exchanges without losing your reading
-position. Automatic loading stops after the current exchange plus ten earlier
-exchanges; **Load more messages** continues beyond that. Older history is not
-deleted, and expanded history stays open while you browse or switch cached tabs.
+Scroll up to load older exchanges automatically, all the way to the start of
+the conversation, without losing your reading position. Loading starts about a
+screen before the top, a small **Loading older messages…** row shows while a page
+downloads, and short pages keep loading while less than a screen of history sits
+above you. Only one page is requested at a time. There is no button to tap; a
+**Retry** appears in that row only if a page fails, and automatic loading resumes
+after it succeeds. Older history is not deleted, and expanded history stays open
+while you browse or switch cached tabs.
 Every loaded message includes its complete text, reasoning, and tool input/output
 by default. Reasoning/tool disclosures and long-prompt readers use content already
 downloaded; they do not require another message fetch.

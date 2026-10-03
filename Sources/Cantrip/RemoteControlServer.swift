@@ -1965,7 +1965,8 @@ private extension RemoteControlServer {
     .subagents{display:grid;gap:6px;margin:8px 0}.live-subagents{position:sticky;bottom:0;z-index:3;display:grid;gap:6px;max-height:45vh;overflow-y:auto;padding:8px 16px;background:var(--chrome);border-top:1px solid var(--line);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.subagent{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-size:12px}.subagent.active{border-left:3px solid var(--accent)}.subagent-head{display:flex;align-items:flex-start;gap:7px}.subagent-head>.status-icon{flex:none;margin-top:2px}.subagent-title{display:flex;flex:1;flex-wrap:wrap;align-items:center;gap:3px 6px;min-width:0}.subagent-title strong{font-size:13px;overflow-wrap:anywhere}.subagent-badge{padding:0 5px;border-radius:4px;background:var(--surface-2);color:var(--secondary);font-size:10px}.subagent-stop{flex:none;min-height:32px;min-width:52px}.subagent-body{display:grid;gap:3px;margin:4px 0 0 21px;color:var(--secondary)}.subagent-now{color:var(--text);overflow-wrap:anywhere}.subagent-meta{font-variant-numeric:tabular-nums}.subagent-error{color:var(--red);font-weight:600;overflow-wrap:anywhere}.subagent-latest{margin:0 0 6px;color:var(--secondary);white-space:pre-wrap;overflow-wrap:anywhere}.subagent-step{display:flex;align-items:center;gap:7px;padding:2px 0;min-width:0}.subagent .disclosure{margin-top:3px}.status-icon.idle{color:var(--secondary)}
     .steps{margin-top:8px}.status-icon{display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;font-size:10px;font-weight:800;color:var(--tertiary)}.status-icon.succeeded{color:var(--green)}.status-icon.failed{color:var(--red)}.status-icon.cancelled{color:var(--secondary)}.status-icon.running{color:var(--accent);animation:pulse 1.1s ease-in-out infinite}@keyframes pulse{50%{opacity:.35}}
     .step{margin:5px 0;border:1px solid var(--line);border-radius:7px;background:var(--surface)}.step>summary,.step-static{display:flex;align-items:center;gap:7px;padding:7px 9px;font-size:12px}.step>summary:after{content:"›";margin-left:auto;color:var(--tertiary);font-size:16px;transition:transform .12s}.step[open]>summary:after{transform:rotate(90deg)}.step-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tool-name{margin-left:auto;color:var(--tertiary);font:10px ui-monospace,SFMono-Regular,Menlo,monospace}.step>summary .tool-name{margin-left:8px}.step-details{display:grid;gap:8px;padding:0 9px 9px 30px}.detail-label{margin-bottom:4px;color:var(--secondary);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}.step-details pre{max-height:180px;margin:0;padding:8px;border-radius:5px;background:var(--surface);overflow:auto;white-space:pre-wrap;word-break:break-word;color:var(--secondary);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
-    .run-status{display:flex;align-items:center;gap:7px;color:var(--secondary);font-size:13px}.spinner{width:12px;height:12px;border:1.5px solid rgba(255,255,255,.2);border-top-color:var(--secondary);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.empty{margin:auto;color:var(--tertiary)}
+    .run-status{display:flex;align-items:center;gap:7px;color:var(--secondary);font-size:13px}.older-history{display:flex;align-items:center;justify-content:center;gap:8px;min-height:28px;margin:0 0 8px;color:var(--secondary);font-size:13px}.older-history .spinner{visibility:hidden}.older-history[data-state=loading] .spinner{visibility:visible}.older-history.has-retry{justify-content:space-between}.older-history.has-retry .control{min-height:36px;padding:4px 14px}.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+    .spinner{width:12px;height:12px;border:1.5px solid rgba(255,255,255,.2);border-top-color:var(--secondary);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.empty{margin:auto;color:var(--tertiary)}
     #pair{width:min(calc(100% - 32px),430px);margin:18vh auto 0;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.2)}#pair h2{margin:0 0 7px;font-size:18px}#pair p{line-height:1.45}#pairControls{display:flex;gap:7px;margin-top:15px}#pair input{min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;outline:0;background:var(--surface)}#pair input:focus{border-color:var(--accent)}
     #tabEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#tabEditor::backdrop{background:rgba(0,0,0,.35)}#tabEditor form{display:grid;gap:12px}#tabName{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}.tab-actions{display:flex;justify-content:flex-end;gap:8px}#tabError,#actionError{color:var(--orange);font-size:12px}#actionError:not(:empty){padding:8px 14px}.session-close:disabled{opacity:.65;cursor:default}.session-menu{border:0;background:transparent;color:var(--secondary);padding:2px 5px}
     .prompt-usage{margin-top:4px}.prompt-usage>summary{font-size:11px}.usage-table{margin:6px 0 2px 19px;max-width:340px;color:var(--text)}.usage-title{margin-top:6px;color:var(--secondary);font-size:11px;font-weight:600}.usage-table dl{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:3px 0;font-size:12px}.usage-table dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}.prompt-preview{white-space:pre-wrap}.prompt-preview.clipped{max-height:11.2em;overflow:hidden}#promptReader{width:min(calc(100% - 24px),680px);border:1px solid var(--line);border-radius:12px;background:Canvas;color:var(--text)}#promptReader::backdrop{background:rgba(0,0,0,.35)}#promptPage{height:55vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
@@ -2012,7 +2013,7 @@ private extension RemoteControlServer {
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div></header>
-    <div id="uiUpdateStatus" class="muted" role="status" aria-live="polite"></div><div id="actionError" role="alert"></div><button id="inputBanner" class="control hidden">Your input is needed</button><div id="historyError" role="alert"></div><button id="olderMessages" class="control hidden">Load more messages</button><section id="messages"></section><section id="liveSubagents" class="live-subagents hidden" aria-label="Running subagents"></section></main>
+    <div id="uiUpdateStatus" class="muted" role="status" aria-live="polite"></div><div id="actionError" role="alert"></div><button id="inputBanner" class="control hidden">Your input is needed</button><div id="historyError" role="alert"></div><div id="olderHistory" class="older-history hidden" data-state="idle"><span class="spinner" aria-hidden="true"></span><span id="olderHistoryText" role="status" aria-live="polite"></span><button id="olderMessages" class="control hidden" aria-label="Retry loading older messages">Retry</button><button id="olderHistoryReader" class="sr-only" tabindex="-1">Load older messages</button></div><section id="messages"></section><section id="liveSubagents" class="live-subagents hidden" aria-label="Running subagents"></section></main>
     <dialog id="inputEditor" aria-labelledby="inputTitle"><strong id="inputTitle">Secure Input</strong>
     <p class="muted">Only passwords and passphrases belong here. Questions and other actions appear in chat.</p>
     <div id="inputError" role="alert"></div><div id="inputCards"></div>
@@ -2158,14 +2159,24 @@ private extension RemoteControlServer {
       const progress=$("sessionProgress");if(!progress.classList.contains("hidden")){const summary=connected?progress.dataset.status:`Reconnecting… Last known: ${progress.dataset.status}`;setText($("sessionProgressText"),summary);progress.title=summary}}
     function renderProgress(session){if(!sidebarLayout)return;const progress=$("sessionProgress");progress.classList.toggle("hidden",!session);progress.dataset.streaming=String(Boolean(session?.isStreaming));progress.dataset.status=session?progressSummary(session):"";if(!session)setText($("sessionProgressText"),"");updateProgressConnection()}
     function atBottom(){const root=document.scrollingElement||document.documentElement;return root.scrollHeight-root.clientHeight-root.scrollTop<=4}
-    let historyScrollIntent=false,lastHistoryScrollTop=0,historyTouchY=null;
-    function requestHistoryOnScroll(){if(historyScrollIntent&&!suppressScroll&&!document.querySelector("dialog[open]")&&(document.scrollingElement||document.documentElement).scrollTop<=120)loadOlderMessages(true)}
-    addEventListener("wheel",event=>{if(event.target.closest("#sessions"))return;historyScrollIntent=event.deltaY<0;if(historyScrollIntent){followOutput=false;requestHistoryOnScroll()}},{passive:true});
+    // historyScrollIntent: the latest input gesture points upward (cleared by each render).
+    // historyReading: the reader is heading into older history, so loaded pages may chain.
+    // restoredScrollTop: where Remote itself last positioned the page, so that scroll is not mistaken for reading.
+    let historyScrollIntent=false,historyReading=false,lastHistoryScrollTop=0,lastHistoryScrollHeight=0,restoredScrollTop=null,historyTouchY=null;
+    function positionConversation(top){const root=document.scrollingElement||document.documentElement;root.scrollTop=top;restoredScrollTop=root.scrollTop}
+    function nearHistoryTop(){return (document.scrollingElement||document.documentElement).scrollTop<=Math.max(600,innerHeight)}
+    function requestHistoryOnScroll(){if(historyScrollIntent&&!suppressScroll&&!document.querySelector("dialog[open]")&&nearHistoryTop())loadOlderMessages(true)}
+    function historyGesture(upward){historyScrollIntent=upward;historyReading=upward;if(upward){followOutput=false;requestHistoryOnScroll()}}
+    addEventListener("wheel",event=>{if(event.target.closest("#sessions")||!event.deltaY)return;historyGesture(event.deltaY<0)},{passive:true});
     addEventListener("touchstart",event=>{historyTouchY=event.touches[0]?.clientY??null;historyScrollIntent=false},{passive:true});
-    addEventListener("touchmove",event=>{const y=event.touches[0]?.clientY;if(y!==undefined&&historyTouchY!==null&&!event.target.closest("#sessions")){historyScrollIntent=y>historyTouchY;if(historyScrollIntent){followOutput=false;requestHistoryOnScroll()}}historyTouchY=y??null},{passive:true});
+    addEventListener("touchmove",event=>{const y=event.touches[0]?.clientY;if(y!==undefined&&historyTouchY!==null&&y!==historyTouchY&&!event.target.closest("#sessions"))historyGesture(y>historyTouchY);historyTouchY=y??null},{passive:true});
     addEventListener("keydown",event=>{if(event.target.closest("input,textarea,select,[contenteditable],#sessions")||document.querySelector("dialog[open]"))return;
-      historyScrollIntent=["ArrowUp","PageUp","Home"].includes(event.key)||(event.key===" "&&event.shiftKey);if(historyScrollIntent){followOutput=false;requestHistoryOnScroll()}});
-    addEventListener("scroll",()=>{const top=(document.scrollingElement||document.documentElement).scrollTop;if(!suppressScroll){followOutput=atBottom();if(top<lastHistoryScrollTop)requestHistoryOnScroll()}lastHistoryScrollTop=top},{passive:true});
+      const upward=["ArrowUp","PageUp","Home"].includes(event.key)||(event.key===" "&&event.shiftKey);if(upward||["ArrowDown","PageDown","End"," "].includes(event.key))historyGesture(upward)});
+    // Any upward scroll Remote did not cause (momentum after a render, scrollbar drags, find, assistive tech)
+    // is reading; content shrinking above the reader is layout, not intent.
+    addEventListener("scroll",()=>{const root=document.scrollingElement||document.documentElement,top=root.scrollTop,height=root.scrollHeight,restored=restoredScrollTop!==null&&Math.abs(top-restoredScrollTop)<1;restoredScrollTop=null;
+      if(!suppressScroll){followOutput=atBottom();if(followOutput)historyReading=false;if(top<lastHistoryScrollTop&&!restored&&height>=lastHistoryScrollHeight){historyScrollIntent=true;historyReading=true;requestHistoryOnScroll()}}
+      lastHistoryScrollTop=top;lastHistoryScrollHeight=height},{passive:true});
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
       if(uiNavigating)throw Error("Remote is updating; this request was not sent.");
       path+=(path.includes("?")?"&":"?")+"history=recent";
@@ -2181,13 +2192,21 @@ private extension RemoteControlServer {
     let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;
     const tabDrafts=new Map();
     function selectTab(id){if(selected)tabDrafts.set(selected,$("draft").value);selected=id;$("draft").value=tabDrafts.get(id)||""}
-    const historyCache=new Map(),expandedHistory=new Set(),automaticHistoryRemaining=new Map(),automaticHistoryLimit=10,initialHistoryGroups=sidebarLayout?3:automaticHistoryLimit+1;
+    // historyPaused: tabs whose last older page failed; automatic loading waits for Retry.
+    const historyCache=new Map(),expandedHistory=new Set(),historyPaused=new Map(),initialHistoryGroups=sidebarLayout?3:11;
     function historySuffix(messages,groups){if(groups<=0)return [];const prompts=messages.flatMap((m,i)=>m.role==="user"?[i]:[]);return prompts.length>groups?messages.slice(prompts[prompts.length-groups]):messages}
-    function canAutomaticallyLoadHistory(session){return Boolean(session?.hasOlderMessages&&(automaticHistoryRemaining.get(session.id)||0)>0)}
-    function updateHistoryControls(session){const button=$("olderMessages"),automatic=canAutomaticallyLoadHistory(session);button.classList.toggle("hidden",!session?.hasOlderMessages);
-      button.disabled=loadingHistory||automatic;button.textContent=loadingHistory?"Loading older messages...":automatic?"Scroll up for older messages":"Load more messages"}
+    function canAutomaticallyLoadHistory(session){return Boolean(session?.hasOlderMessages&&!historyPaused.has(session.id))}
+    // The row keeps its height for paged tabs, so progress or reaching the start never moves the text being read.
+    // A retry shows progress in place of the error, so a repeated failure is announced again.
+    function updateHistoryControls(session){const older=Boolean(session?.hasOlderMessages),failure=older?historyPaused.get(session.id):null,loading=older&&loadingHistory,row=$("olderHistory");
+      row.classList.toggle("hidden",!session?.supportsPagedHistory);row.dataset.state=loading?"loading":failure?"failed":"idle";row.classList.toggle("has-retry",Boolean(failure));
+      setText($("olderHistoryText"),loading?"Loading older messages…":failure||"");
+      $("olderMessages").classList.toggle("hidden",!failure);$("olderMessages").disabled=loadingHistory;
+      // Stays mounted while loading so a screen reader's focus is not dropped.
+      $("olderHistoryReader").classList.toggle("hidden",!older||Boolean(failure));$("olderHistoryReader").setAttribute("aria-disabled",String(loading))}
+    function continueHistoryReading(id){requestAnimationFrame(()=>requestAnimationFrame(()=>{if(historyReading&&selected===id&&!suppressScroll&&!document.querySelector("dialog[open]")&&nearHistoryTop())loadOlderMessages(true)}))}
     function cacheSession(session,merge=true){const previous=historyCache.get(session.id);
-      if(previous?.historyStartID!==session.historyStartID){expandedHistory.delete(session.id);automaticHistoryRemaining.delete(session.id)}
+      if(previous?.historyStartID!==session.historyStartID){expandedHistory.delete(session.id);historyPaused.delete(session.id)}
       if(merge&&session.historyStartID&&previous?.historyStartID===session.historyStartID){
         const overlap=previous.messages.findIndex(m=>m.id===session.messages[0]?.id);
         if(overlap>=0)session={...session,messages:[...previous.messages.slice(0,overlap),...session.messages],hasOlderMessages:previous.hasOlderMessages}}
@@ -2197,8 +2216,7 @@ private extension RemoteControlServer {
         let start=session.messages.length-120;
         if(session.messages[start].role!=="user"){const prompt=session.messages.slice(0,start).findLastIndex(m=>m.role==="user");if(prompt>=0)start=prompt}
         if(start>0)session={...session,messages:session.messages.slice(start),hasOlderMessages:true}}
-      if(!expandedHistory.has(session.id)){const pastGroups=Math.max(0,session.messages.filter(m=>m.role==="user").length-1);automaticHistoryRemaining.set(session.id,Math.min(automaticHistoryRemaining.get(session.id)??automaticHistoryLimit,Math.max(0,automaticHistoryLimit-pastGroups)))}
-      historyCache.delete(session.id);historyCache.set(session.id,session);while(historyCache.size>5){const id=historyCache.keys().next().value;historyCache.delete(id);expandedHistory.delete(id);automaticHistoryRemaining.delete(id)}return session}
+      historyCache.delete(session.id);historyCache.set(session.id,session);while(historyCache.size>5){const id=historyCache.keys().next().value;historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}return session}
     function scheduleRefresh(){if(timer)clearTimeout(timer);timer=null;if(!token||document.hidden||uiNavigating)return;
       const busy=sessionItems.some(s=>s.isStreaming||s.queuedCount)||$("historyError").textContent||document.documentElement.dataset.cantripConnected!=="true";
       timer=setTimeout(refresh,busy?1500:5000)}
@@ -2206,7 +2224,7 @@ private extension RemoteControlServer {
       refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision;
         let listedSuccessfully=false,requestSelection=requestedID;
         try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);
-          for(const id of historyCache.keys())if(!listed.sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);automaticHistoryRemaining.delete(id)}
+          for(const id of historyCache.keys())if(!listed.sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}
           if(selected!==requestedID){refreshRequested=true;continue}
           if(!selected||!listed.sessions.some(s=>s.id===selected))selectTab(listed.sessions[0]?.id||null);
           requestSelection=selected;
@@ -2223,17 +2241,17 @@ private extension RemoteControlServer {
           if(error.status===401){refreshRequested=false;pair(true)}}}
       })().finally(()=>{refreshTask=null;scheduleRefresh();scheduleUIReload()});return refreshTask}
     async function loadOlderMessages(automatically=false){const current=historyCache.get(selected),before=current?.messages[0]?.id;if(loadingHistory||!current?.hasOlderMessages||!before||(automatically&&!canAutomaticallyLoadHistory(current)))return;
-      const requestToken=token,orderRevision=tabOrderRevision;loadingHistory=true;updateHistoryControls(current);
+      const requestToken=token,orderRevision=tabOrderRevision;let loaded=false;loadingHistory=true;updateHistoryControls(current);
       try{const data=await api(`/api/v1/sessions/${current.id}?before=${encodeURIComponent(before)}`),latest=historyCache.get(current.id);
         if(token!==requestToken||selected!==current.id||orderRevision!==tabOrderRevision||latest?.historyStartID!==data.session.historyStartID||latest?.messages[0]?.id!==before)return;
         const ids=new Set(latest.messages.map(m=>m.id)),page=data.session,received=page.messages.filter(m=>!ids.has(m.id));
         if(!received.length&&page.hasOlderMessages!==false)throw Error("Invalid history page");
-        const added=automatically?historySuffix(received,automaticHistoryRemaining.get(current.id)||0):received;
-        automaticHistoryRemaining.set(current.id,automatically?Math.max(0,(automaticHistoryRemaining.get(current.id)||0)-Math.max(1,added.filter(m=>m.role==="user").length)):0);expandedHistory.add(current.id);
-        render(cacheSession({...latest,messages:[...added,...latest.messages],hasOlderMessages:added.length<received.length||page.hasOlderMessages===true},false),true);$("historyError").textContent=""}
-      catch(error){if(token===requestToken&&selected===current.id){automaticHistoryRemaining.set(current.id,0);$("historyError").textContent=`Could not load older messages: ${error.message}. Try again.`}}
-      finally{loadingHistory=false;updateHistoryControls(historyCache.get(selected))}}
+        historyPaused.delete(current.id);expandedHistory.add(current.id);
+        render(cacheSession({...latest,messages:[...received,...latest.messages],hasOlderMessages:page.hasOlderMessages===true},false),true);$("historyError").textContent="";loaded=true}
+      catch(error){if(token===requestToken&&selected===current.id)historyPaused.set(current.id,`Couldn't load older messages: ${error.message}`)}
+      finally{loadingHistory=false;updateHistoryControls(historyCache.get(selected));if(loaded)continueHistoryReading(current.id)}}
     $("olderMessages").onclick=()=>loadOlderMessages();
+    $("olderHistoryReader").onclick=()=>loadOlderMessages();$("olderHistoryReader").onfocus=()=>loadOlderMessages(true);
     document.addEventListener("visibilitychange",()=>{if(document.hidden){if(timer)clearTimeout(timer);timer=null}else if(token)refresh()});
     function renderSessions(items){const nav=$("sessions"),previousLeft=nav.scrollLeft,previousTop=nav.scrollTop,selectionChanged=nav.dataset.selected!==(selected||"");
       if(draggedTabID||movingTab)return;sessionItems=items;
@@ -2705,7 +2723,7 @@ private extension RemoteControlServer {
     function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight;
       $("inputBanner").classList.toggle("hidden",!session?.pendingInputs?.some(r=>r.kind==="secret"));$("inputBanner").textContent="Enter password securely";
       renderProgress(session);updateHistoryControls(session);const liveBox=$("messages"),box=document.createElement("div"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
-      const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession);renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
+      const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession);renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;if(!sameSession)historyReading=false;$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
       const pinned=[];if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{if(session.isLocalPrivate){const notice=document.createElement("p");notice.className="muted";notice.textContent="Private Local - saved on the Mac and available remotely. Self-hosted models; no cloud fallback. Configure the server in the tab menu.";box.append(notice)}
         for(const message of session.messages){const subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id)),activities=(message.activities||[]).filter(activity=>!subagentIDs.has(activity.id)),apps=message.apps||[],settled=subagents.filter(agent=>!subagentActive(agent));for(const agent of subagents)if(subagentActive(agent))pinned.push([agent,message.id]);for(const app of apps)box.append(mcpAppSlot(session.id,app));
@@ -2720,11 +2738,11 @@ private extension RemoteControlServer {
         if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}
         if(!sidebarLayout&&(session.isStreaming||session.queuedCount)){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
       mcpReconcile(liveBox,box);pruneMacImages();renderPinnedSubagents(sessionID,pinned);
-      requestAnimationFrame(()=>{root.scrollTop=shouldFollow?root.scrollHeight:Math.min(previousTop+(prepend?root.scrollHeight-previousHeight:0),Math.max(0,root.scrollHeight-root.clientHeight));followOutput=shouldFollow;suppressScroll=false})}
+      requestAnimationFrame(()=>{positionConversation(shouldFollow?root.scrollHeight:Math.min(previousTop+(prepend?root.scrollHeight-previousHeight:0),Math.max(0,root.scrollHeight-root.clientHeight)));followOutput=shouldFollow;suppressScroll=false})}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
     async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selectTab(data.session.id);renderedPayload="";await refresh()}
       catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
-    $("pairButton").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();historyCache.clear();clearMacImages();expandedHistory.clear();automaticHistoryRemaining.clear();tabDrafts.clear();selected=null;$("draft").value="";token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
+    $("pairButton").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();historyCache.clear();clearMacImages();expandedHistory.clear();historyPaused.clear();tabDrafts.clear();selected=null;$("draft").value="";token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
       catch(error){$("pairError").textContent=error.message}};
     $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;const sessionID=selected,requestToken=token,mode=$("mode").value,body={text,mode};
       if(mode==="auto"&&chatInputReply?.sessionID===sessionID&&chatInputReply.token===requestToken)body.inputRequestID=chatInputReply.id;
