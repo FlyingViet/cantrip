@@ -6,6 +6,41 @@ enum CantripHomeGuardrail: String {
     case attended, unattended
 }
 
+/// The approval setting the user chose in Cantrip for the backend running Home. Cantrip's blocked
+/// list is checked first under every mode; the mode only decides what happens to the rest.
+enum CantripHomeApproval: String {
+    /// "Act on my behalf" (or Claude's "Allow everything"): anything Cantrip doesn't block runs,
+    /// including outbound actions an unattended run would otherwise pause for.
+    case automatic
+    /// Claude's "Allow file edits": edits run; everything else follows `.ask`.
+    case fileEdits
+    /// Tools ask first, and unattended runs pause before outbound or irreversible actions.
+    case ask
+
+    /// The mode the user picked for `backend`. Local models keep Cantrip's own pauses; Codex and
+    /// Copilot Remote run commands Cantrip never sees, so their modes can't be honored safely.
+    static func chosen(for backend: BackendKind, settings: AppSettings) -> Self {
+        switch backend {
+        case .copilot:
+            return settings.allowActions ? .automatic : .ask
+        case .claudeCode:
+            if settings.allowActions || settings.claudePermissionMode == "bypassPermissions" { return .automatic }
+            return settings.claudePermissionMode == "acceptEdits" ? .fileEdits : .ask
+        case .copilotRemote, .codex, .localModel:
+            return .ask
+        }
+    }
+
+    /// Whether an action Cantrip allowed runs without the backend's usual per-tool prompt.
+    func runsWithoutAsking(_ request: CantripHomeActionRequest) -> Bool {
+        switch self {
+        case .automatic: return true
+        case .fileEdits: return request.kind == .write || request.kind == .read
+        case .ask: return request.kind == .read
+        }
+    }
+}
+
 /// Backends that run tools for a Home session consult the same host policy before each one.
 protocol CantripHomeGuardedBackend: AnyObject {
     var guardrail: CantripHomeGuardrail? { get set }
@@ -87,13 +122,20 @@ struct CantripHomeActionDecision: Equatable {
     var detail = ""
     /// Approving an action lets the identical action repeat in the same turn without asking.
     var scope = ""
+    /// Allowed only because the backend's approval mode is automatic; an unattended run on a
+    /// stricter mode would have paused for the user.
+    var automatic = false
+    /// Asked because Cantrip can't check the action against its blocked list (for example a delete
+    /// whose target is a variable), so automatic approval never covers it.
+    var unverifiable = false
 
     static let allow = Self(verdict: .allow)
 }
 
 /// Host-enforced safety rules for Cantrip Home, independent of which model or CLI runs it.
-/// Catastrophic actions are always refused. In unattended runs, outbound or irreversible
-/// actions wait for the user's approval; in the attended Home chat they run as asked.
+/// Catastrophic actions are always refused, whatever the approval mode. In unattended runs,
+/// outbound or irreversible actions wait for the user's approval unless the backend is set to
+/// approve automatically; in the attended Home chat they run as asked.
 enum CantripHomeActionPolicy {
     struct Environment {
         var home: String
@@ -123,7 +165,7 @@ enum CantripHomeActionPolicy {
 
     static func evaluate(
         _ request: CantripHomeActionRequest, mode: CantripHomeGuardrail,
-        environment: Environment = .current()
+        approval: CantripHomeApproval = .ask, environment: Environment = .current()
     ) -> CantripHomeActionDecision {
         var findings: [CantripHomeActionDecision] = []
         switch request.kind {
@@ -158,6 +200,14 @@ enum CantripHomeActionPolicy {
         guard mode == .unattended, var asked = findings.first(where: { $0.verdict == .ask }) else {
             return .allow
         }
+        // Automatic approval covers actions Cantrip has checked, never ones it can't verify.
+        if approval == .automatic {
+            guard let unverifiable = findings.first(where: { $0.verdict == .ask && $0.unverifiable }) else {
+                return .init(verdict: .allow, action: asked.action, automatic: true)
+            }
+            asked = unverifiable
+            asked.reason += " Act on my behalf doesn't cover actions Cantrip can't check."
+        }
         let text = request.kind == .shell ? request.command
             : (request.paths + [request.server, request.tool].compactMap { $0 }).joined(separator: " ")
         asked.detail = """
@@ -183,8 +233,10 @@ enum CantripHomeActionPolicy {
                 + "tell the user it was blocked if it matters.")
     }
 
-    private static func ask(_ action: String, _ reason: String, scope: String) -> CantripHomeActionDecision {
-        .init(verdict: .ask, reason: reason, action: action, scope: scope)
+    private static func ask(
+        _ action: String, _ reason: String, scope: String, unverifiable: Bool = false
+    ) -> CantripHomeActionDecision {
+        .init(verdict: .ask, reason: reason, action: action, scope: scope, unverifiable: unverifiable)
     }
 
     private static let mutatingToolPattern =
@@ -495,12 +547,12 @@ enum CantripHomeActionPolicy {
             targets.append(arg)
         }
         guard !targets.isEmpty else {
-            return [ask("delete files", "Deleted files can't be recovered.", scope: "delete")]
+            return [ask("delete files", "Cantrip can't tell what this deletes.", scope: "delete", unverifiable: true)]
         }
         var resolved: [String] = []
         for target in targets {
             guard let path = resolve(target, environment) else {
-                return [ask("delete files", "Cantrip can't tell what this deletes.", scope: "delete")]
+                return [ask("delete files", "Cantrip can't tell what this deletes.", scope: "delete", unverifiable: true)]
             }
             resolved.append(path)
         }

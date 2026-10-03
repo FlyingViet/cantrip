@@ -388,11 +388,16 @@ enum CantripHomeProtocol {
 
     // MARK: - Rules
 
-    static func rules(unattended: Bool, checksActions: Bool = true) -> String {
-        let approvals = unattended
-            ? " In this unattended run, sending messages or email, pushing, deploying, deleting files "
+    static func rules(unattended: Bool, checksActions: Bool = true,
+                      approval: CantripHomeApproval = .ask) -> String {
+        let approvals = !unattended ? ""
+            : approval == .automatic
+            ? " The user set this backend to act on their behalf, so in this unattended run anything else, "
+                + "including sending messages or email, pushing, deploying and deleting files, runs without "
+                + "asking. Do only what the task calls for. Deletes Cantrip can't check (targets given as "
+                + "variables or command output) still wait for the user, so delete by literal path."
+            : " In this unattended run, sending messages or email, pushing, deploying, deleting files "
                 + "outside temporary folders and Artifacts, and system changes wait for the user's approval."
-            : ""
         let actions = checksActions
             ? """
             5. Cantrip checks commands before they run. It always blocks administrator commands, erasing \

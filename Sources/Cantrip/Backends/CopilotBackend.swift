@@ -337,15 +337,20 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             return reply(false, "Cantrip couldn't read this tool request, so it was not run.")
         }
         let mode = guardrail ?? .unattended
+        // The mode this turn started with ("Act on my behalf"), matching the bridge's own checks.
+        let approval: CantripHomeApproval = configuration?.autoApprove == true ? .automatic : .ask
         let decision = CantripHomeActionPolicy.evaluate(
-            request, mode: mode, environment: .current(workdir: configuration?.workdir ?? "")
+            request, mode: mode, approval: approval,
+            environment: .current(workdir: configuration?.workdir ?? "")
         )
-        let autoApprove = configuration?.autoApprove ?? true
         if decision.verdict == .deny {
             Log.write("home policy: denied \(request.kind.rawValue): \(request.command.prefix(160))")
             return reply(false, decision.reason)
         }
-        if decision.verdict == .allow, autoApprove || request.kind == .read {
+        if decision.verdict == .allow, approval.runsWithoutAsking(request) {
+            if decision.automatic {
+                Log.write("home policy: approved \(decision.action) automatically (Act on my behalf)")
+            }
             return reply(true)
         }
         if decision.verdict == .ask, approvedScopes.contains(decision.scope) { return reply(true) }
