@@ -264,6 +264,7 @@ struct CantripHomeBackgroundView: View {
             inputs: inputs,
             inputBusy: remote.isMutating,
             onAnswer: { request, value in await answer(run, request, value) },
+            remote: remote,
             isFocused: run.sessionID != nil && run.sessionID == remote.homeBackgroundFocus
         )
         .id(run.id)
@@ -387,6 +388,8 @@ struct CantripHomeBackgroundRunRow: View {
     var inputs: [CantripInputRequest] = []
     var inputBusy = false
     var onAnswer: ((CantripInputRequest, CantripInputAnswer) async -> Void)? = nil
+    /// Loads a question's Mac images through the run's own session.
+    var remote: CantripRemoteModel? = nil
     /// The run a notification or task pointed at.
     var isFocused = false
 
@@ -446,7 +449,8 @@ struct CantripHomeBackgroundRunRow: View {
             }
             if let onAnswer {
                 ForEach(inputs) { request in
-                    CantripInputCard(request: request, busy: inputBusy) { value in
+                    CantripInputCard(request: request, busy: inputBusy,
+                                     sessionID: run.sessionID, remote: remote) { value in
                         Task { await onAnswer(request, value) }
                     }
                     .accessibilityIdentifier("home.background.input")

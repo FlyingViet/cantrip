@@ -56,6 +56,111 @@ enum ChatPreviewLink {
     }
 }
 
+/// A Mac preview in a compact row, with the label it sat under.
+struct ChatPreviewTile: Identifiable, Equatable {
+    let image: ChatMessageImage
+    let caption: String
+    var id: String { image.id }
+}
+
+/// Markdown images on their own lines, outside code fences.
+enum ChatMarkdownImages {
+    private static let imageLine = try! NSRegularExpression(
+        pattern: #"^ {0,3}!\[[^\]\r\n]*\]\((<[^>\r\n]+>|[^()\r\n]+)\)[ \t]*\r?$"#
+    )
+
+    /// "**Before**\n![..](..)" is one paragraph, and MarkdownUI draws nothing for an image
+    /// inside text. A blank line between an image line and adjacent text makes it a block.
+    static func separatingBlocks(_ text: String) -> String {
+        guard text.contains("![") else { return text }
+        let lines = text.components(separatedBy: "\n")
+        let images = imageLineIndices(lines)
+        guard !images.isEmpty else { return text }
+        var output: [String] = []
+        output.reserveCapacity(lines.count + images.count * 2)
+        for (index, line) in lines.enumerated() {
+            if index > 0, images.contains(index) != images.contains(index - 1),
+               !isBlank(line), !isBlank(lines[index - 1]) {
+                output.append("")
+            }
+            output.append(line)
+        }
+        return output.joined(separator: "\n")
+    }
+
+    /// Takes standalone Mac previews out of `text`, in order, so a compact row can show them.
+    /// A bold or heading label right above an image ("**Light — before**") becomes its caption.
+    static func extractingPreviews(
+        _ text: String, images: [ChatMessageImage]
+    ) -> (text: String, previews: [ChatPreviewTile]) {
+        guard !images.isEmpty, text.contains("![") else { return (text, []) }
+        let lines = text.components(separatedBy: "\n")
+        var previews: [ChatPreviewTile] = []
+        var removed = Set<Int>()
+        for index in imageLineIndices(lines).sorted() {
+            let line = lines[index] as NSString
+            guard let match = imageLine.firstMatch(in: lines[index], range: NSRange(location: 0, length: line.length)),
+                  let source = ChatMessageImage.preview(
+                    for: URL(string: line.substring(with: match.range(at: 1))), images: images
+                  ) else { continue }
+            removed.insert(index)
+            var caption = source.altText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var above = index - 1
+            while above >= 0, isBlank(lines[above]) { above -= 1 }
+            if above >= 0, !removed.contains(above), let label = label(lines[above]) {
+                removed.insert(above)
+                caption = label
+            }
+            if !previews.contains(where: { $0.image.id == source.id }) {
+                previews.append(.init(image: source, caption: caption.isEmpty ? "Image" : caption))
+            }
+        }
+        let kept = lines.enumerated().filter { !removed.contains($0.offset) }.map(\.element)
+        return (kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), previews)
+    }
+
+    private static let labelLine = try! NSRegularExpression(
+        pattern: #"^ {0,3}(?:#{1,6}[ \t]+(.+?)[ \t]*#*|\*\*([^*]+)\*\*|__([^_]+)__)[ \t]*\r?$"#
+    )
+
+    /// The text of a line that is only a bold phrase or a heading.
+    private static func label(_ line: String) -> String? {
+        let string = line as NSString
+        guard let match = labelLine.firstMatch(in: line, range: NSRange(location: 0, length: string.length)) else {
+            return nil
+        }
+        for group in 1...3 where match.range(at: group).location != NSNotFound {
+            var text = string.substring(with: match.range(at: group)).trimmingCharacters(in: .whitespaces)
+            if text.hasSuffix(":") { text.removeLast() }
+            return text.isEmpty ? nil : text
+        }
+        return nil
+    }
+
+    private static func imageLineIndices(_ lines: [String]) -> Set<Int> {
+        var fence: (Character, Int)?
+        var indices = Set<Int>()
+        for (index, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let active = fence {
+                if trimmed.prefix(while: { $0 == active.0 }).count >= active.1,
+                   trimmed.allSatisfy({ $0 == active.0 || $0.isWhitespace }) { fence = nil }
+                continue
+            }
+            if let first = trimmed.first, first == "`" || first == "~" {
+                let count = trimmed.prefix(while: { $0 == first }).count
+                if count >= 3 { fence = (first, count); continue }
+            }
+            guard line.contains("![") else { continue }
+            let range = NSRange(location: 0, length: (line as NSString).length)
+            if imageLine.firstMatch(in: line, range: range) != nil { indices.insert(index) }
+        }
+        return indices
+    }
+
+    private static func isBlank(_ line: String) -> Bool { line.allSatisfy(\.isWhitespace) }
+}
+
 struct ChatAssistantText: View {
     let text: String
     let images: [ChatMessageImage]
@@ -63,7 +168,7 @@ struct ChatAssistantText: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        Markdown(text)
+        Markdown(ChatMarkdownImages.separatingBlocks(text))
             .markdownImageProvider(ChatPreviewImageProvider(images: images, remote: remote))
             .textSelection(.enabled)
             .environment(\.openURL, OpenURLAction { url in
