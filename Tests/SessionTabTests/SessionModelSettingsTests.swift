@@ -160,6 +160,7 @@ extension SessionTabTests {
         export class CopilotClient {
           async start() {} async stop() {} async forceStop() {}
           async createSession(config) { return {
+            sessionId:'3f2c1e8a-5b7d-4c9e-8a1f-0d2b4c6e8f10',
             async abort() {}, async destroy() {},
             async send(options) {
               config.onEvent({type:'session.idle',agentId:'child',data:{}});
@@ -189,8 +190,14 @@ extension SessionTabTests {
         let allowed = try JSONSerialization.jsonObject(with: Data(chat.messages.last!.text.utf8)) as! [String: Any]
         precondition(allowed["excluded"] is NSNull, "Allowed subagents keep their tools")
         precondition(allowed["mode"] as? String == "append"
-                     && allowed["guidance"] as? String == CopilotBackend.subagentGuidance,
-                     "Subagent guidance belongs in the appended system message")
+                     && allowed["guidance"] as? String
+                        == CopilotBackend.previewGuidance + "\n\n" + CopilotBackend.subagentGuidance,
+                     "Preview and subagent guidance belong in the appended system message")
+        try await waitForJournalTest { !SessionOutputFolders.shared.roots(for: chat.id).isEmpty }
+        precondition(SessionOutputFolders.shared.roots(for: chat.id).map(\.path) == [
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".copilot/session-state/3f2c1e8a-5b7d-4c9e-8a1f-0d2b4c6e8f10/files").path
+        ], "The tab records the CLI session whose files folder it may preview")
         precondition(allowed["childStreaming"] as? Bool == false, "Subagent deltas are not streamed to Cantrip")
         precondition((allowed["prompt"] as? String)?.contains("avoid spawning subagents") == false,
                      "Prompts must not carry a per-turn subagent suffix")
@@ -201,7 +208,8 @@ extension SessionTabTests {
         let disabled = try JSONSerialization.jsonObject(with: Data(chat.messages.last!.text.utf8)) as! [String: Any]
         precondition(disabled["excluded"] as? [String] == ["task", "read_agent", "write_agent", "list_agents"],
                      "Disabling subagents removes their tools")
-        precondition(disabled["guidance"] as? String == "", "Disabled subagents get no delegation guidance")
+        precondition(disabled["guidance"] as? String == CopilotBackend.previewGuidance,
+                     "Disabled subagents get no delegation guidance")
         precondition((disabled["prompt"] as? String)?.contains("Allowed subagents fixture") == true,
                      "Changing the subagent setting must carry recent conversation context")
     }

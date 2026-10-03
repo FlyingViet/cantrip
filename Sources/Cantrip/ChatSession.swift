@@ -360,6 +360,17 @@ final class ChatSession: ObservableObject {
         applyModelSelection()
         restoreDurableState()
         if isLocalPrivate, !FileManager.default.fileExists(atPath: transcriptURL.path) { persistTranscript() }
+        // Remote previews may read only this session's own agent files folders.
+        if let copilot = copilotBackend as? CopilotBackend {
+            copilot.onAgentSession = { [weak self] cliSessionID in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self, !self.isPrivate, !self.isLocalPrivate else { return }
+                        SessionOutputFolders.shared.record(cliSessionID, for: self.id)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Transcript persistence (survives app restarts)
@@ -384,6 +395,7 @@ final class ChatSession: ObservableObject {
 
     func deleteTranscript() {
         SessionTabMetadata.remove(id: id)
+        SessionOutputFolders.shared.remove(id)
         try? FileManager.default.removeItem(at: transcriptURL)
         do {
             try journal?.remove()

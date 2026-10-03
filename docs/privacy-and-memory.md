@@ -120,6 +120,7 @@ Back up notes before manually removing or rewriting them.
 | `~/.cache/Cantrip/` | Session/cache artifacts, including local image captures |
 | `~/.cache/Cantrip/runs/` | Durable journals for non-private runs |
 | `~/.cache/Cantrip/remote-attachments/` | Retained images uploaded by Remote clients |
+| `~/.cache/Cantrip/session-output-folders.json` | Which Copilot CLI session folders each tab may preview images from |
 | `~/Library/Logs/Cantrip.log` | Diagnostic log |
 | macOS Keychain | Remote host/client pairing credentials |
 
