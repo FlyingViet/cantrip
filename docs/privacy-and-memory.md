@@ -18,6 +18,13 @@ access to your user account, not merely unlocking better answers.
 4. Specify limits in the request and review the resulting changes.
 5. Turn the option off when you no longer need unattended actions.
 
+Cantrip Home and its scheduled tasks follow the same choice on Copilot and
+Claude Code: with **Act on my behalf** on (or Claude's **Allow everything**),
+background runs approve tools and commands without pausing for you. Cantrip
+still refuses its blocked commands (administrator commands, erasing disks or
+the home folder, piping downloads into a shell, stopping Cantrip, and writing
+Home's own state) under every setting. Local models keep Home's approval pauses.
+
 Turning off that one switch is not a universal lock:
 Claude's **Permissions** may independently allow edits/everything, and
 Copilot's **Allow all tools** also grants unattended tool use. For

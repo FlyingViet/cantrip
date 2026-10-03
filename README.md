@@ -185,10 +185,16 @@ The macOS app includes:
   Before each tool runs in Home (Copilot, Claude Code or a local
   OpenAI-compatible model), Cantrip blocks catastrophic commands: administrator
   commands, erasing disks or the home folder, piping downloads into a shell,
-  stopping Cantrip, and writing Home's own state files. In unattended background
-  runs, sending messages or email, pushing, deploying, deleting files outside
-  temporary folders and Artifacts, and system changes wait for approval through a
-  push-notified input request; unanswered after 10 minutes, the step is skipped.
+  stopping Cantrip, and writing Home's own state files, under every approval
+  mode. Otherwise Home follows the approval mode chosen for its backend: with
+  **Act on my behalf** on (or Claude's **Allow everything**), Copilot and Claude
+  Code runs, including scheduled tasks and incident investigations, approve tools
+  and commands automatically. With a stricter mode, tools ask as usual, and in
+  unattended background runs sending messages or email, pushing, deploying,
+  deleting files outside temporary folders and Artifacts, and system changes wait
+  for approval through a push-notified input request; unanswered after 10
+  minutes, the step is skipped. Local models keep these pauses whatever the
+  setting. Questions the agent asks you always reach you.
   Background runs can't create or change tasks. Codex and Copilot Remote (ACP) can
   run commands Cantrip never sees, so on them background runs fail closed with an
   explanation and the Home chat follows the rules on its own.

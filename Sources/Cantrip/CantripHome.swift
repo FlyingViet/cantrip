@@ -1864,7 +1864,8 @@ extension ChatSession {
         return """
 
         \(opening)
-        \(CantripHomeProtocol.rules(unattended: isCantripHomeBackground, checksActions: cantripHomeChecksActions))
+        \(CantripHomeProtocol.rules(unattended: isCantripHomeBackground, checksActions: cantripHomeChecksActions,
+                                    approval: cantripHomeApproval))
 
         If and only if the user explicitly asks to create a reminder, monitor, recurring check,
         scheduled job, or structured tracker, gather any missing details conversationally. Once

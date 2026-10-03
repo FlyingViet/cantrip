@@ -5,6 +5,7 @@ extension SessionTabTests {
     @MainActor
     static func testCantripHomeGuardrails() async throws {
         testCantripHomeActionPolicy()
+        testCantripHomeApprovalModes()
         try testCantripHomeBlockProtocol()
         try await testCantripHomeCorrection()
         try await testCantripHomeBridgePolicy()
@@ -22,9 +23,10 @@ extension SessionTabTests {
             cacheRoot: home + "/.cache/Cantrip"
         )
         func decide(
-            _ request: CantripHomeActionRequest, _ mode: CantripHomeGuardrail = .unattended
+            _ request: CantripHomeActionRequest, _ mode: CantripHomeGuardrail = .unattended,
+            approval: CantripHomeApproval = .ask
         ) -> CantripHomeActionDecision {
-            CantripHomeActionPolicy.evaluate(request, mode: mode, environment: environment)
+            CantripHomeActionPolicy.evaluate(request, mode: mode, approval: approval, environment: environment)
         }
         func verdict(_ command: String, _ mode: CantripHomeGuardrail = .unattended) -> CantripHomeActionDecision.Verdict {
             decide(.shell(command), mode).verdict
@@ -55,6 +57,11 @@ extension SessionTabTests {
         for command in alwaysBlocked {
             precondition(verdict(command) == .deny && verdict(command, .attended) == .deny,
                          "Catastrophic commands are always blocked: \(command)")
+            for approval in [CantripHomeApproval.automatic, .fileEdits] {
+                precondition(decide(.shell(command), approval: approval).verdict == .deny
+                             && decide(.shell(command), .attended, approval: approval).verdict == .deny,
+                             "No approval mode bypasses the blocked list (\(approval)): \(command)")
+            }
         }
         let askedWhenUnattended = [
             "~/Coding/Cantrip/Scripts/messages-send '+15551234567' 'On my way'",
@@ -73,6 +80,24 @@ extension SessionTabTests {
         for command in askedWhenUnattended {
             precondition(verdict(command) == .ask, "Unattended runs ask first: \(command)")
             precondition(verdict(command, .attended) == .allow, "The Home chat runs it as asked: \(command)")
+            precondition(decide(.shell(command), approval: .fileEdits).verdict == .ask,
+                         "Allowing file edits doesn't extend to outbound actions: \(command)")
+        }
+        // Deletes Cantrip can't resolve might be on the blocked list, so no mode approves them.
+        let unverifiable = [
+            "rm -f \"$SOME_FILE\"", "xargs rm < list.txt", "rm -rf /Users/$USER", "rm -rf ${HOME:?}",
+            "rm -rf \"$(echo ~)\"", "rm -rf `pwd`/..", "find /Users/$USER -delete", "rm -rf ~otheruser",
+        ]
+        for command in unverifiable {
+            let automatic = decide(.shell(command), approval: .automatic)
+            precondition(automatic.verdict == .ask && automatic.unverifiable && !automatic.automatic
+                         && automatic.detail.contains("can't check"),
+                         "Automatic approval never covers a delete Cantrip can't check: \(command)")
+        }
+        for command in askedWhenUnattended where !unverifiable.contains(command) {
+            let automatic = decide(.shell(command), approval: .automatic)
+            precondition(automatic.verdict == .allow && automatic.automatic && !automatic.action.isEmpty,
+                         "A backend set to act on the user's behalf runs it without pausing: \(command)")
         }
         let ordinary = [
             "ls -la ~/Coding", "rm -f /tmp/cantrip-trip-pending.json", "rm -rf /tmp/build-123",
@@ -129,6 +154,25 @@ extension SessionTabTests {
                      && CopilotACPBackend.homeAction(["kind": "other", "title": "slack-send_message"])
                         .map { decide($0).verdict } == .ask,
                      "Copilot Remote (ACP) tool calls map onto the same policy")
+        precondition(decide(send, approval: .automatic).verdict == .allow
+                     && decide(.write(home + "/.cache/Cantrip/home/tasks.json"), approval: .automatic).verdict == .deny
+                     && !decide(.shell("ls"), approval: .automatic).automatic,
+                     "Automatic approval covers MCP sends but never Home's own state")
+        let push = CantripHomeActionRequest.shell("git push")
+        precondition(CantripHomeApproval.automatic.runsWithoutAsking(push)
+                     && !CantripHomeApproval.fileEdits.runsWithoutAsking(push)
+                     && CantripHomeApproval.fileEdits.runsWithoutAsking(.write(home + "/Coding/x.swift"))
+                     && !CantripHomeApproval.ask.runsWithoutAsking(push)
+                     && CantripHomeApproval.ask.runsWithoutAsking(.init(kind: .read)),
+                     "Each mode decides which allowed actions skip the backend's per-tool prompt")
+        let rulesAuto = CantripHomeProtocol.rules(unattended: true, approval: .automatic)
+        let rulesAsk = CantripHomeProtocol.rules(unattended: true)
+        precondition(rulesAuto.contains("act on their behalf") && rulesAuto.contains("always blocks")
+                     && rulesAuto.contains("delete by literal path")
+                     && !rulesAuto.contains("wait for the user's approval")
+                     && rulesAsk.contains("wait for the user's approval")
+                     && !CantripHomeProtocol.rules(unattended: false, approval: .automatic).contains("act on their behalf"),
+                     "Home's rules describe the approval mode its backend actually uses")
         let asked = decide(.shell("git push origin main"))
         let denied = decide(.shell("sudo ls"))
         precondition(asked.action == "push to a git remote" && asked.detail.contains("git push origin main")
@@ -431,6 +475,37 @@ extension SessionTabTests {
         CantripHomeDelegations.shared.refresh()
     }
 
+    /// Home follows the approval mode chosen for each non-local backend; local models, Codex and
+    /// Copilot Remote keep Cantrip's own pauses.
+    @MainActor
+    static func testCantripHomeApprovalModes() {
+        let settings = AppSettings.shared
+        let saved = (settings.allowActions, settings.claudePermissionMode, settings.backend)
+        defer { (settings.allowActions, settings.claudePermissionMode, settings.backend) = saved }
+        func mode(_ backend: BackendKind) -> CantripHomeApproval { .chosen(for: backend, settings: settings) }
+        settings.allowActions = true
+        settings.claudePermissionMode = "default"
+        precondition(mode(.copilot) == .automatic && mode(.claudeCode) == .automatic,
+                     "Act on my behalf makes Copilot and Claude Code approve automatically")
+        precondition(mode(.localModel) == .ask && mode(.codex) == .ask && mode(.copilotRemote) == .ask,
+                     "Local models and backends Cantrip can't check keep Cantrip's pauses")
+        settings.allowActions = false
+        precondition(mode(.copilot) == .ask && mode(.claudeCode) == .ask, "Stricter modes still ask")
+        settings.claudePermissionMode = "acceptEdits"
+        precondition(mode(.claudeCode) == .fileEdits, "Claude's Allow file edits is honored")
+        settings.claudePermissionMode = "bypassPermissions"
+        precondition(mode(.claudeCode) == .automatic && mode(.copilot) == .ask,
+                     "Claude's Allow everything is honored for Claude only")
+        settings.backend = .claudeCode
+        let run = ChatSession(cantripHomeRun: true, makeJournal: {
+            try RunJournal(sessionID: $0, directory: CantripHomeStore.runsDirectory)
+        })
+        defer { run.cancel() }
+        precondition(run.cantripHomeApproval == .automatic, "A Home run reports its backend's chosen mode")
+        settings.backend = .localModel
+        precondition(run.cantripHomeApproval == .ask)
+    }
+
     @MainActor
     static func testCantripHomeBridgePolicy() async throws {
         let settings = AppSettings.shared
@@ -461,33 +536,56 @@ extension SessionTabTests {
             of: CopilotRuntime.discoveryScript,
             with: "function resolveCopilotRuntime(){return {sdk:'\(url)',runtime:'fixture'}}"
         )
-        let run = ChatSession(copilotBackend: CopilotBackend(bridgeScript: script), cantripHomeRun: true,
-                              makeJournal: { try RunJournal(sessionID: $0, directory: CantripHomeStore.runsDirectory) })
-        defer { run.cancel() }
-        run.submitCantripHomeTask(id: UUID(), title: "Bridge probe", scheduleSummary: "Daily",
-                                  prompt: "Probe the bridge policy.")
-        try await waitForJournalTest { !run.pendingInputs.isEmpty }
-        let approval = run.pendingInputs[0]
-        precondition(approval.kind == .approval && approval.source == "Cantrip Home"
-                     && approval.title == "Bridge probe wants to push to a git remote"
-                     && approval.detail.contains("git push origin main"),
-                     "Unattended pushes wait for the user: \(approval)")
-        try run.respondToInput(id: approval.id, answer: .init(decision: .approve))
-        try await waitForJournalTest { !run.isStreaming }
-        let lines = (run.messages.last { $0.role == .assistant }?.text ?? "").components(separatedBy: "\n")
-        precondition(lines.count == 5
-                     && lines[0].hasPrefix("reject:Blocked by Cantrip Home's safety policy:")
-                     && lines[1] == "approve-once" && lines[2] == "approve-once"
-                     && lines[3] == "approve-once" && lines[4] == "approve-once"
-                     && run.pendingInputs.isEmpty,
-                     "The bridge enforces the host policy and remembers an approval within the turn: \(lines)")
+        /// Runs one Home background task through the real bridge, approving every prompt it raises.
+        func probe() async throws -> (lines: [String], prompts: [String]) {
+            let run = ChatSession(copilotBackend: CopilotBackend(bridgeScript: script), cantripHomeRun: true,
+                                  makeJournal: { try RunJournal(sessionID: $0, directory: CantripHomeStore.runsDirectory) })
+            defer { run.cancel() }
+            run.submitCantripHomeTask(id: UUID(), title: "Bridge probe", scheduleSummary: "Daily",
+                                      prompt: "Probe the bridge policy.")
+            var prompts: [String] = []
+            while true {
+                try await waitForJournalTest { !run.pendingInputs.isEmpty || !run.isStreaming }
+                guard let prompt = run.pendingInputs.first else { break }
+                precondition(prompt.kind == .approval, "Only permission prompts are expected: \(prompt)")
+                prompts.append(prompt.title + "\n" + prompt.detail)
+                try run.respondToInput(id: prompt.id, answer: .init(decision: .approve))
+            }
+            let text = run.messages.last { $0.role == .assistant }?.text ?? ""
+            return (text.components(separatedBy: "\n"), prompts)
+        }
+
+        // Act on my behalf: the run approves everything Cantrip allows, with no prompt at all.
+        let automatic = try await probe()
+        precondition(automatic.prompts.isEmpty
+                     && automatic.lines.count == 5
+                     && automatic.lines[0].hasPrefix("reject:Blocked by Cantrip Home's safety policy:")
+                     && automatic.lines[1...].allSatisfy { $0 == "approve-once" },
+                     "Under Auto a background run completes without prompts, but sudo is still refused: \(automatic)")
+
+        // A stricter mode (tools allowed, approval per tool) prompts exactly as before.
+        settings.allowActions = false
+        let strict = try await probe()
+        precondition(strict.prompts.count == 2
+                     && strict.prompts[0].hasPrefix("Bridge probe wants to push to a git remote")
+                     && strict.prompts[0].contains("git push origin main")
+                     && strict.prompts[1].hasPrefix("Allow shell?") && strict.prompts[1].contains("ls -la"),
+                     "Unattended pushes wait for the user and other tools ask per tool: \(strict.prompts)")
+        precondition(strict.lines.count == 5
+                     && strict.lines[0].hasPrefix("reject:Blocked by Cantrip Home's safety policy:")
+                     && strict.lines[1...].allSatisfy { $0 == "approve-once" },
+                     "The bridge enforces the host policy and remembers an approval within the turn: \(strict.lines)")
     }
 
     @MainActor
     static func testCantripHomeClaudeHook() async throws {
         let settings = AppSettings.shared
-        let saved = (settings.claudePath, settings.allowActions, settings.backend, settings.memoryEnabled)
-        defer { (settings.claudePath, settings.allowActions, settings.backend, settings.memoryEnabled) = saved }
+        let saved = (settings.claudePath, settings.allowActions, settings.claudePermissionMode,
+                     settings.backend, settings.memoryEnabled)
+        defer {
+            (settings.claudePath, settings.allowActions, settings.claudePermissionMode,
+             settings.backend, settings.memoryEnabled) = saved
+        }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("claude-hook-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -500,6 +598,7 @@ extension SessionTabTests {
         if(args.includes('bypassPermissions')||!args.includes('--permission-mode default'))process.exit(4);
         const calls=[['Bash',{command:'sudo ls'}],['Bash',{command:'git push origin main'}],['Read',{file_path:'/tmp/x'}],['Bash',{command:'ls -la'}]];
         const next=()=>{const call=calls[results.length];
+          if(results.length===calls.length){emit({type:'control_request',request_id:'perm-ls',request:{subtype:'can_use_tool',tool_name:'Bash',input:{command:'ls -la'}}});return;}
           if(!call){emit({type:'stream_event',event:{type:'content_block_delta',delta:{type:'text_delta',text:results.join(',')}}});emit({type:'result',is_error:false});return;}
           emit({type:'control_request',request_id:'hook-'+results.length,request:{subtype:'hook_callback',callback_id:hooked,
             input:{hook_event_name:'PreToolUse',tool_name:call[0],tool_input:call[1]},tool_use_id:'tool-'+results.length}});};
@@ -513,31 +612,53 @@ extension SessionTabTests {
           } else if(value.type==='user'){ if(!hooked)process.exit(6); next(); }
           else if(value.type==='control_response'){
             const out=value.response.response;
-            results.push(out.hookSpecificOutput?out.hookSpecificOutput.permissionDecision:(out.continue?'continue':'?'));
+            results.push(out.behavior?'tool:'+out.behavior:out.hookSpecificOutput?out.hookSpecificOutput.permissionDecision:(out.continue?'continue':'?'));
             next();
           }
         });
         """#.utf8).write(to: script)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
         settings.claudePath = script.path
-        settings.allowActions = true
         settings.backend = .claudeCode
         settings.memoryEnabled = false
-        let run = ChatSession(cantripHomeRun: true, makeJournal: {
-            try RunJournal(sessionID: $0, directory: CantripHomeStore.runsDirectory)
-        })
-        defer { run.cancel() }
-        run.submitCantripHomeTask(id: UUID(), title: "Claude probe", scheduleSummary: "Daily",
-                                  prompt: "Probe the Claude hook.")
-        try await waitForJournalTest { !run.pendingInputs.isEmpty || !run.isStreaming }
-        let approval = try requireHome(run.pendingInputs.first)
-        precondition(approval.title == "Claude probe wants to push to a git remote",
-                     "Claude's PreToolUse hook asks before an unattended push: \(approval)")
-        try run.respondToInput(id: approval.id, answer: .init(decision: .approve))
-        try await waitForJournalTest { !run.isStreaming }
-        let text = run.messages.last { $0.role == .assistant }?.text ?? ""
-        precondition(text == "deny,allow,continue,continue",
-                     "The hook runs before Claude's own allow rules and leaves other tools alone: \(text)")
+        /// One Home background run through the fixture, approving every prompt it raises.
+        func probe() async throws -> (text: String, prompts: [String]) {
+            let run = ChatSession(cantripHomeRun: true, makeJournal: {
+                try RunJournal(sessionID: $0, directory: CantripHomeStore.runsDirectory)
+            })
+            defer { run.cancel() }
+            run.submitCantripHomeTask(id: UUID(), title: "Claude probe", scheduleSummary: "Daily",
+                                      prompt: "Probe the Claude hook.")
+            var prompts: [String] = []
+            while true {
+                try await waitForJournalTest { !run.pendingInputs.isEmpty || !run.isStreaming }
+                guard let prompt = run.pendingInputs.first else { break }
+                prompts.append(prompt.title)
+                try run.respondToInput(id: prompt.id, answer: .init(decision: .approve))
+            }
+            return (run.messages.last { $0.role == .assistant }?.text ?? "", prompts)
+        }
+
+        // Act on my behalf, and separately Claude's own "Allow everything": no prompts, sudo still
+        // refused, and Home still launches Claude in default mode (the fixture exits otherwise).
+        settings.claudePermissionMode = "default"
+        for (allowActions, permissionMode) in [(true, "default"), (false, "bypassPermissions")] {
+            settings.allowActions = allowActions
+            settings.claudePermissionMode = permissionMode
+            let automatic = try await probe()
+            precondition(automatic.prompts.isEmpty && automatic.text == "deny,continue,continue,continue,tool:allow",
+                         "Claude set to act on its own approves without prompts (\(permissionMode)): \(automatic)")
+        }
+
+        // Safe (default) mode prompts as before: the hook asks before the push, then Claude's
+        // permission request for another tool asks per tool.
+        settings.allowActions = false
+        settings.claudePermissionMode = "default"
+        let strict = try await probe()
+        precondition(strict.prompts == ["Claude probe wants to push to a git remote", "Allow Bash?"],
+                     "Claude's PreToolUse hook asks before an unattended push: \(strict.prompts)")
+        precondition(strict.text == "deny,allow,continue,continue,tool:allow",
+                     "The hook runs before Claude's own allow rules and leaves other tools alone: \(strict.text)")
     }
 
     @MainActor

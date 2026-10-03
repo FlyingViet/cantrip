@@ -256,6 +256,10 @@ final class ChatSession: ObservableObject {
     var cantripHomeChecksActions: Bool {
         ![.codex, .copilotRemote].contains(runningBackendKind ?? effectiveBackendKind)
     }
+    /// The approval mode the user chose for the backend running this Home session.
+    var cantripHomeApproval: CantripHomeApproval {
+        .chosen(for: runningBackendKind ?? effectiveBackendKind, settings: settings)
+    }
     var title: String {
         if isCantripHome { return "Cantrip Home" }
         if isCantripHomeBackground { return "Cantrip Home background" }

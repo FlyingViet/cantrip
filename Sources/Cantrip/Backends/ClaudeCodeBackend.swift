@@ -208,6 +208,10 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         }
     }
 
+    /// What the user chose for Claude in Cantrip ("Act on my behalf" or Permissions). Home always
+    /// launches Claude in default mode so every tool reaches Cantrip; the choice is applied here.
+    private var homeApproval: CantripHomeApproval { .chosen(for: .claudeCode, settings: settings) }
+
     /// Cantrip's PreToolUse hook. Hooks run before Claude Code's own permission rules, so a
     /// user's `Bash(*)` allow rule can't bypass the Home policy. Tools the policy doesn't
     /// cover get no decision and follow the normal flow (including AskUserQuestion).
@@ -231,10 +235,11 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             return
         }
         let decision = CantripHomeActionPolicy.evaluate(
-            action, mode: mode, environment: .current(workdir: processWorkdir)
+            action, mode: mode, approval: homeApproval, environment: .current(workdir: processWorkdir)
         )
         switch decision.verdict {
         case .allow:
+            // Claude's own deny rules still apply; the permission request then reaches Cantrip.
             sendControlResponse(id: id, response: undecided)
         case .deny:
             Log.write("home policy: denied \(tool): \(action.command.prefix(160))")
@@ -271,8 +276,9 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         tool: String, input: [String: Any], mode: CantripHomeGuardrail, id: String
     ) -> Bool {
         let request = CantripHomeActionRequest(claudeTool: tool, input: input)
+        let approval = homeApproval
         let decision = CantripHomeActionPolicy.evaluate(
-            request, mode: mode, environment: .current(workdir: processWorkdir)
+            request, mode: mode, approval: approval, environment: .current(workdir: processWorkdir)
         )
         switch decision.verdict {
         case .deny:
@@ -280,7 +286,10 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             sendControlResponse(id: id, response: ["behavior": "deny", "message": decision.reason])
             return true
         case .allow:
-            guard settings.allowActions else { return false }
+            guard approval.runsWithoutAsking(request) else { return false }
+            if decision.automatic {
+                Log.write("home policy: approved \(decision.action) automatically (Act on my behalf or Allow everything)")
+            }
             sendControlResponse(id: id, response: ["behavior": "allow", "updatedInput": input])
             return true
         case .ask:
