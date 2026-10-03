@@ -25,6 +25,8 @@ enum CantripHomeBackgroundStyle {
 /// Home's top-left action. Pulses and shows a count while anything is running.
 struct CantripHomeBackgroundButton: View {
     let activeCount: Int
+    /// Background-run requests waiting on the user.
+    var inputCount = 0
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -35,7 +37,15 @@ struct CantripHomeBackgroundButton: View {
                 .symbolEffect(.pulse, isActive: activeCount > 0 && !reduceMotion)
                 .frame(width: 44, height: 44)
                 .overlay(alignment: .topTrailing) {
-                    if activeCount > 0 {
+                    if inputCount > 0 {
+                        Image(systemName: "questionmark")
+                            .font(.caption2.weight(.heavy))
+                            .foregroundStyle(CantripHomeBackgroundStyle.badgeText)
+                            .frame(minWidth: 16, minHeight: 16)
+                            .background(CantripHomeBackgroundStyle.activeTint, in: Capsule())
+                            .offset(x: -1, y: 3)
+                            .accessibilityHidden(true)
+                    } else if activeCount > 0 {
                         Text(activeCount > 9 ? "9+" : "\(activeCount)")
                             .font(.caption2.weight(.bold))
                             .monospacedDigit()
@@ -50,7 +60,10 @@ struct CantripHomeBackgroundButton: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("Background")
-        .accessibilityValue(activeCount == 0 ? "Nothing running" : "\(activeCount) running")
+        .accessibilityValue(inputCount > 0
+            ? "\(inputCount) \(inputCount == 1 ? "needs" : "need") your input"
+                + (activeCount > 0 ? ", \(activeCount) running" : "")
+            : activeCount == 0 ? "Nothing running" : "\(activeCount) running")
         .accessibilityHint("Shows background tasks and scheduled runs")
         .accessibilityIdentifier("home.background")
     }
@@ -65,6 +78,9 @@ struct CantripHomeBackgroundView: View {
     var openTab: ((String) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var expanded: Set<UUID> = []
+    /// Requests answered here, hidden until the next list no longer has them.
+    @State private var answered: Set<UUID> = []
+    @State private var answerError: String?
 
     private var homeSessionID: String? {
         remote.selectedSession?.isCantripHome == true ? remote.selectedSessionID : nil
@@ -96,11 +112,16 @@ struct CantripHomeBackgroundView: View {
                         )
                     }
                 } else {
-                    ScrollView {
-                        content
-                            .padding()
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            content
+                                .padding()
+                        }
+                        .refreshable { await remote.refreshHomeBackground() }
+                        .onAppear { reveal(remote.homeBackgroundFocus, proxy) }
+                        .onChange(of: remote.homeBackgroundFocus) { _, focus in reveal(focus, proxy) }
+                        .onChange(of: snapshot?.runs.map(\.id)) { _, _ in reveal(remote.homeBackgroundFocus, proxy) }
                     }
-                    .refreshable { await remote.refreshHomeBackground() }
                 }
             }
             .navigationTitle("Background")
@@ -127,14 +148,64 @@ struct CantripHomeBackgroundView: View {
             .task {
                 while !Task.isCancelled {
                     await remote.refreshHomeBackground()
-                    try? await Task.sleep(for: .seconds(5))
+                    try? await Task.sleep(for: .seconds(needsInput.isEmpty ? 5 : 2))
                 }
             }
+            .onDisappear { remote.homeBackgroundFocus = nil }
         }
+    }
+
+    /// Running hidden runs waiting on the user, answered here rather than in their sessions.
+    private var needsInput: [CantripHomeBackgroundRun] {
+        (snapshot?.runs ?? []).filter { $0.needsInput && $0.sessionID != nil }
+    }
+
+    private func pendingInputs(_ run: CantripHomeBackgroundRun) -> [CantripInputRequest] {
+        (run.inputs ?? []).filter { !answered.contains($0.id) }
+    }
+
+    private func reveal(_ focus: String?, _ proxy: ScrollViewProxy) {
+        guard let focus, let run = snapshot?.runs.first(where: { $0.sessionID == focus }) else { return }
+        withAnimation(.snappy) { proxy.scrollTo(run.id, anchor: .top) }
+    }
+
+    private func answer(_ run: CantripHomeBackgroundRun, _ request: CantripInputRequest,
+                        _ answer: CantripInputAnswer) async {
+        guard let sessionID = run.sessionID else { return }
+        let accepted = await remote.respondToInput(
+            sessionID: sessionID, id: request.id, answer: answer, identity: remote.usageIdentity,
+            questionOnly: request.kind == "question"
+        )
+        if accepted {
+            answered.insert(request.id)
+            answerError = nil
+            let result = switch answer.decision {
+            case "approve": "Approved"
+            case "deny": "Denied"
+            case "cancel": "Skipped"
+            default: "Answered"
+            }
+            AccessibilityNotification.Announcement("\(result). \(run.label) continues.").post()
+        } else {
+            answerError = remote.errorMessage ?? "Your answer could not be delivered. Nothing was retried."
+        }
+        await remote.refreshHomeBackground()
     }
 
     @ViewBuilder private var content: some View {
         VStack(alignment: .leading, spacing: 20) {
+            if !needsInput.isEmpty {
+                section("Needs your input") {
+                    ForEach(needsInput) { run in
+                        runRow(run, inputs: pendingInputs(run))
+                    }
+                    if let answerError {
+                        Label(answerError, systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
             if let homeSessionID, !watchers.isEmpty {
                 section("In this chat") {
                     CantripSubagentStack(remote: remote, sessionID: homeSessionID, subagents: watchers)
@@ -150,23 +221,10 @@ struct CantripHomeBackgroundView: View {
                     }
                 }
             }
-            if let runs = snapshot?.runs, !runs.isEmpty {
+            if let runs = snapshot?.runs.filter({ run in !needsInput.contains { $0.id == run.id } }), !runs.isEmpty {
                 section("Scheduled and automated") {
                     ForEach(runs) { run in
-                        CantripHomeBackgroundRunRow(
-                            run: run,
-                            activity: run.isRunning ? snapshot?.activity : nil,
-                            isExpanded: Binding(
-                                get: { expanded.contains(run.id) },
-                                set: { if $0 { expanded.insert(run.id) } else { expanded.remove(run.id) } }
-                            ),
-                            onStop: canStop && run.canStop == true
-                                ? { await remote.stopHomeBackgroundRun(run.id) } : nil,
-                            onOpen: run.isRunning ? run.sessionID.flatMap { id in
-                                openSession.map { open in { open(id) } }
-                            } : nil,
-                            onOpenTab: openTab
-                        )
+                        runRow(run, inputs: [])
                     }
                 }
                 if let limit = snapshot?.maxParallel {
@@ -187,6 +245,28 @@ struct CantripHomeBackgroundView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func runRow(_ run: CantripHomeBackgroundRun, inputs: [CantripInputRequest]) -> some View {
+        CantripHomeBackgroundRunRow(
+            run: run,
+            activity: run.isRunning ? snapshot?.activity : nil,
+            isExpanded: Binding(
+                get: { expanded.contains(run.id) },
+                set: { if $0 { expanded.insert(run.id) } else { expanded.remove(run.id) } }
+            ),
+            onStop: canStop && run.canStop == true
+                ? { await remote.stopHomeBackgroundRun(run.id) } : nil,
+            onOpen: run.isRunning ? run.sessionID.flatMap { id in
+                openSession.map { open in { open(id) } }
+            } : nil,
+            onOpenTab: openTab,
+            inputs: inputs,
+            inputBusy: remote.isMutating,
+            onAnswer: { request, value in await answer(run, request, value) },
+            isFocused: run.sessionID != nil && run.sessionID == remote.homeBackgroundFocus
+        )
+        .id(run.id)
     }
 
     private func section<Content: View>(
@@ -303,6 +383,12 @@ struct CantripHomeBackgroundRunRow: View {
     var onStop: (() async -> Bool)? = nil
     var onOpen: (() -> Void)? = nil
     var onOpenTab: ((String) -> Void)? = nil
+    /// Approvals and questions this run waits on, answered right here.
+    var inputs: [CantripInputRequest] = []
+    var inputBusy = false
+    var onAnswer: ((CantripInputRequest, CantripInputAnswer) async -> Void)? = nil
+    /// The run a notification or task pointed at.
+    var isFocused = false
 
     private var result: String {
         if run.isRunning {
@@ -358,6 +444,20 @@ struct CantripHomeBackgroundRunRow: View {
                 CantripHandoffStack(handoffs: handoffs, onOpenTab: onOpenTab)
                     .padding(.top, 4)
             }
+            if let onAnswer {
+                ForEach(inputs) { request in
+                    CantripInputCard(request: request, busy: inputBusy) { value in
+                        Task { await onAnswer(request, value) }
+                    }
+                    .accessibilityIdentifier("home.background.input")
+                }
+                if inputs.isEmpty, run.needsInput {
+                    // Older Macs don't list the request; the live run shows it.
+                    Text("Open this run to answer it. Update Cantrip on your Mac to answer here.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
             if onStop != nil || onOpen != nil {
                 HStack(spacing: 8) {
                     if let onOpen {
@@ -376,6 +476,13 @@ struct CantripHomeBackgroundRunRow: View {
                     }
                 }
                 .padding(.top, 4)
+            }
+        }
+        .overlay {
+            if isFocused {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(.tint, lineWidth: 2)
+                    .accessibilityHidden(true)
             }
         }
     }
@@ -413,7 +520,11 @@ struct CantripHomeBackgroundRunRow: View {
     @ViewBuilder private var statusIcon: some View {
         switch run.status {
         case "running":
-            if run.tabHandoff?.status == .queued {
+            if run.needsInput {
+                Image(systemName: "questionmark.bubble.fill")
+                    .foregroundStyle(CantripHomeBackgroundStyle.activeTint)
+                    .accessibilityLabel("Needs your input")
+            } else if run.tabHandoff?.status == .queued {
                 Image(systemName: "tray.full").foregroundStyle(.secondary)
             } else {
                 ProgressView().controlSize(.small)

@@ -8,7 +8,13 @@ struct HermesApp: App {
     @StateObject private var env = HermesEnv()
     // Held, not observed: re-rendering the whole scene on every Cantrip poll
     // snaps open menus back to the top. ChatView observes the model itself.
+    #if DEBUG
+    @State private var remoteModel = CantripRemoteModel(
+        liveStatus: .shared, authorizeSensitiveAction: CantripUITestFixtures.authorizeSensitiveAction
+    )
+    #else
     @State private var remoteModel = CantripRemoteModel(liveStatus: .shared)
+    #endif
     // Held like remoteModel; App state lives for the process, so only cold launches show it.
     @State private var launchSplash = CantripLaunchSplashController()
 
@@ -61,6 +67,10 @@ struct HermesApp: App {
             if target.sessionID == CantripHomeIdentity.id {
                 env.select(.home)
                 await remoteModel.selectHome()
+            } else if target.isHomeRun, env.selectableLanes.contains(.home) {
+                // Background runs are answered in Home, never opened as Remote tabs.
+                env.select(.home)
+                await remoteModel.openHomeRunNotification(target)
             } else {
                 env.select(.cantrip)
                 await remoteModel.openCompletionNotification(target)

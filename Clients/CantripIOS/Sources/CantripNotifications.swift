@@ -16,6 +16,8 @@ struct CantripNotificationTarget: Equatable {
     let sessionID: UUID
     let fingerprint: String
     var kind: String?
+    /// A Cantrip Home background run asked; it is answered in Home, never opened as a tab.
+    var isHomeRun = false
 
     init?(userInfo: [AnyHashable: Any]) {
         guard let value = userInfo["cantrip"] as? [String: String],
@@ -28,6 +30,7 @@ struct CantripNotificationTarget: Equatable {
         self.sessionID = sessionID
         self.fingerprint = fingerprint
         kind = value["kind"]
+        isHomeRun = value["home"] == "run"
     }
 }
 
@@ -142,6 +145,13 @@ final class CantripNotifications: NSObject, ObservableObject, UNUserNotification
     }
 
     func consumeTarget() { pendingTarget = nil }
+
+    #if DEBUG
+    /// UI tests open a push exactly as a tap would, without APNs or enabled alerts.
+    func simulateTapForUITest(_ userInfo: [AnyHashable: Any]) {
+        pendingTarget = CantripNotificationTarget(userInfo: userInfo)
+    }
+    #endif
 
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
