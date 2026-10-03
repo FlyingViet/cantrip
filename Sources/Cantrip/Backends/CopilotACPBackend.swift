@@ -17,7 +17,7 @@ import Network
 /// thoughts, tool calls, plans) and sends session/request_permission when
 /// a tool needs approval — answered here from Cantrip's settings:
 /// allowActions (and not readOnly) approves, anything else declines.
-final class CopilotACPBackend: Backend {
+final class CopilotACPBackend: Backend, CantripHomeGuardedBackend {
     /// Kept for council API parity; the model is whatever the ACP server
     /// was started with — there is no per-session override in ACP.
     var modelOverride: String?
@@ -49,6 +49,20 @@ final class CopilotACPBackend: Backend {
     private var generation = 0
     private var activities: [String: ToolActivity] = [:]
     private var inputRequests: [BackendInputRequest] = []
+    private let guardrailLock = NSLock()
+    private var storedGuardrail: CantripHomeGuardrail?
+    private var storedGuardrailLabel = "Cantrip Home"
+    private var approvedScopes: Set<String> = []
+
+    var guardrail: CantripHomeGuardrail? {
+        get { guardrailLock.withLock { storedGuardrail } }
+        set { guardrailLock.withLock { storedGuardrail = newValue } }
+    }
+
+    var guardrailLabel: String {
+        get { guardrailLock.withLock { storedGuardrailLabel } }
+        set { guardrailLock.withLock { storedGuardrailLabel = newValue } }
+    }
 
     deinit {
         connection?.cancel() // don't leak the socket with a closed tab
@@ -63,6 +77,7 @@ final class CopilotACPBackend: Backend {
     ) {
         queue.async { [weak self] in
             guard let self else { return }
+            self.approvedScopes = []
             self.currentOnEvent = onEvent
             self.activities.removeAll()
             let gen = self.generation
@@ -411,8 +426,71 @@ final class CopilotACPBackend: Backend {
 
     /// Tool approval, decided by Cantrip's own policy: "Act on my behalf"
     /// (and not a read-only council seat) approves once; otherwise decline.
+    /// An ACP tool call as a Home policy request; nil for reads, searches and fetches.
+    static func homeAction(_ tool: [String: Any]) -> CantripHomeActionRequest? {
+        let raw = tool["rawInput"] as? [String: Any] ?? [:]
+        let paths = ((tool["locations"] as? [[String: Any]]) ?? []).compactMap { $0["path"] as? String }
+            + [raw["path"], raw["fileName"], raw["file_path"]].compactMap { $0 as? String }
+        switch tool["kind"] as? String {
+        case "execute":
+            let command = raw["command"] as? String ?? raw["fullCommandText"] as? String
+                ?? tool["title"] as? String ?? ""
+            return .shell(command)
+        case "edit", "move":
+            return .init(kind: .write, paths: paths)
+        case "delete":
+            return .shell("rm -- " + paths.map { "'\($0)'" }.joined(separator: " "))
+        case "other":
+            // MCP and custom tools arrive as `other`, named by their title.
+            let name = tool["title"] as? String ?? ""
+            return name.isEmpty ? nil : .init(kind: .mcp, tool: name)
+        default:
+            return nil
+        }
+    }
+
     private func handlePermission(id: Any?, params: [String: Any]) {
         let options = params["options"] as? [[String: Any]] ?? []
+        if let mode = guardrail, !readOnly, !suppressUpdates, promptInFlight, let id,
+           let action = Self.homeAction(params["toolCall"] as? [String: Any] ?? [:]) {
+            let decision = CantripHomeActionPolicy.evaluate(action, mode: mode)
+            func answer(_ approved: Bool) {
+                let kinds = approved ? ["allow_once", "allow_always"] : ["reject_once", "reject_always"]
+                let choice = kinds.lazy.compactMap { kind in
+                    options.first { $0["kind"] as? String == kind }?["optionId"] as? String
+                }.first
+                let outcome: [String: Any] = choice.map { ["outcome": "selected", "optionId": $0] }
+                    ?? ["outcome": "cancelled"]
+                sendRaw(["jsonrpc": "2.0", "id": id, "result": ["outcome": outcome]])
+                currentOnEvent?(.approval(BackendApproval(
+                    tool: action.kind.rawValue, decision: approved && choice != nil ? "approved" : "denied",
+                    decidedBy: "Cantrip"
+                )))
+            }
+            switch decision.verdict {
+            case .deny:
+                Log.write("home policy: denied ACP \(action.kind.rawValue): \(action.command.prefix(160))")
+                return answer(false)
+            case .ask where !approvedScopes.contains(decision.scope):
+                let gen = generation
+                let request = BackendInputRequest(
+                    kind: .approval, source: "Cantrip Home",
+                    title: "\(guardrailLabel) wants to \(decision.action)", detail: decision.detail
+                ) { [weak self] response in
+                    self?.queue.async {
+                        guard let self, self.generation == gen, self.promptInFlight else { return }
+                        if response.decision == .approve { self.approvedScopes.insert(decision.scope) }
+                        answer(response.decision == .approve)
+                        self.inputRequests.removeAll { !$0.isPending }
+                    }
+                }
+                inputRequests.append(request)
+                currentOnEvent?(.inputRequired(request))
+                return
+            case .ask, .allow:
+                break
+            }
+        }
         let allow = settings.allowActions && !readOnly
         if !allow, !readOnly, !suppressUpdates, promptInFlight, let id {
             let gen = generation

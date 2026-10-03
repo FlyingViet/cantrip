@@ -258,9 +258,13 @@ extension SessionTabTests {
                      && handoff.summary == "Fix lineup sorting" && handoff.status == .running,
                      "A change request must become a running nested handoff without the raw block")
         try await waitForJournalTest { routeBackend.sink != nil }
+        let tabPrompt = try requireHome(bassSession.messages.first { $0.role == .user }?.text)
         precondition(bassSession.isStreaming
-                     && bassSession.messages.contains { $0.role == .user && $0.text == handoffPrompt },
-                     "The project tab must own the handed-off prompt")
+                     && tabPrompt.hasPrefix("(Handed off by Cantrip Home.")
+                     && tabPrompt.contains(handoffPrompt)
+                     && tabPrompt.contains("> Can you fix the Bass Compass lineup sorting?")
+                     && tabPrompt.hasSuffix("Cantrip Home shows it on the handoff card."),
+                     "The project tab must own a composed, standalone brief with the user's words: \(tabPrompt)")
         let liveHome = try await call("/api/v1/home")
         let liveMessages = try requireHome(
             (liveHome.1["session"] as? [String: Any])?["messages"] as? [[String: Any]]
@@ -284,8 +288,8 @@ extension SessionTabTests {
         let queuedHandoff = try requireHome(homeMessage(queuedID).delegations.first)
         precondition(queuedHandoff.status == .queued
                      && bassSession.isStreaming
-                     && bassSession.queued.map(\.text) == [queuedPrompt]
-                     && bassSession.messages.filter { $0.role == .user }.map(\.text) == [handoffPrompt],
+                     && bassSession.queued.count == 1 && bassSession.queued[0].text.contains(queuedPrompt)
+                     && bassSession.messages.filter { $0.role == .user }.map(\.text) == [tabPrompt],
                      "A handoff to a busy tab must wait in its queue without interrupting it")
         firstRunSink?(.textDelta("Headliners now sort first."))
         firstRunSink?(.done)

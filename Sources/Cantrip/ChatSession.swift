@@ -243,6 +243,19 @@ final class ChatSession: ObservableObject {
     @Published var tabActionError: String?
     /// The scheduled task or incident the Home background conversation is running.
     private(set) var cantripHomeRunLabel: String?
+    /// Home confirmations and refusals waiting to be appended to this run's reply.
+    var cantripHomeNotices: [String] = []
+    /// Refusals held while Home corrects its blocks; replaced if the correction saves blocks.
+    var cantripHomeHeldFailures: [String] = []
+    /// The reply as it stood before Cantrip asked for corrected blocks.
+    var cantripHomeCorrection: (messageID: UUID, prefix: String)?
+    /// Each run gets one correction turn.
+    var cantripHomeCorrectionSpent = false
+    /// Whether this Home session's backend lets Cantrip check each action before it runs.
+    /// Codex runs commands itself; a Copilot Remote server may approve tools Cantrip never sees.
+    var cantripHomeChecksActions: Bool {
+        ![.codex, .copilotRemote].contains(runningBackendKind ?? effectiveBackendKind)
+    }
     var title: String {
         if isCantripHome { return "Cantrip Home" }
         if isCantripHomeBackground { return "Cantrip Home background" }
@@ -360,6 +373,13 @@ final class ChatSession: ObservableObject {
         applyModelSelection()
         restoreDurableState()
         if isLocalPrivate, !FileManager.default.fileExists(atPath: transcriptURL.path) { persistTranscript() }
+        // Home's safety rules are enforced by Cantrip for whichever backend runs it.
+        let guardrail: CantripHomeGuardrail? = isCantripHome ? .attended
+            : isCantripHomeBackground ? .unattended : nil
+        let guarded: [CantripHomeGuardedBackend?] = [
+            copilotBackend as? CantripHomeGuardedBackend, copilotRemote, claudeCode, localModel
+        ]
+        for backend in guarded { backend?.guardrail = guardrail }
         // Remote previews may read only this session's own agent files folders.
         if let copilot = copilotBackend as? CopilotBackend {
             copilot.onAgentSession = { [weak self] cliSessionID in
@@ -1591,6 +1611,9 @@ final class ChatSession: ObservableObject {
             currentRunPrompt = prompt
             currentRunIncludesAmbientContext = includesAmbientContext
             autoResumeSpent = false
+            cantripHomeCorrectionSpent = false
+            cantripHomeCorrection = nil
+            cantripHomeHeldFailures = []
         }
         runningBackendKind = backendKind
         let isFirstOfConversation = messages.isEmpty && automatedRun == nil
@@ -1640,7 +1663,18 @@ final class ChatSession: ObservableObject {
                 userMessage: prompt,
                 previousTurns: previousTurns
             )
-            self.backend(for: backendKind).send(request, workdir: self.workdir) { [weak self] event in
+            if self.isCantripHomeRun, [.codex, .copilotRemote].contains(backendKind) {
+                // Fail closed: an unattended run needs a backend Cantrip can check per action.
+                self.handle(.failure(
+                    "Cantrip Home background runs need Copilot, Claude Code or a local model so Cantrip "
+                        + "can check each action before it runs. Codex and Copilot Remote can't be checked "
+                        + "per command; choose another backend to run scheduled tasks and incidents."
+                ))
+                return
+            }
+            let backend = self.backend(for: backendKind)
+            (backend as? CantripHomeGuardedBackend)?.guardrailLabel = self.notificationTitle
+            backend.send(request, workdir: self.workdir) { [weak self] event in
                 DispatchQueue.main.async {
                     guard let self, self.streamGeneration == generation else {
                         if case .inputRequired(let request) = event { request.cancel() }
@@ -2455,6 +2489,7 @@ final class ChatSession: ObservableObject {
                 deferredInjectionDone = true
                 return
             }
+            if continueWithCantripHomeCorrection() { return }
             finalizeRunningActivities(as: .succeeded)
             let summary = messages.last(where: { $0.role == .assistant })?.text ?? ""
             completeRun(status: "succeeded", summary: summary)
@@ -2463,6 +2498,47 @@ final class ChatSession: ObservableObject {
             isWaitingOnBackgroundWatchers = false
             handleRunInterruption(errorText: message)
         }
+    }
+
+    /// Saves Home's blocks as soon as the backend finishes. When Cantrip refuses one for a
+    /// reason a corrected block could fix, it asks the same backend once, inside this run and
+    /// reply, so a weaker model or CLI still lands its task, record, handoff or artifact.
+    private func continueWithCantripHomeCorrection() -> Bool {
+        guard isCantripHome || isCantripHomeBackground, !isCantripHomeBackgroundLog else { return false }
+        let canCorrect = !cantripHomeCorrectionSpent && !councilRunning && !isLocalPrivate
+            && currentRunID != nil && runningBackendKind != nil
+        let failures = runCantripHomeBlockPass(lintBlocking: canCorrect)
+        guard canCorrect, !failures.isEmpty, let kind = runningBackendKind,
+              let index = messages.lastIndex(where: { $0.role == .assistant }) else {
+            cantripHomeNotices += failures.map(\.notice)
+            return false
+        }
+        cantripHomeCorrectionSpent = true
+        cantripHomeHeldFailures = failures.map(\.notice)
+        cantripHomeCorrection = (messages[index].id, messages[index].text)
+        messages[index].text += "\n\n"
+        Log.write("home: asking \(kind.rawValue) to correct \(failures.count) block(s): "
+            + failures.map { "\($0.kind.rawValue): \($0.message.prefix(100))" }.joined(separator: "; "))
+        let prompt = CantripHomeProtocol.correctionPrompt(failures)
+        statusText = "Checking Home changes…"
+        armWatchdog()
+        streamGeneration += 1
+        let generation = streamGeneration
+        let backend = backend(for: kind)
+        (backend as? CantripHomeGuardedBackend)?.guardrailLabel = notificationTitle
+        backend.send(
+            BackendRequest(prompt: prompt, userMessage: prompt, previousTurns: completedConversationTurns()),
+            workdir: workdir
+        ) { [weak self] event in
+            DispatchQueue.main.async {
+                guard let self, self.streamGeneration == generation else {
+                    if case .inputRequired(let request) = event { request.cancel() }
+                    return
+                }
+                self.handle(event)
+            }
+        }
+        return true
     }
 
     // MARK: - Resume after an interrupted run
@@ -2481,6 +2557,15 @@ final class ChatSession: ObservableObject {
         }
         activeBackend.cancel()
         finalizeRunningActivities(as: .failed)
+        if let correction = cantripHomeCorrection {
+            // The reply already finished and its valid blocks are saved; only Cantrip's block
+            // correction failed. Never resume (that would repeat the request's side effects):
+            // keep the reply and its original refusals.
+            Log.write("home: block correction failed: \(errorText.prefix(160))")
+            completeRun(status: "succeeded", summary: correction.prefix)
+            finishStream()
+            return
+        }
         let resumable = currentRunPrompt != nil && lastRunHadProgress
         recordInterruption(errorText)
         appendRunMessage(ChatMessage(role: .error, text: errorText))
