@@ -1864,11 +1864,14 @@ extension ChatSession {
         return """
 
         \(opening)
+        \(CantripHomeProtocol.rules(unattended: isCantripHomeBackground, checksActions: cantripHomeChecksActions))
+
         If and only if the user explicitly asks to create a reminder, monitor, recurring check,
         scheduled job, or structured tracker, gather any missing details conversationally. Once
         it is fully specified, end the reply with exactly one fenced `cantrip-task` JSON object:
         {"id":"existing task UUID or null","title":"short title",
-        "prompt":"standalone task instructions","schedule":null or {
+        "prompt":"standalone brief for an unattended run: goal, where to look, what to record
+        or report, limits","schedule":null or {
         "kind":"once|interval|weekdays","summary":"natural schedule label",
         "timeZone":"IANA zone","startAt":"ISO-8601 or null","intervalMinutes":null,
         "weekdays":[1-7] or null,"times":[{"hour":0-23,"minute":0-59}] or null},
@@ -1939,57 +1942,108 @@ extension ChatSession {
         """
     }
 
+    /// Final pass when a run ends: saves any blocks still in the reply, then appends every
+    /// confirmation and refusal collected during the run.
     func processCantripHomeBlocks() {
-        guard isCantripHome || isCantripHomeBackground,
+        guard isCantripHome || isCantripHomeBackground else { return }
+        if let correction = cantripHomeCorrection {
+            // The correction never finished (it failed or was stopped): discard what it wrote
+            // and keep the original refusals.
+            cantripHomeCorrection = nil
+            if let index = messages.firstIndex(where: { $0.id == correction.messageID }) {
+                messages[index].text = correction.prefix
+            }
+            cantripHomeNotices += cantripHomeHeldFailures
+            cantripHomeHeldFailures = []
+        }
+        cantripHomeNotices += runCantripHomeBlockPass(lintBlocking: false).map(\.notice)
+        guard !cantripHomeNotices.isEmpty,
               let index = messages.lastIndex(where: { $0.role == .assistant }) else { return }
+        let notices = cantripHomeNotices.joined(separator: "\n\n")
+        cantripHomeNotices = []
+        let text = messages[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
+        messages[index].text = text.isEmpty ? notices : text + "\n\n" + notices
+    }
+
+    /// Saves and strips the Home blocks in the latest reply. Confirmations and refusals that a
+    /// corrected block couldn't change are queued for the reply; fixable refusals are returned.
+    @discardableResult
+    func runCantripHomeBlockPass(lintBlocking: Bool) -> [CantripHomeBlockFailure] {
+        guard isCantripHome || isCantripHomeBackground,
+              let index = messages.lastIndex(where: { $0.role == .assistant }) else { return [] }
         var text = messages[index].text
-        var confirmations = processCantripHomeDelegations(in: &text, messageIndex: index)
-        for (language, action) in [
-            ("cantrip-task-records", { (payload: String) throws -> String in
-                let batch = try JSONDecoder().decode(
-                    CantripHomeTaskRecordBatch.self, from: Data(payload.utf8)
-                )
-                let result = try CantripHomeStore.shared.apply(batch)
-                return "Updated **\(result.0.title)** · \(result.1) "
-                    + (result.1 == 1 ? "record change" : "record changes")
-            }),
-            ("cantrip-task", { (payload: String) throws -> String in
-                let proposal = try JSONDecoder().decode(
-                    CantripHomeTaskProposal.self, from: Data(payload.utf8)
-                )
-                let task = try CantripHomeStore.shared.create(proposal)
-                let mode = task.isScheduled ? task.schedule.summary : "Workspace ready"
-                return "\(proposal.id == nil ? "Task created" : "Task updated"): "
-                    + "**\(task.title)** · \(mode)"
-            }),
-            ("cantrip-artifact", { (payload: String) throws -> String in
-                let proposal = try JSONDecoder().decode(
-                    CantripHomeArtifactProposal.self, from: Data(payload.utf8)
-                )
-                let artifact = try CantripHomeStore.shared.register(proposal)
-                return "Saved to Artifacts: **\(artifact.title)**"
-            }),
-        ] {
-            var processed = 0
-            while let start = text.range(of: "```\(language)"),
-                  let end = text.range(of: "```", range: start.upperBound..<text.endIndex) {
-                let payload = text[start.upperBound..<end.lowerBound]
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                text.removeSubrange(start.lowerBound..<end.upperBound)
-                do {
-                    guard processed < 8, payload.utf8.count <= 16_384 else {
-                        throw CantripHomeError(400, "Too many or oversized Home items in one reply.")
-                    }
-                    processed += 1
-                    confirmations.append(try action(payload))
-                } catch {
-                    let item = language.hasPrefix("cantrip-task") ? "task" : "artifact"
-                    confirmations.append("Could not save \(item): \(error.localizedDescription)")
+        let blocks = CantripHomeProtocol.extractBlocks(from: &text)
+        let delegations = saveCantripHomeDelegations(
+            blocks.filter { $0.kind == .delegate }, messageIndex: index, lintBlocking: lintBlocking
+        )
+        var notices = delegations.notices
+        var failures = delegations.failures
+        var processed: [CantripHomeBlock.Kind: Int] = [:]
+        for block in blocks where block.kind != .delegate {
+            do {
+                guard processed[block.kind, default: 0] < 8,
+                      block.payload.utf8.count <= CantripHomeProtocol.payloadLimit else {
+                    throw CantripHomeError(413, "Too many or oversized Home items in one reply.")
+                }
+                processed[block.kind, default: 0] += 1
+                notices.append(try saveCantripHomeBlock(block, lintBlocking: lintBlocking))
+            } catch {
+                let message = CantripHomeProtocol.describe(error)
+                let notice = "Could not save \(block.kind == .artifact ? "artifact" : "task"): \(message)"
+                if CantripHomeProtocol.isCorrectable(error) {
+                    failures.append(.init(kind: block.kind, payload: block.payload, message: message, notice: notice))
+                } else {
+                    notices.append(notice)
                 }
             }
         }
-        guard text != messages[index].text || !confirmations.isEmpty else { return }
-        let suffix = confirmations.isEmpty ? "" : "\n\n" + confirmations.joined(separator: "\n\n")
-        messages[index].text = text.trimmingCharacters(in: .whitespacesAndNewlines) + suffix
+        cantripHomeNotices += notices
+        if !blocks.isEmpty { text = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if let correction = cantripHomeCorrection {
+            // This pass read the correction reply: it was written for Cantrip, not the user.
+            cantripHomeCorrection = nil
+            if messages[index].id == correction.messageID {
+                text = correction.prefix
+            } else if let original = messages.firstIndex(where: { $0.id == correction.messageID }) {
+                messages[original].text = correction.prefix
+            }
+            if blocks.isEmpty { cantripHomeNotices += cantripHomeHeldFailures }
+            cantripHomeHeldFailures = []
+        }
+        if text != messages[index].text { messages[index].text = text }
+        return failures
+    }
+
+    private func saveCantripHomeBlock(_ block: CantripHomeBlock, lintBlocking: Bool) throws -> String {
+        let store = CantripHomeStore.shared
+        switch block.kind {
+        case .records:
+            let batch = try CantripHomeProtocol.decode(CantripHomeTaskRecordBatch.self, from: block.payload)
+            let result = try store.apply(batch)
+            return "Updated **\(result.0.title)** · \(result.1) "
+                + (result.1 == 1 ? "record change" : "record changes")
+        case .task:
+            guard !isCantripHomeBackground else {
+                throw CantripHomeError(
+                    403, "Background runs can't create or change Home tasks. Tell the user what to change instead."
+                )
+            }
+            let proposal = try CantripHomeProtocol.decode(CantripHomeTaskProposal.self, from: block.payload)
+            if lintBlocking, let prompt = proposal.prompt,
+               let problem = CantripHomeProtocol.promptProblems(prompt).first {
+                throw CantripHomeError(
+                    422, "The task prompt \(problem). Rewrite `prompt` as standalone instructions for an unattended run."
+                )
+            }
+            let task = try store.create(proposal)
+            let mode = task.isScheduled ? task.schedule.summary : "Workspace ready"
+            return "\(proposal.id == nil ? "Task created" : "Task updated"): **\(task.title)** · \(mode)"
+        case .artifact:
+            let proposal = try CantripHomeProtocol.decode(CantripHomeArtifactProposal.self, from: block.payload)
+            let artifact = try store.register(proposal)
+            return "Saved to Artifacts: **\(artifact.title)**"
+        case .delegate:
+            throw CantripHomeError(500, "Handoffs are saved with the other handoffs.")
+        }
     }
 }

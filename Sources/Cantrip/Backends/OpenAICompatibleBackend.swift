@@ -4,7 +4,7 @@ import Foundation
 /// (vLLM, llama.cpp, Ollama, LM Studio…) — e.g. a locally hosted Hermes.
 /// When "Act on my behalf" is enabled, exposes a `run_shell` function and
 /// executes tool-call loops so the local model can act, not just chat.
-final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate {
+final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, CantripHomeGuardedBackend {
     /// Per-instance model override (council members run models different
     /// from the session's setting). Nil = use the configured model.
     var modelOverride: String?
@@ -32,6 +32,20 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate {
     }
 
     private var currentWorkdir = NSHomeDirectory()
+    private let guardrailLock = NSLock()
+    private var storedGuardrail: CantripHomeGuardrail?
+    private var storedGuardrailLabel = "Cantrip Home"
+    private var approvedScopes: Set<String> = []
+
+    var guardrail: CantripHomeGuardrail? {
+        get { guardrailLock.withLock { storedGuardrail } }
+        set { guardrailLock.withLock { storedGuardrail = newValue } }
+    }
+
+    var guardrailLabel: String {
+        get { guardrailLock.withLock { storedGuardrailLabel } }
+        set { guardrailLock.withLock { storedGuardrailLabel = newValue } }
+    }
 
     func send(
         _ request: BackendRequest,
@@ -42,6 +56,7 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate {
         self.onEvent = onEvent
         self.currentWorkdir = workdir
         iterations = 0
+        guardrailLock.withLock { approvedScopes = [] }
         history = ConversationContextBuilder.chatMessages(
             for: request.userMessage,
             turns: request.previousTurns
@@ -229,7 +244,10 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate {
 
                 let output: String
                 let success: Bool
-                if call.name == "run_shell", let command, !command.isEmpty {
+                if let refusal = self.guardrailRefusal(for: call.name, command: command,
+                                                       arguments: call.arguments) {
+                    (output, success) = (refusal, false)
+                } else if call.name == "run_shell", let command, !command.isEmpty {
                     (output, success) = Self.runShell(command, cwd: self.currentWorkdir)
                 } else if call.name.hasPrefix("mcp__") {
                     let args = (try? JSONSerialization.jsonObject(
@@ -247,6 +265,53 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate {
             }
             self.onEvent?(.status("Thinking…"))
             self.startRequest()
+        }
+    }
+
+    /// Checks a Home tool call with the host policy, waiting for the user when it asks.
+    /// Returns the text the model sees instead of the tool's output, or nil to run it.
+    private func guardrailRefusal(for name: String, command: String?, arguments: String) -> String? {
+        guard let mode = guardrail else { return nil }
+        let request: CantripHomeActionRequest
+        if name == "run_shell" {
+            request = .shell(command ?? "")
+        } else if name.hasPrefix("mcp__") {
+            request = .init(claudeTool: name, input: [:])
+        } else {
+            return nil
+        }
+        let decision = CantripHomeActionPolicy.evaluate(
+            request, mode: mode, environment: .current(workdir: currentWorkdir)
+        )
+        switch decision.verdict {
+        case .allow:
+            return nil
+        case .deny:
+            Log.write("home policy: denied \(name): \((command ?? arguments).prefix(160))")
+            return decision.reason
+        case .ask:
+            if guardrailLock.withLock({ approvedScopes.contains(decision.scope) }) { return nil }
+            let done = DispatchSemaphore(value: 0)
+            var approved = false
+            var answered: InputRequestAnswer.Decision = .cancel
+            let pending = BackendInputRequest(
+                kind: .approval, source: "Cantrip Home",
+                title: "\(guardrailLabel) wants to \(decision.action)", detail: decision.detail
+            ) { answer in
+                answered = answer.decision
+                approved = answer.decision == .approve
+                done.signal()
+            }
+            Log.write("home policy: asking the user before \(decision.action)")
+            onEvent?(.inputRequired(pending))
+            if done.wait(timeout: .now() + 610) == .timedOut { pending.cancel() }
+            if approved {
+                guardrailLock.withLock { _ = approvedScopes.insert(decision.scope) }
+                return nil
+            }
+            return answered == .deny
+                ? "The user declined to \(decision.action). Don't retry it another way; say in your reply that it was skipped."
+                : "No approval arrived to \(decision.action), so it was skipped. Say so in your reply."
         }
     }
 

@@ -3,7 +3,7 @@ import Foundation
 /// Runs queries through the Claude Code CLI in headless mode:
 ///   claude -p "<prompt>" --output-format stream-json --verbose
 /// Follow-ups resume the same session via --resume <session_id>.
-final class ClaudeCodeBackend: Backend {
+final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     private var process: Process?
     /// Persisted so conversations resume across app restarts.
     private let persistKey: String
@@ -45,6 +45,22 @@ final class ClaudeCodeBackend: Backend {
     private var inputRequests: [String: BackendInputRequest] = [:]
     private var askpass: RemoteAskpass?
     private var processAllowsActions: Bool?
+    private let guardrailLock = NSLock()
+    private var storedGuardrail: CantripHomeGuardrail?
+    private var storedGuardrailLabel = "Cantrip Home"
+    /// Actions the user approved while this process ran (queue-owned).
+    private var approvedScopes: Set<String> = []
+
+    /// Cantrip Home sessions never bypass permissions: every tool call is checked by the host.
+    var guardrail: CantripHomeGuardrail? {
+        get { guardrailLock.withLock { storedGuardrail } }
+        set { guardrailLock.withLock { storedGuardrail = newValue } }
+    }
+
+    var guardrailLabel: String {
+        get { guardrailLock.withLock { storedGuardrailLabel } }
+        set { guardrailLock.withLock { storedGuardrailLabel = newValue } }
+    }
 
     init(persistKey: String = "claudeSessionID") {
         self.persistKey = persistKey
@@ -177,6 +193,126 @@ final class ClaudeCodeBackend: Backend {
 
     // MARK: - Internals
 
+    static let policyHookID = "cantrip_home_policy"
+
+    private func writeControlRequest(_ request: [String: Any]) {
+        do {
+            guard let handle = stdinHandle else { throw CocoaError(.fileWriteUnknown) }
+            var data = try JSONSerialization.data(withJSONObject: [
+                "type": "control_request", "request_id": "cantrip-\(UUID().uuidString)", "request": request,
+            ])
+            data.append(10)
+            try handle.write(contentsOf: data)
+        } catch {
+            Log.write("claude: could not register Cantrip's Home policy hook: \(error.localizedDescription)")
+        }
+    }
+
+    /// Cantrip's PreToolUse hook. Hooks run before Claude Code's own permission rules, so a
+    /// user's `Bash(*)` allow rule can't bypass the Home policy. Tools the policy doesn't
+    /// cover get no decision and follow the normal flow (including AskUserQuestion).
+    private func answerPolicyHook(id: String, request: [String: Any]) {
+        let undecided: [String: Any] = ["continue": true]
+        guard request["callback_id"] as? String == Self.policyHookID, let mode = guardrail, !readOnly,
+              let input = request["input"] as? [String: Any],
+              let tool = input["tool_name"] as? String else {
+            sendControlResponse(id: id, response: undecided)
+            return
+        }
+        let toolInput = input["tool_input"] as? [String: Any] ?? [:]
+        let action = CantripHomeActionRequest(claudeTool: tool, input: toolInput)
+        func decide(_ permission: String, _ reason: String? = nil) {
+            var output: [String: Any] = ["hookEventName": "PreToolUse", "permissionDecision": permission]
+            if let reason { output["permissionDecisionReason"] = reason }
+            sendControlResponse(id: id, response: ["hookSpecificOutput": output])
+        }
+        guard [.shell, .write, .mcp].contains(action.kind) else {
+            sendControlResponse(id: id, response: undecided)
+            return
+        }
+        let decision = CantripHomeActionPolicy.evaluate(
+            action, mode: mode, environment: .current(workdir: processWorkdir)
+        )
+        switch decision.verdict {
+        case .allow:
+            sendControlResponse(id: id, response: undecided)
+        case .deny:
+            Log.write("home policy: denied \(tool): \(action.command.prefix(160))")
+            decide("deny", decision.reason)
+        case .ask:
+            if approvedScopes.contains(decision.scope) { return decide("allow") }
+            let owner = process
+            let pending = BackendInputRequest(
+                kind: .approval, source: "Cantrip Home",
+                title: "\(guardrailLabel) wants to \(decision.action)", detail: decision.detail
+            ) { [weak self] answer in
+                self?.queue.async {
+                    guard let self, self.process === owner,
+                          self.inputRequests.removeValue(forKey: id) != nil else { return }
+                    if answer.decision == .approve {
+                        self.approvedScopes.insert(decision.scope)
+                        decide("allow")
+                    } else {
+                        decide("deny", answer.decision == .deny
+                            ? "The user declined to \(decision.action). Don't retry it another way; say in your reply that it was skipped."
+                            : "No approval arrived to \(decision.action), so it was skipped. Say so in your reply.")
+                    }
+                }
+            }
+            Log.write("home policy: asking the user before \(decision.action)")
+            inputRequests[id] = pending
+            currentOnEvent?(.inputRequired(pending))
+        }
+    }
+
+    /// Answers one tool call with the Home policy; false falls through to a normal approval.
+    /// Asked actions become an approval request that answers the control request later.
+    private func answerWithGuardrail(
+        tool: String, input: [String: Any], mode: CantripHomeGuardrail, id: String
+    ) -> Bool {
+        let request = CantripHomeActionRequest(claudeTool: tool, input: input)
+        let decision = CantripHomeActionPolicy.evaluate(
+            request, mode: mode, environment: .current(workdir: processWorkdir)
+        )
+        switch decision.verdict {
+        case .deny:
+            Log.write("home policy: denied \(tool): \(request.command.prefix(160))")
+            sendControlResponse(id: id, response: ["behavior": "deny", "message": decision.reason])
+            return true
+        case .allow:
+            guard settings.allowActions else { return false }
+            sendControlResponse(id: id, response: ["behavior": "allow", "updatedInput": input])
+            return true
+        case .ask:
+            if approvedScopes.contains(decision.scope) {
+                sendControlResponse(id: id, response: ["behavior": "allow", "updatedInput": input])
+                return true
+            }
+            let owner = process
+            let pending = BackendInputRequest(
+                kind: .approval, source: "Cantrip Home",
+                title: "\(guardrailLabel) wants to \(decision.action)", detail: decision.detail
+            ) { [weak self] answer in
+                self?.queue.async {
+                    guard let self, self.process === owner,
+                          self.inputRequests.removeValue(forKey: id) != nil else { return }
+                    if answer.decision == .approve {
+                        self.approvedScopes.insert(decision.scope)
+                        self.sendControlResponse(id: id, response: ["behavior": "allow", "updatedInput": input])
+                    } else {
+                        self.sendControlResponse(id: id, response: ["behavior": "deny", "message": answer.decision == .deny
+                            ? "The user declined to \(decision.action). Don't retry it another way; say in your reply that it was skipped."
+                            : "No approval arrived to \(decision.action), so it was skipped. Say so in your reply."])
+                    }
+                }
+            }
+            Log.write("home policy: asking the user before \(decision.action)")
+            inputRequests[id] = pending
+            currentOnEvent?(.inputRequired(pending))
+            return true
+        }
+    }
+
     private func sendControlResponse(id: String, response: [String: Any]) {
         do {
             guard let handle = stdinHandle else { throw CocoaError(.fileWriteUnknown) }
@@ -268,6 +404,10 @@ final class ClaudeCodeBackend: Backend {
         if !effort.isEmpty { args += ["--effort", effort] }
         if readOnly {
             args += ["--permission-mode", "plan"] // read-only tool set
+        } else if guardrail != nil {
+            // Cantrip's PreToolUse hook (registered at launch) runs before Claude's own allow
+            // rules; default mode sends anything else undecided over stdio.
+            args += ["--permission-mode", "default"]
         } else if settings.allowActions {
             args += ["--permission-mode", "bypassPermissions"]
         } else if settings.claudePermissionMode != "default" {
@@ -364,6 +504,12 @@ final class ClaudeCodeBackend: Backend {
             stdinHandle = stdinPipe.fileHandleForWriting
             processWorkdir = workdir
             processAllowsActions = settings.allowActions
+            if guardrail != nil, !readOnly {
+                writeControlRequest([
+                    "subtype": "initialize",
+                    "hooks": ["PreToolUse": [["matcher": "", "hookCallbackIds": [Self.policyHookID]]]],
+                ])
+            }
             turnInFlight = false
             suppressUntilResult = false
             Log.write("claude started, pid=\(p.processIdentifier)")
@@ -404,6 +550,10 @@ final class ClaudeCodeBackend: Backend {
         case "control_request":
             guard let id = obj["request_id"] as? String,
                   let request = obj["request"] as? [String: Any] else { return }
+            if request["subtype"] as? String == "hook_callback" {
+                answerPolicyHook(id: id, request: request)
+                return
+            }
             guard request["subtype"] as? String == "can_use_tool" else {
                 sendControlResponse(id: id, response: ["behavior": "deny", "message": "Unsupported interactive request."])
                 return
@@ -412,6 +562,9 @@ final class ClaudeCodeBackend: Backend {
             let input = request["input"] as? [String: Any] ?? [:]
             if readOnly {
                 sendControlResponse(id: id, response: ["behavior": "deny", "message": "Read-only session."])
+            } else if tool != "AskUserQuestion", let guardrail,
+                      answerWithGuardrail(tool: tool, input: input, mode: guardrail, id: id) {
+                // Answered now, or once the user responds to the approval request.
             } else if tool == "AskUserQuestion",
                       let questions = input["questions"] as? [[String: Any]], !questions.isEmpty {
                 askQuestion(id: id, input: input, questions: questions, answers: [:])

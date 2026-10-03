@@ -175,6 +175,24 @@ enum CopilotSessionBridge {
         enableFileHooks: config.allowTools && !config.readOnly,
         onPermissionRequest: request => {
           const allowed = config.allowTools && !config.readOnly;
+          if (allowed && config.guardrail && request.kind !== 'read') {
+            // Cantrip Home: the host's action policy decides, whatever model runs the session.
+            const summary = {
+              kind: request.kind, fullCommandText: request.fullCommandText,
+              possiblePaths: request.possiblePaths, hasWriteFileRedirection: request.hasWriteFileRedirection,
+              fileName: request.fileName, path: request.path, url: request.url,
+              serverName: request.serverName, toolName: request.toolName, readOnly: request.readOnly
+            };
+            return requestInput('policy', JSON.stringify(summary).slice(0, 60000), { title: 'Cantrip Home policy' })
+              .then(answer => {
+                const approved = answer.decision === 'approve';
+                emit({ kind: 'approval', runID, tool: request.kind, decision: approved ? 'approved' : 'denied' });
+                if (approved) return { kind: 'approve-once' };
+                const feedback = answer.text
+                  || 'Cantrip did not get approval for this action, so it was skipped. Say so in your reply.';
+                return { kind: 'reject', feedback: String(feedback).slice(0, 1000) };
+              });
+          }
           if (allowed && !config.autoApprove && request.kind !== 'read') {
             const detail = request.fullCommandText || request.intention
               || JSON.stringify(request);

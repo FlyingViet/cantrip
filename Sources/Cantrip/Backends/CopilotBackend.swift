@@ -3,7 +3,7 @@ import Foundation
 /// One SDK session per tab, with native immediate delivery during an active turn.
 /// A stopped/crashed runtime is rebuilt from Cantrip's journal and recent history,
 /// never by replaying possibly accepted session.send requests.
-final class CopilotBackend: Backend {
+final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     var modelOverride: String?
     var effortOverride: String?
     var contextTierOverride: String?
@@ -31,6 +31,21 @@ final class CopilotBackend: Backend {
     private var inputRequests: [String: BackendInputRequest] = [:]
     private var askpass: RemoteAskpass?
     private let bridgeScript: String
+    private let guardrailLock = NSLock()
+    private var storedGuardrail: CantripHomeGuardrail?
+    private var storedGuardrailLabel = "Cantrip Home"
+    /// Actions the user approved during the current turn (queue-owned).
+    private var approvedScopes: Set<String> = []
+
+    var guardrail: CantripHomeGuardrail? {
+        get { guardrailLock.withLock { storedGuardrail } }
+        set { guardrailLock.withLock { storedGuardrail = newValue } }
+    }
+
+    var guardrailLabel: String {
+        get { guardrailLock.withLock { storedGuardrailLabel } }
+        set { guardrailLock.withLock { storedGuardrailLabel = newValue } }
+    }
 
     struct Configuration: Equatable {
         let command: String
@@ -43,13 +58,17 @@ final class CopilotBackend: Backend {
         var autoApprove = true
         var allowSubagents = true
         var mcpApps = true
+        /// Cantrip Home sessions route every tool request through the host's action policy.
+        var guardrail: String?
 
         var json: [String: Any] {
-            ["command": command, "workdir": workdir, "model": model,
+            var object: [String: Any] = ["command": command, "workdir": workdir, "model": model,
              "effort": effort, "contextTier": contextTier,
              "allowTools": allowTools, "readOnly": readOnly, "autoApprove": autoApprove,
              "allowSubagents": allowSubagents, "mcpApps": mcpApps,
              "systemGuidance": CopilotBackend.systemGuidance(allowSubagents: allowSubagents)]
+            if let guardrail { object["guardrail"] = guardrail }
+            return object
         }
     }
 
@@ -116,7 +135,8 @@ final class CopilotBackend: Backend {
             allowTools: settings.copilotAllowTools || settings.allowActions,
             readOnly: readOnly, autoApprove: settings.allowActions,
             allowSubagents: settings.copilotAllowSubagents,
-            mcpApps: settings.copilotMCPApps
+            mcpApps: settings.copilotMCPApps,
+            guardrail: guardrail?.rawValue
         )
         queue.async { [weak self] in
             guard let self else { return }
@@ -130,6 +150,7 @@ final class CopilotBackend: Backend {
             self.onEvent = onEvent
             let id = UUID().uuidString
             self.runID = id
+            self.approvedScopes = []
             self.ready = false
             self.idle = false
             self.parser = CopilotJSONStreamParser(canCancelSubagents: true)
@@ -302,6 +323,62 @@ final class CopilotBackend: Backend {
         Log.write("copilot: native session bridge started, pid=\(p.processIdentifier)")
     }
 
+    /// Decides one Home tool request with the host policy (queue-owned). Asked actions become
+    /// a normal approval request, so they reach the user's phone and expire like any other.
+    private func answerPolicy(id: String, owner: String, detail: String) {
+        func reply(_ approved: Bool, _ feedback: String? = nil) {
+            var answer: [String: Any] = ["kind": "inputAnswer", "runID": owner, "id": id,
+                                         "decision": approved ? "approve" : "deny"]
+            if let feedback { answer["text"] = feedback }
+            do { try write(answer) }
+            catch { fail("Could not deliver Cantrip's decision to Copilot. It was not retried.") }
+        }
+        guard let request = CantripHomeActionRequest(copilotJSON: detail) else {
+            return reply(false, "Cantrip couldn't read this tool request, so it was not run.")
+        }
+        let mode = guardrail ?? .unattended
+        let decision = CantripHomeActionPolicy.evaluate(
+            request, mode: mode, environment: .current(workdir: configuration?.workdir ?? "")
+        )
+        let autoApprove = configuration?.autoApprove ?? true
+        if decision.verdict == .deny {
+            Log.write("home policy: denied \(request.kind.rawValue): \(request.command.prefix(160))")
+            return reply(false, decision.reason)
+        }
+        if decision.verdict == .allow, autoApprove || request.kind == .read {
+            return reply(true)
+        }
+        if decision.verdict == .ask, approvedScopes.contains(decision.scope) { return reply(true) }
+        let label = guardrailLabel
+        let title = decision.verdict == .ask
+            ? "\(label) wants to \(decision.action)"
+            : "Allow \(request.kind.rawValue)?"
+        let detailText = decision.verdict == .ask ? decision.detail
+            : String((request.command.isEmpty ? request.paths.joined(separator: "\n") : request.command).prefix(2_000))
+        let scope = decision.scope
+        let pending = BackendInputRequest(
+            kind: .approval, source: "Cantrip Home", title: title, detail: detailText
+        ) { [weak self] answer in
+            self?.queue.async {
+                guard let self, self.runID == owner,
+                      self.inputRequests.removeValue(forKey: id) != nil else { return }
+                if answer.decision == .approve {
+                    if !scope.isEmpty { self.approvedScopes.insert(scope) }
+                    reply(true)
+                } else {
+                    let what = decision.action.isEmpty ? "this action" : decision.action
+                    reply(false, answer.decision == .deny
+                        ? "The user declined to \(what). Don't retry it another way; say in your reply that it was skipped."
+                        : "No approval arrived to \(what), so it was skipped. Say so in your reply.")
+                }
+            }
+        }
+        Log.write("home policy: asking the user before \(decision.action.isEmpty ? request.kind.rawValue : decision.action)")
+        inputRequests[id] = pending
+        ready = true
+        onEvent?(.inputRequired(pending))
+    }
+
     private func write(_ object: [String: Any]) throws {
         guard let input else { throw CocoaError(.fileWriteUnknown) }
         var data = try JSONSerialization.data(withJSONObject: object)
@@ -343,6 +420,9 @@ final class CopilotBackend: Backend {
                 }
                 guard let current = runID, object["runID"] as? String == current else { continue }
                 switch kind {
+                case "input" where object["inputKind"] as? String == "policy":
+                    guard let id = object["id"] as? String else { throw CocoaError(.coderReadCorrupt) }
+                    answerPolicy(id: id, owner: current, detail: object["detail"] as? String ?? "")
                 case "input":
                     guard let id = object["id"] as? String,
                           let rawKind = object["inputKind"] as? String,

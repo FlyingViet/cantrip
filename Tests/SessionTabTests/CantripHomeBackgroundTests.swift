@@ -579,18 +579,21 @@ extension SessionTabTests {
         }
         let nightly = try onceTask("Nightly Bass check", "Check Bass Compass.", due: Date().addingTimeInterval(-5))
         let nightlyRun = try requireHome(runningRun(forTask: nightly.id))
-        try await finish(nightlyRun, delegate("Fix the stale lineup rows."))
+        let lineupFix = "Fix the stale Portola 2026 lineup rows that still show last year's set times."
+        try await finish(nightlyRun, delegate(lineupFix))
         try await waitForJournalTest { routeBackend.sink != nil }
         let nightlyResult = try requireHome(run(nightlyRun))
+        let nightlyBrief = bassSession.messages.last { $0.role == .user }?.text ?? ""
         precondition(nightlyResult.status == "succeeded"
                      && nightlyResult.handoffs?.first?.tabID == bassSession.id
                      && nightlyResult.summary.contains("Handed to **Bass Compass**: Fix lineup data")
                      && !nightlyResult.summary.contains("cantrip-delegate")
-                     && bassSession.messages.last { $0.role == .user }?.text == "Fix the stale lineup rows.",
-                     "A background run's handoff lands in the tab and on its Background entry")
+                     && nightlyBrief.hasPrefix("(Handed off by a Cantrip Home background run \"Nightly Bass check\".")
+                     && nightlyBrief.contains(lineupFix),
+                     "A background run's handoff lands in the tab and on its Background entry: \(nightlyBrief)")
         let nightlyAgain = try onceTask("Nightly Bass check 2", "Check Bass Compass.", due: Date().addingTimeInterval(-5))
         let againRun = try requireHome(runningRun(forTask: nightlyAgain.id))
-        try await finish(againRun, delegate("Fix the stale lineup rows."))
+        try await finish(againRun, delegate(lineupFix))
         precondition(run(againRun)?.handoffs == nil
                      && run(againRun)?.summary.contains("Already running in **Bass Compass**") == true
                      && bassSession.queued.isEmpty,

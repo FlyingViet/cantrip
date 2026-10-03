@@ -176,6 +176,23 @@ The macOS app includes:
   kept in that log. After a quit, interrupted tasks run once more and an
   interrupted incident is retried once. Home can still discuss or rerun any of
   them on request.
+  Home's rules and safety checks are enforced by Cantrip, not by the model's
+  CLI, so they hold whichever backend runs Home. Cantrip validates every task,
+  record, handoff and artifact block (tolerating common JSON slips). When a block
+  is invalid, or a task or handoff prompt leans on the conversation instead of
+  standing alone, it asks the same model once, inside the same reply, for a
+  corrected block. Handoffs are briefs (goal, context, constraints, done-when)
+  that Cantrip turns into a standalone tab prompt with the user's own message.
+  Before each tool runs in Home (Copilot, Claude Code or a local
+  OpenAI-compatible model), Cantrip blocks catastrophic commands: administrator
+  commands, erasing disks or the home folder, piping downloads into a shell,
+  stopping Cantrip, and writing Home's own state files. In unattended background
+  runs, sending messages or email, pushing, deploying, deleting files outside
+  temporary folders and Artifacts, and system changes wait for approval through a
+  push-notified input request; unanswered after 10 minutes, the step is skipped.
+  Background runs can't create or change tasks. Codex and Copilot Remote (ACP) can
+  run commands Cantrip never sees, so on them background runs fail closed with an
+  explanation and the Home chat follows the rules on its own.
   Deliverable files the agent saves in Home's guarded artifact folder
   appear automatically in Artifacts and can be permanently deleted from the
   mobile app. Images and videos show thumbnails (a video's poster frame about
