@@ -216,7 +216,7 @@ extension SessionTabTests {
         const session={id:"recent-three",title:"Recent",historyRevision:"r1",historyStartID:"start",
           supportsPagedHistory:true,hasOlderMessages:false,messages:all};
         try{
-          token="recent-test";historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();
+          token="recent-test";historyCache.clear();expandedHistory.clear();historyPaused.clear();
           const paths=[];window.fetch=async path=>{paths.push(path);return {ok:true,json:async()=>({})}};
           await originalAPI("/api/v1/sessions/example");
           await originalAPI("/api/v1/sessions/example?before=cursor");
@@ -237,7 +237,7 @@ extension SessionTabTests {
               reads++;check(path.includes("before=p4"),"Scrolling starts before the first retained prompt");
               return {session:{...session,messages:all.slice(0,12)}};
             };
-            document.scrollingElement.scrollTop=0;followOutput=false;await settle();
+            positionConversation(0);followOutput=false;await settle();
             $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));await settle();
             check(reads===1&&historyCache.get(selected).messages.length===21,"Scrolling restores earlier complete exchanges without gaps");
             check(!followOutput,"Expanded history does not jump back to the latest answer");
@@ -259,7 +259,7 @@ extension SessionTabTests {
           check(legacy.messages.length===150&&!legacy.hasOlderMessages,"Unpaged hosts must not hide inaccessible history");
         }finally{
           api=originalAPI;window.fetch=originalFetch;token=originalToken;window.requestAnimationFrame=originalFrame;
-          if(timer)clearTimeout(timer);timer=null;historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();
+          if(timer)clearTimeout(timer);timer=null;historyCache.clear();expandedHistory.clear();historyPaused.clear();
           $("historyError").textContent="";selected=null;render(null);renderSessions([]);
         }
         """, arguments: [:], in: nil, contentWorld: .page)
@@ -277,17 +277,19 @@ extension SessionTabTests {
           supportsPagedHistory:true,hasOlderMessages:true,messages:[message(28),message(29),message(30),message(31)]};
         let reads=0,release;
         try{
-          token="auto-test";selected=session.id;historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();
+          token="auto-test";selected=session.id;historyCache.clear();expandedHistory.clear();historyPaused.clear();
           api=async path=>{
             reads++;
-            check(path.includes("before="+(reads===1?"28":"10")),"Automatic/manual loads keep a stable group cursor");
+            check(path.includes("before="+(reads===1?"28":"10")),"Automatic loads keep a stable group cursor");
             if(reads===1)await new Promise(resolve=>release=resolve);
-            return {session:{...session,messages:Array.from({length:reads===1?28:10},(_,i)=>message(i)),hasOlderMessages:false}};
+            return {session:{...session,messages:reads===1?Array.from({length:18},(_,i)=>message(i+10)):Array.from({length:10},(_,i)=>message(i)),hasOlderMessages:reads===1}};
           };
           renderSessions([session]);render(cacheSession(session));await settle();
           check(reads===0&&canAutomaticallyLoadHistory(historyCache.get(selected)),"Opening a conversation never prefetches history");
-          root.scrollTop=0;await settle();
-          check(reads===0,"Programmatic positioning does not download history");
+          const idleHeight=$("olderHistory").getBoundingClientRect().height;
+          check(idleHeight>0&&$("olderMessages").classList.contains("hidden")&&!$("olderHistoryText").textContent,"An idle paged tab shows no control, only reserved space");
+          positionConversation(0);await settle();
+          check(reads===0,"Remote's own positioning does not download history");
           readPrompt("Full prompt text. ".repeat(200));
           $("promptPage").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
           await settle();check(reads===0,"Scrolling a dialog never downloads the underlying conversation");
@@ -297,48 +299,93 @@ extension SessionTabTests {
           await settle();check(reads===0,"Scrolling downward does not load older history");
           $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
           await settle();check(reads===1&&loadingHistory,"Upward scrolling triggers a history download");
+          check($("olderHistory").dataset.state==="loading"&&$("olderHistoryText").textContent==="Loading older messages…"&&$("olderMessages").classList.contains("hidden"),"A small inline indicator shows while a page loads");
+          check(Math.abs($("olderHistory").getBoundingClientRect().height-idleHeight)<1,"Showing progress does not move the conversation");
           $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
           await settle();check(reads===1,"Repeated scroll events coalesce while downloading");
           release();await settle();
           const loaded=historyCache.get(selected);
-          check(loaded.messages.filter(m=>m.role==="user").length===11&&loaded.messages[0].id==="10","Current prompt plus exactly ten past groups, not ten pages");
-          check(loaded.hasOlderMessages&&!canAutomaticallyLoadHistory(loaded),"Extra groups from a large page stay behind the manual boundary");
-          check(!$("olderMessages").disabled&&$("olderMessages").textContent==="Load more messages","Manual control appears at the ten-group boundary");
+          check(loaded.messages.length===22&&loaded.messages[0].id==="10","The whole page is kept");
+          check(loaded.hasOlderMessages&&canAutomaticallyLoadHistory(loaded),"No ten-group cap: scrolling keeps loading");
+          check($("olderMessages").classList.contains("hidden")&&$("olderHistory").dataset.state==="idle","No Load more control appears");
           const restored=$("messages").children[18].getBoundingClientRect().top;
           check(Math.abs(restored-anchor)<3,"Automatic loading preserves the visible prompt's position");
-          root.scrollTop=0;await settle();
+          check(reads===1,"A tall page leaves history above the reader, so the next page waits for scrolling");
+          positionConversation(0);await settle();
           $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
-          await settle();check(reads===1,"Further scrolling cannot bypass the cap");
-          $("olderMessages").click();await settle();
-          check(reads===2&&historyCache.get(selected).messages.length===32,"Manual loading retrieves remaining history without gaps");
-          check($("olderMessages").classList.contains("hidden"),"No control remains at the oldest message");
+          await settle();check(reads===2&&historyCache.get(selected).messages.length===32,"Scrolling up again loads the rest of history");
+          check(!canAutomaticallyLoadHistory(historyCache.get(selected))&&$("olderMessages").classList.contains("hidden"),"No control remains at the oldest message");
+          check(Math.abs($("olderHistory").getBoundingClientRect().height-idleHeight)<1,"Reaching the start keeps the reserved row, so nothing shifts");
+          $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
+          await settle();check(reads===2,"Nothing is requested at the start of history");
 
           const initial=cacheSession({...session,id:"initial",messages:Array.from({length:32},(_,i)=>message(i)),hasOlderMessages:false});
           check(initial.messages.length===(sidebarLayout?6:22)&&initial.messages[0].id===(sidebarLayout?"26":"10")&&initial.hasOlderMessages,"Oversized initial pages respect each layout's exchange window");
-          check(canAutomaticallyLoadHistory(initial)===sidebarLayout,"Already loaded past groups consume the allowance");
-          const reset=cacheSession({...initial,historyStartID:"reset",messages:[message(30),message(31)],hasOlderMessages:true});
-          check(canAutomaticallyLoadHistory(reset),"Reset restores the automatic allowance");
+          check(canAutomaticallyLoadHistory(initial),"Already loaded groups never use up automatic loading");
 
           selected="failure";const failed={...session,id:selected,messages:[message(30),message(31)]};
           renderSessions([failed]);render(cacheSession(failed));await settle();
           let failures=0;api=async()=>{failures++;throw Error("Timeout")};
-          root.scrollTop=0;await settle();
+          positionConversation(0);await settle();
           $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));await settle();
-          check(failures===1&&$("historyError").textContent.includes("Timeout"),"Automatic failures are visible");
+          check(failures===1&&$("olderHistory").dataset.state==="failed"&&$("olderHistoryText").textContent.includes("Timeout")&&!$("olderMessages").classList.contains("hidden"),"A failed page shows inline with Retry");
           $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));await settle();
-          check(failures===1&&!$("olderMessages").disabled,"Failure pauses automatic retries and leaves manual retry");
+          check(failures===1,"Failure pauses automatic retries");
+          let failRetry;api=async()=>{failures++;await new Promise(resolve=>failRetry=resolve);throw Error("Timeout")};
+          $("olderMessages").click();await settle();
+          check($("olderHistory").dataset.state==="loading"&&$("olderHistoryText").textContent==="Loading older messages…"&&!$("olderMessages").classList.contains("hidden")&&$("olderMessages").disabled,"Retry shows progress while keeping its button in place");
+          failRetry();await settle();
+          check(failures===2&&$("olderHistoryText").textContent.includes("Timeout")&&!$("olderMessages").disabled,"A repeated failure changes the status text again, so it is re-announced");
           api=async()=>({session:{...failed,messages:[message(28),message(29)],hasOlderMessages:false}});
           $("olderMessages").click();await settle();
-          check(historyCache.get(selected).messages.length===4&&!$("historyError").textContent,"Manual retry recovers");
+          check(historyCache.get(selected).messages.length===4&&$("olderMessages").classList.contains("hidden")&&!$("olderHistoryText").textContent,"Retry recovers and hides itself");
+          historyPaused.set(selected,"Couldn't load older messages: Timeout");
+          check(canAutomaticallyLoadHistory(cacheSession({...failed,historyStartID:"reset",hasOlderMessages:true})),"A history reset clears the paused failure");
 
-          selected="incremental";const incremental={...session,id:selected,messages:[message(30),message(31)]};
-          cacheSession(incremental);let pages=0;
-          api=async()=>{pages++;return {session:{...incremental,messages:[message(30-pages*2),message(31-pages*2)]}}};
-          for(let i=0;i<12;i++){await loadOlderMessages(true);await settle()}
-          check(pages===10&&historyCache.get(selected).messages.length===22,"Ten single-group downloads stop exactly at the boundary");
+          selected="scrollbar";const dragged={...session,id:selected,messages:[message(30),message(31)]};let dragReads=0;
+          api=async()=>{dragReads++;return {session:{...dragged,messages:[message(28),message(29)],hasOlderMessages:true}}};
+          renderSessions([dragged]);render(cacheSession(dragged));await settle();
+          // Hidden test pages skip rendering updates, so deliver the scroll events a visible page would.
+          positionConversation(400);dispatchEvent(new Event("scroll"));
+          check(dragReads===0,"Remote's own positioning is not mistaken for reading");
+          root.scrollTop=0;dispatchEvent(new Event("scroll"));await settle();
+          check(dragReads===1,"Dragging the scrollbar (or momentum after a render) to the top loads without a wheel or touch event");
+          selected="reader";const reader={...session,id:selected,messages:[message(30),message(31)]};let readerRelease;
+          api=async()=>{await new Promise(resolve=>readerRelease=resolve);return {session:{...reader,messages:[message(28),message(29)],hasOlderMessages:true}}};
+          renderSessions([reader]);render(cacheSession(reader));await settle();
+          $("olderHistoryReader").focus();await settle();
+          check(loadingHistory&&document.activeElement===$("olderHistoryReader")&&$("olderHistoryReader").getAttribute("aria-disabled")==="true","Screen reader focus on the history row loads and keeps focus while loading");
+          readerRelease();await settle();
+          check(historyCache.get(selected).messages.length===4&&document.activeElement===$("olderHistoryReader"),"Focus stays on the row after the page is inserted");
+          $("olderHistoryReader").blur();
+
+          selected="chained";const short=i=>({id:"s"+i,role:i%2===0?"user":"assistant",text:"Short "+i,activities:[]});
+          const chained={...session,id:selected,messages:[short(100),{...short(101),text:"Short 101 latest reply. ".repeat(400)}]};
+          let pages=0,inFlight=0,overlap=0;
+          api=async()=>{pages++;if(++inFlight>1)overlap++;await new Promise(resolve=>setTimeout(resolve,10));inFlight--;
+            return {session:{...chained,messages:[short(100-pages*2),short(101-pages*2)],hasOlderMessages:pages<45}}};
+          renderSessions([chained]);render(cacheSession(chained));await settle();
+          positionConversation(0);await settle();
+          const reading=()=>Array.from($("messages").querySelectorAll("article")).find(row=>row.textContent.includes("Short 100"));
+          const readingTop=reading().getBoundingClientRect().top;
+          // Hidden test pages throttle timers, so wait until no page has started for several turns.
+          const quiet=async()=>{let last=-1,stable=0;for(let i=0;i<300&&stable<4;i++){await settle();if(pages===last&&!loadingHistory)stable++;else{stable=0;last=pages}}};
+          $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
+          await quiet();
+          check(pages>1,"Short pages keep loading without another gesture");
+          check(pages<45&&root.scrollTop>=Math.max(600,innerHeight)-1,`Loading pauses once a screen of history is above the reader: ${pages} pages, scroll ${root.scrollTop}`);
+          check(Math.abs(reading().getBoundingClientRect().top-readingTop)<3,"Chained pages keep the message being read in place");
+          check(overlap===0,"Never more than one page request at a time");
+          const paused=pages;
+          $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:20}));await settle();
+          check(pages===paused,"Scrolling down never loads older history");
+          positionConversation(0);await settle();
+          $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
+          await quiet();
+          check(pages>paused,"Scrolling up again continues through history");
         }finally{
           api=originalAPI;token=originalToken;window.requestAnimationFrame=originalFrame;
-          if(timer)clearTimeout(timer);timer=null;historyCache.clear();expandedHistory.clear();automaticHistoryRemaining.clear();
+          if(timer)clearTimeout(timer);timer=null;historyCache.clear();expandedHistory.clear();historyPaused.clear();
           $("historyError").textContent="";selected=null;render(null);renderSessions([]);
         }
         """, arguments: [:], in: nil, contentWorld: .page)
@@ -360,7 +407,7 @@ extension SessionTabTests {
           const recentRows=$("messages").querySelectorAll("article");
           check(recentRows[0].querySelector(".prose").textContent===message("3").text.trim(),"Recent messages render their complete text without a detail fetch");
           check(!Array.from(recentRows[0].querySelectorAll("button")).some(b=>b.textContent==="Load full message and details"),"Complete messages need no download button");
-          const root=document.scrollingElement;root.scrollTop=0;followOutput=false;await settle();
+          const root=document.scrollingElement;positionConversation(0);followOutput=false;await settle();
           const previous=$("messages").querySelector("article").getBoundingClientRect().top;
           api=async path=>{
             check(path.includes("before=3"),"Older messages use the stable first-message cursor");
@@ -394,7 +441,7 @@ extension SessionTabTests {
           check(historyCache.get(selected).messages.length===(sidebarLayout?122:121)&&historyCache.get(selected).messages[0].id===firstID,"Mac keeps three whole exchanges; browser retains its rolling boundary prompt");
           const firstRow=$("messages").querySelector("article");
           check(firstRow.classList.contains("user")&&firstRow.textContent.includes("Prompt or response "+firstID),"The boundary prompt renders before its response");
-          root.scrollTop=0;followOutput=false;await settle();
+          positionConversation(0);followOutput=false;await settle();
           const promptTop=firstRow.getBoundingClientRect().top;
           const earlier=sidebarLayout?[{...shortMessage(-2),role:"user"},shortMessage(-1)]:[shortMessage(0)];
           let olderReads=0;
