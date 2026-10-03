@@ -384,7 +384,7 @@ final class ChatSession: ObservableObject {
             copilotBackend as? CantripHomeGuardedBackend, copilotRemote, claudeCode, localModel
         ]
         for backend in guarded { backend?.guardrail = guardrail }
-        // Remote previews may read only this session's own agent files folders.
+        // Remember which agent files folders this session used (Home runs hand them to the log).
         if let copilot = copilotBackend as? CopilotBackend {
             copilot.onAgentSession = { [weak self] cliSessionID in
                 DispatchQueue.main.async {

@@ -1,12 +1,12 @@
 import Darwin
 import Foundation
 
-/// Agent output folders each Cantrip session may preview images from remotely.
+/// Agent output folders each Cantrip session used.
 ///
 /// Copilot CLI gives every SDK session its own `~/.copilot/session-state/<id>/files/`.
 /// A tab gets a new CLI session whenever its runtime restarts, so Cantrip records every
-/// CLI session a tab (or Home run) used. A session's previews resolve only against its
-/// own recorded folders, never another session's.
+/// CLI session a tab (or Home run) used. Remote previews accept any session's files folder,
+/// so these records are a subset of what previews allow, kept per session.
 final class SessionOutputFolders: @unchecked Sendable {
     static var shared = SessionOutputFolders()
     static let maximumPerSession = 64

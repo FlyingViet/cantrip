@@ -107,13 +107,18 @@ private func checkLinksAndNesting(generatedRoot: URL, screenshot: URL, cache: UR
     try jpeg().write(to: direct)
     let nestedMarkdown = "![Header](<\(nestedImage.path)>)\n[Open](\(nestedImage.absoluteString))\n![Direct](\(direct.path))"
     expect(RemoteGeneratedImages.presentation(nestedMarkdown, messageID: messageID, root: generatedRoot).images.isEmpty,
-           "another session's files folder is not an allowed root")
+           "a files folder outside the Copilot session-state root is not an allowed root")
+    let anySession = RemoteGeneratedImages.presentation(
+        nestedMarkdown, messageID: messageID, root: generatedRoot, sessionStateRoot: state
+    )
+    expect(anySession.images.count == 2 && anySession.images.allSatisfy { $0.root.path == files.path },
+           "any tab's or Home's files folder previews nested and direct images, recorded or not")
     let owned = RemoteGeneratedImages.presentation(
         nestedMarkdown, messageID: messageID, root: generatedRoot, additionalRoots: [files]
     )
     expect(owned.images.count == 2 && owned.images.allSatisfy { $0.root.path == files.path },
            "own files folder previews nested and direct images")
-    let full = try RemoteGeneratedImages.read(owned.images[0], sessionID: sessionID, thumbnail: false, root: cache)
+    let full = try RemoteGeneratedImages.read(anySession.images[0], sessionID: sessionID, thumbnail: false, root: cache)
     let size = CGImageSourceCopyPropertiesAtIndex(CGImageSourceCreateWithData(full as CFData, nil)!, 0, nil)! as NSDictionary
     expect(size[kCGImagePropertyPixelHeight] as? Int == 2048, "read a nested session image at full size")
     let deep = files.appendingPathComponent((1...9).map { "d\($0)" }.joined(separator: "/"), isDirectory: true)
@@ -122,24 +127,22 @@ private func checkLinksAndNesting(generatedRoot: URL, screenshot: URL, cache: UR
     let hidden = files.appendingPathComponent(".git", isDirectory: true)
     try FileManager.default.createDirectory(at: hidden, withIntermediateDirectories: true)
     try jpeg(type: .png).write(to: hidden.appendingPathComponent("hidden.png"))
+    let cliFolder = files.deletingLastPathComponent()
     for target in [
         deep.appendingPathComponent("deep.png").path, hidden.appendingPathComponent("hidden.png").path,
         files.path + "/screens/../../../outside.png", files.path + "/screens/%2E%2E/%2E%2E/escape.png",
-        files.path + "/./screens/ios/header%20preview.png", files.deletingLastPathComponent().path + "/sibling.png",
-        files.path + "-evil/screens/x.png"
+        files.path + "/./screens/ios/header%20preview.png", cliFolder.path + "/sibling.png",
+        files.path + "-evil/screens/x.png", cliFolder.path + "/checkpoints/x.png",
+        state.path + "/not-a-session/files/x.png", state.path + "/x.png", state.path + "/files/x.png",
+        state.deletingLastPathComponent().path + "/elsewhere/\(UUID())/files/x.png"
     ] {
         let rejected = RemoteGeneratedImages.presentation(
-            "![x](\(target))\n[x](\(target))", messageID: messageID, root: generatedRoot, additionalRoots: [files]
+            "![x](\(target))\n[x](\(target))", messageID: messageID, root: generatedRoot,
+            sessionStateRoot: state, additionalRoots: [files]
         )
-        expect(rejected.images.isEmpty, "reject traversal, hidden, too-deep or sibling paths: \(target)")
+        expect(rejected.images.isEmpty, "reject traversal, hidden, too-deep, non-files or outside paths: \(target)")
     }
-    let sharedNested = generatedRoot.appendingPathComponent("remote-attachments/\(UUID())", isDirectory: true)
-    try FileManager.default.createDirectory(at: sharedNested, withIntermediateDirectories: true)
-    try jpeg().write(to: sharedNested.appendingPathComponent("image-1.jpg"))
-    expect(RemoteGeneratedImages.presentation(
-        "[Upload](\(sharedNested.path)/image-1.jpg)", messageID: messageID, root: generatedRoot,
-        additionalRoots: [files]
-    ).images.isEmpty, "the shared output folder stays flat, so per-session caches below it stay private")
+    try checkSharedSubfolders(generatedRoot: generatedRoot, cache: cache, messageID: messageID, sessionID: sessionID)
 
     // A subfolder swapped for a symlink is refused when read, even after it was validated.
     let outsideDirectory = generatedRoot.deletingLastPathComponent().appendingPathComponent("outside-dir")
@@ -165,7 +168,61 @@ private func checkLinksAndNesting(generatedRoot: URL, screenshot: URL, cache: UR
     if let first = linkedRoot.first { expectUnreadable(first, cache: cache, "reject a symlinked files folder") }
 }
 
-/// Each session previews only the CLI sessions recorded for it; the backfill never guesses.
+/// Agents' own subfolders of ~/.cache/Cantrip preview (job-apply/, qa/...); Cantrip's per-session
+/// uploads, preview caches, transcripts and Home state below it never do.
+private func checkSharedSubfolders(generatedRoot: URL, cache: URL, messageID: UUID, sessionID: UUID) throws {
+    let jobApply = generatedRoot.appendingPathComponent("job-apply", isDirectory: true)
+    try FileManager.default.createDirectory(at: jobApply, withIntermediateDirectories: true)
+    let part = jobApply.appendingPathComponent("block-form-part1.jpg")
+    try jpeg(width: 1100, height: 1500).write(to: part)
+    let deepShared = generatedRoot.appendingPathComponent((1...8).map { "s\($0)" }.joined(separator: "/"), isDirectory: true)
+    try FileManager.default.createDirectory(at: deepShared, withIntermediateDirectories: true)
+    try jpeg(type: .png).write(to: deepShared.appendingPathComponent("eight.png"))
+    let shared = RemoteGeneratedImages.presentation(
+        "![Part 1](\(part.path))\n\n[Full form](\(part.absoluteString))\n\n![Eight](\(deepShared.path)/eight.png)",
+        messageID: messageID, root: generatedRoot
+    )
+    expect(shared.images.count == 2 && shared.images.allSatisfy { $0.root.path == generatedRoot.path },
+           "subfolders of the shared output folder preview, up to eight deep")
+    if let first = shared.images.first {
+        let data = try RemoteGeneratedImages.read(first, sessionID: sessionID, thumbnail: false, root: cache)
+        let size = CGImageSourceCopyPropertiesAtIndex(CGImageSourceCreateWithData(data as CFData, nil)!, 0, nil)!
+            as NSDictionary
+        expect(size[kCGImagePropertyPixelHeight] as? Int == 1500, "read a shared-subfolder image at full size")
+    }
+    for folder in RemoteGeneratedImages.reservedSharedFolders {
+        let directory = generatedRoot.appendingPathComponent("\(folder)/\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try jpeg().write(to: directory.appendingPathComponent("image-1.jpg"))
+        try jpeg().write(to: directory.deletingLastPathComponent().appendingPathComponent("direct.jpg"))
+    }
+    for target in [
+        "remote-attachments/\(UUID())/image-1.jpg", "Remote-Attachments/x/image-1.jpg", "REMOTE-PREVIEWS/x.jpg",
+        "remote-previews/\(sessionID)/\(messageID)/x.jpg", "home/artifacts/tracker.png", "Home/direct.jpg",
+        "chats/direct.jpg", "runs/direct.jpg", "remote-videos/x/frame.png", ".hidden/x.png", "job-apply/.cache/x.png",
+        (1...9).map { "s\($0)" }.joined(separator: "/") + "/nine.png", "job-apply/../../outside.png"
+    ] {
+        let path = generatedRoot.path + "/" + target
+        let rejected = RemoteGeneratedImages.presentation("![x](\(path))\n[x](\(path))", messageID: messageID,
+                                                          root: generatedRoot)
+        expect(rejected.images.isEmpty, "reserved, hidden, too-deep or escaping shared paths stay private: \(target)")
+    }
+    // An agent subfolder swapped for a symlink after validation is refused when read.
+    let outside = generatedRoot.deletingLastPathComponent().appendingPathComponent("outside-shared", isDirectory: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    try jpeg(type: .png).write(to: outside.appendingPathComponent("swap.png"))
+    let swapped = generatedRoot.appendingPathComponent("swap-shared", isDirectory: true)
+    try FileManager.default.createDirectory(at: swapped, withIntermediateDirectories: true)
+    try jpeg(type: .png).write(to: swapped.appendingPathComponent("swap.png"))
+    let reference = RemoteGeneratedImages.presentation(
+        "![Swap](\(swapped.path)/swap.png)", messageID: messageID, root: generatedRoot
+    ).images[0]
+    try FileManager.default.removeItem(at: swapped)
+    try FileManager.default.createSymbolicLink(at: swapped, withDestinationURL: outside)
+    expectUnreadable(reference, cache: cache, "reject a symlinked shared subfolder")
+}
+
+/// Each session records the CLI sessions it used; the backfill never guesses.
 private func checkSessionOutputFolders(base: URL) throws {
     let state = base.appendingPathComponent("session-state", isDirectory: true)
     let file = base.appendingPathComponent("folders.json")
@@ -382,7 +439,7 @@ do {
     let homeMarkdown = "![Tracker](\(homeImage.path))"
     expect(RemoteGeneratedImages.presentation(
         homeMarkdown, messageID: messageID, root: generatedRoot
-    ).images.isEmpty, "nested directories remain excluded by default")
+    ).images.isEmpty, "Home's folder in the shared output folder stays reserved")
     let homePreview = RemoteGeneratedImages.presentation(
         homeMarkdown, messageID: messageID, root: generatedRoot,
         additionalRoots: [homeArtifacts]
