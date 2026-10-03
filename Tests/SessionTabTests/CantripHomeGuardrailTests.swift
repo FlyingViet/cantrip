@@ -233,7 +233,7 @@ extension SessionTabTests {
                      && composed.contains("Constraints:\n- Don't change the API.")
                      && composed.contains("Done when: Lineup tests pass")
                      && composed.contains("verbatim (for intent; it may cover more than this handoff):\n> \(request)")
-                     && composed.hasSuffix("Cantrip Home shows it on the handoff card."),
+                     && composed.hasSuffix("Cantrip Home reads it to report back."),
                      "Handoffs carry a structured, standalone brief with the user's words: \(composed)")
         precondition(brief.marker == "Goal: Headliners appear first in the Bass Compass lineup."
                      && composed.contains(brief.marker),

@@ -19,6 +19,8 @@ struct CantripHomeDelegation: Codable, Equatable, Identifiable {
     /// The tab's user message carrying the handed-off prompt, once it appears.
     var tabMessageID: UUID?
     var latestStatus: String?
+    /// The tab is waiting for the user's answer to an input request.
+    var needsInput: Bool?
     var result: String?
     var error: String?
     var finishedAt: Date?
@@ -33,6 +35,7 @@ struct CantripHomeDelegation: Codable, Equatable, Identifiable {
         ]
         item["finishedAt"] = finishedAt?.timeIntervalSince1970
         item["latestStatus"] = latestStatus
+        item["needsInput"] = needsInput == true ? true : nil
         item["result"] = result
         item["error"] = error
         return item
@@ -254,6 +257,7 @@ final class CantripHomeDelegations {
             next.status = status
             next.error = error
             next.latestStatus = nil
+            next.needsInput = nil
             next.finishedAt = now
         }
         guard let target else {
@@ -295,7 +299,9 @@ final class CantripHomeDelegations {
         let replies = messages[(start + 1)..<end]
         if target.isStreaming, end == messages.endIndex {
             next.status = .running
-            next.latestStatus = target.isWaitingOnBackgroundWatchers
+            next.needsInput = target.pendingInputs.isEmpty ? nil : true
+            next.latestStatus = next.needsInput == true ? "Needs your answer"
+                : target.isWaitingOnBackgroundWatchers
                 ? "Waiting on a background task."
                 : target.currentActivity?.title ?? target.statusText ?? "Working…"
             return next
@@ -305,7 +311,7 @@ final class CantripHomeDelegations {
                 && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }?.text
         let failure = replies.last { $0.role == .error }?.text
-        if let reply { next.result = excerpt(reply, limit: resultLimit) }
+        if let reply { next.result = outcome(reply, limit: resultLimit) }
         // The tab's latest outcome applies only when this was its latest run.
         let outcome = end == messages.endIndex
             ? target.lastRunOutcome.flatMap {
@@ -503,6 +509,20 @@ final class CantripHomeDelegations {
         return counts.values.filter { $0.count >= 2 }
             .sorted { $0.count != $1.count ? $0.count > $1.count : $0.name < $1.name }
             .prefix(limit).map(\.name)
+    }
+
+    /// The end of a tab's reply, where its outcome is; the start is usually progress narration
+    /// ("I'll start with…") from earlier in the turn.
+    static func outcome(_ text: String, limit: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed }
+        var tail = Substring(trimmed.suffix(limit))
+        if let paragraph = tail.range(of: "\n\n") {
+            tail = tail[paragraph.upperBound...]
+        } else if let sentence = tail.range(of: ". ") {
+            tail = tail[sentence.upperBound...]
+        }
+        return "…" + tail.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func excerpt(_ text: String, limit: Int) -> String {

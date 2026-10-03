@@ -263,7 +263,7 @@ extension SessionTabTests {
                      && tabPrompt.hasPrefix("(Handed off by Cantrip Home.")
                      && tabPrompt.contains(handoffPrompt)
                      && tabPrompt.contains("> Can you fix the Bass Compass lineup sorting?")
-                     && tabPrompt.hasSuffix("Cantrip Home shows it on the handoff card."),
+                     && tabPrompt.hasSuffix("Cantrip Home reads it to report back."),
                      "The project tab must own a composed, standalone brief with the user's words: \(tabPrompt)")
         let liveHome = try await call("/api/v1/home")
         let liveMessages = try requireHome(
@@ -278,6 +278,32 @@ extension SessionTabTests {
                      && liveCard["summary"] as? String == "Fix lineup sorting"
                      && liveCard["latestStatus"] as? String != nil,
                      "The phone must receive the live handoff card")
+        routeBackend.sink?(.inputRequired(BackendInputRequest(
+            kind: .question, source: "Copilot", title: "Which branch?", detail: "", allowsFreeform: true
+        ) { _ in }))
+        try await waitForJournalTest { !bassSession.pendingInputs.isEmpty }
+        delegations.refresh()
+        let asking = try requireHome(homeMessage(handoffID).delegations.first)
+        let askingHome = try await call("/api/v1/home")
+        let askingCard = try requireHome(((askingHome.1["session"] as? [String: Any])?["messages"]
+            as? [[String: Any]])?.first { $0["id"] as? String == handoffID.uuidString }?["delegations"]
+            as? [[String: Any]])?.first
+        precondition(asking.status == .running && asking.needsInput == true
+                     && asking.latestStatus == "Needs your answer"
+                     && askingCard?["needsInput"] as? Bool == true,
+                     "A tab waiting on the user's answer marks its handoff card")
+        try bassSession.respondToInput(id: bassSession.pendingInputs[0].id, answer: .init(decision: .cancel))
+        try await waitForJournalTest { bassSession.pendingInputs.isEmpty }
+        delegations.refresh()
+        let answered = try homeMessage(handoffID).delegations.first
+        precondition(answered?.needsInput == nil && answered?.latestStatus != "Needs your answer",
+                     "Answering clears the card's needs-answer state")
+        let narration = String(repeating: "I'll check the lineup files next. ", count: 30)
+        precondition(CantripHomeDelegations.outcome(
+            narration + "\n\nHeadliners now sort first. Tests pass.", limit: 600
+        ) == "…Headliners now sort first. Tests pass."
+                     && CantripHomeDelegations.outcome("Short reply.", limit: 600) == "Short reply.",
+                     "Home remembers a tab's outcome, not its progress narration")
         let firstRunSink = routeBackend.sink
         routeBackend.sink = nil
         let queuedPrompt = "Make the Bass Compass lineup collapsible."
