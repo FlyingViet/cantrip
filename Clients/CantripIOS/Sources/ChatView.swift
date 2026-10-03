@@ -1876,7 +1876,7 @@ struct ChatView: View {
             dismissKeyboard: { composerFocused = false },
             loadOlder: {
                 guard vm.activeLane.usesCantripRemote else { return }
-                Task { await remote.loadOlderMessages(automatically: true) }
+                remote.requestOlderMessages()
             }
         ) {
             if vm.activeLane.usesCantripRemote {

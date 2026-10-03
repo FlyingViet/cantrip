@@ -40,7 +40,7 @@ private struct HistoryTranscriptHarness: View {
         ChatTranscriptScrollView(
             prependRevision: vm.historyPrependRevision,
             prependAnchor: vm.historyPrependAnchor,
-            loadOlder: { Task { await remote.loadOlderMessages(automatically: true) } }
+            loadOlder: { remote.requestOlderMessages() }
         ) {
             CantripHistoryControls(model: remote)
             ForEach(vm.turns) { turn in
@@ -361,13 +361,14 @@ final class CantripHistoryTests: XCTestCase {
         }
         await model.loadOlderMessages()
         XCTAssertEqual(model.selectedSession?.transcript.count, 2)
-        XCTAssertNotNil(model.detailError)
+        XCTAssertNotNil(model.olderHistoryError)
         XCTAssertFalse(model.isLoadingHistory)
         model.setAppActive(false)
         let switched = await model.configure(url: "https://other.example", pairingToken: "other-token", tailscaleOnly: true)
         XCTAssertTrue(switched)
         XCTAssertNil(model.selectedSession)
         XCTAssertNil(model.detailError)
+        XCTAssertTrue(model.olderHistoryFailures.isEmpty, "Switching servers clears paused history")
         HistoryRequestProtocol.handler = { _ in throw URLError(.timedOut) }
         await model.selectSession(id)
         XCTAssertNil(model.selectedSession, "Never show another server's cached conversation")
@@ -505,7 +506,7 @@ final class CantripHistoryTests: XCTestCase {
         XCTAssertEqual(model.selectedSession?.hasOlderMessages, false)
     }
 
-    func testAutomaticHistoryCountsPromptGroupsAndStopsAtTenPastTurns() async throws {
+    func testAutomaticHistoryLoadsWholePagesUntilTheStartOfHistory() async throws {
         let model = try await model()
         var olderReads = 0
         let prompts = Set(stride(from: 0, through: 30, by: 2))
@@ -514,8 +515,8 @@ final class CantripHistoryTests: XCTestCase {
             if let before = items.first(where: { $0.name == "before" })?.value {
                 olderReads += 1
                 XCTAssertEqual(before, self.messageID(olderReads == 1 ? 26 : 10))
-                return (200, try self.session(values: Array(0..<(olderReads == 1 ? 26 : 10)),
-                                              older: false, prompts: prompts))
+                return (200, try self.session(values: Array((olderReads == 1 ? 10 : 0)..<(olderReads == 1 ? 26 : 10)),
+                                              older: olderReads == 1, prompts: prompts))
             }
             return (200, try self.session(values: Array(26..<32),
                                           list: request.url!.path == "/api/v1/sessions", prompts: prompts))
@@ -523,43 +524,44 @@ final class CantripHistoryTests: XCTestCase {
         model.setAppActive(true)
         try await waitForRefresh(model)
         XCTAssertTrue(model.canAutomaticallyLoadHistory)
-        XCTAssertEqual(olderReads, 0)
+        XCTAssertEqual(olderReads, 0, "Opening a conversation never prefetches history")
         await model.loadOlderMessages(automatically: true)
-        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (10..<32).map(messageID))
-        XCTAssertEqual(model.selectedSession?.transcript.filter { $0.role == "user" }.count, 11,
-                       "The current prompt plus exactly ten prior prompt-response groups")
-        XCTAssertEqual(model.selectedSession?.hasOlderMessages, true,
-                       "An oversized page's earlier groups remain available through its retained cursor")
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (10..<32).map(messageID),
+                       "A whole page is kept, with no ten-exchange cutoff")
         XCTAssertEqual(model.historyPrependAnchor, messageID(26))
-        XCTAssertFalse(model.canAutomaticallyLoadHistory)
+        XCTAssertTrue(model.canAutomaticallyLoadHistory, "Automatic loading continues past ten exchanges")
         await model.refreshNow()
         await model.loadOlderMessages(automatically: true)
-        XCTAssertEqual(olderReads, 1, "Polling and scrolling cannot bypass the manual boundary")
-        await model.loadOlderMessages()
         XCTAssertEqual(olderReads, 2)
         XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (0..<32).map(messageID))
         XCTAssertEqual(model.selectedSession?.hasOlderMessages, false)
+        XCTAssertFalse(model.canAutomaticallyLoadHistory)
+        model.requestOlderMessages()
+        await model.loadOlderMessages(automatically: true)
+        XCTAssertEqual(olderReads, 2, "Nothing is requested once the start of history is reached")
     }
 
-    func testAutomaticHistoryLoadsTenSeparateGroupsWithoutCountingAssistantBubbles() async throws {
+    func testAutomaticHistoryKeepsLoadingWellBeyondTheOldTenGroupBoundary() async throws {
         let model = try await model()
         var reads = 0
         HistoryRequestProtocol.handler = { request in
             if request.url!.query!.contains("before=") {
                 reads += 1
-                let start = 1500 - reads * 150
-                return (200, try self.session(values: Array(start..<(start + 150)), prompts: [start]))
+                let start = 3000 - reads * 150
+                return (200, try self.session(values: Array(start..<(start + 150)), older: reads < 14,
+                                              prompts: [start]))
             }
-            return (200, try self.session(values: [1500, 1501],
-                                          list: request.url!.path == "/api/v1/sessions", prompts: [1500]))
+            return (200, try self.session(values: [3000, 3001],
+                                          list: request.url!.path == "/api/v1/sessions", prompts: [3000]))
         }
         model.setAppActive(true)
         try await waitForRefresh(model)
-        for _ in 0..<12 { await model.loadOlderMessages(automatically: true) }
-        XCTAssertEqual(reads, 10)
-        XCTAssertEqual(model.selectedSession?.transcript.count, 1502,
+        for _ in 0..<20 { await model.loadOlderMessages(automatically: true) }
+        XCTAssertEqual(reads, 14)
+        XCTAssertEqual(model.selectedSession?.transcript.count, 2 + 14 * 150,
                        "Whole groups remain intact even beyond the rolling message window")
         XCTAssertEqual(model.selectedSession?.transcript.first?.role, "user")
+        XCTAssertEqual(model.selectedSession?.hasOlderMessages, false)
         XCTAssertFalse(model.canAutomaticallyLoadHistory)
     }
 
@@ -689,20 +691,26 @@ final class CantripHistoryTests: XCTestCase {
         XCTAssertNotNil(release)
         await model.loadOlderMessages(automatically: true)
         XCTAssertEqual(reads, 1)
+        model.requestOlderMessages()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(reads, 1, "A page already loading is never requested twice")
         release?.resume()
         await download.value
-        XCTAssertNotNil(model.detailError)
+        XCTAssertNotNil(model.olderHistoryError)
+        XCTAssertNil(model.detailError, "The failure shows inline at the top of the transcript")
         XCTAssertTrue(model.isConnected)
         XCTAssertFalse(model.canAutomaticallyLoadHistory)
         await model.loadOlderMessages(automatically: true)
-        XCTAssertEqual(reads, 1)
+        model.requestOlderMessages()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(reads, 1, "A failed page pauses automatic loading until Retry")
         await model.loadOlderMessages()
         XCTAssertEqual(reads, 2)
-        XCTAssertNil(model.detailError)
+        XCTAssertNil(model.olderHistoryError)
         XCTAssertEqual(model.selectedSession?.transcript.count, 4)
     }
 
-    func testAutomaticHistoryRejectsNonAdvancingPageAndBoundsLegacyPages() async throws {
+    func testAutomaticHistoryRejectsNonAdvancingPageAndLoadsLegacyPagesToTheStart() async throws {
         let model = try await model()
         var reads = 0
         HistoryRequestProtocol.handler = { request in
@@ -715,22 +723,24 @@ final class CantripHistoryTests: XCTestCase {
         model.setAppActive(true)
         try await waitForRefresh(model)
         await model.loadOlderMessages(automatically: true)
-        XCTAssertNotNil(model.detailError)
+        XCTAssertNotNil(model.olderHistoryError)
         XCTAssertFalse(model.canAutomaticallyLoadHistory)
         XCTAssertEqual(model.selectedSession?.transcript.count, 2)
 
         HistoryRequestProtocol.handler = { request in
             if request.url!.query!.contains("before=") {
                 reads += 1
-                return (200, try self.session(start: "legacy", values: [100 - reads]))
+                return (200, try self.session(start: "legacy", values: [100 - reads], older: reads < 31))
             }
             return (200, try self.session(revision: "r2", start: "legacy",
                                           values: [100, 101],
                                           list: request.url!.path == "/api/v1/sessions"))
         }
         await model.refreshNow()
-        for _ in 0..<12 { await model.loadOlderMessages(automatically: true) }
-        XCTAssertEqual(reads, 11, "Without user roles, each legacy page consumes one of ten allowances")
+        XCTAssertNil(model.olderHistoryError, "A reset clears the paused failure")
+        for _ in 0..<40 { await model.loadOlderMessages(automatically: true) }
+        XCTAssertEqual(reads, 31, "Ungrouped legacy pages also load until the host reports the start")
+        XCTAssertEqual(model.selectedSession?.transcript.count, 32)
         XCTAssertFalse(model.canAutomaticallyLoadHistory)
     }
 
@@ -783,7 +793,7 @@ final class CantripHistoryTests: XCTestCase {
         release = nil
         try await Task.sleep(for: .milliseconds(500))
         controller.view.layoutIfNeeded()
-        XCTAssertEqual(vm.turns.count, 22)
+        XCTAssertEqual(vm.turns.count, 32)
         XCTAssertFalse(model.canAutomaticallyLoadHistory)
         XCTAssertEqual(scroll.contentOffset.y, offset + scroll.contentSize.height - height, accuracy: 3,
                        "Mapped turns and changing pagination controls preserve the same reading position")

@@ -8,6 +8,23 @@ enum CantripUITestFixtures {
     static var showsImageViewer: Bool {
         ProcessInfo.processInfo.arguments.contains("-CantripUITestImageViewer")
     }
+
+    /// `-CantripUITestRemoteURL http://127.0.0.1:<port> -CantripUITestRemoteToken <token>` pairs
+    /// with a local fixture host, so UI tests can scroll real paged history on the simulator.
+    @MainActor
+    static func pairRemoteIfRequested(_ remote: CantripRemoteModel, env: HermesEnv) async {
+        let defaults = UserDefaults.standard
+        guard let url = defaults.string(forKey: "CantripUITestRemoteURL"),
+              let token = defaults.string(forKey: "CantripUITestRemoteToken") else { return }
+        guard await remote.configure(url: url, pairingToken: token, tailscaleOnly: true) else { return }
+        env.select(.cantrip)
+        for _ in 0..<50 where remote.sessions.isEmpty {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        if remote.selectedSession == nil, let first = remote.sessions.first {
+            await remote.selectSession(first.id)
+        }
+    }
 }
 
 struct CantripImageViewerFixtureView: View {

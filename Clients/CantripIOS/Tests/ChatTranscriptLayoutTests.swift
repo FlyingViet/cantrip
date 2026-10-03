@@ -14,8 +14,30 @@ private final class TranscriptLayoutModel: ObservableObject {
     @Published var prompt = ""
     @Published var history: [HistoryRow] = []
     @Published var prependRevision = 0
+    @Published var topInset: CGFloat = 0
     var historyRequests = 0
     var prependAnchor: UUID?
+    /// When set, each history request prepends one row of this height, like a loaded page.
+    var pageHeight: CGFloat?
+    var pagesRemaining = 0
+    var pageLoading = false
+    var overlappingRequests = 0
+
+    func requestHistory() {
+        historyRequests += 1
+        guard let pageHeight else { return }
+        if pageLoading { overlappingRequests += 1; return }
+        guard pagesRemaining > 0 else { return }
+        pageLoading = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(30))
+            prependAnchor = history.first?.id ?? UUID()
+            history.insert(.init(height: pageHeight), at: 0)
+            pagesRemaining -= 1
+            prependRevision += 1
+            pageLoading = false
+        }
+    }
 
     struct HistoryRow: Identifiable {
         let id = UUID()
@@ -30,7 +52,7 @@ private struct TranscriptLayoutHarness: View {
         ChatTranscriptScrollView(scrollRequest: model.scrollRequest,
                                  prependRevision: model.prependRevision,
                                  prependAnchor: model.prependAnchor,
-                                 loadOlder: { model.historyRequests += 1 }) {
+                                 loadOlder: { model.requestHistory() }) {
             ForEach(model.history) { row in
                 Text("History message")
                     .frame(maxWidth: .infinity)
@@ -49,6 +71,7 @@ private struct TranscriptLayoutHarness: View {
                 PromptTextView(text: model.prompt)
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: model.topInset) }
         .frame(width: model.viewportWidth, height: model.viewportHeight)
     }
 }
@@ -101,13 +124,80 @@ final class ChatTranscriptLayoutTests: XCTestCase {
         XCTAssertEqual(model.historyRequests, 0)
     }
 
-    func testHistoryTriggerRequiresUpwardUserScrollNearTop() {
-        XCTAssertTrue(HistoryScrollTrigger.shouldLoad(previous: 140, current: 110, userIsScrolling: true))
-        XCTAssertTrue(HistoryScrollTrigger.shouldLoad(previous: 0, current: -20, userIsScrolling: true))
-        XCTAssertFalse(HistoryScrollTrigger.shouldLoad(previous: 110, current: 140, userIsScrolling: true))
-        XCTAssertFalse(HistoryScrollTrigger.shouldLoad(previous: 500, current: 400, userIsScrolling: true))
-        XCTAssertFalse(HistoryScrollTrigger.shouldLoad(previous: 110, current: 110, userIsScrolling: true))
-        XCTAssertFalse(HistoryScrollTrigger.shouldLoad(previous: 500, current: 0, userIsScrolling: false))
+    func testHistoryTriggerPrefetchesOnlyWhileTheUserHeadsIntoOlderHistory() {
+        func sample(_ offset: CGFloat, height: CGFloat = 5000) -> HistoryScrollSample {
+            HistoryScrollSample(offset: offset, contentHeight: height, visibleHeight: 500)
+        }
+        func reading(_ was: Bool, _ from: CGFloat, _ to: CGFloat, user: Bool) -> Bool {
+            HistoryScrollTrigger.isReadingHistory(was: was, previous: sample(from), current: sample(to),
+                                                  userIsScrolling: user)
+        }
+        func loads(_ reading: Bool, _ from: CGFloat, _ to: CGFloat, user: Bool = true) -> Bool {
+            HistoryScrollTrigger.shouldLoad(readingHistory: reading, previous: sample(from),
+                                            current: sample(to), userIsScrolling: user)
+        }
+        func continues(_ reading: Bool, _ offset: CGFloat) -> Bool {
+            HistoryScrollTrigger.shouldContinueAfterPrepend(readingHistory: reading, current: sample(offset))
+        }
+        XCTAssertEqual(HistoryScrollTrigger.prefetchDistance(visibleHeight: 500), 600)
+        XCTAssertEqual(HistoryScrollTrigger.prefetchDistance(visibleHeight: 900), 900)
+
+        XCTAssertTrue(reading(false, 700, 650, user: true), "The user's upward scroll starts reading history")
+        XCTAssertFalse(reading(false, 700, 650, user: false), "Programmatic or layout movement never does")
+        XCTAssertFalse(reading(true, 650, 700, user: true), "Scrolling down stops automatic loading")
+        XCTAssertTrue(reading(true, -30, 0, user: true), "Springing back from the top bounce keeps reading")
+        XCTAssertTrue(reading(true, 0, 300, user: false), "A restored prepend anchor keeps reading")
+        XCTAssertFalse(reading(true, 300, 4500, user: false), "Returning to the latest message ends it")
+
+        XCTAssertTrue(loads(true, 700, 590), "Loading starts about a screen before the top")
+        XCTAssertTrue(loads(true, 0, -20), "Pulling past the top of a short transcript loads")
+        XCTAssertFalse(loads(true, 900, 800), "Far from the top nothing loads yet")
+        XCTAssertFalse(loads(false, 500, 100), "Not reading history, nothing loads")
+        XCTAssertFalse(loads(true, 0, 300, user: false), "Programmatic or layout movement never loads")
+        XCTAssertTrue(continues(true, 300), "A short restored page chains the next page")
+        XCTAssertFalse(continues(true, 700), "A screen of history above the reader is enough")
+        XCTAssertFalse(continues(false, 0), "Once the reader turns back, pages stop")
+    }
+
+    func testChainedPagesLoadUntilAScreenAboveTheReaderWithoutJumping() async throws {
+        let model = TranscriptLayoutModel()
+        model.pageHeight = 100
+        model.pagesRemaining = 40
+        let (window, controller) = try host(model)
+        defer { window.isHidden = true }
+        let scroll = try await settle(controller)
+        scroll.setContentOffset(CGPoint(x: 0, y: 240), animated: false)
+        _ = try await settle(controller)
+        XCTAssertEqual(model.historyRequests, 0, "Opening and positioning never prefetch")
+        scroll.delegate?.scrollViewWillBeginDragging?(scroll)
+        _ = try await settle(controller)
+        scroll.setContentOffset(CGPoint(x: 0, y: 60), animated: false)
+        scroll.delegate?.scrollViewDidEndDragging?(scroll, willDecelerate: false)
+        let start = scroll.contentOffset.y
+        let startHeight = scroll.contentSize.height
+        for _ in 0..<20 { _ = try await settle(controller) }
+        let loaded = model.history.count
+        XCTAssertGreaterThanOrEqual(loaded, 3, "Short pages keep loading without another gesture")
+        XCTAssertLessThan(loaded, 40, "Loading stops once a screen of history sits above the reader")
+        XCTAssertGreaterThan(scroll.contentOffset.y,
+                             HistoryScrollTrigger.prefetchDistance(visibleHeight: scroll.bounds.height) - 1)
+        XCTAssertEqual(scroll.contentOffset.y, start + scroll.contentSize.height - startHeight, accuracy: 3,
+                       "Every prepended page keeps the message being read in place")
+        XCTAssertEqual(model.overlappingRequests, 0)
+
+        scroll.delegate?.scrollViewWillBeginDragging?(scroll)
+        _ = try await settle(controller)
+        scroll.setContentOffset(CGPoint(x: 0, y: scroll.contentOffset.y + 200), animated: false)
+        scroll.delegate?.scrollViewDidEndDragging?(scroll, willDecelerate: false)
+        for _ in 0..<4 { _ = try await settle(controller) }
+        XCTAssertEqual(model.history.count, loaded, "Scrolling down never loads older history")
+
+        scroll.delegate?.scrollViewWillBeginDragging?(scroll)
+        _ = try await settle(controller)
+        scroll.setContentOffset(CGPoint(x: 0, y: 20), animated: false)
+        scroll.delegate?.scrollViewDidEndDragging?(scroll, willDecelerate: false)
+        for _ in 0..<20 { _ = try await settle(controller) }
+        XCTAssertGreaterThan(model.history.count, loaded, "Scrolling up again continues through history")
     }
 
     func testProgrammaticScrollAndLayoutChangesNeverLoadHistory() async throws {
@@ -136,6 +226,20 @@ final class ChatTranscriptLayoutTests: XCTestCase {
         _ = try await settle(controller)
         XCTAssertGreaterThan(model.historyRequests, 0)
         scroll.delegate?.scrollViewDidEndDragging?(scroll, willDecelerate: false)
+    }
+
+    func testSystemScrollToTopLoadsHistory() async throws {
+        let model = TranscriptLayoutModel()
+        let (window, controller) = try host(model)
+        defer { window.isHidden = true }
+        let scroll = try await settle(controller)
+        scroll.setContentOffset(CGPoint(x: 0, y: 900), animated: false)
+        _ = try await settle(controller)
+        XCTAssertEqual(model.historyRequests, 0)
+        // A status-bar tap, VoiceOver, or Voice Control scrolls up with an animation, not a drag.
+        scroll.setContentOffset(CGPoint(x: 0, y: -scroll.adjustedContentInset.top), animated: true)
+        for _ in 0..<4 { _ = try await settle(controller) }
+        XCTAssertGreaterThan(model.historyRequests, 0)
     }
 
     func testStreamingGrowthFollowsActualContentWithoutAnimatedOvershoot() async throws {
@@ -216,6 +320,61 @@ final class ChatTranscriptLayoutTests: XCTestCase {
         let streaming = try await settle(controller)
         XCTAssertEqual(streaming.contentOffset.y, offset, accuracy: 2,
                        "New output must not pull someone reading older history back to the bottom")
+    }
+
+    func testPrependAnchorAddsTheHeaderInsetAndFollowsLateLayout() {
+        var anchor = HistoryPrependAnchor()
+        func geometry(_ offset: CGFloat, _ height: CGFloat, revision: Int) -> HistoryScrollGeometry {
+            HistoryScrollGeometry(height: height, offset: offset, topInset: 110, prependRevision: revision)
+        }
+        func target(_ previous: HistoryScrollGeometry, _ current: HistoryScrollGeometry, user: Bool = false) -> CGFloat? {
+            anchor.target(previous: previous, current: current, userIsScrolling: user)
+        }
+        XCTAssertNil(target(geometry(-110, 1219, revision: 0), geometry(-110, 1219, revision: 0)))
+        XCTAssertEqual(target(geometry(-110, 1219, revision: 0), geometry(-110, 6295, revision: 1)), 5076,
+                       "scrollTo(y:) is measured from the resting top under the header")
+        XCTAssertEqual(target(geometry(-110, 6295, revision: 1), geometry(-110, 6317, revision: 1)), 5098,
+                       "Rows that finish laying out after the prepend are included")
+        XCTAssertEqual(target(geometry(-110, 6317, revision: 1), geometry(4966, 6317, revision: 1)), 5098,
+                       "A restore that landed on a superseded target is re-applied")
+        XCTAssertNil(target(geometry(4966, 6317, revision: 1), geometry(4988, 6317, revision: 1)))
+        XCTAssertNil(target(geometry(4988, 6317, revision: 1), geometry(4988, 6900, revision: 1)),
+                     "Once restored, later growth (such as streaming below) is left alone")
+
+        XCTAssertNil(target(geometry(100, 1000, revision: 1), geometry(600, 1500, revision: 2)),
+                     "A prepend the scroll anchor already absorbed needs no correction")
+        XCTAssertNil(target(geometry(600, 1500, revision: 2), geometry(600, 2000, revision: 2)))
+
+        XCTAssertEqual(target(geometry(0, 1000, revision: 2), geometry(0, 1500, revision: 3)), 610)
+        XCTAssertNil(target(geometry(0, 1500, revision: 3), geometry(-40, 1500, revision: 3), user: true),
+                     "The user's own scrolling is never fought")
+        XCTAssertNil(target(geometry(-40, 1500, revision: 3), geometry(-40, 1800, revision: 3)))
+
+        XCTAssertNotNil(target(geometry(0, 1000, revision: 3), geometry(0, 9000, revision: 4)))
+        for _ in 0..<3 { _ = target(geometry(0, 9000, revision: 4), geometry(0, 9000, revision: 4)) }
+        XCTAssertNil(target(geometry(0, 9000, revision: 4), geometry(0, 9000, revision: 4)),
+                     "An unreachable target (clamped content) gives up after a few attempts")
+    }
+
+    func testPrependKeepsReadingPositionUnderAHeaderInset() async throws {
+        let model = TranscriptLayoutModel()
+        model.topInset = 110
+        model.heights = []
+        model.history = [.init(height: 300), .init(height: 800), .init(height: 200)]
+        let (window, controller) = try host(model)
+        defer { window.isHidden = true }
+        let scroll = try await settle(controller)
+        XCTAssertEqual(scroll.adjustedContentInset.top, 110, accuracy: 1)
+        scroll.setContentOffset(CGPoint(x: 0, y: -scroll.adjustedContentInset.top + 60), animated: false)
+        _ = try await settle(controller)
+        let offset = scroll.contentOffset.y
+        let height = scroll.contentSize.height
+        model.prependAnchor = model.history.first?.id
+        model.history.insert(contentsOf: [.init(height: 120), .init(height: 450)], at: 0)
+        model.prependRevision += 1
+        let updated = try await settle(controller)
+        XCTAssertEqual(updated.contentOffset.y, offset + updated.contentSize.height - height, accuracy: 2,
+                       "Older messages inserted above keep the visible text in place under the header")
     }
 
     func testAutomaticPrependPreservesPartiallyScrolledPromptOffset() async throws {
