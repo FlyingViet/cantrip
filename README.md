@@ -119,6 +119,9 @@ The macOS app includes:
 - **Durable runs:** journal encoding, writes, and synchronization use an ordered
   background writer. Run completion and Remote mutation acknowledgements wait
   for saved events; storage failures are surfaced instead of reporting success.
+  When a run ends or a tab opens, a journal over 4 MB is atomically rewritten to
+  just the events recovery replays (queued prompts, the last run's boundaries,
+  and any unfinished run), so long-lived tabs keep launching quickly.
 - **Private Local:** a permanent, saved tab shared with paired Remote clients.
   "Local" means **self-hosted**, not restricted to the Cantrip Mac. Your Ollama
   server can run on another machine, independently of the global backend and
