@@ -71,7 +71,8 @@ enum RemoteGeneratedImages {
             return created
         }
         var fence: (Character, Int)?
-        let lines = text.components(separatedBy: "\n").map { line -> String in
+        var imageLines = Set<Int>()
+        let lines = text.components(separatedBy: "\n").enumerated().map { index, line -> String in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if let active = fence {
                 if trimmed.prefix(while: { $0 == active.0 }).count >= active.1,
@@ -91,6 +92,7 @@ enum RemoteGeneratedImages {
                     string.substring(with: match.range(at: 2)),
                     altText: string.substring(with: match.range(at: 1))
                 ) else { return line }
+                imageLines.insert(index)
                 return string.replacingCharacters(in: match.range(at: 2), with: image.markdownURL)
             }
             guard line.contains("](") else { return line }
@@ -106,7 +108,21 @@ enum RemoteGeneratedImages {
             }
             return rewritten as String
         }
-        return Presentation(text: lines.joined(separator: "\n"), images: images)
+        // "**Before**\n![..](..)" is one Markdown paragraph, and clients drop an image inside
+        // text. A blank line between an image line and adjacent text keeps the image a block.
+        var output: [String] = []
+        for (index, line) in lines.enumerated() {
+            if index > 0, imageLines.contains(index) != imageLines.contains(index - 1),
+               !isBlank(line), !isBlank(lines[index - 1]) {
+                output.append("")
+            }
+            output.append(line)
+        }
+        return Presentation(text: output.joined(separator: "\n"), images: images)
+    }
+
+    private static func isBlank(_ line: String) -> Bool {
+        line.allSatisfy(\.isWhitespace)
     }
 
     /// Inline code spans (`code`, ``code``) on one line, as UTF-16 ranges.

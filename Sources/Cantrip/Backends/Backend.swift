@@ -266,6 +266,14 @@ struct InputRequestSnapshot: Codable, Equatable, Identifiable {
     var url: String?
     var code: String?
     let expiresAt: Double
+    /// Remote only: `detail` with Mac images rewritten to paired previews, and those images.
+    var displayText: String?
+    var images: [PreviewImage]?
+
+    struct PreviewImage: Codable, Equatable {
+        let id: String
+        let altText: String
+    }
 }
 
 struct InputRequestAnswer: Codable {

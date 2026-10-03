@@ -168,11 +168,131 @@ extension SessionTabTests {
         let denied = try await request(path, other.id, true, "GET")
         precondition(denied.0 == 404, "another tab cannot read the owner's preview")
         try await checkBrowserPreviewLink(chat: owner, port: port, token: token)
+        try await checkQuestionImages(owner: owner, other: other, image: image, request: request,
+                                      port: port, token: token)
         manager.close(owner.id)
         precondition(SessionOutputFolders.shared.roots(for: owner.id).count == 1, "closing a tab keeps history previews")
         owner.deleteTranscript()
         precondition(SessionOutputFolders.shared.roots(for: owner.id).isEmpty, "deleting a tab forgets its folders")
         try? FileManager.default.removeItem(at: files.deletingLastPathComponent().deletingLastPathComponent())
+    }
+
+    /// "Copilot needs your answer" questions preview images from the tab's files folder in the
+    /// pending request (chat card and composer panel), and the answered copy keeps the same IDs.
+    @MainActor
+    private static func checkQuestionImages(
+        owner: ChatSession, other: ChatSession, image: URL,
+        request: (String, UUID?, Bool, String) async throws -> (Int, [String: Any]),
+        port: Int, token: String
+    ) async throws {
+        let detail = "The audit is done.\n\n**Light — before**\n![Calendar before, light mode](\(image.path))\n\n"
+            + "Should I ship it?"
+        let question = InputRequestSnapshot(
+            id: UUID(), kind: .question, source: "Copilot", title: "Copilot needs your answer", detail: detail,
+            choices: ["Ship", "Hold"], expiresAt: Date().addingTimeInterval(600).timeIntervalSince1970
+        )
+        owner.pendingInputs = [question]
+        other.pendingInputs = [question]
+        func pending(_ id: UUID) async throws -> [String: Any] {
+            let result = try await request("", id, true, "GET")
+            precondition(result.0 == 200)
+            return ((result.1["session"] as! [String: Any])["pendingInputs"] as! [[String: Any]])[0]
+        }
+        let owned = try await pending(owner.id)
+        let images = owned["images"] as? [[String: String]] ?? []
+        let imageID = images.first?["id"] ?? ""
+        precondition(images.count == 1 && images[0]["altText"] == "Calendar before, light mode"
+                     && imageID.hasPrefix("previews/\(question.id.uuidString)/") && owned["detail"] as? String == detail
+                     && owned["displayText"] as? String == "The audit is done.\n\n**Light — before**\n\n"
+                        + "![Calendar before, light mode](cantrip-preview://image/\(imageID))\n\nShould I ship it?",
+                     "a pending question previews its tab's images as their own blocks: \(owned)")
+        let listing = try await request("/input", owner.id, true, "GET")
+        let listed = (listing.1["requests"] as? [[String: Any]])?.first
+        precondition((listed?["images"] as? [[String: String]]) == images
+                     && listed?["displayText"] as? String == owned["displayText"] as? String,
+                     "the input listing used by older clients carries the same previews")
+        let thumbnail = try await request("/\(imageID)/thumbnail", owner.id, true, "GET")
+        precondition(thumbnail.0 == 200, "the question's preview is served by its own tab")
+        let foreign = try await pending(other.id)
+        precondition(foreign["images"] == nil && foreign["displayText"] == nil,
+                     "another tab's question naming the same folder gets no previews")
+        let denied = try await request("/\(imageID)", other.id, true, "GET")
+        precondition(denied.0 == 404, "another tab cannot read the question's preview")
+        owner.pendingInputs = [InputRequestSnapshot(
+            id: question.id, kind: .approval, source: "Copilot", title: "Allow shell?", detail: detail,
+            expiresAt: question.expiresAt
+        )]
+        let approval = try await pending(owner.id)
+        let approvalImage = try await request("/\(imageID)", owner.id, true, "GET")
+        precondition(approval["images"] == nil && approvalImage.0 == 404,
+                     "approvals stay verbatim: their details are commands, not replies")
+        owner.pendingInputs = [question]
+        other.pendingInputs = []
+        try await checkBrowserQuestionImages(chat: owner, port: port, token: token)
+        owner.pendingInputs = []
+        let answeredBefore = try await request("/\(imageID)", owner.id, true, "GET")
+        precondition(answeredBefore.0 == 404, "a question no longer waiting authorizes nothing")
+        owner.recordInputConversation(question, answer: "Ship")
+        let echo = owner.messages.first { $0.id == question.id }
+        let echoed = try await request("/\(imageID)/thumbnail", owner.id, true, "GET")
+        precondition(echo?.role == .assistant && echo?.text == "Copilot needs your answer\n\n\(detail)"
+                     && echoed.0 == 200 && echoed.1["data"] as? String == thumbnail.1["data"] as? String,
+                     "the answered question's transcript copy keeps the request's preview IDs")
+        owner.messages.removeAll { $0.id == question.id || $0.role == .user && $0.text == "Ship" || $0.text.isEmpty }
+    }
+
+    /// Browser and Mac Remote: the chat card renders the question as Markdown with its images
+    /// in a compact row, never as raw paths or "Image on the Mac" notes.
+    @MainActor
+    private static func checkBrowserQuestionImages(chat: ChatSession, port: Int, token: String) async throws {
+        _ = NSApplication.shared
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let delegate = GeneratedImagePageDelegate()
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 390, height: 800), configuration: configuration)
+        webView.navigationDelegate = delegate
+        let window = NSWindow(contentRect: webView.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = webView
+        defer { webView.stopLoading(); window.close() }
+        webView.load(URLRequest(url: URL(string: "http://127.0.0.1:\(port)/")!))
+        for _ in 0..<200 where !delegate.finished && delegate.error == nil { try await Task.sleep(for: .milliseconds(50)) }
+        precondition(delegate.finished, "Remote page should load: \(String(describing: delegate.error))")
+        let json = try await webView.callAsyncJavaScript("""
+        localStorage.cantripToken=pairing;token=pairing;pair(false);selected=sessionID;
+        const data=await api(`/api/v1/sessions/${sessionID}`),wait=ms=>new Promise(r=>setTimeout(r,ms));render(data.session);
+        const card=()=>document.querySelector('.input-card'),thumb=()=>card()?.querySelector('.input-images .mac-image img');
+        for(let i=0;i<60&&!thumb()?.naturalWidth;i++)await wait(100);
+        const detail=card()?.querySelector('.input-detail'),button=card()?.querySelector('.input-images .mac-image');
+        const box=button?.getBoundingClientRect(),choices=[...(card()?.querySelectorAll('button.control')||[])].map(b=>b.textContent);
+        button?.click();for(let i=0;i<60&&$("imageFull").naturalHeight!==2048;i++)await wait(100);
+        const result={strong:detail?.querySelector('strong')?.textContent||'',text:detail?.textContent||'',
+          caption:card()?.querySelector('.input-image figcaption')?.textContent||'',
+          thumb:thumb()?.naturalWidth||0,height:Math.round(box?.height||0),label:button?.getAttribute('aria-label')||'',choices,
+          open:$("imageViewer").open,full:$("imageFull").naturalHeight,title:$("imageViewerTitle").textContent};
+        $("imageDone").click();return JSON.stringify(result);
+        """, arguments: ["pairing": token, "sessionID": chat.id.uuidString], contentWorld: .page) as? String ?? "{}"
+        let result = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] ?? [:]
+        let text = result["text"] as? String ?? ""
+        precondition(text == "The audit is done.Should I ship it?" && result["strong"] as? String == ""
+                     && result["caption"] as? String == "Light — before",
+                     "the question renders as Markdown, and the label above the image captions it: \(result)")
+        precondition(result["thumb"] as? Int ?? 0 > 0 && (1...130).contains(result["height"] as? Int ?? 0)
+                     && result["label"] as? String == "Light — before. Open full size."
+                     && (result["choices"] as? [String])?.starts(with: ["Ship", "Hold"]) == true,
+                     "its image is a compact thumbnail ahead of the answers: \(result)")
+        precondition(result["open"] as? Bool == true && result["full"] as? Int == 2048
+                     && result["title"] as? String == "Light — before",
+                     "the thumbnail opens the full-size viewer: \(result)")
+        if let directory = ProcessInfo.processInfo.environment["CANTRIP_TEST_SNAPSHOT_DIR"] {
+            _ = try await webView.evaluateJavaScript("document.querySelector('.input-card').scrollIntoView({block:'end'})")
+            try await Task.sleep(for: .milliseconds(300))
+            let snapshot = try await webView.takeSnapshot(configuration: nil)
+            if let tiff = snapshot.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?
+                .representation(using: .png, properties: [:]) {
+                try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("web-question-card.png"))
+            }
+        }
     }
 
     /// Browser and Mac Remote: a link to a Mac image opens the full-size viewer.

@@ -180,10 +180,16 @@ extension SessionTabTests {
         const elements={};const $=id=>elements[id]||(elements[id]=node());const document={createElement:node};
         let token="fixture",selected="tab",renderedPayload="",calls=[];function clearTimeout(){}function setTimeout(){return 1}
         function safeURL(value){return value}function refresh(){return Promise.resolve()}
+        let inlineImages=null;function appendProse(parent,text){const prose=node();prose.prose=text;prose.inline=inlineImages;parent.append(prose)}
+        function macImage(sessionID,image,kind,label){const button=node();button.preview={sessionID,id:image.id,kind,label};return button}
         const question={id:"question",kind:"question",title:"Which?",detail:"Explain in chat",choices:["A","B"],allowsFreeform:true,expiresAt:9999999999};
         const secret={id:"secret",kind:"secret",title:"Password",detail:"Verified program",choices:[],expiresAt:9999999999};
+        const shown={id:"shown",kind:"question",title:"Ship?",detail:"**Before**\\n![Before](/Users/me/files/a.png)\\nShip [it](/Users/me/files/a.png)?",
+          displayText:"**Before**\\n\\n![Shot](cantrip-preview://image/previews/q/a.jpg)\\n\\nShip [it](cantrip-preview://image/previews/q/a.jpg)?",
+          images:[{id:"previews/q/a.jpg",altText:"Shot"}],choices:["Yes"],allowsFreeform:false,expiresAt:9999999999};
+        const approval={id:"approval",kind:"approval",title:"Allow?",detail:"rm *.tmp",choices:[],expiresAt:9999999999};
         function api(path,options){calls.push({path,body:options?JSON.parse(options.body):null});return Promise.resolve({requests:[question,secret]})}
-        \(source[start.lowerBound..<end.lowerBound])
+        \(source[start.lowerBound..<end.lowerBound].replacingOccurrences(of: "\\\\", with: "\\"))
         const inline=node();appendChatInputs(inline,{id:"tab",pendingInputs:[question,secret]});
         """)
         precondition(context.evaluateScript("!$('inputEditor').open && inline.children.length===2 && chatInputReply.id==='question'")!.toBool())
@@ -191,6 +197,15 @@ extension SessionTabTests {
         precondition(context.evaluateScript("$('inputCards').children.length===1 && $('inputCards').children[0].dataset.id==='secret'")!.toBool())
         context.evaluateScript("respondChatInput({sessionID:'tab',token},question,{decision:'submit',text:'A'})")
         precondition(context.evaluateScript("calls.some(c=>c.path==='/api/v1/sessions/tab/input/question' && c.body.text==='A')")!.toBool())
+        context.evaluateScript(#"globalThis.imaged=node();appendChatInputs(imaged,{id:"tab",pendingInputs:[shown,approval]})"#)
+        precondition(context.evaluateScript("""
+        (()=>{const [card,command]=imaged.children,[,detail,row]=card.children,prose=detail.children[0];
+          const [tile,caption]=row.children[0].children;
+          return prose.prose==="Ship [it](cantrip-preview://image/previews/q/a.jpg)?"&&prose.inline.sessionID==="tab"
+            &&prose.inline.images.get("previews/q/a.jpg").altText==="Shot"&&inlineImages===null
+            &&row.className==="input-images"&&row.children.length===1&&tile.preview.label==="Before"&&caption.textContent==="Before"
+            &&command.children[1].textContent==="rm *.tmp"})()
+        """)!.toBool(), "question cards render Markdown with a thumbnail row; approvals stay verbatim")
     }
 
     @MainActor
