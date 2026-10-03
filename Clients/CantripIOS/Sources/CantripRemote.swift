@@ -271,12 +271,14 @@ struct CantripRemoteDelegation: Decodable, Equatable, Identifiable {
     let startedAt: TimeInterval?
     let finishedAt: TimeInterval?
     let latestStatus: String?
+    /// The tab is waiting for the user's answer to one of its questions.
+    let needsInput: Bool
     let result: String?
     let error: String?
 
     private enum CodingKeys: String, CodingKey {
         case id, tabID, tabTitle, summary, prompt, status, startedAt, finishedAt
-        case latestStatus, result, error
+        case latestStatus, needsInput, result, error
     }
 
     init(
@@ -289,6 +291,7 @@ struct CantripRemoteDelegation: Decodable, Equatable, Identifiable {
         startedAt: TimeInterval? = nil,
         finishedAt: TimeInterval? = nil,
         latestStatus: String? = nil,
+        needsInput: Bool = false,
         result: String? = nil,
         error: String? = nil
     ) {
@@ -301,6 +304,7 @@ struct CantripRemoteDelegation: Decodable, Equatable, Identifiable {
         self.startedAt = startedAt
         self.finishedAt = finishedAt
         self.latestStatus = latestStatus
+        self.needsInput = needsInput
         self.result = result
         self.error = error
     }
@@ -317,6 +321,7 @@ struct CantripRemoteDelegation: Decodable, Equatable, Identifiable {
             startedAt: container.decodeLenient(TimeInterval.self, forKey: .startedAt),
             finishedAt: container.decodeLenient(TimeInterval.self, forKey: .finishedAt),
             latestStatus: container.decodeLenient(String.self, forKey: .latestStatus),
+            needsInput: container.decodeLenient(Bool.self, forKey: .needsInput, default: false),
             result: container.decodeLenient(String.self, forKey: .result),
             error: container.decodeLenient(String.self, forKey: .error)
         )

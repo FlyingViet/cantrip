@@ -665,6 +665,48 @@ final class CantripHomeTests: XCTestCase {
         }
     }
 
+    func testHandoffCardsLeaveNarrationInTheTab() throws {
+        let now = Date().timeIntervalSince1970
+        let narration = "I'll start with my Cantrip notes, then map how Home depends on the Copilot CLI. "
+            + "Now the rest of the Home section, then the tests, the bridge and the staged build."
+        let plain = CantripRemoteDelegation(
+            id: "a", tabID: "tab", tabTitle: "Cantrip", summary: "Make Home backend-agnostic",
+            status: .completed, startedAt: now - 600, finishedAt: now - 60
+        )
+        let verbose = CantripRemoteDelegation(
+            id: "a", tabID: "tab", tabTitle: "Cantrip", summary: "Make Home backend-agnostic",
+            status: .completed, startedAt: now - 600, finishedAt: now - 60,
+            latestStatus: narration, result: narration + narration, error: "The tab's run failed."
+        )
+        for dynamicType in [DynamicTypeSize.large, .accessibility3] {
+            func height(_ handoff: CantripRemoteDelegation) -> CGFloat {
+                UIHostingController(rootView:
+                    CantripHandoffCard(handoff: handoff, onOpenTab: { _ in })
+                        .environment(\.dynamicTypeSize, dynamicType)
+                        .frame(width: 393)
+                ).sizeThatFits(in: CGSize(width: 393, height: CGFloat.greatestFiniteMagnitude)).height
+            }
+            XCTAssertEqual(height(verbose), height(plain), accuracy: 0.5,
+                           "Narration, results and errors stay in the tab at \(dynamicType)")
+            if dynamicType == .large {
+                XCTAssertLessThanOrEqual(height(plain), 110, "A handoff card stays a couple of lines tall")
+            }
+        }
+
+        let decoded = try JSONDecoder().decode([CantripRemoteDelegation].self, from: Data("""
+        [{"id":"q","tabID":"t","status":"running","needsInput":true},
+         {"id":"o","tabID":"t","status":"running","latestStatus":"Waiting for your input"},
+         {"id":"w","tabID":"t","status":"running","latestStatus":"Running xcodebuild test","needsInput":"yes"},
+         {"id":"c","tabID":"t","status":"completed","needsInput":true}]
+        """.utf8))
+        let cards = decoded.map { CantripHandoffCard(handoff: $0) }
+        XCTAssertEqual(decoded.map(\.needsInput), [true, false, false, true])
+        XCTAssertEqual(cards.map(\.needsAnswer), [true, true, false, false],
+                       "Running tabs that wait on the user say so, including older Macs")
+        XCTAssertEqual(cards.map(\.statusText),
+                       ["Needs your answer", "Needs your answer", "Working in tab", "Done in tab"])
+    }
+
     func testHomeHandoffCardScreenshots() async throws {
         let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_ARTIFACT_DIR"]
         guard let directory, !directory.isEmpty else {
@@ -714,6 +756,9 @@ final class CantripHomeTests: XCTestCase {
             .init(id: "running", tabID: "tab-1", tabTitle: "Bass Compass",
                   summary: "Fix lineup sorting", status: .running, startedAt: now - 95,
                   latestStatus: "Running xcodebuild test"),
+            .init(id: "asking", tabID: "tab-3", tabTitle: "Cantrip",
+                  summary: "Make Home's guardrails backend-agnostic", status: .running,
+                  startedAt: now - 240, latestStatus: "Needs your answer", needsInput: true),
             .init(id: "done", tabID: "tab-1", tabTitle: "Bass Compass",
                   summary: "Collapse past sets in the lineup", status: .completed,
                   startedAt: now - 900, finishedAt: now - 420,

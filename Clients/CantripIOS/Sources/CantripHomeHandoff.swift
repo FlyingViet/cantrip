@@ -14,11 +14,12 @@ struct CantripHandoffStack: View {
     }
 }
 
+/// A compact handoff card: status, tab, summary, elapsed time and Open tab. The tab's own
+/// narration, results and errors stay in the tab, so a card stays a couple of lines tall.
 struct CantripHandoffCard: View {
     let handoff: CantripRemoteDelegation
     var onOpenTab: ((String) -> Void)?
 
-    @State private var showsFullResult = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .caption) private var iconSize: CGFloat = 18
 
@@ -48,7 +49,15 @@ struct CantripHandoffCard: View {
         onOpenTab != nil && !CantripSubagentFormat.trimmed(handoff.tabID).isEmpty
     }
 
-    private var statusText: String {
+    /// Older Macs only say so in the tab's latest status.
+    var needsAnswer: Bool {
+        guard handoff.status == .running else { return false }
+        let latest = CantripSubagentFormat.trimmed(handoff.latestStatus)
+        return handoff.needsInput || latest == "Needs your answer" || latest == "Waiting for your input"
+    }
+
+    var statusText: String {
+        if needsAnswer { return "Needs your answer" }
         switch handoff.status {
         case .queued: return "Queued in tab"
         case .running: return "Working in tab"
@@ -60,48 +69,10 @@ struct CantripHandoffCard: View {
 
     @ViewBuilder
     private func card(now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             header
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibilityLabel(now: now))
-
-            if handoff.status.isActive, let latest = nonEmpty(handoff.latestStatus) {
-                Text("Now: \(latest)")
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let result = nonEmpty(handoff.result) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { showsFullResult.toggle() }
-                } label: {
-                    Text(result)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(showsFullResult ? nil : 4)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Result: \(result)")
-                .accessibilityHint(showsFullResult ? "Shows less of the result" : "Shows the full result")
-            }
-
-            if let error = nonEmpty(handoff.error) {
-                Label {
-                    Text(error)
-                        .foregroundStyle(.secondary)
-                } icon: {
-                    Image(systemName: handoff.status == .failed
-                          ? "exclamationmark.triangle.fill" : "info.circle")
-                        .foregroundStyle(handoff.status == .failed ? Color.orange : Color.secondary)
-                        .accessibilityHidden(true)
-                }
-                .font(.caption)
-                .fixedSize(horizontal: false, vertical: true)
-            }
 
             let footer = stacksRows
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
@@ -126,11 +97,12 @@ struct CantripHandoffCard: View {
                     .accessibilityLabel("Open \(tabTitle) tab")
                 }
             }
+            .padding(.leading, stacksRows ? 0 : iconSize + 8)
         }
         .padding(.horizontal, 12)
-        .padding(.top, 12)
+        .padding(.top, 10)
         // The 44pt Open tab target already leaves room below its label.
-        .padding(.bottom, canOpenTab ? 2 : 12)
+        .padding(.bottom, canOpenTab ? 0 : 10)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -150,7 +122,8 @@ struct CantripHandoffCard: View {
                 statusRow {
                     Text(statusText)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(needsAnswer ? Color.primary : Color.secondary)
+                        .lineLimit(stacksRows ? nil : 1)
                     Label(tabTitle, systemImage: "rectangle.stack")
                         .labelStyle(.titleAndIcon)
                         .font(.caption2.weight(.semibold))
@@ -173,17 +146,22 @@ struct CantripHandoffCard: View {
 
     @ViewBuilder
     private var statusIcon: some View {
-        switch handoff.status {
-        case .queued:
-            Image(systemName: "clock").foregroundStyle(.secondary)
-        case .running:
-            ProgressView().controlSize(.small)
-        case .completed:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .failed:
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-        case .cancelled:
-            Image(systemName: "stop.circle.fill").foregroundStyle(.secondary)
+        if needsAnswer {
+            Image(systemName: "questionmark.bubble.fill")
+                .foregroundStyle(CantripHomeBackgroundStyle.activeTint)
+        } else {
+            switch handoff.status {
+            case .queued:
+                Image(systemName: "clock").foregroundStyle(.secondary)
+            case .running:
+                ProgressView().controlSize(.small)
+            case .completed:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            case .failed:
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            case .cancelled:
+                Image(systemName: "stop.circle.fill").foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -192,10 +170,5 @@ struct CantripHandoffCard: View {
             startedAt: handoff.startedAt, finishedAt: handoff.finishedAt, now: now
         )
         return "\(statusText), \(tabTitle): \(summary). \(elapsed)"
-    }
-
-    private func nonEmpty(_ value: String?) -> String? {
-        let trimmed = CantripSubagentFormat.trimmed(value)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
