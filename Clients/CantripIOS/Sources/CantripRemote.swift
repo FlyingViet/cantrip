@@ -1924,11 +1924,15 @@ final class CantripRemoteModel: ObservableObject {
     private var regularSelectedSessionID: String?
     private var cacheOrder: [String] = []
     private var expandedHistory: Set<String> = []
-    private var automaticHistoryRemaining: [String: Int] = [:]
-    private static let automaticHistoryLimit = 10
+    /// Tabs whose last older-history page failed. Automatic loading pauses until a manual retry.
+    @Published private(set) var olderHistoryFailures: [String: String] = [:]
     var canAutomaticallyLoadHistory: Bool {
         guard let session = selectedSession, session.hasOlderMessages == true else { return false }
-        return (automaticHistoryRemaining[session.id] ?? 0) > 0
+        return olderHistoryFailures[session.id] == nil
+    }
+    var olderHistoryError: String? {
+        guard let session = selectedSession, session.hasOlderMessages == true else { return nil }
+        return olderHistoryFailures[session.id]
     }
     private var selectionRevision = 0
     private var selectingSessionID: String?
@@ -2803,6 +2807,13 @@ final class CantripRemoteModel: ObservableObject {
         return url
     }
 
+    /// Starts the next older page unless one is already loading, a failure is awaiting
+    /// retry, or the start of history has been reached.
+    func requestOlderMessages() {
+        guard canAutomaticallyLoadHistory, !isLoadingHistory, !isMutating else { return }
+        Task { await loadOlderMessages(automatically: true) }
+    }
+
     func loadOlderMessages(automatically: Bool = false) async {
         guard !automatically || canAutomaticallyLoadHistory else { return }
         guard !isLoadingHistory, !isMutating,
@@ -2826,15 +2837,9 @@ final class CantripRemoteModel: ObservableObject {
             guard !received.isEmpty || page.hasOlderMessages == false else {
                 throw CantripRemoteError.invalidResponse
             }
-            let added = automatically
-                ? Self.historySuffix(received, groups: automaticHistoryRemaining[current.id] ?? 0)
-                : received
-            latest.messages = added + latest.transcript
-            latest.hasOlderMessages = added.count < received.count || page.hasOlderMessages == true
-            automaticHistoryRemaining[current.id] = automatically
-                ? max(0, (automaticHistoryRemaining[current.id] ?? 0)
-                      - max(1, added.filter { $0.role == "user" }.count))
-                : 0
+            latest.messages = received + latest.transcript
+            latest.hasOlderMessages = page.hasOlderMessages == true
+            olderHistoryFailures.removeValue(forKey: current.id)
             expandedHistory.insert(current.id)
             historyPrependAnchor = before
             apply(latest, mergeHistory: false)
@@ -2844,8 +2849,10 @@ final class CantripRemoteModel: ObservableObject {
             return
         } catch {
             guard selection == selectionRevision else { return }
-            automaticHistoryRemaining[current.id] = 0
-            detailError = "Could not load older messages. \(error.localizedDescription)"
+            let message = "Couldn't load older messages. \(error.localizedDescription)"
+            olderHistoryFailures[current.id] = message
+            // Announce every failure, so a retry that fails the same way is not silent.
+            AccessibilityNotification.Announcement(message).post()
             handleReadFailure(error, detailOnly: true)
         }
     }
@@ -3374,7 +3381,9 @@ final class CantripRemoteModel: ObservableObject {
             detailCache = detailCache.filter { publicIDs.contains($0.key) }
             cacheOrder.removeAll { !publicIDs.contains($0) }
             expandedHistory.formIntersection(publicIDs)
-            automaticHistoryRemaining = automaticHistoryRemaining.filter { publicIDs.contains($0.key) }
+            if olderHistoryFailures.keys.contains(where: { !publicIDs.contains($0) }) {
+                olderHistoryFailures = olderHistoryFailures.filter { publicIDs.contains($0.key) }
+            }
             guard selection == selectionRevision else { return }
             if isHomeSelected,
                requestedID == nil || selectedSession?.isCantripHome != true {
@@ -3512,7 +3521,7 @@ final class CantripRemoteModel: ObservableObject {
         var session = incoming
         if detailCache[session.id]?.historyStartID != session.historyStartID {
             expandedHistory.remove(session.id)
-            automaticHistoryRemaining.removeValue(forKey: session.id)
+            olderHistoryFailures.removeValue(forKey: session.id)
         }
         if mergeHistory, let previous = detailCache[session.id],
            let start = session.historyStartID, start == previous.historyStartID,
@@ -3533,13 +3542,6 @@ final class CantripRemoteModel: ObservableObject {
             session.messages = Array(session.transcript.suffix(120))
             session.hasOlderMessages = true
         }
-        if !expandedHistory.contains(session.id) {
-            let pastGroups = max(0, session.transcript.filter { $0.role == "user" }.count - 1)
-            automaticHistoryRemaining[session.id] = min(
-                automaticHistoryRemaining[session.id] ?? Self.automaticHistoryLimit,
-                max(0, Self.automaticHistoryLimit - pastGroups)
-            )
-        }
         detailCache[session.id] = session
         cacheOrder.removeAll { $0 == session.id }
         cacheOrder.append(session.id)
@@ -3547,7 +3549,7 @@ final class CantripRemoteModel: ObservableObject {
             let removed = cacheOrder.removeFirst()
             detailCache.removeValue(forKey: removed)
             expandedHistory.remove(removed)
-            automaticHistoryRemaining.removeValue(forKey: removed)
+            olderHistoryFailures.removeValue(forKey: removed)
         }
         if selectedSession != session {
             selectedSession = session
@@ -3652,7 +3654,7 @@ final class CantripRemoteModel: ObservableObject {
         detailCache.removeAll()
         cacheOrder.removeAll()
         expandedHistory.removeAll()
-        automaticHistoryRemaining.removeAll()
+        olderHistoryFailures.removeAll()
         detailError = nil
         selectionRevision += 1
         selectingSessionID = nil
@@ -4019,6 +4021,7 @@ private struct CantripRemoteTranscript: View {
     @State private var followsBottom = true
     @State private var userIsScrolling = false
     @State private var scrollPosition = ScrollPosition(idType: String.self, edge: .bottom)
+    @State private var prependAnchor = HistoryPrependAnchor()
 
     var body: some View {
         ScrollView {
@@ -4045,8 +4048,8 @@ private struct CantripRemoteTranscript: View {
         .scrollPosition($scrollPosition)
         .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
-        .onUpwardHistoryScroll {
-            Task { await model.loadOlderMessages(automatically: true) }
+        .onUpwardHistoryScroll(prependRevision: model.historyPrependRevision) {
+            model.requestOlderMessages()
         }
         .onScrollGeometryChange(for: Bool.self) { geometry in
             geometry.contentSize.height - geometry.visibleRect.maxY < 72
@@ -4081,42 +4084,72 @@ private struct CantripRemoteTranscript: View {
         .onScrollGeometryChange(for: HistoryScrollGeometry.self) { geometry in
             HistoryScrollGeometry(geometry, prependRevision: model.historyPrependRevision)
         } action: { previous, current in
-            guard previous.prependRevision != current.prependRevision,
-                  model.historyPrependAnchor != nil else { return }
+            guard model.historyPrependAnchor != nil,
+                  let target = prependAnchor.target(previous: previous, current: current,
+                                                    userIsScrolling: userIsScrolling) else { return }
             followsBottom = false
-            scrollPosition.scrollTo(y: max(0, previous.offset + current.height - previous.height))
+            scrollPosition.scrollTo(y: target)
         }
     }
 }
 
+/// Top-of-transcript status for paged history. Older pages load automatically while
+/// scrolling, so this only shows progress, or a retry after a failed page.
 struct CantripHistoryControls: View {
     @ObservedObject var model: CantripRemoteModel
+    @AccessibilityFocusState private var accessibilityFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if model.selectedSession?.hasOlderMessages == true {
-                if model.canAutomaticallyLoadHistory {
-                    HStack {
-                        if model.isLoadingHistory { ProgressView() }
-                        Text(model.isLoadingHistory ? "Loading older messages..." : "Scroll up for older messages")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityAction(named: Text("Load older messages")) {
-                        Task { await model.loadOlderMessages(automatically: true) }
+        if model.selectedSession?.supportsPagedHistory == true {
+            let hasOlder = model.selectedSession?.hasOlderMessages == true
+            Group {
+                if let error = model.olderHistoryError {
+                    HStack(spacing: 12) {
+                        // A retry shows progress in place, keeping Retry where it was.
+                        Group {
+                            if model.isLoadingHistory {
+                                HStack(spacing: 8) {
+                                    ProgressView().controlSize(.small)
+                                    Text("Loading older messages…")
+                                }
+                            } else {
+                                Text(error)
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(CantripReasoningFormat.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("Retry") { Task { await model.loadOlderMessages() } }
+                            .buttonStyle(.bordered)
+                            .frame(minHeight: 44)
+                            .disabled(model.isLoadingHistory || model.isMutating)
+                            .accessibilityLabel("Retry loading older messages")
+                            .accessibilityIdentifier("cantrip.retryOlderMessages")
                     }
                 } else {
-                    Button {
-                        Task { await model.loadOlderMessages() }
-                    } label: {
-                        HStack {
-                            if model.isLoadingHistory { ProgressView() }
-                            Text(model.isLoadingHistory ? "Loading older messages..." : "Load more messages")
-                        }
+                    // Always laid out while history is paged, so showing or hiding progress
+                    // (or reaching the start) never shifts the messages being read.
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading older messages…")
                     }
-                    .disabled(model.isLoadingHistory || model.isMutating)
-                    .accessibilityIdentifier("cantrip.loadOlderMessages")
+                    .font(.caption)
+                    .foregroundStyle(CantripReasoningFormat.secondaryText)
+                    .opacity(hasOlder && model.isLoadingHistory ? 1 : 0)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(model.isLoadingHistory ? "Loading older messages" : "Earlier messages")
+                    .accessibilityHint("Older messages load automatically.")
+                    .accessibilityAction { model.requestOlderMessages() }
+                    .accessibilityFocused($accessibilityFocused)
+                    .accessibilityHidden(!hasOlder)
+                    .accessibilityIdentifier("cantrip.olderMessagesStatus")
                 }
+            }
+            // VoiceOver readers reaching the top get the next page without an extra action.
+            .onChange(of: accessibilityFocused) { _, focused in
+                if focused { model.requestOlderMessages() }
             }
         }
     }

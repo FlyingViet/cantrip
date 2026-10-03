@@ -36,6 +36,9 @@ struct HermesApp: App {
             remoteModel.setAppActive(scenePhase == .active)
             openNotification()
         }
+        #if DEBUG
+        .task { await CantripUITestFixtures.pairRemoteIfRequested(remoteModel, env: env) }
+        #endif
         .onChange(of: scenePhase) { _, phase in
             remoteModel.setAppActive(phase == .active)
             if phase == .active { openNotification() }

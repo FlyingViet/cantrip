@@ -243,14 +243,17 @@ With an updated Cantrip host, the app shows the **latest three complete
 prompt-and-reply exchanges**, matching native Mac Remote. A new or running prompt
 counts as the newest exchange. Sending a follow-up keeps the preceding two
 exchanges instead of replacing them with only the latest response.
-Scrolling upward near the top automatically loads older history up to the
-current exchange plus ten earlier groups, including groups already loaded.
-Then tap **Load more messages** to page further
-back while keeping your reading position. Every loaded message includes complete text,
-reasoning, and all tool input/output by default; there is no separate detail
-download on updated hosts. Opening a tab or polling never prefetches older pages.
-Automatic loading pauses on failure and offers a manual retry. The allowance is
-per cached tab and resets when its history is reset or its cache is cleared.
+Scrolling up loads older history automatically, starting about a screen before
+the top, all the way back to the start of the conversation. There is nothing to
+tap: a small **Loading older messages…** row shows while a page downloads, short
+pages keep loading while less than a screen of history sits above you, and your
+reading position stays put as messages are inserted (including under the header).
+Only one page downloads at a time, and nothing is requested once the start is
+reached. VoiceOver users get the next page when focus reaches the top row. Every
+loaded message includes complete text, reasoning, and all tool input/output by
+default; there is no separate detail download on updated hosts. Opening a tab or
+polling never prefetches older pages. A failed page pauses automatic loading and
+shows **Retry** in that row; a history reset or cache clear also clears it.
 Older pages target 30 messages and 192 KiB, but always include at least one whole message
 and extend back to its user prompt when available. Large answers or
 multi-response turns can exceed the soft count/size limits so the prompt stays
@@ -269,8 +272,8 @@ the selected server and cleared when its configuration changes.
 Unchanged session revisions skip conversation downloads entirely. Foreground
 polling waits 1.5 seconds while any tab is working/queued or recovering, and
 5 seconds while idle. Unexpanded transcripts roll forward to the latest three
-exchanges, with up to five tabs cached. Older history loaded by scrolling or
-**Load more messages** stays expanded through polling and cached-tab selection.
+exchanges, with up to five tabs cached. Older history loaded by scrolling
+stays expanded through polling and cached-tab selection.
 Ungrouped legacy pages retain the 120-message cache limit; unpaged legacy
 snapshots remain intact so their older messages do not become inaccessible. Lightweight
 reads retain 3-second HTTPS / 2-second LAN deadlines.
