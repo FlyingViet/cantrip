@@ -15,6 +15,10 @@ struct SessionTabTests {
                 try await testCopilotLiveSteering()
                 return
             }
+            if ProcessInfo.processInfo.environment["CANTRIP_RECOVERY_LIVE_TEST"] == "1" {
+                try await testCopilotRuntimeRecoveryLive()
+                return
+            }
             if ProcessInfo.processInfo.environment["CANTRIP_WATCHER_LIVE_TEST"] == "1" {
                 try await testBackgroundWatcherLive()
                 return
@@ -138,6 +142,7 @@ struct SessionTabTests {
         try await testRemoteGeneratedImages()
         try await testJournalDelivery()
         try await testCopilotSteering()
+        try await testCopilotRuntimeRecovery()
         try await testMCPAppTranscripts()
         try await testMCPAppRemote()
         try testCantripHomeSchedules()

@@ -1,8 +1,8 @@
 import Foundation
 
 /// One SDK session per tab, with native immediate delivery during an active turn.
-/// A stopped/crashed runtime is rebuilt from Cantrip's journal and recent history,
-/// never by replaying possibly accepted session.send requests.
+/// A lost runtime is replaced and its Copilot session resumed. A prompt is resent only when
+/// nothing of its turn (text, tools, approvals, steering) reached the user, and only once.
 final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     var modelOverride: String?
     var effortOverride: String?
@@ -36,6 +36,31 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     private var storedGuardrailLabel = "Cantrip Home"
     /// Actions the user approved during the current turn (queue-owned).
     private var approvedScopes: Set<String> = []
+    /// The Copilot CLI runtime has crashed (stack overflow) on the first request after
+    /// 9.5-19 hours idle, while reuse after up to 8 hours was fine. A runtime idle this long
+    /// is restarted before reuse, resuming the same Copilot session.
+    var idleRuntimeLimit: TimeInterval = 2 * 60 * 60
+    /// A healthy idle runtime accepts a prompt in well under a second.
+    var reusedStartupLimit: TimeInterval = 30
+    /// New runtimes accepted prompts within about 5 seconds; resuming a long session takes longer.
+    var newRuntimeStartupLimit: TimeInterval = 60
+    /// Queue-owned startup state that lets a lost runtime be replaced without losing the prompt.
+    private struct Attempt {
+        let request: BackendRequest
+        let config: Configuration
+        let number: Int
+        let newRuntime: Bool
+        let startedAt: Date
+        var accepted = false
+        /// Text, reasoning, tool activity, approvals or steering reached this turn. Replaying it
+        /// could repeat work, so a lost runtime then ends the turn instead of retrying.
+        var visibleOutput = false
+    }
+    private var attempt: Attempt?
+    /// The Copilot session this tab last ran, and the one to resume in the next new runtime.
+    private var agentSessionID: String?
+    private var resumeTarget: (sessionID: String, config: Configuration)?
+    private var lastTurnEnded: Date?
 
     var guardrail: CantripHomeGuardrail? {
         get { guardrailLock.withLock { storedGuardrail } }
@@ -138,36 +163,103 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                 onEvent(.failure("Copilot already has a running turn. Queue this message instead."))
                 return
             }
-            if self.configuration != config || self.process?.isRunning != true {
-                self.teardown()
-            }
             self.onEvent = onEvent
             let id = UUID().uuidString
             self.runID = id
-            self.approvedScopes = []
-            self.ready = false
-            self.idle = false
-            self.parser = CopilotJSONStreamParser(canCancelSubagents: true)
-            do {
-                var command: [String: Any] = [
-                    "kind": "start", "runID": id, "config": config.json, "prompt": request.prompt
-                ]
-                if self.process == nil {
-                    command["initialPrompt"] = ConversationContextBuilder.composePrompt(
-                        currentPrompt: request.prompt, query: request.userMessage, turns: request.previousTurns
-                    )
-                    try self.launch(config)
+            if self.resumeTarget?.config != config { self.resumeTarget = nil }
+            if self.process?.isRunning == true, self.configuration == config,
+               let ended = self.lastTurnEnded, Date().timeIntervalSince(ended) >= self.idleRuntimeLimit,
+               let session = self.agentSessionID {
+                Log.write(String(format: "copilot: restarting a runtime idle for %.1f h before reuse", Date().timeIntervalSince(ended) / 3600))
+                self.resumeTarget = (session, config)
+                let old = self.stopProcess()
+                self.afterExit(of: old) { [weak self] in
+                    guard let self, self.runID == id, self.process == nil else { return }
+                    self.begin(id, request: request, config: config, number: 1)
                 }
-                self.askpass?.beginTurn()
-                onEvent(.status("Connecting to Copilot"))
-                try self.write(command)
-                self.queue.asyncAfter(deadline: .now() + 45) { [weak self] in
-                    guard let self, self.runID == id, !self.ready, self.inputRequests.isEmpty else { return }
-                    self.fail("Copilot session startup timed out. Update the CLI and check its sign-in.")
-                }
-            } catch {
-                self.fail("Could not start Copilot: \(error.localizedDescription)")
+                return
             }
+            if self.configuration != config || self.process?.isRunning != true {
+                self.stopProcess()
+            }
+            self.begin(id, request: request, config: config, number: 1)
+        }
+    }
+
+    /// Writes the turn's start command, launching (or resuming in) a new runtime when none is live.
+    private func begin(_ id: String, request: BackendRequest, config: Configuration, number: Int) {
+        approvedScopes = []
+        ready = false
+        idle = false
+        parser = CopilotJSONStreamParser(canCancelSubagents: true)
+        do {
+            var command: [String: Any] = [
+                "kind": "start", "runID": id, "config": config.json, "prompt": request.prompt
+            ]
+            let newRuntime = process == nil
+            if newRuntime {
+                command["initialPrompt"] = ConversationContextBuilder.composePrompt(
+                    currentPrompt: request.prompt, query: request.userMessage, turns: request.previousTurns
+                )
+                if let target = resumeTarget, target.config == config {
+                    command["resumeSessionID"] = target.sessionID
+                }
+                resumeTarget = nil
+                try launch(config)
+            }
+            attempt = Attempt(request: request, config: config, number: number,
+                              newRuntime: newRuntime, startedAt: Date())
+            askpass?.beginTurn()
+            onEvent?(.status(number == 1 ? "Connecting to Copilot" : "Restarting Copilot"))
+            try write(command)
+            let limit = newRuntime ? newRuntimeStartupLimit : reusedStartupLimit
+            queue.asyncAfter(deadline: .now() + limit) { [weak self] in
+                guard let self, self.runID == id, self.attempt?.number == number,
+                      !self.ready, self.inputRequests.isEmpty else { return }
+                self.runtimeLost("no reply to the prompt within \(Int(limit)) s",
+                                 otherwise: Self.startupFailure)
+            }
+        } catch {
+            fail("Could not start Copilot: \(error.localizedDescription)")
+        }
+    }
+
+    static let startupFailure = "Copilot didn't start, even after Cantrip restarted it. Check that the Copilot CLI works and is signed in on the Mac, then send again."
+    static let lostMidReply = "Copilot's runtime stopped unexpectedly mid-reply. The conversation is kept, so resuming continues it in a new runtime."
+
+    /// The runtime died, stalled or rejected a prompt it should have accepted. Before anything
+    /// reached the turn, it is replaced once and the prompt resent in the same Copilot session;
+    /// otherwise the turn ends now (rather than waiting out the stall timer), and the next prompt
+    /// resumes the session in a new runtime.
+    private func runtimeLost(_ reason: String, otherwise message: String) {
+        guard let id = runID, let current = attempt else {
+            Log.write("copilot: runtime lost outside a turn (\(reason))")
+            return fail(message)
+        }
+        let session = agentSessionID
+        if current.number == 1, !current.visibleOutput, inputRequests.isEmpty, deliveries.isEmpty {
+            Log.write("copilot: runtime lost before replying (\(reason)); retrying in a new runtime")
+            if let session { resumeTarget = (session, current.config) }
+            // Supersede attempt 1 now, so its startup timer can't start a second retry while waiting.
+            attempt = nil
+            let old = stopProcess()
+            afterExit(of: old) { [weak self] in
+                guard let self, self.runID == id, self.attempt == nil, self.process == nil else { return }
+                self.begin(id, request: current.request, config: current.config, number: 2)
+            }
+            return
+        }
+        Log.write("copilot: runtime lost (\(reason)); attempt \(current.number), output \(current.visibleOutput)")
+        if let session { resumeTarget = (session, current.config) }
+        fail(current.accepted && current.visibleOutput ? Self.lostMidReply : message)
+    }
+
+    /// Runs `body` on the queue once `process` has exited (or after a bounded wait), so a resumed
+    /// session never overlaps the runtime that still holds it.
+    private func afterExit(of process: Process?, _ body: @escaping () -> Void, deadline: Date = Date().addingTimeInterval(4)) {
+        guard let process, process.isRunning, Date() < deadline else { return body() }
+        queue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.afterExit(of: process, body, deadline: deadline)
         }
     }
 
@@ -178,6 +270,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                 completion(.notSent)
                 return
             }
+            self.attempt?.visibleOutput = true
             let id = UUID().uuidString
             self.deliveries[id] = completion
             do {
@@ -201,9 +294,22 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
 
     func cancel() {
         availabilityLock.withLock { injectionAvailable = false }
-        queue.async { [weak self] in self?.teardown() }
+        queue.async { [weak self] in
+            guard let self else { return }
+            // Stopping a live turn starts the next one fresh; a runtime already lost (Cantrip cancels
+            // after every failure) keeps its session for the next prompt or automatic resume.
+            if self.runID != nil { self.resumeTarget = nil }
+            self.teardown()
+        }
     }
-    func reset() { cancel() }
+
+    func reset() {
+        cancel()
+        queue.async { [weak self] in
+            self?.resumeTarget = nil
+            self?.agentSessionID = nil
+        }
+    }
 
     /// Proxies an MCP App view's `tools/call`, `tools/list` or `resources/read`
     /// to its server through this tab's live session, between turns too.
@@ -304,9 +410,14 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                     guard let self, self.process === proc else { return }
                     self.consume(tail)
                     guard self.process === proc else { return }
+                    let reason = proc.terminationReason == .uncaughtSignal
+                        ? "signal \(proc.terminationStatus)" : "status \(proc.terminationStatus)"
                     if self.runID != nil {
-                        self.fail("Copilot session disconnected (status \(proc.terminationStatus)). Check Node.js, the Copilot CLI version, and CLI sign-in on the Mac.")
-                    } else { self.teardown() }
+                        self.runtimeLost("session bridge exited with \(reason)",
+                                         otherwise: "Copilot session disconnected (\(reason)). Check Node.js, the Copilot CLI version, and CLI sign-in on the Mac.")
+                    } else {
+                        self.rememberLostIdleRuntime("session bridge exited with \(reason)")
+                    }
                 }
             }
         }
@@ -395,6 +506,19 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                       let kind = object["kind"] as? String else {
                     throw CocoaError(.coderReadCorrupt)
                 }
+                if kind == "log" {
+                    Log.write("copilot: \(String((object["message"] as? String ?? "").prefix(300)))")
+                    continue
+                }
+                if kind == "runtimeExited" {
+                    let detail = String((object["detail"] as? String ?? "unknown").prefix(120))
+                    if runID != nil {
+                        runtimeLost("runtime exited (\(detail))", otherwise: Self.startupFailure)
+                    } else {
+                        rememberLostIdleRuntime("runtime exited (\(detail))")
+                    }
+                    return
+                }
                 if kind == "appResponse" {
                     guard let id = object["id"] as? String,
                           let completion = appRequests.removeValue(forKey: id) else { continue }
@@ -421,6 +545,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                 switch kind {
                 case "input" where object["inputKind"] as? String == "policy":
                     guard let id = object["id"] as? String else { throw CocoaError(.coderReadCorrupt) }
+                    attempt?.visibleOutput = true
                     answerPolicy(id: id, owner: current, detail: object["detail"] as? String ?? "")
                 case "input":
                     guard let id = object["id"] as? String,
@@ -445,12 +570,24 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                     }
                     inputRequests[id] = request
                     ready = true
+                    attempt?.visibleOutput = true
                     onEvent?(.inputRequired(request))
                 case "inputClosed":
                     if let id = object["id"] as? String { inputRequests.removeValue(forKey: id)?.cancel() }
                 case "started":
                     ready = true
-                    if let session = object["sessionID"] as? String { onAgentSession?(session) }
+                    if let session = object["sessionID"] as? String {
+                        agentSessionID = session
+                        onAgentSession?(session)
+                    }
+                    if let started = attempt?.startedAt {
+                        let how = attempt?.newRuntime == true
+                            ? (object["resumed"] as? Bool == true ? "new runtime, resumed session" : "new runtime")
+                            : "reused runtime"
+                        Log.write(String(format: "copilot: prompt accepted in %.1f s (%@, attempt %d)",
+                                         Date().timeIntervalSince(started), how, attempt?.number ?? 1))
+                    }
+                    attempt?.accepted = true
                     onEvent?(.status("Thinking..."))
                 case "watcherWaiting":
                     let count = object["count"] as? Int ?? 1
@@ -480,8 +617,10 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                     let events = parser.consume(encoded) { error, _ in
                         Log.write("copilot: \(error.localizedDescription)")
                     }
+                    if events.contains(where: \.isVisibleOutput) { attempt?.visibleOutput = true }
                     for event in events { onEvent?(event) }
                 case "approval":
+                    attempt?.visibleOutput = true
                     onEvent?(.approval(BackendApproval(
                         tool: object["tool"] as? String ?? "tool",
                         decision: object["decision"] as? String ?? "denied", decidedBy: "Cantrip"
@@ -491,7 +630,13 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                     ready = false
                     finishIfIdle()
                 case "failure":
-                    fail(object["message"] as? String ?? "Copilot session failed.")
+                    let message = object["message"] as? String ?? "Copilot session failed."
+                    // An idle runtime that rejects a prompt before accepting it is broken; a new one may not be.
+                    if let current = attempt, !current.newRuntime, !current.accepted {
+                        runtimeLost("reused runtime rejected the prompt: \(message.prefix(200))", otherwise: message)
+                        return
+                    }
+                    fail(message)
                 default:
                     throw CocoaError(.coderReadCorrupt)
                 }
@@ -502,12 +647,21 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         }
     }
 
+    /// A runtime that died between turns is replaced on the next prompt, resuming its session.
+    private func rememberLostIdleRuntime(_ reason: String) {
+        if let session = agentSessionID, let config = configuration { resumeTarget = (session, config) }
+        Log.write("copilot: idle runtime lost (\(reason)); the next prompt resumes its session in a new runtime")
+        teardown()
+    }
+
     private func finishIfIdle() {
         guard idle, runID != nil, deliveries.isEmpty else { return }
         askpass?.endTurn()
         let sink = onEvent
         runID = nil
         onEvent = nil
+        attempt = nil
+        lastTurnEnded = Date()
         sink?(.done)
     }
 
@@ -526,6 +680,15 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     }
 
     private func teardown() {
+        stopProcess()
+        runID = nil
+        onEvent = nil
+        attempt = nil
+    }
+
+    /// Ends the runtime and everything tied to it, keeping the current turn so it can retry.
+    @discardableResult
+    private func stopProcess() -> Process? {
         let pendingInputs = Array(inputRequests.values)
         inputRequests.removeAll()
         for request in pendingInputs { request.cancel() }
@@ -543,12 +706,11 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         input?.closeFile()
         input = nil
         buffer.removeAll()
-        runID = nil
         ready = false
         idle = false
-        onEvent = nil
         configuration = nil
         if let old { Self.terminate(old) }
+        return old
     }
 
     private static func terminate(_ process: Process) {
@@ -556,6 +718,16 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         process.terminate()
         DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
+    }
+}
+
+private extension BackendEvent {
+    /// Output the user can see, which a replayed prompt could repeat.
+    var isVisibleOutput: Bool {
+        switch self {
+        case .textDelta, .thinkingDelta, .activity, .approval, .inputRequired: true
+        case .status, .usage, .context, .done, .failure: false
         }
     }
 }
