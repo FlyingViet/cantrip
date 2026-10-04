@@ -181,8 +181,8 @@ extension SessionTabTests {
         try? FileManager.default.removeItem(at: files.deletingLastPathComponent().deletingLastPathComponent())
     }
 
-    /// An agent's subfolder of ~/.cache/Cantrip (job-apply/) previews in any tab; Cantrip's
-    /// per-session upload folder below it stays private.
+    /// An agent's subfolder of ~/.cache/Cantrip (job-apply/) and any other folder (/tmp) preview in
+    /// any tab; Cantrip's per-session upload folder stays private.
     @MainActor
     private static func checkSharedSubfolder(
         chat: ChatSession, request: (String, UUID?, Bool, String) async throws -> (Int, [String: Any])
@@ -191,6 +191,8 @@ extension SessionTabTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let part = folder.appendingPathComponent("block-form-part1.jpg")
+        let anywhere = URL(fileURLWithPath: "/tmp/cantrip-tab-preview-\(UUID().uuidString).jpg")
+        defer { try? FileManager.default.removeItem(at: anywhere) }
         let context = CGContext(data: nil, width: 1100, height: 1500, bitsPerComponent: 8, bytesPerRow: 0,
                                 space: CGColorSpaceCreateDeviceRGB(),
                                 bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
@@ -201,20 +203,23 @@ extension SessionTabTests {
         CGImageDestinationAddImage(destination, context.makeImage()!, nil)
         precondition(CGImageDestinationFinalize(destination))
         try (jpeg as Data).write(to: part)
+        try (jpeg as Data).write(to: anywhere)
         let upload = RemoteImageAttachments.storageRoot.appendingPathComponent("\(UUID())/image-1.jpg")
         let saved = chat.messages
         defer { chat.messages = saved }
         var reply = ChatMessage(role: .assistant, text: "**Part 1: contact**\n![Block form part 1](\(part.path))\n\n"
-            + "![Upload](\(upload.path))")
+            + "![Upload](\(upload.path))\n\n![Anywhere](\(anywhere.path))")
         reply.id = UUID()
         chat.messages = [ChatMessage(role: .user, text: "Show the form"), reply]
         let result = try await request("", chat.id, true, "GET")
         let message = ((result.1["session"] as! [String: Any])["messages"] as! [[String: Any]]).last!
         let images = message["images"] as? [[String: String]] ?? []
-        precondition(images.count == 1 && images[0]["altText"] == "Block form part 1",
-                     "a ~/.cache/Cantrip subfolder previews; the upload cache does not: \(message)")
-        let thumbnail = try await request("/\(images[0]["id"]!)/thumbnail", chat.id, true, "GET")
-        precondition(thumbnail.0 == 200, "the shared-subfolder image is served")
+        precondition(images.map { $0["altText"] } == ["Block form part 1", "Anywhere"],
+                     "a ~/.cache/Cantrip subfolder and /tmp preview; the upload cache does not: \(message)")
+        for image in images {
+            let thumbnail = try await request("/\(image["id"]!)/thumbnail", chat.id, true, "GET")
+            precondition(thumbnail.0 == 200, "the image is served: \(image)")
+        }
     }
 
     /// "Copilot needs your answer" questions preview images from the tab's files folder in the
@@ -386,7 +391,7 @@ extension SessionTabTests {
         let prompt = try RemoteImageAttachments.preparePrompt(
             "Compare with this", images: [RemoteImageUpload(data: jpeg as Data)], sessionID: chat.id)
         var withOtherImage = reply
-        withOtherImage.text = markdown + "\n\n![Elsewhere](~/Desktop/nested/other.png)"
+        withOtherImage.text = markdown + "\n\n![Elsewhere](~/.cache/Cantrip/remote-attachments/nested/other.png)"
         chat.messages = [ChatMessage(role: .user, text: prompt), withOtherImage]
 
         _ = NSApplication.shared

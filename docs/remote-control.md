@@ -888,40 +888,39 @@ Escape) to return. In Cantrip Agent, pinch or double-tap to zoom. In the
 browser Remote, choose **Actual size** or click the image to zoom to full
 resolution, then scroll to pan. Loading failures show a retry action.
 
-Save PNG or JPEG output under `~/.cache/Cantrip/` or in any tab's or Cantrip
-Home's Copilot files folder (`~/.copilot/session-state/{cliSessionID}/files/`).
-Subfolders up to eight levels deep work in both (for example
-`~/.cache/Cantrip/job-apply/form-part1.jpg`). Then include a standalone Markdown
-image in the assistant's reply:
+A PNG or JPEG anywhere on the Mac previews when an assistant reply references
+it: `/tmp`, `~/Desktop`, a project's build output, hidden folders and symlinked
+folders all work, at any depth. New output is best saved under
+`~/.cache/Cantrip/` (subfolders are fine, for example
+`~/.cache/Cantrip/job-apply/form-part1.jpg`) or in the session's Copilot files
+folder (`~/.copilot/session-state/{cliSessionID}/files/`). Then include a
+standalone Markdown image in the assistant's reply:
 
 ```markdown
 ![Landscape preview](~/.cache/Cantrip/landscape-preview.png)
 ```
 
-Absolute paths and local `file:` URLs also work; use `<...>` around paths
-containing spaces or parentheses. An ordinary Markdown link to an eligible image
-(`[Open full size](/path/to/image.png)`) opens the same full-screen viewer
-instead of a dead Mac file link. Up to eight distinct images (previews and links
-together) are presented per message. Code blocks, inline code, remote URLs and
-files outside the allowed folders do not authorize preview reads. Hidden
-subfolders never preview, and neither do Cantrip's own folders under
-`~/.cache/Cantrip/` (`chats`, `home`, `maintenance`, `notifications`, `recovery`,
-`remote-attachments`, `remote-previews`, `remote-videos`, `runs`; matched
-case-insensitively), which hold per-session uploads, preview caches, transcripts
-and Home's state. Home's own replies also preview its artifacts in
-`~/.cache/Cantrip/home/artifacts/`. Private Local keeps its existing text-only
-output behavior.
+Absolute paths, `~/` paths and local `file:` URLs work; relative paths don't. Use
+`<...>` around paths containing spaces or parentheses. An ordinary Markdown link
+to an eligible image (`[Open full size](/path/to/image.png)`) opens the same
+full-screen viewer instead of a dead Mac file link. Up to eight distinct images
+(previews and links together) are presented per message. Code blocks, inline
+code, remote URLs and `..` paths do not authorize preview reads, and neither do
+Cantrip's own folders under `~/.cache/Cantrip/` (`chats`, `home`, `maintenance`,
+`notifications`, `recovery`, `remote-attachments`, `remote-previews`,
+`remote-videos`, `runs`; matched case-insensitively), which hold per-session
+uploads, preview caches, transcripts and Home's state. Home's own replies also
+preview its artifacts in `~/.cache/Cantrip/home/artifacts/`. Private Local keeps
+its existing text-only output behavior.
 
-Any tab or Home may preview any Copilot session's files folder, so a reply that
-shows another tab's screenshot works, and so does a folder from a turn whose CLI
-session was never recorded. The folder name must be a UUID and the image must sit
-under its `files/` folder. Cantrip still records each tab's CLI session IDs in
-`~/.cache/Cantrip/session-output-folders.json` (owner-only, at most 64 per tab;
-private-mode turns are not recorded). Finished Home background runs hand their
-folders to the background log with their messages, and deleting a tab forgets
-them. Copilot sessions get these locations in their system message; Claude Code
-has no per-session output folder, so `--append-system-prompt` points it at
-`~/.cache/Cantrip/`.
+Any tab or Home may preview any other tab's images, so a reply that shows
+another tab's screenshot works. Cantrip still records each tab's CLI session IDs
+in `~/.cache/Cantrip/session-output-folders.json` (owner-only, at most 64 per
+tab; private-mode turns are not recorded) so those folders count as the tab's
+own. Finished Home background runs hand their folders to the background log with
+their messages, and deleting a tab forgets them. Copilot sessions get this
+guidance in their system message; Claude Code has no per-session output folder,
+so `--append-system-prompt` points it at `~/.cache/Cantrip/` for new files.
 
 The host preserves original transcript text and adds `displayText` with
 `cantrip-preview://image/previews/{messageID}/{hash}.jpg` references plus `images`
@@ -932,8 +931,11 @@ the image as its own block. The pairing-authenticated read-only route
 base64 JPEG JSON (`data`); append `/thumbnail` for a 960-pixel inline preview.
 Each request requires that assistant message to remain in the same public
 session, including when serving a cached image. No client-supplied file path is
-accepted. Symlinks (including a symlinked subfolder, checked as each folder is
-opened), hard links, non-images and oversized sources are rejected.
+accepted. Reads resolve symlinks and apply the reserved-folder rule to the real
+location, then open each folder from `/` without following links, so a link (or a
+folder swapped for one) can't reach a reserved folder. A session-owned folder that
+is itself a link elsewhere grants nothing. Hard links, non-images and oversized
+sources are rejected.
 
 Waiting **questions** ("Copilot needs your answer") preview images the same
 way, in tabs and in Cantrip Home background runs. Each pending question in
