@@ -384,6 +384,30 @@ extension SessionTabTests {
           $("messages").dispatchEvent(new WheelEvent("wheel",{bubbles:true,deltaY:-20}));
           await quiet();
           check(pages>paused,"Scrolling up again continues through history");
+
+          selected="delayed-growth";
+          const delayedBase={...session,id:selected,messages:[message(40),message(41)]};
+          renderSessions([delayedBase]);render(cacheSession(delayedBase));await settle();
+          positionConversation(0);followOutput=false;await settle();
+          const delayedAnchor=Array.from($("messages").querySelectorAll("article")).find(row=>row.textContent.includes("Message 40"));
+          const delayedTop=delayedAnchor.getBoundingClientRect().top;
+          let delayedReads=0,growAfterRender=true;
+          api=async()=>{delayedReads++;return {session:{...delayedBase,messages:[message(38),message(39)],hasOlderMessages:false}}};
+          window.requestAnimationFrame=callback=>setTimeout(()=>{
+            callback();
+            if(growAfterRender){
+              growAfterRender=false;
+              setTimeout(()=>{
+                const inserted=Array.from($("messages").querySelectorAll("article")).find(row=>row.textContent.includes("Message 38"));
+                check(inserted,"The newly inserted page rendered before it grew");
+                inserted.style.paddingTop="260px";
+              },0);
+            }
+          },0);
+          await loadOlderMessages();await quiet();
+          const delayedRestored=Array.from($("messages").querySelectorAll("article")).find(row=>row.textContent.includes("Message 40")).getBoundingClientRect().top;
+          check(delayedReads===1&&Math.abs(delayedRestored-delayedTop)<3,
+                `Delayed growth above the retained message keeps the anchor: ${delayedTop} -> ${delayedRestored}, scroll ${root.scrollTop}`);
         }finally{
           api=originalAPI;token=originalToken;window.requestAnimationFrame=originalFrame;
           if(timer)clearTimeout(timer);timer=null;historyCache.clear();expandedHistory.clear();historyPaused.clear();
