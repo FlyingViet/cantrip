@@ -247,10 +247,12 @@ final class CantripMascotTests: XCTestCase {
     }
 
     func testOutfitsKeepStableStoredValuesAndDefaultToStarryPlush() {
-        XCTAssertEqual(CantripMascotOutfit.allCases.map(\.rawValue), ["starryPlush", "dinoHoodie"])
+        XCTAssertEqual(CantripMascotOutfit.allCases.map(\.rawValue), ["starryPlush", "dinoHoodie", "pandaKitty"])
         XCTAssertEqual(CantripMascotOutfit.storageKey, "cantrip.mascot.outfit")
         XCTAssertNil(CantripMascotOutfit(rawValue: "unknownOutfit"))
         XCTAssertEqual(CantripMascotOutfit.dinoHoodie.title, "Dino Hoodie")
+        XCTAssertEqual(CantripMascotOutfit.pandaKitty.title, "Panda Kitty")
+        XCTAssertEqual(CantripMascotOutfit.allCases.filter(\.isCat), [.pandaKitty])
         XCTAssertEqual(Set(CantripMascotMood.allCases.map(\.title)).count, CantripMascotMood.allCases.count)
     }
 
@@ -563,34 +565,36 @@ final class CantripMascotTests: XCTestCase {
             try await capture(sheet, size: CGSize(width: 440, height: 1010), scene: scene,
                               to: output.appendingPathComponent("cantrip-mascot-moods-\(name).png"))
 
-            let dino = UIHostingController(rootView:
-                VStack(spacing: 18) {
-                    ForEach([[CantripMascotMood.idle, .thinking, .searching],
-                             [.working, .writing, .listening],
-                             [.speaking, .curious, .concerned],
-                             [.sleeping]], id: \.self) { row in
-                        HStack(spacing: 18) {
-                            ForEach(row, id: \.self) { mood in
-                                VStack(spacing: 6) {
-                                    CantripMascotView(mood: mood, outfit: .dinoHoodie, size: 112, frameTime: 1)
-                                    Text(mood.title).font(.caption)
+            for (outfit, slug) in [(CantripMascotOutfit.dinoHoodie, "dino"), (.pandaKitty, "panda")] {
+                let outfitSheet = UIHostingController(rootView:
+                    VStack(spacing: 18) {
+                        ForEach([[CantripMascotMood.idle, .thinking, .searching],
+                                 [.working, .writing, .listening],
+                                 [.speaking, .curious, .concerned],
+                                 [.sleeping]], id: \.self) { row in
+                            HStack(spacing: 18) {
+                                ForEach(row, id: \.self) { mood in
+                                    VStack(spacing: 6) {
+                                        CantripMascotView(mood: mood, outfit: outfit, size: 112, frameTime: 1)
+                                        Text(mood.title).font(.caption)
+                                    }
                                 }
                             }
                         }
+                        HStack(spacing: 18) {
+                            CantripMascotView(mood: .idle, outfit: outfit, size: 112, frameTime: 1,
+                                              celebrationProgress: 0.3)
+                            CantripMascotView(mood: .idle, outfit: .starryPlush, size: 112, frameTime: 1)
+                        }
                     }
-                    HStack(spacing: 18) {
-                        CantripMascotView(mood: .idle, outfit: .dinoHoodie, size: 112, frameTime: 1,
-                                          celebrationProgress: 0.3)
-                        CantripMascotView(mood: .idle, outfit: .starryPlush, size: 112, frameTime: 1)
-                    }
-                }
-                .padding(24)
-                .frame(width: 440, height: 1010)
-                .background(Color(.systemBackground))
-            )
-            dino.overrideUserInterfaceStyle = style
-            try await capture(dino, size: CGSize(width: 440, height: 1010), scene: scene,
-                              to: output.appendingPathComponent("cantrip-mascot-dino-\(name).png"))
+                    .padding(24)
+                    .frame(width: 440, height: 1010)
+                    .background(Color(.systemBackground))
+                )
+                outfitSheet.overrideUserInterfaceStyle = style
+                try await capture(outfitSheet, size: CGSize(width: 440, height: 1010), scene: scene,
+                                  to: output.appendingPathComponent("cantrip-mascot-\(slug)-\(name).png"))
+            }
 
             let picker = UIHostingController(rootView: CantripMascotCustomizationView())
             picker.overrideUserInterfaceStyle = style
