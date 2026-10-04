@@ -196,7 +196,7 @@ private struct ChatPreviewImageProvider: ImageProvider {
         } else if url?.scheme == "https" || url?.scheme == "http" {
             DefaultImageProvider().makeImage(url: url)
         } else {
-            Label("Preview unavailable. Generated images require updated apps and a supported image in Cantrip's output folder.",
+            Label("Preview unavailable. The Mac shares PNG and JPEG images from any folder except Cantrip's private ones; older Mac apps may need an update.",
                   systemImage: "photo.badge.exclamationmark")
                 .font(.callout)
                 .foregroundStyle(.secondary)
