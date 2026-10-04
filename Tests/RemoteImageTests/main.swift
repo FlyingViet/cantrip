@@ -57,15 +57,16 @@ private func expectUnreadable(_ reference: RemoteGeneratedImages.Reference, cach
 /// "**Before**\n![..](..)" parses as one paragraph, where clients drop the image. Every
 /// rewritten image line becomes its own block; text, code and unpublished images stay as written.
 private func checkStandaloneImageBlocks(generatedRoot: URL, screenshot: URL, messageID: UUID) {
+    let reserved = "\(generatedRoot.path)/remote-attachments/x/elsewhere.png"
     let markdown = "Copilot needs your answer\n\n**Light — before**\n![Before](\(screenshot.path))\n"
         + "![Before, dark](<\(screenshot.path)>)\n**Light — after**\n  ![After](\(screenshot.absoluteString))\n\n"
-        + "Ship it?\n![Elsewhere](/tmp/elsewhere.png)\n```\n**Code**\n![Code](\(screenshot.path))\n```"
+        + "Ship it?\n![Elsewhere](\(reserved))\n```\n**Code**\n![Code](\(screenshot.path))\n```"
     let presented = RemoteGeneratedImages.presentation(markdown, messageID: messageID, root: generatedRoot)
     let url = presented.images.first?.markdownURL ?? "missing"
     expect(presented.images.count == 1, "one source, one reference")
     expect(presented.text == "Copilot needs your answer\n\n**Light — before**\n\n![Before](\(url))\n"
         + "![Before, dark](\(url))\n\n**Light — after**\n\n  ![After](\(url))\n\n"
-        + "Ship it?\n![Elsewhere](/tmp/elsewhere.png)\n```\n**Code**\n![Code](\(screenshot.path))\n```",
+        + "Ship it?\n![Elsewhere](\(reserved))\n```\n**Code**\n![Code](\(screenshot.path))\n```",
            "separate rewritten images from adjacent text only: \(presented.text)")
     let again = RemoteGeneratedImages.presentation(presented.text, messageID: messageID, root: generatedRoot)
     expect(again.text == presented.text, "already separated images gain no extra lines")
@@ -106,22 +107,16 @@ private func checkLinksAndNesting(generatedRoot: URL, screenshot: URL, cache: UR
     let direct = files.appendingPathComponent("direct.jpg")
     try jpeg().write(to: direct)
     let nestedMarkdown = "![Header](<\(nestedImage.path)>)\n[Open](\(nestedImage.absoluteString))\n![Direct](\(direct.path))"
-    expect(RemoteGeneratedImages.presentation(nestedMarkdown, messageID: messageID, root: generatedRoot).images.isEmpty,
-           "a files folder outside the Copilot session-state root is not an allowed root")
-    let anySession = RemoteGeneratedImages.presentation(
-        nestedMarkdown, messageID: messageID, root: generatedRoot, sessionStateRoot: state
-    )
-    expect(anySession.images.count == 2 && anySession.images.allSatisfy { $0.root.path == files.path },
-           "any tab's or Home's files folder previews nested and direct images, recorded or not")
+    let anywhere = RemoteGeneratedImages.presentation(nestedMarkdown, messageID: messageID, root: generatedRoot)
+    expect(anywhere.images.count == 2, "images in any folder on the Mac preview, nested or not")
     let owned = RemoteGeneratedImages.presentation(
         nestedMarkdown, messageID: messageID, root: generatedRoot, additionalRoots: [files]
     )
-    expect(owned.images.count == 2 && owned.images.allSatisfy { $0.root.path == files.path },
-           "own files folder previews nested and direct images")
-    let full = try RemoteGeneratedImages.read(anySession.images[0], sessionID: sessionID, thumbnail: false, root: cache)
+    expect(owned.images.map(\.id) == anywhere.images.map(\.id), "owning a folder doesn't change preview IDs")
+    let full = try RemoteGeneratedImages.read(anywhere.images[0], sessionID: sessionID, thumbnail: false, root: cache)
     let size = CGImageSourceCopyPropertiesAtIndex(CGImageSourceCreateWithData(full as CFData, nil)!, 0, nil)! as NSDictionary
     expect(size[kCGImagePropertyPixelHeight] as? Int == 2048, "read a nested session image at full size")
-    let deep = files.appendingPathComponent((1...9).map { "d\($0)" }.joined(separator: "/"), isDirectory: true)
+    let deep = files.appendingPathComponent((1...12).map { "d\($0)" }.joined(separator: "/"), isDirectory: true)
     try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
     try jpeg(type: .png).write(to: deep.appendingPathComponent("deep.png"))
     let hidden = files.appendingPathComponent(".git", isDirectory: true)
@@ -130,24 +125,46 @@ private func checkLinksAndNesting(generatedRoot: URL, screenshot: URL, cache: UR
     let cliFolder = files.deletingLastPathComponent()
     for target in [
         deep.appendingPathComponent("deep.png").path, hidden.appendingPathComponent("hidden.png").path,
-        files.path + "/screens/../../../outside.png", files.path + "/screens/%2E%2E/%2E%2E/escape.png",
-        files.path + "/./screens/ios/header%20preview.png", cliFolder.path + "/sibling.png",
-        files.path + "-evil/screens/x.png", cliFolder.path + "/checkpoints/x.png",
-        state.path + "/not-a-session/files/x.png", state.path + "/x.png", state.path + "/files/x.png",
+        cliFolder.path + "/sibling.png", files.path + "-evil/screens/x.png", cliFolder.path + "/checkpoints/x.png",
+        state.path + "/not-a-session/files/x.png", state.path + "/x.png",
         state.deletingLastPathComponent().path + "/elsewhere/\(UUID())/files/x.png"
     ] {
-        let rejected = RemoteGeneratedImages.presentation(
-            "![x](\(target))\n[x](\(target))", messageID: messageID, root: generatedRoot,
-            sessionStateRoot: state, additionalRoots: [files]
+        let accepted = RemoteGeneratedImages.presentation(
+            "![x](\(target))\n[x](\(target))", messageID: messageID, root: generatedRoot, additionalRoots: [files]
         )
-        expect(rejected.images.isEmpty, "reject traversal, hidden, too-deep, non-files or outside paths: \(target)")
+        expect(accepted.images.count == 1, "deep, hidden and unrelated folders preview too: \(target)")
+    }
+    let deepReference = RemoteGeneratedImages.presentation(
+        "![Deep](\(deep.path)/deep.png)", messageID: messageID, root: generatedRoot
+    ).images[0]
+    expect(try !RemoteGeneratedImages.read(deepReference, sessionID: sessionID, thumbnail: true, root: cache).isEmpty,
+           "read an image twelve folders deep")
+    for target in [
+        files.path + "/screens/../../../outside.png", files.path + "/screens/%2E%2E/%2E%2E/escape.png",
+        files.path + "/./screens/ios/header%20preview.png", "screens/relative.png", "./relative.png"
+    ] {
+        let rejected = RemoteGeneratedImages.presentation(
+            "![x](\(target))\n[x](\(target))", messageID: messageID, root: generatedRoot, additionalRoots: [files]
+        )
+        expect(rejected.images.isEmpty, "reject traversal and relative paths: \(target)")
     }
     try checkSharedSubfolders(generatedRoot: generatedRoot, cache: cache, messageID: messageID, sessionID: sessionID)
 
-    // A subfolder swapped for a symlink is refused when read, even after it was validated.
+    // Links resolve before the reserved-folder check: a symlinked folder elsewhere previews, but a
+    // subfolder swapped after validation for a link into Cantrip's upload cache is refused.
     let outsideDirectory = generatedRoot.deletingLastPathComponent().appendingPathComponent("outside-dir")
     try FileManager.default.createDirectory(at: outsideDirectory, withIntermediateDirectories: true)
     try jpeg(type: .png).write(to: outsideDirectory.appendingPathComponent("swap.png"))
+    let uploads = generatedRoot.appendingPathComponent("remote-attachments/\(UUID())", isDirectory: true)
+    try FileManager.default.createDirectory(at: uploads, withIntermediateDirectories: true)
+    try jpeg(type: .png).write(to: uploads.appendingPathComponent("swap.png"))
+    let alias = files.appendingPathComponent("alias", isDirectory: true)
+    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: outsideDirectory)
+    let aliased = RemoteGeneratedImages.presentation(
+        "![Alias](\(alias.path)/swap.png)", messageID: messageID, root: generatedRoot
+    ).images[0]
+    expect(try !RemoteGeneratedImages.read(aliased, sessionID: sessionID, thumbnail: true, root: cache).isEmpty,
+           "a symlinked folder elsewhere on the Mac previews")
     let swapped = files.appendingPathComponent("swap", isDirectory: true)
     try FileManager.default.createDirectory(at: swapped, withIntermediateDirectories: true)
     try jpeg(type: .png).write(to: swapped.appendingPathComponent("swap.png"))
@@ -155,17 +172,19 @@ private func checkLinksAndNesting(generatedRoot: URL, screenshot: URL, cache: UR
         "![Swap](\(swapped.path)/swap.png)", messageID: messageID, root: generatedRoot, additionalRoots: [files]
     ).images[0]
     try FileManager.default.removeItem(at: swapped)
-    try FileManager.default.createSymbolicLink(at: swapped, withDestinationURL: outsideDirectory)
-    expectUnreadable(swappedReference, cache: cache, "reject a symlinked subfolder")
+    try FileManager.default.createSymbolicLink(at: swapped, withDestinationURL: uploads)
+    expectUnreadable(swappedReference, cache: cache, "reject a subfolder swapped for a link into the upload cache")
     let linkedFiles = state.appendingPathComponent("\(UUID())/files", isDirectory: true)
     try FileManager.default.createDirectory(at: linkedFiles.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try FileManager.default.createSymbolicLink(at: linkedFiles, withDestinationURL: outsideDirectory)
+    try FileManager.default.createSymbolicLink(at: linkedFiles, withDestinationURL: uploads)
     let linkedRoot = RemoteGeneratedImages.presentation(
         "![Root](\(linkedFiles.path)/swap.png)", messageID: messageID, root: generatedRoot,
         additionalRoots: [linkedFiles]
     ).images
     expect(linkedRoot.count == 1, "the symlinked root path is recognized before reading")
-    if let first = linkedRoot.first { expectUnreadable(first, cache: cache, "reject a symlinked files folder") }
+    if let first = linkedRoot.first {
+        expectUnreadable(first, cache: cache, "an owned folder that links into the upload cache reads nothing")
+    }
 }
 
 /// Agents' own subfolders of ~/.cache/Cantrip preview (job-apply/, qa/...); Cantrip's per-session
@@ -182,8 +201,7 @@ private func checkSharedSubfolders(generatedRoot: URL, cache: URL, messageID: UU
         "![Part 1](\(part.path))\n\n[Full form](\(part.absoluteString))\n\n![Eight](\(deepShared.path)/eight.png)",
         messageID: messageID, root: generatedRoot
     )
-    expect(shared.images.count == 2 && shared.images.allSatisfy { $0.root.path == generatedRoot.path },
-           "subfolders of the shared output folder preview, up to eight deep")
+    expect(shared.images.count == 2, "subfolders of the shared output folder preview")
     if let first = shared.images.first {
         let data = try RemoteGeneratedImages.read(first, sessionID: sessionID, thumbnail: false, root: cache)
         let size = CGImageSourceCopyPropertiesAtIndex(CGImageSourceCreateWithData(data as CFData, nil)!, 0, nil)!
@@ -199,18 +217,24 @@ private func checkSharedSubfolders(generatedRoot: URL, cache: URL, messageID: UU
     for target in [
         "remote-attachments/\(UUID())/image-1.jpg", "Remote-Attachments/x/image-1.jpg", "REMOTE-PREVIEWS/x.jpg",
         "remote-previews/\(sessionID)/\(messageID)/x.jpg", "home/artifacts/tracker.png", "Home/direct.jpg",
-        "chats/direct.jpg", "runs/direct.jpg", "remote-videos/x/frame.png", ".hidden/x.png", "job-apply/.cache/x.png",
-        (1...9).map { "s\($0)" }.joined(separator: "/") + "/nine.png", "job-apply/../../outside.png"
+        "chats/direct.jpg", "runs/direct.jpg", "remote-videos/x/frame.png", "job-apply/../../outside.png",
+        "job-apply/../remote-attachments/x.png"
     ] {
         let path = generatedRoot.path + "/" + target
         let rejected = RemoteGeneratedImages.presentation("![x](\(path))\n[x](\(path))", messageID: messageID,
                                                           root: generatedRoot)
-        expect(rejected.images.isEmpty, "reserved, hidden, too-deep or escaping shared paths stay private: \(target)")
+        expect(rejected.images.isEmpty, "reserved or escaping shared paths stay private: \(target)")
     }
-    // An agent subfolder swapped for a symlink after validation is refused when read.
-    let outside = generatedRoot.deletingLastPathComponent().appendingPathComponent("outside-shared", isDirectory: true)
-    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
-    try jpeg(type: .png).write(to: outside.appendingPathComponent("swap.png"))
+    for target in [".hidden/x.png", "job-apply/.cache/x.png", (1...9).map { "s\($0)" }.joined(separator: "/") + "/nine.png"] {
+        let path = generatedRoot.path + "/" + target
+        expect(RemoteGeneratedImages.presentation("![x](\(path))", messageID: messageID, root: generatedRoot)
+            .images.count == 1, "hidden and deep agent subfolders preview: \(target)")
+    }
+    // A link elsewhere into a reserved folder is refused when read, whether it was there from the
+    // start or swapped in after validation; case changes don't hide the reserved folder.
+    let uploads = generatedRoot.appendingPathComponent("remote-attachments/\(UUID())", isDirectory: true)
+    try FileManager.default.createDirectory(at: uploads, withIntermediateDirectories: true)
+    try jpeg(type: .png).write(to: uploads.appendingPathComponent("swap.png"))
     let swapped = generatedRoot.appendingPathComponent("swap-shared", isDirectory: true)
     try FileManager.default.createDirectory(at: swapped, withIntermediateDirectories: true)
     try jpeg(type: .png).write(to: swapped.appendingPathComponent("swap.png"))
@@ -218,8 +242,24 @@ private func checkSharedSubfolders(generatedRoot: URL, cache: URL, messageID: UU
         "![Swap](\(swapped.path)/swap.png)", messageID: messageID, root: generatedRoot
     ).images[0]
     try FileManager.default.removeItem(at: swapped)
-    try FileManager.default.createSymbolicLink(at: swapped, withDestinationURL: outside)
-    expectUnreadable(reference, cache: cache, "reject a symlinked shared subfolder")
+    try FileManager.default.createSymbolicLink(at: swapped, withDestinationURL: uploads)
+    expectUnreadable(reference, cache: cache, "reject a shared subfolder swapped for a link into the upload cache")
+    let outside = generatedRoot.deletingLastPathComponent().appendingPathComponent("outside-shared", isDirectory: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    let pointer = outside.appendingPathComponent("pointer.png")
+    try FileManager.default.createSymbolicLink(at: pointer, withDestinationURL: uploads.appendingPathComponent("swap.png"))
+    let linked = RemoteGeneratedImages.presentation(
+        "![Pointer](\(pointer.path))", messageID: messageID, root: generatedRoot
+    ).images[0]
+    expectUnreadable(linked, cache: cache, "reject a file elsewhere that links into the upload cache")
+    let upperRoot = generatedRoot.deletingLastPathComponent().appendingPathComponent(
+        generatedRoot.lastPathComponent.uppercased(), isDirectory: true
+    )
+    let caseVariant = RemoteGeneratedImages.presentation(
+        "![Case](\(upperRoot.path)/Remote-Attachments/\(uploads.lastPathComponent)/swap.png)",
+        messageID: messageID, root: generatedRoot
+    )
+    expect(caseVariant.images.isEmpty, "a case-changed path to the upload cache is not published")
 }
 
 /// Each session records the CLI sessions it used; the backfill never guesses.
@@ -455,14 +495,30 @@ do {
         "```\n\(markdown)\n```", "~~~md\n\(markdown)\n~~~", "    ![Example](\(screenshot.path))",
         "`![Example](\(screenshot.path))`", "`[Download](\(screenshot.path))`",
         "``a ` [Download](\(screenshot.path)) ``", "\\[Escaped](\(screenshot.path))",
-        "```\n[Download](\(screenshot.path))\n```", "[Outside](/etc/secret.png)",
-        "![Outside](/etc/secret.png)", "![Outside](\(generatedRoot.path)/../secret.png)",
+        "```\n[Download](\(screenshot.path))\n```", "![Outside](\(generatedRoot.path)/../secret.png)",
         "![Upload](\(generatedRoot.path)/remote-attachments/\(sessionID)/image-1.jpg)",
         "![SVG](\(generatedRoot.path)/unsafe.svg)", "![Remote](https://example.com/image.png)",
         "![Partial](\(screenshot.path)"
     ] {
         let ignored = RemoteGeneratedImages.presentation(text, messageID: messageID, root: generatedRoot)
         expect(ignored.images.isEmpty && ignored.text == text, "do not publish unsupported or quoted image paths")
+    }
+    // Any folder works, including /tmp (a link to /private/tmp); the read still decodes the file.
+    let temporary = URL(fileURLWithPath: "/tmp/cantrip-image-test-\(UUID().uuidString).png")
+    try jpeg(width: 40, height: 20, type: .png).write(to: temporary)
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let tmpPreview = RemoteGeneratedImages.presentation(
+        "![Tmp](\(temporary.path))\n[Secret](/etc/secret.png)", messageID: messageID, root: generatedRoot
+    )
+    expect(tmpPreview.images.count == 2, "images anywhere on the Mac are published: \(tmpPreview.text)")
+    if let first = tmpPreview.images.first {
+        let data = try RemoteGeneratedImages.read(first, sessionID: sessionID, thumbnail: false, root: cache)
+        let size = CGImageSourceCopyPropertiesAtIndex(CGImageSourceCreateWithData(data as CFData, nil)!, 0, nil)!
+            as NSDictionary
+        expect(size[kCGImagePropertyPixelWidth] as? Int == 40, "read an image from /tmp")
+    }
+    if tmpPreview.images.count == 2 {
+        expectUnreadable(tmpPreview.images[1], cache: cache, "a missing or non-image file still reads nothing")
     }
     try checkLinksAndNesting(generatedRoot: generatedRoot, screenshot: screenshot, cache: cache,
                              messageID: messageID, sessionID: sessionID)
@@ -501,10 +557,8 @@ do {
     let linkReference = RemoteGeneratedImages.presentation(
         "![Link](\(forbidden.path))", messageID: messageID, root: generatedRoot
     ).images[0]
-    do {
-        _ = try RemoteGeneratedImages.read(linkReference, sessionID: sessionID, thumbnail: false, root: cache)
-        expect(false, "reject generated-image symlinks")
-    } catch is RemoteImageAttachmentError {}
+    expect(try !RemoteGeneratedImages.read(linkReference, sessionID: UUID(), thumbnail: true, root: cache).isEmpty,
+           "a symlink to an ordinary image previews its target")
     try FileManager.default.removeItem(at: forbidden)
     try FileManager.default.linkItem(at: outside, to: forbidden)
     do {
