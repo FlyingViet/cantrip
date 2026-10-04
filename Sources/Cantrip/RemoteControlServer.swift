@@ -2230,7 +2230,17 @@ private extension RemoteControlServer {
     // historyReading: the reader is heading into older history, so loaded pages may chain.
     // restoredScrollTop: where Remote itself last positioned the page, so that scroll is not mistaken for reading.
     let historyScrollIntent=false,historyReading=false,lastHistoryScrollTop=0,lastHistoryScrollHeight=0,restoredScrollTop=null,historyTouchY=null;
+    let historyAnchorRows=()=>Array.from($("messages").querySelectorAll("article[data-message-id]"));
+    let renderScrollRevision=0;
     function positionConversation(top){const root=document.scrollingElement||document.documentElement;root.scrollTop=top;restoredScrollTop=root.scrollTop}
+    function visibleHistoryAnchor(){for(const row of historyAnchorRows()){const bounds=row.getBoundingClientRect();if(bounds.bottom>0&&bounds.top<innerHeight)return {id:row.dataset.messageId,top:bounds.top}}return null}
+    function settleConversationPosition(anchor,target,shouldFollow,revision){return new Promise(resolve=>{const root=document.scrollingElement||document.documentElement;let attempts=0,stable=0;
+      const step=()=>requestAnimationFrame(()=>{if(revision!==renderScrollRevision){resolve();return}
+        const row=anchor&&historyAnchorRows().find(item=>item.dataset.messageId===anchor.id);
+        if(row){const delta=row.getBoundingClientRect().top-anchor.top;if(Math.abs(delta)>=0.5){positionConversation(root.scrollTop+delta);stable=0}else stable++}
+        else{if(!attempts)positionConversation(target);stable=2}
+        attempts++;if(!anchor||attempts>=6||stable>=2){followOutput=shouldFollow;suppressScroll=false;resolve()}else step()});
+      step()})}
     function nearHistoryTop(){return (document.scrollingElement||document.documentElement).scrollTop<=Math.max(600,innerHeight)}
     function requestHistoryOnScroll(){if(historyScrollIntent&&!suppressScroll&&!document.querySelector("dialog[open]")&&nearHistoryTop())loadOlderMessages(true)}
     function historyGesture(upward){historyScrollIntent=upward;historyReading=upward;if(upward){followOutput=false;requestHistoryOnScroll()}}
@@ -2242,7 +2252,7 @@ private extension RemoteControlServer {
     // Any upward scroll Remote did not cause (momentum after a render, scrollbar drags, find, assistive tech)
     // is reading; content shrinking above the reader is layout, not intent.
     addEventListener("scroll",()=>{const root=document.scrollingElement||document.documentElement,top=root.scrollTop,height=root.scrollHeight,restored=restoredScrollTop!==null&&Math.abs(top-restoredScrollTop)<1;restoredScrollTop=null;
-      if(!suppressScroll){followOutput=atBottom();if(followOutput)historyReading=false;if(top<lastHistoryScrollTop&&!restored&&height>=lastHistoryScrollHeight){historyScrollIntent=true;historyReading=true;requestHistoryOnScroll()}}
+      if(!suppressScroll&&!restored){followOutput=atBottom();if(followOutput)historyReading=false;if(top<lastHistoryScrollTop&&height>=lastHistoryScrollHeight){historyScrollIntent=true;historyReading=true;requestHistoryOnScroll()}}
       lastHistoryScrollTop=top;lastHistoryScrollHeight=height},{passive:true});
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
       if(uiNavigating)throw Error("Remote is updating; this request was not sent.");
@@ -2271,7 +2281,7 @@ private extension RemoteControlServer {
       $("olderMessages").classList.toggle("hidden",!failure);$("olderMessages").disabled=loadingHistory;
       // Stays mounted while loading so a screen reader's focus is not dropped.
       $("olderHistoryReader").classList.toggle("hidden",!older||Boolean(failure));$("olderHistoryReader").setAttribute("aria-disabled",String(loading))}
-    function continueHistoryReading(id){requestAnimationFrame(()=>requestAnimationFrame(()=>{if(historyReading&&selected===id&&!suppressScroll&&!document.querySelector("dialog[open]")&&nearHistoryTop())loadOlderMessages(true)}))}
+    function continueHistoryReading(id){setTimeout(()=>{if(historyReading&&selected===id&&!document.querySelector("dialog[open]")&&nearHistoryTop())loadOlderMessages(true)},120)}
     function cacheSession(session,merge=true){const previous=historyCache.get(session.id);
       if(previous?.historyStartID!==session.historyStartID){expandedHistory.delete(session.id);historyPaused.delete(session.id)}
       if(merge&&session.historyStartID&&previous?.historyStartID===session.historyStartID){
@@ -2844,14 +2854,14 @@ private extension RemoteControlServer {
     $("promptDownload").onclick=()=>{const url=URL.createObjectURL(new Blob([readingPrompt],{type:"text/plain;charset=utf-8"})),link=document.createElement("a");link.href=url;link.download="cantrip-prompt.txt";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
     $("promptDone").onclick=()=>$("promptReader").close();
     $("promptReader").addEventListener("close",()=>{readingPrompt="";promptStarts=[0];$("promptPage").textContent=""});
-    function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight;
+    function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight,anchor=prepend?visibleHistoryAnchor():null;
       $("inputBanner").classList.toggle("hidden",!session?.pendingInputs?.some(r=>r.kind==="secret"));$("inputBanner").textContent="Enter password securely";
       renderProgress(session);updateHistoryControls(session);const liveBox=$("messages"),box=document.createElement("div"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
-      const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession);renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;if(!sameSession)historyReading=false;$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
+      const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession),scrollRevision=++renderScrollRevision;renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;if(!sameSession)historyReading=false;$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
       const pinned=[];if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{if(session.isLocalPrivate){const notice=document.createElement("p");notice.className="muted";notice.textContent="Private Local - saved on the Mac and available remotely. Self-hosted models; no cloud fallback. Configure the server in the tab menu.";box.append(notice)}
         for(const message of session.messages){const subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id)),activities=(message.activities||[]).filter(activity=>!subagentIDs.has(activity.id)),apps=message.apps||[],settled=subagents.filter(agent=>!subagentActive(agent));for(const agent of subagents)if(subagentActive(agent))pinned.push([agent,message.id]);for(const app of apps)box.append(mcpAppSlot(session.id,app));
-          if(!message.text&&!message.thinking&&!activities.length&&!settled.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;
+          if(!message.text&&!message.thinking&&!activities.length&&!settled.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;row.dataset.messageId=message.id;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
           appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=images.length?message.displayText||"":message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else appendReply(row,message,settled,session);appendActivities(row,activities,message.id);
           if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
@@ -2862,7 +2872,7 @@ private extension RemoteControlServer {
         if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}
         if(!sidebarLayout&&(session.isStreaming||session.queuedCount)){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
       mcpReconcile(liveBox,box);pruneMacImages();renderPinnedSubagents(sessionID,pinned);
-      requestAnimationFrame(()=>{positionConversation(shouldFollow?root.scrollHeight:Math.min(previousTop+(prepend?root.scrollHeight-previousHeight:0),Math.max(0,root.scrollHeight-root.clientHeight)));followOutput=shouldFollow;suppressScroll=false})}
+      settleConversationPosition(anchor,shouldFollow?root.scrollHeight:Math.min(previousTop+(prepend?root.scrollHeight-previousHeight:0),Math.max(0,root.scrollHeight-root.clientHeight)),shouldFollow,scrollRevision)}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
     async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selectTab(data.session.id);renderedPayload="";await refresh()}
       catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
