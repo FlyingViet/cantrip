@@ -128,6 +128,7 @@ enum CantripMascotName {
 enum CantripMascotOutfit: String, CaseIterable, Identifiable {
     case starryPlush
     case dinoHoodie
+    case pandaKitty
 
     static let storageKey = "cantrip.mascot.outfit"
 
@@ -137,6 +138,7 @@ enum CantripMascotOutfit: String, CaseIterable, Identifiable {
         switch self {
         case .starryPlush: "Starry Plush"
         case .dinoHoodie: "Dino Hoodie"
+        case .pandaKitty: "Panda Kitty"
         }
     }
 
@@ -144,8 +146,12 @@ enum CantripMascotOutfit: String, CaseIterable, Identifiable {
         switch self {
         case .starryPlush: "Fluffy purple hood with a gold star pin"
         case .dinoHoodie: "Green fleece hood with spikes and soft teeth"
+        case .pandaKitty: "British Shorthair cat in a panda onesie"
         }
     }
+
+    /// The wearer is a cat instead of Pip's usual plush face.
+    var isCat: Bool { self == .pandaKitty }
 
     struct Palette {
         let background: [Color]
@@ -183,6 +189,18 @@ enum CantripMascotOutfit: String, CaseIterable, Identifiable {
                 paw: [Color(red: 0.6, green: 0.87, blue: 0.5), Color(red: 0.4, green: 0.72, blue: 0.38)],
                 accent: Color(red: 0.16, green: 0.5, blue: 0.24),
                 fluff: 0.25, fur: false
+            )
+        case .pandaKitty:
+            Palette(
+                background: [Color(red: 0.9, green: 0.97, blue: 0.86), Color(red: 0.76, green: 0.9, blue: 0.7),
+                             Color(red: 0.58, green: 0.79, blue: 0.53)],
+                darkBackground: [Color(red: 0.93, green: 0.99, blue: 0.9), Color(red: 0.8, green: 0.93, blue: 0.75),
+                                 Color(red: 0.64, green: 0.84, blue: 0.59)],
+                hood: [.white, Color(red: 0.96, green: 0.96, blue: 0.97), Color(red: 0.8, green: 0.81, blue: 0.85)],
+                recess: Color(red: 0.2, green: 0.21, blue: 0.26),
+                paw: [Color(red: 0.32, green: 0.32, blue: 0.36), Color(red: 0.11, green: 0.11, blue: 0.14)],
+                accent: Color(red: 0.84, green: 0.42, blue: 0.1),
+                fluff: 0.6, fur: true
             )
         }
     }
@@ -327,6 +345,10 @@ struct CantripMascotRenderer {
         if outfit == .dinoHoodie {
             drawSpikes(&figure, s: s, t: t, progress: progress)
         }
+        if outfit.isCat {
+            drawTail(&figure, s: s, t: t, progress: progress)
+            drawPandaEars(&figure, s: s)
+        }
         let hood = hoodPath(s, fluff: palette.fluff)
         figure.drawLayer { fluff in
             fluff.addFilter(.blur(radius: (palette.fur ? 0.0045 : 0.002) * s))
@@ -344,7 +366,7 @@ struct CantripMascotRenderer {
                     strand.rotate(by: .radians(tuft.angle))
                     strand.fill(
                         Path(ellipseIn: CGRect(x: -0.026 * s, y: -0.007 * s, width: 0.052 * s, height: 0.014 * s)),
-                        with: .color(tuft.light ? .white.opacity(0.2) : palette.recess.opacity(0.13))
+                        with: .color(tuft.light ? .white.opacity(0.2) : palette.recess.opacity(outfit.isCat ? 0.07 : 0.13))
                     )
                 }
             }
@@ -361,33 +383,47 @@ struct CantripMascotRenderer {
             ))
             drawHoodEyes(&figure, s: s)
         }
+        if outfit.isCat {
+            drawPandaPatches(&figure, s: s)
+        }
         figure.drawLayer { shadow in
             shadow.addFilter(.blur(radius: 0.03 * s))
-            shadow.fill(ellipse(0.5, 0.585, 0.24, 0.21), with: .color(palette.recess.opacity(0.75)))
+            shadow.fill(ellipse(0.5, 0.585, 0.24, 0.21), with: .color(palette.recess.opacity(outfit.isCat ? 0.55 : 0.75)))
             shadow.fill(ellipse(0.5, 0.79, 0.17, 0.035), with: .color(palette.recess.opacity(0.35)))
         }
-        figure.fill(ellipse(0.5, 0.57, 0.205, 0.178), with: .radialGradient(
-            Gradient(colors: [
-                Color(red: 1.0, green: 0.97, blue: 0.94), Color(red: 0.99, green: 0.9, blue: 0.84),
-                Color(red: 0.94, green: 0.8, blue: 0.73),
-            ]),
-            center: p(0.45, 0.49), startRadius: 0, endRadius: 0.25 * s
-        ))
+        if outfit.isCat {
+            drawCatFace(&figure, s: s)
+        } else {
+            figure.fill(ellipse(0.5, 0.57, 0.205, 0.178), with: .radialGradient(
+                Gradient(colors: [
+                    Color(red: 1.0, green: 0.97, blue: 0.94), Color(red: 0.99, green: 0.9, blue: 0.84),
+                    Color(red: 0.94, green: 0.8, blue: 0.73),
+                ]),
+                center: p(0.45, 0.49), startRadius: 0, endRadius: 0.25 * s
+            ))
+        }
         if outfit == .dinoHoodie {
             drawTeeth(&figure, s: s)
         }
 
         figure.drawLayer { blush in
             blush.addFilter(.blur(radius: 0.018 * s))
-            for x in [0.37, 0.63] {
-                blush.fill(ellipse(x, 0.612, 0.042, 0.024),
-                           with: .color(Color(red: 1.0, green: 0.52, blue: 0.62).opacity(0.6)))
+            for x in outfit.isCat ? [0.355, 0.645] : [0.37, 0.63] {
+                blush.fill(ellipse(x, outfit.isCat ? 0.625 : 0.612, 0.042, 0.024),
+                           with: .color(Color(red: 1.0, green: 0.52, blue: 0.62).opacity(outfit.isCat ? 0.42 : 0.6)))
             }
         }
 
-        drawEyes(&figure, s: s, progress: progress)
+        if outfit.isCat {
+            drawCatEyes(&figure, s: s, progress: progress)
+        } else {
+            drawEyes(&figure, s: s, progress: progress)
+        }
         drawBrows(&figure, s: s)
         drawMouth(&figure, s: s)
+        if outfit.isCat {
+            drawWhiskers(&figure, s: s, t: t)
+        }
 
         let paw = Gradient(colors: palette.paw)
         for x in [0.375, 0.625] {
@@ -518,6 +554,236 @@ struct CantripMascotRenderer {
         }
     }
 
+    private static func oval(_ x: Double, _ y: Double, _ rx: Double, _ ry: Double, _ s: CGFloat) -> Path {
+        Path(ellipseIn: CGRect(x: (x - rx) * s, y: (y - ry) * s, width: rx * 2 * s, height: ry * 2 * s))
+    }
+
+    /// A point on the hood's outline and its outward normal, in unit coordinates.
+    private static func hoodEdge(theta: Double) -> (point: CGPoint, normal: CGVector) {
+        let exponent = 2 / 2.35
+        let c = cos(theta)
+        let n = sin(theta)
+        let point = CGPoint(
+            x: 0.5 + 0.385 * (c < 0 ? -1 : 1) * pow(abs(c), exponent),
+            y: 0.69 + 0.5 * (n < 0 ? -1 : 1) * pow(abs(n), exponent)
+        )
+        let normal = CGVector(dx: (point.x - 0.5) / pow(0.385, 2), dy: (point.y - 0.69) / pow(0.5, 2))
+        let length = hypot(normal.dx, normal.dy)
+        return (point, CGVector(dx: normal.dx / length, dy: normal.dy / length))
+    }
+
+    /// A plush blue-grey tail curling up from behind the onesie. It sways with the mood and puffs up when worried.
+    private func drawTail(_ figure: inout GraphicsContext, s: CGFloat, t: Double, progress: Double?) {
+        let sway: Double = if let progress {
+            0.05 * sin(progress * 4 * .pi)
+        } else if !motion {
+            0
+        } else {
+            switch mood {
+            case .sleeping: 0
+            case .working, .searching: 0.028 * sin(t * 5)
+            case .thinking, .writing: 0.024 * sin(t * 2.4)
+            case .curious, .listening: 0.014 * sin(t * 1.6)
+            case .concerned: 0.008 * sin(t * 9)
+            default: 0.034 * sin(t * 2 * .pi / 3.4)
+            }
+        }
+        let width = mood == .concerned ? 0.07 : 0.052
+        let tipY = mood == .sleeping ? 0.6 : 0.46
+        var tail = Path()
+        tail.move(to: CGPoint(x: 0.26 * s, y: 0.88 * s))
+        tail.addCurve(
+            to: CGPoint(x: (0.08 + sway) * s, y: tipY * s),
+            control1: CGPoint(x: 0.04 * s, y: 0.9 * s),
+            control2: CGPoint(x: (0.05 + sway * 0.5) * s, y: (tipY + 0.16) * s)
+        )
+        // A question-mark hook at the tip, curling outward like a friendly cat's tail.
+        tail.addQuadCurve(
+            to: CGPoint(x: (0.035 + sway * 1.3) * s, y: (tipY - 0.03) * s),
+            control: CGPoint(x: (0.09 + sway) * s, y: (tipY - 0.07) * s)
+        )
+        let round = { (lineWidth: Double) in
+            StrokeStyle(lineWidth: lineWidth * s, lineCap: .round, lineJoin: .round)
+        }
+        figure.stroke(tail, with: .color(Color(red: 0.36, green: 0.4, blue: 0.48)), style: round(width + 0.012))
+        figure.stroke(tail, with: .linearGradient(
+            Gradient(colors: [Color(red: 0.8, green: 0.83, blue: 0.89), Color(red: 0.6, green: 0.64, blue: 0.72)]),
+            startPoint: CGPoint(x: 0.06 * s, y: 0.42 * s), endPoint: CGPoint(x: 0.22 * s, y: 0.86 * s)
+        ), style: round(width))
+    }
+
+    /// Round black felt ears on the panda hood, drawn behind it so their bases tuck in.
+    private func drawPandaEars(_ figure: inout GraphicsContext, s: CGFloat) {
+        for side in [-1.0, 1.0] {
+            let edge = Self.hoodEdge(theta: 1.5 * .pi + side * 0.6)
+            let center = CGPoint(x: edge.point.x + edge.normal.dx * 0.012, y: edge.point.y + edge.normal.dy * 0.012)
+            let radius = 0.074
+            figure.fill(Self.oval(center.x, center.y, radius, radius, s), with: .radialGradient(
+                Gradient(colors: [Color(red: 0.36, green: 0.36, blue: 0.41), Color(red: 0.11, green: 0.11, blue: 0.14)]),
+                center: CGPoint(x: (center.x - 0.02) * s, y: (center.y - 0.03) * s),
+                startRadius: 0, endRadius: radius * 1.3 * s
+            ))
+            figure.fill(
+                Self.oval(center.x + edge.normal.dx * 0.018, center.y + edge.normal.dy * 0.018, 0.034, 0.034, s),
+                with: .color(Color(red: 0.42, green: 0.42, blue: 0.48).opacity(0.7))
+            )
+        }
+    }
+
+    /// The onesie's own panda face: drooping black eye patches on the hood crown, glancing down at the wearer.
+    private func drawPandaPatches(_ figure: inout GraphicsContext, s: CGFloat) {
+        for (x, angle, lean) in [(0.405, -30.0, 0.005), (0.595, 30.0, -0.005)] {
+            var patch = figure
+            patch.translateBy(x: x * s, y: 0.305 * s)
+            patch.rotate(by: .degrees(angle))
+            patch.fill(
+                Path(ellipseIn: CGRect(x: -0.055 * s, y: -0.037 * s, width: 0.11 * s, height: 0.074 * s)),
+                with: .color(Color(red: 0.14, green: 0.14, blue: 0.17))
+            )
+            figure.fill(Self.oval(x, 0.307, 0.017, 0.017, s), with: .color(.white))
+            figure.fill(Self.oval(x + lean, 0.312, 0.01, 0.011, s), with: .color(Self.ink))
+            figure.fill(Self.oval(x + lean + 0.003, 0.308, 0.0035, 0.0035, s), with: .color(.white.opacity(0.9)))
+        }
+    }
+
+    /// A round, chubby-cheeked British Shorthair face in plush blue-grey, with small rounded ears
+    /// peeking out of the hood and lighter whisker pads.
+    private func drawCatFace(_ figure: inout GraphicsContext, s: CGFloat) {
+        let fur = GraphicsContext.Shading.radialGradient(
+            Gradient(colors: [
+                Color(red: 0.82, green: 0.85, blue: 0.9), Color(red: 0.68, green: 0.72, blue: 0.79),
+                Color(red: 0.53, green: 0.57, blue: 0.65),
+            ]),
+            center: CGPoint(x: 0.45 * s, y: 0.5 * s), startRadius: 0, endRadius: 0.27 * s
+        )
+        for mirror in [false, true] {
+            func p(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: (mirror ? 1 - x : x) * s, y: y * s) }
+            var ear = Path()
+            ear.move(to: p(0.325, 0.5))
+            ear.addQuadCurve(to: p(0.35, 0.372), control: p(0.315, 0.42))
+            ear.addQuadCurve(to: p(0.392, 0.378), control: p(0.366, 0.35))
+            ear.addQuadCurve(to: p(0.48, 0.44), control: p(0.43, 0.395))
+            ear.closeSubpath()
+            figure.fill(ear, with: fur)
+            figure.stroke(ear, with: .color(Color(red: 0.42, green: 0.46, blue: 0.54).opacity(0.6)), lineWidth: 0.005 * s)
+            var inner = Path()
+            inner.move(to: p(0.35, 0.47))
+            inner.addQuadCurve(to: p(0.362, 0.395), control: p(0.344, 0.425))
+            inner.addQuadCurve(to: p(0.384, 0.397), control: p(0.371, 0.383))
+            inner.addQuadCurve(to: p(0.45, 0.45), control: p(0.415, 0.41))
+            inner.closeSubpath()
+            figure.fill(inner, with: .linearGradient(
+                Gradient(colors: [Color(red: 0.98, green: 0.7, blue: 0.76), Color(red: 0.84, green: 0.6, blue: 0.68)]),
+                startPoint: p(0.365, 0.39), endPoint: p(0.4, 0.46)
+            ))
+        }
+        var face = Self.oval(0.5, 0.57, 0.205, 0.178, s)
+        face.addPath(Self.oval(0.4, 0.638, 0.112, 0.082, s))
+        face.addPath(Self.oval(0.6, 0.638, 0.112, 0.082, s))
+        figure.fill(face, with: fur)
+        figure.drawLayer { pads in
+            pads.addFilter(.blur(radius: 0.006 * s))
+            for x in [0.474, 0.526] {
+                pads.fill(Self.oval(x, 0.612, 0.032, 0.023, s), with: .color(Color(red: 0.88, green: 0.9, blue: 0.94)))
+            }
+        }
+    }
+
+    /// Big round copper eyes; pupils widen when attentive and narrow to slits when focused or worried.
+    private func drawCatEyes(_ context: inout GraphicsContext, s: CGFloat, progress: Double?) {
+        let t = motion ? time : 1
+        let line = StrokeStyle(lineWidth: 0.016 * s, lineCap: .round)
+        for x in [0.418, 0.582] {
+            let y = 0.548
+            if progress != nil || mood == .sleeping {
+                var arc = Path()
+                let lift = progress != nil ? -0.03 : 0.024
+                let baseline = y + (progress != nil ? 0.008 : -0.004)
+                arc.move(to: CGPoint(x: (x - 0.03) * s, y: baseline * s))
+                arc.addQuadCurve(to: CGPoint(x: (x + 0.03) * s, y: baseline * s),
+                                 control: CGPoint(x: x * s, y: (y + lift) * s))
+                context.stroke(arc, with: .color(Self.ink), style: line)
+                continue
+            }
+            let (gx, gy, scale): (Double, Double, Double) = switch mood {
+            case .thinking: (0.7, -0.8 + 0.1 * sin(t * 3), 1)
+            case .searching: (1.1 * sin(t * 2.2), -0.2, 1.04)
+            case .working: (0.2, 0.7, 0.94)
+            case .writing: (-0.5 + 0.25 * sin(t * 1.4), 0.8, 1)
+            case .listening: (-0.15, 0, 1.08)
+            case .curious: (0.35, -0.35, 1.12)
+            case .concerned: (0, -0.2, 0.97)
+            case .speaking: (0, 0.1, 1)
+            default: (sin(t * 0.55) * sin(t * 0.21) * 1.4, 0, 1)
+            }
+            let open = Self.openness(t)
+            let gazeX = max(-1, min(1, gx))
+            let cx = x + gazeX * 0.005
+            let cy = y + gy * 0.006
+            if open < 0.22 {
+                var closed = Path()
+                closed.move(to: CGPoint(x: (cx - 0.028) * s, y: cy * s))
+                closed.addLine(to: CGPoint(x: (cx + 0.028) * s, y: cy * s))
+                context.stroke(closed, with: .color(Self.ink), style: line)
+                continue
+            }
+            let radius = 0.036 * scale
+            let eye = Self.oval(cx, cy, radius, radius * open, s)
+            context.fill(eye, with: .radialGradient(
+                Gradient(colors: [
+                    Color(red: 1.0, green: 0.86, blue: 0.42), Color(red: 0.97, green: 0.63, blue: 0.18),
+                    Color(red: 0.78, green: 0.4, blue: 0.1),
+                ]),
+                center: CGPoint(x: cx * s, y: (cy + 0.012) * s), startRadius: 0, endRadius: radius * s
+            ))
+            context.stroke(eye, with: .color(Self.ink), lineWidth: 0.007 * s)
+            let pupilWidth: Double = switch mood {
+            case .curious, .listening: 0.022
+            case .working, .concerned, .searching: 0.008
+            default: 0.015
+            }
+            context.fill(
+                Self.oval(cx + gazeX * 0.008, cy + gy * 0.004, pupilWidth * scale, 0.027 * scale * open, s),
+                with: .color(Self.ink)
+            )
+            context.fill(
+                Self.oval(cx - 0.011 * scale, cy - radius * open * 0.45, 0.0085 * scale, 0.0085 * scale * open, s),
+                with: .color(.white.opacity(0.95))
+            )
+        }
+    }
+
+    private func drawCatNose(_ context: inout GraphicsContext, s: CGFloat) {
+        var nose = Path()
+        nose.move(to: CGPoint(x: 0.482 * s, y: 0.583 * s))
+        nose.addQuadCurve(to: CGPoint(x: 0.518 * s, y: 0.583 * s), control: CGPoint(x: 0.5 * s, y: 0.576 * s))
+        nose.addQuadCurve(to: CGPoint(x: 0.5 * s, y: 0.6 * s), control: CGPoint(x: 0.515 * s, y: 0.593 * s))
+        nose.addQuadCurve(to: CGPoint(x: 0.482 * s, y: 0.583 * s), control: CGPoint(x: 0.485 * s, y: 0.593 * s))
+        context.fill(nose, with: .linearGradient(
+            Gradient(colors: [Color(red: 1.0, green: 0.74, blue: 0.8), Color(red: 0.92, green: 0.5, blue: 0.6)]),
+            startPoint: CGPoint(x: 0.5 * s, y: 0.577 * s), endPoint: CGPoint(x: 0.5 * s, y: 0.6 * s)
+        ))
+        context.stroke(nose, with: .color(Color(red: 0.6, green: 0.3, blue: 0.38).opacity(0.7)), lineWidth: 0.004 * s)
+    }
+
+    /// Fine white whiskers; they twitch while listening, speaking or searching.
+    private func drawWhiskers(_ context: inout GraphicsContext, s: CGFloat, t: Double) {
+        let twitch = motion && [.listening, .speaking, .searching].contains(mood) ? 0.006 * sin(t * 8) : 0
+        let style = StrokeStyle(lineWidth: 0.0055 * s, lineCap: .round)
+        for side in [-1.0, 1.0] {
+            for (index, (startY, endY)) in [(0.603, 0.587), (0.613, 0.616), (0.623, 0.646)].enumerated() {
+                let end = endY + twitch * Double(index - 1)
+                var whisker = Path()
+                whisker.move(to: CGPoint(x: (0.5 + side * 0.05) * s, y: startY * s))
+                whisker.addQuadCurve(
+                    to: CGPoint(x: (0.5 + side * 0.225) * s, y: end * s),
+                    control: CGPoint(x: (0.5 + side * 0.14) * s, y: ((startY + end) / 2 - 0.008) * s)
+                )
+                context.stroke(whisker, with: .color(.white.opacity(0.88)), style: style)
+            }
+        }
+    }
+
     private func hoodPath(_ s: CGFloat, fluff amount: Double = 1) -> Path {
         var path = Path()
         let steps = 240
@@ -602,9 +868,15 @@ struct CantripMascotRenderer {
         }
     }
 
-    private func drawMouth(_ context: inout GraphicsContext, s: CGFloat) {
+    private func drawMouth(_ base: inout GraphicsContext, s: CGFloat) {
         let t = motion ? time : 1
         let line = StrokeStyle(lineWidth: 0.013 * s, lineCap: .round)
+        // The cat's mouth sits just under its nose, so its other mood mouths drop slightly.
+        var context = base
+        if outfit.isCat {
+            drawCatNose(&base, s: s)
+            context.translateBy(x: 0, y: 0.008 * s)
+        }
         switch mood {
         case .speaking:
             let open = motion ? 0.35 + 0.65 * abs(sin(t * 9)) * abs(sin(t * 2.3 + 0.6)) : 0.6
@@ -648,6 +920,17 @@ struct CantripMascotRenderer {
                                control: CGPoint(x: 0.5 * s, y: 0.604 * s))
             context.stroke(mouth, with: .color(Self.ink), style: line)
         default:
+            if outfit.isCat, celebration == nil {
+                var mouth = Path()
+                mouth.move(to: CGPoint(x: 0.5 * s, y: 0.6 * s))
+                mouth.addLine(to: CGPoint(x: 0.5 * s, y: 0.607 * s))
+                mouth.move(to: CGPoint(x: 0.473 * s, y: 0.609 * s))
+                mouth.addQuadCurve(to: CGPoint(x: 0.5 * s, y: 0.607 * s), control: CGPoint(x: 0.485 * s, y: 0.623 * s))
+                mouth.addQuadCurve(to: CGPoint(x: 0.527 * s, y: 0.609 * s), control: CGPoint(x: 0.515 * s, y: 0.623 * s))
+                base.stroke(mouth, with: .color(Self.ink),
+                            style: StrokeStyle(lineWidth: 0.011 * s, lineCap: .round, lineJoin: .round))
+                return
+            }
             let wide = celebration != nil ? 0.034 : 0.024
             var mouth = Path()
             mouth.move(to: CGPoint(x: (0.5 - wide) * s, y: 0.607 * s))
@@ -888,7 +1171,7 @@ struct CantripMascotCustomizationView: View {
                     nameField
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Outfits")
+                        Text("Looks")
                             .font(.headline)
                             .accessibilityAddTraits(.isHeader)
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
@@ -896,7 +1179,7 @@ struct CantripMascotCustomizationView: View {
                                 outfitCard(option)
                             }
                         }
-                        Text("Your outfit is saved on this device and shows in Cantrip Home.")
+                        Text("Your choice is saved on this device and shows in Cantrip Home.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
