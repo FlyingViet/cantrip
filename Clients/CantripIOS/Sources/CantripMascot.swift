@@ -408,9 +408,9 @@ struct CantripMascotRenderer {
 
         figure.drawLayer { blush in
             blush.addFilter(.blur(radius: 0.018 * s))
-            for x in outfit.isCat ? [0.355, 0.645] : [0.37, 0.63] {
-                blush.fill(ellipse(x, outfit.isCat ? 0.625 : 0.612, 0.042, 0.024),
-                           with: .color(Color(red: 1.0, green: 0.52, blue: 0.62).opacity(outfit.isCat ? 0.42 : 0.6)))
+            for x in outfit.isCat ? [0.345, 0.655] : [0.37, 0.63] {
+                blush.fill(ellipse(x, outfit.isCat ? 0.638 : 0.612, outfit.isCat ? 0.038 : 0.042, outfit.isCat ? 0.027 : 0.024),
+                           with: .color(Color(red: 1.0, green: 0.52, blue: 0.62).opacity(outfit.isCat ? 0.55 : 0.6)))
             }
         }
 
@@ -646,140 +646,146 @@ struct CantripMascotRenderer {
         }
     }
 
-    /// A round, chubby-cheeked British Shorthair face in plush blue-grey, with small rounded ears
+    /// A round, cartoony British Shorthair face in plush blue-grey with a soft outline, rounded ears
     /// peeking out of the hood and lighter whisker pads.
     private func drawCatFace(_ figure: inout GraphicsContext, s: CGFloat) {
         let fur = GraphicsContext.Shading.radialGradient(
             Gradient(colors: [
-                Color(red: 0.82, green: 0.85, blue: 0.9), Color(red: 0.68, green: 0.72, blue: 0.79),
-                Color(red: 0.53, green: 0.57, blue: 0.65),
+                Color(red: 0.84, green: 0.87, blue: 0.92), Color(red: 0.7, green: 0.74, blue: 0.81),
+                Color(red: 0.55, green: 0.59, blue: 0.67),
             ]),
-            center: CGPoint(x: 0.45 * s, y: 0.5 * s), startRadius: 0, endRadius: 0.27 * s
+            center: CGPoint(x: 0.44 * s, y: 0.5 * s), startRadius: 0, endRadius: 0.28 * s
         )
+        let outline = GraphicsContext.Shading.color(Self.catOutline)
         for mirror in [false, true] {
             func p(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: (mirror ? 1 - x : x) * s, y: y * s) }
             var ear = Path()
-            ear.move(to: p(0.325, 0.5))
-            ear.addQuadCurve(to: p(0.35, 0.372), control: p(0.315, 0.42))
-            ear.addQuadCurve(to: p(0.392, 0.378), control: p(0.366, 0.35))
-            ear.addQuadCurve(to: p(0.48, 0.44), control: p(0.43, 0.395))
+            ear.move(to: p(0.312, 0.52))
+            ear.addQuadCurve(to: p(0.318, 0.39), control: p(0.298, 0.45))
+            ear.addQuadCurve(to: p(0.37, 0.362), control: p(0.326, 0.34))
+            ear.addQuadCurve(to: p(0.47, 0.425), control: p(0.42, 0.378))
             ear.closeSubpath()
             figure.fill(ear, with: fur)
-            figure.stroke(ear, with: .color(Color(red: 0.42, green: 0.46, blue: 0.54).opacity(0.6)), lineWidth: 0.005 * s)
+            figure.stroke(ear, with: outline, style: StrokeStyle(lineWidth: 0.008 * s, lineJoin: .round))
             var inner = Path()
-            inner.move(to: p(0.35, 0.47))
-            inner.addQuadCurve(to: p(0.362, 0.395), control: p(0.344, 0.425))
-            inner.addQuadCurve(to: p(0.384, 0.397), control: p(0.371, 0.383))
-            inner.addQuadCurve(to: p(0.45, 0.45), control: p(0.415, 0.41))
+            inner.move(to: p(0.335, 0.49))
+            inner.addQuadCurve(to: p(0.337, 0.405), control: p(0.326, 0.44))
+            inner.addQuadCurve(to: p(0.37, 0.39), control: p(0.343, 0.375))
+            inner.addQuadCurve(to: p(0.44, 0.44), control: p(0.41, 0.4))
             inner.closeSubpath()
             figure.fill(inner, with: .linearGradient(
-                Gradient(colors: [Color(red: 0.98, green: 0.7, blue: 0.76), Color(red: 0.84, green: 0.6, blue: 0.68)]),
-                startPoint: p(0.365, 0.39), endPoint: p(0.4, 0.46)
+                Gradient(colors: [Color(red: 1.0, green: 0.72, blue: 0.78), Color(red: 0.88, green: 0.62, blue: 0.7)]),
+                startPoint: p(0.345, 0.39), endPoint: p(0.4, 0.47)
             ))
         }
-        var face = Self.oval(0.5, 0.57, 0.205, 0.178, s)
-        face.addPath(Self.oval(0.4, 0.638, 0.112, 0.082, s))
-        face.addPath(Self.oval(0.6, 0.638, 0.112, 0.082, s))
+        let face = Self.oval(0.5, 0.585, 0.205, 0.193, s)
         figure.fill(face, with: fur)
+        figure.stroke(face, with: outline, lineWidth: 0.008 * s)
         figure.drawLayer { pads in
             pads.addFilter(.blur(radius: 0.006 * s))
-            for x in [0.474, 0.526] {
-                pads.fill(Self.oval(x, 0.612, 0.032, 0.023, s), with: .color(Color(red: 0.88, green: 0.9, blue: 0.94)))
+            for x in [0.476, 0.524] {
+                pads.fill(Self.oval(x, 0.627, 0.033, 0.024, s), with: .color(Color(red: 0.9, green: 0.92, blue: 0.95)))
             }
         }
     }
 
-    /// Big round copper eyes; pupils widen when attentive and narrow to slits when focused or worried.
+    private static let catOutline = Color(red: 0.36, green: 0.4, blue: 0.49).opacity(0.7)
+
+    /// Big round copper cartoon eyes with two highlights; pupils widen when attentive and narrow
+    /// when focused or worried.
     private func drawCatEyes(_ context: inout GraphicsContext, s: CGFloat, progress: Double?) {
         let t = motion ? time : 1
-        let line = StrokeStyle(lineWidth: 0.016 * s, lineCap: .round)
-        for x in [0.418, 0.582] {
-            let y = 0.548
+        let line = StrokeStyle(lineWidth: 0.017 * s, lineCap: .round)
+        for x in [0.415, 0.585] {
+            let y = 0.568
             if progress != nil || mood == .sleeping {
                 var arc = Path()
-                let lift = progress != nil ? -0.03 : 0.024
-                let baseline = y + (progress != nil ? 0.008 : -0.004)
-                arc.move(to: CGPoint(x: (x - 0.03) * s, y: baseline * s))
-                arc.addQuadCurve(to: CGPoint(x: (x + 0.03) * s, y: baseline * s),
+                let lift = progress != nil ? -0.034 : 0.026
+                let baseline = y + (progress != nil ? 0.01 : -0.004)
+                arc.move(to: CGPoint(x: (x - 0.034) * s, y: baseline * s))
+                arc.addQuadCurve(to: CGPoint(x: (x + 0.034) * s, y: baseline * s),
                                  control: CGPoint(x: x * s, y: (y + lift) * s))
                 context.stroke(arc, with: .color(Self.ink), style: line)
                 continue
             }
             let (gx, gy, scale): (Double, Double, Double) = switch mood {
             case .thinking: (0.7, -0.8 + 0.1 * sin(t * 3), 1)
-            case .searching: (1.1 * sin(t * 2.2), -0.2, 1.04)
-            case .working: (0.2, 0.7, 0.94)
+            case .searching: (1.1 * sin(t * 2.2), -0.2, 1.03)
+            case .working: (0.2, 0.7, 0.95)
             case .writing: (-0.5 + 0.25 * sin(t * 1.4), 0.8, 1)
-            case .listening: (-0.15, 0, 1.08)
-            case .curious: (0.35, -0.35, 1.12)
+            case .listening: (-0.15, 0, 1.06)
+            case .curious: (0.35, -0.35, 1.1)
             case .concerned: (0, -0.2, 0.97)
             case .speaking: (0, 0.1, 1)
             default: (sin(t * 0.55) * sin(t * 0.21) * 1.4, 0, 1)
             }
             let open = Self.openness(t)
             let gazeX = max(-1, min(1, gx))
-            let cx = x + gazeX * 0.005
-            let cy = y + gy * 0.006
+            let cx = x + gazeX * 0.004
+            let cy = y + gy * 0.005
             if open < 0.22 {
                 var closed = Path()
-                closed.move(to: CGPoint(x: (cx - 0.028) * s, y: cy * s))
-                closed.addLine(to: CGPoint(x: (cx + 0.028) * s, y: cy * s))
+                closed.move(to: CGPoint(x: (cx - 0.032) * s, y: cy * s))
+                closed.addLine(to: CGPoint(x: (cx + 0.032) * s, y: cy * s))
                 context.stroke(closed, with: .color(Self.ink), style: line)
                 continue
             }
-            let radius = 0.036 * scale
+            let radius = 0.046 * scale
             let eye = Self.oval(cx, cy, radius, radius * open, s)
             context.fill(eye, with: .radialGradient(
                 Gradient(colors: [
-                    Color(red: 1.0, green: 0.86, blue: 0.42), Color(red: 0.97, green: 0.63, blue: 0.18),
-                    Color(red: 0.78, green: 0.4, blue: 0.1),
+                    Color(red: 1.0, green: 0.88, blue: 0.45), Color(red: 0.98, green: 0.64, blue: 0.2),
+                    Color(red: 0.8, green: 0.42, blue: 0.12),
                 ]),
-                center: CGPoint(x: cx * s, y: (cy + 0.012) * s), startRadius: 0, endRadius: radius * s
+                center: CGPoint(x: cx * s, y: (cy + 0.016) * s), startRadius: 0, endRadius: radius * s
             ))
-            context.stroke(eye, with: .color(Self.ink), lineWidth: 0.007 * s)
-            let pupilWidth: Double = switch mood {
-            case .curious, .listening: 0.022
-            case .working, .concerned, .searching: 0.008
-            default: 0.015
+            context.stroke(eye, with: .color(Self.ink), lineWidth: 0.008 * s)
+            let pupil: (Double, Double) = switch mood {
+            case .curious, .listening: (0.031, 0.034)
+            case .working, .concerned, .searching: (0.011, 0.032)
+            default: (0.025, 0.031)
             }
+            let px = cx + gazeX * 0.009, py = cy + gy * 0.005
+            context.fill(Self.oval(px, py, pupil.0 * scale, pupil.1 * scale * open, s), with: .color(Self.ink))
             context.fill(
-                Self.oval(cx + gazeX * 0.008, cy + gy * 0.004, pupilWidth * scale, 0.027 * scale * open, s),
-                with: .color(Self.ink)
+                Self.oval(cx - 0.015 * scale, cy - 0.016 * scale * open, 0.013 * scale, 0.013 * scale * open, s),
+                with: .color(.white.opacity(0.97))
             )
             context.fill(
-                Self.oval(cx - 0.011 * scale, cy - radius * open * 0.45, 0.0085 * scale, 0.0085 * scale * open, s),
-                with: .color(.white.opacity(0.95))
+                Self.oval(cx + 0.015 * scale, cy + 0.016 * scale * open, 0.0055 * scale, 0.0055 * scale * open, s),
+                with: .color(.white.opacity(0.85))
             )
         }
     }
 
     private func drawCatNose(_ context: inout GraphicsContext, s: CGFloat) {
         var nose = Path()
-        nose.move(to: CGPoint(x: 0.482 * s, y: 0.583 * s))
-        nose.addQuadCurve(to: CGPoint(x: 0.518 * s, y: 0.583 * s), control: CGPoint(x: 0.5 * s, y: 0.576 * s))
-        nose.addQuadCurve(to: CGPoint(x: 0.5 * s, y: 0.6 * s), control: CGPoint(x: 0.515 * s, y: 0.593 * s))
-        nose.addQuadCurve(to: CGPoint(x: 0.482 * s, y: 0.583 * s), control: CGPoint(x: 0.485 * s, y: 0.593 * s))
+        nose.move(to: CGPoint(x: 0.486 * s, y: 0.6 * s))
+        nose.addQuadCurve(to: CGPoint(x: 0.514 * s, y: 0.6 * s), control: CGPoint(x: 0.5 * s, y: 0.594 * s))
+        nose.addQuadCurve(to: CGPoint(x: 0.5 * s, y: 0.614 * s), control: CGPoint(x: 0.513 * s, y: 0.609 * s))
+        nose.addQuadCurve(to: CGPoint(x: 0.486 * s, y: 0.6 * s), control: CGPoint(x: 0.487 * s, y: 0.609 * s))
         context.fill(nose, with: .linearGradient(
-            Gradient(colors: [Color(red: 1.0, green: 0.74, blue: 0.8), Color(red: 0.92, green: 0.5, blue: 0.6)]),
-            startPoint: CGPoint(x: 0.5 * s, y: 0.577 * s), endPoint: CGPoint(x: 0.5 * s, y: 0.6 * s)
+            Gradient(colors: [Color(red: 1.0, green: 0.74, blue: 0.8), Color(red: 0.94, green: 0.52, blue: 0.62)]),
+            startPoint: CGPoint(x: 0.5 * s, y: 0.595 * s), endPoint: CGPoint(x: 0.5 * s, y: 0.614 * s)
         ))
-        context.stroke(nose, with: .color(Color(red: 0.6, green: 0.3, blue: 0.38).opacity(0.7)), lineWidth: 0.004 * s)
+        context.stroke(nose, with: .color(Color(red: 0.6, green: 0.3, blue: 0.38).opacity(0.7)),
+                       style: StrokeStyle(lineWidth: 0.004 * s, lineJoin: .round))
     }
 
-    /// Fine white whiskers; they twitch while listening, speaking or searching.
+    /// Short white whiskers poking out past the cheeks; they twitch while listening, speaking or searching.
     private func drawWhiskers(_ context: inout GraphicsContext, s: CGFloat, t: Double) {
         let twitch = motion && [.listening, .speaking, .searching].contains(mood) ? 0.006 * sin(t * 8) : 0
-        let style = StrokeStyle(lineWidth: 0.0055 * s, lineCap: .round)
+        let style = StrokeStyle(lineWidth: 0.007 * s, lineCap: .round)
         for side in [-1.0, 1.0] {
-            for (index, (startY, endY)) in [(0.603, 0.587), (0.613, 0.616), (0.623, 0.646)].enumerated() {
+            for (index, (startY, endY)) in [(0.628, 0.6), (0.642, 0.64), (0.656, 0.68)].enumerated() {
                 let end = endY + twitch * Double(index - 1)
                 var whisker = Path()
-                whisker.move(to: CGPoint(x: (0.5 + side * 0.05) * s, y: startY * s))
+                whisker.move(to: CGPoint(x: (0.5 + side * 0.15) * s, y: startY * s))
                 whisker.addQuadCurve(
-                    to: CGPoint(x: (0.5 + side * 0.225) * s, y: end * s),
-                    control: CGPoint(x: (0.5 + side * 0.14) * s, y: ((startY + end) / 2 - 0.008) * s)
+                    to: CGPoint(x: (0.5 + side * 0.268) * s, y: end * s),
+                    control: CGPoint(x: (0.5 + side * 0.21) * s, y: ((startY + end) / 2 - 0.006) * s)
                 )
-                context.stroke(whisker, with: .color(.white.opacity(0.88)), style: style)
+                context.stroke(whisker, with: .color(.white.opacity(0.92)), style: style)
             }
         }
     }
@@ -875,7 +881,7 @@ struct CantripMascotRenderer {
         var context = base
         if outfit.isCat {
             drawCatNose(&base, s: s)
-            context.translateBy(x: 0, y: 0.008 * s)
+            context.translateBy(x: 0, y: 0.021 * s)
         }
         switch mood {
         case .speaking:
@@ -922,11 +928,11 @@ struct CantripMascotRenderer {
         default:
             if outfit.isCat, celebration == nil {
                 var mouth = Path()
-                mouth.move(to: CGPoint(x: 0.5 * s, y: 0.6 * s))
-                mouth.addLine(to: CGPoint(x: 0.5 * s, y: 0.607 * s))
-                mouth.move(to: CGPoint(x: 0.473 * s, y: 0.609 * s))
-                mouth.addQuadCurve(to: CGPoint(x: 0.5 * s, y: 0.607 * s), control: CGPoint(x: 0.485 * s, y: 0.623 * s))
-                mouth.addQuadCurve(to: CGPoint(x: 0.527 * s, y: 0.609 * s), control: CGPoint(x: 0.515 * s, y: 0.623 * s))
+                mouth.move(to: CGPoint(x: 0.5 * s, y: 0.613 * s))
+                mouth.addLine(to: CGPoint(x: 0.5 * s, y: 0.621 * s))
+                mouth.move(to: CGPoint(x: 0.474 * s, y: 0.622 * s))
+                mouth.addQuadCurve(to: CGPoint(x: 0.5 * s, y: 0.621 * s), control: CGPoint(x: 0.486 * s, y: 0.637 * s))
+                mouth.addQuadCurve(to: CGPoint(x: 0.526 * s, y: 0.622 * s), control: CGPoint(x: 0.514 * s, y: 0.637 * s))
                 base.stroke(mouth, with: .color(Self.ink),
                             style: StrokeStyle(lineWidth: 0.011 * s, lineCap: .round, lineJoin: .round))
                 return
