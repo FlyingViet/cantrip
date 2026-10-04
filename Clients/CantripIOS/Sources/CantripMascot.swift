@@ -384,7 +384,7 @@ struct CantripMascotRenderer {
             drawHoodEyes(&figure, s: s)
         }
         if outfit.isCat {
-            drawPandaPatches(&figure, s: s)
+            drawBambooClip(&figure, s: s, t: t, progress: progress)
         }
         figure.drawLayer { shadow in
             shadow.addFilter(.blur(radius: 0.03 * s))
@@ -435,6 +435,13 @@ struct CantripMascotRenderer {
             if outfit == .dinoHoodie {
                 for (dx, dy) in [(-0.03, 0.866), (0, 0.86), (0.03, 0.866)] {
                     figure.fill(ellipse(x + dx, dy, 0.009, 0.012), with: .color(.white.opacity(0.95)))
+                }
+            }
+            if outfit.isCat {
+                let bean = Color(red: 1.0, green: 0.7, blue: 0.78)
+                figure.fill(ellipse(x, 0.917, 0.026, 0.02), with: .color(bean))
+                for (dx, dy) in [(-0.033, 0.879), (0, 0.869), (0.033, 0.879)] {
+                    figure.fill(ellipse(x + dx, dy, 0.012, 0.012), with: .color(bean))
                 }
             }
         }
@@ -612,38 +619,60 @@ struct CantripMascotRenderer {
         ), style: round(width))
     }
 
-    /// Round black felt ears on the panda hood, drawn behind it so their bases tuck in.
+    /// Big round plush-black ears on the panda hood with a soft velvet sheen, drawn behind it so their bases tuck in.
     private func drawPandaEars(_ figure: inout GraphicsContext, s: CGFloat) {
-        for side in [-1.0, 1.0] {
-            let edge = Self.hoodEdge(theta: 1.5 * .pi + side * 0.6)
-            let center = CGPoint(x: edge.point.x + edge.normal.dx * 0.012, y: edge.point.y + edge.normal.dy * 0.012)
-            let radius = 0.074
-            figure.fill(Self.oval(center.x, center.y, radius, radius, s), with: .radialGradient(
-                Gradient(colors: [Color(red: 0.36, green: 0.36, blue: 0.41), Color(red: 0.11, green: 0.11, blue: 0.14)]),
-                center: CGPoint(x: (center.x - 0.02) * s, y: (center.y - 0.03) * s),
-                startRadius: 0, endRadius: radius * 1.3 * s
-            ))
-            figure.fill(
-                Self.oval(center.x + edge.normal.dx * 0.018, center.y + edge.normal.dy * 0.018, 0.034, 0.034, s),
-                with: .color(Color(red: 0.42, green: 0.42, blue: 0.48).opacity(0.7))
-            )
+        figure.drawLayer { ears in
+            ears.addFilter(.blur(radius: 0.0018 * s))
+            for side in [-1.0, 1.0] {
+                let edge = Self.hoodEdge(theta: 1.5 * .pi + side * 0.62)
+                let center = CGPoint(x: edge.point.x + edge.normal.dx * 0.024, y: edge.point.y + edge.normal.dy * 0.024)
+                let radius = 0.086
+                ears.fill(Self.oval(center.x, center.y, radius, radius, s), with: .radialGradient(
+                    Gradient(colors: [Color(red: 0.3, green: 0.3, blue: 0.35), Color(red: 0.12, green: 0.12, blue: 0.15)]),
+                    center: CGPoint(x: (center.x - 0.025) * s, y: (center.y - 0.035) * s),
+                    startRadius: 0, endRadius: radius * 1.4 * s
+                ))
+            }
+        }
+        figure.drawLayer { sheen in
+            sheen.addFilter(.blur(radius: 0.012 * s))
+            for side in [-1.0, 1.0] {
+                let edge = Self.hoodEdge(theta: 1.5 * .pi + side * 0.62)
+                let center = CGPoint(x: edge.point.x + edge.normal.dx * 0.024, y: edge.point.y + edge.normal.dy * 0.024)
+                sheen.fill(Self.oval(center.x - 0.022, center.y - 0.03, 0.03, 0.02, s), with: .color(.white.opacity(0.28)))
+            }
         }
     }
 
-    /// The onesie's own panda face: drooping black eye patches on the hood crown, glancing down at the wearer.
-    private func drawPandaPatches(_ figure: inout GraphicsContext, s: CGFloat) {
-        for (x, angle, lean) in [(0.405, -30.0, 0.005), (0.595, 30.0, -0.005)] {
-            var patch = figure
-            patch.translateBy(x: x * s, y: 0.305 * s)
-            patch.rotate(by: .degrees(angle))
-            patch.fill(
-                Path(ellipseIn: CGRect(x: -0.055 * s, y: -0.037 * s, width: 0.11 * s, height: 0.074 * s)),
-                with: .color(Color(red: 0.14, green: 0.14, blue: 0.17))
-            )
-            figure.fill(Self.oval(x, 0.307, 0.017, 0.017, s), with: .color(.white))
-            figure.fill(Self.oval(x + lean, 0.312, 0.01, 0.011, s), with: .color(Self.ink))
-            figure.fill(Self.oval(x + lean + 0.003, 0.308, 0.0035, 0.0035, s), with: .color(.white.opacity(0.9)))
+    /// A little bamboo-leaf clip pinned to the hood beside the left ear, swaying gently.
+    private func drawBambooClip(_ figure: inout GraphicsContext, s: CGFloat, t: Double, progress: Double?) {
+        let sway: Double = if let progress { 8 * sin(progress * 4 * .pi) } else if motion { 3 * sin(t * 1.6) } else { 0 }
+        var clip = figure
+        clip.translateBy(x: 0.375 * s, y: 0.29 * s)
+        for (angle, length, width) in [(-64.0, 0.082, 0.024), (-22.0, 0.1, 0.029), (22.0, 0.074, 0.022)] {
+            var leaf = clip
+            leaf.rotate(by: .degrees(angle + sway))
+            var blade = Path()
+            blade.move(to: .zero)
+            blade.addQuadCurve(to: CGPoint(x: 0, y: -length * s), control: CGPoint(x: width * s, y: -length * 0.42 * s))
+            blade.addQuadCurve(to: .zero, control: CGPoint(x: -width * s, y: -length * 0.58 * s))
+            leaf.fill(blade, with: .linearGradient(
+                Gradient(colors: [Color(red: 0.6, green: 0.86, blue: 0.42), Color(red: 0.26, green: 0.6, blue: 0.27)]),
+                startPoint: CGPoint(x: 0, y: -length * s), endPoint: .zero
+            ))
+            leaf.stroke(blade, with: .color(Color(red: 0.16, green: 0.42, blue: 0.2).opacity(0.55)), lineWidth: 0.004 * s)
+            var vein = Path()
+            vein.move(to: CGPoint(x: 0, y: -0.01 * s))
+            vein.addLine(to: CGPoint(x: 0, y: -length * 0.72 * s))
+            leaf.stroke(vein, with: .color(.white.opacity(0.45)), style: StrokeStyle(lineWidth: 0.004 * s, lineCap: .round))
         }
+        let knot = Path(roundedRect: CGRect(x: -0.014 * s, y: -0.01 * s, width: 0.028 * s, height: 0.024 * s),
+                        cornerRadius: 0.009 * s)
+        clip.fill(knot, with: .linearGradient(
+            Gradient(colors: [Color(red: 0.72, green: 0.86, blue: 0.45), Color(red: 0.44, green: 0.66, blue: 0.28)]),
+            startPoint: CGPoint(x: 0, y: -0.01 * s), endPoint: CGPoint(x: 0, y: 0.014 * s)
+        ))
+        clip.stroke(knot, with: .color(Color(red: 0.16, green: 0.42, blue: 0.2).opacity(0.55)), lineWidth: 0.004 * s)
     }
 
     /// A round, cartoony British Shorthair face in plush blue-grey with a soft outline, rounded ears
