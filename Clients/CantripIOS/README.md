@@ -418,8 +418,8 @@ translucent. Choose **Customize Mascot** from Home's menu to switch
 looks: the default **Starry Plush**, a green **Dino Hoodie** with felt
 spikes, hood eyes and soft teeth, or **Panda Kitty**, a blue-grey British
 Shorthair cat with a round cartoon face, big copper eyes and whiskers in a
-panda onesie, whose tail
-sways with its mood and puffs up when something goes wrong. A live preview cycles through each mood, and
+panda onesie with round black ears, pink toe-bean paws and a bamboo-leaf clip,
+whose tail sways with its mood and puffs up when something goes wrong. A live preview cycles through each mood, and
 you can rename Pip there too (up to 20 characters; blank restores Pip). Choices
 are saved on the device. Backend menus and Settings still call the lane Cantrip
 Home.
