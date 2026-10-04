@@ -212,6 +212,26 @@ support to a running old app.
 **Escape** and **Hide Panel & Overlays** only dismiss UI. Cantrip also has a
 15-minute inactivity watchdog; a quiet backend may eventually be canceled.
 
+## Copilot restarts its runtime
+
+Each Copilot tab keeps a Copilot CLI runtime between messages. That runtime can
+crash after sitting idle for many hours (seen after 9.5 hours or more), which
+used to show **Copilot session startup timed out** or leave a reply stuck until
+the 15-minute watchdog. Cantrip now handles this itself:
+
+- A runtime idle for two hours or more is restarted before its next message,
+  resuming the same Copilot session, so the conversation is kept.
+- If the runtime dies or stops answering before Copilot replies, Cantrip shows
+  **Restarting Copilot** and resends the message once in a new runtime.
+- If it dies after the reply started, the turn ends right away with a note
+  instead of waiting for the watchdog, and resuming (automatic once, then
+  **Resume** or your next message) continues the same session. Cantrip never
+  resends a turn that already showed output or ran tools.
+
+If Copilot still can't start after the automatic restart, check that `copilot`
+runs and is signed in on the Mac. `~/Library/Logs/Cantrip.log` records each
+start (`copilot: prompt accepted in …`) and runtime loss (`copilot: runtime lost …`).
+
 ## Remote will not connect
 
 Work through these in order:

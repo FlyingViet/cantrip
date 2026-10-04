@@ -151,7 +151,19 @@ enum CopilotSessionBridge {
         if (watcherChanged) finishIfIdle();
       }
     }
-    async function open(config) {
+    // The SDK never settles a request in flight when its runtime process dies, so the turn
+    // would wait forever. Report the loss and exit; Cantrip replaces the runtime.
+    function watchRuntime() {
+      const lost = detail => {
+        if (stopping) return;
+        stopping = true;
+        process.stdout.write(JSON.stringify({ kind: 'runtimeExited', runID, detail }) + '\n',
+          () => process.exit(75));
+      };
+      client.cliProcess?.once?.('exit', (code, signal) => lost(signal ? `signal ${signal}` : `code ${code}`));
+      client.connection?.onClose?.(() => lost('connection closed'));
+    }
+    async function open(config, resumeSessionID) {
       const paths = resolveCopilotRuntime(config.command);
       const sdk = await import(paths.sdk);
       if (!sdk.RuntimeConnection?.forStdio || !sdk.CopilotClient) {
@@ -162,7 +174,8 @@ enum CopilotSessionBridge {
         workingDirectory: config.workdir, logLevel: 'none', useLoggedInUser: true
       });
       await client.start();
-      session = await client.createSession({
+      watchRuntime();
+      const options = {
         clientName: 'Cantrip', workingDirectory: config.workdir,
         model: config.model || undefined, reasoningEffort: config.effort || undefined,
         contextTier: config.contextTier || undefined, streaming: true,
@@ -211,9 +224,20 @@ enum CopilotSessionBridge {
           return {answer:answer.text,wasFreeform:!(request.choices || []).includes(answer.text)};
         }),
         onEvent
-      });
+      };
+      let resumed = false;
+      if (resumeSessionID && typeof client.resumeSession === 'function') {
+        try {
+          session = await client.resumeSession(resumeSessionID, options);
+          resumed = true;
+        } catch (error) {
+          emit({ kind: 'log', message: 'could not resume the previous session; starting a new one: ' + errorText(error) });
+        }
+      }
+      if (!session) session = await client.createSession(options);
       if (typeof session.send !== 'function') throw new Error('Copilot native session input is unavailable.');
       await settleMcpServers();
+      return resumed;
     }
     // A prompt sent while an MCP server is still connecting sees the tool catalog
     // change mid-turn, and the first call to that server fails. Wait briefly.
@@ -234,11 +258,12 @@ enum CopilotSessionBridge {
         sending++;
         try {
           const fresh = !session;
-          if (fresh) await open(command.config);
+          const resumed = fresh ? await open(command.config, command.resumeSessionID) : false;
+          // A resumed session already holds the conversation; only a new one needs the recap.
           const messageID = await session.send({
-            prompt: fresh ? command.initialPrompt : command.prompt, mode: 'enqueue'
+            prompt: fresh && !resumed ? command.initialPrompt : command.prompt, mode: 'enqueue'
           });
-          emit({ kind: 'started', runID, messageID, sessionID: session.sessionId });
+          emit({ kind: 'started', runID, messageID, sessionID: session.sessionId, resumed });
         } finally {
           sending--;
           finishIfIdle();
