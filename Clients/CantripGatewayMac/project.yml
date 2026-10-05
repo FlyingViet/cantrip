@@ -1,0 +1,102 @@
+name: CantripGatewayMac
+options:
+  bundleIdPrefix: com.itzhoang
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: "9M3XNFG4J7"
+    CODE_SIGN_STYLE: Automatic
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: "2.0.0"
+  Qwen3TTS:
+    url: https://github.com/AtomGradient/swift-qwen3-tts
+    branch: main
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    revision: 5c19d5e12320e22bbfb7a1877b089d2665a69add
+schemes:
+  CantripGatewayMac:
+    build:
+      targets:
+        CantripGatewayMac: all
+    test:
+      targets:
+        - CantripGatewayMacTests
+targets:
+  CantripGatewayMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+      - path: Hermes/Sources
+        excludes:
+          - App.swift
+          - Info.plist
+          - Hermes.entitlements
+          - Assets.xcassets
+      - path: Hermes/Shared
+      - path: Resources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Cantrip Gateway Mac
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleIconName: AppIcon
+        LSApplicationCategoryType: public.app-category.productivity
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        NSHumanReadableCopyright: ""
+        NSMicrophoneUsageDescription: "Cantrip Gateway uses the microphone for voice conversations with Cantrip Home."
+        NSSpeechRecognitionUsageDescription: "Cantrip Gateway transcribes your speech so you can talk to Cantrip Home hands-free."
+        NSLocalNetworkUsageDescription: "Cantrip Gateway discovers and connects securely to your paired Cantrip on the local network."
+        NSBonjourServices:
+          - _cantrip-remote._tcp
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_NAME: "Cantrip Gateway Mac"
+        # Same module name as the iOS app, so the shared Hermes tests run here unchanged.
+        PRODUCT_MODULE_NAME: Hermes
+        PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.cantripgateway.mac
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: NO
+      configs:
+        # Debug runs (UI tests, fixture hosts) keep their own settings and saved servers.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.cantripgateway.mac.debug
+    dependencies:
+      - package: MarkdownUI
+      - package: Qwen3TTS
+      - package: FluidAudio
+  CantripGatewayMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+      # Shared logic suites that do not render UIKit views run against the Mac build.
+      # Push-alert registration is iOS-only (no APNs environment on the Mac).
+      - path: Hermes/Tests/CantripRoutingTests.swift
+      - path: Hermes/Tests/CantripHistoryTests.swift
+      - path: Hermes/Tests/CantripMutationTests.swift
+      - path: Hermes/Tests/CantripImageTransportTests.swift
+      - path: Hermes/Tests/ServerProfilesTests.swift
+      - path: Hermes/Tests/CantripMCPAppTests.swift
+      - path: Hermes/Tests/CantripPromptUsageTests.swift
+      - path: Hermes/Tests/CantripQueueTests.swift
+      - path: Hermes/Tests/ChatTabTests.swift
+    dependencies:
+      - target: CantripGatewayMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.cantripgateway.mac.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Cantrip Gateway Mac.app/Contents/MacOS/Cantrip Gateway Mac"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
