@@ -5,6 +5,7 @@ extension SessionTabTests {
     @MainActor
     static func testCantripHomeGuardrails() async throws {
         testCantripHomeActionPolicy()
+        testCantripHomeShellEffects()
         testCantripHomeApprovalModes()
         try testCantripHomeBlockProtocol()
         try await testCantripHomeCorrection()
@@ -180,6 +181,130 @@ extension SessionTabTests {
                      && denied.reason.hasPrefix("Blocked by Cantrip Home's safety policy:")
                      && denied.reason.contains("Don't try another way"),
                      "Decisions explain themselves to the user and to the model")
+    }
+
+    /// The policy judges what a command does, not words in heredocs, quotes or notes it writes.
+    static func testCantripHomeShellEffects() {
+        let home = "/Users/fixture"
+        let session = home + "/.copilot/session-state/483df02f-9655-41f1-a223-d6f4a445aaf2/files/dy"
+        let existing: Set<String> = [
+            home, home + "/Cantrip Memory", session, home + "/.cache/Cantrip", home + "/.cache/Cantrip/home",
+            home + "/.cache/Cantrip/home/artifacts", home + "/Coding/Cantrip", "/tmp",
+        ]
+        var environment = CantripHomeActionPolicy.Environment(
+            home: home, workdir: home, temporaryRoots: ["/tmp", "/private/tmp", "/var/folders"],
+            protectedRoot: home + "/.cache/Cantrip/home",
+            artifactRoot: home + "/.cache/Cantrip/home/artifacts",
+            cacheRoot: home + "/.cache/Cantrip"
+        )
+        environment.cantripPIDs = [4242]
+        environment.cantripProcess = ["Cantrip", home + "/Coding/Cantrip/Cantrip.app/Contents/MacOS/Cantrip"]
+        environment.directoryExists = { existing.contains($0) }
+        func decide(_ command: String, _ mode: CantripHomeGuardrail) -> CantripHomeActionDecision {
+            CantripHomeActionPolicy.evaluate(.shell(command), mode: mode, environment: environment)
+        }
+
+        // Oct 4, ~10:17 PM: memory notes describing how other apps were quit.
+        let memoryNotes = """
+        cd "/Users/fixture/Cantrip Memory" && python3 - <<'EOF'
+        p='/Users/fixture/Cantrip Memory/MEMORY.md'; s=open(p).read()
+        s=s.replace("- M4 mini/16GB: Claude/Copilot CLIs; LLMs/sims trimmed; mac-storage.md.", "- M4 mini/16GB tight: after tests `simctl shutdown all`+quit Simulator/Xcode/DeviceHub/test apps; mac-storage.md.")
+        open(p,'w').write(s)
+        u='/Users/fixture/Cantrip Memory/USER.md'; t=open(u).read().replace('WCAG-AA;sharedUI;Duo>rail;QA=simOnly','WCAG;sharedUI;Duo>rail;QA=sim+closeAfter'); open(u,'w').write(t)
+        EOF
+        cat >> mac-storage.md <<'EOF'
+        - 10/04 cleanup (user: always close test apps after use): `xcrun simctl shutdown all` (4 booted sims = ~700 procs); osascript quit by bundle path (Xcode/Simulator/DeviceHub/Keychain/Discord). Simulator needed `kill -TERM <pid>`; LM Studio ignores quit+TERM -> `kill -KILL <pid>` (helpers exit). Result: free 0.5->3.9G, swap 9.5->3.2G.
+        EOF
+        """
+        // Oct 4, ~9:23 PM: a delete inside a Copilot session folder, not Home's state.
+        let sessionCleanup = "cd \(session) && find . -name '*.jpg' -size -1k -delete && sips -Z 1200 E35197MSSABD.jpg --out view.jpg"
+        precondition(decide(memoryNotes, .attended).verdict == .allow && decide(memoryNotes, .unattended).verdict == .allow,
+                     "Notes about quitting other apps are data, not a command to quit Cantrip")
+        precondition(decide(sessionCleanup, .attended).verdict == .allow
+                     && decide(sessionCleanup, .unattended).verdict == .ask,
+                     "find . deletes in the folder cd moved to, not the home folder")
+
+        let allowed = [
+            "echo 'killall Cantrip' >> ~/notes.md", "git commit -m \"Stop Home from quitting Cantrip\"",
+            "osascript -e 'tell application \"/Applications/Discord.app\" to quit'",
+            "kill -TERM 1207 1725", "kill -KILL 1725", "kill -l",
+            "killall \"Cantrip Gateway Mac\"", "pkill -f \"Cantrip Gateway Mac\"",
+            "osascript -e 'tell application \"Cantrip Gateway Mac\" to quit'",
+            "cat > ~/notes.md <<'EOF'\nsudo rm -rf / and killall Cantrip are blocked.\nosascript -e 'tell application \"Cantrip\" to quit'\nEOF",
+            "python3 - <<'EOF'\nprint(\"quit Cantrip, then reopen it\")\nEOF",
+            "python3 - <<'EOF'\nimport json\nprint(len(json.load(open('/Users/fixture/.cache/Cantrip/home/tasks.json'))))\nEOF",
+            "cd ~/.cache/Cantrip/home && cat tasks.json", "# killall Cantrip when it hangs\nls -la",
+            "ps aux | grep -i python | awk '{print $2}' | xargs kill",
+            "cd ~/.cache/Cantrip/home/artifacts && rm old.png", "echo $((1 << 4)) && ls",
+            "cat <<'EOF' | ssh mini.local bash\nkillall Cantrip\nEOF",
+            "git commit -m \"$(cat <<'EOF'\nKeep Home from quitting Cantrip; osascript quit by bundle path\nEOF\n)\"",
+            "python3 -c 'import os, signal; os.kill(1725, signal.SIGTERM)'",
+        ]
+        for command in allowed {
+            precondition(decide(command, .attended).verdict == .allow && decide(command, .unattended).verdict == .allow,
+                         "Allowed: \(command) -> \(decide(command, .unattended).reason)")
+        }
+
+        let stopsCantrip = [
+            "killall -9 Cantrip", "timeout 5 killall Cantrip", "pkill -f Cantrip.app/Contents/MacOS/Cantrip",
+            "pkill -if cantrip", "kill -9 4242", "kill -- -1", "kill 0",
+            "pgrep -x Cantrip | xargs kill", "ps aux | grep -i cantrip | awk '{print $2}' | xargs kill -9",
+            "PID=$(pgrep Cantrip); kill $PID", "kill `pgrep Cantrip`", "kill \"$(pgrep -x Cantrip)\"",
+            "bash <<'EOF'\nkillall Cantrip\nEOF", "cat <<'EOF' | sh\nkillall Cantrip\nEOF",
+            "cat > /tmp/stop.sh <<'EOF'\nkillall Cantrip\nEOF\nchmod +x /tmp/stop.sh && /tmp/stop.sh",
+            "cat > /tmp/stop.sh <<'EOF'\nkillall Cantrip\nEOF\nbash /tmp/stop.sh",
+            "osascript <<'EOF'\ntell application \"Cantrip\"\nquit\nend tell\nEOF",
+            "osascript -e 'quit app \"Cantrip\"'", "osascript -e 'tell application id \"com.brian.agentspotlight\" to quit'",
+            "osascript -e 'do shell script \"killall Cantrip\"'",
+            "python3 -c 'import subprocess; subprocess.run([\"killall\", \"Cantrip\"])'",
+            "python3 - <<'EOF'\nimport os\nos.system('pkill -x Cantrip')\nEOF",
+            "launchctl bootout gui/501/com.brian.agentspotlight", "cd ~/Coding/Cantrip && make run",
+            "bash -xc 'killall Cantrip'", "bash <<< 'killall Cantrip'", "killall $'Cantrip'",
+            "killall \"$(echo Cantrip)\"", "P=Cantrip; killall $P", "echo Cantrip | xargs killall",
+            "osascript -e \"$(printf 'tell application \\\"Cantrip\\\" to quit')\"",
+            "cat <<'EOF' > >(sh)\nkillall Cantrip\nEOF", "if true; then killall Cantrip; fi",
+            "for i in 1; do { killall Cantrip; }; done",
+            "osascript -l JavaScript -e 'Application(\"Cantrip\").quit()'",
+            "source <(cat <<'EOF'\nkillall Cantrip\nEOF\n)", "eval \"$(cat <<'EOF'\nkillall Cantrip\nEOF\n)\"",
+            "bash -c \"$(cat <<'EOF'\npkill -x Cantrip\nEOF\n)\"",
+            "python3 -c 'import os, signal; os.kill(4242, signal.SIGTERM)'",
+        ]
+        for command in stopsCantrip {
+            let decision = decide(command, .attended)
+            precondition(decision.verdict == .deny && decide(command, .unattended).verdict == .deny,
+                         "Stopping Cantrip stays blocked: \(command) -> \(decision.verdict)")
+        }
+
+        let writesHomeState = [
+            "cd ~/.cache/Cantrip/home && echo '[]' > tasks.json", "cd ~/.cache/Cantrip && rm home/tasks.json",
+            "cat > ~/.cache/Cantrip/home/tasks.json <<'EOF'\n[]\nEOF",
+            "tee ~/.cache/Cantrip/home/tasks.json <<'EOF'\n[]\nEOF",
+            "python3 - <<'EOF'\nopen('/Users/fixture/.cache/Cantrip/home/tasks.json', 'w').write('[]')\nEOF",
+            "bash -c 'cd ~/.cache/Cantrip/home && rm tasks.json'",
+            "(cd /tmp && echo ok); echo '[]' > .cache/Cantrip/home/tasks.json",
+            "cd ~/.cache/Cantrip/home && python3 -c \"open('tasks.json', 'w').write('[]')\"",
+            "if true; then rm ~/.cache/Cantrip/home/tasks.json; fi",
+        ]
+        for command in writesHomeState {
+            let decision = decide(command, .attended)
+            precondition(decision.verdict == .deny && decision.reason.contains("own task, record and run files"),
+                         "Writing Home's state stays blocked: \(command) -> \(decision.reason)")
+        }
+        // A cd that may fail leaves the next command in the old folder, so it's judged there too.
+        for command in ["cd /does/not/exist; rm -rf *", "cd \"$X\" && rm -rf *", "cd /does/not/exist || true; rm -rf ./*"] {
+            precondition(decide(command, .attended).verdict == .deny, "Unsure cd keeps the home folder in play: \(command)")
+        }
+
+        let split = CantripHomeActionPolicy.splitHeredocs("cat <<'A' >> x; cat <<-B\nline1\nA\n\tbody\n\tB\necho done")
+        precondition(split.heredocs == ["line1", "\tbody"] && split.code.contains("<<HEREDOC#0")
+                     && split.code.contains("<<HEREDOC#1") && split.code.contains("echo done")
+                     && !split.code.contains("line1"),
+                     "Heredoc bodies are taken out of the command and kept in order")
+        let scoped = CantripHomeActionPolicy.scopedSegments(of: "a && (cd /tmp; b) | c \"$(d)\" 2>&1")
+        precondition(scoped.map(\.text) == ["a", "cd /tmp", "b", "c \"", "d", "\" 2>&1"]
+                     && scoped.map(\.separator) == ["&&", ";", ")", "$(", ")", ""]
+                     && scoped.map(\.depth) == [0, 1, 1, 0, 1, 0],
+                     "Segments keep their separators and subshell depth: \(scoped)")
     }
 
     static func testCantripHomeBlockProtocol() throws {
