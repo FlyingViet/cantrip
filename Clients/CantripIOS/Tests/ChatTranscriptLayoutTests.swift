@@ -356,6 +356,39 @@ final class ChatTranscriptLayoutTests: XCTestCase {
                      "An unreachable target (clamped content) gives up after a few attempts")
     }
 
+    func testPrependAnchorHoldsThroughMomentumAndTheEdgeBounce() {
+        var anchor = HistoryPrependAnchor()
+        func geometry(_ offset: CGFloat, _ height: CGFloat, revision: Int = 1) -> HistoryScrollGeometry {
+            HistoryScrollGeometry(height: height, offset: offset, topInset: 110, prependRevision: revision)
+        }
+        // A fast flick reached the top edge and the older page arrived mid-bounce.
+        XCTAssertEqual(anchor.target(previous: geometry(-110, 5_000, revision: 0), current: geometry(-110, 9_000),
+                                     userIsScrolling: false, momentum: true), 4_000)
+        XCTAssertNil(anchor.target(previous: geometry(-110, 9_000), current: geometry(3_890, 9_000),
+                                   userIsScrolling: false, momentum: true))
+        XCTAssertEqual(anchor.target(previous: geometry(3_890, 9_000), current: geometry(3_600, 9_000),
+                                     userIsScrolling: false, momentum: true), 4_000,
+                       "The bounce pulling back toward the start must not drop the reader there")
+        for pull in stride(from: 3_500, through: 3_000, by: -100) {
+            XCTAssertNotNil(anchor.target(previous: geometry(3_890, 9_000), current: geometry(CGFloat(pull), 9_000),
+                                          userIsScrolling: false, momentum: true))
+        }
+        XCTAssertNil(anchor.target(previous: geometry(3_000, 9_000), current: geometry(3_890, 9_000),
+                                   userIsScrolling: false),
+                     "Resting at the restored place releases the anchor")
+        XCTAssertNil(anchor.target(previous: geometry(3_890, 9_000), current: geometry(3_890, 9_600),
+                                   userIsScrolling: false),
+                     "After it settles, streaming below is left alone")
+
+        XCTAssertNotNil(anchor.target(previous: geometry(-110, 9_600), current: geometry(-110, 14_000, revision: 2),
+                                      userIsScrolling: false, momentum: true))
+        XCTAssertNil(anchor.target(previous: geometry(-110, 14_000, revision: 2), current: geometry(-300, 14_000, revision: 2),
+                                   userIsScrolling: true, momentum: false),
+                     "A finger on the screen still ends it at once")
+        XCTAssertNil(anchor.target(previous: geometry(-300, 14_000, revision: 2), current: geometry(-500, 14_000, revision: 2),
+                                   userIsScrolling: false, momentum: true))
+    }
+
     func testPrependKeepsReadingPositionUnderAHeaderInset() async throws {
         let model = TranscriptLayoutModel()
         model.topInset = 110

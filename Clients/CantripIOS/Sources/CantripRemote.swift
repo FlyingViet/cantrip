@@ -4063,6 +4063,7 @@ private struct CantripRemoteTranscript: View {
     @ObservedObject var model: CantripRemoteModel
     @State private var followsBottom = true
     @State private var userIsScrolling = false
+    @State private var scrollPhase = ScrollPhase.idle
     @State private var scrollPosition = ScrollPosition(idType: String.self, edge: .bottom)
     @State private var prependAnchor = HistoryPrependAnchor()
 
@@ -4109,6 +4110,13 @@ private struct CantripRemoteTranscript: View {
             userIsScrolling = newPhase == .tracking
                 || newPhase == .interacting
                 || newPhase == .decelerating
+            scrollPhase = newPhase
+            if newPhase == .idle, model.historyPrependAnchor != nil {
+                let settled = HistoryScrollGeometry(context.geometry, prependRevision: model.historyPrependRevision)
+                if let target = prependAnchor.target(previous: settled, current: settled, userIsScrolling: false) {
+                    scrollPosition.scrollTo(y: target)
+                }
+            }
             if endedUserScroll {
                 followsBottom = context.geometry.contentSize.height
                     - context.geometry.visibleRect.maxY < 72
@@ -4129,7 +4137,8 @@ private struct CantripRemoteTranscript: View {
         } action: { previous, current in
             guard model.historyPrependAnchor != nil,
                   let target = prependAnchor.target(previous: previous, current: current,
-                                                    userIsScrolling: userIsScrolling) else { return }
+                                                    userIsScrolling: scrollPhase.isFingerDriven,
+                                                    momentum: scrollPhase.isMomentum) else { return }
             followsBottom = false
             scrollPosition.scrollTo(y: target)
         }
