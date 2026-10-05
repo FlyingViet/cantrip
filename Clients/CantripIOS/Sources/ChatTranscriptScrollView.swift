@@ -10,6 +10,7 @@ struct ChatTranscriptScrollView<Content: View>: View {
 
     @State private var followsBottom = true
     @State private var userIsScrolling = false
+    @State private var scrollPhase = ScrollPhase.idle
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var prependAnchorState = HistoryPrependAnchor()
 
@@ -45,6 +46,13 @@ struct ChatTranscriptScrollView<Content: View>: View {
             userIsScrolling = newPhase == .tracking
                 || newPhase == .interacting
                 || newPhase == .decelerating
+            scrollPhase = newPhase
+            if newPhase == .idle, prependAnchor != nil,
+               let target = prependAnchorState.target(previous: HistoryScrollGeometry(context.geometry, prependRevision: prependRevision),
+                                                      current: HistoryScrollGeometry(context.geometry, prependRevision: prependRevision),
+                                                      userIsScrolling: false) {
+                position.scrollTo(y: target)
+            }
             if endedUserScroll {
                 followsBottom = context.geometry.contentSize.height
                     - context.geometry.visibleRect.maxY < 72
@@ -58,7 +66,8 @@ struct ChatTranscriptScrollView<Content: View>: View {
         } action: { previous, current in
             guard prependAnchor != nil,
                   let target = prependAnchorState.target(previous: previous, current: current,
-                                                         userIsScrolling: userIsScrolling) else { return }
+                                                         userIsScrolling: scrollPhase.isFingerDriven,
+                                                         momentum: scrollPhase.isMomentum) else { return }
             followsBottom = false
             position.scrollTo(y: target)
         }
@@ -157,14 +166,18 @@ struct HistoryScrollGeometry: Equatable {
 /// Keeps the reader's place when older messages are inserted above them. Inserted rows can
 /// finish laying out in a later update than the prepend, and a second `scrollTo` issued before
 /// the first lands is dropped, so the target is re-applied until the offset actually matches.
-/// The user's own scrolling ends it immediately.
+/// A flick's momentum, and its bounce at the top edge, keep pulling the view after a restore
+/// lands, so the anchor holds until scrolling comes to rest; only the user's finger ends it early.
 struct HistoryPrependAnchor {
     private var pending: (offset: CGFloat, height: CGFloat, attempts: Int)?
     private static let maximumAttempts = 4
+    /// About a second of frames: enough to outlast deceleration and the edge bounce.
+    private static let maximumMomentumAttempts = 60
 
     /// The `ScrollPosition.scrollTo(y:)` value to apply for this geometry change, if any.
+    /// `userIsScrolling` means a finger on the screen; `momentum` is deceleration or an animation.
     mutating func target(previous: HistoryScrollGeometry, current: HistoryScrollGeometry,
-                         userIsScrolling: Bool) -> CGFloat? {
+                         userIsScrolling: Bool, momentum: Bool = false) -> CGFloat? {
         if previous.prependRevision != current.prependRevision {
             pending = (previous.offset, previous.height, 0)
         } else if userIsScrolling {
@@ -172,7 +185,11 @@ struct HistoryPrependAnchor {
         }
         guard var restoring = pending else { return nil }
         let offset = restoring.offset + current.height - restoring.height
-        guard abs(offset - current.offset) >= 0.5, restoring.attempts < Self.maximumAttempts else {
+        if abs(offset - current.offset) < 0.5 {
+            if !momentum { pending = nil }
+            return nil
+        }
+        guard restoring.attempts < (momentum ? Self.maximumMomentumAttempts : Self.maximumAttempts) else {
             pending = nil
             return nil
         }
@@ -231,4 +248,11 @@ extension View {
     func onUpwardHistoryScroll(prependRevision: Int, perform: @escaping () -> Void) -> some View {
         modifier(UpwardHistoryScrollModifier(prependRevision: prependRevision, perform: perform))
     }
+}
+
+extension ScrollPhase {
+    /// A finger is on the scroll view, so its movement is the user's own.
+    var isFingerDriven: Bool { self == .tracking || self == .interacting }
+    /// Deceleration, the edge bounce, or an animated scroll.
+    var isMomentum: Bool { self == .decelerating || self == .animating }
 }
