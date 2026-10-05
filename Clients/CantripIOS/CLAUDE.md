@@ -73,3 +73,6 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
   Keep UIKit, ActivityKit and AVAudioSession use behind `#if os(iOS)` (imports
   behind `#if canImport(UIKit)`); the Mac repo supplies AppKit equivalents.
   After changing shared code, run `make test` there before bumping its submodule.
+- Never animate `Text` size per frame (Canvas/TimelineView): every new size is a fresh
+  glyph rasterization that macOS keeps, so memory grows without bound. Animate shapes, or
+  fill a glyph outline (`CantripMascotRenderer.GlyphOutline`) at the frame's size.
