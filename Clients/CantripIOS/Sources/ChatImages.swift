@@ -1,7 +1,9 @@
 import ImageIO
 import MarkdownUI
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 enum ChatImageDecoder {
     static func decode(_ data: Data, maximumDimension: Int,
@@ -378,6 +380,7 @@ struct ChatImageViewer: View {
     }
 }
 
+#if os(iOS)
 final class ChatImageScrollView: UIScrollView, UIScrollViewDelegate {
     private let imageView = UIImageView()
     private var fittedSize: CGSize = .zero
@@ -461,3 +464,4 @@ final class ChatImageScrollView: UIScrollView, UIScrollViewDelegate {
                         width: size.width, height: size.height), animated: true)
     }
 }
+#endif

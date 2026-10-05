@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Everything running behind Cantrip Home: the chat's own background watchers plus
 /// scheduled-task and incident runs in the Mac's hidden background conversation.
@@ -71,7 +73,8 @@ struct CantripHomeBackgroundButton: View {
 
 struct CantripHomeBackgroundView: View {
     @ObservedObject var remote: CantripRemoteModel
-    let openLog: () -> Void
+    /// Opens the background log as a Remote tab; clients without Remote tabs pass nil.
+    var openLog: (() -> Void)?
     /// Opens a live hidden run's conversation by ID.
     var openSession: ((String) -> Void)? = nil
     /// Opens the project tab a run was handed to.
@@ -127,7 +130,7 @@ struct CantripHomeBackgroundView: View {
             .navigationTitle("Background")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if snapshot != nil {
+                if snapshot != nil, let openLog {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Full Log", action: openLog)
                             .accessibilityHint("Opens the conversation that keeps finished background reports")

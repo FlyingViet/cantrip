@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 enum CantripSubagentFormat {
     static let queuedHint = "Starts when the main agent waits for it or finishes its turn."

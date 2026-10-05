@@ -1,6 +1,8 @@
 import Foundation
 import ImageIO
+#if canImport(UIKit)
 import UIKit
+#endif
 import UniformTypeIdentifiers
 
 struct ChatImageAttachment: Identifiable, Equatable, Sendable {

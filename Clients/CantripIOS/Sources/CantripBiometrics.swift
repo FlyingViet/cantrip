@@ -1,17 +1,25 @@
 import LocalAuthentication
+#if canImport(UIKit)
 import UIKit
+#endif
 
 @MainActor
 enum CantripBiometrics {
     static func authorize(_ reason: String) async throws {
         let context = LAContext()
+        #if os(macOS)
+        // Not every Mac has Touch ID; the login password is the Mac's equivalent fallback.
+        let policy = LAPolicy.deviceOwnerAuthentication
+        #else
         context.localizedFallbackTitle = ""
+        let policy = LAPolicy.deviceOwnerAuthenticationWithBiometrics
+        #endif
         try await authorize(applicationState: { UIApplication.shared.applicationState }, notifications: .default, evaluate: {
             var error: NSError?
-            guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            guard context.canEvaluatePolicy(policy, error: &error) else {
                 throw ServerConfigurationError(message: "Face ID or Touch ID is required for this action. Set up biometrics in device Settings, or perform the action on the Mac. Cancel and Deny remain available.")
             }
-            return try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason)
+            return try await context.evaluatePolicy(policy, localizedReason: reason)
         }, invalidate: { context.invalidate() })
     }
 

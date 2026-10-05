@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import WebKit
 
 /// Chat-session hooks an inline MCP App view may use.
@@ -395,6 +397,7 @@ final class MCPAppSchemeHandler: NSObject, WKURLSchemeHandler {
 final class MCPAppRenderingWebView: WKWebView {
     var onLayout: (() -> Void)?
     var onTraitChange: (() -> Void)?
+    #if os(iOS)
     private var traitRegistration: UITraitChangeRegistration?
 
     override func layoutSubviews() {
@@ -407,6 +410,19 @@ final class MCPAppRenderingWebView: WKWebView {
             webView.onTraitChange?()
         }
     }
+    #else
+    override func layout() {
+        super.layout()
+        onLayout?()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onTraitChange?()
+    }
+
+    func observeThemeChanges() {}
+    #endif
 }
 
 struct MCPAppWebView: UIViewRepresentable {
@@ -504,12 +520,16 @@ struct MCPAppWebView: UIViewRepresentable {
             config.mediaTypesRequiringUserActionForPlayback = .all
 
             let webView = MCPAppRenderingWebView(frame: .zero, configuration: config)
+            #if os(iOS)
             webView.isOpaque = false
             webView.backgroundColor = .clear
             webView.scrollView.backgroundColor = .clear
             webView.scrollView.isScrollEnabled = false
             webView.scrollView.bounces = false
             webView.scrollView.showsVerticalScrollIndicator = false
+            #else
+            webView.setValue(false, forKey: "drawsBackground")
+            #endif
             webView.navigationDelegate = self
             webView.uiDelegate = self
             webView.allowsBackForwardNavigationGestures = false
@@ -595,8 +615,10 @@ struct MCPAppWebView: UIViewRepresentable {
         private func contentHeightChanged(_ reported: CGFloat) {
             guard reported.isFinite, reported > 0 else { return }
             let clamped = min(max(reported.rounded(.up), 48), MCPAppWebView.maxHeight)
+            #if os(iOS)
             webView?.scrollView.isScrollEnabled = reported > MCPAppWebView.maxHeight + 1
             webView?.scrollView.bounces = false
+            #endif
             MCPAppHeights.set(clamped, for: app.id)
             DispatchQueue.main.async { [weak self] in
                 guard let binding = self?.height, abs(binding.wrappedValue - clamped) >= 1 else { return }

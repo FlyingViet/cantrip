@@ -1,4 +1,6 @@
+#if os(iOS)
 import ActivityKit
+#endif
 import Foundation
 import SwiftUI
 import WidgetKit

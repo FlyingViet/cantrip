@@ -4,7 +4,9 @@ import MarkdownUI
 import Network
 import Security
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 enum CantripRemoteConnectionState: Equatable {
     case disconnected
@@ -4425,6 +4427,7 @@ private struct CantripRemoteSettingsSheet: View {
     }
 }
 
+#if os(iOS)
 enum CantripRemoteTabIcon {
     static func image(connected: Bool) -> UIImage {
         let size = CGSize(width: 30, height: 26)
@@ -4451,6 +4454,7 @@ enum CantripRemoteTabIcon {
         return image.withRenderingMode(.alwaysOriginal)
     }
 }
+#endif
 
 #if DEBUG
 extension CantripRemoteModel {

@@ -71,6 +71,15 @@ struct ChatTranscriptScrollView<Content: View>: View {
             followsBottom = false
             position.scrollTo(y: target)
         }
+        #if os(macOS)
+        // macOS doesn't hold the bottom anchor while content grows (images loading, streaming
+        // replies), so stay on the latest message whenever the reader was already there.
+        .onScrollGeometryChange(for: HistoryScrollSample.self) { HistoryScrollSample($0) } action: { previous, current in
+            guard current.contentHeight > previous.contentHeight, previous.isNearBottom,
+                  prependAnchor == nil, !scrollPhase.isFingerDriven else { return }
+            position.scrollTo(edge: .bottom)
+        }
+        #endif
         .overlay(alignment: .bottomTrailing) {
             if !followsBottom {
                 Button(action: scrollToLatest) {

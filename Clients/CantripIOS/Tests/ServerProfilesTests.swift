@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import XCTest
 @testable import Hermes
 
@@ -439,6 +441,7 @@ final class ServerProfilesTests: XCTestCase {
         XCTAssertEqual(store.servers.count, 3)
     }
 
+#if os(iOS)
     func testSavedRowsFitNarrowAndLargeTextLayouts() throws {
         let server = SavedServer(
             id: UUID(), name: "A long descriptive home server name", url: "https://home-private.example.com",
@@ -457,7 +460,9 @@ final class ServerProfilesTests: XCTestCase {
             }
         }
     }
+#endif
 
+#if os(iOS)
     func testSavedServerSettingsRenderWithBlankAddFields() throws {
         let (store, _, _) = try fixture(.cantrip)
         let selected = try store.add(draft("Home Mac", url: "https://home.example"))
@@ -506,8 +511,11 @@ final class ServerProfilesTests: XCTestCase {
             window.isHidden = true
         }
     }
+#endif
 
+#if os(iOS)
     private func descendants(of view: UIView) -> [UIView] {
         [view] + view.subviews.flatMap { descendants(of: $0) }
     }
+#endif
 }
