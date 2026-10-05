@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Photos-style swipe-to-dismiss rules, kept separate so they can be tested directly.
 enum CantripImageDismissal {
@@ -45,6 +47,7 @@ enum CantripImageDismissal {
     }
 }
 
+#if os(iOS)
 /// Hosts the zoomable image over a black backdrop and owns the dismissal gesture and the
 /// open/close animations to and from the thumbnail.
 final class CantripImageStageView: UIView, UIGestureRecognizerDelegate {
@@ -271,6 +274,7 @@ struct ZoomableChatImage: UIViewRepresentable {
         stage.setImage(image)
     }
 }
+#endif
 
 /// Full-screen zoomable viewer shared by chat images and Home artifacts. At minimum zoom,
 /// drag up or down to dismiss, as in Photos.
@@ -397,6 +401,7 @@ extension View {
     }
 }
 
+#if os(iOS)
 /// Presents the viewer over the current screen without the system slide-up, so the stage's
 /// own zoom and fade transitions show what is underneath.
 @MainActor
@@ -439,3 +444,4 @@ enum CantripImageViewerPresenter {
         return top
     }
 }
+#endif

@@ -4,7 +4,9 @@ import CoreTransferable
 import CryptoKit
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import UniformTypeIdentifiers
 
 final class ChatVideoAttachment: Identifiable, Sendable {

@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import XCTest
 @testable import Hermes
 
@@ -328,6 +330,7 @@ final class CantripMutationTests: XCTestCase {
         XCTAssertFalse(missing)
     }
 
+#if os(iOS)
     func testDrawerStaysOpenThroughDelayedReorderAndFailureRollback() async throws {
         for fails in [false, true] {
             let model = try await model()
@@ -378,6 +381,7 @@ final class CantripMutationTests: XCTestCase {
             model.clearConfiguration()
         }
     }
+#endif
 }
 
 @MainActor

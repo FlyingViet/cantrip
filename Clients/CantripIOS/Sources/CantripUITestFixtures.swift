@@ -1,6 +1,8 @@
 #if DEBUG
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Debug-only screens that UI tests launch directly (`-CantripUITestImageViewer`), so real
 /// touches can exercise the image viewer without a paired Mac. Never compiled into Release.
@@ -64,6 +66,7 @@ enum CantripUITestFixtures {
     }
 }
 
+#if os(iOS)
 struct CantripImageViewerFixtureView: View {
     @State private var source = CantripViewerSource()
     private let image: UIImage = {
@@ -101,4 +104,5 @@ struct CantripImageViewerFixtureView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+#endif
 #endif

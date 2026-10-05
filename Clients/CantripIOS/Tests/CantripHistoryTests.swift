@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import XCTest
 @testable import Hermes
 
@@ -744,6 +746,7 @@ final class CantripHistoryTests: XCTestCase {
         XCTAssertFalse(model.canAutomaticallyLoadHistory)
     }
 
+#if os(iOS)
     func testMappedTranscriptAutomaticallyLoadsAndPreservesReadingPosition() async throws {
         let model = try await model()
         var release: CheckedContinuation<Void, Never>?
@@ -798,4 +801,5 @@ final class CantripHistoryTests: XCTestCase {
         XCTAssertEqual(scroll.contentOffset.y, offset + scroll.contentSize.height - height, accuracy: 3,
                        "Mapped turns and changing pagination controls preserve the same reading position")
     }
+#endif
 }

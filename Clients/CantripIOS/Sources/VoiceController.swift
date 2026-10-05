@@ -102,6 +102,7 @@ final class VoiceController: NSObject, ObservableObject {
             }
             .store(in: &cancellables)
 
+        #if os(iOS)
         NotificationCenter.default.publisher(
             for: AVAudioSession.interruptionNotification
         )
@@ -136,6 +137,7 @@ final class VoiceController: NSObject, ObservableObject {
             }
         }
         .store(in: &cancellables)
+        #endif
     }
 
     func requestAuth() {
@@ -435,6 +437,7 @@ final class VoiceController: NSObject, ObservableObject {
     }
 
     private func prepareListeningAudioSession() throws {
+        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try? session.setActive(false, options: .notifyOthersOnDeactivation)
         try session.setCategory(
@@ -443,6 +446,7 @@ final class VoiceController: NSObject, ObservableObject {
             options: [.duckOthers, .defaultToSpeaker]
         )
         try session.setActive(true, options: .notifyOthersOnDeactivation)
+        #endif
         ownsAudioSession = true
     }
 
@@ -555,8 +559,10 @@ final class VoiceController: NSObject, ObservableObject {
     private func prepareForSpeech() {
         if isListening { stopListening(finalize: false) }
         do {
+            #if os(iOS)
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
             try AVAudioSession.sharedInstance().setActive(true)
+            #endif
             ownsAudioSession = true
         } catch {}
     }
@@ -603,10 +609,12 @@ final class VoiceController: NSObject, ObservableObject {
     private func deactivateAudioSession() {
         guard ownsAudioSession else { return }
         ownsAudioSession = false
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(
             false,
             options: .notifyOthersOnDeactivation
         )
+        #endif
     }
 
     private func stopAudioInput() {

@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import UserNotifications
 
 struct CantripPushStatus: Codable {
@@ -182,6 +184,7 @@ final class CantripNotifications: NSObject, ObservableObject, UNUserNotification
     }
 }
 
+#if os(iOS)
 final class AgentGatewayAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
@@ -198,6 +201,7 @@ final class AgentGatewayAppDelegate: NSObject, UIApplicationDelegate {
         CantripNotifications.shared.failed(error)
     }
 }
+#endif
 
 struct CantripNotificationSettingsSection: View {
     @ObservedObject var remote: CantripRemoteModel

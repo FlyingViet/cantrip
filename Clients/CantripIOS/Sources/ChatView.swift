@@ -2858,7 +2858,8 @@ struct WaveformView: View {
     }
 }
 
-private struct TurnView: View {
+/// One transcript message; also used by Cantrip Gateway Mac's Home window.
+struct TurnView: View {
     let turn: ChatTurn
     @ObservedObject var remote: CantripRemoteModel
     var cantripSessionID: String?

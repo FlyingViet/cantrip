@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(UIKit)
 import UIKit
+#endif
 import XCTest
 @testable import Hermes
 
@@ -326,6 +328,7 @@ final class CantripImageTransportTests: XCTestCase {
         } catch ImageAttachmentError.invalidImage {}
     }
 
+#if os(iOS)
     @MainActor
     func testImageCacheIsSeparatedBySizeAndClearedOnRepairing() async throws {
         let configuration = URLSessionConfiguration.ephemeral
@@ -367,6 +370,7 @@ final class CantripImageTransportTests: XCTestCase {
         _ = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: false)
         XCTAssertEqual(imageReads, 5, "Retry must fetch again after a decode failure")
     }
+#endif
 
     func testAutoOnLegacyHostDoesNotSendAMutation() async throws {
         let response = try snapshot(support: nil)
