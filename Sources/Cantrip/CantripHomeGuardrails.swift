@@ -146,11 +146,20 @@ enum CantripHomeActionPolicy {
         /// Deliverables Home may freely replace or delete.
         var artifactRoot: String
         var cacheRoot: String
+        /// Cantrip's own process ID: a `kill` aimed at it would end every Home run.
+        var cantripPIDs: Set<Int32> = []
+        /// What `ps` shows for Cantrip, so pkill/killall/grep patterns can be tested against it.
+        var cantripProcess = ["Cantrip", "/Applications/Cantrip.app/Contents/MacOS/Cantrip"]
+        /// Whether `cd` into a path will succeed, so later relative paths resolve where they run.
+        var directoryExists: (String) -> Bool = { path in
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+        }
 
         static func current(workdir: String = "") -> Self {
             let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
             let temporary = URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.path
-            return .init(
+            var environment = Self(
                 home: home,
                 workdir: workdir.isEmpty ? home : workdir,
                 temporaryRoots: ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders", temporary],
@@ -158,9 +167,20 @@ enum CantripHomeActionPolicy {
                 artifactRoot: CantripHomeStore.artifactDirectory.standardizedFileURL.path,
                 cacheRoot: home + "/.cache/Cantrip"
             )
+            environment.cantripPIDs = [ProcessInfo.processInfo.processIdentifier]
+            if let executable = Bundle.main.executablePath { environment.cantripProcess.append(executable) }
+            return environment
         }
 
         var temporaryDirectory: String { temporaryRoots.last ?? "/tmp" }
+
+        /// The same environment with commands running in `directory` (nil: somewhere unknown).
+        func running(in directory: String?) -> Self {
+            var copy = self
+            // A `$` makes every relative path unresolvable, so deletes there become unverifiable.
+            copy.workdir = directory ?? "$UNKNOWN"
+            return copy
+        }
     }
 
     static func evaluate(
@@ -242,33 +262,132 @@ enum CantripHomeActionPolicy {
     private static let mutatingToolPattern =
         #"(^|[_\-.])(send|post|create|update|delete|remove|merge|push|publish|write|close|comment|reply|transfer|pay|purchase|order|archive|move)([_\-.]|$)"#
 
+    private static let shells: Set<String> = ["bash", "sh", "zsh", "dash", "ksh", "fish"]
+    private static let databases: Set<String> = ["sqlite3", "psql", "mysql", "mariadb", "mongosh"]
+    private static let interpreters: Set<String> = [
+        "python", "python3", "node", "ruby", "perl", "php", "deno", "bun", "swift", "osascript",
+    ]
+
+    /// What runs a piece of text: a shell, AppleScript, SQL, another interpreter, or nothing.
+    private enum Consumer { case shell, appleScript, sql, script, data }
+
+    private static func consumer(_ name: String) -> Consumer {
+        if shells.contains(name) || name == "source" || name == "." { return .shell }
+        if name == "osascript" { return .appleScript }
+        if databases.contains(name) { return .sql }
+        if interpreters.contains(name) || name.hasPrefix("python3.") { return .script }
+        return .data
+    }
+
+    /// Judges what a command line actually does. Heredoc bodies and quoted text are data unless
+    /// a shell, AppleScript, database or interpreter runs them, and relative paths resolve in
+    /// the directory each command runs in after `cd`.
     private static func shellFindings(
         _ command: String, environment: Environment, depth: Int
     ) -> [CantripHomeActionDecision] {
         guard depth < 4 else { return [deny("The command nests too many shells to check.")] }
-        let lower = command.lowercased()
+        let text = splitHeredocs(command)
+        let lower = text.code.lowercased()
+        let segments = scopedSegments(of: text.code)
+        let words = segments.map { commandWords($0.text) }
+        let names = words.map { $0.first.map(baseName) ?? "" }
         var findings: [CantripHomeActionDecision] = []
-        if lower.range(
-            of: #"\b(kill|pkill|killall)\b[^\n;]*\b(cantrip|agentspotlight)(\.app)?(?![\w.-])"#,
-            options: .regularExpression
-        ) != nil {
-            findings.append(deny("Home can't stop Cantrip; it runs inside it."))
-        }
         if pipesDownloadIntoProgram(lower) {
             findings.append(deny("Piping downloaded content into a shell or interpreter isn't allowed."))
         }
-        for redirect in redirectTargets(command) {
-            if let path = resolve(redirect, environment), isProtected(path, environment) {
-                findings.append(protectedWrite)
+        findings += stopCantripFindings(words, code: lower, environment: environment)
+
+        // Where each segment runs, per subshell depth; several candidates when a `cd` might fail.
+        var directories: [[String?]] = [[environment.workdir]]
+        var runsIn: [[String?]] = []
+        for (index, segment) in segments.enumerated() {
+            while directories.count > segment.depth + 1 { directories.removeLast() }
+            while directories.count < segment.depth + 1 { directories.append(directories.last ?? [nil]) }
+            let here = directories[segment.depth]
+            runsIn.append(here)
+            if ["cd", "pushd"].contains(names[index]), !["|", "&"].contains(segment.separator) {
+                let target = words[index].dropFirst().first { !$0.hasPrefix("-") || $0 == "-" }
+                var next: [String?] = []
+                for directory in here {
+                    let resolved: String? = switch target {
+                    case nil: environment.home
+                    case "-": nil
+                    case let target?: directory.flatMap { resolve(target, environment.running(in: $0)) }
+                    }
+                    if let resolved, environment.directoryExists(resolved) {
+                        next.append(resolved)
+                    } else {
+                        // A failed cd leaves later commands where they were; an unknown one, anywhere.
+                        next += [directory, resolved]
+                    }
+                }
+                directories[segment.depth] = next.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
             }
         }
-        let segments = segments(of: command)
-        let commandNames = Set(segments.compactMap { commandWords($0).first.map(baseName) })
-        if commandNames.contains("osascript") {
-            findings += appleScriptFindings(lower)
+
+        // Heredoc bodies go to whatever reads them; `cat <<EOF | sh` and scripts written from a
+        // heredoc and then run in the same command are code, everything else is data.
+        let executed = executedFiles(words, runsIn: runsIn, environment: environment)
+        var sqlText = lower
+        // `eval "$(cat <<EOF …)"` and `bash -c "$(…)"` run what a substitution prints.
+        let runsSubstitution = segments.indices.contains { index in
+            let args = Array(words[index].dropFirst())
+            let runs = ["eval", "source", "."].contains(names[index])
+                || (shells.contains(names[index]) && shellCommandFlag(args) != nil)
+            return runs && ["$(", "`"].contains(segments[index].separator)
         }
-        if !commandNames.isDisjoint(with: ["sqlite3", "psql", "mysql", "mariadb", "mongosh"]),
-           lower.range(
+        // Data heredocs could still reach a shell reading stdin elsewhere in the line (`>(sh)`).
+        let shellReadsStdin = text.code.contains(">(") || text.code.contains("<(") || words.contains { words in
+            guard let first = words.first, consumer(baseName(first)) == .shell else { return false }
+            let args = Array(words.dropFirst())
+            return shellCommandFlag(args) == nil && !args.contains { !$0.hasPrefix("-") }
+        }
+        for (index, segment) in segments.enumerated() {
+            let bodies = heredocMarkers(in: segment.text).compactMap {
+                $0 < text.heredocs.count ? text.heredocs[$0] : nil
+            } + hereStrings(in: segment.text)
+            guard !bodies.isEmpty else { continue }
+            var reader = index
+            while ["cat", "tee"].contains(names[reader]), segments[reader].separator == "|",
+                  reader + 1 < segments.count {
+                reader += 1
+            }
+            var kind = consumer(names[reader])
+            if kind == .data, shellReadsStdin || (segment.depth > 0 && runsSubstitution) { kind = .shell }
+            if kind == .data {
+                let written = redirectTargets(segment.text)
+                    + (names[index] == "tee" ? words[index].dropFirst().filter { !$0.hasPrefix("-") } : [])
+                for path in written {
+                    for directory in runsIn[index] {
+                        if let resolved = directory.flatMap({ resolve(path, environment.running(in: $0)) }),
+                           let runner = executed[resolved] {
+                            kind = runner
+                        }
+                    }
+                }
+            }
+            for body in bodies {
+                switch kind {
+                case .shell:
+                    for directory in runsIn[reader] {
+                        findings += shellFindings(body, environment: environment.running(in: directory), depth: depth + 1)
+                    }
+                case .appleScript:
+                    findings += appleScriptFindings(body.lowercased())
+                case .sql:
+                    sqlText += "\n" + body.lowercased()
+                case .script:
+                    for directory in runsIn[reader] {
+                        findings += scriptFindings(body, environment: environment.running(in: directory))
+                    }
+                case .data:
+                    break
+                }
+            }
+        }
+
+        if names.contains(where: databases.contains),
+           sqlText.range(
                of: #"\b(drop\s+(table|database|schema|index|view)|delete\s+from|truncate\s|alter\s+table|update\s+["`\w.]+\s+set\b|insert\s+(or\s+\w+\s+)?into)"#,
                options: .regularExpression
            ) != nil {
@@ -276,10 +395,17 @@ enum CantripHomeActionPolicy {
                 "change a database", "The command writes to a database.", scope: "db"
             ))
         }
-        for segment in segments {
-            var words = commandWords(segment)
+
+        for (index, segment) in segments.enumerated() {
+            let scoped = runsIn[index].map { environment.running(in: $0) }
+            for redirect in redirectTargets(segment.text) {
+                if scoped.contains(where: { env in resolve(redirect, env).map { isProtected($0, env) } ?? false }) {
+                    findings.append(protectedWrite)
+                }
+            }
+            var words = words[index]
             guard !words.isEmpty else { continue }
-            var name = baseName(words[0])
+            var name = names[index]
             if ["sudo", "su", "doas"].contains(name) {
                 findings.append(deny("Cantrip Home never runs commands as an administrator."))
                 continue
@@ -292,23 +418,264 @@ enum CantripHomeActionPolicy {
                 words[0] = name
             }
             let args = Array(words.dropFirst())
-            if ["bash", "sh", "zsh", "dash", "ksh", "fish"].contains(name),
-               let flag = args.firstIndex(where: { $0 == "-c" || $0 == "-lc" || $0 == "-ic" || $0 == "-ec" }),
-               flag + 1 < args.count {
-                findings += shellFindings(args[flag + 1], environment: environment, depth: depth + 1)
+            if shells.contains(name), let flag = shellCommandFlag(args), flag + 1 < args.count {
+                for env in scoped {
+                    findings += shellFindings(args[flag + 1], environment: env, depth: depth + 1)
+                }
                 continue
             }
             if name == "eval" {
-                findings += shellFindings(args.joined(separator: " "), environment: environment, depth: depth + 1)
+                for env in scoped {
+                    findings += shellFindings(args.joined(separator: " "), environment: env, depth: depth + 1)
+                }
                 continue
             }
-            findings += commandFindings(name, args, full: lower, environment: environment)
+            if name == "osascript" {
+                // A script assembled at run time (`-e "$(…)"`) can't be read, so the whole line counts.
+                let assembled = ["$(", "`"].contains(segment.separator) || args.contains { $0.contains("$") }
+                findings += appleScriptFindings(assembled ? lower : inlineCode(args, flags: ["-e"]).lowercased())
+            } else if consumer(name) == .script {
+                let code = inlineCode(args, flags: ["-c", "-e", "-E", "-r", "--eval", "-p", "--print"])
+                if !code.isEmpty {
+                    for env in scoped { findings += scriptFindings(code, environment: env) }
+                }
+            }
+            for env in scoped {
+                findings += commandFindings(name, args, full: lower, environment: env)
+            }
         }
         return findings
     }
 
-    private static func appleScriptFindings(_ command: String) -> [CantripHomeActionDecision] {
-        let script = command.replacingOccurrences(of: "\\\"", with: "\"")
+    /// Where `bash -c`, `sh -xc`, `zsh -lic` and the like name the command string.
+    private static func shellCommandFlag(_ args: [String]) -> Int? {
+        for (index, arg) in args.enumerated() {
+            guard arg.hasPrefix("-") else { return nil }
+            if !arg.hasPrefix("--"), arg.dropFirst().contains("c") { return index }
+        }
+        return nil
+    }
+
+    /// The text of `<<< word` here-strings in one segment, unquoted.
+    private static func hereStrings(in segment: String) -> [String] {
+        let regex = try! NSRegularExpression(pattern: #"<<<\s*(?:\$?'([^']*)'|\$?"((?:[^"\\]|\\.)*)"|([^\s;&|<>()]+))"#)
+        return regex.matches(in: segment, range: NSRange(segment.startIndex..., in: segment)).compactMap { match in
+            (1...3).lazy.compactMap { Range(match.range(at: $0), in: segment) }.first.map { String(segment[$0]) }
+        }
+    }
+
+    /// The program text an interpreter gets on its command line (`-e '…'`, `-c '…'`, `-pe '…'`).
+    private static func inlineCode(_ args: [String], flags: Set<String>) -> String {
+        var code: [String] = []
+        for (index, arg) in args.enumerated() where index + 1 < args.count {
+            if flags.contains(arg) || arg.range(of: #"^-[A-Za-z]*[ce]$"#, options: .regularExpression) != nil {
+                code.append(args[index + 1])
+            }
+        }
+        return code.joined(separator: "\n")
+    }
+
+    /// Script files a command runs (`bash x.sh`, `python3 x.py`, `source x`, `./x`), resolved.
+    private static func executedFiles(
+        _ words: [[String]], runsIn: [[String?]], environment: Environment
+    ) -> [String: Consumer] {
+        var files: [String: Consumer] = [:]
+        for (index, words) in words.enumerated() {
+            guard let first = words.first else { continue }
+            let name = baseName(first)
+            var path: String?
+            var kind = Consumer.shell
+            if first.contains("/") {
+                path = first
+            } else if consumer(name) != .data, name != "osascript" || words.count > 1 {
+                kind = consumer(name)
+                path = words.dropFirst().first { !$0.hasPrefix("-") }
+            }
+            guard let path else { continue }
+            for directory in runsIn[index] {
+                if let resolved = directory.flatMap({ resolve(path, environment.running(in: $0)) }) {
+                    files[resolved] = kind
+                }
+            }
+        }
+        return files
+    }
+
+    // MARK: - Stopping Cantrip
+
+    private static let stopCantrip = deny("Home can't stop Cantrip; it runs inside it.")
+
+    /// kill, pkill and killall judged by what they'd actually signal: Cantrip's PID, a name or
+    /// pattern that matches Cantrip's process, or PIDs looked up from Cantrip in the same command.
+    private static func stopCantripFindings(
+        _ commands: [[String]], code: String, environment: Environment
+    ) -> [CantripHomeActionDecision] {
+        var signalsLookedUpPIDs = false
+        var namesComputedTargets = false
+        var findings: [CantripHomeActionDecision] = []
+        for words in commands {
+            // Wrappers like `timeout 5` or `launchctl asuser 501` can put the command anywhere.
+            guard let index = words.firstIndex(where: { ["kill", "pkill", "killall"].contains(baseName($0)) }) else {
+                continue
+            }
+            let name = baseName(words[index])
+            let args = Array(words[(index + 1)...])
+            // Names from variables, substitutions or stdin (`killall $P`, `xargs pkill`) are unknown.
+            let named = args.filter { !$0.hasPrefix("-") }
+            if name != "kill", named.isEmpty || named.contains(where: { $0.isEmpty || $0.contains("$") || $0.contains("`") }) {
+                namesComputedTargets = true
+            }
+            switch name {
+            case "killall":
+                if killallTargetsCantrip(args, environment) { findings.append(stopCantrip) }
+            case "pkill":
+                if pkillTargetsCantrip(args, environment) { findings.append(stopCantrip) }
+            default:
+                guard let targets = killTargets(args) else { continue }
+                if targets.isEmpty || targets.contains(where: { Int32($0) == nil }) { signalsLookedUpPIDs = true }
+                if targets.contains(where: { target in
+                    guard let pid = Int32(target) else { return false }
+                    // 0 and -1 signal this process group or every process the user owns.
+                    return pid == 0 || pid == -1 || environment.cantripPIDs.contains(abs(pid))
+                }) {
+                    findings.append(stopCantrip)
+                }
+            }
+        }
+        if signalsLookedUpPIDs || namesComputedTargets,
+           commands.contains(where: { looksUpCantrip($0, environment) })
+            || (namesComputedTargets && mentionsCantrip(code)) {
+            findings.append(stopCantrip)
+        }
+        return findings
+    }
+
+    /// The PID or job arguments of `kill`, after its signal option; nil when it only lists signals.
+    private static func killTargets(_ args: [String]) -> [String]? {
+        var rest = args[...]
+        if let first = rest.first {
+            if ["-s", "-n"].contains(first) { rest = rest.dropFirst(2) }
+            else if first == "-l" || first == "-L" { return nil }
+            else if first.hasPrefix("-"), first != "--" { rest = rest.dropFirst() }
+        }
+        if rest.first == "--" { rest = rest.dropFirst() }
+        return Array(rest)
+    }
+
+    /// Cantrip named anywhere in the command line (`P=Cantrip; killall $P`).
+    private static func mentionsCantrip(_ code: String) -> Bool {
+        code.range(of: #"\b(?:cantrip(?:\.app)?|agentspotlight)\b(?![\w.-]|\s+(?:gateway|memory))"#,
+                   options: .regularExpression) != nil
+    }
+
+    private static func isCantripName(_ value: String) -> Bool {
+        let name = (value.lowercased() as NSString).lastPathComponent
+        return ["cantrip", "cantrip.app", "agentspotlight", "com.brian.agentspotlight"].contains(name)
+    }
+
+    /// Whether a pkill/pgrep/grep pattern matches Cantrip's name or command line (case-insensitively,
+    /// to stay on the safe side of `-i`).
+    private static func patternMatchesCantrip(_ pattern: String, _ environment: Environment) -> Bool {
+        let candidates = environment.cantripProcess + ["com.brian.agentspotlight"]
+        if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+            return candidates.contains { regex.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }
+        }
+        return candidates.contains { $0.range(of: pattern, options: .caseInsensitive) != nil }
+    }
+
+    private static func killallTargetsCantrip(_ args: [String], _ environment: Environment) -> Bool {
+        let matchesRegex = args.contains { $0.hasPrefix("-") && !$0.hasPrefix("--") && $0.contains("m") && !$0.contains(where: \.isNumber) }
+        var names: [String] = []
+        var skip = false
+        for (index, arg) in args.enumerated() {
+            if skip { skip = false; continue }
+            if ["-u", "-t"].contains(arg) { skip = true; continue }
+            if arg == "-c", index + 1 < args.count { names.append(args[index + 1]); skip = true; continue }
+            if arg.hasPrefix("-") { continue }
+            names.append(arg)
+        }
+        return names.contains { isCantripName($0) || (matchesRegex && patternMatchesCantrip($0, environment)) }
+    }
+
+    private static func pkillTargetsCantrip(_ args: [String], _ environment: Environment) -> Bool {
+        let valued: Set<String> = ["-F", "-G", "-g", "-P", "-U", "-u", "-t", "-s", "-J", "-M", "-N", "-L"]
+        var patterns: [String] = []
+        var skip = false
+        for arg in args {
+            if skip { skip = false; continue }
+            if valued.contains(arg) { skip = true; continue }
+            if arg.hasPrefix("-") { continue }
+            patterns.append(arg)
+        }
+        return patterns.contains { isCantripName($0) || patternMatchesCantrip($0, environment) }
+    }
+
+    /// A PID lookup in the same command that would find Cantrip (`pgrep Cantrip`, `ps … | grep -i cantrip`).
+    private static func looksUpCantrip(_ words: [String], _ environment: Environment) -> Bool {
+        guard let first = words.first else { return false }
+        let name = baseName(first)
+        let args = words.dropFirst().filter { !$0.hasPrefix("-") }
+        switch name {
+        case "pgrep", "grep", "egrep", "fgrep", "rg":
+            return args.contains { isCantripName($0) || patternMatchesCantrip($0, environment) }
+        case "pidof", "ps", "lsof", "awk", "launchctl":
+            return args.contains { $0.lowercased().contains("cantrip") || $0.lowercased().contains("agentspotlight") }
+        default:
+            return false
+        }
+    }
+
+    /// `application "Cantrip"`, `app id "com.brian.agentspotlight"`, JXA `Application("Cantrip")`.
+    private static let cantripAppReference =
+        #"\b(?:application|app|process)\s*\(?\s*(?:id\s+)?\\?["'](?:[^"'\n]*/)?(?:cantrip(?:\.app)?|com\.brian\.agentspotlight)\\?["']"#
+
+    /// Program text for an interpreter: only code that names Cantrip as what it stops, or that
+    /// writes Home's state on the same line, counts. Prose in strings doesn't.
+    static func targetsCantrip(_ code: String) -> Bool {
+        let patterns = [
+            #"\b(?:killall|pkill)\b[\s"',\[\]]*(?:-[\w-]+["',\s]+)*["']?(?:[^\s"']*/)?(?:cantrip(?:\.app)?|agentspotlight|com\.brian\.agentspotlight)(?![\w.-]|\s+gateway)"#,
+            cantripAppReference + #"[^\n]*\b(?:quit|kill)\b"#,
+            #"\b(?:quit|kill)\b[^\n]*"# + cantripAppReference,
+            #"\blaunchctl\b[^\n]*\b(?:bootout|unload|kill|stop|remove|disable)\b[^\n]*(?:agentspotlight|cantrip)"#,
+            #"\bpgrep\b[\s"',\[\]]*(?:-[\w-]+["',\s]+)*["']?(?:cantrip|agentspotlight)\b(?![\w.-]|\s+gateway)[\s\S]*\bkill"#,
+        ]
+        let lower = code.lowercased()
+        return patterns.contains { lower.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    /// Code run by python, node, ruby, perl and similar: refused only when it stops Cantrip or
+    /// writes Home's own state (path and write on the same line).
+    private static func scriptFindings(_ code: String, environment: Environment) -> [CantripHomeActionDecision] {
+        var findings: [CantripHomeActionDecision] = []
+        if targetsCantrip(code) { findings.append(stopCantrip) }
+        if code.range(of: #"\bkill"#, options: .regularExpression) != nil,
+           environment.cantripPIDs.contains(where: { code.range(of: "\\b\($0)\\b", options: .regularExpression) != nil }) {
+            findings.append(stopCantrip)
+        }
+        let writes = #"open\([^\n]*,\s*['"][^'"]*[wax+]|\.write_(?:text|bytes)\(|\b(?:os|shutil)\.(?:remove|unlink|rename|replace|rmdir|rmtree|move)\(|\.(?:unlink|rename|rmdir)\(|\bfs\.(?:writeFile|appendFile|rm|unlink|rename|truncate)|File\.(?:write|delete|rename)|\bunlink\b"#
+        let protected = [environment.protectedRoot, environment.protectedRoot.replacingOccurrences(of: environment.home, with: "~"),
+                         environment.protectedRoot.replacingOccurrences(of: environment.home, with: "$HOME")]
+        if isProtected(environment.workdir, environment), code.range(of: writes, options: .regularExpression) != nil {
+            return findings + [protectedWrite]
+        }
+        let artifacts = String(environment.artifactRoot.dropFirst(environment.protectedRoot.count))
+        for line in code.split(separator: "\n") where line.range(of: writes, options: .regularExpression) != nil {
+            let mentions = protected.contains { root in
+                var range = line.startIndex..<line.endIndex
+                while let found = line.range(of: root, range: range) {
+                    if !line[found.upperBound...].hasPrefix(artifacts + "/") { return true }
+                    range = found.upperBound..<line.endIndex
+                }
+                return false
+            }
+            if mentions { findings.append(protectedWrite); break }
+        }
+        return findings
+    }
+
+    /// AppleScript actually passed to osascript (its `-e` lines or a heredoc).
+    private static func appleScriptFindings(_ script: String) -> [CantripHomeActionDecision] {
+        let script = script.replacingOccurrences(of: "\\\"", with: "\"")
         var findings: [CantripHomeActionDecision] = []
         let sends = script.range(of: #"\bsend\b"#, options: .regularExpression) != nil
         if sends, script.contains("application \"messages\"") || script.contains("com.apple.mobilesms")
@@ -319,8 +686,8 @@ enum CantripHomeActionPolicy {
            sends || script.contains("outgoing message") {
             findings.append(ask("send an email", "Email can't be unsent.", scope: "email"))
         }
-        if script.range(of: #"\bquit\b"#, options: .regularExpression) != nil,
-           script.contains("cantrip") || script.contains("agentspotlight") {
+        let quitsCantrip = script.range(of: cantripAppReference, options: .regularExpression) != nil && script.range(of: #"\b(?:quit|kill)\b"#, options: .regularExpression) != nil
+        if quitsCantrip || targetsCantrip(script) {
             findings.append(deny("Home can't quit Cantrip; it runs inside it."))
         }
         if script.contains("system events"),
@@ -582,7 +949,11 @@ enum CantripHomeActionPolicy {
         if path == "~" { path = environment.home }
         if path.hasPrefix("~/") { path = environment.home + path.dropFirst(1) }
         guard !path.contains("$"), !path.contains("`"), !path.hasPrefix("~") else { return nil }
-        if !path.hasPrefix("/") { path = environment.workdir + "/" + path }
+        if !path.hasPrefix("/") {
+            // Relative to a directory Cantrip couldn't determine (`cd "$X"`).
+            guard !environment.workdir.contains("$") else { return nil }
+            path = environment.workdir + "/" + path
+        }
         while path.count > 1, path.hasSuffix("/*") || path.hasSuffix("/.") || path.hasSuffix("/") {
             path.removeLast(path.hasSuffix("/") ? 1 : 2)
         }
@@ -651,24 +1022,207 @@ enum CantripHomeActionPolicy {
 
     // MARK: - Shell text
 
+    /// A command line with its heredoc bodies taken out. `code` keeps a `<<HEREDOC#n` marker
+    /// where body n was introduced, so the command reading it can be found. Comments are dropped.
+    struct ShellText: Equatable {
+        var code: String
+        var heredocs: [String]
+    }
+
+    static func splitHeredocs(_ command: String) -> ShellText {
+        let characters = Array(command)
+        var code = ""
+        var bodies: [String] = []
+        var pending: [(delimiter: String, stripsTabs: Bool)] = []
+        var quote: Character?
+        var escaped = false
+        var arithmetic = 0
+        // `$(…)` and backticks start fresh quoting, even inside double quotes.
+        var substitutions: [(restore: Character?, backtick: Bool)] = []
+        var index = 0
+        func atWordStart() -> Bool {
+            guard let last = code.last else { return true }
+            return " \t\n;&|()".contains(last)
+        }
+        while index < characters.count {
+            let character = characters[index]
+            let next: Character? = index + 1 < characters.count ? characters[index + 1] : nil
+            if escaped { code.append(character); escaped = false; index += 1; continue }
+            if character == "\\", quote != "'" { code.append(character); escaped = true; index += 1; continue }
+            if quote != "'", character == "$", next == "(" {
+                let isArithmetic = index + 2 < characters.count && characters[index + 2] == "("
+                if isArithmetic { arithmetic += 1 }
+                code += isArithmetic ? "$((" : "$("
+                index += isArithmetic ? 3 : 2
+                substitutions.append((quote, false))
+                quote = nil
+                continue
+            }
+            if quote != "'", character == "`" {
+                code.append(character)
+                index += 1
+                if let last = substitutions.last, last.backtick {
+                    substitutions.removeLast()
+                    quote = last.restore
+                } else {
+                    substitutions.append((quote, true))
+                    quote = nil
+                }
+                continue
+            }
+            if let open = quote {
+                if character == open { quote = nil }
+                code.append(character)
+                index += 1
+                continue
+            }
+            if character == "'" || character == "\"" {
+                quote = character
+                code.append(character)
+                index += 1
+                continue
+            }
+            if character == "#", atWordStart() {
+                while index < characters.count, characters[index] != "\n" { index += 1 }
+                continue
+            }
+            if character == ")", let last = substitutions.last, !last.backtick {
+                if arithmetic > 0, next == ")" {
+                    arithmetic -= 1
+                    code += "))"
+                    index += 2
+                } else {
+                    code.append(character)
+                    index += 1
+                }
+                substitutions.removeLast()
+                quote = last.restore
+                continue
+            }
+            if character == "(", next == "(" {
+                arithmetic += 1
+            } else if character == ")", arithmetic > 0, next == ")" {
+                arithmetic -= 1
+            }
+            if character == "<", arithmetic == 0, index + 1 < characters.count, characters[index + 1] == "<",
+               code.last != "<", !(index + 2 < characters.count && characters[index + 2] == "<") {
+                var cursor = index + 2
+                var stripsTabs = false
+                if cursor < characters.count, characters[cursor] == "-" { stripsTabs = true; cursor += 1 }
+                while cursor < characters.count, characters[cursor] == " " || characters[cursor] == "\t" { cursor += 1 }
+                var delimiter = ""
+                var delimiterQuote: Character?
+                while cursor < characters.count {
+                    let next = characters[cursor]
+                    if let open = delimiterQuote {
+                        if next == open { delimiterQuote = nil } else { delimiter.append(next) }
+                    } else if next == "'" || next == "\"" {
+                        delimiterQuote = next
+                    } else if next == "\\" {
+                        // `<<\EOF` quotes the delimiter like `<<'EOF'`.
+                    } else if " \t\n;&|<>()".contains(next) {
+                        break
+                    } else {
+                        delimiter.append(next)
+                    }
+                    cursor += 1
+                }
+                if !delimiter.isEmpty {
+                    code += "<<HEREDOC#\(bodies.count + pending.count)"
+                    pending.append((delimiter, stripsTabs))
+                    index = cursor
+                    continue
+                }
+            }
+            if character == "\n", !pending.isEmpty {
+                code.append("\n")
+                index += 1
+                for heredoc in pending {
+                    var lines: [String] = []
+                    while index < characters.count {
+                        var line = ""
+                        while index < characters.count, characters[index] != "\n" { line.append(characters[index]); index += 1 }
+                        if index < characters.count { index += 1 }
+                        let compared = heredoc.stripsTabs ? String(line.drop { $0 == "\t" }) : line
+                        if compared == heredoc.delimiter { break }
+                        lines.append(line)
+                    }
+                    bodies.append(lines.joined(separator: "\n"))
+                }
+                pending.removeAll()
+                continue
+            }
+            code.append(character)
+            index += 1
+        }
+        // A heredoc with no body before the command ended reads nothing.
+        bodies += pending.map { _ in "" }
+        return .init(code: code, heredocs: bodies)
+    }
+
+    /// Indices of the heredocs a segment reads, from its `<<HEREDOC#n` markers.
+    static func heredocMarkers(in segment: String) -> [Int] {
+        let regex = try! NSRegularExpression(pattern: #"<<HEREDOC#(\d+)"#)
+        return regex.matches(in: segment, range: NSRange(segment.startIndex..., in: segment)).compactMap { match in
+            Range(match.range(at: 1), in: segment).flatMap { Int(segment[$0]) }
+        }
+    }
+
+    /// One simple command, the separator that ended it (`&&`, `||`, `;`, `|`, `&`, newline,
+    /// `(`, `)`, `$(`, a backtick, or empty at the end), and how many subshells deep it runs.
+    struct ShellSegment: Equatable {
+        var text: String
+        var separator: String
+        var depth: Int
+    }
+
     /// Splits a command line into simple commands at unquoted separators, pipes, subshells
-    /// and command substitutions. Heredoc bodies become their own (harmless) segments.
-    static func segments(of command: String) -> [String] {
-        var segments: [String] = []
+    /// and command substitutions (also inside double quotes).
+    static func scopedSegments(of command: String) -> [ShellSegment] {
+        enum Scope { case parenthesis(Character?), backtick(Character?) }
+        let characters = Array(command)
+        var segments: [ShellSegment] = []
         var current = ""
         var quote: Character?
         var escaped = false
-        func flush() {
+        var scopes: [Scope] = []
+        var index = 0
+        func flush(_ separator: String) {
             let trimmed = current.trimmingCharacters(in: .whitespaces)
-            if !trimmed.isEmpty { segments.append(trimmed) }
+            if !trimmed.isEmpty { segments.append(.init(text: trimmed, separator: separator, depth: scopes.count)) }
             current = ""
         }
-        for character in command {
+        while index < characters.count {
+            let character = characters[index]
+            let next: Character? = index + 1 < characters.count ? characters[index + 1] : nil
+            index += 1
             if escaped { current.append(character); escaped = false; continue }
             if character == "\\", quote != "'" { current.append(character); escaped = true; continue }
-            if let open = quote {
-                if character == open { quote = nil }
-                if open == "\"", character == "`" { flush(); continue }
+            if quote == "'" {
+                if character == "'" { quote = nil }
+                current.append(character)
+                continue
+            }
+            if character == "`" {
+                flush("`")
+                if case .backtick(let restore)? = scopes.last {
+                    scopes.removeLast()
+                    quote = restore
+                } else {
+                    scopes.append(.backtick(quote))
+                    quote = nil
+                }
+                continue
+            }
+            if character == "$", next == "(" {
+                index += 1
+                flush("$(")
+                scopes.append(.parenthesis(quote))
+                quote = nil
+                continue
+            }
+            if quote == "\"" {
+                if character == "\"" { quote = nil }
                 current.append(character)
                 continue
             }
@@ -676,15 +1230,39 @@ enum CantripHomeActionPolicy {
             case "'", "\"":
                 quote = character
                 current.append(character)
-            case ";", "&", "|", "\n", "\r", "(", ")", "`":
-                if character == "(", current.hasSuffix("$") { current.removeLast() }
-                flush()
+            case "(":
+                flush("(")
+                scopes.append(.parenthesis(nil))
+            case ")":
+                flush(")")
+                if case .parenthesis(let restore)? = scopes.last {
+                    scopes.removeLast()
+                    quote = restore
+                }
+            case "&", "|":
+                if next == character {
+                    index += 1
+                    flush(String([character, character]))
+                } else if character == "|", next == "&" {
+                    index += 1
+                    flush("|")
+                } else if character == "&", next == ">" || current.last == ">" || current.last == "<" {
+                    current.append(character)
+                } else {
+                    flush(String(character))
+                }
+            case ";", "\n", "\r":
+                flush(character == "\r" ? "\n" : String(character))
             default:
                 current.append(character)
             }
         }
-        flush()
+        flush("")
         return segments
+    }
+
+    static func segments(of command: String) -> [String] {
+        scopedSegments(of: splitHeredocs(command).code).map(\.text)
     }
 
     /// Words of one simple command, without quotes, leading variable assignments,
@@ -702,7 +1280,13 @@ enum CantripHomeActionPolicy {
                 if character == open { quote = nil } else { current.append(character) }
                 continue
             }
-            if character == "'" || character == "\"" { quote = character; hasWord = true; continue }
+            if character == "'" || character == "\"" {
+                // `$'…'` and `$"…"` are quoting, not a variable.
+                if current.hasSuffix("$") { current.removeLast() }
+                quote = character
+                hasWord = true
+                continue
+            }
             if character == " " || character == "\t" {
                 if hasWord || !current.isEmpty { words.append(current) }
                 current = ""
@@ -728,7 +1312,13 @@ enum CantripHomeActionPolicy {
             index += 1
         }
         let wrappers: Set<String> = ["env", "nohup", "time", "command", "exec", "builtin", "nice", "caffeinate", "noglob", "xargs"]
+        // Shell keywords that start a command inside if/while/for/{ … } blocks.
+        let keywords: Set<String> = ["if", "then", "else", "elif", "do", "while", "until", "!", "{"]
         while let first = cleaned.first {
+            if keywords.contains(first) {
+                cleaned.removeFirst()
+                continue
+            }
             if first.range(of: #"^[A-Za-z_][A-Za-z0-9_]*=.*"#, options: .regularExpression) != nil
                 || wrappers.contains(baseName(first)) {
                 cleaned.removeFirst()

@@ -23,7 +23,10 @@ Claude Code: with **Act on my behalf** on (or Claude's **Allow everything**),
 background runs approve tools and commands without pausing for you. Cantrip
 still refuses its blocked commands (administrator commands, erasing disks or
 the home folder, piping downloads into a shell, stopping Cantrip, and writing
-Home's own state) under every setting. Local models keep Home's approval pauses.
+Home's own state) under every setting. It judges what a command actually does:
+words inside heredocs, quoted text or notes being written don't count, and
+relative paths are checked in the folder a `cd` moves to. Local models keep
+Home's approval pauses.
 
 Turning off that one switch is not a universal lock:
 Claude's **Permissions** may independently allow edits/everything, and
