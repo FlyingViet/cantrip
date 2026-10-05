@@ -24,3 +24,6 @@ Native macOS Cantrip Home. See README.md for architecture and usage.
 - No Remote tabs: pass `nil` for tab-opening callbacks (`onOpenTab`, `openTab`,
   `openSession`, `openLog`).
 - Keep SwiftUI `body` lean and match Cantrip's dark look (WCAG AA contrast).
+- Memory: never animate `Text` size per frame (sleeping Pip's "z" grew the app ~17 MB/min
+  from cached glyph bitmaps). Check long sessions with `footprint <pid>` over time; idle
+  should stay flat (~105-120 MB, ~160 MB with Home history, ~210 MB image-heavy).
