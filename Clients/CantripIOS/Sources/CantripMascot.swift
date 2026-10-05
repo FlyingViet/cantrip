@@ -1,4 +1,8 @@
+import CoreText
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// What Cantrip Home's mascot is expressing. Priority favors states that need the user.
 enum CantripMascotMood: Equatable, CaseIterable {
@@ -273,6 +277,50 @@ struct CantripMascotRenderer {
     let dark: Bool
 
     private static let ink = Color(red: 0.16, green: 0.12, blue: 0.24)
+
+    /// Mood marks drawn as glyph outlines in the rounded heavy system font. Text drawn at a
+    /// size that changes every frame is rasterized anew each time, and macOS keeps every one of
+    /// those glyph bitmaps, so an animated mood grew the app by megabytes a minute.
+    private static let sleepGlyph = GlyphOutline("z")
+    private static let questionGlyph = GlyphOutline("?")
+
+    struct GlyphOutline {
+        /// The glyph at 1pt, centered on the origin like `GraphicsContext.draw(_:at:)` centers text.
+        let path: Path
+
+        init(_ character: Character) {
+            let reference: CGFloat = 100
+            #if canImport(UIKit)
+            let base = UIFont.systemFont(ofSize: reference, weight: .heavy)
+            let font = (base.fontDescriptor.withDesign(.rounded).map { UIFont(descriptor: $0, size: reference) } ?? base) as CTFont
+            #else
+            let base = NSFont.systemFont(ofSize: reference, weight: .heavy)
+            let font = (base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: reference) } ?? base) as CTFont
+            #endif
+            var unit = Path()
+            var characters = Array(String(character).utf16)
+            var glyphs = [CGGlyph](repeating: 0, count: characters.count)
+            if CTFontGetGlyphsForCharacters(font, &characters, &glyphs, characters.count),
+               let outline = CTFontCreatePathForGlyph(font, glyphs[0], nil) {
+                var advance = CGSize.zero
+                CTFontGetAdvancesForGlyphs(font, .horizontal, glyphs, &advance, 1)
+                // Text is centered on its advance width and line box (ascent + descent).
+                let ascent = CTFontGetAscent(font), descent = CTFontGetDescent(font)
+                let center = CGAffineTransform(scaleX: 1 / reference, y: -1 / reference)
+                    .translatedBy(x: -advance.width / 2, y: -(ascent - descent) / 2)
+                unit = Path(outline).applying(center)
+            }
+            path = unit
+        }
+
+        /// Fills the glyph at `size` points, centered on `point`.
+        func draw(in context: inout GraphicsContext, at point: CGPoint, size: CGFloat, color: Color) {
+            context.fill(
+                path.applying(CGAffineTransform(translationX: point.x, y: point.y).scaledBy(x: size, y: size)),
+                with: .color(color)
+            )
+        }
+    }
 
     private struct Tuft {
         let x: Double
@@ -995,16 +1043,15 @@ struct CantripMascotRenderer {
                 let phase = motion ? (t / 2.4 + Double(index) * 0.5).truncatingRemainder(dividingBy: 1) : 0.35 + Double(index) * 0.3
                 var z = context
                 z.opacity = sin(phase * .pi)
-                let size = (0.1 + 0.05 * phase) * s
-                z.draw(
-                    Text("z").font(.system(size: size, weight: .heavy, design: .rounded)).foregroundColor(accent),
-                    at: CGPoint(x: (0.79 + 0.1 * phase) * s, y: (0.42 - 0.18 * phase) * s)
+                Self.sleepGlyph.draw(
+                    in: &z, at: CGPoint(x: (0.79 + 0.1 * phase) * s, y: (0.42 - 0.18 * phase) * s),
+                    size: (0.1 + 0.05 * phase) * s, color: accent
                 )
             }
         case .curious:
-            context.draw(
-                Text("?").font(.system(size: 0.16 * s, weight: .heavy, design: .rounded)).foregroundColor(accent),
-                at: CGPoint(x: 0.83 * s, y: (0.24 + (motion ? 0.015 * sin(t * 3) : 0)) * s)
+            Self.questionGlyph.draw(
+                in: &context, at: CGPoint(x: 0.83 * s, y: (0.24 + (motion ? 0.015 * sin(t * 3) : 0)) * s),
+                size: 0.16 * s, color: accent
             )
         case .listening:
             for ring in 1...2 {
