@@ -58,8 +58,10 @@ on the local network, exactly like the iPhone app.
 - **Keyboard:** ⌘1–⌘3 switch sections and ⌘N focuses a new message. ⇧⌘V opens voice
   mode and ⇧⌘P pauses the agent.
 
-Not on the Mac: Remote tabs, push alerts, widgets and Live Activities. Handoff cards
-show which tab took over but don't open it.
+Not on the Mac: Remote tabs, push alerts, widgets and Live Activities. When a tab Home
+handed work to finishes, fails, stops or needs an answer, a result card in the chat shows its
+outcome; Open tab opens that tab in the Mac's browser remote (`<server URL>/#tab=<id>`), so it
+needs a URL pairing rather than a local-network-only one.
 
 ## Updating the shared code
 

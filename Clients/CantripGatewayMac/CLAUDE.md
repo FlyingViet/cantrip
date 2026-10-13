@@ -21,8 +21,9 @@ Native macOS Cantrip Home. See README.md for architecture and usage.
   use `#if os(iOS)` guards that leave iOS behavior identical.
 - The app's module name is `Hermes` so shared tests compile unchanged; add only
   suites that don't render UIKit views to the test target in `project.yml`.
-- No Remote tabs: pass `nil` for tab-opening callbacks (`onOpenTab`, `openTab`,
-  `openSession`, `openLog`).
+- No Remote tabs: pass `nil` for tab-opening callbacks (`openTab`, `openSession`, `openLog`).
+  Exception: handoff cards' `onOpenTab` opens the tab in the browser remote via
+  `remote.webTabURL(_:)` when `remote.canOpenWebTabs`.
 - Keep SwiftUI `body` lean and match Cantrip's dark look (WCAG AA contrast).
 - Memory: never animate `Text` size per frame (sleeping Pip's "z" grew the app ~17 MB/min
   from cached glyph bitmaps). Check long sessions with `footprint <pid>` over time; idle

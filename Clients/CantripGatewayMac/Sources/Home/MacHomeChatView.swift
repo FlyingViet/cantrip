@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -102,8 +103,11 @@ struct MacHomeChatView: View {
                     remoteMessage: message,
                     onAction: { vm.send($0.command) },
                     onApproval: { vm.approveRun($0, for: turn.id) },
-                    // The Mac app has no Remote tabs, so handoff cards don't link out.
-                    onOpenTab: nil
+                    // The Mac app has no Remote tabs: handoff cards open the tab in the
+                    // Mac's browser remote (unavailable when paired only over the LAN).
+                    onOpenTab: !remote.canOpenWebTabs ? nil : { id in
+                        if let url = remote.webTabURL(id) { NSWorkspace.shared.open(url) }
+                    }
                 )
                 .id(turn.id)
                 if let message, message.isPreview == true {
