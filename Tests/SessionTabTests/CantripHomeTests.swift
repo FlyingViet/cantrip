@@ -292,11 +292,36 @@ extension SessionTabTests {
                      && asking.latestStatus == "Needs your answer"
                      && askingCard?["needsInput"] as? Bool == true,
                      "A tab waiting on the user's answer marks its handoff card")
+        func resultCard(_ id: UUID) -> CantripHomeHandoffResult? {
+            let cards = manager.homeSession.messages.compactMap(\.handoffResult)
+                .filter { $0.delegationID == id }
+            precondition(cards.count <= 1, "One result card per handoff")
+            return cards.first
+        }
+        let askingResult = try requireHome(resultCard(handoff.id))
+        let askingRemote = try requireHome(((askingHome.1["session"] as? [String: Any])?["messages"]
+            as? [[String: Any]])?.last { $0["role"] as? String == "handoff" }?["handoffResult"]
+            as? [String: Any])
+        precondition(askingResult.state == .needsInput && askingResult.detail == "Which branch?"
+                     && askingResult.tabID == bassSession.id
+                     && manager.homeSession.messages.last?.role == .handoff
+                     && askingRemote["state"] as? String == "needsInput"
+                     && askingRemote["tabID"] as? String == bassSession.id.uuidString,
+                     "Home's chat shows that the tab needs the user's answer")
+        let listing = try await call("/api/v1/sessions")
+        let listedTabs = try requireHome(listing.1["sessions"] as? [[String: Any]])
+        let listedHome = try requireHome(listing.1["home"] as? [String: Any])
+        precondition(listedHome["id"] as? String == ChatSession.cantripHomeID.uuidString
+                     && listedHome["isCantripHome"] as? Bool == true
+                     && listedHome["supportsTabMetadata"] as? Bool == false
+                     && !listedTabs.contains { $0["id"] as? String == ChatSession.cantripHomeID.uuidString },
+                     "Web clients get Home as its own pinned entry, never as a tab")
         try bassSession.respondToInput(id: bassSession.pendingInputs[0].id, answer: .init(decision: .cancel))
         try await waitForJournalTest { bassSession.pendingInputs.isEmpty }
         delegations.refresh()
         let answered = try homeMessage(handoffID).delegations.first
-        precondition(answered?.needsInput == nil && answered?.latestStatus != "Needs your answer",
+        precondition(answered?.needsInput == nil && answered?.latestStatus != "Needs your answer"
+                     && resultCard(handoff.id)?.state == .working,
                      "Answering clears the card's needs-answer state")
         let narration = String(repeating: "I'll check the lineup files next. ", count: 30)
         precondition(CantripHomeDelegations.outcome(
@@ -336,6 +361,10 @@ extension SessionTabTests {
                      && finished.result == "Headliners now sort first."
                      && finished.latestStatus == nil,
                      "The card must finish with the tab's reply")
+        precondition(resultCard(handoff.id)?.state == .completed
+                     && resultCard(handoff.id)?.detail == "Headliners now sort first."
+                     && finishedQueued.map { resultCard($0.id)?.detail } == "Past sets now collapse.",
+                     "Each finished handoff posts its outcome into Home's chat")
         let savedHome = try JSONDecoder().decode(
             [ChatMessage].self,
             from: Data(contentsOf: SessionManager.chatsDir
@@ -363,6 +392,10 @@ extension SessionTabTests {
         let stopped = try requireHome(homeMessage(stoppedID).delegations.first)
         precondition(stopped.status == .cancelled && stopped.error == "Stopped in the tab.",
                      "Stopping the tab must stop the nested card")
+        precondition(resultCard(stopped.id)?.state == .cancelled
+                     && resultCard(stopped.id)?.detail == ""
+                     && manager.homeSession.messages.filter { $0.role == .handoff }.count == 3,
+                     "A stopped handoff shows its state in Home's chat")
 
         routeBackend.sink = nil
         let automatedID = homeReply(
@@ -562,11 +595,13 @@ extension SessionTabTests {
         var sink: ((BackendEvent) -> Void)?
         var lastPrompt: String?
         var lastTurnCount = 0
+        var lastTurns: [ConversationTurn] = []
         var resets = 0
         func send(_ request: BackendRequest, workdir: String,
                   onEvent: @escaping (BackendEvent) -> Void) {
             lastPrompt = request.prompt
             lastTurnCount = request.previousTurns.count
+            lastTurns = request.previousTurns
             sink = onEvent
         }
         func cancel() {}

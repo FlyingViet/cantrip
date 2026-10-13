@@ -29,6 +29,7 @@ enum RemoteHistory {
         if !message.delegations.isEmpty {
             result["delegations"] = message.delegations.map(\.snapshot)
         }
+        if let handoff = message.handoffResult { result["handoffResult"] = handoff.snapshot }
         let reasoning = ReasoningStep.steps(from: message.reasoningBlocks)
         if !reasoning.isEmpty {
             result["reasoning"] = reasoning.enumerated().map { $1.snapshot(number: $0 + 1) }

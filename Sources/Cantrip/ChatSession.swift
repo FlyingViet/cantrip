@@ -27,14 +27,17 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var promptUsage: PromptUsage?
     /// Cantrip Home work handed to project tabs from this reply.
     var delegations: [CantripHomeDelegation] = []
-    enum Role: String, Codable { case user, assistant, error }
+    /// Cantrip Home only: a handed-off tab's result card (role `handoff`).
+    var handoffResult: CantripHomeHandoffResult?
+    /// `handoff`: a Home result card posted by Cantrip, never a model turn.
+    enum Role: String, Codable { case user, assistant, error, handoff }
     struct ReasoningMark: Equatable {
         let activities: Int
         let textBytes: Int
     }
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, author, runID, apps, promptUsage, delegations
+        case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult
     }
 }
 
@@ -86,7 +89,7 @@ extension ChatMessage {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
-        role = try container.decode(Role.self, forKey: .role)
+        let storedRole = try container.decode(Role.self, forKey: .role)
         text = try container.decode(String.self, forKey: .text)
         author = try container.decodeIfPresent(String.self, forKey: .author)
         runID = try container.decodeIfPresent(UUID.self, forKey: .runID)
@@ -95,18 +98,25 @@ extension ChatMessage {
         delegations = (try? container.decodeIfPresent(
             [CantripHomeDelegation].self, forKey: .delegations
         )) ?? []
+        handoffResult = try? container.decodeIfPresent(
+            CantripHomeHandoffResult.self, forKey: .handoffResult
+        )
+        role = handoffResult == nil ? storedRole : .handoff
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
-        try container.encode(role, forKey: .role)
+        // Result cards are saved as assistant messages so builds without the `handoff` role
+        // still load the transcript; `handoffResult` marks them.
+        try container.encode(role == .handoff && handoffResult != nil ? .assistant : role, forKey: .role)
         try container.encode(text, forKey: .text)
         try container.encodeIfPresent(author, forKey: .author)
         try container.encodeIfPresent(runID, forKey: .runID)
         if !apps.isEmpty { try container.encode(apps, forKey: .apps) }
         try container.encodeIfPresent(promptUsage, forKey: .promptUsage)
         if !delegations.isEmpty { try container.encode(delegations, forKey: .delegations) }
+        try container.encodeIfPresent(handoffResult, forKey: .handoffResult)
     }
 }
 
@@ -191,6 +201,10 @@ final class ChatSession: ObservableObject {
     private var currentRunIncludesAmbientContext = true
     /// One free automatic resume per user-initiated run; manual after that.
     private var autoResumeSpent = false
+    /// An interrupted run will resume by itself in a moment (handoffs keep waiting for it).
+    private(set) var autoResumePending = false
+    /// An interrupted run waits for the user's Resume (handoffs show that the tab needs them).
+    private(set) var interruptionAwaitsResume = false
     /// Durable run identity survives backend retries and process restarts.
     private var currentRunID: UUID?
     var currentRunIdentifier: UUID? { currentRunID }
@@ -572,6 +586,8 @@ final class ChatSession: ObservableObject {
         includesAmbientContext: Bool,
         queueItemID: UUID? = nil
     ) -> UUID {
+        autoResumePending = false
+        interruptionAwaitsResume = false
         if currentRunID != nil {
             cancelRun(reason: "superseded by a new run")
         }
@@ -2205,6 +2221,9 @@ final class ChatSession: ObservableObject {
                 pendingUser = nil
             case .error:
                 pendingUser = nil
+            case .handoff:
+                // Result cards hold tab output for the user, not Home's own words.
+                continue
             }
         }
         return turns
@@ -2596,6 +2615,7 @@ final class ChatSession: ObservableObject {
                 self?.scheduleAutoResume()
             }
         } else {
+            interruptionAwaitsResume = true
             // Surface the Resume button only after the SIGTERM → SIGKILL
             // escalation window, so a fast click can't relaunch the CLI
             // session while the hung process is still dying.
@@ -2626,9 +2646,16 @@ final class ChatSession: ObservableObject {
     /// SIGKILL escalation so a hung process can't race the new stream.
     private func scheduleAutoResume() {
         let generation = streamGeneration
+        // Set only once a resume is really scheduled (a failed journal flush skips this).
+        autoResumePending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
-            guard let self, !self.isStreaming,
-                  self.streamGeneration == generation else { return }
+            guard let self else { return }
+            self.autoResumePending = false
+            guard !self.isStreaming, self.streamGeneration == generation else {
+                // Nothing resumes after all; handoffs re-read the tab and settle.
+                self.objectWillChange.send()
+                return
+            }
             self.performResume(auto: true)
         }
     }
@@ -2651,7 +2678,7 @@ final class ChatSession: ObservableObject {
         Log.write("resume: \(auto ? "auto" : "manual") resume of interrupted run")
         recordResumeAttempt(reason: auto ? "automatic-resume" : "manual-resume")
         send(
-            "Continue from where you left off.",
+            Self.resumePrompt,
             preamble: preamble,
             isResume: true,
             includesAmbientContext: currentRunIncludesAmbientContext

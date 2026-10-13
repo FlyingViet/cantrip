@@ -19,9 +19,14 @@ struct CantripHomeDelegation: Codable, Equatable, Identifiable {
     /// The tab's user message carrying the handed-off prompt, once it appears.
     var tabMessageID: UUID?
     var latestStatus: String?
-    /// The tab is waiting for the user's answer to an input request.
+    /// The tab is waiting for the user's answer: an input request, or a reply that ended by
+    /// asking the user something.
     var needsInput: Bool?
+    /// What the tab is asking the user while it waits (plain text, untrusted tab output).
+    var question: String?
     var result: String?
+    /// The tab's outcome in a sentence or two (plain text, untrusted tab output).
+    var outcome: String?
     var error: String?
     var finishedAt: Date?
 
@@ -36,8 +41,110 @@ struct CantripHomeDelegation: Codable, Equatable, Identifiable {
         item["finishedAt"] = finishedAt?.timeIntervalSince1970
         item["latestStatus"] = latestStatus
         item["needsInput"] = needsInput == true ? true : nil
+        item["question"] = question
         item["result"] = result
+        item["outcome"] = outcome
         item["error"] = error
+        return item
+    }
+}
+
+/// A handoff's result, posted once into Home's chat when its tab finishes, fails, stops or
+/// needs the user. Its text comes from the tab, so clients show it as data in a card and Home
+/// never reads it back as its own words or acts on it.
+struct CantripHomeHandoffResult: Codable, Equatable {
+    enum State: String, Codable {
+        /// The user answered the tab's question and it is working again.
+        case working
+        case needsInput, completed, failed, cancelled
+    }
+
+    let delegationID: UUID
+    let tabID: UUID
+    var tabTitle: String
+    /// Home's label for the handoff.
+    var summary: String
+    var state: State
+    /// The tab's outcome, question or error in plain text.
+    var detail: String
+    let startedAt: Date
+    var finishedAt: Date?
+    var updatedAt: Date
+
+    /// The card state for a handoff, or nil while it is queued or simply working.
+    static func state(of delegation: CantripHomeDelegation) -> State? {
+        switch delegation.status {
+        case .queued: return nil
+        case .running: return delegation.needsInput == true ? .needsInput : nil
+        case .completed: return .completed
+        case .failed: return .failed
+        case .cancelled: return .cancelled
+        }
+    }
+
+    init?(_ delegation: CantripHomeDelegation, now: Date) {
+        guard let state = Self.state(of: delegation) else { return nil }
+        delegationID = delegation.id
+        tabID = delegation.tabID
+        tabTitle = delegation.tabTitle
+        summary = delegation.summary
+        self.state = state
+        detail = ""
+        startedAt = delegation.createdAt
+        updatedAt = now
+        apply(delegation, state: state)
+    }
+
+    /// The same card brought up to date with its handoff; a card never disappears, so a handoff
+    /// that is working again after the user's answer shows `working`.
+    func updated(from delegation: CantripHomeDelegation, now: Date) -> CantripHomeHandoffResult {
+        var next = self
+        next.tabTitle = delegation.tabTitle
+        next.apply(delegation, state: Self.state(of: delegation) ?? .working)
+        if next != self { next.updatedAt = now }
+        return next
+    }
+
+    private mutating func apply(_ delegation: CantripHomeDelegation, state: State) {
+        self.state = state
+        finishedAt = delegation.finishedAt
+        switch state {
+        case .working: detail = ""
+        case .needsInput: detail = delegation.question ?? ""
+        case .completed:
+            detail = delegation.outcome
+                ?? delegation.result.map { CantripHomeDelegations.briefOutcome($0) } ?? ""
+        case .failed: detail = delegation.error ?? ""
+        // "Stopped in the tab." only repeats the card's status.
+        case .cancelled: detail = delegation.error == "Stopped in the tab." ? "" : delegation.error ?? ""
+        }
+    }
+
+    var headline: String {
+        let tab = tabTitle.isEmpty ? "the tab" : tabTitle
+        switch state {
+        case .working: return "Working in \(tab)"
+        case .needsInput: return "\(tab) needs your answer"
+        case .completed: return "Done in \(tab)"
+        case .failed: return "Failed in \(tab)"
+        case .cancelled: return "Stopped in \(tab)"
+        }
+    }
+
+    /// Plain chat text for clients that show this message as an ordinary reply.
+    var fallbackText: String {
+        let label = summary.isEmpty ? "" : " · " + summary
+        return detail.isEmpty ? "**\(headline)**\(label)" : "**\(headline)**\(label)\n\n\(detail)"
+    }
+
+    var snapshot: [String: Any] {
+        var item: [String: Any] = [
+            "delegationID": delegationID.uuidString, "tabID": tabID.uuidString,
+            "tabTitle": tabTitle, "summary": summary, "state": state.rawValue, "detail": detail,
+            "startedAt": startedAt.timeIntervalSince1970,
+            "updatedAt": updatedAt.timeIntervalSince1970,
+        ]
+        item["finishedAt"] = finishedAt?.timeIntervalSince1970
         return item
     }
 }
@@ -109,6 +216,7 @@ final class CantripHomeDelegations {
                 Task { @MainActor in self?.refresh() }
             }
         refresh()
+        postMissedResults()
     }
 
     static func eligibleTabs(in manager: SessionManager) -> [ChatSession] {
@@ -160,6 +268,7 @@ final class CantripHomeDelegations {
         let home = manager.homeSession
         var activeTabs = Set<UUID>()
         var statusChanged = false
+        var updated: [CantripHomeDelegation] = []
         for messageIndex in home.messages.indices
         where home.messages[messageIndex].delegations.contains(where: \.isActive) {
             for index in home.messages[messageIndex].delegations.indices {
@@ -170,9 +279,14 @@ final class CantripHomeDelegations {
                 if next != current {
                     home.messages[messageIndex].delegations[index] = next
                     statusChanged = statusChanged || next.status != current.status
+                        || next.needsInput != current.needsInput
+                    updated.append(next)
                 }
                 if next.isActive { activeTabs.insert(next.tabID) }
             }
+        }
+        for delegation in updated where Self.noteResult(delegation, in: home, now: now) {
+            statusChanged = true
         }
         // Handoffs made by background runs live on their Background list entries.
         let store = CantripHomeStore.shared
@@ -182,7 +296,7 @@ final class CantripHomeDelegations {
             var changed = false
             for index in handoffs.indices where handoffs[index].isActive {
                 let target = manager.sessions.first { $0.id == handoffs[index].tabID }
-                let next = Self.evaluate(handoffs[index], target: target, now: now)
+                let next = Self.evaluate(handoffs[index], target: target, now: now, waitsForAnswer: false)
                 if next != handoffs[index] {
                     changed = true
                     backgroundFinished = backgroundFinished || !next.isActive
@@ -203,6 +317,47 @@ final class CantripHomeDelegations {
             if let target = manager.sessions.first(where: { $0.id == id }) { observe(target) }
         }
         if statusChanged { home.persistTranscript() }
+    }
+
+    /// Posts a handoff's result card into Home's chat, or brings its existing card up to date.
+    /// One card per handoff. Posting never starts or interrupts a Home turn: while Home is
+    /// replying, the card goes above the request being answered so the reply stays last.
+    @discardableResult
+    static func noteResult(
+        _ delegation: CantripHomeDelegation, in home: ChatSession, now: Date = Date()
+    ) -> Bool {
+        if let index = home.messages.lastIndex(where: {
+            $0.handoffResult?.delegationID == delegation.id
+        }), let existing = home.messages[index].handoffResult {
+            let next = existing.updated(from: delegation, now: now)
+            guard next != existing else { return false }
+            home.messages[index].handoffResult = next
+            home.messages[index].text = next.fallbackText
+            return true
+        }
+        guard let result = CantripHomeHandoffResult(delegation, now: now) else { return false }
+        var message = ChatMessage(role: .handoff, text: result.fallbackText)
+        message.handoffResult = result
+        if home.isStreaming, let request = home.messages.lastIndex(where: { $0.role == .user }) {
+            home.messages.insert(message, at: request)
+        } else {
+            home.messages.append(message)
+        }
+        Log.write("home: posted handoff result \(result.state.rawValue) for \(delegation.id)")
+        return true
+    }
+
+    /// Handoffs that finished while Cantrip was being updated get their card once.
+    func postMissedResults(now: Date = Date(), within window: TimeInterval = 6 * 3600) {
+        guard let home = manager?.homeSession else { return }
+        let posted = Set(home.messages.compactMap { $0.handoffResult?.delegationID })
+        let missed = home.messages.flatMap(\.delegations).filter {
+            !$0.isActive && !posted.contains($0.id)
+                && ($0.finishedAt.map { now.timeIntervalSince($0) <= window } ?? false)
+        }.sorted { ($0.finishedAt ?? $0.createdAt) < ($1.finishedAt ?? $1.createdAt) }
+        guard !missed.isEmpty else { return }
+        for delegation in missed { Self.noteResult(delegation, in: home, now: now) }
+        home.persistTranscript()
     }
 
     /// Every handoff Home or a background run made, oldest first.
@@ -248,8 +403,12 @@ final class CantripHomeDelegations {
             }
     }
 
+    /// `waitsForAnswer`: a handoff whose tab ends by asking the user something, or whose run was
+    /// interrupted and needs Resume, stays open until the user acts. Background-run handoffs
+    /// pass false so their unattended runs always finish and release what they hold.
     static func evaluate(
-        _ delegation: CantripHomeDelegation, target: ChatSession?, now: Date = Date()
+        _ delegation: CantripHomeDelegation, target: ChatSession?, now: Date = Date(),
+        waitsForAnswer: Bool = true
     ) -> CantripHomeDelegation {
         guard delegation.isActive else { return delegation }
         var next = delegation
@@ -261,7 +420,9 @@ final class CantripHomeDelegations {
             next.finishedAt = now
         }
         guard let target else {
-            finish(.cancelled, error: "The tab was closed before this finished.")
+            finish(.cancelled, error: delegation.needsInput == true
+                   ? "The tab was closed before you answered it."
+                   : "The tab was closed before this finished.")
             return next
         }
         next.tabTitle = target.title
@@ -293,24 +454,41 @@ final class CantripHomeDelegations {
             }
             return next
         }
-        let end = messages.indices.dropFirst(start + 1).first {
-            messages[$0].role == .user
-        } ?? messages.endIndex
-        let replies = messages[(start + 1)..<end]
+        // A handoff's run lasts until a user message from another run: answers to the tab's
+        // input requests join the same run. An automatic resume, or the user's reply to a
+        // question the tab ended on, carries the handoff into the next run.
+        var segment = start
+        var end = messages.endIndex
+        while true {
+            let runID = messages[segment].runID
+            end = messages.indices.dropFirst(segment + 1).first {
+                messages[$0].role == .user && (runID == nil || messages[$0].runID != runID)
+            } ?? messages.endIndex
+            guard end < messages.endIndex,
+                  continuesHandoff(after: messages[(segment + 1)..<end], next: messages[end],
+                                   waitsForAnswer: waitsForAnswer)
+            else { break }
+            segment = end
+        }
+        let replies = messages[(segment + 1)..<end]
+        next.question = nil
         if target.isStreaming, end == messages.endIndex {
             next.status = .running
-            next.needsInput = target.pendingInputs.isEmpty ? nil : true
+            let input = target.pendingInputs.first
+            next.needsInput = input == nil ? nil : true
+            next.question = input.map { question(from: $0) }
             next.latestStatus = next.needsInput == true ? "Needs your answer"
                 : target.isWaitingOnBackgroundWatchers
                 ? "Waiting on a background task."
                 : target.currentActivity?.title ?? target.statusText ?? "Working…"
             return next
         }
-        let reply = replies.last {
-            $0.role == .assistant
-                && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }?.text
+        let reply = lastReply(in: replies)
         let failure = replies.last { $0.role == .error }?.text
+        // A run that ended on an error failed, even after some reply text.
+        let endedInError = replies.last {
+            $0.role == .error || !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }?.role == .error
         if let reply { next.result = outcome(reply, limit: resultLimit) }
         // The tab's latest outcome applies only when this was its latest run.
         let outcome = end == messages.endIndex
@@ -318,16 +496,60 @@ final class CantripHomeDelegations {
                 $0.finishedAt >= delegation.createdAt ? $0.status : nil
             }
             : nil
+        let interrupted = end == messages.endIndex && endedInError
         if outcome == .stopped {
             finish(.cancelled, error: "Stopped in the tab.")
-        } else if outcome == .failed || (reply == nil && failure != nil) {
+        } else if interrupted, target.autoResumePending {
+            // The tab resumes the interrupted run by itself in a moment.
+            next.status = .running
+            next.needsInput = nil
+            next.latestStatus = "Resuming after an interruption…"
+        } else if interrupted, waitsForAnswer, target.canResume, !target.interruptionAwaitsResume {
+            // Cantrip quit mid-run; the tab offers Resume, which continues this handoff.
+            next.status = .running
+            next.needsInput = true
+            next.question = "Cantrip quit while this was running. Open the tab and resume it."
+            next.latestStatus = "Needs your answer"
+        } else if outcome == .failed || endedInError || (reply == nil && failure != nil) {
             finish(.failed, error: excerpt(failure ?? "The tab's run failed.", limit: 300))
         } else if reply == nil {
             finish(.cancelled, error: "The tab stopped before replying.")
+        } else if waitsForAnswer, end == messages.endIndex, let asked = trailingQuestion(reply ?? "") {
+            // The tab ended by asking the user something; their reply continues this handoff.
+            next.status = .running
+            next.needsInput = true
+            next.question = asked
+            next.latestStatus = "Needs your answer"
         } else {
             finish(.completed)
+            next.outcome = reply.map { briefOutcome($0) }
         }
         return next
+    }
+
+    private static func lastReply(in messages: ArraySlice<ChatMessage>) -> String? {
+        messages.last {
+            $0.role == .assistant
+                && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }?.text
+    }
+
+    /// Whether the user message `next` continues the same handoff instead of starting new work.
+    private static func continuesHandoff(
+        after replies: ArraySlice<ChatMessage>, next: ChatMessage, waitsForAnswer: Bool
+    ) -> Bool {
+        let text = next.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text == ChatSession.resumePrompt { return true }
+        guard !text.isEmpty, !text.hasPrefix("!"), !text.hasPrefix("/"),
+              !text.hasPrefix("(Handed off by"),
+              !text.hasPrefix(ChatSession.cantripHomeScheduledTaskPrefix),
+              waitsForAnswer, let reply = lastReply(in: replies) else { return false }
+        return trailingQuestion(reply) != nil
+    }
+
+    nonisolated static func question(from input: InputRequestSnapshot) -> String {
+        let detail = input.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        return shortened(plainText(detail.isEmpty ? input.title : detail), limit: questionLimit)
     }
 
     /// Open tabs and recent handoffs, appended to every Home prompt.
@@ -344,7 +566,8 @@ final class CantripHomeDelegations {
         let recent = allHandoffs
             .suffix(6)
             .map { handoff in
-                let outcome = handoff.result ?? handoff.error ?? handoff.latestStatus ?? ""
+                let outcome = handoff.question.map { "waiting for the user's answer to: " + $0 }
+                    ?? handoff.result ?? handoff.error ?? handoff.latestStatus ?? ""
                 let detail = outcome.isEmpty ? "" : ": "
                     + Self.excerpt(outcome, limit: 240).replacingOccurrences(of: "\n", with: " ")
                 return "- \(handoff.tabTitle.prefix(80)) · \(handoff.summary.prefix(100)) · "
@@ -443,7 +666,7 @@ final class CantripHomeDelegations {
         let substantive = requests.filter {
             let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
             return text.count >= 24 && !text.hasSuffix("(Recommended)")
-                && text != "Continue from where you left off."
+                && text != ChatSession.resumePrompt
         }
         var parts = ["- \(id.uuidString): \"\(clean(title, 80))\" (\(state))"]
         let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
@@ -529,6 +752,99 @@ final class CantripHomeDelegations {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > limit else { return trimmed }
         return String(trimmed.prefix(limit)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+    }
+
+    nonisolated static let briefLimit = 320
+    nonisolated static let questionLimit = 320
+
+    /// The outcome a tab's reply ends with, as a sentence or two of plain text. Handoff briefs
+    /// ask tabs to end with the outcome, often labelled "Outcome:".
+    nonisolated static func briefOutcome(_ reply: String, limit: Int = briefLimit) -> String {
+        var paragraphs = proseParagraphs(reply)
+        let label = #"^(outcome|result|summary)\s*:\s*"#
+        if let labelled = paragraphs.suffix(3).last(where: {
+            $0.range(of: label, options: [.regularExpression, .caseInsensitive]) != nil
+        }) {
+            let text = labelled.replacingOccurrences(
+                of: label, with: "", options: [.regularExpression, .caseInsensitive]
+            )
+            // "Outcome: headliners now…" reads as a sentence on its own once the label is gone.
+            return shortened(text.prefix(1).uppercased() + text.dropFirst(), limit: limit)
+        }
+        guard var text = paragraphs.popLast() else { return "" }
+        // "Done." or a bare label says little; add the paragraph before it.
+        while text.count < 80, let previous = paragraphs.popLast() { text = previous + " " + text }
+        return shortened(text, limit: limit)
+    }
+
+    /// The final paragraph of `reply` when it asks the user something, as plain text.
+    nonisolated static func trailingQuestion(_ reply: String) -> String? {
+        guard let last = proseParagraphs(reply).last else { return nil }
+        let end = last.trimmingCharacters(in: CharacterSet(charactersIn: " )\"'”’"))
+        guard end.hasSuffix("?") else { return nil }
+        return shortened(last, limit: questionLimit)
+    }
+
+    /// Plain-text paragraphs of a Markdown reply, without code blocks or tables.
+    nonisolated static func proseParagraphs(_ text: String) -> [String] {
+        var paragraphs: [String] = []
+        var current: [String] = []
+        var inFence = false
+        func flush() {
+            let joined = plainText(current.joined(separator: "\n"))
+            if !joined.isEmpty { paragraphs.append(joined) }
+            current = []
+        }
+        for raw in text.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("```") || line.hasPrefix("~~~") {
+                flush()
+                inFence.toggle()
+                continue
+            }
+            if inFence { continue }
+            if line.isEmpty || line.hasPrefix("|") || line.allSatisfy({ "-=*_ ".contains($0) })
+                || line.range(of: #"^#{1,6}\s"#, options: .regularExpression) != nil {
+                flush()
+            } else {
+                current.append(line)
+            }
+        }
+        flush()
+        return paragraphs
+    }
+
+    /// Markdown reduced to one line of plain text.
+    nonisolated static func plainText(_ markdown: String) -> String {
+        var text = markdown
+        let rules: [(String, String)] = [
+            (#"(?m)^\s{0,3}#{1,6}\s+"#, ""),          // headings
+            (#"(?m)^\s*(?:[-*+•]|\d+[.)])\s+"#, ""),  // list markers
+            (#"(?m)^\s*>\s?"#, ""),                    // quotes
+            (#"!?\[([^\]]*)\]\([^)]*\)"#, "$1"),       // links and images
+            (#"(\*\*|__|~~)"#, ""),                    // bold, strikethrough
+            (#"`+"#, ""),                              // inline code
+            (#"\s+"#, " "),
+        ]
+        for (pattern, template) in rules {
+            text = text.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// `text` cut to `limit` characters at a sentence end when one is near, else a word.
+    nonisolated static func shortened(_ text: String, limit: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed }
+        let head = String(trimmed.prefix(limit))
+        let characters = Array(head)
+        if let end = characters.indices.dropLast().last(where: {
+            ".!?".contains(characters[$0]) && characters[$0 + 1].isWhitespace
+        }), end >= limit / 2 {
+            return String(characters[...end])
+        }
+        let word = head.range(of: " ", options: .backwards).map { head[..<$0.lowerBound] } ?? head[...]
+        return word.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)) + "…"
     }
 }
 
