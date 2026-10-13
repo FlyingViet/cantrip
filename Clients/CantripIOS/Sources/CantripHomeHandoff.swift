@@ -172,3 +172,178 @@ struct CantripHandoffCard: View {
         return "\(statusText), \(tabTitle): \(summary). \(elapsed)"
     }
 }
+
+/// What a handed-off tab reported, posted once into Home's chat: its outcome, its question for
+/// the user, or why it failed or stopped. The text is the tab's own, shown only as data.
+struct CantripHandoffResultCard: View {
+    let result: CantripRemoteHandoffResult
+    var onOpenTab: ((String) -> Void)?
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .caption) private var iconSize: CGFloat = 18
+
+    private var stacksRows: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    private var tabTitle: String {
+        let title = CantripSubagentFormat.trimmed(result.tabTitle)
+        return title.isEmpty ? "Project tab" : title
+    }
+
+    private var summary: String { CantripSubagentFormat.trimmed(result.summary) }
+    private var detail: String { CantripSubagentFormat.trimmed(result.detail) }
+
+    private var canOpenTab: Bool {
+        onOpenTab != nil && !CantripSubagentFormat.trimmed(result.tabID).isEmpty
+    }
+
+    var statusText: String {
+        switch result.state {
+        case .working: return "Working in tab again"
+        case .needsInput: return "Needs your answer"
+        case .completed: return "Done in tab"
+        case .failed: return "Failed in tab"
+        case .cancelled: return "Stopped"
+        case .other: return "Handoff update"
+        }
+    }
+
+    private var tint: Color {
+        switch result.state {
+        case .completed: return .green
+        case .needsInput: return CantripHomeBackgroundStyle.activeTint
+        case .failed: return .orange
+        case .working: return .accentColor
+        case .cancelled, .other: return Color(.tertiaryLabel)
+        }
+    }
+
+    var timeText: String {
+        func clock(_ time: TimeInterval) -> String {
+            Date(timeIntervalSince1970: time).formatted(date: .omitted, time: .shortened)
+        }
+        if let finished = result.finishedAt {
+            let took = CantripSubagentFormat.elapsedLabel(
+                startedAt: result.startedAt, finishedAt: finished, now: Date()
+            )
+            return result.startedAt == nil ? "Finished \(clock(finished))" : "Finished \(clock(finished)) · took \(took)"
+        }
+        return result.updatedAt.map { "Updated \(clock($0))" } ?? ""
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(tint)
+                .frame(width: 3)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                header
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(headerAccessibilityLabel)
+                if !detail.isEmpty {
+                    Text(verbatim: detail)
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .lineLimit(stacksRows ? nil : 6)
+                        .multilineTextAlignment(.leading)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, stacksRows ? 0 : iconSize + 8)
+                }
+                footer
+                    .padding(.leading, stacksRows ? 0 : iconSize + 8)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, canOpenTab ? 0 : 10)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color(.separator).opacity(0.24))
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var headerAccessibilityLabel: String {
+        let label = summary.isEmpty ? "" : ": \(summary)"
+        return "Handoff result. \(statusText), \(tabTitle)\(label)"
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 8) {
+            statusIcon
+                .font(.caption)
+                .frame(width: iconSize, height: iconSize)
+            VStack(alignment: .leading, spacing: 4) {
+                let statusRow = stacksRows
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+                    : AnyLayout(HStackLayout(spacing: 6))
+                statusRow {
+                    Text(statusText)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(result.state == .needsInput ? Color.primary : Color.secondary)
+                        .lineLimit(stacksRows ? nil : 1)
+                    Label(tabTitle, systemImage: "rectangle.stack")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                        .lineLimit(stacksRows ? 2 : 1)
+                }
+                if !summary.isEmpty {
+                    Text(summary)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(stacksRows ? 4 : 2)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch result.state {
+        case .needsInput:
+            Image(systemName: "questionmark.bubble.fill").foregroundStyle(tint)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(tint)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(tint)
+        case .working:
+            Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(tint)
+        case .cancelled, .other:
+            Image(systemName: "stop.circle.fill").foregroundStyle(.secondary)
+        }
+    }
+
+    private var footer: some View {
+        let layout = stacksRows
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 8))
+        return layout {
+            Text(timeText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !stacksRows { Spacer(minLength: 8) }
+            if canOpenTab {
+                Button {
+                    onOpenTab?(result.tabID)
+                } label: {
+                    Label("Open tab", systemImage: "arrow.up.right.square")
+                        .font(.caption.weight(.semibold))
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Open \(tabTitle) tab")
+            }
+        }
+    }
+}

@@ -640,12 +640,80 @@ final class CantripHomeTests: XCTestCase {
         XCTAssertEqual(handoffs[1].status, .running)
         XCTAssertEqual(handoffs[1].tabTitle, "")
         XCTAssertFalse(handoffs[1].id.isEmpty)
+        let result = try XCTUnwrap(transcript.first { $0.id == "h3" })
+        XCTAssertTrue(result.isHandoffResult)
+        XCTAssertEqual(result.handoffResult, CantripRemoteHandoffResult(
+            delegationID: "d1", tabID: bassID, tabTitle: "Bass Compass", summary: "Fix lineup sorting",
+            state: .completed, detail: "Headliners now sort first.",
+            startedAt: 100, finishedAt: 160, updatedAt: 160
+        ))
+        let future = try XCTUnwrap(transcript.first { $0.id == "h4" }?.handoffResult,
+                                   "A result card from a newer Mac still decodes")
+        XCTAssertEqual(future.state, .other)
+        XCTAssertEqual(future.detail, "")
+
+        XCTAssertEqual(model.webTabURL(bassID.lowercased())?.absoluteString,
+                       "https://cantrip.example/#tab=\(bassID)",
+                       "Clients without Remote tabs open the tab in the Mac's browser remote")
+        XCTAssertNil(model.webTabURL("not-a-tab"))
+        XCTAssertTrue(model.canOpenWebTabs)
 
         model.prepareToOpenTab(bassID)
         await model.selectRegularSession()
         XCTAssertFalse(model.isHomeSelected)
         XCTAssertEqual(model.selectedSessionID, bassID,
                        "Open tab must win over the previously selected Remote tab")
+    }
+
+    func testHandoffResultCardsShowTheTabsOutcome() throws {
+        let now = Date().timeIntervalSince1970
+        let outcome = "Pick Up a Grimoire has one copy on the servers with chapters 1–3 and no lost "
+            + "progress. The missing-chapter cause is fixed in TestFlight 1.0 (100091), so new adds keep "
+            + "retrying their first download until the source lists chapters."
+        let states: [(CantripRemoteHandoffResult.State, String)] = [
+            (.completed, "Done in tab"), (.needsInput, "Needs your answer"), (.failed, "Failed in tab"),
+            (.cancelled, "Stopped"), (.working, "Working in tab again"), (.other, "Handoff update"),
+        ]
+        for (state, text) in states {
+            XCTAssertEqual(CantripHandoffResultCard(result: .init(tabID: "t", state: state)).statusText, text)
+        }
+        let finished = CantripHandoffResultCard(result: .init(
+            tabID: "t", state: .completed, startedAt: now - 240, finishedAt: now - 60
+        ))
+        XCTAssertTrue(finished.timeText.hasPrefix("Finished "))
+        XCTAssertTrue(finished.timeText.hasSuffix(" · took 3m 00s"), finished.timeText)
+        XCTAssertTrue(CantripHandoffResultCard(result: .init(tabID: "t", state: .needsInput, updatedAt: now))
+            .timeText.hasPrefix("Updated "))
+
+        for dynamicType in [DynamicTypeSize.large, .accessibility3] {
+            func height(_ detail: String) -> CGFloat {
+                UIHostingController(rootView:
+                    CantripHandoffResultCard(result: .init(
+                        tabID: "t", tabTitle: "NetLib", summary: "Fix duplicate listings",
+                        state: .completed, detail: detail, startedAt: now - 600, finishedAt: now - 60
+                    ), onOpenTab: { _ in })
+                    .environment(\.dynamicTypeSize, dynamicType)
+                    .frame(width: 393)
+                ).sizeThatFits(in: CGSize(width: 393, height: CGFloat.greatestFiniteMagnitude)).height
+            }
+            XCTAssertGreaterThan(height(outcome), height("") + 30, "The outcome is visible at \(dynamicType)")
+            if dynamicType == .large {
+                XCTAssertLessThanOrEqual(height(String(repeating: outcome + " ", count: 6)), 260,
+                                         "A long outcome stays a short card; details are in the tab")
+            }
+        }
+    }
+
+    func testHandoffResultCardsNeverPoseAsTheStreamingReply() throws {
+        let data = Data("""
+        [{"id":"ask","role":"user","text":"Go","thinking":"","activities":[]},
+         {"id":"reply","role":"assistant","text":"Here's the plan","thinking":"","activities":[]},
+         {"id":"card","role":"handoff","text":"**Done in NetLib**","thinking":"","activities":[],
+          "handoffResult":{"tabID":"t","state":"completed"}}]
+        """.utf8)
+        let transcript = try JSONDecoder().decode([CantripRemoteMessage].self, from: data)
+        XCTAssertEqual(CantripMascotActivity.current(status: nil, transcript: transcript), .writing,
+                       "Pip follows Home's reply, not a result card after it")
     }
 
     func testHandoffCardsFitNarrowAndAccessibilityWidths() {
@@ -726,6 +794,9 @@ final class CantripHomeTests: XCTestCase {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("The Bass Compass tab is taking this.")
                         CantripHandoffStack(handoffs: sampleHandoffs(), onOpenTab: { _ in })
+                        ForEach(Array(sampleHandoffResults().enumerated()), id: \.offset) { _, result in
+                            CantripHandoffResultCard(result: result, onOpenTab: { _ in })
+                        }
                     }
                     .padding(16)
                 }
@@ -769,6 +840,22 @@ final class CantripHomeTests: XCTestCase {
         ]
     }
 
+    private func sampleHandoffResults() -> [CantripRemoteHandoffResult] {
+        let now = Date().timeIntervalSince1970
+        return [
+            .init(tabID: "tab-1", tabTitle: "Bass Compass", summary: "Collapse past sets in the lineup",
+                  state: .completed,
+                  detail: "Past sets now collapse under an Earlier today header. Tests pass, and the change is pushed to master as 1a2b3c4 for the next OTA update.",
+                  startedAt: now - 900, finishedAt: now - 420),
+            .init(tabID: "tab-4", tabTitle: "NetLib", summary: "Fix duplicate listings", state: .needsInput,
+                  detail: "There's only one Pick Up a Grimoire on the servers. On the Home tab it shows in Recently Added and Recently Updated. Is that where you saw the duplicate?",
+                  startedAt: now - 700, updatedAt: now - 30),
+            .init(tabID: "tab-2", tabTitle: "Plexible", summary: "Fix the player scrubber", state: .failed,
+                  detail: "xcodebuild failed: no signing certificate for team 9M3XNFG4J7.",
+                  startedAt: now - 300, finishedAt: now - 240),
+        ]
+    }
+
     private func handoffMessages(bassID: String) -> String {
         """
         [{"id":"h0","role":"user","text":"How many users does Bass Compass have?","thinking":"","activities":[]},
@@ -778,7 +865,13 @@ final class CantripHomeTests: XCTestCase {
         {"id":"d1","tabID":"\(bassID)","tabTitle":"Bass Compass","summary":"Fix lineup sorting",
         "prompt":"Fix the Bass Compass lineup sorting so headliners appear first.",
         "status":"completed","startedAt":100,"finishedAt":160,"result":"Headliners now sort first."},
-        {"tabID":"\(bassID)","status":"paused","tabTitle":7}]}]
+        {"tabID":"\(bassID)","status":"paused","tabTitle":7}]},
+        {"id":"h3","role":"handoff","text":"**Done in Bass Compass** · Fix lineup sorting\\n\\nHeadliners now sort first.",
+        "thinking":"","activities":[],"handoffResult":{"delegationID":"d1","tabID":"\(bassID)",
+        "tabTitle":"Bass Compass","summary":"Fix lineup sorting","state":"completed",
+        "detail":"Headliners now sort first.","startedAt":100,"finishedAt":160,"updatedAt":160}},
+        {"id":"h4","role":"handoff","text":"**Bass Compass needs your answer**","thinking":"","activities":[],
+        "handoffResult":{"tabID":"\(bassID)","state":"rescheduled","detail":42}}]
         """
     }
 

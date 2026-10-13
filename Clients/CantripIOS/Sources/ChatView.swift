@@ -293,7 +293,7 @@ final class ChatViewModel: ObservableObject {
 
         let transcript = session?.transcript ?? []
         let lastAssistantID = transcript.last(where: {
-            $0.role != "user" && $0.role != "error"
+            $0.role != "user" && $0.role != "error" && !$0.isHandoffResult
         })?.id
         turns = transcript.map { message in
             let id = remoteMessageIDs[message.id] ?? UUID()
@@ -337,6 +337,7 @@ final class ChatViewModel: ObservableObject {
             remoteSpeechTargetID = transcript.last(where: {
                 $0.role != "user"
                     && $0.role != "error"
+                    && !$0.isHandoffResult
                     && !remoteSpeechBaseline.contains($0.id)
             })?.id
         }
@@ -2882,7 +2883,9 @@ struct TurnView: View {
     }
 
     var body: some View {
-        if turn.role == .user {
+        if let result = remoteMessage?.handoffResult, remoteMessage?.isHandoffResult == true {
+            CantripHandoffResultCard(result: result, onOpenTab: onOpenTab)
+        } else if turn.role == .user {
             VStack(alignment: .trailing, spacing: 2) {
                 HStack {
                     Spacer(minLength: 40)
