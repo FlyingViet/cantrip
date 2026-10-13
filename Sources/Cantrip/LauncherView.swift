@@ -2577,6 +2577,16 @@ private struct MessageRow: View {
                 .font(.callout)
                 .foregroundStyle(.orange)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        case .handoff:
+            VStack(alignment: .leading, spacing: 3) {
+                Label(message.handoffResult?.headline ?? "Handoff", systemImage: "rectangle.stack")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if let detail = message.handoffResult?.detail, !detail.isEmpty {
+                    Text(verbatim: detail).font(.callout).textSelection(.enabled)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

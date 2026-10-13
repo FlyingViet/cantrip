@@ -1682,6 +1682,8 @@ extension ChatSession {
     nonisolated static let cantripHomeBackgroundID =
         UUID(uuidString: "231C484E-0E50-43E0-9ADF-4295F3AC8956")!
     nonisolated static let cantripHomeScheduledTaskPrefix = "Scheduled task · "
+    /// The message an automatic or manual resume of an interrupted run sends.
+    nonisolated static let resumePrompt = "Continue from where you left off."
 
     var isCantripHome: Bool { id == Self.cantripHomeID }
     /// Home's background log or one of its hidden runs: both use the background protocol.

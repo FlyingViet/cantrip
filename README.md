@@ -140,8 +140,12 @@ The macOS app includes:
   requests to change a project are handed to the open tab that owns it as a
   nested task. Home matches tabs by meaning, using each tab's title, the
   repositories its conversation works in and its latest requests, and a busy
-  tab queues the handoff instead of being interrupted. Home keeps a live card for each handoff with the tab's status and
-  final result. Tasks can be
+  tab queues the handoff instead of being interrupted. Home keeps a live card for each handoff with the tab's status.
+  When the tab finishes, fails, is stopped or needs the user's answer, Cantrip posts one
+  result card into Home's chat with the tab's outcome, question or error and a link to the
+  tab (Cantrip Agent, Cantrip Gateway Mac and the browser remote, where Home is the pinned
+  first tab). The card is updated in place, never interrupts a Home reply, and its tab text
+  is shown as data that Home's model never reads back as its own words. Tasks can be
   one-time, interval or weekday automations, or
   structured workspaces such as trackers. A weekday task can run at several
   local times a day in its own time zone, with DST handled. After sleep or a
