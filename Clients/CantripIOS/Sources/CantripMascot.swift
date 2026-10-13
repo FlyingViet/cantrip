@@ -96,7 +96,9 @@ enum CantripMascotActivity: Equatable {
     }
 
     static func current(status: String?, transcript: [CantripRemoteMessage]) -> Self {
-        guard let reply = transcript.last, reply.role == "assistant" else { return .thinking }
+        // Result cards Cantrip posts while Home replies sit above the reply, but skip them anyway.
+        guard let reply = transcript.last(where: { !$0.isHandoffResult }), reply.role == "assistant"
+        else { return .thinking }
         if let tool = reply.activities.last(where: { $0.state == "running" }) {
             return isLookup(tool.toolName) ? .searching : .working
         }

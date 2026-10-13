@@ -330,6 +330,70 @@ struct CantripRemoteDelegation: Decodable, Equatable, Identifiable {
     }
 }
 
+/// Cantrip Home only: what a handed-off tab reported, posted once into Home's chat as a message
+/// with role `handoff`. `detail` is the tab's own text, so it is shown as plain data in a card.
+struct CantripRemoteHandoffResult: Decodable, Equatable {
+    enum State: String, Decodable, Equatable {
+        /// The user answered the tab's question and it is working again.
+        case working
+        case needsInput, completed, failed, cancelled
+        /// A state from a newer Mac.
+        case other
+    }
+
+    let delegationID: String
+    let tabID: String
+    let tabTitle: String
+    let summary: String
+    let state: State
+    let detail: String
+    let startedAt: TimeInterval?
+    let finishedAt: TimeInterval?
+    let updatedAt: TimeInterval?
+
+    private enum CodingKeys: String, CodingKey {
+        case delegationID, tabID, tabTitle, summary, state, detail, startedAt, finishedAt, updatedAt
+    }
+
+    init(
+        delegationID: String = UUID().uuidString,
+        tabID: String,
+        tabTitle: String = "",
+        summary: String = "",
+        state: State,
+        detail: String = "",
+        startedAt: TimeInterval? = nil,
+        finishedAt: TimeInterval? = nil,
+        updatedAt: TimeInterval? = nil
+    ) {
+        self.delegationID = delegationID
+        self.tabID = tabID
+        self.tabTitle = tabTitle
+        self.summary = summary
+        self.state = state
+        self.detail = detail
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = container.decodeLenient(String.self, forKey: .state, default: "")
+        self.init(
+            delegationID: container.decodeLenient(String.self, forKey: .delegationID, default: UUID().uuidString),
+            tabID: container.decodeLenient(String.self, forKey: .tabID, default: ""),
+            tabTitle: container.decodeLenient(String.self, forKey: .tabTitle, default: ""),
+            summary: container.decodeLenient(String.self, forKey: .summary, default: ""),
+            state: State(rawValue: raw) ?? .other,
+            detail: container.decodeLenient(String.self, forKey: .detail, default: ""),
+            startedAt: container.decodeLenient(TimeInterval.self, forKey: .startedAt),
+            finishedAt: container.decodeLenient(TimeInterval.self, forKey: .finishedAt),
+            updatedAt: container.decodeLenient(TimeInterval.self, forKey: .updatedAt)
+        )
+    }
+}
+
 private extension KeyedDecodingContainer {
     func decodeLenient<T: Decodable>(_ type: T.Type, forKey key: Key, default defaultValue: @autoclosure () -> T) -> T {
         (try? decodeIfPresent(type, forKey: key)) ?? defaultValue()
@@ -359,8 +423,12 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var promptUsage: CantripPromptUsage? = nil
     /// Cantrip Home work handed to project tabs; absent from older Mac hosts.
     var delegations: [CantripRemoteDelegation]? = nil
+    /// Cantrip Home only: a handoff's result card (role `handoff`).
+    var handoffResult: CantripRemoteHandoffResult? = nil
 
     var presentedText: String { displayText ?? text }
+    /// Result cards Cantrip posts into Home's chat; never a model reply.
+    var isHandoffResult: Bool { role == "handoff" }
 }
 
 struct CantripRemoteQueuedPrompt: Decodable, Equatable, Identifiable {
@@ -1993,6 +2061,18 @@ final class CantripRemoteModel: ObservableObject {
             return "\(baseURL.host ?? baseURL.absoluteString):\(port)"
         }
         return baseURL.host ?? baseURL.absoluteString
+    }
+
+    /// The Mac's browser remote opened on one tab, for clients without Remote tabs of their own.
+    /// Nil when the Mac is paired only over the local network, which browsers can't reach.
+    var canOpenWebTabs: Bool { baseURL != nil }
+
+    func webTabURL(_ tabID: String) -> URL? {
+        guard let baseURL, UUID(uuidString: tabID) != nil,
+              var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
+        components.path = "/"
+        components.fragment = "tab=\(tabID.uppercased())"
+        return components.url
     }
 
     private static let endpointKey = "cantrip.remote.base-url"
