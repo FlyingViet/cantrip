@@ -98,6 +98,7 @@ extension SessionTabTests {
         precondition(trackedApplication.values["status"] == "Interview"
                      && trackedApplication.values["round"] == "2")
         precondition(manager.homeSession.messages.last?.text.contains("1 record change") == true)
+        try testCantripHomeListGroups(store: store, manager: manager, tracker: tracker)
 
         let artifactURL = CantripHomeStore.artifactDirectory.appendingPathComponent("home-test.png")
         let imageData = Data(base64Encoded:
@@ -606,6 +607,148 @@ extension SessionTabTests {
         }
         func cancel() {}
         func reset() { resets += 1 }
+    }
+
+    /// List groups: opt-in, validated against the choice field, and editable on their own.
+    @MainActor
+    static func testCantripHomeListGroups(
+        store: CantripHomeStore, manager: SessionManager, tracker: CantripHomeTask
+    ) throws {
+        func list(_ json: String) throws -> CantripHomeTaskListPresentation {
+            try JSONDecoder().decode(CantripHomeTaskListPresentation.self, from: Data(json.utf8))
+        }
+        func rejects(_ proposal: CantripHomeTaskProposal, _ expected: String, _ message: String) {
+            let before = store.tasks
+            do {
+                _ = try store.create(proposal)
+                preconditionFailure(message)
+            } catch {
+                precondition(error.localizedDescription.contains(expected),
+                             "\(message): \(error.localizedDescription)")
+            }
+            precondition(store.tasks == before, "\(message): a rejected edit changes nothing")
+        }
+        let base = #""titleField":"company","subtitleFields":["round"],"badgeField":"status","dateField":"appliedAt""#
+
+        let legacy = try list(#"{"titleField":"company","subtitleFields":[],"badgeField":null,"dateField":null}"#)
+        precondition(legacy.groupField == nil && legacy.groups == nil)
+        let plain = try requireHome(tracker.workspace?.list)
+        let plainJSON = String(decoding: try JSONEncoder().encode(plain), as: UTF8.self)
+        precondition(!plainJSON.contains("group"),
+                     "Workspaces that never opt in save exactly the keys they had: \(plainJSON)")
+
+        let before = try requireHome(store.tasks.first { $0.id == tracker.id })
+        manager.homeSession.messages.append(ChatMessage(role: .assistant, text: """
+        I grouped your applications.
+        ```cantrip-task
+        {"id":"\(tracker.id.uuidString)","list":{\(base),"groupField":"status","groups":[{"title":" Active ","values":["Interview","Offer"]},{"title":"Applied","values":["Applied"]},{"title":"Done","values":["Closed"],"collapsed":true}]}}
+        ```
+        """))
+        manager.homeSession.processCantripHomeBlocks()
+        let grouped = try requireHome(store.tasks.first { $0.id == tracker.id })
+        let groups = try requireHome(grouped.workspace?.list.groups)
+        precondition(grouped.workspace?.list.groupField == "status"
+                     && groups.map(\.title) == ["Active", "Applied", "Done"]
+                     && groups.map(\.values) == [["Interview", "Offer"], ["Applied"], ["Closed"]]
+                     && groups.map(\.collapsed) == [nil, nil, true],
+                     "A Home block sets trimmed groups in the order given")
+        precondition(grouped.workspace?.records == before.workspace?.records
+                     && grouped.workspace?.fields == before.workspace?.fields
+                     && grouped.workspace?.detailSections == before.workspace?.detailSections
+                     && grouped.workspace?.list.titleField == "company"
+                     && grouped.prompt == before.prompt && grouped.title == before.title
+                     && grouped.isScheduled == before.isScheduled
+                     && grouped.runsAfter == before.runsAfter,
+                     "A top-level list edit replaces only the list presentation")
+        precondition(manager.homeSession.messages.last?.text.contains("Task updated: **Job applications**") == true
+                     && !manager.homeSession.messages.last!.text.contains("cantrip-task"))
+        let saved = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: CantripHomeStore.tasksFile)
+        ) as? [[String: Any]]
+        let savedList = (saved?.first { ($0["id"] as? String) == tracker.id.uuidString }?["workspace"]
+            as? [String: Any])?["list"] as? [String: Any]
+        precondition(savedList?["groupField"] as? String == "status"
+                     && (savedList?["groups"] as? [[String: Any]])?.count == 3,
+                     "Groups persist in tasks.json")
+
+        let instructions = manager.homeSession.cantripHomeInstructions
+        precondition(instructions.contains("status:choice[Applied|Interview|Offer|Closed]")
+                     && instructions.contains(#""groupField":"status""#)
+                     && instructions.contains(#""title":"Active","values":["Interview","Offer"]"#)
+                     && instructions.contains("To change only an existing workspace's list")
+                     && instructions.contains(#""groupField":"choice key or null""#),
+                     "Home sees each choice field's options and the saved list, and the rules")
+
+        let id = tracker.id
+        rejects(.init(id: id, title: nil, prompt: nil, schedule: nil, list: try list(
+            #"{\#(base),"groups":[{"title":"A","values":["Applied"]}]}"#
+        )), "need a groupField", "Groups without a groupField")
+        rejects(.init(id: id, title: nil, prompt: nil, schedule: nil, list: try list(
+            #"{\#(base),"groupField":"company"}"#
+        )), "must be a choice field", "Grouping by a text field")
+        rejects(.init(id: id, title: nil, prompt: nil, schedule: nil, list: try list(
+            #"{\#(base),"groupField":"missing"}"#
+        )), "unknown field", "Grouping by an unknown field")
+        rejects(.init(id: id, title: nil, prompt: nil, schedule: nil, list: try list(
+            #"{\#(base),"groupField":"status","groups":[{"title":"Done","values":["Rejected"]}]}"#
+        )), "isn't a Status option", "A group value outside the options")
+        rejects(.init(id: id, title: nil, prompt: nil, schedule: nil, list: try list(
+            #"{\#(base),"groupField":"status","groups":[{"title":"A","values":["Applied"]},{"title":"B","values":["Offer","Applied"]}]}"#
+        )), "more than one list group", "A value in two groups")
+        rejects(.init(id: id, title: nil, prompt: nil, schedule: nil, list: try list(
+            #"{\#(base),"groupField":"status","groups":[{"title":"Done","values":["Applied"]},{"title":"done","values":["Offer"]}]}"#
+        )), "short, unique titles", "Duplicate group titles")
+        rejects(.init(id: id, title: nil, prompt: nil, schedule: nil, list: try list(
+            #"{\#(base),"groupField":"status","groups":[{"title":"  ","values":["Applied"]}]}"#
+        )), "short, unique titles", "A blank group title")
+        rejects(.init(id: id, title: nil, prompt: nil, schedule: nil, list: try list(
+            #"{\#(base),"groupField":"status","groups":[{"title":"Empty","values":[]}]}"#
+        )), "needs 1 to 50 values", "A group with no values")
+        let thirteen = (0..<13).map { #"{"title":"G\#($0)","values":["Applied"]}"# }.joined(separator: ",")
+        rejects(.init(id: id, title: nil, prompt: nil, schedule: nil, list: try list(
+            #"{\#(base),"groupField":"status","groups":[\#(thirteen)]}"#
+        )), "1 to 12 list groups", "Too many groups")
+        rejects(.init(id: nil, title: "New", prompt: "Track", schedule: nil, list: plain),
+                "only to change an existing task's workspace list", "A list without a task id")
+        let workspaceProposal = try JSONDecoder().decode(
+            CantripHomeTaskWorkspaceProposal.self,
+            from: Data(#"{"recordLabel":"Application","icon":"briefcase.fill","fields":[{"key":"company","label":"Company","kind":"text","required":true,"options":null},{"key":"appliedAt","label":"Applied","kind":"date","required":true,"options":null},{"key":"status","label":"Status","kind":"choice","required":true,"options":["Applied","Interview","Offer","Closed"]},{"key":"round","label":"Interview round","kind":"number","required":false,"options":null},{"key":"interviewAt","label":"Interview","kind":"dateTime","required":false,"options":null}],"list":{\#(base),"groupField":"status","groups":[{"title":"Gone","values":["Withdrawn"]}]},"detailSections":[]}"#.utf8)
+        )
+        rejects(.init(id: id, title: nil, prompt: nil, schedule: nil, workspace: workspaceProposal),
+                "isn't a Status option", "Full workspace edits validate groups too")
+        rejects(.init(id: id, title: nil, prompt: nil, schedule: nil, workspace: workspaceProposal,
+                      list: plain),
+                "only to change an existing task's workspace list", "A list beside a workspace")
+        let scheduleOnly = try requireHome(store.tasks.first { $0.workspace == nil })
+        rejects(.init(id: scheduleOnly.id, title: nil, prompt: nil, schedule: nil, list: plain),
+                "has no workspace list", "A list for a task without a workspace")
+
+        // A groupField alone means one section per option; local maintenance can queue it.
+        try? FileManager.default.createDirectory(
+            at: CantripHomeStore.taskEditDirectory, withIntermediateDirectories: true
+        )
+        let edit = CantripHomeStore.taskEditDirectory.appendingPathComponent("list-groups.json")
+        try Data(#"{"version":1,"taskID":"\#(id.uuidString)","list":{\#(base),"groupField":"status"}}"#.utf8)
+            .write(to: edit, options: .atomic)
+        store.checkNow()
+        let perOption = try requireHome(store.tasks.first { $0.id == id })
+        precondition(perOption.workspace?.list.groupField == "status"
+                     && perOption.workspace?.list.groups == nil
+                     && perOption.workspace?.records == before.workspace?.records
+                     && !FileManager.default.fileExists(atPath: edit.path),
+                     "The task-edit inbox replaces the list")
+        let badEdit = CantripHomeStore.taskEditDirectory.appendingPathComponent("list-bad.json")
+        try Data(#"{"version":1,"taskID":"\#(id.uuidString)","list":{\#(base),"groupField":"round"}}"#.utf8)
+            .write(to: badEdit, options: .atomic)
+        store.checkNow()
+        precondition(store.tasks.first { $0.id == id }?.workspace?.list.groupField == "status"
+                     && FileManager.default.fileExists(atPath: badEdit.path + ".rejected"),
+                     "An invalid queued list is set aside")
+        try? FileManager.default.removeItem(atPath: badEdit.path + ".rejected")
+
+        // Clearing groups restores the original list exactly.
+        _ = try store.create(.init(id: id, title: nil, prompt: nil, schedule: nil, list: plain))
+        precondition(store.tasks.first { $0.id == id }?.workspace?.list == plain)
     }
 
     static func requireHome<T>(_ value: T?, line: UInt = #line) throws -> T {

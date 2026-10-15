@@ -155,12 +155,19 @@ The macOS app includes:
   starts after their runs due at or before it finish, or 30 minutes after its
   own time at the latest. Local maintenance can queue a change for an existing
   task by writing `{"version":1,"taskID":"…","schedule":{…}}` (and/or
-  `"runsAfter":["…"]`, `"runsAfterTimeoutMinutes":45`) into
+  `"runsAfter":["…"]`, `"runsAfterTimeoutMinutes":45`, or a replacement workspace
+  `"list":{…}`) into
   `~/.cache/Cantrip/home/task-edits/` (schedule-only edits also work in
   `schedule-edits/`); it is applied once that task is idle.
   Workspace tasks use a validated
   declarative schema for native list, detail and edit screens; their records can
-  be updated conversationally or through the mobile UI. Touch and hold a task to
+  be updated conversationally or through the mobile UI. A workspace list can be
+  grouped by a choice field (`list.groupField`, optionally `list.groups`:
+  `[{"title":"In progress","values":["Interviewing",…],"collapsed":false}]`) into
+  collapsible sections with live record counts on Cantrip Agent, Cantrip Gateway
+  Mac and the browser remote's Tasks panel; records keep their saved order within
+  each section, values no group lists fall under Other, and each client remembers
+  which sections the user collapsed. Touch and hold a task to
   drag it into a new order; the order is saved on the Mac. Each due run and
   local ingestion incident runs in its own hidden, single-use session with a
   fresh model context, so unrelated jobs run in parallel (3 at once by default;
