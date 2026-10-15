@@ -92,6 +92,7 @@ targets:
       - path: Hermes/Tests/CantripPromptUsageTests.swift
       - path: Hermes/Tests/CantripQueueTests.swift
       - path: Hermes/Tests/ChatTabTests.swift
+      - path: Hermes/Tests/CantripHomeWorkspaceGroupTests.swift
     dependencies:
       - target: CantripGatewayMac
     settings:
