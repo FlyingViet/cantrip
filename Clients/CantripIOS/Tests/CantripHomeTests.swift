@@ -422,6 +422,117 @@ final class CantripHomeTests: XCTestCase {
         })
     }
 
+    func testTaskRunSummaryShowsEverySummaryLine() async throws {
+        let summary = "Upcoming interviews: Fri Oct 16, 10 AM · Headway (recruiter call); "
+            + "Tue Oct 20, 1 PM · Google (onsite); Fri Oct 30, 11 AM · Rippling (technical)\n"
+            + "Interviewing: Coinbase (screen done, awaiting next steps)\n"
+            + "Applied, waiting (6 companies): Airbnb, Anthropic, Datadog, Figma, Stripe (2), Zillow\n"
+            + "Changes: Headway booked a recruiter call; Bloomberg rejected."
+        XCTAssertEqual(CantripHomeRunSummaryText.lines(summary).count, 4)
+        XCTAssertTrue(CantripHomeRunSummaryText.isLabelledSummary(summary))
+        let styled = CantripHomeRunSummaryText.styled("Interviewing: Coinbase (screen done)")
+        XCTAssertEqual(String(styled.characters), "Interviewing: Coinbase (screen done)")
+        XCTAssertEqual(
+            styled.runs.filter { $0.inlinePresentationIntent == .stronglyEmphasized }
+                .map { String(styled[$0.range].characters) },
+            ["Interviewing: "]
+        )
+        XCTAssertEqual(CantripHomeRunSummaryText.styled("Call at 10:00 AM, then lunch").runs.count, 1)
+        // Older one-line previews and full Markdown reports keep their old rendering.
+        let narration = "Starting with the tracker procedure note, then refreshing Mail. Mail refreshed."
+        XCTAssertFalse(CantripHomeRunSummaryText.isLabelledSummary(narration))
+        XCTAssertFalse(CantripHomeRunSummaryText.isLabelledSummary(
+            "Mail refreshed.\n\n**Bills:** nothing due.\n- Paid: rent"
+        ))
+
+        // On the task card each line wraps up to 3 lines, so all four stay visible where one
+        // three-line Text cut the overview after its first line.
+        func height(_ view: some View) -> CGFloat {
+            UIHostingController(rootView: view.font(.caption))
+                .sizeThatFits(in: CGSize(width: 330, height: 2_000)).height
+        }
+        let card = height(CantripHomeRunSummaryText(summary: summary, lineLimit: 3))
+        let oneText = height(Text(summary).lineLimit(3))
+        let oneLine = height(Text("Line").lineLimit(1))
+        XCTAssertGreaterThan(card, oneText + oneLine * 2, "card \(card) vs one text \(oneText)")
+        XCTAssertEqual(height(CantripHomeRunSummaryText(summary: narration, lineLimit: 3)),
+                       height(Text(narration).lineLimit(3)), accuracy: 0.5)
+
+        // The Tasks screen with a labelled summary and an older one-line one.
+        let client = client()
+        let model = CantripRemoteModel(urlSession: client)
+        let now = Date().timeIntervalSinceReferenceDate.rounded(.down)
+        let escaped = summary.replacingOccurrences(of: "\n", with: "\\n")
+        func task(_ id: Int, _ title: String, _ runSummary: String) -> String {
+            """
+            {"id":"10000000-0000-0000-0000-00000000000\(id)","title":"\(title)",
+            "prompt":"Scan Mail and Messages and keep the tracker current.","schedule":{"kind":"weekdays",
+            "summary":"Every day at 8:00 AM and 10:00 PM","timeZone":"America/Los_Angeles","startAt":null,
+            "intervalMinutes":null,"weekdays":[1,2,3,4,5,6,7],"hour":8,"minute":0},
+            "enabled":true,"createdAt":0,"updatedAt":0,"nextRunAt":\(now + 3_600),
+            "lastRunAt":\(now - 600),"state":"succeeded","activeRunID":null,"runs":[
+            {"id":"20000000-0000-0000-0000-00000000000\(id)","startedAt":\(now - 900),
+             "finishedAt":\(now - 600),"status":"succeeded","summary":"\(runSummary)"}]}
+            """
+        }
+        CantripHomeRequestProtocol.handler = { request in
+            let path = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .percentEncodedPath ?? ""
+            switch path {
+            case "/api/v1/home":
+                return (200, self.homeSessionPayload())
+            case "/api/v1/home/tasks":
+                return (200, Data("""
+                {"tasks":[\(task(1, "Daily interview tracker", escaped)),
+                \(task(2, "Personal operations briefing", narration))],"revision":"summary-revision"}
+                """.utf8))
+            case "/api/v1/home/artifacts":
+                return (200, self.artifactsPayload())
+            default:
+                return (200, Data(#"{"sessions":[]}"#.utf8))
+            }
+        }
+        addTeardownBlock { @MainActor in
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            CantripHomeRequestProtocol.handler = nil
+        }
+        let configured = await model.configure(
+            url: "https://cantrip.example", pairingToken: "home-summary-token", tailscaleOnly: true
+        )
+        XCTAssertTrue(configured)
+        await model.selectHome()
+        XCTAssertEqual(model.homeTasks.first?.runs.first?.summary, summary)
+
+        let controller = UIHostingController(rootView: NavigationStack {
+            CantripHomeTasksView(remote: model, openChat: { _ in })
+        })
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 852))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(500))
+        if let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_SUMMARY_ARTIFACT_DIR"],
+           !directory.isEmpty {
+            let output = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            for style in [UIUserInterfaceStyle.light, .dark] {
+                window.overrideUserInterfaceStyle = style
+                try await Task.sleep(for: .milliseconds(300))
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                try XCTUnwrap(image.pngData()).write(to: output.appendingPathComponent(
+                    "home-tasks-summary-\(style == .dark ? "dark" : "light").png"
+                ))
+            }
+        }
+    }
+
     func testTaskReorderMapsListDropsToRelativeMoves() {
         let ids = (0..<4).map { _ in UUID() }
         for source in ids.indices {

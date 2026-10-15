@@ -474,10 +474,9 @@ struct CantripHomeTasksView: View {
             .foregroundStyle(.secondary)
             .padding(.leading, 32)
             if let run = task.runs.first, !run.summary.isEmpty {
-                Text(run.summary)
+                CantripHomeRunSummaryText(summary: run.summary, lineLimit: 3)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(3)
                     .padding(.leading, 32)
             }
             if let session = waitingRuns[task.id], let openRun {
@@ -573,7 +572,7 @@ private struct CantripHomeTaskEditView: View {
                 if let run = task.runs.first {
                     Section("Latest run") {
                         LabeledContent("Status", value: run.status.capitalized)
-                        Text(run.summary)
+                        CantripHomeRunSummaryText(summary: run.summary)
                     }
                 }
             }
@@ -1365,6 +1364,59 @@ struct CantripArtifactCardLabel: View {
         if let duration { parts.append(CantripArtifactThumbnailView.spokenDuration(duration)) }
         parts.append(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))
         return parts.joined(separator: ", ")
+    }
+}
+
+/// A task run's summary. A run that ends with a "Summary:" section reports it as short lines
+/// ("Upcoming interviews: …"), shown one per row with the label emphasized; one-line
+/// summaries render as before.
+struct CantripHomeRunSummaryText: View {
+    let summary: String
+    /// How far each line may wrap; nil shows all of it.
+    var lineLimit: Int?
+
+    var body: some View {
+        let lines = Self.lines(summary)
+        if lines.count < 2 {
+            Text(summary)
+                .lineLimit(lineLimit)
+        } else {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    Text(Self.styled(line))
+                        .lineLimit(lineLimit)
+                }
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    static func lines(_ summary: String) -> [String] {
+        summary.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Lines that each start with a short "Label: ", as a "Summary:" section's are; a run's
+    /// full Markdown report isn't.
+    static func isLabelledSummary(_ summary: String) -> Bool {
+        let lines = lines(summary)
+        return (2...12).contains(lines.count) && lines.allSatisfy { label(in: $0) != nil }
+    }
+
+    private static func label(in line: String) -> Range<String.Index>? {
+        guard let first = line.first, !"*_#-+>|`[".contains(first),
+              let colon = line.range(of: ": "),
+              line.distance(from: line.startIndex, to: colon.lowerBound) <= 40 else { return nil }
+        return line.startIndex..<colon.upperBound
+    }
+
+    /// "Interviewing: Coinbase (screen done)" with "Interviewing:" in semibold.
+    static func styled(_ line: String) -> AttributedString {
+        guard let label = label(in: line) else { return AttributedString(line) }
+        var text = AttributedString(line[label])
+        text.inlinePresentationIntent = .stronglyEmphasized
+        return text + AttributedString(line[label.upperBound...])
     }
 }
 
