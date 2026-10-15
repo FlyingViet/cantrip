@@ -615,6 +615,9 @@ struct CantripHomeTaskWorkspaceView: View {
     @State private var editorTarget: CantripHomeRecordEditorTarget?
     @State private var deleting: CantripHomeTaskRecord?
     @State private var showingSettings = false
+    /// Sections the user collapsed (true) or expanded (false), remembered on this device.
+    @State private var collapsed: [String: Bool]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         remote: CantripRemoteModel, taskID: UUID,
@@ -624,10 +627,15 @@ struct CantripHomeTaskWorkspaceView: View {
         self.taskID = taskID
         self.openChat = openChat
         _tasks = State(initialValue: remote.homeTasks)
+        _collapsed = State(initialValue: CantripHomeWorkspaceGroupState.load(taskID: taskID))
     }
 
     private var task: CantripHomeTask? {
         tasks.first { $0.id == taskID }
+    }
+
+    private var isSearching: Bool {
+        !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var records: [CantripHomeTaskRecord] {
@@ -665,18 +673,31 @@ struct CantripHomeTaskWorkspaceView: View {
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                         }
-                        ForEach(records) { record in
-                            NavigationLink {
-                                CantripHomeTaskRecordDetailView(
-                                    remote: remote, taskID: taskID, recordID: record.id
-                                )
-                            } label: {
-                                recordRow(record, workspace: workspace)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button("Delete", systemImage: "trash", role: .destructive) {
-                                    deleting = record
+                        if let sections = CantripHomeWorkspaceGrouping.sections(
+                            for: workspace, records: records, searching: isSearching
+                        ) {
+                            ForEach(sections) { section in
+                                let expanded = isSearching || !isCollapsed(section)
+                                Section {
+                                    if expanded {
+                                        ForEach(section.records) { record in
+                                            recordLink(record, workspace: workspace)
+                                        }
+                                    }
+                                } header: {
+                                    CantripHomeWorkspaceSectionHeader(
+                                        title: section.title, count: section.records.count,
+                                        noun: section.records.count == 1
+                                            ? workspace.recordLabel : pluralLabel(workspace),
+                                        expanded: expanded, searching: isSearching
+                                    ) {
+                                        toggle(section)
+                                    }
                                 }
+                            }
+                        } else {
+                            ForEach(records) { record in
+                                recordLink(record, workspace: workspace)
                             }
                         }
                     }
@@ -749,6 +770,34 @@ struct CantripHomeTaskWorkspaceView: View {
 
     private func pluralLabel(_ workspace: CantripHomeTaskWorkspace) -> String {
         workspace.recordLabelPlural ?? "\(workspace.recordLabel)s"
+    }
+
+    private func isCollapsed(_ section: CantripHomeWorkspaceSection) -> Bool {
+        collapsed[section.id] ?? section.startsCollapsed
+    }
+
+    private func toggle(_ section: CantripHomeWorkspaceSection) {
+        withAnimation(reduceMotion ? nil : .snappy) {
+            collapsed[section.id] = !isCollapsed(section)
+        }
+        CantripHomeWorkspaceGroupState.save(collapsed, taskID: taskID)
+    }
+
+    private func recordLink(
+        _ record: CantripHomeTaskRecord, workspace: CantripHomeTaskWorkspace
+    ) -> some View {
+        NavigationLink {
+            CantripHomeTaskRecordDetailView(
+                remote: remote, taskID: taskID, recordID: record.id
+            )
+        } label: {
+            recordRow(record, workspace: workspace)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                deleting = record
+            }
+        }
     }
 
     private func recordRow(
