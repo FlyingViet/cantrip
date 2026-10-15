@@ -578,11 +578,22 @@ struct CantripHomeTaskField: Decodable, Equatable, Identifiable {
     var id: String { key }
 }
 
+/// One collapsible section of a grouped workspace list.
+struct CantripHomeTaskListGroup: Decodable, Equatable {
+    let title: String
+    let values: [String]
+    /// Starts collapsed until the user expands it on this device.
+    var collapsed: Bool? = nil
+}
+
 struct CantripHomeTaskListPresentation: Decodable, Equatable {
     let titleField: String
     let subtitleFields: [String]
     let badgeField: String?
     let dateField: String?
+    /// A choice field that splits the list into sections; older Macs never send it.
+    var groupField: String? = nil
+    var groups: [CantripHomeTaskListGroup]? = nil
 }
 
 struct CantripHomeTaskDetailSection: Decodable, Equatable, Identifiable {
