@@ -199,6 +199,7 @@ extension SessionTabTests {
         try await testRemoteHistoryNavigation(webView: webView)
         try await testAutomaticHistoryNavigation(webView: webView)
         try await testHomeInputs(webView: webView)
+        try await testHomeTasks(webView: webView)
         print("Remote tabs (\(sidebar ? "Mac sidebar" : "browser strip")): WebKit scrolling, progress, polling, selection, focus, and controls passed at 320-1100pt widths and 340-700pt heights")
     }
 
@@ -470,6 +471,101 @@ extension SessionTabTests {
         }finally{
           api=originalAPI;token=originalToken;window.requestAnimationFrame=originalFrame;
           if(timer)clearTimeout(timer);timer=null;answeredHomeInputs.clear();renderHomeInputs([]);
+          selected=null;render(null);renderSessions([]);
+        }
+        """, arguments: [:], in: nil, contentWorld: .page)
+    }
+
+    /// The Tasks panel: task list, grouped workspace sections with live counts, remembered
+    /// collapse state, search and record details.
+    @MainActor
+    private static func testHomeTasks(webView: WKWebView) async throws {
+        _ = try await webView.callAsyncJavaScript("""
+        const originalAPI=api,originalToken=token;
+        const settle=()=>new Promise(resolve=>setTimeout(resolve,60));
+        const stages=["Applied","Recruiter conversation scheduled","Recruiter screen complete","Technical interview scheduled","Interviewing","Final round","Offer","Rejected","Withdrawn"];
+        const record=(id,company,stage,extra={})=>({id,values:{company,role:"Senior Software Engineer",stage,latestUpdate:`${company} update`,...extra},createdAt:0,updatedAt:0});
+        const fields=[{key:"company",label:"Company",kind:"text",required:true,options:null},{key:"role",label:"Role",kind:"text",required:true,options:null},
+          {key:"stage",label:"Current stage",kind:"choice",required:true,options:stages},{key:"latestUpdate",label:"Latest update",kind:"longText",required:true,options:null},
+          {key:"nextInterviewAt",label:"Upcoming interview",kind:"dateTime",required:false,options:null},{key:"levelsFyiURL",label:"Levels.fyi source",kind:"url",required:false,options:null}];
+        const list={titleField:"company",subtitleFields:["role","latestUpdate"],badgeField:"stage",dateField:"nextInterviewAt",groupField:"stage",groups:[
+          {title:"In progress",values:stages.slice(1,7),collapsed:false},{title:"Applied",values:["Applied"],collapsed:false},{title:"Done",values:["Rejected","Withdrawn"],collapsed:true}]};
+        const records=[record("r1","Headway","Recruiter conversation scheduled",{nextInterviewAt:"2026-10-16T17:00:00Z"}),record("r2","Legora","Technical interview scheduled"),
+          record("r3","Persona","Applied",{levelsFyiURL:"https://www.levels.fyi/companies/persona"}),record("r4","Rippling","Technical interview scheduled"),record("r5","Pinterest","Applied"),
+          record("r6","Betterment","Rejected"),record("r7","Datalab","Recruiter screen complete"),record("r8","Ro","Rejected"),record("r9","Brex","Withdrawn")];
+        const schedule={kind:"weekdays",summary:"Every day at 8:00 AM and 10:00 PM",timeZone:"America/Los_Angeles",startAt:null,intervalMinutes:null,weekdays:[1,2,3,4,5,6,7],hour:8,minute:0};
+        const tracker={id:"T-TRACKER",title:"Daily interview tracker",prompt:"Track interviews.",schedule,hasSchedule:true,enabled:true,createdAt:0,updatedAt:0,nextRunAt:800000000,lastRunAt:null,
+          state:"succeeded",activeRunID:null,runs:[{id:"run",startedAt:0,finishedAt:0,status:"succeeded",summary:"Upcoming interviews: Headway Fri\\nApplied, waiting (2 companies)"}],
+          workspace:{recordLabel:"interview application",recordLabelPlural:"interview applications",icon:"briefcase.fill",fields,list,
+            detailSections:[{title:"Application",fields:["company","stage","levelsFyiURL"]}],records}};
+        const plain={...tracker,id:"T-PLAIN",title:"Bills",runs:[],workspace:{...tracker.workspace,recordLabel:"bill",recordLabelPlural:"bills",
+          list:{titleField:"company",subtitleFields:[],badgeField:null,dateField:null},records:records.slice(0,3)}};
+        const briefing={...tracker,id:"T-BRIEF",title:"Morning briefing",workspace:null,runs:[{id:"b",startedAt:0,finishedAt:0,status:"succeeded",summary:"All clear."}]};
+        let snapshot={tasks:[tracker,plain,briefing],revision:"rev-1",error:null};const calls=[];
+        const titles=()=>Array.from($("tasksBody").querySelectorAll(".record-group")).map(g=>g.querySelector(".group-title").textContent);
+        const counts=()=>Array.from($("tasksBody").querySelectorAll(".group-count")).map(n=>Number(n.textContent));
+        const open=()=>Array.from($("tasksBody").querySelectorAll(".record-group")).map(g=>g.open);
+        const companies=group=>Array.from(group.querySelectorAll(".record-title")).map(n=>n.textContent);
+        const group=title=>Array.from($("tasksBody").querySelectorAll(".record-group")).find(g=>g.querySelector(".group-title").textContent===title);
+        try{
+          token="home-tasks";localStorage.removeItem("cantrip.workspaceGroups.T-TRACKER");
+          api=async(path,options={})=>{calls.push([path,options.method||"GET"]);if(path==="/api/v1/home/tasks")return JSON.parse(JSON.stringify(snapshot));throw Error("unexpected "+path)};
+          check($("homeTasks").closest(".tools")&&$("homeTasks").classList.contains("hidden"),"Tasks waits for a Mac that has Cantrip Home");
+          api=async(path,options={})=>{calls.push([path,options.method||"GET"]);
+            if(path==="/api/v1/sessions")return {sessions:[],home:{id:"7EAE0CE5-8C8B-4652-9FD0-214867A90E5D",title:"Cantrip Home",isCantripHome:true,messages:[],historyRevision:"h"}};
+            if(path==="/api/v1/home/tasks")return JSON.parse(JSON.stringify(snapshot));return {session:{id:"7EAE0CE5-8C8B-4652-9FD0-214867A90E5D",title:"Cantrip Home",messages:[]}}};
+          await refresh();await settle();
+          check(!$("homeTasks").classList.contains("hidden"),"A Mac with Cantrip Home shows Tasks");
+          const button=$("homeTasks").getBoundingClientRect();
+          check(button.width>0&&button.right<=innerWidth+1,"Tasks stays reachable in the tool row");
+          $("homeTasks").click();await settle();
+          check($("tasksPanel").open&&$("tasksTitle").textContent==="Tasks","Tasks opens as a dialog");
+          const cards=Array.from($("tasksBody").querySelectorAll(".task-card"));
+          check(cards.length===3&&cards[0].textContent.includes("9 interview applications")&&cards[0].textContent.includes("Every day at 8:00 AM")
+                &&cards[0].querySelector(".task-run").textContent.includes("Applied, waiting"),"Each task shows its schedule, record count and latest run");
+          cards[0].click();await settle();
+          check($("tasksTitle").textContent==="Daily interview tracker"&&!$("tasksBack").classList.contains("hidden")&&document.activeElement===$("tasksTitle"),"Opening a task moves focus to its title");
+          check(titles().join()==="In progress,Applied,Done"&&counts().join()==="4,2,3","Sections follow the declared groups with their counts");
+          check(open().join()==="true,true,false","Done starts collapsed");
+          check(companies(group("In progress")).join()==="Headway,Legora,Rippling,Datalab"&&companies(group("Done")).join()==="Betterment,Ro,Brex","Records keep the saved order within each section");
+          const headway=group("In progress").querySelector(".record");
+          check(headway.querySelector(".record-badge").textContent==="Recruiter conversation scheduled"&&headway.querySelector(".record-subtitle").textContent.includes("Latest update: Headway update")
+                &&headway.querySelector(".record-date").textContent.startsWith("Upcoming interview: "),"Rows show the title, badge, subtitles and date");
+          check(group("Done").querySelector(".record-badge").classList.contains("rejected")&&group("Applied").querySelector(".record-badge").classList.contains("applied"),"Badges use lifecycle tones");
+          check(group("Done").querySelector("summary").textContent.includes("3 interview applications"),"Headers name the count for screen readers");
+          group("Done").querySelector("summary").click();await settle();
+          group("In progress").querySelector("summary").click();await settle();
+          check(open().join()==="false,true,true","Headers collapse and expand their sections");
+          check(JSON.stringify(JSON.parse(localStorage.getItem("cantrip.workspaceGroups.T-TRACKER")))===JSON.stringify({Done:false,"In progress":true}),"This browser remembers each section the user toggled");
+          const persona=group("Applied").querySelector(".record");persona.querySelector("summary").click();await settle();
+          check(persona.open&&persona.querySelector(".record-details").textContent.includes("Application")
+                &&persona.querySelector(".record-details a")?.href==="https://www.levels.fyi/companies/persona","Record details show their sections and links");
+          persona.querySelector("summary").focus();
+          snapshot={...snapshot,revision:"rev-2",tasks:[{...tracker,workspace:{...tracker.workspace,records:records.map(r=>r.id==="r2"?{...r,values:{...r.values,stage:"Rejected"}}:r)}},plain,briefing]};
+          await loadTasks();await settle();
+          check(counts().join()==="3,2,4"&&companies(group("Done")).join()==="Legora,Betterment,Ro,Brex","Counts follow records as they change stage");
+          check(open().join()==="false,true,true"&&group("Applied").querySelector(".record").open,"Polling keeps collapsed sections and open records");
+          check(document.activeElement?.closest(".record")?.querySelector(".record-title").textContent==="Persona","Polling keeps keyboard focus");
+          $("tasksSearch").value="pers";$("tasksSearch").dispatchEvent(new Event("input"));await settle();
+          check(titles().join()==="Applied"&&counts().join()==="1"&&open().join()==="true"&&$("tasksStatus").textContent==="1 interview application found","Search shows only sections with matches, expanded");
+          group("Applied").querySelector("summary").click();await settle();
+          check(group("Applied").open&&!JSON.parse(localStorage.getItem("cantrip.workspaceGroups.T-TRACKER")).Applied,"Search never changes the remembered sections");
+          $("tasksSearch").value="";$("tasksSearch").dispatchEvent(new Event("input"));await settle();
+          check(open().join()==="false,true,true","Clearing search restores the remembered sections");
+          check($("tasksPanel").scrollWidth<=$("tasksPanel").clientWidth+1,"The panel never scrolls sideways");
+          $("tasksBack").click();await settle();
+          check($("tasksTitle").textContent==="Tasks"&&document.activeElement?.dataset.focusKey==="task:T-TRACKER","Back returns focus to the task");
+          Array.from($("tasksBody").querySelectorAll(".task-card"))[1].click();await settle();
+          check(!$("tasksBody").querySelector(".record-group")&&$("tasksBody").querySelectorAll(".record").length===3,"Workspaces without groups stay a flat list");
+          $("tasksBack").click();await settle();Array.from($("tasksBody").querySelectorAll(".task-card"))[2].click();await settle();
+          check($("tasksSearch").classList.contains("hidden")&&$("tasksBody").textContent.includes("Every day at 8:00 AM")&&$("tasksBody").textContent.includes("All clear."),"Tasks without a workspace show their schedule and runs");
+          $("tasksDone").click();await settle();
+          check(!$("tasksPanel").open&&tasksState===null&&!$("tasksBody").children.length,"Closing stops polling");
+          const before=calls.length;await new Promise(resolve=>setTimeout(resolve,150));
+          check(calls.length===before,"No polling after close");
+        }finally{
+          if($("tasksPanel").open)$("tasksPanel").close();closeTasks();localStorage.removeItem("cantrip.workspaceGroups.T-TRACKER");
+          api=originalAPI;token=originalToken;if(timer)clearTimeout(timer);timer=null;$("homeTasks").classList.add("hidden");
           selected=null;render(null);renderSessions([]);
         }
         """, arguments: [:], in: nil, contentWorld: .page)

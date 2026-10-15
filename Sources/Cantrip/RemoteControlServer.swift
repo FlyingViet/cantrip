@@ -2088,13 +2088,34 @@ private extension RemoteControlServer {
     .input-images{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}.input-image{display:flex;flex:none;flex-direction:column;align-items:flex-start;gap:4px;width:min-content;min-width:96px;margin:0}
     .input-image figcaption{font-size:12px;line-height:1.3;color:var(--secondary);overflow-wrap:anywhere}.input-images .mac-image{flex:none;margin:0;max-width:none}
     .input-images .mac-image img{height:120px;width:auto;max-width:200px;max-height:none}.input-images .mac-image-status{width:96px;min-height:120px;padding:6px;text-align:center}
+    #tasksPanel{width:min(calc(100% - 24px),720px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
+    #tasksPanel::backdrop{background:rgba(0,0,0,.35)}.tasks-bar{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:Canvas}
+    #tasksPanel .control{min-height:44px;padding:4px 14px}#tasksPanel button:focus-visible,#tasksPanel summary:focus-visible,#tasksSearch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    #tasksTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}#tasksTitle:focus{outline:0}
+    #tasksError:not(:empty){margin:10px 14px 0;color:var(--red);font-size:13px}#tasksSearch{display:block;box-sizing:border-box;width:calc(100% - 28px);min-height:40px;margin:12px 14px 0;padding:6px 10px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--text);font:inherit}
+    #tasksBody{padding:10px 14px 16px}.tasks-empty{padding:18px 2px;font-size:14px}.task-list,.record-list,.run-list{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+    .task-card{display:grid;gap:4px;box-sizing:border-box;width:100%;min-height:44px;padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:inherit;font:inherit;text-align:left}.task-card:hover{background:var(--surface-2)}
+    .task-title{font-size:15px;overflow-wrap:anywhere}.task-meta{color:var(--secondary);font-size:12px}.task-run,.run-summary{color:var(--secondary);font-size:13px;line-height:1.4;white-space:pre-line;overflow-wrap:anywhere}
+    .task-run{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}.run-list li{display:grid;gap:3px;padding:9px 0;border-top:1px solid var(--line)}
+    .task-facts,.record-details dl{display:grid;grid-template-columns:minmax(100px,max-content) 1fr;gap:5px 14px;margin:0 0 12px;font-size:13px}.task-facts dt,.record-details dt{color:var(--secondary)}.task-facts dd,.record-details dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+    .task-detail h3,.record-details h3{margin:6px 0 2px;color:var(--tertiary);font-size:11px;font-weight:650;letter-spacing:.04em;text-transform:uppercase}
+    .record-group{border-bottom:1px solid var(--line)}.record-group:last-child{border-bottom:0}.record-group>summary{display:flex;align-items:center;gap:8px;min-height:48px;padding:2px}
+    .record-group>summary:after{content:"›";margin-left:auto;color:var(--tertiary);font-size:22px;line-height:1;transition:transform .12s}.record-group[open]>summary:after{transform:rotate(90deg)}
+    .record-group.searching>summary{cursor:default}.record-group.searching>summary:after{content:none}.record-group>.record-list,.group-empty{margin:0 0 12px}
+    .group-title{font-size:16px;font-weight:650}.group-count{min-width:22px;padding:1px 8px;border-radius:999px;background:var(--surface-2);color:var(--secondary);font-size:12px;font-weight:650;text-align:center;font-variant-numeric:tabular-nums}
+    .record{border:1px solid var(--line);border-radius:11px;background:var(--surface)}.record>summary{display:grid;gap:3px;min-height:44px;padding:10px 12px}.record>summary:hover{background:var(--surface-2);border-radius:11px}
+    .record-head{display:flex;align-items:baseline;gap:8px}.record-title{flex:1;min-width:0;font-weight:650;overflow-wrap:anywhere}
+    .record-badge{flex:none;max-width:55%;padding:2px 8px;border-radius:999px;background:var(--surface-2);background:color-mix(in srgb,var(--tone,var(--accent)) 14%,transparent);color:var(--tone,var(--accent));font-size:11px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .record-badge.rejected{--tone:var(--red)}.record-badge.offer{--tone:var(--green)}.record-badge.applied{--tone:var(--orange)}
+    .record-subtitle{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--secondary);font-size:13px;overflow-wrap:anywhere}.record-date{color:var(--secondary);font-size:12px}
+    .record-details{padding:2px 12px 12px}.record-details a{color:var(--accent);overflow-wrap:anywhere}@media(max-width:480px){.task-facts,.record-details dl{grid-template-columns:1fr;gap:1px}.task-facts dd,.record-details dd{margin-bottom:7px}}
     #uiUpdateStatus:not(:empty){padding:8px 14px}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
     <main id="app" class="hidden"><aside id="sessionSidebar" class="hidden" aria-labelledby="sessionSidebarTitle"><div id="sessionSidebarHeader"><strong id="sessionSidebarTitle">Tabs</strong></div></aside><header class="workspace">
     <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off"><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
-    <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><span class="tools-spacer"></span>
+    <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div>
@@ -2153,6 +2174,8 @@ private extension RemoteControlServer {
     </div></form></dialog>
     <dialog id="promptReader" aria-labelledby="promptTitle"><strong id="promptTitle">Full prompt</strong>
     <pre id="promptPage"></pre><div class="tab-actions"><button id="promptPrevious" class="control">Previous</button><span id="promptNumber"></span><button id="promptNext" class="control">Next</button><button id="promptDownload" class="control">Download all</button><button id="promptDone" class="control">Done</button></div></dialog>
+    <dialog id="tasksPanel" aria-labelledby="tasksTitle"><div class="tasks-bar"><button id="tasksBack" type="button" class="control hidden" aria-label="Back to tasks">‹ Tasks</button><strong id="tasksTitle" class="grow" tabindex="-1">Tasks</strong><button id="tasksDone" type="button" class="control">Done</button></div>
+    <div id="tasksError" role="alert"></div><input id="tasksSearch" class="hidden" type="search" autocomplete="off" aria-label="Search records"><div id="tasksBody"></div><div id="tasksStatus" class="sr-only" role="status" aria-live="polite"></div></dialog>
     <dialog id="imageViewer" aria-labelledby="imageViewerTitle"><div class="viewer-bar"><strong id="imageViewerTitle" class="grow">Preview</strong><button id="imageZoom" type="button" class="control" aria-pressed="false">Actual size</button><button id="imageRetry" type="button" class="control hidden">Retry</button><button id="imageDone" type="button" class="control">Done</button></div>
     <div id="imageStage"><img id="imageFull" alt=""><p id="imageStatus" role="status" aria-live="polite"></p></div></dialog>
     <script>
@@ -2321,7 +2344,7 @@ private extension RemoteControlServer {
         let listedSuccessfully=false,requestSelection=requestedID;
         try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);renderHomeInputs(listed.homeInputs||[]);
           // Cantrip Home is pinned first when the Mac has it on; it is never closed or moved.
-          const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;
+          const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;$("homeTasks").classList.toggle("hidden",!listed.home);
           for(const id of historyCache.keys())if(!sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}
           if(selected!==requestedID){refreshRequested=true;continue}
           if(tabLink&&sessions.some(s=>s.id===tabLink)){selectTab(tabLink);tabLink=null;history.replaceState(null,"",location.pathname+location.search)}
@@ -2930,6 +2953,111 @@ private extension RemoteControlServer {
     $("draft").onkeydown=event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selectTab(data.session.id);refresh()};
     $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();selected=null;$("draft").value="";token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null)};
+    // Home Tasks: the task list, each workspace's records (grouped when its list declares a groupField) and record details.
+    const appleEpochSeconds=978307200,workspaceGroupsKey="cantrip.workspaceGroups.",otherGroupID=String.fromCharCode(1)+"other";
+    let tasksState=null;
+    function homeNode(tag,className,text){const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node}
+    function homeNoun(workspace,count){return count===1?workspace.recordLabel:(workspace.recordLabelPlural||`${workspace.recordLabel}s`)}
+    function homeTime(seconds){return new Date((seconds+appleEpochSeconds)*1000).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}
+    function loadWorkspaceGroups(taskID){try{const value=JSON.parse(localStorage.getItem(workspaceGroupsKey+taskID)||"{}");return value&&typeof value==="object"?value:{}}catch{return {}}}
+    function saveWorkspaceGroups(taskID,value){try{if(Object.keys(value).length)localStorage.setItem(workspaceGroupsKey+taskID,JSON.stringify(value));else localStorage.removeItem(workspaceGroupsKey+taskID)}catch{}}
+    // Same rules as Cantrip Agent: explicit groups always show (0 when empty), one-per-option sections and Other only
+    // with records, records keep their saved order, and a search keeps only sections with matches.
+    function workspaceSections(workspace,records,searching){const key=workspace.list?.groupField;if(!key)return null;
+      const explicit=workspace.list.groups,options=workspace.fields.find(field=>field.key===key)?.options||[];
+      const groups=explicit||options.map(option=>({title:option,values:[option]})),index=new Map();
+      groups.forEach((group,position)=>{for(const value of group.values)if(!index.has(value))index.set(value,position)});
+      const buckets=groups.map(()=>[]),other=[];
+      for(const record of records){const position=index.get(record.values[key]);if(position===undefined)other.push(record);else buckets[position].push(record)}
+      let sections=groups.map((group,position)=>({id:group.title,title:group.title,records:buckets[position],startsCollapsed:group.collapsed===true}));
+      if(!explicit)sections=sections.filter(section=>section.records.length);
+      if(other.length)sections.push({id:otherGroupID,title:"Other",records:other,startsCollapsed:false});
+      return searching?sections.filter(section=>section.records.length):sections}
+    function formatHomeValue(field,value){if(value===undefined||value===null||value==="")return "—";
+      if(field.kind==="boolean")return value==="true"?"Yes":"No";
+      if(field.kind==="date"){const parts=/^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(value);return parts?new Date(+parts[1],+parts[2]-1,+parts[3]).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}):value}
+      if(field.kind==="dateTime"){const date=new Date(value);return isNaN(date)?value:date.toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"})}
+      return value}
+    function badgeTone(value){const text=value.trim().toLowerCase();
+      return text.includes("reject")||text.includes("declin")?"rejected":text.includes("offer")?"offer":text==="applied"||text==="application received"?"applied":""}
+    function openTasks(){closeTasks();tasksState={token,taskID:null,tasks:[],revision:null,loaded:false,failed:false,loading:false,openRecords:new Set(),timer:setInterval(()=>loadTasks(),10000)};
+      $("tasksSearch").value="";setText($("tasksError"),"");renderTasks();$("tasksPanel").showModal();loadTasks()}
+    function closeTasks(){if(tasksState)clearInterval(tasksState.timer);tasksState=null}
+    async function loadTasks(){const state=tasksState;if(!state||state.loading)return;state.loading=true;
+      try{const data=await api("/api/v1/home/tasks");if(state!==tasksState)return;state.failed=false;
+        setText($("tasksError"),data.error?`Cantrip couldn't save tasks: ${data.error}`:"");
+        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.tasks=data.tasks||[];state.loaded=true;renderTasks()}}
+      catch(error){if(state===tasksState){setText($("tasksError"),`Couldn't load tasks: ${error.message}`);if(!state.loaded){state.loaded=true;state.failed=true;renderTasks()}}}
+      finally{state.loading=false}}
+    // Polling re-renders in place: scroll, open records, collapsed sections and the focused row survive.
+    function renderTasks(){const state=tasksState;if(!state)return;const panel=$("tasksPanel"),body=$("tasksBody");
+      let task=state.taskID?state.tasks.find(item=>item.id===state.taskID):null;if(state.taskID&&!task&&state.loaded&&!state.failed)state.taskID=null;
+      const workspace=task?.workspace,focused=document.activeElement?.closest?.("#tasksBody [data-focus-key]")?.dataset.focusKey,scroll=panel.scrollTop;
+      $("tasksBack").classList.toggle("hidden",!task);setText($("tasksTitle"),task?task.title:"Tasks");
+      $("tasksSearch").classList.toggle("hidden",!workspace?.records?.length);if(workspace)$("tasksSearch").placeholder=`Search ${homeNoun(workspace,2)}`;
+      body.replaceChildren(task?(workspace?workspaceView(task):taskDetailView(task)):taskListView(state));panel.scrollTop=scroll;
+      if(focused)Array.from(body.querySelectorAll("[data-focus-key]")).find(node=>node.dataset.focusKey===focused)?.focus()}
+    function showTask(id){if(!tasksState)return;const previous=tasksState.taskID;tasksState.taskID=id;tasksState.openRecords.clear();$("tasksSearch").value="";setText($("tasksStatus"),"");renderTasks();$("tasksPanel").scrollTop=0;
+      if(id)$("tasksTitle").focus();else Array.from($("tasksBody").querySelectorAll("[data-focus-key]")).find(node=>node.dataset.focusKey===`task:${previous}`)?.focus()}
+    function taskListView(state){if(!state.loaded)return homeNode("p","muted tasks-empty","Loading tasks…");
+      if(!state.tasks.length)return homeNode("p","muted tasks-empty",state.failed?"Tasks are unavailable right now.":"No tasks yet. Ask Cantrip Home to track or schedule something.");
+      const list=homeNode("ul","task-list");
+      for(const task of state.tasks){const item=homeNode("li"),card=homeNode("button","task-card");card.type="button";card.dataset.focusKey=`task:${task.id}`;
+        const meta=[task.hasSchedule===false?"No schedule":task.enabled?task.schedule.summary:`Paused · ${task.schedule.summary}`];
+        if(task.workspace)meta.push(`${task.workspace.records.length} ${homeNoun(task.workspace,task.workspace.records.length)}`);
+        if(task.state==="running")meta.push("Running now");
+        card.append(homeNode("strong","task-title",task.title),homeNode("span","task-meta",meta.join(" · ")));
+        if(task.runs?.[0]?.summary)card.append(homeNode("span","task-run",task.runs[0].summary));
+        card.onclick=()=>showTask(task.id);item.append(card);list.append(item)}
+      return list}
+    function taskDetailView(task){const view=homeNode("div","task-detail"),facts=homeNode("dl","task-facts");
+      const fact=(label,value)=>{if(value)facts.append(homeNode("dt","",label),homeNode("dd","",value))};
+      fact("Schedule",task.hasSchedule===false?"No schedule":task.schedule.summary);fact("Status",!task.enabled?"Paused":task.state==="running"?"Running now":"On");
+      if(task.enabled&&task.nextRunAt!==null&&task.nextRunAt!==undefined)fact("Next run",homeTime(task.nextRunAt));
+      view.append(facts,homeNode("h3","","Recent runs"));
+      if(!task.runs?.length)view.append(homeNode("p","muted","No runs yet."));
+      else{const runs=homeNode("ul","run-list");for(const run of task.runs.slice(0,5)){const item=homeNode("li");item.append(homeNode("span","task-meta",`${homeTime(run.finishedAt)} · ${run.status}`),homeNode("span","run-summary",run.summary||"No summary"));runs.append(item)}view.append(runs)}
+      const prompt=homeNode("details","disclosure");prompt.append(homeNode("summary","","Instructions"),homeNode("p","run-summary",task.prompt));view.append(prompt);
+      return view}
+    function workspaceView(task){const workspace=task.workspace,query=$("tasksSearch").value.trim().toLowerCase(),searching=Boolean(query);
+      if(!workspace.records.length)return homeNode("p","muted tasks-empty",`No ${homeNoun(workspace,2)} yet. Tell Cantrip Home about one in Chat.`);
+      const records=searching?workspace.records.filter(record=>Object.values(record.values).some(value=>String(value).toLowerCase().includes(query))):workspace.records;
+      setText($("tasksStatus"),searching?`${records.length} ${homeNoun(workspace,records.length)} found`:"");
+      const view=homeNode("div","workspace-records"),sections=workspaceSections(workspace,records,searching);
+      if(searching&&!records.length)view.append(homeNode("p","muted tasks-empty",`No ${homeNoun(workspace,2)} match.`));
+      if(!sections){if(records.length)view.append(recordList(task,records));return view}
+      const remembered=loadWorkspaceGroups(task.id);
+      for(const section of sections){const group=homeNode("details",`record-group${searching?" searching":""}`),summary=homeNode("summary");
+        group.dataset.group=section.id;group.open=searching||!(remembered[section.id]??section.startsCollapsed);summary.dataset.focusKey=`group:${section.id}`;
+        summary.append(homeNode("span","group-title",section.title),homeNode("span","group-count",String(section.records.length)),homeNode("span","sr-only",` ${homeNoun(workspace,section.records.length)}`));
+        // Only the user's own toggles are remembered, never a search's temporary expansion.
+        summary.addEventListener("click",event=>{if(searching){event.preventDefault();return}const saved=loadWorkspaceGroups(task.id);saved[section.id]=group.open;saveWorkspaceGroups(task.id,saved)});
+        group.append(summary,section.records.length?recordList(task,section.records):homeNode("p","muted group-empty",`No ${homeNoun(workspace,2)}.`));view.append(group)}
+      return view}
+    function recordList(task,records){const workspace=task.workspace,list=homeNode("ul","record-list"),fields=new Map(workspace.fields.map(field=>[field.key,field])),layout=workspace.list;
+      for(const record of records){const item=homeNode("li"),details=homeNode("details","record"),summary=homeNode("summary"),head=homeNode("span","record-head");
+        details.open=tasksState?.openRecords.has(record.id)||false;details.addEventListener("toggle",()=>{if(details.open)tasksState?.openRecords.add(record.id);else tasksState?.openRecords.delete(record.id)});
+        summary.dataset.focusKey=`record:${record.id}`;head.append(homeNode("span","record-title",record.values[layout.titleField]||workspace.recordLabel));
+        const badge=layout.badgeField&&record.values[layout.badgeField];if(badge)head.append(homeNode("span",`record-badge ${badgeTone(badge)}`.trim(),badge));
+        summary.append(head);
+        const subtitles=layout.subtitleFields.flatMap(key=>{const field=fields.get(key),value=record.values[key];return field&&value?[`${field.label}: ${formatHomeValue(field,value)}`]:[]});
+        if(subtitles.length)summary.append(homeNode("span","record-subtitle",subtitles.join(" · ")));
+        const dateField=layout.dateField&&fields.get(layout.dateField),date=dateField&&record.values[dateField.key];
+        if(date)summary.append(homeNode("span","record-date",`${dateField.label}: ${formatHomeValue(dateField,date)}`));
+        details.append(summary,recordDetails(workspace,record,fields));item.append(details);list.append(item)}
+      return list}
+    function recordDetails(workspace,record,fields){const body=homeNode("div","record-details");
+      const sections=workspace.detailSections.length?workspace.detailSections:[{title:null,fields:workspace.fields.map(field=>field.key)}];
+      for(const section of sections){if(section.title)body.append(homeNode("h3","",section.title));const list=homeNode("dl");
+        for(const key of section.fields){const field=fields.get(key);if(!field)continue;const value=record.values[key],cell=homeNode("dd");
+          if(field.kind==="url"&&/^https?:[/][/]/i.test(value||"")){const link=homeNode("a","",value);link.href=value;link.target="_blank";link.rel="noopener noreferrer";cell.append(link)}
+          else{cell.textContent=formatHomeValue(field,value);if(!value)cell.className="muted"}
+          list.append(homeNode("dt","",field.label),cell)}
+        body.append(list)}
+      return body}
+    $("homeTasks").onclick=openTasks;$("tasksDone").onclick=()=>$("tasksPanel").close();$("tasksBack").onclick=()=>showTask(null);
+    $("tasksSearch").oninput=()=>{if(tasksState){renderTasks();$("tasksPanel").scrollTop=0}};
+    $("tasksPanel").addEventListener("close",()=>{closeTasks();$("tasksBody").replaceChildren();setText($("tasksStatus"),"")});
     function readTabLink(){const match=/^#tab=([0-9A-Fa-f-]{36})$/.exec(location.hash);return match?match[1].toUpperCase():null}
     let tabLink=readTabLink();window.addEventListener("hashchange",()=>{tabLink=readTabLink();if(tabLink&&token)refresh()});
     async function startRemoteUI(){
