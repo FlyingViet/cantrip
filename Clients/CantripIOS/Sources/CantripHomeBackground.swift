@@ -507,12 +507,21 @@ struct CantripHomeBackgroundRunRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if showsResult {
-                Text(Self.markdown(result))
-                    .font(.callout)
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(isExpanded ? nil : 3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if !run.isRunning, CantripHomeRunSummaryText.isLabelledSummary(result) {
+                    // A "Summary:" section: every line stays visible, each wrapping a little.
+                    CantripHomeRunSummaryText(summary: result, lineLimit: isExpanded ? nil : 2)
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(Self.markdown(result))
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(isExpanded ? nil : 3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             if canExpand {
                 Label(isExpanded ? "Show less" : "Show full result",
