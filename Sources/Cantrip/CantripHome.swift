@@ -1548,14 +1548,16 @@ final class CantripHomeStore: ObservableObject {
             backgroundRuns[run].status = status
             backgroundRuns[run].finishedAt = Date()
             backgroundRuns[run].sessionID = nil
+            // A closing "Summary:" section is the result; the full report stays in the log.
             backgroundRuns[run].summary = String(
-                summary.trimmingCharacters(in: .whitespacesAndNewlines).prefix(4_000)
+                (CantripHomeDelegations.summarySection(summary)
+                    ?? summary.trimmingCharacters(in: .whitespacesAndNewlines)).prefix(4_000)
             )
             persistBackgroundRuns()
         }
         guard let index = tasks.firstIndex(where: { $0.activeRunID == runID }) else { return }
         let finished = clock()
-        let clipped = RemoteCompletion.preview(summary)
+        let clipped = CantripHomeDelegations.runSummary(summary)
         tasks[index].runs.insert(.init(
             startedAt: tasks[index].lastRunAt ?? finished,
             finishedAt: finished, status: status, summary: clipped
@@ -1769,8 +1771,14 @@ extension ChatSession {
         var outcome: String?
         func flush() {
             guard let label else { return }
-            let detail = CantripHomeDelegations.excerpt(outcome ?? "no reply yet", limit: 240)
-                .replacingOccurrences(of: "\n", with: " ")
+            let detail: String
+            if let summary = outcome.flatMap(CantripHomeDelegations.summarySection) {
+                detail = CantripHomeDelegations.excerpt(summary, limit: 240)
+                    .replacingOccurrences(of: "\n", with: " | ")
+            } else {
+                detail = CantripHomeDelegations.excerpt(outcome ?? "no reply yet", limit: 240)
+                    .replacingOccurrences(of: "\n", with: " ")
+            }
             lines.append("- \(label.prefix(100)): \(detail)")
         }
         for message in messages {
@@ -1856,7 +1864,9 @@ extension ChatSession {
         automated incident, in its own hidden session; other background jobs may be running at
         the same time. The user does not see this conversation in their Home chat. Start the
         final reply with the outcome in one or two sentences: it becomes the run summary and the
-        completion notification. Ask the user only if you cannot continue.
+        completion notification. When the task asks for a closing section that begins on its own
+        line with 'Summary:', that section becomes the run summary instead and its first lines
+        the notification. Ask the user only if you cannot continue.
         To refresh Apple Mail, run `\(CantripHomeStore.mailRefreshCommand)` instead of telling Mail
         to check for new mail yourself, even when the task's instructions show that osascript
         command: it shares one refresh across concurrent jobs and waits for the sync to settle.
@@ -1951,9 +1961,11 @@ extension ChatSession {
     }
 
     /// Final pass when a run ends: saves any blocks still in the reply, then appends every
-    /// confirmation and refusal collected during the run.
-    func processCantripHomeBlocks() {
-        guard isCantripHome || isCantripHomeBackground else { return }
+    /// confirmation and refusal collected during the run. Returns the reply as written, without
+    /// those notices.
+    @discardableResult
+    func processCantripHomeBlocks() -> String? {
+        guard isCantripHome || isCantripHomeBackground else { return nil }
         if let correction = cantripHomeCorrection {
             // The correction never finished (it failed or was stopped): discard what it wrote
             // and keep the original refusals.
@@ -1965,12 +1977,13 @@ extension ChatSession {
             cantripHomeHeldFailures = []
         }
         cantripHomeNotices += runCantripHomeBlockPass(lintBlocking: false).map(\.notice)
-        guard !cantripHomeNotices.isEmpty,
-              let index = messages.lastIndex(where: { $0.role == .assistant }) else { return }
+        guard let index = messages.lastIndex(where: { $0.role == .assistant }) else { return nil }
+        let text = messages[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cantripHomeNotices.isEmpty else { return text }
         let notices = cantripHomeNotices.joined(separator: "\n\n")
         cantripHomeNotices = []
-        let text = messages[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
         messages[index].text = text.isEmpty ? notices : text + "\n\n" + notices
+        return text
     }
 
     /// Saves and strips the Home blocks in the latest reply. Confirmations and refusals that a

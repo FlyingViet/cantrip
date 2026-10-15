@@ -264,7 +264,9 @@ permissions remain subject to IT policy. Both native apps need updated builds.
 On iPhone/iPad, select a saved Mac and enable **Settings > Cantrip alerts >
 Completion and input-needed alerts**. After a successful run and all queued
 prompts finish, the Mac sends an Apple push notification with the tab name and
-a short, Markdown-cleaned excerpt of the final answer. It does not ask another
+a short, Markdown-cleaned excerpt of the final answer. When the answer ends with
+a section that begins on its own line with `Summary:`, the excerpt is that
+section's first two lines instead. It does not ask another
 model to summarize the conversation. Tap an alert to open that saved server and
 tab. A removed/re-paired server is rejected; opening a notification never sends
 a prompt. Private tabs, failures, Stop, redirects and intermediate automatic

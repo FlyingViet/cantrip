@@ -14,6 +14,7 @@ struct RemoteCompletion: Codable, Equatable {
     var isAttention: Bool { kind == "input" || kind == "macAttention" }
 
     static func preview(_ text: String) -> String {
+        if let summary = summaryPreview(text) { return summary }
         // Use the final answer, not tool output or a second model request.
         var value = text.replacingOccurrences(of: #"(?s)```.*?```"#, with: "", options: .regularExpression)
         value = value.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
@@ -22,6 +23,14 @@ struct RemoteCompletion: Codable, Equatable {
         value = value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         if value.isEmpty { return "The response is ready. Open the tab for details." }
         return value.count > 220 ? String(value.prefix(217)) + "..." : value
+    }
+
+    /// The first two lines of a reply's closing "Summary:" section, which say more than the
+    /// narration a reply opens with. Nil when the reply has no such section.
+    static func summaryPreview(_ text: String) -> String? {
+        guard let section = CantripHomeDelegations.summarySection(text) else { return nil }
+        let lines = section.split(separator: "\n").prefix(2).joined(separator: "\n")
+        return CantripHomeDelegations.shortened(lines, limit: 219)
     }
 }
 

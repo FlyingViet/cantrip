@@ -777,6 +777,57 @@ final class CantripHomeDelegations {
         return shortened(text, limit: limit)
     }
 
+    /// Longest summary a scheduled or automated run keeps; also how much of the previous
+    /// summary the next run's start note carries.
+    nonisolated static let runSummaryLimit = 1_200
+
+    /// What a scheduled or automated run reports: its closing "Summary:" section when it has
+    /// one, else the start of the reply as one line, as before.
+    nonisolated static func runSummary(_ reply: String, limit: Int = runSummaryLimit) -> String {
+        summarySection(reply).map { shortened($0, limit: limit) } ?? RemoteCompletion.preview(reply)
+    }
+
+    /// The reply's closing "Summary:" section: everything after the last line that starts with
+    /// that label, as plain-text lines with the label removed. Nil when no line outside a code
+    /// block is labelled, or nothing follows the label.
+    nonisolated static func summarySection(_ reply: String) -> String? {
+        // "Summary:", "**Summary:**", "**Summary**:", "## Summary:" and the like.
+        let label = #"^(?:#{1,6}\s*)?(?:[*_]{1,2})?summary(?:[*_]{1,2})?\s*:(?:[*_]{1,2})?\s*"#
+        var section: [String]?
+        var inFence = false
+        for raw in reply.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("```") || line.hasPrefix("~~~") {
+                inFence.toggle()
+                continue
+            }
+            if inFence { continue }
+            if let match = line.range(of: label, options: [.regularExpression, .caseInsensitive]) {
+                section = [String(line[match.upperBound...])]
+            } else {
+                section?.append(line)
+            }
+        }
+        let lines = (section ?? []).compactMap { line -> String? in
+            // Rules and table separators carry no text; table rows read as one line.
+            guard !line.allSatisfy({ "-=*_|: ".contains($0) }) else { return nil }
+            var line = line
+            if line.hasPrefix("|") {
+                line = line.trimmingCharacters(in: CharacterSet(charactersIn: "| "))
+                    .replacingOccurrences(of: #"\s*\|\s*"#, with: " · ", options: .regularExpression)
+            }
+            let text = plainText(line).replacingOccurrences(
+                of: #"(?<![\w*])[*_](\S(?:.*?\S)?)[*_](?![\w*])"#, with: "$1",
+                options: .regularExpression
+            )
+            return text.isEmpty ? nil : text
+        }
+        guard let first = lines.first else { return nil }
+        // "Summary: all caught up" reads as a sentence on its own once the label is gone.
+        return ([first.prefix(1).uppercased() + first.dropFirst()] + lines.dropFirst())
+            .joined(separator: "\n")
+    }
+
     /// The final paragraph of `reply` when it asks the user something, as plain text.
     nonisolated static func trailingQuestion(_ reply: String) -> String? {
         guard let last = proseParagraphs(reply).last else { return nil }

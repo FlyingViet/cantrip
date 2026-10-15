@@ -332,7 +332,30 @@ extension SessionTabTests {
                      && fixture(forRun: intervalRun)?.lastPrompt?.contains("starting 60 minutes late") == true
                      && fixture(forRun: intervalRun)?.lastPrompt?.contains("runs a missed schedule once") == true,
                      "Duplicate triggers for a running task coalesce into the one run")
-        try await finish(intervalRun, "Interval done.")
+        // A closing "Summary:" section becomes the task run's summary, the Background result,
+        // the push, Home's digest and the next run's continuity note.
+        let intervalSession = try requireHome(store.runner.session(forRun: intervalRun))
+        try await finish(intervalRun, trackerReply)
+        let summarized = try requireHome(store.tasks.first { $0.id == interval.id })
+        let summaryNote = store.runner.startNote(
+            for: summarized,
+            job: .init(id: UUID(), kind: .task, label: summarized.title, taskID: interval.id,
+                       enqueuedAt: Date(), dueAt: Date()),
+            now: Date()
+        ) ?? ""
+        precondition(summarized.runs.first?.summary == trackerSummary
+                     && run(intervalRun)?.summary == trackerSummary
+                     && intervalSession.remoteCompletion?.summary
+                        == trackerSummary.split(separator: "\n").prefix(2).joined(separator: "\n")
+                     && log.cantripHomeBackgroundDigest.first?.hasPrefix(
+                        "- Interval check: Upcoming interviews: Fri Oct 16, 10 AM · Headway (recruiter call);") == true
+                     && log.cantripHomeBackgroundDigest.first?.contains(" | Interviewing: Coinbase") == true
+                     && log.messages.last { $0.role == .assistant }?.text
+                        .contains("Background runs can't create or change Home tasks") == true
+                     && summaryNote.contains(
+                        "call out what changed since then: "
+                            + trackerSummary.replacingOccurrences(of: "\n", with: " | ") + ")"),
+                     "A run's Summary section is what every surface reports: \(summarized.runs.first?.summary ?? "none")")
         store.checkNow()
         precondition(runningRun(forTask: interval.id) == nil
                      && (store.tasks.first { $0.id == interval.id }?.nextRunAt ?? .distantPast) > Date(),
