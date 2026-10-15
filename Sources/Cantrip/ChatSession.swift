@@ -2794,10 +2794,14 @@ final class ChatSession: ObservableObject {
         councilFinished = []
         councilSynthesizing = false
         if !isLocalPrivate { processOverlayBlock() }
-        processCantripHomeBlocks()
+        let reply = processCantripHomeBlocks()
         if let completion = pendingTurnCompletion {
-            let visibleSummary = messages.last(where: { $0.role == .assistant })?.text
+            var visibleSummary = messages.last(where: { $0.role == .assistant })?.text
                 ?? completion.summary
+            // A closing "Summary:" section ends where Cantrip's own block notices begin.
+            if let reply, CantripHomeDelegations.summarySection(reply) != nil {
+                visibleSummary = reply
+            }
             pendingTurnCompletion = nil
             onTurnCompleted?(completion.runID, completion.status, visibleSummary)
         }

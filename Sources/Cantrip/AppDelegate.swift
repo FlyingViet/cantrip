@@ -359,7 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             guard granted else { return }
             let content = UNMutableNotificationContent()
             content.title = "Cantrip — \(title)"
-            content.body = String(preview.prefix(160))
+            content.body = RemoteCompletion.summaryPreview(preview) ?? String(preview.prefix(160))
             UNUserNotificationCenter.current().add(UNNotificationRequest(
                 identifier: UUID().uuidString,
                 content: content,

@@ -391,7 +391,7 @@ final class CantripHomeBackgroundRunner {
         )
     }
 
-    private func startNote(
+    func startNote(
         for task: CantripHomeTask, job: CantripHomeBackgroundJob, now: Date
     ) -> String? {
         var notes: [String] = []
@@ -413,8 +413,10 @@ final class CantripHomeBackgroundRunner {
             )
         }
         if let previous = task.runs.first(where: { $0.status == "succeeded" }) {
-            let summary = CantripHomeDelegations.excerpt(previous.summary, limit: 500)
-                .replacingOccurrences(of: "\n", with: " ")
+            let summary = CantripHomeDelegations.excerpt(
+                previous.summary, limit: CantripHomeDelegations.runSummaryLimit
+            )
+            .replacingOccurrences(of: "\n", with: " | ")
             if !summary.isEmpty {
                 notes.append(
                     "(Previous successful run, \(previous.finishedAt.formatted(date: .abbreviated, time: .shortened)); "

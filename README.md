@@ -176,7 +176,10 @@ The macOS app includes:
   Results appear in the Background list (with per-run Stop), task run summaries,
   workspaces and completion notifications (which open the run's report in
   Home's background log); finished sessions are removed and their transcripts
-  kept in that log. After a quit, interrupted tasks run once more and an
+  kept in that log. A run whose reply ends with a section that begins on its own
+  line with `Summary:` uses that section (from the last such label, up to 1,200
+  characters, line breaks kept) as its summary, and its first two lines as the
+  notification; other runs keep the start of the reply. After a quit, interrupted tasks run once more and an
   interrupted incident is retried once. Home can still discuss or rerun any of
   them on request.
   Home's rules and safety checks are enforced by Cantrip, not by the model's
