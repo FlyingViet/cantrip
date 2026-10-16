@@ -54,7 +54,15 @@ struct HermesApp: App {
         .onOpenURL { url in
             guard let target = CantripDeepLink.parse(url) else { return }
             launchSplash.skip()
-            env.select(.cantrip)
+            switch target {
+            case .tab(let id, _):
+                // Tabs open full screen inside Cantrip Home.
+                remoteModel.prepareToOpenTab(id)
+                env.select(.cantrip)
+            case .tabs:
+                env.select(.home)
+                remoteModel.requestTabDrawer()
+            }
             Task { await remoteModel.openLiveStatusLink(target) }
         }
     }
@@ -72,6 +80,8 @@ struct HermesApp: App {
                 env.select(.home)
                 await remoteModel.openHomeRunNotification(target)
             } else {
+                // The tab opens full screen inside Cantrip Home.
+                remoteModel.prepareToOpenTab(target.sessionID.uuidString)
                 env.select(.cantrip)
                 await remoteModel.openCompletionNotification(target)
             }

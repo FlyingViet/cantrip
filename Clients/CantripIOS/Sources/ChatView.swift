@@ -1118,6 +1118,7 @@ struct ChatView: View {
     @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
     @State private var showCantripMaintenance = false
     @State private var showRemoteTabs = false
+    @State private var opensDrawerAfterReturningHome = false
     @State private var showCopilotUsage = false
     @State private var homeSection = CantripHomeSection.chat
     @State private var renamingRemoteSession: CantripRemoteSession?
@@ -1152,15 +1153,23 @@ struct ChatView: View {
     var body: some View {
         ChatNavigationView(
             isTabListPresented: $showRemoteTabs,
-            hasTabs: vm.activeLane == .cantrip,
+            hasTabs: vm.activeLane == .home,
             canSelectTabs: remoteTabsEnabled,
             isReorderingTabs: remote.isReorderingTabs
         ) { isModal, dismiss in
-            CantripSessionDrawer(
+            CantripHomeTabDrawer(
                 model: remote,
                 isModal: isModal,
+                backgroundActiveCount: homeBackgroundCount,
+                backgroundInputCount: homeBackgroundInputCount,
                 onDismiss: dismiss,
-                onSelect: selectRemoteSession,
+                onSelectHome: dismiss,
+                onOpenBackground: {
+                    dismiss()
+                    composerFocused = false
+                    showHomeBackground = true
+                },
+                onSelect: openTab,
                 onCreate: createRemoteSession,
                 onRename: { renamingRemoteSession = $0 },
                 onClose: closeRemoteSession
@@ -1247,8 +1256,7 @@ struct ChatView: View {
                     },
                     openTab: { id in
                         showHomeBackground = false
-                        remote.prepareToOpenTab(id)
-                        env.select(.cantrip)
+                        openTab(id)
                     }
                 )
                 .presentationDetents([.medium, .large])
@@ -1314,8 +1322,25 @@ struct ChatView: View {
                 Text(imageSendError ?? "")
             }
         }
+        // Inside a tab, the same left-edge swipe that opens the drawer in Home goes back to Home.
+        .cantripEdgeSwipe(isEnabled: vm.activeLane == .cantrip && !importingImages && !submittingRemote) {
+            returnHome()
+        }
         .onChange(of: showRemoteTabs) { _, showing in
             if showing { composerFocused = false }
+        }
+        .onChange(of: remote.tabDrawerRequest) { _, _ in
+            if vm.activeLane == .home {
+                DispatchQueue.main.async { showRemoteTabs = true }
+            } else {
+                opensDrawerAfterReturningHome = true
+            }
+        }
+        .onChange(of: vm.activeLane) { _, lane in
+            guard lane == .home, opensDrawerAfterReturningHome else { return }
+            opensDrawerAfterReturningHome = false
+            // After the navigation view has reset its drawer for the lane change.
+            DispatchQueue.main.async { showRemoteTabs = true }
         }
         .onChange(of: showVoiceMode) { _, showing in
             if showing { composerFocused = false }
@@ -1371,6 +1396,12 @@ struct ChatView: View {
         .onChange(of: env.executionLane) { _, lane in
             showHomeBackground = false
             vm.switchLane(to: lane)
+            reloadCommands()
+        }
+        .onChange(of: vm.sending) { _, sending in
+            // A lane change (e.g. ‹ Home or Open tab) made while a send was in flight waits for it.
+            guard !sending, env.executionLane != vm.activeLane else { return }
+            vm.switchLane(to: env.executionLane)
             reloadCommands()
         }
         .onChange(of: remote.transcriptRevision) { _, _ in
@@ -1448,15 +1479,13 @@ struct ChatView: View {
     private var chatHeader: some View {
         ChatHeader(
             style: vm.activeLane == .home ? .mascot
-                : vm.activeLane == .cantrip ? .compact : .standard
+                : vm.activeLane == .cantrip ? .tab : .standard
         ) {
             if vm.activeLane == .cantrip {
-                ExecutionLanePicker(
-                    env: env,
-                    remote: remote,
-                    centeredTitle: "Cantrip Remote"
+                CantripTabHeaderTitle(
+                    session: remote.selectedSession,
+                    connectionState: remote.connectionState
                 )
-                .disabled(vm.sending || importingImages || submittingRemote)
             } else if vm.activeLane == .home {
                 ExecutionLanePicker(
                     env: env,
@@ -1520,12 +1549,18 @@ struct ChatView: View {
                 .disabled(vm.sending || importingImages || submittingRemote)
         } leading: {
             if vm.activeLane == .cantrip {
-                ChatTabsButton(isEnabled: remoteTabsEnabled) { showRemoteTabs = true }
+                CantripHomeBackPill { returnHome() }
+                    .disabled(importingImages || submittingRemote)
             } else if vm.activeLane == .home {
-                // The Pip title is already the lane menu, so this slot opens background work.
-                CantripHomeBackgroundButton(activeCount: homeBackgroundCount, inputCount: homeBackgroundInputCount) {
+                // The Pip title is already the lane menu, so this slot opens the tab drawer, which
+                // also holds background jobs.
+                CantripHomeTabsButton(
+                    workingCount: CantripHomeTabCounts.working(in: remote.sessions),
+                    inputCount: CantripHomeTabCounts.needingInput(in: remote.sessions) + homeBackgroundInputCount,
+                    isEnabled: remoteTabsEnabled
+                ) {
                     composerFocused = false
-                    showHomeBackground = true
+                    showRemoteTabs = true
                 }
             }
         } trailing: {
@@ -1552,6 +1587,9 @@ struct ChatView: View {
         let isTabLocked: Bool
         let newConversationDisabled: Bool
         let deliveryMode: CantripDeliveryMode
+        /// The open project tab's actions; nil outside a listed tab.
+        let tab: CantripTabActionState?
+        let canReturnHome: Bool
     }
 
     private var chatMenuState: ChatMenuState {
@@ -1572,13 +1610,41 @@ struct ChatView: View {
             settingsDisabled: vm.sending || importingImages || submittingRemote,
             isTabLocked: vm.isTabLocked,
             newConversationDisabled: newConversationDisabled,
-            deliveryMode: vm.remoteDeliveryMode
+            deliveryMode: vm.remoteDeliveryMode,
+            tab: vm.activeLane == .cantrip
+                ? remote.selectedSession.flatMap { session in
+                    remote.sessions.contains { $0.id == session.id }
+                        ? CantripTabActionState(session: session, model: remote) : nil
+                }
+                : nil,
+            canReturnHome: !importingImages && !submittingRemote
         )
     }
 
     private var chatMenu: some View {
         let state = chatMenuState
         return StableMenu(state: state) {
+            if state.isCantrip {
+                Button {
+                    opensDrawerAfterReturningHome = true
+                    returnHome()
+                } label: {
+                    Label("All Tabs", systemImage: "sidebar.left")
+                }
+                .disabled(!state.canReturnHome)
+            }
+            if let tab = state.tab {
+                Section {
+                    CantripTabActions(
+                        model: remote, state: tab,
+                        onRename: {
+                            composerFocused = false
+                            renamingRemoteSession = remote.sessions.first { $0.id == tab.id }
+                        },
+                        onClose: { closeRemoteSession(tab.id) }
+                    )
+                }
+            }
             Menu {
                 ForEach(state.selectableLanes) { lane in
                     Button {
@@ -1586,7 +1652,7 @@ struct ChatView: View {
                     } label: {
                         Label(
                             lane.title,
-                            systemImage: lane == state.activeLane
+                            systemImage: lane == state.activeLane.pickerLane
                                 ? "checkmark.circle.fill"
                                 : lane.systemImage
                         )
@@ -1595,12 +1661,12 @@ struct ChatView: View {
                 }
             } label: {
                 Label(
-                    "Backend: \(state.activeLane.title)",
-                    systemImage: state.activeLane.systemImage
+                    "Backend: \(state.activeLane.pickerLane.title)",
+                    systemImage: state.activeLane.pickerLane.systemImage
                 )
             }
             if state.isCantrip || state.isHome {
-                if state.selectedSessionID != nil {
+                if state.selectedSessionID != nil, state.tab == nil {
                     Button {
                         composerFocused = false
                         if let session = remote.selectedSession {
@@ -1656,14 +1722,6 @@ struct ChatView: View {
                     Label("Refresh Cantrip", systemImage: "arrow.clockwise")
                 }
                 .disabled(!state.macControlsEnabled || state.isRemoteMutating)
-                if state.isCantrip {
-                    Button {
-                        showRemoteTabs = true
-                    } label: {
-                        Label("Tabs", systemImage: "rectangle.stack")
-                    }
-                    .disabled(!state.remoteTabsEnabled)
-                }
                 if state.macControlsEnabled {
                     CantripLiveActivityToggle()
                 }
@@ -1742,10 +1800,10 @@ struct ChatView: View {
                 .disabled(state.newConversationDisabled)
             }
         } label: {
-            ChatMenuIcon(isPaused: state.paused)
+            ChatMenuIcon(isPaused: state.paused, systemName: state.isCantrip ? "ellipsis" : "line.3.horizontal")
         }
         .equatable()
-        .accessibilityLabel("Chat menu")
+        .accessibilityLabel(state.isCantrip ? "Tab menu" : "Chat menu")
         .accessibilityValue(state.paused ? "Agent paused" : "")
         .accessibilityIdentifier("chat.menu")
     }
@@ -1840,31 +1898,47 @@ struct ChatView: View {
     }
 
     private var remoteTabsEnabled: Bool {
-        vm.activeLane == .cantrip
+        vm.activeLane == .home
             && !vm.sending && !importingImages && !submittingRemote && !remote.isMutating
     }
 
-    private func selectRemoteSession(_ id: String) {
+    /// Opens a project tab full screen inside Cantrip Home (drawer rows, handoff cards, Background).
+    private func openTab(_ id: String) {
         composerFocused = false
-        Task {
-            await remote.selectSession(id)
-            vm.syncRemoteTranscript()
+        showRemoteTabs = false
+        if vm.activeLane == .cantrip {
+            Task {
+                await remote.selectSession(id)
+                vm.syncRemoteTranscript()
+            }
+        } else {
+            remote.prepareToOpenTab(id)
+            env.select(.cantrip)
         }
     }
 
+    private func returnHome() {
+        composerFocused = false
+        env.select(.home)
+    }
+
     private func createRemoteSession() {
+        composerFocused = false
         Task {
-            _ = await remote.createSession()
-            vm.syncRemoteTranscript()
+            guard let id = await remote.createTab() else { return }
+            openTab(id)
         }
     }
 
     private func closeRemoteSession(_ id: String) {
         let draftKey = remoteDraftKey(id)
+        let closesOpenTab = vm.activeLane == .cantrip && remote.selectedSessionID == id
         Task {
             if await remote.closeSession(id) {
                 imageDrafts.removeValue(forKey: draftKey)
                 videoDrafts.removeValue(forKey: draftKey)
+                // A closed tab returns to Home, where the drawer lists the remaining tabs.
+                if closesOpenTab, vm.activeLane == .cantrip { returnHome() }
             }
             vm.syncRemoteTranscript()
         }
@@ -1912,12 +1986,7 @@ struct ChatView: View {
                     remoteMessage: remoteMessage,
                     onAction: { vm.send($0.command) },
                     onApproval: { vm.approveRun($0, for: turn.id) },
-                    onOpenTab: vm.activeLane == .home && env.selectableLanes.contains(.cantrip)
-                        ? { id in
-                            remote.prepareToOpenTab(id)
-                            env.select(.cantrip)
-                        }
-                        : nil
+                    onOpenTab: vm.activeLane == .home ? { openTab($0) } : nil
                 )
                 .id(turn.id)
                 if vm.activeLane.usesCantripRemote, let message = remoteMessage,
@@ -1972,18 +2041,18 @@ struct ChatView: View {
                         .padding(.top, 4)
                 }
             } else if vm.activeLane == .cantrip {
-                Text("Choose a Cantrip session").font(.title3.weight(.semibold))
-                Text("Open Tabs from the header or left edge to select a session, or create one, then type or use voice as usual.")
-                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button("Create Session") {
-                    Task {
-                        _ = await remote.createSession()
-                        vm.syncRemoteTranscript()
-                    }
+                if let session = remote.selectedSession {
+                    Text(session.title).font(.title3.weight(.semibold))
+                    Text("Type or use voice to start this tab. Cantrip runs it on your Mac.")
+                        .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                } else {
+                    Text("No tab open").font(.title3.weight(.semibold))
+                    Text("Go back to Home and open a tab from the drawer, or start a new one.")
+                        .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Button("Back to Home") { returnHome() }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.top, 4)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(remote.isMutating)
-                .padding(.top, 4)
             } else if env.isConfigured {
                 Text("Talk to Hermes").font(.title3.weight(.semibold))
                 Text("Type, or tap the mic to dictate. Touch and hold the mic for continuous, hands-free voice.")
@@ -2130,7 +2199,8 @@ struct ChatView: View {
                 vm.activeLane.usesCantripRemote
                     ? CantripInputComposer.placeholder(
                         for: remote.chatInputRequest, mode: vm.remoteDeliveryMode,
-                        recipient: vm.activeLane == .home ? CantripMascotName.display(mascotName) : "Cantrip"
+                        recipient: vm.activeLane == .home ? CantripMascotName.display(mascotName)
+                            : remote.selectedSession?.title ?? "Cantrip"
                     )
                     : "Message Hermes…",
                 text: $input,
@@ -2417,9 +2487,10 @@ struct StableMenu<State: Equatable, Content: View, MenuLabel: View>: View, Equat
 
 struct ChatMenuIcon: View {
     var isPaused = false
+    var systemName = "line.3.horizontal"
 
     var body: some View {
-        Image(systemName: "line.3.horizontal")
+        Image(systemName: systemName)
             .foregroundStyle(.white)
             .frame(width: 44, height: 44)
             .overlay(alignment: .bottomTrailing) {
@@ -2456,11 +2527,16 @@ enum ChatHeaderStyle {
     case compact
     /// Cantrip Home: a large Muse-style mascot between floating glass actions.
     case mascot
+    /// A project tab inside Home: "‹ Home" pill, centered title and state, glass menu.
+    case tab
 }
 
 struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delivery: View,
                   Refresh: View, Settings: View, Leading: View, Trailing: View>: View {
     @Environment(\.chatDisplayTraits) private var displayTraits
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var tabLeadingWidth: CGFloat = 96
+    @State private var tabHeaderWidth: CGFloat = 393
     var style = ChatHeaderStyle.standard
     @ViewBuilder var title: () -> Title
     @ViewBuilder var connection: () -> Connection
@@ -2480,6 +2556,8 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                     title().frame(maxWidth: .infinity)
                     floatingActions
                 }
+            case .tab:
+                tabRow
             case .compact:
                 HStack(spacing: 8) {
                     if !displayTraits.hasVerticalBar {
@@ -2514,7 +2592,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .padding(.horizontal, 12)
         .padding(.top, style == .standard ? 8 : 2)
-        .padding(.bottom, style == .mascot ? 6 : style == .compact ? 2 : 4)
+        .padding(.bottom, style == .mascot ? 6 : style == .compact || style == .tab ? 2 : 4)
         .frame(maxWidth: .infinity)
         .background(style == .mascot ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.bar))
         .background { if style == .mascot { CantripMascotHeaderFade() } }
@@ -2522,6 +2600,27 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         .modifier(ChatNavigationActions(
             leading: leading, refresh: refresh, settings: settings, trailing: trailing
         ))
+    }
+
+    /// The title stays centered on the screen and clear of the wider of the two side controls.
+    private var tabRow: some View {
+        let inset = displayTraits.hasVerticalBar ? 0 : max(tabLeadingWidth, 44) + 8
+        return ZStack {
+            title()
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .padding(.horizontal, inset)
+            if !displayTraits.hasVerticalBar {
+                HStack(spacing: 8) {
+                    leading()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabLeadingWidth = $0 }
+                    Spacer(minLength: 0)
+                    glassAction(trailing())
+                }
+            }
+        }
+        .frame(minHeight: 48)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabHeaderWidth = $0 }
+        .environment(\.cantripCompactBackPill, tabHeaderWidth < 340 || dynamicTypeSize > .xLarge)
     }
 
     @ViewBuilder private var floatingActions: some View {
@@ -2746,7 +2845,7 @@ struct ExecutionLanePicker: View {
                 } label: {
                     Label(
                         pickerTitle(lane),
-                        systemImage: lane == env.executionLane
+                        systemImage: lane == env.executionLane.pickerLane
                             ? "checkmark.circle.fill"
                             : lane.systemImage
                     )
@@ -2782,10 +2881,6 @@ struct ExecutionLanePicker: View {
         switch lane {
         case .local where !env.isAvailable(.local):
             "\(lane.title) · Not configured"
-        case .cantrip where remote.isConnected:
-            "\(lane.title) · Connected"
-        case .cantrip where !remote.isConfigured:
-            "\(lane.title) · Set up"
         case .home where remote.isConnected:
             "\(lane.title) · Connected"
         case .home where !remote.isConfigured:

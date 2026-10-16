@@ -91,7 +91,7 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if lane == env.executionLane {
+                        if lane == env.executionLane.pickerLane {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundStyle(.tint)
                         }
@@ -130,12 +130,8 @@ struct SettingsView: View {
         switch lane {
         case .local where !env.isAvailable(.local):
             "Unavailable until the local-private gateway route is configured."
-        case .cantrip where remote.isConnected:
-            "Connected to \(remote.endpointHost)."
-        case .cantrip where remote.isConfigured:
-            "Configured for \(remote.endpointHost), but not currently connected."
         case .home where remote.isConnected:
-            "Uses the hidden Cantrip Home session on \(remote.endpointHost)."
+            "Home and your project tabs on \(remote.endpointHost)."
         case .home where remote.isConfigured:
             "Configured for \(remote.endpointHost). Enable Cantrip Home on the Mac if needed."
         default:
@@ -315,14 +311,16 @@ struct BackendSettingsView: View {
                     .accessibilityHint(
                         env.canHide(lane)
                             ? "Controls whether this backend appears in the picker."
-                            : "At least one backend must remain visible."
+                            : lane == .home
+                                ? "Cantrip Home holds your project tabs, so it always stays visible."
+                                : "At least one backend must remain visible."
                     )
                 }
                 .onMove(perform: env.moveBackends)
             } header: {
                 Text("Shown in picker")
             } footer: {
-                Text("Tap Edit, then drag backends into the order you want. At least one backend stays visible.")
+                Text("Tap Edit, then drag backends into the order you want. Cantrip Home always stays visible: your project tabs live in its drawer.")
             }
         }
         .navigationTitle("Backends")

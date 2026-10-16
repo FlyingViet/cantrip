@@ -508,7 +508,7 @@ final class CantripMascotTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(transcript.adjustedContentInset.top, top + 44,
                                     "The first message must rest below the title header")
         XCTAssertLessThanOrEqual(transcript.adjustedContentInset.top, top + 52,
-                                 "Remote keeps one compact title row, without a status band")
+                                 "A tab keeps one compact header row (title and state), without a status band")
         let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_ARTIFACT_DIR"]
         guard let directory, !directory.isEmpty else { return }
         for (name, offset) in [("top", CGFloat(0)), ("scrolled", 260)] {

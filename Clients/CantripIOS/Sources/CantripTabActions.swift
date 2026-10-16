@@ -1,10 +1,53 @@
 import SwiftUI
 
+/// What a tab's action menu shows, snapshotted so menus rebuild only when it changes.
+struct CantripTabActionState: Equatable {
+    let id: String
+    let isLocked: Bool
+    let isLocalPrivate: Bool
+    let supportsTabMetadata: Bool
+    let supportsTabReordering: Bool
+    let supportsInputRequests: Bool
+    let isBusy: Bool
+    let isFirst: Bool
+    let isLast: Bool
+    let isMutating: Bool
+
+    @MainActor
+    init(session: CantripRemoteSession, model: CantripRemoteModel) {
+        id = session.id
+        isLocked = session.isLocked == true
+        isLocalPrivate = session.isLocalPrivate == true
+        supportsTabMetadata = session.supportsTabMetadata == true
+        supportsTabReordering = session.supportsTabReordering == true
+        supportsInputRequests = session.supportsInputRequests == true
+        isBusy = session.isStreaming || session.queuedCount > 0
+        isFirst = model.sessions.first?.id == session.id
+        isLast = model.sessions.last?.id == session.id
+        isMutating = model.isMutating
+    }
+}
+
 struct CantripTabActions: View {
-    @ObservedObject var model: CantripRemoteModel
-    let session: CantripRemoteSession
+    let model: CantripRemoteModel
+    let state: CantripTabActionState
     let onRename: () -> Void
     let onClose: () -> Void
+
+    init(model: CantripRemoteModel, state: CantripTabActionState,
+         onRename: @escaping () -> Void, onClose: @escaping () -> Void) {
+        self.model = model
+        self.state = state
+        self.onRename = onRename
+        self.onClose = onClose
+    }
+
+    @MainActor
+    init(model: CantripRemoteModel, session: CantripRemoteSession,
+         onRename: @escaping () -> Void, onClose: @escaping () -> Void) {
+        self.init(model: model, state: CantripTabActionState(session: session, model: model),
+                  onRename: onRename, onClose: onClose)
+    }
 
     var body: some View {
         Button {
@@ -12,66 +55,67 @@ struct CantripTabActions: View {
         } label: {
             Label("Mac Permissions & View Mac", systemImage: "display")
         }
-        if session.supportsInputRequests == true {
+        if state.supportsInputRequests {
             Button {
-                Task { await model.showInputRequests(sessionID: session.id) }
+                Task { await model.showInputRequests(sessionID: state.id) }
             } label: {
                 Label("View Questions in Chat", systemImage: "person.crop.circle.badge.questionmark")
             }
-            if session.isLocalPrivate != true {
+            if !state.isLocalPrivate {
                 Button {
-                    Task { await model.send("/login github", mode: .queue, sessionID: session.id) }
+                    Task { await model.send("/login github", mode: .queue, sessionID: state.id) }
                 } label: {
                     Label("Sign in to GitHub on Mac", systemImage: "person.badge.key")
                 }
-                .disabled(model.isMutating || session.isStreaming || session.queuedCount > 0)
+                .disabled(state.isMutating || state.isBusy)
             }
         }
         Button {
-            model.modelSettingsSession = session
+            model.modelSettingsSession = model.sessions.first { $0.id == state.id }
+                ?? (model.selectedSession?.id == state.id ? model.selectedSession : nil)
         } label: {
-            Label(session.isLocalPrivate == true ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
+            Label(state.isLocalPrivate ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
         }
-        .disabled(model.isMutating)
+        .disabled(state.isMutating)
         Button(action: onRename) {
             Label("Rename Tab", systemImage: "pencil")
         }
-        .disabled(model.isMutating || session.supportsTabMetadata != true)
+        .disabled(state.isMutating || !state.supportsTabMetadata)
         Button {
-            Task { await model.updateTab(session.id, isLocked: session.isLocked != true) }
+            Task { await model.updateTab(state.id, isLocked: !state.isLocked) }
         } label: {
-            Label(session.isLocked == true ? "Unlock Tab" : "Lock Tab",
-                  systemImage: session.isLocked == true ? "lock.open" : "lock")
+            Label(state.isLocked ? "Unlock Tab" : "Lock Tab",
+                  systemImage: state.isLocked ? "lock.open" : "lock")
         }
-        .disabled(model.isMutating || session.supportsTabMetadata != true || session.isLocalPrivate == true)
-        if session.isLocalPrivate == true {
+        .disabled(state.isMutating || !state.supportsTabMetadata || state.isLocalPrivate)
+        if state.isLocalPrivate {
             Text("Permanent tab. History saved; self-hosted models only.")
         }
-        if session.supportsTabMetadata != true {
+        if !state.supportsTabMetadata {
             Text("Update and reopen Cantrip to rename or lock tabs.")
         }
         Divider()
-        if session.supportsTabReordering == true {
+        if state.supportsTabReordering {
             Button {
-                Task { await model.moveTab(session.id, offset: -1) }
+                Task { await model.moveTab(state.id, offset: -1) }
             } label: {
                 Label("Move Tab Up", systemImage: "arrow.up")
             }
-            .disabled(model.isMutating || model.sessions.first?.id == session.id)
+            .disabled(state.isMutating || state.isFirst)
             Button {
-                Task { await model.moveTab(session.id, offset: 1) }
+                Task { await model.moveTab(state.id, offset: 1) }
             } label: {
                 Label("Move Tab Down", systemImage: "arrow.down")
             }
-            .disabled(model.isMutating || model.sessions.last?.id == session.id)
+            .disabled(state.isMutating || state.isLast)
         } else {
             Text("Update and reopen Cantrip to reorder tabs.")
         }
         Divider()
         Button(role: .destructive, action: onClose) {
-            Label("Close Session", systemImage: "xmark")
+            Label("Close Tab", systemImage: "xmark")
         }
-        .disabled(model.isMutating || session.isLocked == true)
+        .disabled(state.isMutating || state.isLocked)
     }
 }
 

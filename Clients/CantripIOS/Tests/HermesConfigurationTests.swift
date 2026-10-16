@@ -26,7 +26,7 @@ final class HermesConfigurationTests: XCTestCase {
     }
 
     @MainActor
-    func testBackendVisibilityAndOrderPersistAndKeepOneVisible() throws {
+    func testBackendVisibilityAndOrderPersistAndKeepHomeVisible() throws {
         let suite = "HermesConfigurationTests.backendPreferences.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.removePersistentDomain(forName: suite)
@@ -35,27 +35,52 @@ final class HermesConfigurationTests: XCTestCase {
 
         let env = HermesEnv(defaults: defaults)
         XCTAssertEqual(env.executionLane, .home)
-        XCTAssertEqual(env.backendOrder, ExecutionLane.allCases)
-        XCTAssertEqual(env.selectableLanes, ExecutionLane.allCases)
+        XCTAssertEqual(env.backendOrder, [.copilot, .local, .home])
+        XCTAssertEqual(env.selectableLanes, ExecutionLane.pickerLanes)
+        XCTAssertFalse(env.selectableLanes.contains(.cantrip), "Tabs live in Home's drawer, not the picker")
         env.select(.copilot)
 
-        env.moveBackends(fromOffsets: IndexSet(integer: 0), toOffset: 4)
-        XCTAssertEqual(env.backendOrder, [.local, .cantrip, .home, .copilot])
+        env.moveBackends(fromOffsets: IndexSet(integer: 0), toOffset: 3)
+        XCTAssertEqual(env.backendOrder, [.local, .home, .copilot])
         env.setLaneVisible(.home, isVisible: false)
+        XCTAssertTrue(env.isLaneVisible(.home), "Home holds every tab, so it cannot be hidden")
+        XCTAssertFalse(env.canHide(.home))
+        env.setLaneVisible(.cantrip, isVisible: true)
+        XCTAssertEqual(env.backendOrder, [.local, .home, .copilot])
         env.setLaneVisible(.copilot, isVisible: false)
-        XCTAssertEqual(env.selectableLanes, [.local, .cantrip])
-        XCTAssertEqual(env.executionLane, .cantrip)
+        XCTAssertEqual(env.selectableLanes, [.local, .home])
+        XCTAssertEqual(env.executionLane, .home)
 
         let restored = HermesEnv(defaults: defaults)
-        XCTAssertEqual(restored.backendOrder, [.local, .cantrip, .home, .copilot])
-        XCTAssertEqual(restored.selectableLanes, [.local, .cantrip])
-        XCTAssertEqual(restored.executionLane, .cantrip)
+        XCTAssertEqual(restored.backendOrder, [.local, .home, .copilot])
+        XCTAssertEqual(restored.selectableLanes, [.local, .home])
+        XCTAssertEqual(restored.executionLane, .home)
 
         restored.setLaneVisible(.local, isVisible: false)
-        restored.setLaneVisible(.cantrip, isVisible: false)
-        XCTAssertEqual(restored.selectableLanes, [.cantrip])
-        XCTAssertTrue(restored.isLaneVisible(.cantrip))
-        XCTAssertFalse(restored.canHide(.cantrip))
+        XCTAssertEqual(restored.selectableLanes, [.home])
+        XCTAssertFalse(restored.canHide(.home))
+    }
+
+    @MainActor
+    func testStoredRemoteLanePreferencesMigrateToHome() throws {
+        let suite = "HermesConfigurationTests.remoteMigration.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["cantrip", "local", "home", "copilot"], forKey: "hermes.backendOrder")
+        defaults.set(["home", "cantrip", "copilot"], forKey: "hermes.hiddenBackends")
+        defaults.set(ExecutionLane.cantrip.rawValue, forKey: "hermes.executionLane")
+
+        let env = HermesEnv(defaults: defaults)
+        XCTAssertEqual(env.executionLane, .home)
+        XCTAssertEqual(defaults.string(forKey: "hermes.executionLane"), "home")
+        XCTAssertEqual(env.backendOrder, [.local, .home, .copilot])
+        XCTAssertEqual(env.selectableLanes, [.local, .home])
+        XCTAssertFalse(env.isLaneVisible(.copilot))
+
+        env.setLaneVisible(.copilot, isVisible: true)
+        XCTAssertEqual(defaults.stringArray(forKey: "hermes.backendOrder"), ["local", "home", "copilot"])
+        XCTAssertEqual(defaults.stringArray(forKey: "hermes.hiddenBackends"), [])
     }
 
     @MainActor
@@ -70,6 +95,9 @@ final class HermesConfigurationTests: XCTestCase {
         XCTAssertEqual(launched.executionLane, .home)
         launched.select(.cantrip)
         XCTAssertEqual(launched.executionLane, .cantrip)
+        XCTAssertEqual(defaults.string(forKey: "hermes.executionLane"), "home",
+                       "An open tab is stored as Home, so a cold launch never restores a tab lane")
+        XCTAssertEqual(ExecutionLane.cantrip.pickerLane, .home)
 
         let relaunched = HermesEnv(defaults: defaults)
         XCTAssertEqual(relaunched.executionLane, .home)
@@ -88,7 +116,7 @@ final class HermesConfigurationTests: XCTestCase {
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         let env = HermesEnv(defaults: defaults)
-        env.moveBackends(fromOffsets: IndexSet(integer: 3), toOffset: 0)
+        env.moveBackends(fromOffsets: IndexSet(integer: 2), toOffset: 0)
         env.setLaneVisible(.local, isVisible: false)
 
         let output = URL(fileURLWithPath: directory, isDirectory: true)

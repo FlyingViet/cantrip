@@ -18,6 +18,21 @@ enum CantripDrawerGesture {
 }
 
 extension View {
+    /// A deliberate right swipe from the left edge, e.g. from a project tab back to Home.
+    func cantripEdgeSwipe(isEnabled: Bool, perform action: @escaping () -> Void) -> some View {
+        simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    if isEnabled, CantripDrawerGesture.shouldOpen(
+                        start: value.startLocation, translation: value.translation
+                    ) {
+                        action()
+                    }
+                },
+            isEnabled: isEnabled
+        )
+    }
+
     func cantripTabDrawer<Panel: View>(
         isPresented: Binding<Bool>,
         isEnabled: Bool,
@@ -191,6 +206,8 @@ struct CantripTabList<Actions: View>: View {
     let selectedSessionID: String?
     let onSelect: (String) -> Void
     var onMove: ((String, String, Bool) -> Void)? = nil
+    /// Rows above the tabs that scroll with them (Home's pinned rows), never reorderable.
+    var header: (() -> AnyView)? = nil
     @ViewBuilder var actions: (CantripRemoteSession) -> Actions
 
     var selectedSession: CantripRemoteSession? {
@@ -200,6 +217,12 @@ struct CantripTabList<Actions: View>: View {
     var body: some View {
         ScrollViewReader { proxy in
             List {
+                if let header {
+                    header()
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                }
                 ForEach(sessions) { session in
                     row(session)
                         .id(session.id)
@@ -214,7 +237,6 @@ struct CantripTabList<Actions: View>: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .environment(\.editMode, .constant(onMove == nil ? .inactive : .active))
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: sessions.map(\.id))
             .scrollBounceBehavior(.basedOnSize)
             .defaultScrollAnchor(.top)
@@ -226,58 +248,75 @@ struct CantripTabList<Actions: View>: View {
     }
 
     private func row(_ session: CantripRemoteSession) -> some View {
-        HStack(spacing: 0) {
-            Button { onSelect(session.id) } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: session.id == selectedSessionID ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(.tint)
-                    VStack(alignment: .leading, spacing: 4) {
-                        CantripSessionTitle(title: session.title, isStreaming: session.isStreaming)
-                            .font(.body.weight(.semibold))
-                            .lineLimit(3)
-                        let status = CantripSessionPicker.statusSummary(for: session)
-                        if !status.isEmpty {
-                            Text(status)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+        let selected = session.id == selectedSessionID
+        let detail = CantripTabRowText.detail(for: session)
+        return Button { onSelect(session.id) } label: {
+            HStack(alignment: .top, spacing: 12) {
+                CantripTabStatusIndicator(session: session)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        HStack(spacing: 4) {
+                            if session.isLocalPrivate == true {
+                                Image(systemName: "lock.shield.fill").font(.caption)
+                            } else if session.isLocked == true {
+                                Image(systemName: "lock.fill").font(.caption)
+                            }
+                            Text(session.title)
+                                .multilineTextAlignment(.leading)
                                 .lineLimit(2)
                         }
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        CantripTabAgeText(date: session.lastActivityDate)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if let detail {
+                        Text(detail.text)
+                            .font(.subheadline)
+                            .foregroundStyle(detail.isActive ? CantripHomeBackgroundStyle.activeTint : Color.secondary)
+                            .lineLimit(1)
+                    }
                 }
-                .padding(12)
-                .frame(minHeight: 52)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("cantrip-tab-\(session.id)")
-            .accessibilityLabel(CantripSessionPicker.accessibilityTitle(for: session))
-            .accessibilityValue(CantripSessionPicker.statusSummary(for: session))
-            .accessibilityAddTraits(session.id == selectedSessionID ? [.isSelected] : [])
-            .contextMenu { actions(session) }
-
-            Menu { actions(session) } label: {
-                Image(systemName: "ellipsis")
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel("Actions for \(session.title)")
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(minHeight: 52)
+            .background(selected ? Color.accentColor.opacity(0.15) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
         }
-        .background(
-            session.id == selectedSessionID ? Color.accentColor.opacity(0.15) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 12)
-        )
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("cantrip-tab-\(session.id)")
+        .accessibilityLabel(CantripSessionPicker.accessibilityTitle(for: session))
+        .accessibilityValue(session.tabRowAccessibilityValue)
+        .accessibilityHint("Opens this tab. Touch and hold for tab actions.")
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+        .contextMenu { actions(session) }
     }
 
     @discardableResult
     func move(fromOffsets offsets: IndexSet, toOffset destination: Int) -> Bool {
-        guard let onMove, offsets.count == 1, let source = offsets.first,
+        guard let onMove,
+              let move = CantripTabReorder.move(sessions, fromOffsets: offsets, toOffset: destination)
+        else { return false }
+        onMove(move.id, move.targetID, move.after)
+        return true
+    }
+}
+
+enum CantripTabReorder {
+    /// A `List.onMove` drop as the tab to move, the tab it lands beside and whether it goes after
+    /// it. Nil for no-op drops, multi-row drags and hosts that cannot reorder tabs.
+    static func move(
+        _ sessions: [CantripRemoteSession], fromOffsets offsets: IndexSet, toOffset destination: Int
+    ) -> (id: String, targetID: String, after: Bool)? {
+        guard offsets.count == 1, let source = offsets.first,
               sessions.indices.contains(source), (0...sessions.count).contains(destination),
-              destination != source, destination != source + 1 else { return false }
+              destination != source, destination != source + 1 else { return nil }
         let target = source < destination ? destination - 1 : destination
         guard sessions[source].supportsTabReordering == true,
-              sessions[target].supportsTabReordering == true else { return false }
-        onMove(sessions[source].id, sessions[target].id, source < target)
-        return true
+              sessions[target].supportsTabReordering == true else { return nil }
+        return (sessions[source].id, sessions[target].id, source < target)
     }
 }

@@ -8,10 +8,17 @@ enum CantripHomeIdentity {
 enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
     case copilot
     case local
+    /// A Cantrip project tab opened full screen from Cantrip Home's tab drawer. Not a lane the
+    /// user picks: it never appears in the backend menu or Settings and is never restored.
     case cantrip
     case home
 
     static let defaultLane: ExecutionLane = .home
+    /// The backends offered in the lane menu and Settings, in default order.
+    static let pickerLanes: [ExecutionLane] = [.copilot, .local, .home]
+
+    /// The picker entry this lane belongs to: a tab is part of Cantrip Home.
+    var pickerLane: ExecutionLane { self == .cantrip ? .home : self }
 
     var id: String { rawValue }
 
@@ -19,7 +26,7 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .copilot: "Copilot"
         case .local: "Private Local"
-        case .cantrip: "Cantrip Remote"
+        case .cantrip: "Cantrip Tab"
         case .home: "Cantrip Home"
         }
     }
@@ -28,7 +35,7 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .copilot: "Coding · Copilot"
         case .local: "Private · Local"
-        case .cantrip: "Remote · Cantrip"
+        case .cantrip: "Tab · Cantrip"
         case .home: "Home · Cantrip"
         }
     }
@@ -40,9 +47,9 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         case .local:
             "Uses the explicitly configured local-private inference route."
         case .cantrip:
-            "Controls an existing Cantrip session through its Remote server."
+            "A Cantrip project tab, opened from Cantrip Home."
         case .home:
-            "A focused always-on Cantrip assistant with Chat, Tasks, and Artifacts."
+            "Your always-on Cantrip assistant with Chat, Tasks, Artifacts and every project tab."
         }
     }
 
@@ -50,7 +57,7 @@ enum ExecutionLane: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .copilot: "chevron.left.forwardslash.chevron.right"
         case .local: "lock.shield.fill"
-        case .cantrip: "antenna.radiowaves.left.and.right"
+        case .cantrip: "rectangle.stack"
         case .home: "house.fill"
         }
     }

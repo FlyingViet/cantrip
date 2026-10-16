@@ -18,8 +18,8 @@ A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.c
 - 🔘 **Action Button / Shortcuts / Siri** — "Talk to Hermes" jumps straight into voice mode
 - 💾 **Persistent history** — reopen to your prior conversation
 - 🔑 **Your gateway, your key** — points at *your* Hermes server, nothing hardcoded
-- 📡 **Cantrip Remote** — choose Cantrip from the agent picker and use the same
-  chat, dictation, hands-free voice, and TTS interface
+- 📡 **Cantrip tabs** — every project tab on your Mac lives in Cantrip Home's drawer and
+  uses the same chat, dictation, hands-free voice, and TTS interface
 
 > The app is a thin, secure client. All the intelligence (skills, memory, tools) lives in **your** Hermes gateway. You bring the gateway + an API key; the app does the rest.
 
@@ -44,40 +44,39 @@ A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.c
 
 The app speaks the gateway's **OpenAI-compatible API server** (`gateway/platforms/api_server.py`), which is the *full agent* — not the raw inference shim.
 
-## Cantrip Remote
+## Cantrip tabs (inside Cantrip Home)
 
-Tap the agent badge under the conversation title (the `</>` badge when Copilot is selected)
-and choose **Cantrip Remote**. It attaches to Cantrip's existing session IDs
-rather than launching another agent. Cantrip then uses the same transcript,
-composer, microphone, hands-free voice mode, and spoken replies as Hermes.
-The header, tab drawer, and composer provide session selection, new
-sessions and conversations, queued/redirected/injected prompts, stop, and resume.
+Cantrip Home is the front door: there is no separate Remote lane. Your Mac's project tabs
+live in Home's **tab drawer**: tap the top-left **Tabs** button (its badge counts working
+tabs, or shows **?** while a tab or background job waits for you) or swipe right from the
+left edge. The drawer has **+** for a new tab, **Search tabs**, a pinned **Cantrip Home**
+row, a **Background jobs** row (scheduled and automated runs), then every tab with a spinner
+while it works (its live status in orange), its latest outcome when idle, and how long ago
+it last ran. Touch and hold a tab for Rename, Lock, Move, Model Settings, View Mac and
+Close. A connection line sits at the bottom.
+
+A tab opens full screen with **‹ Home** on the left, its name and **Working / Idle** state in
+the center, and a **⋯** menu on the right: **All Tabs**, the tab's actions, delivery mode,
+Copilot usage, Resume, voice mode and the Mac menu items. Stop, queued prompts, input
+requests, attachments, per-tab models and history paging work as before. **‹ Home** or a
+right swipe from the left edge returns to Home. Handoff cards' **Open tab**, a tab's push
+notification and the Tabs widget open the tab the same way. Tab ages and outcomes need
+Cantrip host e8e5c0b or later; older hosts show names and live status only.
 
 In **Settings → Backends**, choose which execution backends appear in the picker
-and tap **Edit** to drag them into your preferred order. At least one backend
-always remains visible.
+and tap **Edit** to drag them into your preferred order. Cantrip Home always stays
+visible because it holds your tabs. A saved Cantrip Remote lane selection opens Home.
 
 **Tap the mic** for single-turn dictation, or **touch and hold it** for half a
 second to open full-screen **continuous voice mode**. Once open, release the
 mic and talk hands-free through the existing *listen → think → speak* loop.
-Close voice mode to end the loop. This works in Cantrip Remote, Copilot, and
+Close voice mode to end the loop. This works in Cantrip Home and its tabs, Copilot, and
 Private Local; **hamburger menu > Voice mode** remains available, and VoiceOver
 offers a **Continuous voice mode** action on the mic.
 
-The **Tabs** drawer marks the selected tab with a checkmark and includes tab
-names, locks, and queued counts. A blinking brain beside a tab's name in the
-drawer marks it as working, disappearing when work stops. Cantrip Remote keeps
-a compact header: **Tabs** on the left, the centered **Cantrip Remote** title
-with its connection dot, and the menu on the right. Tap the title to switch
-backends. While the selected tab works, the "Cantrip is working…" status
-appears only above the composer. With Reduce
-Motion enabled the
-brain stays still; VoiceOver continues to announce "Working".
-Locked tabs remain selectable. The **Auto** delivery dropdown sits immediately
-to the right of the usage limit in the header; choose a manual mode there for
-a one-message override. The title appears only in the header, with extra
-clearance below the safe area/Dynamic Island. Use **New Tab** in the drawer
-to create another session.
+With Reduce Motion enabled the drawer's spinners stay still; VoiceOver announces each tab's
+state, latest line and age. The **Auto** delivery dropdown is in the tab's **⋯** menu;
+choose a manual mode there for a one-message override.
 
 The connected-server indicator sits at the left end of the antenna/usage row,
 with **Refresh** at the right end and Auto still beside usage. On narrow screens
@@ -390,11 +389,10 @@ and tap **Stop** on a running or waiting card to stop just that subagent.
 
 ### Cantrip Home
 
-**Cantrip Home** is a focused fourth execution lane backed by one permanent,
-hidden session on the paired Mac. Turn it on in the Mac Cantrip settings, then
-choose **Cantrip Home** from the lane picker. It keeps Cantrip Remote's model
-selection, tools, attachments, voice, input requests and streaming chat, but
-removes session switching and uses bottom **Chat**, **Tasks**, **Artifacts** and
+**Cantrip Home** is the default lane, backed by one permanent, hidden session on the
+paired Mac, with every project tab in its drawer (above). Turn it on in the Mac Cantrip
+settings. It keeps the model selection, tools, attachments, voice, input requests and
+streaming chat of tabs, and uses bottom **Chat**, **Tasks**, **Artifacts** and
 **Builds** destinations. These use Apple's native Liquid Glass tab bar, which moves into
 the system vertical edge automatically on iPhone Duo.
 
@@ -459,7 +457,7 @@ run. Answering in place needs Cantrip host v1.0-131 or later; on older hosts,
 
 Home reads each message for intent. Questions, status checks and other
 references to a project are answered right in Home. When you ask for changes to
-a project that has an open Cantrip Remote tab, Home hands the work to that tab
+a project that has an open Cantrip tab, Home hands the work to that tab
 and shows a nested task card under its reply: live status while the tab works,
 the tab's result when it finishes, and **Open tab** to jump straight to it.
 
