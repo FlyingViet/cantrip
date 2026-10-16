@@ -43,6 +43,13 @@ final class AppSettings: ObservableObject {
     @Published var remoteControlPort: Int {
         didSet { d.set(remoteControlPort, forKey: "remoteControlPort") }
     }
+    /// Fixed port for the encrypted (TLS-PSK) LAN listener, so a client can save this Mac's
+    /// direct address (e.g. through a Tailscale subnet router). 0 = automatic (dynamic) port.
+    @Published var remoteLANPort: Int {
+        didSet { d.set(remoteLANPort, forKey: "remoteLANPort") }
+    }
+    /// Where the encrypted LAN listener is actually listening; nil while it is off.
+    @Published private(set) var remoteLANStatus: RemoteLANStatus?
     /// Permanent hidden session used by Cantrip Agent's focused Home mode.
     @Published var cantripHomeEnabled: Bool {
         didSet { d.set(cantripHomeEnabled, forKey: "cantripHomeEnabled") }
@@ -107,6 +114,10 @@ final class AppSettings: ObservableObject {
 
     func reportRemoteControlError(_ message: String?) {
         remoteControlError = message
+    }
+
+    func reportRemoteLANStatus(_ status: RemoteLANStatus?) {
+        if remoteLANStatus != status { remoteLANStatus = status }
     }
 
     @Published var backend: BackendKind {
@@ -422,6 +433,7 @@ final class AppSettings: ObservableObject {
             "panelOpacity": panelOpacity,
             "remoteControlEnabled": remoteControlEnabled,
             "remoteControlPort": remoteControlPort,
+            "remoteLANPort": remoteLANPort,
             "cantripHomeEnabled": cantripHomeEnabled,
             "cantripHomeParallelRuns": cantripHomeParallelRuns,
         ]
@@ -478,6 +490,9 @@ final class AppSettings: ObservableObject {
         }
         if let port = dict["remoteControlPort"] as? Int {
             remoteControlPort = port
+        }
+        if let port = dict["remoteLANPort"] as? Int, (0...65535).contains(port) {
+            remoteLANPort = port
         }
         if let opacity = dict["panelOpacity"] as? Double {
             panelOpacity = min(max(opacity, 0.5), 1.0)
@@ -551,6 +566,7 @@ final class AppSettings: ObservableObject {
         remoteControlEnabled = d.bool(forKey: "remoteControlEnabled")
         let storedRemotePort = d.integer(forKey: "remoteControlPort")
         remoteControlPort = storedRemotePort == 0 ? 8765 : storedRemotePort
+        remoteLANPort = min(max(d.integer(forKey: "remoteLANPort"), 0), 65535)
         cantripHomeEnabled = d.bool(forKey: "cantripHomeEnabled")
         let storedParallelRuns = d.integer(forKey: "cantripHomeParallelRuns")
         cantripHomeParallelRuns = storedParallelRuns == 0

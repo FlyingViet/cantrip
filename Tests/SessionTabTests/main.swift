@@ -125,6 +125,7 @@ struct SessionTabTests {
         try await testPanelStaysOpenForAttachedConfirmation()
         try await testTabReordering()
         try await testTabListPreviews()
+        try await testRemoteLANPort()
         try testPromptPaging()
         try await testPromptPreparation()
         try await testCopilotUsage()

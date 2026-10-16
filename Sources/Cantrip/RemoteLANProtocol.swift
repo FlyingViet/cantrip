@@ -42,3 +42,26 @@ enum RemoteLANProtocol {
             .joined()
     }
 }
+
+enum RemoteLANAddresses {
+    /// This Mac's IPv4 addresses on Wi-Fi/Ethernet (en*), for showing its direct address.
+    static func ipv4() -> [String] {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return [] }
+        defer { freeifaddrs(head) }
+        var addresses: [String] = []
+        for pointer in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let entry = pointer.pointee
+            guard let address = entry.ifa_addr, address.pointee.sa_family == UInt8(AF_INET),
+                  entry.ifa_flags & UInt32(IFF_UP) != 0, entry.ifa_flags & UInt32(IFF_LOOPBACK) == 0,
+                  String(cString: entry.ifa_name).hasPrefix("en") else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count),
+                           nil, 0, NI_NUMERICHOST) == 0 {
+                let value = String(cString: host)
+                if !value.hasPrefix("169.254."), !addresses.contains(value) { addresses.append(value) }
+            }
+        }
+        return addresses
+    }
+}
