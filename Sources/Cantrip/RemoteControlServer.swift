@@ -8,6 +8,11 @@ import Combine
 /// listener uses forward-secret TLS with the pairing token as a PSK for LAN use.
 final class RemoteControlServer {
     var onError: ((String?) -> Void)?
+    /// The encrypted LAN listener's actual port, and whether a pinned port had to fall back.
+    var onLANStatus: ((RemoteLANStatus?) -> Void)?
+    /// Bonjour advertisement of the encrypted LAN listener. Tests turn it off to prove that
+    /// clients reach it through a direct host:port.
+    var advertisesLANService = true
 
     private weak var manager: SessionManager?
     private let queue = DispatchQueue(label: "com.brian.cantrip.remote-control")
@@ -20,6 +25,7 @@ final class RemoteControlServer {
     private var listener: NWListener?
     private var lanListener: NWListener?
     private var activePort: Int?
+    private var activeLANPort: Int?
     private var token = ""
     private let buildMonitor: GitHubBuildMonitor
     private let usage: UsageTracker
@@ -58,7 +64,10 @@ final class RemoteControlServer {
         self.requestLog = requestLog
     }
 
-    func start(port: Int, token: String) {
+    /// `lanPort` pins the encrypted LAN listener (for direct addresses such as a Tailscale
+    /// subnet route to this Mac); nil, or a port that is busy, uses a dynamic port.
+    func start(port: Int, token: String, lanPort: Int? = nil) {
+        let lanPort = lanPort.flatMap { (1...65535).contains($0) && $0 != port ? $0 : nil }
         guard (1...65535).contains(port) else {
             onError?("Remote control port must be between 1 and 65535.")
             stop()
@@ -69,7 +78,19 @@ final class RemoteControlServer {
             stop()
             return
         }
-        if listener != nil, lanListener != nil, activePort == port, self.token == token {
+        if listener != nil, lanListener != nil, activePort == port, self.token == token,
+           activeLANPort == lanPort {
+            return
+        }
+        // Only the LAN port changed: keep the loopback listener, whose port can't be rebound
+        // until the old socket finishes closing on the listener queue.
+        if listener != nil, activePort == port, self.token == token {
+            lanListener?.stateUpdateHandler = nil
+            lanListener?.cancel()
+            lanListener = nil
+            activeLANPort = lanPort
+            onLANStatus?(nil)
+            startLANListener(token: token, pinnedPort: lanPort)
             return
         }
         stop()
@@ -100,11 +121,12 @@ final class RemoteControlServer {
             }
             self.listener = listener
             activePort = port
+            activeLANPort = lanPort
             self.token = token
             updateNotificationActivation(fingerprint: RemoteLANProtocol.tokenFingerprint(token))
             updateLiveStatusActivation(fingerprint: RemoteLANProtocol.tokenFingerprint(token))
             listener.start(queue: queue)
-            startLANListener(token: token)
+            startLANListener(token: token, pinnedPort: lanPort)
         } catch {
             onError?("Remote control daemon failed: \(error.localizedDescription)")
             Log.write("remote-control: listener failed: \(error.localizedDescription)")
@@ -123,7 +145,9 @@ final class RemoteControlServer {
         lanListener?.cancel()
         lanListener = nil
         activePort = nil
+        activeLANPort = nil
         token = ""
+        onLANStatus?(nil)
     }
 
     @MainActor
@@ -362,17 +386,23 @@ final class RemoteControlServer {
             .filter { $0.subagent?.isActive == true }.count
     }
 
-    private func startLANListener(token: String) {
+    /// Starts the TLS-PSK listener, on `pinnedPort` when given. A pinned port that can't be bound
+    /// (another app holds it) falls back to a dynamic port so Bonjour clients keep working.
+    private func startLANListener(token: String, pinnedPort: Int?, fallbackFrom: Int? = nil) {
         do {
-            let listener = try NWListener(using: RemoteLANProtocol.parameters(token: token))
-            listener.service = NWListener.Service(
-                name: Host.current().localizedName ?? "Cantrip",
-                type: RemoteLANProtocol.serviceType,
-                txtRecord: NWTXTRecord([
-                    "id": RemoteLANProtocol.tokenFingerprint(token),
-                    "v": "1",
-                ])
-            )
+            let parameters = RemoteLANProtocol.parameters(token: token)
+            let listener = try pinnedPort.flatMap { NWEndpoint.Port(rawValue: UInt16($0)) }
+                .map { try NWListener(using: parameters, on: $0) } ?? NWListener(using: parameters)
+            if advertisesLANService {
+                listener.service = NWListener.Service(
+                    name: Host.current().localizedName ?? "Cantrip",
+                    type: RemoteLANProtocol.serviceType,
+                    txtRecord: NWTXTRecord([
+                        "id": RemoteLANProtocol.tokenFingerprint(token),
+                        "v": "1",
+                    ])
+                )
+            }
             listener.newConnectionHandler = { [weak self] connection in
                 self?.accept(connection)
             }
@@ -382,7 +412,22 @@ final class RemoteControlServer {
                 case .ready:
                     self.onError?(nil)
                     if let port = listener.port {
-                        Log.write("remote-control: encrypted LAN service ready on port \(port)")
+                        Log.write("remote-control: encrypted LAN service ready on port \(port)"
+                            + (fallbackFrom.map { " (port \($0) was unavailable)" } ?? ""))
+                        self.onLANStatus?(RemoteLANStatus(
+                            port: Int(port.rawValue), requestedPort: fallbackFrom ?? pinnedPort
+                        ))
+                    }
+                case .waiting(let error) where pinnedPort != nil && Self.isPortConflict(error),
+                     .failed(let error) where pinnedPort != nil:
+                    Log.write("remote-control: LAN port \(pinnedPort!) unavailable: \(error.localizedDescription)")
+                    listener.stateUpdateHandler = nil
+                    listener.cancel()
+                    // start() and stop() run on the main queue; restart there unless they replaced us.
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.lanListener === listener, self.token == token else { return }
+                        self.lanListener = nil
+                        self.startLANListener(token: token, pinnedPort: nil, fallbackFrom: pinnedPort)
                     }
                 case .failed(let error):
                     self.onError?(
@@ -392,6 +437,7 @@ final class RemoteControlServer {
                     listener.stateUpdateHandler = nil
                     listener.cancel()
                     self.lanListener = nil
+                    self.onLANStatus?(nil)
                 default:
                     break
                 }
@@ -399,9 +445,19 @@ final class RemoteControlServer {
             lanListener = listener
             listener.start(queue: queue)
         } catch {
+            if let pinnedPort {
+                Log.write("remote-control: LAN port \(pinnedPort) unavailable: \(error.localizedDescription)")
+                startLANListener(token: token, pinnedPort: nil, fallbackFrom: pinnedPort)
+                return
+            }
             onError?("Direct local-network control failed: \(error.localizedDescription)")
             Log.write("remote-control: LAN listener failed: \(error.localizedDescription)")
         }
+    }
+
+    private static func isPortConflict(_ error: NWError) -> Bool {
+        guard case .posix(let code) = error else { return false }
+        return [.EADDRINUSE, .EACCES, .EADDRNOTAVAIL].contains(code)
     }
 
     private func accept(_ connection: NWConnection) {
@@ -3098,4 +3154,31 @@ private extension RemoteControlServer {
     startRemoteUI();
     </script></body></html>
     """
+}
+
+/// Where the encrypted LAN listener ended up. `requestedPort` is the pinned port, if any.
+struct RemoteLANStatus: Equatable {
+    let port: Int
+    let requestedPort: Int?
+
+    /// The pinned port was busy, so a dynamic port is in use.
+    var fellBack: Bool { requestedPort != nil && requestedPort != port }
+}
+
+enum RemoteLANStatusText {
+    /// Settings' line under the direct port: the address to save in a client profile, or why the
+    /// pinned port isn't in use.
+    static func describe(_ status: RemoteLANStatus?, pinnedPort: Int, addresses: [String]) -> String {
+        guard let status else { return "The encrypted local-network connection is starting." }
+        if status.fellBack, let requested = status.requestedPort {
+            return "Port \(requested) is in use by another app, so the encrypted connection is on port \(status.port) for now. Choose another direct port."
+        }
+        guard pinnedPort != 0 else {
+            return "Encrypted local-network port \(status.port) (automatic; it changes when Cantrip restarts). Set a direct port to save this Mac's direct address in Cantrip Agent."
+        }
+        let direct = addresses.map { "\($0):\(status.port)" }
+        return direct.isEmpty
+            ? "Encrypted local-network port \(status.port). Add <this Mac's IP>:\(status.port) as the direct address in Cantrip Agent."
+            : "Direct address: \(direct.joined(separator: " or ")). Add it to a Cantrip Agent or Gateway Mac profile with this Mac's pairing token; Tailscale subnet routes reach it away from home."
+    }
 }
