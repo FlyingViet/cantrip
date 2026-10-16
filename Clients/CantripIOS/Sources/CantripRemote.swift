@@ -3859,7 +3859,8 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     private func recoverTailscale() {
-        guard appIsActive, let token, !tailscaleOnly else { return }
+        // Tailscale-only skips Bonjour but keeps a saved direct address, which can become preferred.
+        guard appIsActive, let token, !tailscaleOnly || directEndpoint != nil else { return }
         router.recoverTailscale { [urlSession] transport in
             _ = try await CantripRemoteAPI(
                 transport: transport, token: token, urlSession: urlSession
