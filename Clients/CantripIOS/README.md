@@ -59,7 +59,10 @@ A tab opens full screen with **‹ Home** on the left, its name and **Working / 
 the center, and a **⋯** menu on the right: **All Tabs**, the tab's actions, delivery mode,
 Copilot usage, Resume, voice mode and the Mac menu items. Stop, queued prompts, input
 requests, attachments, per-tab models and history paging work as before. **‹ Home** or a
-right swipe from the left edge returns to Home. Handoff cards' **Open tab**, a tab's push
+right swipe from the left edge returns to Home. The swipe drags the tab with your finger over
+Home, like a navigation back swipe: let go past about a third of the width (or flick) to
+finish, or earlier to stay in the tab. Home shows as you left it until its conversation has
+reloaded; with Reduce Motion, **‹ Home** switches without sliding. Handoff cards' **Open tab**, a tab's push
 notification and the Tabs widget open the tab the same way. Tab ages and outcomes need
 Cantrip host e8e5c0b or later; older hosts show names and live status only.
 
