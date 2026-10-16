@@ -394,8 +394,8 @@ and tap **Stop** on a running or waiting card to stop just that subagent.
 hidden session on the paired Mac. Turn it on in the Mac Cantrip settings, then
 choose **Cantrip Home** from the lane picker. It keeps Cantrip Remote's model
 selection, tools, attachments, voice, input requests and streaming chat, but
-removes session switching and uses bottom **Chat**, **Tasks**, and **Artifacts**
-destinations. These use Apple's native Liquid Glass tab bar, which moves into
+removes session switching and uses bottom **Chat**, **Tasks**, **Artifacts** and
+**Builds** destinations. These use Apple's native Liquid Glass tab bar, which moves into
 the system vertical edge automatically on iPhone Duo.
 
 Home's chat header features **Pip**, a mascot: a fluffy purple hooded plush with
@@ -483,6 +483,18 @@ unpairing deletes them. An updated Mac host is needed for thumbnails; older host
 show the type icons. Images open in the full-screen viewer, and everything else
 opens in the system preview. The menu on each artifact can permanently delete
 its file from the paired Mac.
+
+**Builds** lists every app build on the Mac's private over-the-air install page
+(`~/Sites/ota`, published with `ota-publish.py`), read through the paired host's
+`GET /api/v1/home/builds` route. One card per page entry shows the app icon, title,
+version (build), publish time, size, profile type and note, with a prominent
+**Install**; older builds sit behind a disclosure, and pull to refresh reloads the
+list. Install first checks that the page answers (it is tailnet-only), then hands
+the build's `itms-services` link to iOS, which shows its install prompt; if Tailscale
+is off, the build is gone, or iOS can't open the link, an alert says what to do.
+Installing Cantrip Agent itself asks first, and entries sharing a bundle ID (Brane
+Controller and Crooner) say that one replaces the other. The tab is read-only and
+iPhone-only (Gateway Mac has no installer); icons are cached by build in Caches.
 
 The full-screen image viewer (Artifacts and chat images) works like Photos: at
 minimum zoom, drag the image up or down and it shrinks while the screen behind

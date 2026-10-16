@@ -649,6 +649,51 @@ struct CantripHomeArtifact: Decodable, Equatable, Identifiable {
     let createdAt: Date
 }
 
+/// One build on the Mac's private over-the-air install page (Home's Builds tab).
+struct CantripOTABuild: Decodable, Equatable, Identifiable, Sendable {
+    /// `<bundle id>/<build folder>` on the Mac; also addresses the icon.
+    let id: String
+    let bundleID: String
+    let title: String
+    let version: String
+    let build: String
+    let note: String?
+    let hasIcon: Bool
+    let size: Int64?
+    let sizeLabel: String?
+    let profileName: String?
+    let profileKind: String?
+    let profileExpires: String?
+    let publishedAt: Date
+    let publishedLabel: String?
+    let sourceCommit: String?
+    /// The https manifest the install link points at (tailnet-only).
+    let manifestURL: String
+    /// `itms-services://?action=download-manifest&url=…`
+    let installURL: String
+}
+
+/// One install-page entry: builds sharing a page key, newest first.
+struct CantripOTAApp: Decodable, Equatable, Identifiable, Sendable {
+    let id: String
+    let title: String
+    let bundleID: String
+    let builds: [CantripOTABuild]
+}
+
+struct CantripOTABuildsSnapshot: Decodable, Equatable, Sendable {
+    let apps: [CantripOTAApp]
+    let pageURL: String?
+    /// False when the Mac has no install page folder at all.
+    let available: Bool
+    let skipped: Int
+    let revision: String
+}
+
+private struct CantripOTAIconResponse: Decodable {
+    let data: Data
+}
+
 private struct CantripHomeTasksResponse: Decodable {
     let tasks: [CantripHomeTask]
     let revision: String
@@ -1370,6 +1415,29 @@ struct CantripRemoteAPI {
         return (response.artifacts, response.revision)
     }
 
+    func homeBuilds() async throws -> CantripOTABuildsSnapshot {
+        try await request(path: "/api/v1/home/builds")
+    }
+
+    /// nil when the build has no icon on the Mac.
+    func homeBuildIcon(id: String) async throws -> Data? {
+        let parts = id.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2, parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw CantripRemoteError.invalidResponse
+        }
+        do {
+            let response: CantripOTAIconResponse = try await request(
+                path: "/api/v1/home/builds/\(try Self.pathComponent(parts[0]))/\(try Self.pathComponent(parts[1]))/icon"
+            )
+            guard !response.data.isEmpty, response.data.count <= 2 * 1024 * 1024 else {
+                throw CantripRemoteError.invalidResponse
+            }
+            return response.data
+        } catch CantripRemoteError.http(404, _) {
+            return nil
+        }
+    }
+
     func updateHomeTask(id: UUID, title: String? = nil, prompt: String? = nil,
                         enabled: Bool? = nil) async throws -> CantripHomeTask {
         var object: [String: Any] = [:]
@@ -1984,6 +2052,9 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var homeTasks: [CantripHomeTask] = []
     @Published private(set) var homeArtifacts: [CantripHomeArtifact] = []
     let artifactThumbnails = CantripArtifactThumbnailStore()
+    /// Home's Builds tab: the Mac's over-the-air install page; nil until first loaded.
+    @Published private(set) var homeBuilds: CantripOTABuildsSnapshot?
+    @Published private(set) var homeBuildsError: String?
     @Published private(set) var homeDataError: String?
     @Published private(set) var isLoadingHomeData = false
     @Published private(set) var homeTasksSupportReordering = false
@@ -1998,6 +2069,7 @@ final class CantripRemoteModel: ObservableObject {
     /// never listed, instead of falling back to the first tab, until it is gone or replaced.
     private var unlistedSessionID: String?
     private var homeDataRefreshInFlight = false
+    private var homeBuildsRefreshInFlight = false
     private var homeTaskOrderRevision = 0
     @Published private(set) var errorMessage: String?
     @Published private(set) var isRefreshing = false
@@ -2415,6 +2487,8 @@ final class CantripRemoteModel: ObservableObject {
             homeTasks = []
             homeTasksSupportReordering = false
             homeArtifacts = []
+            homeBuilds = nil
+            homeBuildsError = nil
             homeBackground = nil
             homeBackgroundError = nil
             transcriptRevision += 1
@@ -2471,6 +2545,8 @@ final class CantripRemoteModel: ObservableObject {
             homeTasks = []
             homeTasksSupportReordering = false
             homeArtifacts = []
+            homeBuilds = nil
+            homeBuildsError = nil
             homeBackground = nil
             homeBackgroundError = nil
             selectedServerID = nil
@@ -2714,6 +2790,44 @@ final class CantripRemoteModel: ObservableObject {
             let message = error.localizedDescription
             if homeDataError != message { homeDataError = message }
         }
+    }
+
+    func refreshHomeBuilds() async {
+        guard isHomeSelected, isConfigured, !homeBuildsRefreshInFlight else { return }
+        homeBuildsRefreshInFlight = true
+        defer { homeBuildsRefreshInFlight = false }
+        do {
+            let snapshot = try await performHistoryRead { try await $0.homeBuilds() }
+            guard isHomeSelected else { return }
+            if homeBuilds != snapshot { homeBuilds = snapshot }
+            if homeBuildsError != nil { homeBuildsError = nil }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard isHomeSelected else { return }
+            let message = Self.homeBuildsErrorMessage(error)
+            if homeBuildsError != message { homeBuildsError = message }
+        }
+    }
+
+    static func homeBuildsErrorMessage(_ error: Error) -> String {
+        switch error {
+        case CantripRemoteError.http(404, _):
+            return "Update Cantrip on the Mac to list its install builds."
+        case let error where CantripRemoteError.isRouteFailure(error):
+            return "Can't reach Cantrip on your Mac. Turn on Tailscale (or join the Mac's Wi-Fi) "
+                + "and make sure Cantrip is running."
+        default:
+            return error.localizedDescription
+        }
+    }
+
+    /// The build's PNG icon from the Mac; nil when it has none.
+    func homeBuildIcon(_ build: CantripOTABuild) async throws -> Data? {
+        let parts = build.id.split(separator: "/", omittingEmptySubsequences: false)
+        guard build.hasIcon, parts.count == 2,
+              parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { return nil }
+        return try await performHistoryRead { try await $0.homeBuildIcon(id: build.id) }
     }
 
     func refreshHomeBackground() async {

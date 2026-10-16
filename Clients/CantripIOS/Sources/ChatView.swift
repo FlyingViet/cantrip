@@ -1178,6 +1178,10 @@ struct ChatView: View {
                         CantripHomeTasksView(remote: remote, openChat: openHomeChat, openRun: openHomeRun)
                     } artifacts: {
                         CantripHomeArtifactsView(remote: remote, openChat: openHomeChat)
+                    } builds: {
+                        #if os(iOS)
+                        CantripHomeBuildsView(remote: remote)
+                        #endif
                     }
                 } else {
                     conversationContent

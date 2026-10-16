@@ -26,6 +26,10 @@ enum CantripHomeSection: String, CaseIterable, Identifiable {
     case chat
     case tasks
     case artifacts
+    #if os(iOS)
+    /// The Mac's over-the-air install page; installing is iPhone-only, so Gateway Mac has no tab.
+    case builds
+    #endif
 
     var id: Self { self }
     var title: String { rawValue.capitalized }
@@ -34,6 +38,9 @@ enum CantripHomeSection: String, CaseIterable, Identifiable {
         case .chat: "bubble.left.and.bubble.right"
         case .tasks: "checklist"
         case .artifacts: "square.grid.2x2"
+        #if os(iOS)
+        case .builds: "arrow.down.app"
+        #endif
         }
     }
 }
@@ -83,7 +90,7 @@ enum CantripHomeBadgeTone: Equatable {
     }
 }
 
-struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: View>: View {
+struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: View, BuildsContent: View>: View {
     @Environment(\.chatDisplayTraits) private var displayTraits
     @Binding var selection: CantripHomeSection
     let runningTasks: Int
@@ -92,6 +99,7 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
     private let chat: ChatContent
     private let tasks: TasksContent
     private let artifacts: ArtifactsContent
+    private let builds: BuildsContent
 
     init(
         selection: Binding<CantripHomeSection>,
@@ -99,7 +107,8 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
         chatTopClearance: CGFloat = 0,
         @ViewBuilder chat: () -> ChatContent,
         @ViewBuilder tasks: () -> TasksContent,
-        @ViewBuilder artifacts: () -> ArtifactsContent
+        @ViewBuilder artifacts: () -> ArtifactsContent,
+        @ViewBuilder builds: () -> BuildsContent
     ) {
         _selection = selection
         self.runningTasks = runningTasks
@@ -107,6 +116,7 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
         self.chat = chat()
         self.tasks = tasks()
         self.artifacts = artifacts()
+        self.builds = builds()
     }
 
     var body: some View {
@@ -134,6 +144,15 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
             ) {
                 tabContent(artifacts)
             }
+            #if os(iOS)
+            Tab(
+                CantripHomeSection.builds.title,
+                systemImage: CantripHomeSection.builds.systemImage,
+                value: CantripHomeSection.builds
+            ) {
+                tabContent(builds)
+            }
+            #endif
         }
         .tabViewStyle(.tabBarOnly)
         .tabBarMinimizeBehavior(.never)
@@ -171,12 +190,29 @@ struct CantripHomeCompactTabBar: View {
     let runningTasks: Int
 
     var body: some View {
-        HStack(spacing: 2) {
+        // Side-by-side labels when every title fits; otherwise icons over titles (four tabs at
+        // large text sizes) so none truncates.
+        ViewThatFits(in: .horizontal) {
+            buttons(stacked: false)
+            buttons(stacked: true)
+        }
+        .padding(2)
+        .frame(height: 48)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Cantrip Home")
+        .accessibilityIdentifier("home.compactTabBar")
+    }
+
+    private func buttons(stacked: Bool) -> some View {
+        CantripHomeEqualWidthRow(spacing: 2) {
             ForEach(CantripHomeSection.allCases) { section in
                 Button {
                     selection = section
                 } label: {
                     Label(section.title, systemImage: section.systemImage)
+                        .labelStyle(CantripHomeTabLabelStyle(stacked: stacked, selected: selection == section))
                         .font(.caption.weight(selection == section ? .semibold : .regular))
                         .lineLimit(1)
                         .foregroundStyle(selection == section ? Color.accentColor : .secondary)
@@ -207,13 +243,53 @@ struct CantripHomeCompactTabBar: View {
                 )
             }
         }
-        .padding(2)
-        .frame(height: 48)
-        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-        .glassEffect(.regular.interactive(), in: Capsule())
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Cantrip Home")
-        .accessibilityIdentifier("home.compactTabBar")
+    }
+}
+
+/// Equal-width slots whose ideal width gives every slot the widest child's ideal width, so
+/// `ViewThatFits` only picks a row when no title would truncate in its share.
+struct CantripHomeEqualWidthRow: Layout {
+    var spacing: CGFloat = 0
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let ideals = subviews.map { $0.sizeThatFits(.unspecified) }
+        let gaps = spacing * CGFloat(max(subviews.count - 1, 0))
+        let ideal = (ideals.map(\.width).max() ?? 0) * CGFloat(subviews.count) + gaps
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? ideal
+        let height = proposal.height.flatMap { $0.isFinite ? $0 : nil } ?? (ideals.map(\.height).max() ?? 0)
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let slot = max(0, (bounds.width - spacing * CGFloat(subviews.count - 1)) / CGFloat(subviews.count))
+        for (index, subview) in subviews.enumerated() {
+            subview.place(
+                at: CGPoint(x: bounds.minX + CGFloat(index) * (slot + spacing), y: bounds.midY),
+                anchor: .leading,
+                proposal: ProposedViewSize(width: slot, height: bounds.height)
+            )
+        }
+    }
+}
+
+/// The compact bar's tab label: icon beside title, or a smaller title under the icon.
+struct CantripHomeTabLabelStyle: LabelStyle {
+    let stacked: Bool
+    var selected = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        if stacked {
+            VStack(spacing: 1) {
+                configuration.icon
+                    .imageScale(.medium)
+                configuration.title
+                    .font(.caption2.weight(selected ? .semibold : .regular))
+                    .minimumScaleFactor(0.85)
+            }
+        } else {
+            Label(configuration)
+        }
     }
 }
 
