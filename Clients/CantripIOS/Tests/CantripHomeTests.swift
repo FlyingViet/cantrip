@@ -45,7 +45,7 @@ final class CantripHomeTests: XCTestCase {
         XCTAssertEqual(ExecutionLane.home.systemImage, "house.fill")
         XCTAssertTrue(ExecutionLane.home.usesCantripRemote)
         XCTAssertFalse(ExecutionLane.home.isPrivate)
-        XCTAssertEqual(CantripHomeSection.allCases, [.chat, .tasks, .artifacts])
+        XCTAssertEqual(CantripHomeSection.allCases, [.chat, .tasks, .artifacts, .builds])
     }
 
     func testHomeBadgeTonesUseHiringLifecycleSemantics() {
@@ -167,6 +167,8 @@ final class CantripHomeTests: XCTestCase {
                 Text("Tasks")
             } artifacts: {
                 Text("Artifacts")
+            } builds: {
+                Text("Builds")
             }
         )
         let scene = try XCTUnwrap(
@@ -182,7 +184,7 @@ final class CantripHomeTests: XCTestCase {
         controller.view.layoutIfNeeded()
 
         let tabBar: UITabBar = try XCTUnwrap(firstSubview(in: controller.view))
-        XCTAssertEqual(tabBar.items?.compactMap(\.title), ["Chat", "Tasks", "Artifacts"])
+        XCTAssertEqual(tabBar.items?.compactMap(\.title), ["Chat", "Tasks", "Artifacts", "Builds"])
         XCTAssertEqual(tabBar.selectedItem?.title, "Tasks")
         XCTAssertEqual(tabBar.selectedItem?.badgeValue, "2")
         let tabBarFrame = tabBar.convert(tabBar.bounds, to: window)
@@ -220,6 +222,7 @@ final class CantripHomeTests: XCTestCase {
                 var chatFrame = CGRect.zero
                 var tasksFrame = CGRect.zero
                 var artifactsFrame = CGRect.zero
+                var buildsFrame = CGRect.zero
                 let controller = UIHostingController(rootView:
                     CantripHomeTabs(selection: .constant(section), runningTasks: 0) {
                         bottomContentProbe(frame: { chatFrame = $0 })
@@ -227,6 +230,8 @@ final class CantripHomeTests: XCTestCase {
                         bottomContentProbe(frame: { tasksFrame = $0 })
                     } artifacts: {
                         bottomContentProbe(frame: { artifactsFrame = $0 })
+                    } builds: {
+                        bottomContentProbe(frame: { buildsFrame = $0 })
                     }
                     .environment(\.dynamicTypeSize, size)
                 )
@@ -248,6 +253,7 @@ final class CantripHomeTests: XCTestCase {
                 case .chat: chatFrame
                 case .tasks: tasksFrame
                 case .artifacts: artifactsFrame
+                case .builds: buildsFrame
                 }
                 let safeBottom = controller.view.safeAreaLayoutGuide.layoutFrame.maxY
                 XCTAssertLessThanOrEqual(
@@ -300,6 +306,8 @@ final class CantripHomeTests: XCTestCase {
                 Text("Tasks")
             } artifacts: {
                 Text("Artifacts")
+            } builds: {
+                Text("Builds")
             }
             .environment(\.chatDisplayTraits, ChatDisplayTraits(hasVerticalBar: true))
         )
@@ -1340,6 +1348,8 @@ final class CantripHomeTests: XCTestCase {
                     }
                 } artifacts: {
                     Color.clear
+                } builds: {
+                    Color.clear
                 }
                 .frame(width: 393)
                 .background(Color(.systemBackground))
@@ -1392,6 +1402,8 @@ final class CantripHomeTests: XCTestCase {
                     NavigationStack {
                         CantripHomeArtifactsView(remote: model, openChat: { _ in })
                     }
+                } builds: {
+                    Color.clear
                 }
                 .frame(width: 393)
                 .background(Color(.systemBackground))
