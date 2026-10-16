@@ -1091,6 +1091,8 @@ final class ChatViewModel: ObservableObject {
 
 struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var env: HermesEnv
     @ObservedObject private var remote: CantripRemoteModel
     @StateObject private var voice: VoiceController
@@ -1119,6 +1121,7 @@ struct ChatView: View {
     @State private var showCantripMaintenance = false
     @State private var showRemoteTabs = false
     @State private var opensDrawerAfterReturningHome = false
+    @StateObject private var backTransition = CantripTabBackTransition()
     @State private var showCopilotUsage = false
     @State private var homeSection = CantripHomeSection.chat
     @State private var renamingRemoteSession: CantripRemoteSession?
@@ -1169,7 +1172,9 @@ struct ChatView: View {
                     composerFocused = false
                     showHomeBackground = true
                 },
-                onSelect: openTab,
+                // The drawer has already asked to close, but it is still on screen: keep the picture of
+                // Home taken as it opened.
+                onSelect: { openTab($0, picturesHome: false) },
                 onCreate: createRemoteSession,
                 onRename: { renamingRemoteSession = $0 },
                 onClose: closeRemoteSession
@@ -1322,12 +1327,26 @@ struct ChatView: View {
                 Text(imageSendError ?? "")
             }
         }
-        // Inside a tab, the same left-edge swipe that opens the drawer in Home goes back to Home.
-        .cantripEdgeSwipe(isEnabled: vm.activeLane == .cantrip && !importingImages && !submittingRemote) {
-            returnHome()
-        }
+        // Inside a tab, the same left-edge swipe that opens the drawer in Home drags the tab away to Home.
+        .cantripTabBackSwipe(
+            backTransition,
+            isEnabled: vm.activeLane == .cantrip && !vm.sending && !importingImages && !submittingRemote,
+            isHomeReady: isHomeLoadedAfterReturn,
+            pop: returnHome
+        )
         .onChange(of: showRemoteTabs) { _, showing in
-            if showing { composerFocused = false }
+            if showing {
+                if vm.activeLane == .home {
+                    captureHomeSnapshot(keyboardShown: composerFocused, drawerShown: false)
+                }
+                composerFocused = false
+            }
+        }
+        .onChange(of: composerFocused) { wasFocused, focused in
+            // Picture Home before the keyboard reshapes it.
+            if focused, !wasFocused, vm.activeLane == .home {
+                captureHomeSnapshot(keyboardShown: false, drawerShown: showRemoteTabs)
+            }
         }
         .onChange(of: remote.tabDrawerRequest) { _, _ in
             if vm.activeLane == .home {
@@ -1395,6 +1414,17 @@ struct ChatView: View {
         }
         .onChange(of: env.executionLane) { _, lane in
             showHomeBackground = false
+            if lane != .home, backTransition.isBusy {
+                // A notification or link opened a tab while Home was sliding in or still covered.
+                backTransition.reset()
+            } else if vm.activeLane == .home, lane != .home {
+                backTransition.leavingHome(signature: homeSnapshotSignature)
+            } else if lane == .home, backTransition.isSliding {
+                // Something else (e.g. the Tabs widget) went Home before the swipe finished.
+                backTransition.reset()
+            } else if lane == .home, !backTransition.isBusy {
+                backTransition.discardHomeSnapshot()
+            }
             vm.switchLane(to: lane)
             reloadCommands()
         }
@@ -1408,6 +1438,8 @@ struct ChatView: View {
             vm.syncRemoteTranscript()
         }
         .onChange(of: remote.selectedSessionID) { _, _ in
+            // Another tab opened while this one was being swiped away: stay with the new tab.
+            if vm.activeLane == .cantrip, backTransition.isBusy { backTransition.reset() }
             showBackgroundTasks = false
             vm.syncRemoteTranscript()
         }
@@ -1421,6 +1453,7 @@ struct ChatView: View {
             showVoiceMode = false
         }
         .onChange(of: remote.notificationNavigationID) { _, _ in
+            backTransition.reset()
             showSettings = false
             showRemoteTabs = false
             showQueue = false
@@ -1442,6 +1475,10 @@ struct ChatView: View {
             if focus != nil, vm.activeLane == .home { showHomeBackground = true }
         }
         .onChange(of: scenePhase) { _, phase in
+            if phase != .active, vm.activeLane == .home {
+                // A notification or widget may open a tab before Home is seen again.
+                captureHomeSnapshot(keyboardShown: composerFocused, drawerShown: showRemoteTabs)
+            }
             vm.setAppActive(phase == .active)
             if phase == .active, showVoiceMode {
                 vm.resumeVoiceModeIfIdle()
@@ -1549,7 +1586,7 @@ struct ChatView: View {
                 .disabled(vm.sending || importingImages || submittingRemote)
         } leading: {
             if vm.activeLane == .cantrip {
-                CantripHomeBackPill { returnHome() }
+                CantripHomeBackPill { returnHomeAnimated() }
                     .disabled(importingImages || submittingRemote)
             } else if vm.activeLane == .home {
                 // The Pip title is already the lane menu, so this slot opens the tab drawer, which
@@ -1903,7 +1940,10 @@ struct ChatView: View {
     }
 
     /// Opens a project tab full screen inside Cantrip Home (drawer rows, handoff cards, Background).
-    private func openTab(_ id: String) {
+    private func openTab(_ id: String, picturesHome: Bool = true) {
+        if picturesHome, vm.activeLane == .home {
+            captureHomeSnapshot(keyboardShown: composerFocused, drawerShown: showRemoteTabs)
+        }
         composerFocused = false
         showRemoteTabs = false
         if vm.activeLane == .cantrip {
@@ -1922,11 +1962,43 @@ struct ChatView: View {
         env.select(.home)
     }
 
+    /// ‹ Home and Back to Home: slide the tab away like the swipe does.
+    private func returnHomeAnimated() {
+        guard !backTransition.isBusy else { return }
+        // A send in flight defers the lane change, so there is nothing to slide to yet.
+        guard vm.activeLane == .cantrip, !vm.sending else { return returnHome() }
+        composerFocused = false
+        backTransition.popFromButton(colorScheme: colorScheme, reduceMotion: reduceMotion, pop: returnHome)
+    }
+
+    /// What Home's conversation shows; a snapshot of Home is only reused while this is unchanged.
+    private var homeSnapshotSignature: String? {
+        guard vm.activeLane == .home, homeSection == .chat, let session = remote.selectedSession,
+              session.isCantripHome == true else { return nil }
+        let messages = session.messages ?? []
+        let last = messages.last
+        return [session.id, session.historyRevision ?? "", String(messages.count), last?.id ?? "",
+                String(last?.text.count ?? 0), String(session.isStreaming)].joined(separator: "|")
+    }
+
+    /// Pictures Home as it is on screen right now, unless the keyboard or tab drawer covers it.
+    private func captureHomeSnapshot(keyboardShown: Bool, drawerShown: Bool) {
+        guard !keyboardShown, !drawerShown, let signature = homeSnapshotSignature else { return }
+        backTransition.keepHomeSnapshot(CantripScreenSnapshot.capture(signature: signature, colorScheme: colorScheme))
+    }
+
+    /// Home's conversation has reloaded (or failed to) after returning from a tab.
+    private var isHomeLoadedAfterReturn: Bool {
+        vm.activeLane == .home && remote.isHomeSelected
+            && (remote.selectedSession?.isCantripHome == true || remote.detailError != nil)
+    }
+
     private func createRemoteSession() {
         composerFocused = false
         Task {
             guard let id = await remote.createTab() else { return }
-            openTab(id)
+            // Started from the drawer, which may still be closing.
+            openTab(id, picturesHome: false)
         }
     }
 
@@ -2049,7 +2121,7 @@ struct ChatView: View {
                     Text("No tab open").font(.title3.weight(.semibold))
                     Text("Go back to Home and open a tab from the drawer, or start a new one.")
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button("Back to Home") { returnHome() }
+                    Button("Back to Home") { returnHomeAnimated() }
                         .buttonStyle(.borderedProminent)
                         .padding(.top, 4)
                 }

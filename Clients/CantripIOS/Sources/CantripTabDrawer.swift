@@ -18,21 +18,6 @@ enum CantripDrawerGesture {
 }
 
 extension View {
-    /// A deliberate right swipe from the left edge, e.g. from a project tab back to Home.
-    func cantripEdgeSwipe(isEnabled: Bool, perform action: @escaping () -> Void) -> some View {
-        simultaneousGesture(
-            DragGesture(minimumDistance: 20)
-                .onEnded { value in
-                    if isEnabled, CantripDrawerGesture.shouldOpen(
-                        start: value.startLocation, translation: value.translation
-                    ) {
-                        action()
-                    }
-                },
-            isEnabled: isEnabled
-        )
-    }
-
     func cantripTabDrawer<Panel: View>(
         isPresented: Binding<Bool>,
         isEnabled: Bool,
