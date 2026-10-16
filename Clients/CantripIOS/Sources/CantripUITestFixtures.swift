@@ -23,7 +23,8 @@ enum CantripUITestFixtures {
 
     /// `-CantripUITestRemoteURL http://127.0.0.1:<port> -CantripUITestRemoteToken <token>` pairs
     /// with a local fixture host (saved like a server added in Settings), so UI tests can drive real
-    /// Remote and Home flows on the simulator. `-CantripUITestLane home` opens Cantrip Home, and
+    /// Remote and Home flows on the simulator. `-CantripUITestRemoteDirect <host:port>` also saves a
+    /// direct address (pass an empty URL to reach the host only through its TLS-PSK listener). `-CantripUITestLane home` opens Cantrip Home, and
     /// `-CantripUITestNotifyHomeRun <session> -CantripUITestNotifyAfter <seconds>` taps a Home
     /// background-run input push through the same handler as a real notification.
     @MainActor
@@ -31,14 +32,18 @@ enum CantripUITestFixtures {
         let defaults = UserDefaults.standard
         guard let url = defaults.string(forKey: "CantripUITestRemoteURL"),
               let token = defaults.string(forKey: "CantripUITestRemoteToken") else { return }
+        let direct = defaults.string(forKey: "CantripUITestRemoteDirect")
         func trimmed(_ value: String) -> String { value.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
         func saved() -> SavedServer? {
             remote.servers.servers.first {
-                trimmed($0.url) == trimmed(url) && (try? remote.servers.credential(for: $0)) == token
+                trimmed($0.url) == trimmed(url) && $0.directAddress == direct
+                    && (try? remote.servers.credential(for: $0)) == token
             }
         }
         if saved() == nil {
-            try? remote.addServer(ServerDraft(name: "UI test host", url: url, credential: token, tailscaleOnly: true))
+            try? remote.addServer(ServerDraft(name: direct == nil ? "UI test host" : "Work laptop", url: url,
+                                              credential: token, tailscaleOnly: !url.isEmpty,
+                                              directAddress: direct ?? ""))
         }
         guard let server = saved() else { return }
         do { try await remote.selectServer(server) } catch { return }

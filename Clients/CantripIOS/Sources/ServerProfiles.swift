@@ -14,8 +14,14 @@ struct SavedServer: Codable, Identifiable, Equatable {
     let url: String
     let tailscaleOnly: Bool
     let usesLegacyHistory: Bool
+    /// Cantrip only: host:port of the Mac's encrypted LAN listener, tried when Bonjour can't see
+    /// it (e.g. through a Tailscale subnet router). Absent in profiles saved by older builds.
+    var directAddress: String? = nil
 
-    var address: String { url.isEmpty ? "Local network discovery" : url }
+    var address: String {
+        let parts = [url.isEmpty ? nil : url, directAddress.map { "Direct \($0)" }].compactMap { $0 }
+        return parts.isEmpty ? "Local network discovery" : parts.joined(separator: " · ")
+    }
 }
 
 struct ServerConfigurationError: LocalizedError {
@@ -102,7 +108,8 @@ final class ServerProfiles: ObservableObject {
         guard kind != .cantrip || !draft.tailscaleOnly || !url.isEmpty else {
             throw ServerConfigurationError(message: "Enter a Tailscale URL to use Tailscale only.")
         }
-        for existing in servers where existing.url == url {
+        let direct = kind == .cantrip ? try CantripDirectAddress.normalized(draft.directAddress) : nil
+        for existing in servers where existing.url == url && existing.directAddress == direct {
             if try credential(for: existing) == secret {
                 throw ServerConfigurationError(
                     message: "This server is already saved as \(existing.name). Select it from the list."
@@ -115,10 +122,11 @@ final class ServerProfiles: ObservableObject {
         }
         let server = SavedServer(
             id: UUID(),
-            name: name.isEmpty ? (URL(string: url)?.host ?? "Cantrip on LAN") : name,
+            name: name.isEmpty ? (URL(string: url)?.host ?? direct ?? "Cantrip on LAN") : name,
             url: url,
             tailscaleOnly: kind == .cantrip && draft.tailscaleOnly,
-            usesLegacyHistory: usesLegacyHistory
+            usesLegacyHistory: usesLegacyHistory,
+            directAddress: direct
         )
         let snapshot = Snapshot(servers: servers + [server], selectedID: selectedID)
         let data = try JSONEncoder().encode(snapshot)
@@ -199,6 +207,8 @@ struct ServerDraft: Equatable {
     var url = ""
     var credential = ""
     var tailscaleOnly = false
+    /// Cantrip only: host:port of the Mac's encrypted LAN listener.
+    var directAddress = ""
 }
 
 @MainActor
