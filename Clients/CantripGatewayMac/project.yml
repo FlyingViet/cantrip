@@ -89,6 +89,7 @@ targets:
       - path: Hermes/Tests/CantripImageTransportTests.swift
       - path: Hermes/Tests/ServerProfilesTests.swift
       - path: Hermes/Tests/CantripDirectAddressTests.swift
+      - path: Hermes/Tests/CantripTabBackTransitionTests.swift
       - path: Hermes/Tests/CantripMCPAppTests.swift
       - path: Hermes/Tests/CantripPromptUsageTests.swift
       - path: Hermes/Tests/CantripQueueTests.swift
