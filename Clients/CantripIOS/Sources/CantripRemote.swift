@@ -944,7 +944,52 @@ enum CantripTransport: Hashable {
     case remote(URL)
 }
 
-private enum CantripLANProtocol {
+/// A Mac's encrypted (TLS-PSK) LAN listener saved as host:port, e.g. "192.168.0.152:8766" for
+/// a Mac without Tailscale that the phone reaches through a Tailscale subnet router. It is
+/// tried like a Bonjour-discovered endpoint, so it works away from home where Bonjour can't.
+enum CantripDirectAddress {
+    static let example = "192.168.0.152:8766"
+
+    /// The address in canonical form, nil when empty.
+    static func normalized(_ raw: String?) throws -> String? {
+        let value = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        guard let (host, port) = split(value) else {
+            throw ServerConfigurationError(
+                message: "Enter the direct address as host:port, for example \(example). Set the port in Cantrip's Remote control settings on that Mac."
+            )
+        }
+        return host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)"
+    }
+
+    static func endpoint(_ value: String?) -> NWEndpoint? {
+        guard let value, let (host, port) = split(value),
+              let nwPort = NWEndpoint.Port(rawValue: port) else { return nil }
+        return .hostPort(host: NWEndpoint.Host(host), port: nwPort)
+    }
+
+    private static func split(_ value: String) -> (String, UInt16)? {
+        let host: Substring
+        let portText: Substring
+        if value.hasPrefix("[") {
+            guard let close = value.firstIndex(of: "]"),
+                  value[value.index(after: close)...].hasPrefix(":") else { return nil }
+            host = value[value.index(after: value.startIndex)..<close]
+            portText = value[value.index(close, offsetBy: 2)...]
+        } else {
+            let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+            guard parts.count == 2 else { return nil }
+            host = parts[0]
+            portText = parts[1]
+        }
+        guard !host.isEmpty, host.count <= 253,
+              host.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || ".-:%".contains($0)) }),
+              portText.allSatisfy(\.isNumber), let port = UInt16(portText), port > 0 else { return nil }
+        return (host.lowercased(), port)
+    }
+}
+
+enum CantripLANProtocol {
     static let serviceType = "_cantrip-remote._tcp"
 
     static func parameters(token: String) -> NWParameters {
@@ -1046,6 +1091,7 @@ private final class CantripLANRequest: @unchecked Sendable {
     private let token: String
     private let requestData: Data
     private let timeout: TimeInterval
+    private let isDirect: Bool
     private let queue = DispatchQueue(label: "com.itzhoang.hermbot.cantrip-request")
     private var connection: NWConnection?
     private var continuation: CheckedContinuation<CantripLANResponse, Error>?
@@ -1058,7 +1104,11 @@ private final class CantripLANRequest: @unchecked Sendable {
         self.endpoint = endpoint
         self.token = token
         let payload = body ?? Data()
-        timeout = method == "GET" ? (CantripRemoteAPI.isContentRead(method: method, path: path) ? 20 : 2)
+        // Bonjour peers are `.service` endpoints on this Wi-Fi. A saved direct address (`.hostPort`)
+        // may cross a Tailscale subnet route, so it gets the Tailscale HTTPS route's 3s deadlines.
+        if case .hostPort = endpoint { isDirect = true } else { isDirect = false }
+        timeout = method == "GET"
+            ? (CantripRemoteAPI.isContentRead(method: method, path: path) ? 20 : isDirect ? 3 : 2)
             : (payload.count > 256 * 1024 || path.contains("/videos/") ? 60 : 12)
         let header = """
         \(method) \(path) HTTP/1.1\r
@@ -1127,7 +1177,7 @@ private final class CantripLANRequest: @unchecked Sendable {
             }
         }
         connection.start(queue: queue)
-        queue.asyncAfter(deadline: .now() + 2) { [weak self] in
+        queue.asyncAfter(deadline: .now() + (isDirect ? 3 : 2)) { [weak self] in
             guard let self, !self.isReady, !self.isComplete else { return }
             self.finish(.failure(CantripRemoteError.transport(
                 "The local connection timed out."
@@ -2146,17 +2196,17 @@ final class CantripRemoteModel: ObservableObject {
     }
     var hasConfiguration: Bool { baseURL != nil || token != nil }
     var isConfigured: Bool {
-        token != nil && (baseURL != nil || (!tailscaleOnly && !lanEndpoints.isEmpty))
+        token != nil && (baseURL != nil || directEndpoint != nil || (!tailscaleOnly && !lanEndpoints.isEmpty))
     }
 
     var endpointHost: String {
-        if case .lan = activeTransport {
-            return "Local network"
+        if case .lan(let endpoint) = activeTransport {
+            return endpoint == directEndpoint ? directAddress ?? "Direct address" : "Local network"
         }
         if activeTransport == nil, isLocalNetworkAvailable {
             return "Local network"
         }
-        guard let baseURL else { return "Not configured" }
+        guard let baseURL else { return directAddress ?? "Not configured" }
         if let port = baseURL.port {
             return "\(baseURL.host ?? baseURL.absoluteString):\(port)"
         }
@@ -2192,6 +2242,9 @@ final class CantripRemoteModel: ObservableObject {
     private var lastAuthenticatedAt: Date?
     private var configurationGeneration = 0
     private var lanEndpoints: [NWEndpoint] = []
+    /// The selected profile's saved direct address (host:port of the Mac's TLS-PSK listener).
+    @Published private(set) var directAddress: String?
+    private var directEndpoint: NWEndpoint?
     private var activeTransport: CantripTransport?
     private let lanBrowser = CantripLANBrowser()
     private let requestGate = CantripRequestGate()
@@ -2229,6 +2282,8 @@ final class CantripRemoteModel: ObservableObject {
                 token = try self.servers.credential(for: server)
                 configuredURL = server.url
                 tailscaleOnly = server.tailscaleOnly
+                directAddress = try CantripDirectAddress.normalized(server.directAddress)
+                directEndpoint = CantripDirectAddress.endpoint(directAddress)
                 selectedServerID = server.id
             } else if self.servers.hasSavedState {
                 configuredURL = ""
@@ -2304,7 +2359,8 @@ final class CantripRemoteModel: ObservableObject {
         guard selectedServerID != server.id else { return }
         let credential = try servers.credential(for: server)
         guard await configure(
-            url: server.url, pairingToken: credential, tailscaleOnly: server.tailscaleOnly
+            url: server.url, pairingToken: credential, tailscaleOnly: server.tailscaleOnly,
+            directAddress: server.directAddress
         ) else {
             throw ServerConfigurationError(message: errorMessage ?? "Could not select the server.")
         }
@@ -2460,7 +2516,8 @@ final class CantripRemoteModel: ObservableObject {
     func configure(
         url rawURL: String,
         pairingToken rawToken: String,
-        tailscaleOnly: Bool = false
+        tailscaleOnly: Bool = false,
+        directAddress rawDirectAddress: String? = nil
     ) async -> Bool {
         guard !isMutating, !isUploadingVideo, !isUpdatingNotifications else {
             errorMessage = "Wait for the current request to finish before switching servers."
@@ -2468,6 +2525,7 @@ final class CantripRemoteModel: ObservableObject {
         }
         do {
             let normalized = try Self.normalizedBaseURL(rawURL)
+            let direct = try CantripDirectAddress.normalized(rawDirectAddress)
             guard !tailscaleOnly || normalized != nil else {
                 throw CantripRemoteError.invalidURL("Enter a Tailscale URL to use Tailscale only.")
             }
@@ -2489,6 +2547,8 @@ final class CantripRemoteModel: ObservableObject {
             resetHistory()
             router.reset()
             baseURL = normalized
+            directAddress = direct
+            directEndpoint = CantripDirectAddress.endpoint(direct)
             self.tailscaleOnly = tailscaleOnly
             UserDefaults.standard.set(tailscaleOnly, forKey: Self.tailscaleOnlyKey)
             token = effectiveToken
@@ -2550,6 +2610,8 @@ final class CantripRemoteModel: ObservableObject {
             UserDefaults.standard.removeObject(forKey: Self.tailscaleOnlyKey)
             tailscaleOnly = false
             baseURL = nil
+            directAddress = nil
+            directEndpoint = nil
             token = nil
             activeTransport = nil
             lanEndpoints = []
@@ -3787,9 +3849,13 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
+    /// Tailscale URL first, then Bonjour peers on this network, then the saved direct address
+    /// (an explicit choice, so Tailscale-only mode keeps it; it only skips Bonjour discovery).
     private func updateRoutes() {
+        let discovered = tailscaleOnly ? [] : lanEndpoints.filter { $0 != directEndpoint }
         router.available = (baseURL.map { [.remote($0)] } ?? [])
-            + (tailscaleOnly ? [] : lanEndpoints.map(CantripTransport.lan))
+            + discovered.map(CantripTransport.lan)
+            + (directEndpoint.map { [.lan($0)] } ?? [])
     }
 
     private func recoverTailscale() {
@@ -3889,7 +3955,7 @@ final class CantripRemoteModel: ObservableObject {
         isLocalNetworkAvailable = !endpoints.isEmpty
         updateRoutes()
         if case .lan(let endpoint) = activeTransport,
-           !endpoints.contains(endpoint) {
+           endpoint != directEndpoint, !endpoints.contains(endpoint) {
             activeTransport = nil
             markDisconnected()
         }

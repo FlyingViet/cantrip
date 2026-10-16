@@ -103,6 +103,13 @@ struct ServerSettingsSections: View {
             .autocorrectionDisabled()
             .focused($editing)
             if servers.kind == .cantrip {
+                TextField("Direct address, e.g. \(CantripDirectAddress.example)",
+                          text: $form.draft.directAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.numbersAndPunctuation)
+                    .focused($editing)
+                    .accessibilityHint("The Mac's IP address and direct port from its Remote control settings")
                 Toggle("Tailscale only (skip local network)", isOn: $form.draft.tailscaleOnly)
             }
             Button("Add Server", systemImage: "plus.circle") {
@@ -125,7 +132,7 @@ struct ServerSettingsSections: View {
         } footer: {
             Text(servers.kind == .hermes
                 ? "Use HTTPS through a private network or authenticated tunnel. Each server keeps its own API key and conversation history. Adding a server does not change your current connection."
-                : "Use each Mac's own pairing token. A saved HTTPS URL is preferred; automatic mode falls back to local discovery only when needed. Credentials stay in Keychain. Adding a server does not change your current connection.")
+                : "Use each Mac's own pairing token. A saved HTTPS URL is preferred; automatic mode falls back to local discovery only when needed. A direct address (the Mac's IP and the direct port set in its Remote control settings) reaches a Mac without Tailscale, end-to-end encrypted, wherever this device can route to it, such as through a home router's Tailscale subnet route. Credentials stay in Keychain. Adding a server does not change your current connection.")
         }
         .disabled(form.saving || selecting || servers.loadIssue != nil)
     }

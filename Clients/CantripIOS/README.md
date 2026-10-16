@@ -220,6 +220,18 @@ fall back to LAN and try cooling-down routes if necessary, without waiting
 for polling. The write is then sent once, on the exact route that passed
 preparation; a background route change cannot move it to an unchecked host.
 
+**Direct address** (optional) saves a Mac's encrypted listener as `host:port`,
+for a Mac that can't run Tailscale but is reachable another way, such as a home
+router advertising a Tailscale subnet route (e.g. `192.168.0.152:8766`). On that
+Mac, set **Direct port** under Cantrip's Settings > Remote control; its status
+line shows the address to enter. The connection uses the same TLS-PSK protocol
+and pairing token as Bonjour discovery, so it stays end-to-end encrypted and the
+plain HTTP API is never exposed. It is tried after the Tailscale URL and any
+Bonjour match, with three-second connection and read deadlines, and **Tailscale
+only** keeps it (that mode skips only Bonjour). A profile can have just a direct
+address. The Home Screen widget and background Live Activity updates fetch only
+through the Tailscale URL, so a direct-only profile doesn't feed them.
+
 Enable **Tailscale only (skip local network)** in Remote settings to bypass
 LAN discovery; this requires a saved Tailscale URL and Tailscale connectivity
 when using a tailnet address. Automatic mode remains the default, and LAN-only

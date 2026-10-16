@@ -564,7 +564,8 @@ final class CantripRoutingTests: XCTestCase {
         } catch {
             XCTAssertTrue(CantripRemoteError.isRouteFailure(error))
         }
-        XCTAssertLessThan(Date().timeIntervalSince(start), 3.5)
+        // A host:port endpoint is a saved direct address, which gets the HTTPS route's 3s deadline.
+        XCTAssertLessThan(Date().timeIntervalSince(start), 4.5)
         let mutationStart = Date()
         do {
             _ = try await CantripRemoteAPI(
@@ -575,6 +576,6 @@ final class CantripRoutingTests: XCTestCase {
         } catch {
             XCTAssertTrue(CantripRemoteError.isRouteFailure(error))
         }
-        XCTAssertLessThan(Date().timeIntervalSince(mutationStart), 3.5)
+        XCTAssertLessThan(Date().timeIntervalSince(mutationStart), 4.5)
     }
 }
