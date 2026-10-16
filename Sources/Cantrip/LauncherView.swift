@@ -2973,11 +2973,16 @@ private struct RemoteLANPortField: View {
             .onChange(of: focused) { _, isFocused in
                 if !isFocused { commit() }
             }
+            // Follow changes made elsewhere (e.g. Import Settings) unless the user is typing.
+            .onChange(of: settings.remoteLANPort) { _, port in
+                if !focused { text = Self.display(port) }
+            }
             .onAppear { text = Self.display(settings.remoteLANPort) }
             .onDisappear(perform: commit)
     }
 
     private func commit() {
+        guard text != Self.display(settings.remoteLANPort) else { return }
         let value = text.trimmingCharacters(in: .whitespaces)
         if value.isEmpty {
             settings.remoteLANPort = 0
