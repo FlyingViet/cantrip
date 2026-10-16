@@ -411,6 +411,33 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    // MARK: - Tab lists
+
+    private var tabPreviewCache: (key: String, value: String?)?
+
+    /// When this tab last ran, for tab lists: the current run's start while it works, else when
+    /// its latest run finished (or, before any recorded run, when its transcript last changed).
+    var lastActivityDate: Date? {
+        if isStreaming, let currentRunStartedAt { return currentRunStartedAt }
+        if let finished = lastRunOutcome?.finishedAt { return finished }
+        return (try? transcriptURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate
+    }
+
+    /// One line about the latest reply for tab lists: its "Outcome:" paragraph or closing words.
+    func tabPreview() -> String? {
+        guard let reply = messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }) else {
+            return nil
+        }
+        let key = "\(reply.id.uuidString):\(reply.text.utf8.count)"
+        if let cached = tabPreviewCache, cached.key == key { return cached.value }
+        let line = CantripHomeDelegations.briefOutcome(reply.text, limit: 140)
+            .split(whereSeparator: \.isNewline).joined(separator: " ")
+        let value = line.isEmpty ? nil : line
+        tabPreviewCache = (key, value)
+        return value
+    }
+
     // MARK: - Transcript persistence (survives app restarts)
 
     private var transcriptURL: URL {
