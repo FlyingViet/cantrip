@@ -1484,6 +1484,29 @@ final class RemoteControlServer {
                     on: connection
                 )
             }
+        case "builds":
+            // Read-only: the Mac's over-the-air install page (~/Sites/ota). Publishing and
+            // removal stay on the Mac (ota-publish.py).
+            guard request.method == "GET" else {
+                sendError(405, "Builds are published on the Mac.", on: connection)
+                return
+            }
+            if parts.count == 4 {
+                // The folder scan runs on the encoding queue, off the main actor.
+                sendEncoded(on: connection) { try JSONEncoder().encode(CantripHomeOTABuilds.snapshot()) }
+                return
+            }
+            // GET /api/v1/home/builds/<bundle id>/<build folder>/icon
+            guard parts.count == 7, parts[6] == "icon" else {
+                sendError(404, "build not found", on: connection)
+                return
+            }
+            let id = "\(parts[4])/\(parts[5])"
+            guard let data = CantripHomeOTABuilds.iconData(id: id) else {
+                sendError(404, "This build has no icon.", on: connection)
+                return
+            }
+            sendJSON(["data": data.base64EncodedString(), "mimeType": "image/png"], on: connection)
         case "background":
             if parts.count == 6, parts[5] == "stop" {
                 // POST /api/v1/home/background/<run id>/stop

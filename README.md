@@ -225,6 +225,13 @@ The macOS app includes:
   opened without following symlinks, 20 MB and 64-megapixel limits; videos decode
   from a private copy with a 15-second limit), and thumbnails are cached in
   `~/.cache/Cantrip/home/thumbnails/` until the file changes or is deleted.
+  Cantrip Agent's **Builds** tab lists the over-the-air install page in
+  `~/Sites/ota` (written by `ota-publish.py`) through the read-only
+  `GET /api/v1/home/builds` route: entries grouped by `page_key` (else bundle id),
+  builds newest first, with install links taken from each build's own
+  `manifest.plist`, plus `GET /api/v1/home/builds/{bundle id}/{folder}/icon`.
+  Folders without readable metadata, manifest or `app.ipa` are skipped and counted;
+  symlinks are never followed. Publishing and removal stay on the Mac.
   Cantrip must remain running for scheduled work.
 - **Extensions:** dashboards, MCP tools, custom slash commands, and a
   `cantrip` command for asking questions from Terminal. With Copilot, MCP

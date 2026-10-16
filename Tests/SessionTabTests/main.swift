@@ -148,6 +148,7 @@ struct SessionTabTests {
         try testCantripHomeSchedules()
         try await testCantripHome()
         try await testCantripHomeArtifactThumbnails()
+        try await testCantripHomeBuilds()
         try await testCantripHomeGuardrails()
         try await testCantripHomeHandoffResults()
         try testCantripHomeRunSummaries()
