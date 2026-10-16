@@ -198,6 +198,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 AppSettings.shared.reportRemoteControlError(message)
             }
         }
+        remoteControlServer.onLANStatus = { status in
+            DispatchQueue.main.async {
+                AppSettings.shared.reportRemoteLANStatus(status)
+            }
+        }
         self.remoteControlServer = remoteControlServer
         CantripHomeStore.shared.onHandoff = { [weak self] run, handoff in
             let title = "Handed to \(handoff.tabTitle)"
@@ -227,19 +232,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
             }
             .store(in: &cancellables)
-        Publishers.CombineLatest3(
+        Publishers.CombineLatest4(
             AppSettings.shared.$remoteControlEnabled,
             AppSettings.shared.$remoteControlPort,
+            AppSettings.shared.$remoteLANPort,
             AppSettings.shared.$remoteControlCredentialRevision
         )
         .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
-        .sink { enabled, port, _ in
+        .sink { enabled, port, lanPort, _ in
             guard enabled else { return }
             guard let token = AppSettings.shared.ensureRemoteControlToken() else {
                 remoteControlServer.stop()
                 return
             }
-            remoteControlServer.start(port: port, token: token)
+            remoteControlServer.start(port: port, token: token, lanPort: lanPort == 0 ? nil : lanPort)
         }
         .store(in: &cancellables)
 

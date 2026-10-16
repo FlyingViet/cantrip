@@ -2957,6 +2957,39 @@ private struct DiffView: View {
     }
 }
 
+/// The pinned encrypted-LAN port. Commits on Return or focus loss, not per keystroke, because
+/// each change restarts the listener and drops connected clients.
+private struct RemoteLANPortField: View {
+    @ObservedObject var settings: AppSettings
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("Auto", text: $text)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 72)
+            .focused($focused)
+            .onSubmit(commit)
+            .onChange(of: focused) { _, isFocused in
+                if !isFocused { commit() }
+            }
+            .onAppear { text = Self.display(settings.remoteLANPort) }
+            .onDisappear(perform: commit)
+    }
+
+    private func commit() {
+        let value = text.trimmingCharacters(in: .whitespaces)
+        if value.isEmpty {
+            settings.remoteLANPort = 0
+        } else if let port = Int(value), (1...65535).contains(port), port != settings.remoteControlPort {
+            settings.remoteLANPort = port
+        }
+        text = Self.display(settings.remoteLANPort)
+    }
+
+    private static func display(_ port: Int) -> String { port == 0 ? "" : String(port) }
+}
+
 struct SettingsView: View {
     @ObservedObject var settings = AppSettings.shared
     var busySessions = 0
@@ -3149,6 +3182,18 @@ struct SettingsView: View {
                 Text("Tailscale Serve can proxy 127.0.0.1:\(settings.remoteControlPort). Cantrip Agent also discovers an end-to-end encrypted connection automatically on the same local network. Regenerating the token disconnects paired clients.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+                HStack(spacing: 8) {
+                    Text("Direct port")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    RemoteLANPortField(settings: settings)
+                    .help("Fixed port for the encrypted local-network connection (for example 8766), so Cantrip Agent can save this Mac's direct address. Leave empty for an automatic port.")
+                }
+                Text(RemoteLANStatusText.describe(settings.remoteLANStatus, pinnedPort: settings.remoteLANPort,
+                                                  addresses: RemoteLANAddresses.ipv4()))
+                    .font(.caption2)
+                    .foregroundStyle(settings.remoteLANStatus?.fellBack == true ? Color.orange : Color.secondary)
+                    .textSelection(.enabled)
             }
             if let error = settings.remoteControlError {
                 Text(error)
