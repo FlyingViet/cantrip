@@ -5,6 +5,8 @@ import XCTest
 /// and `TEST_RUNNER_CANTRIP_UITEST_TABS_TOKEN=tabs-qa-token`.
 final class CantripTabBackSwipeUITests: XCTestCase {
     private var app: XCUIApplication!
+    private var host: URL!
+    private var token = ""
 
     override func setUpWithError() throws {
         let env = ProcessInfo.processInfo.environment
@@ -12,6 +14,8 @@ final class CantripTabBackSwipeUITests: XCTestCase {
             throw XCTSkip("Start the tabs fixture host and set CANTRIP_UITEST_TABS_URL and CANTRIP_UITEST_TABS_TOKEN")
         }
         continueAfterFailure = false
+        host = URL(string: url)
+        self.token = token
         app = XCUIApplication()
         app.launchArguments = ["-CantripUITestRemoteURL", url, "-CantripUITestRemoteToken", token,
                                "-CantripUITestLane", "home"]
@@ -25,11 +29,27 @@ final class CantripTabBackSwipeUITests: XCTestCase {
         XCTAssertTrue(homeReply.waitForExistence(timeout: 30), "Home must load from the fixture host")
     }
 
+    /// Home's conversation: its first reply, or the handoff posted later (which may scroll it away).
     private var homeReply: XCUIElement {
-        app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "109 users")).firstMatch
+        app.staticTexts.containing(NSPredicate(
+            format: "label CONTAINS %@ OR label CONTAINS %@", "109 users", "taking this"
+        )).firstMatch
     }
     private var tabsButton: XCUIElement { app.buttons["Tabs"].firstMatch }
     private var backPill: XCUIElement { app.buttons["Home"].firstMatch }
+
+    /// Sends Home a message as another device would, so Home keeps changing while a tab is open.
+    private func postToHome(_ text: String) {
+        var request = URLRequest(url: host.appendingPathComponent(
+            "api/v1/sessions/7EAE0CE5-8C8B-4652-9FD0-214867A90E5D/messages"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "mode": "queue"])
+        let done = expectation(description: "posted to Home")
+        URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
+        wait(for: [done], timeout: 10)
+    }
 
     private func openTab(_ title: String) {
         XCTAssertTrue(tabsButton.waitForExistence(timeout: 5))
@@ -55,6 +75,9 @@ final class CantripTabBackSwipeUITests: XCTestCase {
     }
 
     func testEdgeSwipeDragsTheTabAwayAndAShortSwipeSpringsBack() {
+        // Home hands work to a tab and its card keeps changing while NetLib is open.
+        postToHome("qa-complete fix the lineup sorting")
+        sleep(2)
         openTab("NetLib")
         attach("NetLib tab")
 
