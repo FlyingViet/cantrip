@@ -66,18 +66,17 @@ final class HermesEnv: ObservableObject {
         self.defaults = defaults
         self.servers = servers ?? ServerProfiles(kind: .hermes)
         let order = Self.loadBackendOrder(from: defaults)
-        var hidden = Set(
+        // Cantrip Home holds every project tab (the old Cantrip Remote lane), so it never hides.
+        let hidden = Set(
             (defaults.stringArray(forKey: Self.hiddenBackendsKey) ?? [])
                 .compactMap(ExecutionLane.init(rawValue:))
+                .filter { ExecutionLane.pickerLanes.contains($0) && $0 != .home }
         )
-        if hidden.count == ExecutionLane.allCases.count {
-            hidden.remove(ExecutionLane.defaultLane)
-        }
         backendOrder = order
         hiddenBackends = hidden
         let storedLane = defaults.string(forKey: "hermes.executionLane")
         let visible = order.filter { !hidden.contains($0) }
-        let restoredLane = ExecutionLane(rawValue: storedLane ?? "")
+        let restoredLane = ExecutionLane(rawValue: storedLane ?? "")?.pickerLane
         executionLane = visible.contains(.home)
             ? .home
             : restoredLane.flatMap { visible.contains($0) ? $0 : nil }
@@ -216,10 +215,12 @@ final class HermesEnv: ObservableObject {
     }
 
     func canHide(_ lane: ExecutionLane) -> Bool {
-        !isLaneVisible(lane) || selectableLanes.count > 1
+        guard lane != .home else { return false }
+        return !isLaneVisible(lane) || selectableLanes.count > 1
     }
 
     func setLaneVisible(_ lane: ExecutionLane, isVisible: Bool) {
+        guard ExecutionLane.pickerLanes.contains(lane) else { return }
         if isVisible {
             hiddenBackends.remove(lane)
         } else {
@@ -238,10 +239,12 @@ final class HermesEnv: ObservableObject {
         persistBackendPreferences()
     }
 
+    /// `.cantrip` opens the selected project tab full screen inside Cantrip Home; it is stored
+    /// as Home, so a relaunch always returns to Home.
     func select(_ lane: ExecutionLane) {
         guard isAvailable(lane) else { return }
         executionLane = lane
-        defaults.set(lane.rawValue, forKey: "hermes.executionLane")
+        defaults.set(lane.pickerLane.rawValue, forKey: "hermes.executionLane")
     }
 
     @discardableResult
@@ -313,8 +316,8 @@ final class HermesEnv: ObservableObject {
         var seen: Set<ExecutionLane> = []
         let stored = (defaults.stringArray(forKey: backendOrderKey) ?? [])
             .compactMap(ExecutionLane.init(rawValue:))
-            .filter { seen.insert($0).inserted }
-        return stored + ExecutionLane.allCases.filter { seen.insert($0).inserted }
+            .filter { ExecutionLane.pickerLanes.contains($0) && seen.insert($0).inserted }
+        return stored + ExecutionLane.pickerLanes.filter { seen.insert($0).inserted }
     }
 
     private static func fallbackLane(in visible: [ExecutionLane]) -> ExecutionLane {

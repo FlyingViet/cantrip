@@ -479,8 +479,14 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     /// Cantrip Home only: requests from background runs waiting on the user.
     var backgroundInputCount: Int? = nil
     var pendingInputs: [CantripInputRequest]? = nil
+    /// Seconds since 1970 of the tab's latest run: when it started while working, else when it
+    /// finished. Nil from older hosts and for tabs that have not run.
+    var lastActivityAt: Double? = nil
+    /// One line about the tab's latest reply, for tab lists. Nil from older hosts.
+    var preview: String? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
+    var lastActivityDate: Date? { lastActivityAt.map(Date.init(timeIntervalSince1970:)) }
 }
 
 struct CantripHomeSchedule: Decodable, Equatable {
@@ -720,8 +726,10 @@ private struct CantripHomeArtifactDataResponse: Decodable {
     let data: Data
 }
 
-private struct CantripSessionsResponse: Decodable {
+struct CantripSessionsResponse: Decodable {
     let sessions: [CantripRemoteSession]
+    /// Cantrip Home's summary, listed alongside the tabs by hosts with Home enabled.
+    var home: CantripRemoteSession?
 }
 
 private struct CantripSessionResponse: Decodable {
@@ -1278,8 +1286,11 @@ struct CantripRemoteAPI {
     }()
 
     func sessions() async throws -> [CantripRemoteSession] {
-        let response: CantripSessionsResponse = try await request(path: "/api/v1/sessions")
-        return response.sessions
+        try await sessionListing().sessions
+    }
+
+    func sessionListing() async throws -> CantripSessionsResponse {
+        try await request(path: "/api/v1/sessions")
     }
 
     func completionNotifications(method: String = "GET", body: Data? = nil) async throws -> CantripPushStatus {
@@ -2049,6 +2060,8 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var selectedSessionID: String?
     @Published private(set) var selectedSession: CantripRemoteSession?
     @Published private(set) var isHomeSelected = false
+    /// Cantrip Home's latest listed summary, kept current while a project tab is open.
+    @Published private(set) var homeSummary: CantripRemoteSession?
     @Published private(set) var homeTasks: [CantripHomeTask] = []
     @Published private(set) var homeArtifacts: [CantripHomeArtifact] = []
     let artifactThumbnails = CantripArtifactThumbnailStore()
@@ -2061,6 +2074,10 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var homeBackground: CantripHomeBackgroundSnapshot?
     /// The hidden run (by session ID) the Background sheet should reveal, e.g. from a push.
     @Published var homeBackgroundFocus: String?
+    /// Bumped to open Cantrip Home's tab drawer, e.g. from a widget's "all tabs" link.
+    @Published private(set) var tabDrawerRequest = 0
+
+    func requestTabDrawer() { tabDrawerRequest += 1 }
     @Published private(set) var homeBackgroundError: String?
     private var homeBackgroundRefreshInFlight = false
     /// Opened once by the next regular-lane selection even though it is not a tab.
@@ -2481,6 +2498,7 @@ final class CantripRemoteModel: ObservableObject {
             lanEndpoints = []
             isLocalNetworkAvailable = false
             sessions = []
+            homeSummary = nil
             selectedSessionID = nil
             selectedSession = nil
             isHomeSelected = false
@@ -2539,6 +2557,7 @@ final class CantripRemoteModel: ObservableObject {
             configuredURL = ""
             hasStoredToken = false
             sessions = []
+            homeSummary = nil
             selectedSessionID = nil
             selectedSession = nil
             isHomeSelected = false
@@ -3303,6 +3322,20 @@ final class CantripRemoteModel: ObservableObject {
         return true
     }
 
+    /// Creates a project tab without opening it, so Cantrip Home can open it as a tab (selecting
+    /// it here would show it in Home's place). Returns the new tab's ID.
+    func createTab() async -> String? {
+        guard let session = await mutate({ api in
+            try await api.createSession()
+        }) else { return nil }
+        if let index = sessions.firstIndex(where: { $0.id == session.id }) {
+            sessions[index] = session
+        } else {
+            sessions.append(session)
+        }
+        return session.id
+    }
+
     @discardableResult
     func send(
         _ text: String,
@@ -3606,12 +3639,14 @@ final class CantripRemoteModel: ObservableObject {
         let selection = selectionRevision
         do {
             let generation = configurationGeneration
-            let listed = try await performAuthenticated(allowFallback: true) { api in
-                try await api.sessions()
+            let listing = try await performAuthenticated(allowFallback: true) { api in
+                try await api.sessionListing()
             }
+            let listed = listing.sessions
             guard generation == configurationGeneration else { throw CancellationError() }
             guard revision == mutationRevision else { return }
             sessions = listed
+            if homeSummary != listing.home { homeSummary = listing.home }
             errorMessage = nil
             syncLiveStatusPairing()
             liveStatus?.refreshIfDue(anyStreaming: listed.contains { $0.isStreaming }

@@ -54,6 +54,17 @@ enum CantripUITestFixtures {
                 await remote.selectSession(first.id)
             }
         }
+        // `-CantripUITestNotifyTab <session> -CantripUITestNotifyAfter <seconds>` taps a tab's
+        // completion push, which opens the tab inside Cantrip Home.
+        if let sessionID = defaults.string(forKey: "CantripUITestNotifyTab"), let serverID = remote.selectedServerID {
+            try? await Task.sleep(for: .seconds(defaults.double(forKey: "CantripUITestNotifyAfter")))
+            CantripNotifications.shared.simulateTapForUITest([
+                "cantrip": [
+                    "eventID": UUID().uuidString, "serverID": serverID.uuidString, "sessionID": sessionID,
+                    "fingerprint": CantripRemoteModel.notificationFingerprintForUITest(token), "kind": "completion",
+                ],
+            ])
+        }
         if let sessionID = defaults.string(forKey: "CantripUITestNotifyHomeRun"), let serverID = remote.selectedServerID {
             try? await Task.sleep(for: .seconds(defaults.double(forKey: "CantripUITestNotifyAfter")))
             CantripNotifications.shared.simulateTapForUITest([
