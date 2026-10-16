@@ -217,6 +217,16 @@ final class CantripDirectAddressTests: XCTestCase {
         try await waitUntil { model.isConnected && model.endpointHost == "127.0.0.1:\(port.rawValue)" }
         XCTAssertGreaterThan(UnreachableTailscaleProtocol.hits, failedBefore, "Tailscale is tried first")
         XCTAssertTrue(server.paths.contains("/api/v1/sessions"))
+
+        // Tailscale comes back: background probes move the connection back to it (after the
+        // router's 15s failure cooldown and two successful probes 3s apart).
+        UnreachableTailscaleProtocol.healthy = true
+        let deadline = Date().addingTimeInterval(35)
+        while model.endpointHost != "cantrip.example", Date() < deadline {
+            await model.refreshNow()
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        XCTAssertEqual(model.endpointHost, "cantrip.example", "A recovered Tailscale route is preferred again")
     }
 
     private func waitUntil(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
