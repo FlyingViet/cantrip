@@ -46,6 +46,11 @@ Open **Settings (⌘,) > Connection**, then add the pairing token from Cantrip's
 control settings. A Tailscale Serve URL is optional. Without it the app finds Cantrip
 on the local network, exactly like the iPhone app.
 
+For a Mac that can't run Tailscale, set **Direct port** (e.g. 8766) in that Mac's Cantrip
+Settings > Remote control and add its **Direct address** (`IP:port`, e.g.
+`192.168.0.152:8766`) here. The app reaches it end-to-end encrypted with the pairing token
+wherever it can route to that IP, such as through a home router's Tailscale subnet route.
+
 ## Using it
 
 - **Sidebar:** Pip shows Home's mood. Below Pip are Chat, Tasks and Artifacts, with
