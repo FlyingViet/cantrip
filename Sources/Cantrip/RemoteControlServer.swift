@@ -1664,6 +1664,12 @@ final class RemoteControlServer {
         hasher.update(data: Data(session.remoteMessageRevision.uuidString.utf8))
         hasher.update(data: Data(session.remoteQueueRevision.uuidString.utf8))
         result["historyRevision"] = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        // Tab lists (Cantrip Home's drawer, Gateway's sidebar) show each tab's age and latest
+        // outcome; kept out of the revision so they never force a transcript reload.
+        if !SessionManager.isCantripHomeReserved(session) {
+            if let date = session.lastActivityDate { result["lastActivityAt"] = date.timeIntervalSince1970 }
+            if !session.isStreaming, let preview = session.tabPreview() { result["preview"] = preview }
+        }
         result["pendingInputs"] = Self.presentedInputs(session).map(Self.inputObject)
         if includeMessages {
             result["queued"] = session.queued.map { prompt in
