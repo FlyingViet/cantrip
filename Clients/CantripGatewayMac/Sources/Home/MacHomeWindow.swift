@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Cantrip Home for the Mac: the iOS Home lane (Chat, Tasks, Artifacts, Background) in a
-/// sidebar window. All state and networking come from the shared Hermes model objects.
+/// Cantrip Home for the Mac: the iOS Home lane (Chat, Tasks, Artifacts, Background) and every
+/// project tab in a sidebar window. All state and networking come from the shared Hermes model
+/// objects; an open tab uses the same `.cantrip` lane as a tab opened from iOS Home's drawer.
 struct MacHomeWindow: View {
     @ObservedObject var env: HermesEnv
     @ObservedObject var remote: CantripRemoteModel
@@ -14,11 +15,9 @@ struct MacHomeWindow: View {
     @State private var showingMaintenance = false
 
     init(env: HermesEnv, remote: CantripRemoteModel, voice: VoiceController, navigation: MacHomeNavigation) {
-        // Home is the only lane on the Mac.
-        if env.executionLane != .home {
-            env.setLaneVisible(.home, isVisible: true)
-            env.select(.home)
-        }
+        // Home (with its tabs) is the Mac's only lane; HermesEnv always launches into it. Forcing
+        // it here would undo an open tab, since SwiftUI re-runs this init whenever env changes.
+        navigation.attach(env: env, remote: remote)
         self.env = env
         self.remote = remote
         self.voice = voice
@@ -28,19 +27,26 @@ struct MacHomeWindow: View {
 
     var body: some View {
         NavigationSplitView {
-            MacHomeSidebar(remote: remote, voice: voice, navigation: navigation) {
+            MacHomeSidebar(env: env, remote: remote, voice: voice, navigation: navigation) {
                 navigation.sheet = .mascot
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 248, max: 320)
         } detail: {
             NavigationStack { detail }
-                .id(navigation.section)
+                .id(isTabOpen ? "tab" : navigation.section.rawValue)
         }
         .frame(minWidth: 760, minHeight: 540)
         .toolbar { toolbar }
         .sheet(isPresented: $navigation.showingBackground) {
-            CantripHomeBackgroundView(remote: remote, openLog: nil, openSession: nil, openTab: nil)
-                .macSheetFrame(width: 620, height: 640)
+            CantripHomeBackgroundView(
+                remote: remote, openLog: nil, openSession: nil,
+                openTab: { navigation.openTab($0) }
+            )
+            .macSheetFrame(width: 620, height: 640)
+        }
+        .sheet(item: $navigation.renamingTab) { session in
+            CantripTabRenameSheet(model: remote, session: session)
+                .macSheetFrame(width: 420, height: 220)
         }
         .sheet(item: $navigation.sheet, content: sheet)
         .sheet(item: $remote.modelSettingsSession) { session in
@@ -66,12 +72,18 @@ struct MacHomeWindow: View {
             voice.requestAuth()
         }
         .onChange(of: scenePhase) { _, phase in setActive(phase) }
+        .onChange(of: env.executionLane) { _, lane in vm.switchLane(to: lane) }
+        .onChange(of: vm.sending) { _, sending in
+            // A tab or Home picked while a send (or image upload) was in flight opens after it.
+            if !sending, env.executionLane != vm.activeLane { vm.switchLane(to: env.executionLane) }
+        }
         .onChange(of: remote.transcriptRevision) { _, _ in vm.syncRemoteTranscript() }
         .onChange(of: remote.selectedSessionID) { _, _ in vm.syncRemoteTranscript() }
         .onChange(of: remote.selectedServerID) { _, _ in
             vm.leaveVoiceMode()
             vm.remoteDeliveryMode = .auto
             navigation.closeAll()
+            navigation.showHome()
             Task {
                 await remote.selectHome()
                 vm.syncRemoteTranscript()
@@ -98,7 +110,18 @@ struct MacHomeWindow: View {
         }
     }
 
+    /// The lane the chat actually shows; a requested switch waits for an in-flight send.
+    private var isTabOpen: Bool { vm.activeLane == .cantrip }
+
     @ViewBuilder private var detail: some View {
+        if isTabOpen {
+            MacHomeChatView(remote: remote, vm: vm, voice: voice, navigation: navigation, isTab: true)
+        } else {
+            homeSection
+        }
+    }
+
+    @ViewBuilder private var homeSection: some View {
         switch navigation.section {
         case .chat:
             MacHomeChatView(remote: remote, vm: vm, voice: voice, navigation: navigation)
@@ -114,6 +137,74 @@ struct MacHomeWindow: View {
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        if isTabOpen {
+            tabToolbar
+        } else {
+            homeToolbar
+        }
+    }
+
+    /// A project tab: Stop, delivery (Auto) and the tab's More menu.
+    @ToolbarContentBuilder private var tabToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
+            CantripStopButton(
+                session: remote.selectedSession,
+                isConnected: remote.isConnected,
+                isMutating: remote.isMutating,
+                isStopping: remote.stoppingSessionID != nil
+                    && remote.stoppingSessionID == remote.selectedSessionID,
+                onStop: vm.stopRemote
+            )
+            .disabled(vm.sending)
+            if remote.selectedSession != nil {
+                CantripDeliveryPicker(deliveryMode: $vm.remoteDeliveryMode, compact: true)
+                    .disabled(remote.isMutating || vm.sending)
+                    .help("Delivery: how a message reaches a working tab")
+            }
+            tabMenu
+        }
+    }
+
+    private var tabMenu: some View {
+        Menu {
+            if let session = remote.selectedSession, remote.sessions.contains(where: { $0.id == session.id }) {
+                CantripTabActions(
+                    model: remote, session: session,
+                    onRename: { navigation.renamingTab = session },
+                    onClose: { navigation.closeTab(session.id) }
+                )
+                Divider()
+            }
+            if remote.selectedSession?.canResume == true {
+                Button("Resume", systemImage: "play") {
+                    Task {
+                        _ = await remote.resume()
+                        vm.syncRemoteTranscript()
+                    }
+                }
+                .disabled(remote.isMutating)
+            }
+            Button("Refresh", systemImage: "arrow.clockwise") { Task { await remote.refreshNow() } }
+                .disabled(!remote.isConfigured || remote.isRefreshing)
+            Button("Copilot Usage", systemImage: "gauge.with.dots.needle.33percent") {
+                navigation.sheet = .usage
+            }
+            .disabled(!remote.isConfigured)
+            Button(paused ? "Resume Agent" : "Pause Agent",
+                   systemImage: paused ? "play.circle" : "pause.circle") { paused.toggle() }
+            Button("Voice Mode", systemImage: "waveform") { navigation.sheet = .voiceMode }
+                .disabled(paused || !remote.isConfigured || remote.selectedSessionID == nil)
+            Divider()
+            Button("Back to Home", systemImage: "house") { navigation.showHome() }
+            SettingsLink { Label("Settings…", systemImage: "gearshape") }
+        } label: {
+            Label("More", systemImage: paused ? "pause.circle" : "ellipsis.circle")
+        }
+        .help(paused ? "Tab actions — agent paused" : "Tab actions")
+        .accessibilityIdentifier("tab.menu")
+    }
+
+    @ToolbarContentBuilder private var homeToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             MacHomeBackgroundButton(activeCount: backgroundCount, inputCount: backgroundInputCount) {
                 navigation.showingBackground = true

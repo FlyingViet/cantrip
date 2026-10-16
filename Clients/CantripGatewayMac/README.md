@@ -1,7 +1,7 @@
 # Cantrip Gateway Mac
 
 Cantrip Home as a native macOS app: the same Home as the Cantrip Agent iPhone app
-(Chat, Tasks, Artifacts, Background), sized for a Mac window, without Remote tabs.
+(Chat, Tasks, Artifacts, Background and every project tab), sized for a Mac window.
 
 ## How it shares the iOS app's logic
 
@@ -49,19 +49,26 @@ on the local network, exactly like the iPhone app.
 ## Using it
 
 - **Sidebar:** Pip shows Home's mood. Below Pip are Chat, Tasks and Artifacts, with
-  badges for questions waiting and running tasks. The footer shows the connection.
+  badges for questions waiting and running tasks, then **Tabs · N**: every project tab on
+  the Mac with a spinner while it works (or a question mark while it waits for you), an idle
+  dot otherwise, and how long ago it last ran. **+** (⌘T) starts a tab; drag to reorder;
+  right-click for Rename, Lock, Move, Model Settings, View Mac and Close. The footer shows
+  the connection.
+- **Tabs:** selecting a tab shows its transcript and composer in place. The toolbar shows its
+  name and **Working / Idle · folder**, with Stop, delivery (**Auto**) and **⋯** for the tab's
+  actions, Resume, voice mode and **Back to Home**. ⌘1–⌘3 or any Home section returns.
 - **Chat:** Return sends; Option-Return adds a line. Drag images onto the chat to
   attach them. Questions from Cantrip appear above the composer.
 - **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS),
   delivery mode, Refresh (⌘R) and More (model settings, Copilot usage, voice mode,
   pause, memory, builds, mascot, Cantrip maintenance).
-- **Keyboard:** ⌘1–⌘3 switch sections and ⌘N focuses a new message. ⇧⌘V opens voice
-  mode and ⇧⌘P pauses the agent.
+- **Keyboard:** ⌘1–⌘3 switch sections, ⌘T opens a new tab and ⌘N focuses a new message.
+  ⇧⌘V opens voice mode and ⇧⌘P pauses the agent.
 
-Not on the Mac: Remote tabs, push alerts, widgets and Live Activities. When a tab Home
-handed work to finishes, fails, stops or needs an answer, a result card in the chat shows its
-outcome; Open tab opens that tab in the Mac's browser remote (`<server URL>/#tab=<id>`), so it
-needs a URL pairing rather than a local-network-only one.
+When a tab Home handed work to finishes, fails, stops or needs an answer, a result card in
+the chat shows its outcome; **Open tab** opens that tab right in the window. Not on the Mac:
+the iPhone's Builds tab (its OTA install links only work on iPhone), push alerts, widgets and
+Live Activities. Tab ages and outcomes need Cantrip host e8e5c0b or later.
 
 ## Updating the shared code
 

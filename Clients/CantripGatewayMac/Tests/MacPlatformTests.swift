@@ -148,6 +148,42 @@ final class MacHomeNavigationTests: XCTestCase {
         XCTAssertNil(navigation.sheet)
         XCTAssertFalse(navigation.showingBackground)
     }
+
+    /// Project tabs open in Home's detail pane (sidebar rows, handoff cards, Background) and
+    /// any Home section, ⌘1-3 or Background brings Home back.
+    func testTabsOpenInPlaceAndHomeSectionsReturn() throws {
+        let memory = ServerCredentialStore(read: { _ in nil }, write: { _, _ in }, remove: { _ in })
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        let remote = CantripRemoteModel(servers: ServerProfiles(kind: .cantrip, defaults: defaults, credentials: memory))
+        let env = HermesEnv(servers: ServerProfiles(kind: .hermes, defaults: defaults, credentials: memory),
+                            defaults: defaults)
+        let navigation = MacHomeNavigation()
+        navigation.attach(env: env, remote: remote)
+        XCTAssertEqual(env.executionLane, .home)
+        XCTAssertFalse(navigation.isTabOpen)
+
+        navigation.sheet = .memory
+        navigation.openTab("50000000-0000-0000-0000-000000000001")
+        XCTAssertEqual(env.executionLane, .cantrip, "The tab opens in the window, not the browser")
+        XCTAssertTrue(navigation.isTabOpen)
+        XCTAssertNil(navigation.sheet, "Opening a tab closes sheets such as Background")
+        XCTAssertEqual(defaults.string(forKey: "hermes.executionLane"), "home",
+                       "A relaunch still opens Home")
+
+        navigation.showHome(.tasks)
+        XCTAssertEqual(env.executionLane, .home)
+        XCTAssertEqual(navigation.section, .tasks)
+
+        navigation.openTab("50000000-0000-0000-0000-000000000002")
+        navigation.showBackground()
+        XCTAssertEqual(env.executionLane, .home, "Background runs load from Home")
+        XCTAssertTrue(navigation.showingBackground)
+
+        navigation.openTab("50000000-0000-0000-0000-000000000002")
+        navigation.openChat(prefill: "Hi")
+        XCTAssertEqual(env.executionLane, .home)
+        XCTAssertEqual(navigation.section, .chat)
+    }
 }
 
 @MainActor

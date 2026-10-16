@@ -10,6 +10,8 @@ struct MacHomeChatView: View {
     @ObservedObject var vm: ChatViewModel
     @ObservedObject var voice: VoiceController
     @ObservedObject var navigation: MacHomeNavigation
+    /// A project tab opened from the sidebar instead of Home's own chat.
+    var isTab = false
     @AppStorage("hermes.paused") private var paused = false
     @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
     @State private var input = ""
@@ -43,7 +45,7 @@ struct MacHomeChatView: View {
             inputBar
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
-        .navigationTitle("Chat")
+        .navigationTitle(isTab ? remote.selectedSession?.title ?? "Tab" : "Chat")
         .navigationSubtitle(subtitle)
         .onDrop(of: [.fileURL, .image], isTargeted: $isDropTargeted, perform: dropImages)
         .overlay {
@@ -103,11 +105,8 @@ struct MacHomeChatView: View {
                     remoteMessage: message,
                     onAction: { vm.send($0.command) },
                     onApproval: { vm.approveRun($0, for: turn.id) },
-                    // The Mac app has no Remote tabs: handoff cards open the tab in the
-                    // Mac's browser remote (unavailable when paired only over the LAN).
-                    onOpenTab: !remote.canOpenWebTabs ? nil : { id in
-                        if let url = remote.webTabURL(id) { NSWorkspace.shared.open(url) }
-                    }
+                    // Handoff cards open the tab right here, in the sidebar's Tabs section.
+                    onOpenTab: { navigation.openTab($0) }
                 )
                 .id(turn.id)
                 if let message, message.isPreview == true {
@@ -129,7 +128,13 @@ struct MacHomeChatView: View {
             Image(systemName: emptyStateIcon)
                 .font(.system(size: 56))
                 .foregroundStyle(.tint)
-            if !remote.isConfigured {
+            if isTab, remote.isConfigured {
+                Text(remote.selectedSession?.title ?? "No tab open").font(.title3.weight(.semibold))
+                Text(remote.selectedSession == nil
+                     ? "Choose a tab in the sidebar, or press ⌘T for a new one."
+                     : "Type or use voice to start this tab. Cantrip runs it on your Mac.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            } else if !remote.isConfigured {
                 Text("Connect to Cantrip").font(.title3.weight(.semibold))
                 Text("Open Settings and enter the pairing token from Cantrip on your Mac. A Tailscale URL is optional.")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -162,6 +167,7 @@ struct MacHomeChatView: View {
 
     private var emptyStateIcon: String {
         guard remote.isConfigured else { return "antenna.radiowaves.left.and.right.slash" }
+        if isTab { return "rectangle.stack" }
         switch availability {
         case .ready: return "house.fill"
         case .opening: return "house"
@@ -224,6 +230,12 @@ struct MacHomeChatView: View {
 
     private var subtitle: String {
         if paused { return "Agent paused" }
+        if isTab {
+            // "Working · ~/Coding/Plexa", like the tab rows' state.
+            let state = CantripTabRowText.state(for: remote.selectedSession, connection: remote.connectionState).text
+            guard let folder = remote.selectedSession?.workdir, !folder.isEmpty else { return state }
+            return "\(state) · \((folder as NSString).abbreviatingWithTildeInPath)"
+        }
         if vm.isWorking { return vm.runStatusText ?? "Working…" }
         return remote.isConnected ? remote.endpointHost : remote.connectionLabel
     }
@@ -291,7 +303,8 @@ struct MacHomeChatView: View {
             TextField(
                 CantripInputComposer.placeholder(
                     for: remote.chatInputRequest, mode: vm.remoteDeliveryMode,
-                    recipient: CantripMascotName.display(mascotName)
+                    recipient: isTab ? remote.selectedSession?.title ?? "Cantrip"
+                        : CantripMascotName.display(mascotName)
                 ),
                 text: $input,
                 axis: .vertical

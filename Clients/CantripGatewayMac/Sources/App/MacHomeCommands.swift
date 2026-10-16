@@ -12,12 +12,14 @@ struct MacHomeCommands: Commands {
 
         CommandMenu("Home") {
             ForEach(Array(CantripHomeSection.allCases.enumerated()), id: \.element) { index, section in
-                Button(section.title) { navigation.section = section }
+                Button(section.title) { navigation.showHome(section) }
                     .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
             }
-            Button("Background") { navigation.showingBackground = true }
+            Button("Background") { navigation.showBackground() }
                 .keyboardShortcut("b", modifiers: .command)
             Divider()
+            Button("New Tab") { navigation.createTab() }
+                .keyboardShortcut("t", modifiers: .command)
             Button("New Message") { navigation.openChat() }
                 .keyboardShortcut("n", modifiers: .command)
             Button("Refresh") { Task { await remote.refreshNow() } }

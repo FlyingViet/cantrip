@@ -12,9 +12,63 @@ final class MacHomeNavigation: ObservableObject {
     @Published var composerPrefill: String?
     /// Bumped to move keyboard focus into the composer.
     @Published var composerFocusRequest = 0
+    /// The project tab being renamed from the sidebar or the tab's More menu.
+    @Published var renamingTab: CantripRemoteSession?
+    private weak var env: HermesEnv?
+    private weak var remote: CantripRemoteModel?
+
+    /// Project tabs open in Home's detail pane; the lane records which one is showing.
+    func attach(env: HermesEnv, remote: CantripRemoteModel) {
+        self.env = env
+        self.remote = remote
+    }
+
+    /// A tab is showing, not just requested (a switch waits for an in-flight send).
+    var isTabOpen: Bool { env?.executionLane == .cantrip && remote?.isHomeSelected == false }
+
+    /// Opens a project tab in the detail pane: sidebar rows, handoff cards and Background.
+    func openTab(_ id: String) {
+        guard let env, let remote else { return }
+        closeAll()
+        if isTabOpen {
+            Task { await remote.selectSession(id) }
+        } else {
+            // Also retargets a tab switch still waiting for Home's send to finish.
+            remote.prepareToOpenTab(id)
+            env.select(.cantrip)
+        }
+    }
+
+    /// Leaves an open tab for Home, optionally on one section.
+    func showHome(_ section: CantripHomeSection? = nil) {
+        if let section { self.section = section }
+        if let env, env.executionLane != .home { env.select(.home) }
+    }
+
+    func createTab() {
+        guard let remote, remote.isConfigured, !remote.isMutating else { return }
+        Task {
+            if let id = await remote.createTab() { openTab(id) }
+        }
+    }
+
+    /// Closes a tab; closing the open one returns to Home.
+    func closeTab(_ id: String) {
+        guard let remote else { return }
+        let wasOpen = isTabOpen && remote.selectedSessionID == id
+        Task {
+            if await remote.closeSession(id), wasOpen, isTabOpen { showHome() }
+        }
+    }
+
+    /// Background runs load from Home, so the list opens there.
+    func showBackground() {
+        showHome()
+        showingBackground = true
+    }
 
     func openChat(prefill: String? = nil) {
-        section = .chat
+        showHome(.chat)
         if let prefill { composerPrefill = prefill }
         composerFocusRequest += 1
     }
@@ -28,6 +82,7 @@ final class MacHomeNavigation: ObservableObject {
     func closeAll() {
         sheet = nil
         showingBackground = false
+        renamingTab = nil
     }
 }
 
