@@ -26,6 +26,14 @@ final class RemoteControlServer {
     private var lanListener: NWListener?
     private var activePort: Int?
     private var activeLANPort: Int?
+    /// Bumped whenever the LAN listener is replaced on purpose, cancelling scheduled retries.
+    private var lanGeneration = 0
+    /// A busy pinned port is retried this often before falling back (an old listener, or the
+    /// previous Cantrip process after an update, may still be releasing it)...
+    var lanPinnedRetries = 12
+    var lanPinnedRetryDelay: TimeInterval = 0.25
+    /// ...and after a fallback, the pinned port is reclaimed once it is free again.
+    var lanReclaimInterval: TimeInterval = 30
     private var token = ""
     private let buildMonitor: GitHubBuildMonitor
     private let usage: UsageTracker
@@ -85,9 +93,7 @@ final class RemoteControlServer {
         // Only the LAN port changed: keep the loopback listener, whose port can't be rebound
         // until the old socket finishes closing on the listener queue.
         if listener != nil, activePort == port, self.token == token {
-            lanListener?.stateUpdateHandler = nil
-            lanListener?.cancel()
-            lanListener = nil
+            cancelLANListener()
             activeLANPort = lanPort
             onLANStatus?(nil)
             startLANListener(token: token, pinnedPort: lanPort)
@@ -96,41 +102,59 @@ final class RemoteControlServer {
         stop()
 
         do {
-            let parameters = NWParameters.tcp
-            parameters.requiredLocalEndpoint = .hostPort(
-                host: NWEndpoint.Host("127.0.0.1"),
-                port: NWEndpoint.Port(rawValue: UInt16(port))!
-            )
-            let listener = try NWListener(using: parameters)
-            listener.newConnectionHandler = { [weak self] connection in
-                self?.accept(connection)
-            }
-            listener.stateUpdateHandler = { [weak self, weak listener] state in
-                guard let self, let listener, self.listener === listener else { return }
-                switch state {
-                case .ready:
-                    self.onError?(nil)
-                    Log.write("remote-control: listening at http://127.0.0.1:\(port)")
-                case .failed(let error):
-                    self.onError?("Remote control daemon failed: \(error.localizedDescription)")
-                    Log.write("remote-control: listener failed: \(error.localizedDescription)")
-                    self.stop()
-                default:
-                    break
-                }
-            }
-            self.listener = listener
+            try startHTTPListener(port: port)
             activePort = port
             activeLANPort = lanPort
             self.token = token
             updateNotificationActivation(fingerprint: RemoteLANProtocol.tokenFingerprint(token))
             updateLiveStatusActivation(fingerprint: RemoteLANProtocol.tokenFingerprint(token))
-            listener.start(queue: queue)
             startLANListener(token: token, pinnedPort: lanPort)
         } catch {
             onError?("Remote control daemon failed: \(error.localizedDescription)")
             Log.write("remote-control: listener failed: \(error.localizedDescription)")
         }
+    }
+
+    /// The loopback HTTP listener. Restarting on the same port (e.g. a new pairing token) can find
+    /// the old socket still closing, so a port conflict is retried briefly before giving up.
+    private func startHTTPListener(port: Int, attempt: Int = 0) throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(
+            host: NWEndpoint.Host("127.0.0.1"),
+            port: NWEndpoint.Port(rawValue: UInt16(port))!
+        )
+        let listener = try NWListener(using: parameters)
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.accept(connection)
+        }
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            guard let self, let listener, self.listener === listener else { return }
+            switch state {
+            case .ready:
+                self.onError?(nil)
+                Log.write("remote-control: listening at http://127.0.0.1:\(port)")
+            case .failed(let error) where Self.isPortConflict(error) && attempt + 1 < self.lanPinnedRetries:
+                listener.stateUpdateHandler = nil
+                listener.cancel()
+                DispatchQueue.main.asyncAfter(deadline: .now() + self.lanPinnedRetryDelay) { [weak self] in
+                    guard let self, self.listener === listener, self.activePort == port else { return }
+                    do {
+                        try self.startHTTPListener(port: port, attempt: attempt + 1)
+                    } catch {
+                        self.onError?("Remote control daemon failed: \(error.localizedDescription)")
+                        self.stop()
+                    }
+                }
+            case .failed(let error):
+                self.onError?("Remote control daemon failed: \(error.localizedDescription)")
+                Log.write("remote-control: listener failed: \(error.localizedDescription)")
+                self.stop()
+            default:
+                break
+            }
+        }
+        self.listener = listener
+        listener.start(queue: queue)
     }
 
     func stop() {
@@ -141,9 +165,7 @@ final class RemoteControlServer {
         listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
-        lanListener?.stateUpdateHandler = nil
-        lanListener?.cancel()
-        lanListener = nil
+        cancelLANListener()
         activePort = nil
         activeLANPort = nil
         token = ""
@@ -386,9 +408,17 @@ final class RemoteControlServer {
             .filter { $0.subagent?.isActive == true }.count
     }
 
+    private func cancelLANListener() {
+        lanGeneration += 1
+        lanListener?.stateUpdateHandler = nil
+        lanListener?.cancel()
+        lanListener = nil
+    }
+
     /// Starts the TLS-PSK listener, on `pinnedPort` when given. A pinned port that can't be bound
-    /// (another app holds it) falls back to a dynamic port so Bonjour clients keep working.
-    private func startLANListener(token: String, pinnedPort: Int?, fallbackFrom: Int? = nil) {
+    /// is retried briefly, then falls back to a dynamic port so Bonjour clients keep working.
+    private func startLANListener(token: String, pinnedPort: Int?, fallbackFrom: Int? = nil, attempt: Int = 0) {
+        let generation = lanGeneration
         do {
             let parameters = RemoteLANProtocol.parameters(token: token)
             let listener = try pinnedPort.flatMap { NWEndpoint.Port(rawValue: UInt16($0)) }
@@ -420,14 +450,16 @@ final class RemoteControlServer {
                     }
                 case .waiting(let error) where pinnedPort != nil && Self.isPortConflict(error),
                      .failed(let error) where pinnedPort != nil:
-                    Log.write("remote-control: LAN port \(pinnedPort!) unavailable: \(error.localizedDescription)")
                     listener.stateUpdateHandler = nil
                     listener.cancel()
-                    // start() and stop() run on the main queue; restart there unless they replaced us.
+                    // start() and stop() run on the main queue; continue there unless they replaced us.
                     DispatchQueue.main.async { [weak self] in
-                        guard let self, self.lanListener === listener, self.token == token else { return }
+                        guard let self, generation == self.lanGeneration, self.lanListener === listener else { return }
                         self.lanListener = nil
-                        self.startLANListener(token: token, pinnedPort: nil, fallbackFrom: pinnedPort)
+                        if attempt == 0 || attempt + 1 >= self.lanPinnedRetries {
+                            Log.write("remote-control: LAN port \(pinnedPort!) unavailable: \(error.localizedDescription)")
+                        }
+                        self.pinnedLANPortUnavailable(token: token, pinnedPort: pinnedPort!, attempt: attempt)
                     }
                 case .failed(let error):
                     self.onError?(
@@ -447,11 +479,60 @@ final class RemoteControlServer {
         } catch {
             if let pinnedPort {
                 Log.write("remote-control: LAN port \(pinnedPort) unavailable: \(error.localizedDescription)")
-                startLANListener(token: token, pinnedPort: nil, fallbackFrom: pinnedPort)
+                pinnedLANPortUnavailable(token: token, pinnedPort: pinnedPort, attempt: lanPinnedRetries)
                 return
             }
             onError?("Direct local-network control failed: \(error.localizedDescription)")
             Log.write("remote-control: LAN listener failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Main queue. Retries the pinned port, then serves on a dynamic port and keeps checking
+    /// whether the pinned one has been released.
+    private func pinnedLANPortUnavailable(token: String, pinnedPort: Int, attempt: Int) {
+        let generation = lanGeneration
+        if attempt + 1 < lanPinnedRetries {
+            DispatchQueue.main.asyncAfter(deadline: .now() + lanPinnedRetryDelay) { [weak self] in
+                guard let self, generation == self.lanGeneration, self.lanListener == nil,
+                      self.token == token else { return }
+                self.startLANListener(token: token, pinnedPort: pinnedPort, attempt: attempt + 1)
+            }
+            return
+        }
+        startLANListener(token: token, pinnedPort: nil, fallbackFrom: pinnedPort)
+        scheduleLANReclaim(token: token, pinnedPort: pinnedPort, generation: generation)
+    }
+
+    private func scheduleLANReclaim(token: String, pinnedPort: Int, generation: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + lanReclaimInterval) { [weak self] in
+            guard let self, generation == self.lanGeneration, self.token == token,
+                  self.activeLANPort == pinnedPort else { return }
+            guard Self.portIsFree(pinnedPort) else {
+                self.scheduleLANReclaim(token: token, pinnedPort: pinnedPort, generation: generation)
+                return
+            }
+            Log.write("remote-control: LAN port \(pinnedPort) is free again; moving back to it")
+            self.cancelLANListener()
+            self.startLANListener(token: token, pinnedPort: pinnedPort)
+        }
+    }
+
+    /// Whether a dual-stack wildcard bind of `port` would succeed right now.
+    private static func portIsFree(_ port: Int) -> Bool {
+        let fd = socket(AF_INET6, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var off: Int32 = 0
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, socklen_t(MemoryLayout<Int32>.size))
+        var address = sockaddr_in6()
+        address.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+        address.sin6_family = sa_family_t(AF_INET6)
+        address.sin6_port = in_port_t(UInt16(port).bigEndian)
+        address.sin6_addr = in6addr_any
+        return withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) == 0
+            }
         }
     }
 
