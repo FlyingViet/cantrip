@@ -10,10 +10,11 @@ extension SessionTabTests {
         let token = UUID().uuidString
         let server = RemoteControlServer(manager: manager)
         server.advertisesLANService = false
+        server.lanReclaimInterval = 0.5
         var statuses: [RemoteLANStatus?] = []
         server.onLANStatus = { status in DispatchQueue.main.async { statuses.append(status) } }
         func waitForStatus(_ condition: (RemoteLANStatus) -> Bool) async throws -> RemoteLANStatus {
-            for _ in 0..<100 {
+            for _ in 0..<200 {
                 if let last = statuses.last, let status = last, condition(status) { return status }
                 try await Task.sleep(nanoseconds: 50_000_000)
             }
@@ -22,6 +23,7 @@ extension SessionTabTests {
 
         let httpPort = Int.random(in: 49152...54000)
         let pinned = Int.random(in: 54001...58000)
+        statuses.removeAll()
         server.start(port: httpPort, token: token, lanPort: pinned)
         defer { server.stop() }
         let status = try await waitForStatus { $0.port == pinned }
@@ -36,6 +38,25 @@ extension SessionTabTests {
         precondition(RemoteLANStatusText.describe(status, pinnedPort: pinned, addresses: ["192.168.1.152"])
             .contains("192.168.1.152:\(pinned)"))
 
+        // A new pairing token restarts everything; the pinned port is rebound once the old
+        // socket closes, not abandoned for a dynamic one.
+        let renewed = UUID().uuidString
+        try await Task.sleep(nanoseconds: 100_000_000)
+        statuses.removeAll()
+        server.start(port: httpPort, token: renewed, lanPort: pinned)
+        let rebound = try await waitForStatus { _ in true }
+        precondition(rebound.port == pinned && !rebound.fellBack, "Token change kept the pinned port: \(rebound)")
+        let reboundHealth = try await lanRequest(port: pinned, token: renewed, path: "/health")
+        precondition(reboundHealth.status == 200)
+        var loopbackUp = false
+        for _ in 0..<40 where !loopbackUp {
+            let health = URL(string: "http://127.0.0.1:\(httpPort)/health")!
+            if let (_, response) = try? await URLSession.shared.data(from: health),
+               (response as? HTTPURLResponse)?.statusCode == 200 { loopbackUp = true }
+            else { try await Task.sleep(nanoseconds: 100_000_000) }
+        }
+        precondition(loopbackUp, "The loopback HTTP listener survives a token change on the same port")
+
         // Another app holding the pinned port: fall back to a dynamic port and say so.
         let busy = Int.random(in: 58001...62000)
         let blocker = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: UInt16(busy))!)
@@ -44,16 +65,24 @@ extension SessionTabTests {
         defer { blocker.cancel() }
         for _ in 0..<40 where blocker.state != .ready { try await Task.sleep(nanoseconds: 50_000_000) }
         precondition(blocker.state == .ready, "Test blocker could not bind \(busy)")
-        server.start(port: httpPort, token: token, lanPort: busy)
+        statuses.removeAll()
+        server.start(port: httpPort, token: renewed, lanPort: busy)
         let fallback = try await waitForStatus { $0.requestedPort == busy }
         precondition(fallback.fellBack && fallback.port != busy, "A busy pinned port falls back")
-        let viaFallback = try await lanRequest(port: fallback.port, token: token, path: "/health")
+        let viaFallback = try await lanRequest(port: fallback.port, token: renewed, path: "/health")
         precondition(viaFallback.status == 200, "The fallback listener still serves TLS-PSK")
         precondition(RemoteLANStatusText.describe(fallback, pinnedPort: busy, addresses: [])
             .contains("Port \(busy) is in use"))
+        // The other app lets go: Cantrip moves back to the pinned port by itself.
+        blocker.cancel()
+        let reclaimed = try await waitForStatus { $0.port == busy }
+        precondition(!reclaimed.fellBack)
+        let reclaimedHealth = try await lanRequest(port: busy, token: renewed, path: "/health")
+        precondition(reclaimedHealth.status == 200)
 
         // The loopback HTTP port can't double as the LAN port; it stays dynamic.
-        server.start(port: httpPort, token: token, lanPort: httpPort)
+        statuses.removeAll()
+        server.start(port: httpPort, token: renewed, lanPort: httpPort)
         let automatic = try await waitForStatus { $0.requestedPort == nil }
         precondition(automatic.port != httpPort && !automatic.fellBack)
         precondition(RemoteLANStatusText.describe(automatic, pinnedPort: 0, addresses: [])
