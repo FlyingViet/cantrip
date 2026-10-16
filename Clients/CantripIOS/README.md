@@ -52,8 +52,9 @@ tabs, or shows **?** while a tab or background job waits for you) or swipe right
 left edge. The drawer has **+** for a new tab, **Search tabs**, a pinned **Cantrip Home**
 row, a **Background jobs** row (scheduled and automated runs), then every tab with a spinner
 while it works (its live status in orange), its latest outcome when idle, and how long ago
-it last ran. Touch and hold a tab for Rename, Lock, Move, Model Settings, View Mac and
-Close. A connection line sits at the bottom.
+it last ran. Drag a tab's **≡** handle to reorder (not while searching); touch and hold a tab
+for Rename, Lock, Move, Model Settings, View Mac and Close. A connection line sits at the
+bottom.
 
 A tab opens full screen with **‹ Home** on the left, its name and **Working / Idle** state in
 the center, and a **⋯** menu on the right: **All Tabs**, the tab's actions, delivery mode,
@@ -61,7 +62,7 @@ Copilot usage, Resume, voice mode and the Mac menu items. Stop, queued prompts, 
 requests, attachments, per-tab models and history paging work as before. **‹ Home** or a
 right swipe from the left edge returns to Home. The swipe drags the tab with your finger over
 Home, like a navigation back swipe: let go past about a third of the width (or flick) to
-finish, or earlier to stay in the tab. Home shows as you left it until its conversation has
+finish, or earlier to stay in the tab. Home shows its latest look until its conversation has
 reloaded; with Reduce Motion, **‹ Home** switches without sliding. Handoff cards' **Open tab**, a tab's push
 notification and the Tabs widget open the tab the same way. Tab ages and outcomes need
 Cantrip host e8e5c0b or later; older hosts show names and live status only.

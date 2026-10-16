@@ -41,10 +41,10 @@ enum CantripBackSwipe {
     }
 }
 
-/// What Cantrip Home looked like on screen, shown under a tab while it is swiped away and over the
-/// live Home until its conversation has reloaded. Only kept while it matches Home's content.
+/// What Cantrip Home last looked like on screen, shown under a tab while it is swiped away and
+/// over the live Home until its conversation has reloaded. Kept fresh while Home is visible; any
+/// later change is covered by the crossfade to the live Home.
 struct CantripScreenSnapshot {
-    let signature: String
     let windowSize: CGSize
     let colorScheme: ColorScheme
     #if os(iOS)
@@ -78,19 +78,31 @@ struct CantripScreenSnapshot {
     }
     #endif
 
-    /// The key window's current frame. Nil when a sheet covers it or there is no window.
+    /// The key window's current frame. Nil when a sheet or menu covers it or there is no window.
     @MainActor
-    static func capture(signature: String, colorScheme: ColorScheme) -> CantripScreenSnapshot? {
+    static func capture(colorScheme: ColorScheme) -> CantripScreenSnapshot? {
         #if os(iOS)
         guard let window = keyWindow(), window.bounds.width > 0,
               window.rootViewController?.presentedViewController == nil,
+              !showsMenu(in: window),
               let view = window.snapshotView(afterScreenUpdates: false) else { return nil }
-        return CantripScreenSnapshot(signature: signature, windowSize: window.bounds.size,
-                                     colorScheme: colorScheme, view: view)
+        return CantripScreenSnapshot(windowSize: window.bounds.size, colorScheme: colorScheme, view: view)
         #else
         return nil
         #endif
     }
+
+    #if os(iOS)
+    /// Menus and context menus are drawn into the window, outside SwiftUI's state.
+    @MainActor
+    private static func showsMenu(in window: UIWindow) -> Bool {
+        func scan(_ view: UIView, depth: Int) -> Bool {
+            if String(describing: type(of: view)).contains("ContextMenu") { return true }
+            return depth < 3 && view.subviews.contains { scan($0, depth: depth + 1) }
+        }
+        return window.subviews.contains { scan($0, depth: 0) }
+    }
+    #endif
 }
 
 /// Drives the back swipe: the tab follows the finger over Home, then either finishes the pop or
@@ -135,20 +147,10 @@ final class CantripTabBackTransition: ObservableObject {
 
     // MARK: Home snapshot
 
+    /// Replaces the picture of Home, never mid-transition (the screen then shows the transition).
     func keepHomeSnapshot(_ snapshot: CantripScreenSnapshot?) {
         guard phase == .idle, let snapshot else { return }
         homeSnapshot = snapshot
-    }
-
-    /// Leaving Home: keep the snapshot only if Home still shows what it captured.
-    func leavingHome(signature: String?) {
-        guard phase == .idle else { return }
-        if homeSnapshot?.signature != signature { homeSnapshot = nil }
-    }
-
-    func discardHomeSnapshot() {
-        guard phase == .idle else { return }
-        homeSnapshot = nil
     }
 
     // MARK: Gesture
@@ -270,7 +272,7 @@ final class CantripTabBackTransition: ObservableObject {
         var instant = Transaction(animation: nil)
         instant.disablesAnimations = true
         withTransaction(instant) {
-            if phase == .covering || phase == .entering { homeSnapshot = nil }
+            // The picture stays: it is still the latest view of Home until a fresh one replaces it.
             phase = .idle
             offset = 0
             contentOpacity = 1
@@ -368,7 +370,8 @@ private struct CantripTabBackSwipe: ViewModifier {
                             ? 0 : CantripBackSwipe.underlayOffset(progress: progress, width: transition.width))
                     .opacity(covering ? transition.coverOpacity : 1)
             } else if !covering {
-                Self.underlayBackground
+                // No picture of Home yet (e.g. a tab opened straight from a notification at launch).
+                Self.screenBackground
             }
             if !covering {
                 Color.black.opacity(0.25 * (1 - progress))
@@ -388,14 +391,6 @@ private struct CantripTabBackSwipe: ViewModifier {
         Color(uiColor: .systemBackground)
         #else
         Color(nsColor: .windowBackgroundColor)
-        #endif
-    }
-
-    private static var underlayBackground: Color {
-        #if os(iOS)
-        Color(uiColor: .secondarySystemBackground)
-        #else
-        Color(nsColor: .underPageBackgroundColor)
         #endif
     }
 }

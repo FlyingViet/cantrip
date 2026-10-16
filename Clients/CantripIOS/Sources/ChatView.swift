@@ -1122,6 +1122,9 @@ struct ChatView: View {
     @State private var showRemoteTabs = false
     @State private var opensDrawerAfterReturningHome = false
     @StateObject private var backTransition = CantripTabBackTransition()
+    @State private var homeSnapshotTask: Task<Void, Never>?
+    /// The launch splash covers Home at first; no pictures until it has gone.
+    @State private var homeSnapshotsAllowedFrom = Date.distantFuture
     @State private var showCopilotUsage = false
     @State private var homeSection = CantripHomeSection.chat
     @State private var renamingRemoteSession: CantripRemoteSession?
@@ -1340,13 +1343,23 @@ struct ChatView: View {
                     captureHomeSnapshot(keyboardShown: composerFocused, drawerShown: false)
                 }
                 composerFocused = false
+            } else {
+                // Not while the drawer slides away.
+                scheduleHomeSnapshot(after: .milliseconds(500))
             }
         }
         .onChange(of: composerFocused) { wasFocused, focused in
-            // Picture Home before the keyboard reshapes it.
+            // Picture Home before the keyboard reshapes it, and again once it has gone.
             if focused, !wasFocused, vm.activeLane == .home {
                 captureHomeSnapshot(keyboardShown: false, drawerShown: showRemoteTabs)
+            } else if !focused {
+                scheduleHomeSnapshot(after: .milliseconds(600))
             }
+        }
+        .onChange(of: homeSection) { _, _ in scheduleHomeSnapshot() }
+        .onChange(of: vm.activeLane) { _, lane in
+            // Back on Home: picture it again once the reloaded conversation has settled.
+            if lane == .home { scheduleHomeSnapshot(after: .seconds(2)) }
         }
         .onChange(of: remote.tabDrawerRequest) { _, _ in
             if vm.activeLane == .home {
@@ -1394,6 +1407,7 @@ struct ChatView: View {
             }
         }
         .onAppear {
+            homeSnapshotsAllowedFrom = Date().addingTimeInterval(2.5)
             voice.requestAuth()
             vm.setAppActive(scenePhase == .active)
             if router.startVoiceMode { showVoiceMode = true; router.startVoiceMode = false }   // cold launch from the Action Button
@@ -1417,13 +1431,9 @@ struct ChatView: View {
             if lane != .home, backTransition.isBusy {
                 // A notification or link opened a tab while Home was sliding in or still covered.
                 backTransition.reset()
-            } else if vm.activeLane == .home, lane != .home {
-                backTransition.leavingHome(signature: homeSnapshotSignature)
             } else if lane == .home, backTransition.isSliding {
                 // Something else (e.g. the Tabs widget) went Home before the swipe finished.
                 backTransition.reset()
-            } else if lane == .home, !backTransition.isBusy {
-                backTransition.discardHomeSnapshot()
             }
             vm.switchLane(to: lane)
             reloadCommands()
@@ -1436,6 +1446,7 @@ struct ChatView: View {
         }
         .onChange(of: remote.transcriptRevision) { _, _ in
             vm.syncRemoteTranscript()
+            scheduleHomeSnapshot()
         }
         .onChange(of: remote.selectedSessionID) { _, _ in
             // Another tab opened while this one was being swiped away: stay with the new tab.
@@ -1971,20 +1982,24 @@ struct ChatView: View {
         backTransition.popFromButton(colorScheme: colorScheme, reduceMotion: reduceMotion, pop: returnHome)
     }
 
-    /// What Home's conversation shows; a snapshot of Home is only reused while this is unchanged.
-    private var homeSnapshotSignature: String? {
-        guard vm.activeLane == .home, homeSection == .chat, let session = remote.selectedSession,
-              session.isCantripHome == true else { return nil }
-        let messages = session.messages ?? []
-        let last = messages.last
-        return [session.id, session.historyRevision ?? "", String(messages.count), last?.id ?? "",
-                String(last?.text.count ?? 0), String(session.isStreaming)].joined(separator: "|")
+    /// Pictures Home as it is on screen right now, unless the keyboard or tab drawer covers it (the
+    /// snapshot also skips sheets and menus). The latest picture is what a tab's back swipe reveals.
+    private func captureHomeSnapshot(keyboardShown: Bool, drawerShown: Bool) {
+        guard vm.activeLane == .home, !keyboardShown, !drawerShown, !backTransition.isBusy,
+              Date() >= homeSnapshotsAllowedFrom else { return }
+        backTransition.keepHomeSnapshot(CantripScreenSnapshot.capture(colorScheme: colorScheme))
     }
 
-    /// Pictures Home as it is on screen right now, unless the keyboard or tab drawer covers it.
-    private func captureHomeSnapshot(keyboardShown: Bool, drawerShown: Bool) {
-        guard !keyboardShown, !drawerShown, let signature = homeSnapshotSignature else { return }
-        backTransition.keepHomeSnapshot(CantripScreenSnapshot.capture(signature: signature, colorScheme: colorScheme))
+    /// Refreshes Home's picture once it has been still for a moment (replies stream in bursts).
+    private func scheduleHomeSnapshot(after delay: Duration = .milliseconds(700)) {
+        guard vm.activeLane == .home else { return }
+        homeSnapshotTask?.cancel()
+        let untilSplashGone = min(3, max(0, homeSnapshotsAllowedFrom.timeIntervalSinceNow))
+        homeSnapshotTask = Task { @MainActor in
+            try? await Task.sleep(for: max(delay, .seconds(untilSplashGone)))
+            guard !Task.isCancelled, scenePhase == .active else { return }
+            captureHomeSnapshot(keyboardShown: composerFocused, drawerShown: showRemoteTabs)
+        }
     }
 
     /// Home's conversation has reloaded (or failed to) after returning from a tab.

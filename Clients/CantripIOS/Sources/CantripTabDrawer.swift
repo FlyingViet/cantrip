@@ -199,6 +199,10 @@ struct CantripTabList<Actions: View>: View {
         sessions.first { $0.id == selectedSessionID }
     }
 
+    private func canMove(_ session: CantripRemoteSession) -> Bool {
+        onMove != nil && session.supportsTabReordering == true && sessions.count >= 2
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             List {
@@ -214,7 +218,7 @@ struct CantripTabList<Actions: View>: View {
                         .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
-                        .moveDisabled(onMove == nil || session.supportsTabReordering != true || sessions.count < 2)
+                        .moveDisabled(!canMove(session))
                 }
                 .onMove { source, destination in
                     move(fromOffsets: source, toOffset: destination)
@@ -222,6 +226,9 @@ struct CantripTabList<Actions: View>: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            // Rows open their actions on touch and hold, which would swallow a long-press drag,
+            // so reordering uses the native ≡ handles (taps and the actions menu still work).
+            .environment(\.editMode, .constant(onMove == nil ? .inactive : .active))
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: sessions.map(\.id))
             .scrollBounceBehavior(.basedOnSize)
             .defaultScrollAnchor(.top)

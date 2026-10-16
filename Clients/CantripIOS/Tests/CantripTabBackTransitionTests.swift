@@ -38,12 +38,11 @@ private final class StepScheduler {
 
 @MainActor
 final class CantripTabBackTransitionTests: XCTestCase {
-    private func snapshot(_ signature: String = "home|1") -> CantripScreenSnapshot {
+    private func snapshot(width: CGFloat = 400) -> CantripScreenSnapshot {
         #if os(iOS)
-        CantripScreenSnapshot(signature: signature, windowSize: CGSize(width: 400, height: 860),
-                              colorScheme: .dark, view: UIView())
+        CantripScreenSnapshot(windowSize: CGSize(width: width, height: 860), colorScheme: .dark, view: UIView())
         #else
-        CantripScreenSnapshot(signature: signature, windowSize: CGSize(width: 400, height: 860), colorScheme: .dark)
+        CantripScreenSnapshot(windowSize: CGSize(width: width, height: 860), colorScheme: .dark)
         #endif
     }
 
@@ -134,7 +133,7 @@ final class CantripTabBackTransitionTests: XCTestCase {
         XCTAssertEqual(transition.phase, .covering)
         scheduler.run(delay: CantripTabBackTransition.revealDuration)
         XCTAssertEqual(transition.phase, .idle)
-        XCTAssertNil(transition.homeSnapshot, "A used picture is released")
+        XCTAssertNotNil(transition.homeSnapshot, "The picture stays as Home's latest view until a fresh one replaces it")
         XCTAssertEqual(transition.coverOpacity, 1)
         scheduler.run(delay: CantripTabBackTransition.coverTimeout)
         XCTAssertTrue(scheduler.isEmpty)
@@ -191,19 +190,20 @@ final class CantripTabBackTransitionTests: XCTestCase {
         XCTAssertEqual(still.offset, 0)
     }
 
-    func testOnlyAPictureOfHomesCurrentConversationIsKept() {
-        let (transition, _) = transition()
-        transition.keepHomeSnapshot(snapshot("home|3"))
-        transition.leavingHome(signature: "home|3")
-        XCTAssertEqual(transition.homeSnapshot?.signature, "home|3")
-        transition.leavingHome(signature: "home|4")
-        XCTAssertNil(transition.homeSnapshot, "Home changed since the picture was taken")
-        transition.keepHomeSnapshot(snapshot("home|4"))
-        transition.leavingHome(signature: nil)
-        XCTAssertNil(transition.homeSnapshot, "Not on Home's chat")
-        transition.keepHomeSnapshot(snapshot())
-        transition.discardHomeSnapshot()
-        XCTAssertNil(transition.homeSnapshot)
+    func testTheLatestPictureOfHomeIsKeptButNeverSwappedMidTransition() {
+        let (transition, scheduler) = transition()
+        transition.keepHomeSnapshot(nil)
+        XCTAssertNil(transition.homeSnapshot, "A failed capture keeps whatever there was")
+        transition.keepHomeSnapshot(snapshot(width: 400))
+        transition.keepHomeSnapshot(nil)
+        XCTAssertNotNil(transition.homeSnapshot)
+        transition.track(50)
+        transition.keepHomeSnapshot(snapshot(width: 390))
+        XCTAssertEqual(transition.homeSnapshot?.windowSize.width, 400, "The screen shows the swipe, not Home")
+        transition.release(predictedOffset: 50, velocity: 0, colorScheme: .dark) {}
+        scheduler.runPending()
+        transition.keepHomeSnapshot(snapshot(width: 390))
+        XCTAssertEqual(transition.homeSnapshot?.windowSize.width, 390)
     }
 
     func testResetAbandonsAPopInProgress() {
@@ -213,10 +213,8 @@ final class CantripTabBackTransitionTests: XCTestCase {
         XCTAssertTrue(transition.isSliding)
         transition.release(predictedOffset: 300, velocity: 0, colorScheme: .dark) { popped = true }
         XCTAssertTrue(transition.isSliding, "Still sliding until the lane switches")
-        transition.keepHomeSnapshot(snapshot("other"))
-        XCTAssertEqual(transition.homeSnapshot?.signature, "home|1", "No new picture mid-transition")
-        transition.leavingHome(signature: nil)
-        XCTAssertNotNil(transition.homeSnapshot, "Mid-transition, leaving Home is handled by reset")
+        transition.keepHomeSnapshot(snapshot(width: 390))
+        XCTAssertEqual(transition.homeSnapshot?.windowSize.width, 400, "No new picture mid-transition")
         transition.reset()
         XCTAssertEqual(transition.phase, .idle)
         XCTAssertEqual(transition.offset, 0)
