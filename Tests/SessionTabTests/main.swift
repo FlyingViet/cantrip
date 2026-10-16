@@ -124,6 +124,7 @@ struct SessionTabTests {
         try testNativeTabDragging()
         try await testPanelStaysOpenForAttachedConfirmation()
         try await testTabReordering()
+        try await testTabListPreviews()
         try testPromptPaging()
         try await testPromptPreparation()
         try await testCopilotUsage()
