@@ -17,6 +17,22 @@ struct MacHomeSidebar: View {
     @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
 
     var body: some View {
+        // Header and footer sit outside the list (not as safe-area insets, which let rows scroll
+        // underneath them), so Home's sections and the tabs scroll only inside their own box.
+        VStack(spacing: 0) {
+            header
+            list
+                .clipShape(Self.listBox)
+                .background(Self.listBox.fill(.white.opacity(0.03)))
+                .overlay(Self.listBox.strokeBorder(.white.opacity(0.08)))
+                .padding(.horizontal, 8)
+            footer
+        }
+    }
+
+    private static let listBox = RoundedRectangle(cornerRadius: 12, style: .continuous)
+
+    private var list: some View {
         List(selection: selection) {
             Section {
                 ForEach(CantripHomeSection.allCases) { section in
@@ -54,8 +70,7 @@ struct MacHomeSidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) { header }
-        .safeAreaInset(edge: .bottom, spacing: 0) { footer }
+        .accessibilityIdentifier("sidebar.list")
     }
 
     private var selection: Binding<MacHomeDestination?> {
@@ -124,7 +139,6 @@ struct MacHomeSidebar: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Divider()
             ChatConnectionIndicator(
                 host: remote.endpointHost, isConnected: remote.isConnected,
                 statusOverride: remote.connectionLabel
@@ -138,6 +152,7 @@ struct MacHomeSidebar: View {
             }
         }
         .padding(.horizontal, 12)
+        .padding(.top, 6)
         .padding(.bottom, 10)
     }
 
