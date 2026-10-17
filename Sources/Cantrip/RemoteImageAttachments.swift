@@ -26,6 +26,11 @@ enum RemoteImageAttachments {
     struct Presentation {
         let text: String
         let imageIDs: [String]
+        /// Attached documents, shown in `text` as "📎 name" lines.
+        var fileNames: [String] = []
+
+        /// Clients show `text` instead of the prompt.
+        var replacesText: Bool { !imageIDs.isEmpty || !fileNames.isEmpty }
     }
 
     // Only our own complete upload markers become images; ordinary paths and
@@ -34,25 +39,46 @@ enum RemoteImageAttachments {
         _ text: String, sessionID: UUID, root: URL = storageRoot
     ) -> Presentation {
         let prefix = root.appendingPathComponent(sessionID.uuidString).path + "/"
-        guard text.contains("(Attached image: " + prefix) else {
+        let hasImages = text.contains("(Attached image: " + prefix)
+        let hasFiles = text.contains("(Attached file: " + prefix)
+        guard hasImages || hasFiles else {
             return Presentation(text: text, imageIDs: [])
         }
-        let pattern = #"(?m)^\(Attached image: "#
-            + NSRegularExpression.escapedPattern(for: prefix)
-            + #"([A-Fa-f0-9-]{36}/image-[1-4]\.jpg) - view this image file; it is part of my request\.\)$"#
-        let expression = try! NSRegularExpression(pattern: pattern)
-        let source = text as NSString
-        let matches = expression.matches(in: text, range: NSRange(location: 0, length: source.length))
-            .filter { validID(source.substring(with: $0.range(at: 1))) }
-        guard !matches.isEmpty else { return Presentation(text: text, imageIDs: []) }
         let display = NSMutableString(string: text)
-        for match in matches.reversed() { display.replaceCharacters(in: match.range, with: "") }
-        var seen = Set<String>()
-        let ids = matches.map { source.substring(with: $0.range(at: 1)) }
-            .filter { seen.insert($0).inserted }
+        var ids: [String] = []
+        if hasImages {
+            let pattern = #"(?m)^\(Attached image: "#
+                + NSRegularExpression.escapedPattern(for: prefix)
+                + #"([A-Fa-f0-9-]{36}/image-[1-4]\.jpg) - view this image file; it is part of my request\.\)$"#
+            let expression = try! NSRegularExpression(pattern: pattern)
+            let source = text as NSString
+            let matches = expression.matches(in: text, range: NSRange(location: 0, length: source.length))
+                .filter { validID(source.substring(with: $0.range(at: 1))) }
+            for match in matches.reversed() { display.replaceCharacters(in: match.range, with: "") }
+            var seen = Set<String>()
+            ids = matches.map { source.substring(with: $0.range(at: 1)) }
+                .filter { seen.insert($0).inserted }
+        }
+        var names: [String] = []
+        if hasFiles {
+            let pattern = #"(?m)^\(Attached file: "#
+                + NSRegularExpression.escapedPattern(for: prefix)
+                + #"([A-Fa-f0-9-]{36})/([^/\n]+) - read this file; it is part of my request\.\)$"#
+            let expression = try! NSRegularExpression(pattern: pattern)
+            let source = display.copy() as! NSString
+            let matches = expression.matches(in: source as String, range: NSRange(location: 0, length: source.length))
+                .filter { UUID(uuidString: source.substring(with: $0.range(at: 1))) != nil }
+            for match in matches.reversed() {
+                let name = source.substring(with: match.range(at: 2))
+                display.replaceCharacters(in: match.range, with: "📎 " + name)
+            }
+            names = matches.map { source.substring(with: $0.range(at: 2)) }
+        }
+        guard !ids.isEmpty || !names.isEmpty else { return Presentation(text: text, imageIDs: []) }
         return Presentation(
             text: (display as String).trimmingCharacters(in: .whitespacesAndNewlines),
-            imageIDs: ids
+            imageIDs: ids,
+            fileNames: names
         )
     }
 
