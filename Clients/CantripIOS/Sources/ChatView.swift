@@ -56,6 +56,8 @@ final class ChatViewModel: ObservableObject {
     private var observationGeneration = 0
     private var remoteSessionID: String?
     private var remoteMessageIDs: [String: UUID] = [:]
+    /// Handoffs whose result card is in the transcript; their reply cards are hidden.
+    private var reportedHandoffIDs: Set<String> = []
     private var remoteSpeechBaseline: Set<String> = []
     private var remoteSpeechTargetID: String?
     private var remoteSpeechActive = false
@@ -180,13 +182,14 @@ final class ChatViewModel: ObservableObject {
         spoken: Bool = false,
         images: [ChatImageAttachment] = [],
         video: ChatVideoAttachment? = nil,
+        files: [ChatFileAttachment] = [],
         sessionID: String? = nil
     ) async -> Bool {
         guard activeLane.usesCantripRemote,
               !UserDefaults.standard.bool(forKey: "hermes.paused"),
               !sending, !remote.isMutating else { return false }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !images.isEmpty || video != nil else { return false }
+                || !images.isEmpty || video != nil || !files.isEmpty else { return false }
         guard remote.isConfigured else {
             appendRemoteFailure("Configure Cantrip Remote in Settings.", for: text)
             return false
@@ -212,7 +215,10 @@ final class ChatViewModel: ObservableObject {
             && remote.selectedSession?.isStreaming == true
         if !isQueuedSend {
             turns.append(ChatTurn(
-                role: .user, text: text + (video.map { "\n\nVideo: \($0.name)" } ?? ""), executionLane: activeLane,
+                role: .user,
+                text: text + (video.map { "\n\nVideo: \($0.name)" } ?? "")
+                    + files.map { "\n\n📎 \($0.name)" }.joined(),
+                executionLane: activeLane,
                 images: images.map(ChatMessageImage.init)
             ))
             turns.append(
@@ -231,6 +237,7 @@ final class ChatViewModel: ObservableObject {
             mode: remoteDeliveryMode,
             images: images,
             video: video,
+            files: files,
             sessionID: targetSessionID
         )
         sending = false
@@ -272,6 +279,7 @@ final class ChatViewModel: ObservableObject {
 
     func remoteMessage(for turnID: UUID) -> CantripRemoteMessage? {
         remote.selectedSession?.transcript.first { remoteMessageIDs[$0.id] == turnID }
+            .map { CantripHandoffCards.visible($0, reported: reportedHandoffIDs) }
     }
 
     var historyPrependAnchor: UUID? {
@@ -292,6 +300,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         let transcript = session?.transcript ?? []
+        reportedHandoffIDs = CantripHandoffCards.reportedIDs(in: transcript)
         let lastAssistantID = transcript.last(where: {
             $0.role != "user" && $0.role != "error" && !$0.isHandoffResult
         })?.id
@@ -1102,6 +1111,7 @@ struct ChatView: View {
     @State private var serverTextDrafts: [String: String] = [:]
     @State private var imageDrafts: [String: [ChatImageAttachment]] = [:]
     @State private var videoDrafts: [String: ChatVideoAttachment] = [:]
+    @State private var fileDrafts: [String: [ChatFileAttachment]] = [:]
     @State private var imageImportID: UUID?
     @State private var submittingRemote = false
     @State private var imageSendError: String?
@@ -2024,6 +2034,7 @@ struct ChatView: View {
             if await remote.closeSession(id) {
                 imageDrafts.removeValue(forKey: draftKey)
                 videoDrafts.removeValue(forKey: draftKey)
+                fileDrafts.removeValue(forKey: draftKey)
                 // A closed tab returns to Home, where the drawer lists the remaining tabs.
                 if closesOpenTab, vm.activeLane == .cantrip { returnHome() }
             }
@@ -2214,6 +2225,8 @@ struct ChatView: View {
                             videoDraft(for: sessionID).wrappedValue = nil
                         }
                     }
+                    FileAttachmentPreviews(files: fileDraft(for: sessionID),
+                                           disabled: imagePickerDisabled || importingImages)
                     if importingImages {
                         Button("Cancel attachment preparation") { imageImportID = nil }
                             .frame(minHeight: 44)
@@ -2222,7 +2235,7 @@ struct ChatView: View {
                         VStack(alignment: .leading) {
                             ProgressView(value: progress.fraction)
                             Text(progress.label).font(.caption).foregroundStyle(.secondary)
-                            Button("Cancel video upload") { remote.cancelVideoUpload() }
+                            Button("Cancel upload") { remote.cancelVideoUpload() }
                                 .frame(minHeight: 44)
                         }
                         .accessibilityElement(children: .contain)
@@ -2269,7 +2282,12 @@ struct ChatView: View {
                     disabled: imagePickerDisabled,
                     video: videoDraft(for: sessionID),
                     videoSupport: remote.selectedSession?.id == sessionID
-                        ? remote.selectedSession?.supportsVideoAttachments : nil
+                        ? remote.selectedSession?.supportsVideoAttachments : nil,
+                    files: fileDraft(for: sessionID),
+                    fileSupport: remote.selectedSession?.id == sessionID
+                        ? remote.selectedSession?.supportsFileAttachments : nil,
+                    mixedSupport: remote.selectedSession?.id == sessionID
+                        ? remote.selectedSession?.supportsMixedAttachments : nil
                 )
                 .id(sessionID)
             } else if !vm.activeLane.usesCantripRemote {
@@ -2328,6 +2346,11 @@ struct ChatView: View {
     private func videoDraft(for sessionID: String) -> Binding<ChatVideoAttachment?> {
         let key = remoteDraftKey(sessionID)
         return Binding(get: { videoDrafts[key] }, set: { videoDrafts[key] = $0 })
+    }
+
+    private func fileDraft(for sessionID: String) -> Binding<[ChatFileAttachment]> {
+        let key = remoteDraftKey(sessionID)
+        return Binding(get: { fileDrafts[key] ?? [] }, set: { fileDrafts[key] = $0 })
     }
 
     private var imagePickerDisabled: Bool {
@@ -2472,15 +2495,18 @@ struct ChatView: View {
             let draftKey = remoteDraftKey(sessionID)
             let images = imageDrafts[draftKey] ?? []
             let video = videoDrafts[draftKey]
+            let files = fileDrafts[draftKey] ?? []
             let originalInput = input
             submittingRemote = true
             Task { @MainActor in
                 defer { submittingRemote = false }
-                let sent = await vm.sendRemote(text, images: images, video: video, sessionID: sessionID)
+                let sent = await vm.sendRemote(text, images: images, video: video, files: files, sessionID: sessionID)
                 if sent {
                     let sentIDs = Set(images.map(\.id))
                     imageDrafts[draftKey]?.removeAll { sentIDs.contains($0.id) }
                     if videoDrafts[draftKey]?.id == video?.id { videoDrafts.removeValue(forKey: draftKey) }
+                    let sentFiles = Set(files.map(\.id))
+                    fileDrafts[draftKey]?.removeAll { sentFiles.contains($0.id) }
                     if remoteDraftKey(remote.selectedSessionID ?? "") == draftKey, input == originalInput {
                         input = ""
                         composerRevision = UUID()
@@ -2501,6 +2527,7 @@ struct ChatView: View {
         guard vm.activeLane.usesCantripRemote, let sessionID = remote.selectedSessionID else { return false }
         return !(imageDrafts[remoteDraftKey(sessionID)] ?? []).isEmpty
             || videoDrafts[remoteDraftKey(sessionID)] != nil
+            || !(fileDrafts[remoteDraftKey(sessionID)] ?? []).isEmpty
     }
 
     private var importingImages: Bool { imageImportID != nil }
