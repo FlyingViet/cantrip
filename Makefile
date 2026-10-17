@@ -9,14 +9,14 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds cert artwork icon app run clean
+.PHONY: all build test test-prune prune-builds test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds
+test: test-prune test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds
 
 test-architectures:
 	@bash Tests/ArchitectureTests/run.sh
@@ -140,6 +140,15 @@ app: build cert icon
 	rm -rf "$$BACKUP" "$$PENDING"; \
 	trap - EXIT HUP INT TERM; \
 	echo "Built $$APP ($$BUILD_ID at $$BUILD_DATE). Run with: open $$APP"
+	@# Every update (Update and Restart, agent deploys) also clears old build folders.
+	@bash Scripts/prune-build-folders.sh || true
+
+# Lists what an update would clear: make prune-builds ARGS=--dry-run
+prune-builds:
+	@bash Scripts/prune-build-folders.sh $(ARGS)
+
+test-prune:
+	@bash Tests/PruneBuildTests/run.sh
 
 run: app
 	-/usr/bin/osascript -e 'tell application id "com.brian.agentspotlight" to quit' 2>/dev/null
