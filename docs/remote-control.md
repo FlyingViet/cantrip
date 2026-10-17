@@ -834,8 +834,10 @@ advertises image support. Use a Claude, Copilot, or Codex backend on the Mac,
 not Local Model. Updating only Cantrip Agent is not enough.
 
 1. In Cantrip Agent, choose **Cantrip Remote** and select a session.
-2. Tap the **+** (**Attach images or video**) beside the chat composer.
-3. Choose **Photo Library**, **Choose Image File**, or **Paste Image**.
+2. Tap the **+** (**Attach photos, videos or files**) beside the chat composer.
+3. Choose **Photos** (one picker shows photos and videos together; select
+   several) or **Paste Image**. Older hosts without file support also take
+   images picked from **Files**.
 4. Wait for **Preparing attachment...** to finish.
 5. Tap a thumbnail to view the full image, or its **x** to remove it.
 6. Add a question if desired, then send. An image-only message is allowed.
@@ -970,10 +972,12 @@ thumbnails under the prompt, with the upload marker removed from its text.
 
 ## Send a video for analysis from Cantrip Agent
 
-With both apps updated and the host reopened, use **+ > Video Library** or
-**Choose Video File**. Attach one standard MOV/MP4, up to **100 MB and five
-minutes**, instead of images. Preview it locally, add a question or send it
-alone, and use the preparation/upload progress and Cancel controls as needed.
+With both apps updated and the host reopened, use **+ > Photos** and pick a
+video alongside any photos. Attach one standard MOV/MP4 per message, up to
+**100 MB and five minutes**; hosts that advertise `supportsMixedAttachments`
+take it together with up to four photos and five files (older hosts take a video
+or images, not both). Preview it locally, add a question or send it alone, and
+use the preparation/upload progress and Cancel controls as needed.
 Videos need a Claude, Copilot, or Codex backend and cannot be sent with shell
 or slash commands.
 
@@ -1009,6 +1013,30 @@ promise or persistent mobile outbox is implied.
 Sent originals and frames remain for queued/recovered work. Unsubmitted
 uploads reserve at most 500 MB; abandoned uploads older than 24 hours are
 reclaimed when starting a new upload. These limits do not truncate videos.
+
+## Send files from Cantrip Agent
+
+Use **+ > Files** to attach any document (PDF, text, spreadsheet, archive...):
+up to **five files per message, 100 MB each**, alone or with photos and a
+video. Files need a Claude, Copilot, or Codex backend and cannot be sent with
+shell or slash commands. Folders and packages must be zipped first.
+
+Cantrip Agent copies each picked file and its SHA-256 before upload. The host
+keeps the exact original at
+`~/.cache/Cantrip/remote-attachments/{sessionID}/{uploadID}/{name}` (the name's
+path separators, control characters and leading dots are removed) and adds one
+line per file to the prompt naming that path, so the agent reads the file with
+its own tools. Clients show the line as **📎 name**; nothing on the Mac opens
+or parses the file.
+
+Session snapshots advertise `supportsFileAttachments`. Paired
+`GET /api/v1/sessions/{id}/files/{uploadID}` reads the confirmed offset, and
+`PUT` to the same path uploads at most 1 MiB with query metadata `offset`,
+`totalBytes`, `name`, and `sha256`, with the same replay, ordering and restart
+rules as videos. Uploading never sends a prompt; the final one-shot
+`POST .../messages` lists `fileIDs` (with optional `videoID` and `images`), and
+the host verifies each file's size and SHA-256 before delivering it. Unsent
+file uploads share a separate 500 MB budget and expire after 24 hours.
 
 ## Interactive MCP App views remotely
 

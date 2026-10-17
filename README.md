@@ -86,8 +86,9 @@ The macOS app includes:
 - **Remote control:** use the Mac's sessions from Cantrip Agent (formerly
   AgentGateway) on iPhone/iPad,
   another Mac, or a browser. Recent messages load with full text and tool details.
-  Cantrip Agent can send one MOV/MP4 video (100 MB / five minutes) for analysis,
-  preserving the original and providing four timestamped preview frames.
+  Cantrip Agent attaches photos and a video from one Photos picker and any
+  document from Files (up to five, 100 MB each). A MOV/MP4 video (100 MB / five
+  minutes) keeps its original and gets four timestamped preview frames.
   Scrolling up automatically pages back through the whole conversation, with no
   button to tap and no jump in what you are reading. Opening a tab or polling
   never prefetches history; a failed page pauses automatic loading and shows Retry.
@@ -140,11 +141,13 @@ The macOS app includes:
   requests to change a project are handed to the open tab that owns it as a
   nested task. Home matches tabs by meaning, using each tab's title, the
   repositories its conversation works in and its latest requests, and a busy
-  tab queues the handoff instead of being interrupted. Home keeps a live card for each handoff with the tab's status.
-  When the tab finishes, fails, is stopped or needs the user's answer, Cantrip posts one
-  result card into Home's chat with the tab's outcome, question or error and a link to the
-  tab (Cantrip Agent, Cantrip Gateway Mac and the browser remote, where Home is the pinned
-  first tab). The card is updated in place, never interrupts a Home reply, and its tab text
+  tab queues the handoff instead of being interrupted. Home shows one card per handoff.
+  It starts under Home's reply with the tab's live status. When the tab needs the user's
+  answer, finishes, fails or is stopped, Cantrip posts the handoff's result card into Home's
+  chat and the earlier card is hidden. The result card shows the tab's question, outcome
+  or error and a link to the tab (Cantrip Agent, Cantrip Gateway Mac and the browser
+  remote, where Home is the pinned first tab). Later states, including working again
+  after an answer, update that card in place. It never interrupts a Home reply, and its tab text
   is shown as data that Home's model never reads back as its own words. Tasks can be
   one-time, interval or weekday automations, or
   structured workspaces such as trackers. A weekday task can run at several

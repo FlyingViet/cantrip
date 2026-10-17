@@ -141,6 +141,7 @@ struct SessionTabTests {
         try await testRemoteNotifications()
         try await testLiveStatus()
         try await testRemoteVideos()
+        try await testRemoteFiles()
         try await testRemoteGeneratedImages()
         try await testJournalDelivery()
         try await testCopilotSteering()

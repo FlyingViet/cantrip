@@ -969,6 +969,52 @@ final class RemoteControlServer {
             return
         }
 
+        if parts.count >= 2, parts[1] == "files" {
+            guard session.supportsRemoteImages else {
+                sendError(409, "Choose a Claude, Copilot, or Codex backend to attach files.", on: connection)
+                return
+            }
+            guard parts.count == 3, let uploadID = UUID(uuidString: String(parts[2])) else {
+                sendError(400, "invalid file upload ID", on: connection)
+                return
+            }
+            let method = request.method
+            guard ["GET", "PUT"].contains(method) else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            Task {
+                do {
+                    let upload: RemoteFileUpload
+                    if method == "GET" {
+                        upload = try await RemoteFileAttachments.shared.status(sessionID: id, uploadID: uploadID)
+                    } else {
+                        guard let offset = request.query("offset").flatMap(Int.init),
+                              let total = request.query("totalBytes").flatMap(Int.init),
+                              let name = request.query("name"), let sha256 = request.query("sha256") else {
+                            throw RemoteVideoError(status: 400, message: "File upload metadata is required.")
+                        }
+                        upload = try await RemoteFileAttachments.shared.receive(
+                            sessionID: id, uploadID: uploadID, offset: offset,
+                            upload: RemoteFileUpload(totalBytes: total, name: name, sha256: sha256, receivedBytes: 0),
+                            data: request.body
+                        )
+                    }
+                    guard manager.managedSession(id: id).map({ !$0.isPrivate }) == true else {
+                        sendError(404, "session not found", on: connection)
+                        return
+                    }
+                    sendEncoded(on: connection) { try JSONEncoder().encode(["upload": upload]) }
+                } catch let error as RemoteVideoError {
+                    sendError(error.status, error.message, on: connection)
+                } catch {
+                    Log.write("remote-control: file upload failed: \(error.localizedDescription)")
+                    sendError(422, "Could not save this file on the Mac. Check disk space and try again.", on: connection)
+                }
+            }
+            return
+        }
+
         if parts.count == 3, parts[1] == "messages", request.method == "GET" {
             guard let messageID = UUID(uuidString: String(parts[2])),
                   let message = session.messages.first(where: { $0.id == messageID }) else {
@@ -1280,31 +1326,56 @@ final class RemoteControlServer {
                     inputRequestID = id
                 } else { inputRequestID = nil }
                 let images = try RemoteImageAttachments.decode(body["images"])
+                var videoID: UUID?
                 if let value = body["videoID"] {
-                    guard let rawID = value as? String, let uploadID = UUID(uuidString: rawID),
-                          images.isEmpty else {
-                        sendError(400, "Attach one video or up to four images, not both.", on: connection)
+                    guard let raw = value as? String, let uploadID = UUID(uuidString: raw) else {
+                        sendError(400, "videoID must be a video upload ID.", on: connection)
                         return
                     }
+                    videoID = uploadID
+                }
+                var fileIDs: [UUID] = []
+                if let value = body["fileIDs"] {
+                    let raw = value as? [String] ?? []
+                    fileIDs = raw.compactMap(UUID.init(uuidString:))
+                    guard !raw.isEmpty, raw.count <= RemoteFileAttachments.maximumCount,
+                          fileIDs.count == raw.count, Set(fileIDs).count == fileIDs.count else {
+                        sendError(400, "Attach up to five files, each sent once.", on: connection)
+                        return
+                    }
+                }
+                if videoID != nil || !fileIDs.isEmpty {
                     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard session.supportsRemoteImages else {
-                        sendError(409, "The selected backend does not support video analysis.", on: connection)
+                        sendError(409, videoID != nil
+                                  ? "The selected backend does not support video analysis."
+                                  : "The selected backend can't read attached files.", on: connection)
                         return
                     }
                     guard !trimmed.hasPrefix("!"), !trimmed.hasPrefix("/") else {
-                        sendError(400, "Attach videos to an agent prompt, not a shell or slash command.", on: connection)
+                        sendError(400, "Attach videos and files to an agent prompt, not a shell or slash command.",
+                                  on: connection)
                         return
                     }
                     Task {
                         do {
-                            let video = try await RemoteVideoAttachments.shared.claim(sessionID: id, uploadID: uploadID)
+                            var video: String?
+                            if let videoID {
+                                video = try await RemoteVideoAttachments.shared.claim(sessionID: id, uploadID: videoID)
+                            }
+                            var files: [String] = []
+                            for fileID in fileIDs {
+                                files.append(try await RemoteFileAttachments.shared.claim(sessionID: id, uploadID: fileID))
+                            }
                             guard manager.managedSession(id: id) === session, !session.isPrivate,
                                   session.supportsRemoteImages else {
-                                sendError(409, "The session changed before the video could be sent.", on: connection)
+                                sendError(409, "The session changed before the attachments could be sent.", on: connection)
                                 return
                             }
-                            let prompt = (trimmed.isEmpty ? "Please analyze the attached video." : trimmed)
-                                + "\n\n" + video
+                            let prompt = try RemoteImageAttachments.preparePrompt(
+                                RemoteFileAttachments.prompt(trimmed, video: video, files: files, imageCount: images.count),
+                                images: images, sessionID: session.id
+                            )
                             if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
                             else { session.submitRemote(prompt, mode: mode) }
                             sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
@@ -1312,9 +1383,11 @@ final class RemoteControlServer {
                             sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
                         } catch let error as RemoteVideoError {
                             sendError(error.status, error.message, on: connection)
+                        } catch let error as RemoteImageAttachmentError {
+                            sendError(400, error.localizedDescription, on: connection)
                         } catch {
-                            Log.write("remote-control: video claim failed: \(error.localizedDescription)")
-                            sendError(500, "Could not retain the video for this session.", on: connection)
+                            Log.write("remote-control: attachment claim failed: \(error.localizedDescription)")
+                            sendError(500, "Could not retain the attachments for this session.", on: connection)
                         }
                     }
                     return
@@ -1779,6 +1852,9 @@ final class RemoteControlServer {
             "queuedCount": session.queued.count,
             "supportsImageAttachments": session.supportsRemoteImages,
             "supportsVideoAttachments": session.supportsRemoteImages,
+            "supportsFileAttachments": session.supportsRemoteImages,
+            // One message may carry images, a video and files together.
+            "supportsMixedAttachments": true,
             "supportsAutoDelivery": true,
             "supportsQueueRemoval": true,
             "supportsPagedHistory": true,
@@ -1815,7 +1891,7 @@ final class RemoteControlServer {
                     "id": prompt.id.uuidString,
                     "text": prompt.text,
                 ]
-                if !presentation.imageIDs.isEmpty {
+                if presentation.replacesText {
                     object["displayText"] = presentation.text
                     object["images"] = presentation.imageIDs.map { ["id": $0] }
                 }
@@ -1842,7 +1918,7 @@ final class RemoteControlServer {
         object["isLocalPrivate"] = sessionID == ChatSession.privateLocalID
         if message.role == .user {
             let presentation = RemoteImageAttachments.presentation(message.text, sessionID: sessionID)
-            if !presentation.imageIDs.isEmpty {
+            if presentation.replacesText {
                 object["displayText"] = presentation.text
                 object["images"] = presentation.imageIDs.map { ["id": $0] }
             }
@@ -3065,8 +3141,9 @@ private extension RemoteControlServer {
     $("promptDownload").onclick=()=>{const url=URL.createObjectURL(new Blob([readingPrompt],{type:"text/plain;charset=utf-8"})),link=document.createElement("a");link.href=url;link.download="cantrip-prompt.txt";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
     $("promptDone").onclick=()=>$("promptReader").close();
     $("promptReader").addEventListener("close",()=>{readingPrompt="";promptStarts=[0];$("promptPage").textContent=""});
-    // Cantrip Home handoffs: live cards under the reply that made them, and one result card per
-    // handoff posted into Home's chat. Tab output is shown as text only, never as markup.
+    // Cantrip Home handoffs: one card per handoff. It starts under the reply that made it; once
+    // the tab reports back (asks, finishes, fails, stops) the result card posted into Home's chat
+    // takes over and the original is hidden. Tab output is shown as text only, never as markup.
     function handoffClock(seconds){return seconds?new Date(seconds*1000).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}):""}
     function handoffDuration(start,end){const total=Math.max(0,Math.round(end-start));if(total<60)return `${total}s`;const minutes=Math.round(total/60);return minutes<60?`${minutes}m`:`${Math.floor(minutes/60)}h ${minutes%60}m`}
     function openHandoffTab(id){if(!sessionItems.some(s=>s.id===id)){$("actionError").textContent="That tab is no longer open.";return}$("actionError").textContent="";selectTab(id);renderedPayload="";refresh()}
@@ -3084,7 +3161,7 @@ private extension RemoteControlServer {
       const label=needs?"Needs your answer":{queued:"Queued in tab",running:"Working in tab",completed:"Done in tab",failed:"Failed in tab",cancelled:"Stopped"}[handoff.status]||"Handed off";
       const time=handoff.finishedAt?`Took ${handoffDuration(handoff.startedAt,handoff.finishedAt)}`:handoff.startedAt?`Started ${handoffClock(handoff.startedAt)}`:"";
       return handoffCardElement({state,label,tabID:handoff.tabID,tabTitle:handoff.tabTitle,summary:handoff.summary||handoff.prompt,time})}
-    function handoffResultCard(result){const label={working:"Working in tab again",needsInput:"Needs your answer",completed:"Done in tab",failed:"Failed in tab",cancelled:"Stopped"}[result.state]||"Handoff update";
+    function handoffResultCard(result){const label={working:"Working in tab",needsInput:"Needs your answer",completed:"Done in tab",failed:"Failed in tab",cancelled:"Stopped"}[result.state]||"Handoff update";
       const time=result.finishedAt?`Finished ${handoffClock(result.finishedAt)} · took ${handoffDuration(result.startedAt,result.finishedAt)}`:`Updated ${handoffClock(result.updatedAt)}`;
       return handoffCardElement({state:result.state,label,tabID:result.tabID,tabTitle:result.tabTitle,summary:result.summary,detail:result.detail,time,result:true})}
     function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight,anchor=prepend?visibleHistoryAnchor():null;
@@ -3093,11 +3170,12 @@ private extension RemoteControlServer {
       const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession),scrollRevision=++renderScrollRevision;renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;if(!sameSession)historyReading=false;$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
       const pinned=[];if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{if(session.isLocalPrivate){const notice=document.createElement("p");notice.className="muted";notice.textContent="Private Local - saved on the Mac and available remotely. Self-hosted models; no cloud fallback. Configure the server in the tab menu.";box.append(notice)}
-        for(const message of session.messages){const subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id)),activities=(message.activities||[]).filter(activity=>!subagentIDs.has(activity.id)),apps=message.apps||[],settled=subagents.filter(agent=>!subagentActive(agent));for(const agent of subagents)if(subagentActive(agent))pinned.push([agent,message.id]);for(const app of apps)box.append(mcpAppSlot(session.id,app));
-          if(!message.text&&!message.thinking&&!activities.length&&!settled.length&&!message.delegations?.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;row.dataset.messageId=message.id;
+        const answered=new Set(session.messages.filter(m=>m.role==="handoff"&&m.handoffResult).map(m=>m.handoffResult.delegationID));
+        for(const message of session.messages){const handoffs=(message.delegations||[]).filter(handoff=>!answered.has(handoff.id)),subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id)),activities=(message.activities||[]).filter(activity=>!subagentIDs.has(activity.id)),apps=message.apps||[],settled=subagents.filter(agent=>!subagentActive(agent));for(const agent of subagents)if(subagentActive(agent))pinned.push([agent,message.id]);for(const app of apps)box.append(mcpAppSlot(session.id,app));
+          if(!message.text&&!message.thinking&&!activities.length&&!settled.length&&!handoffs.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;row.dataset.messageId=message.id;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
-          appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=images.length?message.displayText||"":message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
-          if(message.delegations?.length){const stack=document.createElement("div");stack.className="handoffs";for(const handoff of message.delegations)stack.append(handoffCard(handoff));row.append(stack)}appendActivities(row,activities,message.id);
+          appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
+          if(handoffs.length){const stack=document.createElement("div");stack.className="handoffs";for(const handoff of handoffs)stack.append(handoffCard(handoff));row.append(stack)}appendActivities(row,activities,message.id);
           if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
             const requestToken=token;button.disabled=true;try{const data=await api(`/api/v1/sessions/${session.id}/messages/${message.id}`);if(token!==requestToken||selected!==session.id)return;
               const full=data.message,parts=[full.text];if(full.thinking)parts.push("Reasoning\\n"+full.thinking);for(const step of full.activities||[])parts.push([step.title,step.input,step.output].filter(Boolean).join("\\n"));readPrompt(parts.join("\\n\\n"));$("promptTitle").textContent="Message details"}
