@@ -59,6 +59,16 @@ directly. `CANTRIP_INSTALL_NOW=1 make app` forces the old immediate
 replacement, which makes a running Cantrip report permissions as unavailable
 until it reopens.
 
+Each `make app` (and so every update) then clears old build folders to free
+space: build output from an older SwiftPM build system and old test binaries in
+`.build`, Xcode DerivedData for Cantrip Agent, Cantrip Gateway Mac and Cantrip
+whose project checkout no longer exists (or package-only caches unused for a
+day), `/tmp/hermes-*` and `/tmp/cantrip-*` build folders older than a day, and
+all but the two newest Cantrip Gateway Mac zips. Current build caches and
+anything a running process names are kept, and pruning never fails the build.
+Preview it with `make prune-builds ARGS=--dry-run`; set `CANTRIP_KEEP_BUILDS=1`
+to skip it.
+
 The in-app updater attempts to stash tracked local changes and restore them.
 If it reports a restore conflict, inspect `git status` and `git stash list`
 and reconcile the changes before proceeding. Do not delete the stash blindly.
