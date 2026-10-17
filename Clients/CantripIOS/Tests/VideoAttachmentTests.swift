@@ -46,14 +46,139 @@ final class VideoAttachmentTests: XCTestCase {
         return model
     }
 
-    private func snapshot(support: Bool? = true, list: Bool = false) throws -> Data {
+    private func snapshot(support: Bool? = true, list: Bool = false, files: Bool? = nil,
+                          mixed: Bool? = nil) throws -> Data {
         var session: [String: Any] = [
             "id": sessionID, "title": "Video tab", "workdir": "/tmp", "isStreaming": false,
             "canResume": false, "councilMode": false, "queuedCount": 0, "messages": [],
             "supportsImageAttachments": true, "supportsAutoDelivery": true,
         ]
         session["supportsVideoAttachments"] = support
+        session["supportsFileAttachments"] = files
+        session["supportsMixedAttachments"] = mixed
         return try JSONSerialization.data(withJSONObject: list ? ["sessions": [session]] : ["session": session])
+    }
+
+    private func fileDraft(name: String, bytes: Int) throws -> ChatFileAttachment {
+        let source = FileManager.default.temporaryDirectory.appendingPathComponent("source-\(UUID())")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: source) }
+        let url = source.appendingPathComponent(name)
+        try Data(repeating: 7, count: bytes).write(to: url)
+        return try FileAttachmentProcessor.prepare(url)
+    }
+
+    private func photo() throws -> ChatImageAttachment {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 30)).image { context in
+            UIColor.orange.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 40, height: 30))
+        }
+        return try ImageAttachmentProcessor.prepare(try XCTUnwrap(image.pngData()))
+    }
+
+    func testFileImportCopiesHashesAndCleansUp() throws {
+        var file: ChatFileAttachment? = try fileDraft(name: "Q3 \u{7}report.pdf", bytes: FileAttachmentProcessor.chunkBytes + 5)
+        let copy = try XCTUnwrap(file).url
+        XCTAssertEqual(file?.name, "Q3 report.pdf", "Control characters never reach the Mac")
+        XCTAssertEqual(file?.bytes, FileAttachmentProcessor.chunkBytes + 5)
+        XCTAssertEqual(file?.sha256, SHA256.hash(data: Data(repeating: 7, count: FileAttachmentProcessor.chunkBytes + 5))
+            .map { String(format: "%02x", $0) }.joined())
+        XCTAssertEqual(file?.systemImage, "doc.richtext")
+        XCTAssertEqual(try FileAttachmentProcessor.chunk(XCTUnwrap(file), offset: FileAttachmentProcessor.chunkBytes).count, 5)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copy.path))
+        file = nil
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path), "A removed draft deletes its copy")
+        XCTAssertThrowsError(try fileDraft(name: "empty.txt", bytes: 0))
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("folder-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        XCTAssertThrowsError(try FileAttachmentProcessor.prepare(folder)) {
+            XCTAssertEqual($0 as? FileAttachmentError, .invalid)
+        }
+        XCTAssertTrue(CantripRemoteAPI.isUploadRoute("/api/v1/sessions/S/files/F?offset=0&name=a%2Fb"))
+        XCTAssertTrue(CantripRemoteAPI.isUploadRoute("/api/v1/sessions/S/videos/V/prepare"))
+        XCTAssertFalse(CantripRemoteAPI.isUploadRoute("/api/v1/sessions/S/messages?name=/files/x"))
+    }
+
+    func testFilesPhotosAndVideoUploadThenSendOnePrompt() async throws {
+        let model = try await remote(), video = try draft(bytes: 30)
+        let name = "Lease & notes+v2 é?.pdf"
+        let file = try fileDraft(name: name, bytes: FileAttachmentProcessor.chunkBytes + 9)
+        let image = try photo()
+        var fileReceived = 0, videoReceived = 0, prepared = false, messages = 0
+        VideoRequestProtocol.handler = { request in
+            let path = request.url!.path
+            if path.contains("/files/") {
+                XCTAssertTrue(path.hasSuffix("/files/\(file.id)"))
+                if request.httpMethod == "GET" { return (404, Data(#"{"error":"File upload not found."}"#.utf8)) }
+                XCTAssertEqual(request.httpMethod, "PUT")
+                XCTAssertEqual(request.timeoutInterval, 60)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/octet-stream")
+                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                XCTAssertEqual(query.first { $0.name == "name" }?.value, name, "Any file name round-trips")
+                XCTAssertEqual(Int(query.first { $0.name == "offset" }!.value!)!, fileReceived)
+                XCTAssertEqual(messages, 0)
+                fileReceived += try self.body(request).count
+                return (200, try JSONSerialization.data(withJSONObject: ["upload": [
+                    "totalBytes": file.bytes, "receivedBytes": fileReceived, "sha256": file.sha256,
+                ]]))
+            }
+            if path.contains("/videos/") {
+                if request.httpMethod == "GET" { return (404, Data(#"{"error":"Video upload not found."}"#.utf8)) }
+                if request.httpMethod == "PUT" {
+                    videoReceived += try self.body(request).count
+                    return (200, try self.uploadStatus(video, received: videoReceived))
+                }
+                prepared = true
+                return (200, Data(#"{"ready":true}"#.utf8))
+            }
+            if request.httpMethod == "POST" {
+                messages += 1
+                XCTAssertTrue(prepared && fileReceived == file.bytes && videoReceived == video.bytes,
+                              "The prompt goes only after every upload is complete")
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: self.body(request)) as? [String: Any])
+                XCTAssertEqual(json["fileIDs"] as? [String], [file.id.uuidString])
+                XCTAssertEqual(json["videoID"] as? String, video.id.uuidString)
+                XCTAssertEqual((json["images"] as? [[String: Any]])?.count, 1)
+                XCTAssertEqual(json["text"] as? String, "Read these")
+                return (202, try self.snapshot(files: true, mixed: true))
+            }
+            return (200, try self.snapshot(files: true, mixed: true))
+        }
+        let sent = await model.send("Read these", mode: .queue, images: [image], video: video, files: [file],
+                                    sessionID: sessionID)
+        XCTAssertTrue(sent, model.errorMessage ?? "")
+        XCTAssertEqual(messages, 1)
+        XCTAssertNil(model.videoUploadProgress)
+    }
+
+    func testOlderMacsNeverUploadFilesOrMixedMedia() async throws {
+        let video = try draft(bytes: 30), file = try fileDraft(name: "a.txt", bytes: 3), image = try photo()
+        for (files, mixed, useFile) in [(Bool?.none, Bool?.none, true), (true, nil, false)] {
+            let model = try await remote()
+            var writes = 0
+            VideoRequestProtocol.handler = { request in
+                if request.httpMethod != "GET" { writes += 1 }
+                return (200, try self.snapshot(files: files, mixed: mixed))
+            }
+            let sent = useFile
+                ? await model.send("Read", mode: .queue, files: [file], sessionID: sessionID)
+                : await model.send("Both", mode: .queue, images: [image], video: video, sessionID: sessionID)
+            XCTAssertFalse(sent)
+            XCTAssertEqual(writes, 0, "Nothing uploads when the Mac can't take the message")
+            XCTAssertEqual(model.errorMessage, useFile
+                ? FileAttachmentError.unsupportedHost.localizedDescription
+                : VideoAttachmentError.mixedAttachments.localizedDescription)
+        }
+        let model = try await remote()
+        var writes = 0
+        VideoRequestProtocol.handler = { request in
+            if request.httpMethod != "GET" { writes += 1 }
+            return (200, try self.snapshot(files: true, mixed: true))
+        }
+        let command = await model.send("!rm -rf x", mode: .queue, files: [file], sessionID: sessionID)
+        XCTAssertFalse(command)
+        XCTAssertEqual(writes, 0, "Files attach to agent prompts, never shell commands")
     }
 
     private func draft(bytes: Int = 2 * VideoAttachmentProcessor.chunkBytes + 19) throws -> ChatVideoAttachment {
@@ -278,6 +403,21 @@ final class VideoAttachmentTests: XCTestCase {
             _ = try await VideoAttachmentProcessor.importFile(source)
             XCTFail("Long videos must not be silently clipped")
         } catch VideoAttachmentError.tooLong {}
+    }
+
+    func testFileDraftChipsFitNarrowAndAccessibilitySizes() async throws {
+        let long = try fileDraft(name: "Quarterly lease renewal agreement with every addendum signed (final, v3).pdf", bytes: 12)
+        let files = [long, try fileDraft(name: "notes.txt", bytes: 4)]
+        for size in [DynamicTypeSize.large, .accessibility3] {
+            let controller = UIHostingController(rootView:
+                FileAttachmentPreviews(files: .constant(files), disabled: false)
+                    .frame(width: 320)
+                    .dynamicTypeSize(size)
+            )
+            let fitted = controller.sizeThatFits(in: CGSize(width: 320, height: CGFloat.greatestFiniteMagnitude))
+            XCTAssertLessThanOrEqual(fitted.width, 320.5, "File chips fit a narrow phone at \(size)")
+            XCTAssertGreaterThanOrEqual(fitted.height, 2 * 44, "Each chip keeps a 44pt remove target")
+        }
     }
 
     func testVideoDraftPreviewAtNarrowAndAccessibilitySizes() async throws {

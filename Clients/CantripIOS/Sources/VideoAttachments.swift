@@ -137,10 +137,13 @@ struct CantripVideoUploadStatus: Decodable {
     let sha256: String
 }
 
+/// Progress of a send's video and file uploads.
 struct VideoUploadProgress: Equatable {
     let fraction: Double
     let isPreparing: Bool
-    var label: String { isPreparing ? "Preparing video for analysis..." : "Uploading video: \(Int(fraction * 100))%" }
+    /// What's uploading: "video", "file", "files" or "attachments".
+    var subject = "video"
+    var label: String { isPreparing ? "Preparing video for analysis..." : "Uploading \(subject): \(Int(fraction * 100))%" }
 }
 
 struct VideoAttachmentPreview: View {

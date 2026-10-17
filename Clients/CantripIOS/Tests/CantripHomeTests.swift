@@ -791,7 +791,7 @@ final class CantripHomeTests: XCTestCase {
             + "retrying their first download until the source lists chapters."
         let states: [(CantripRemoteHandoffResult.State, String)] = [
             (.completed, "Done in tab"), (.needsInput, "Needs your answer"), (.failed, "Failed in tab"),
-            (.cancelled, "Stopped"), (.working, "Working in tab again"), (.other, "Handoff update"),
+            (.cancelled, "Stopped"), (.working, "Working in tab"), (.other, "Handoff update"),
         ]
         for (state, text) in states {
             XCTAssertEqual(CantripHandoffResultCard(result: .init(tabID: "t", state: state)).statusText, text)
@@ -821,6 +821,36 @@ final class CantripHomeTests: XCTestCase {
                                          "A long outcome stays a short card; details are in the tab")
             }
         }
+    }
+
+    func testEachHandoffShowsOneCard() throws {
+        let data = Data("""
+        [{"id":"ask","role":"user","text":"Delete DropKart","thinking":"","activities":[]},
+         {"id":"reply","role":"assistant","text":"The DropKart tab is taking it.","thinking":"","activities":[],
+          "delegations":[{"id":"d1","tabID":"t","tabTitle":"DropKart","summary":"Delete DropKart","status":"running"},
+                         {"id":"d2","tabID":"u","tabTitle":"NetLib","summary":"Check listings","status":"running"}]},
+         {"id":"why","role":"user","text":"Why two cards?","thinking":"","activities":[]},
+         {"id":"card","role":"handoff","text":"**Working in DropKart**","thinking":"","activities":[],
+          "handoffResult":{"delegationID":"d1","tabID":"t","tabTitle":"DropKart","summary":"Delete DropKart",
+                           "state":"working","startedAt":1000,"updatedAt":1100}}]
+        """.utf8)
+        let transcript = try JSONDecoder().decode([CantripRemoteMessage].self, from: data)
+        let reported = CantripHandoffCards.reportedIDs(in: transcript)
+        XCTAssertEqual(reported, ["d1"])
+        XCTAssertEqual(CantripHandoffCards.visible(transcript[1], reported: reported).delegations?.map(\.id), ["d2"],
+                       "Once the tab reports back, its result card is the handoff's only card")
+        XCTAssertEqual(CantripHandoffCards.visible(transcript[1], reported: []).delegations?.map(\.id), ["d1", "d2"],
+                       "Until then the card stays under the reply that made the handoff")
+        XCTAssertEqual(CantripHandoffCards.visible(transcript[3], reported: reported), transcript[3])
+
+        let working = CantripHandoffResultCard(result: try XCTUnwrap(transcript[3].handoffResult))
+        XCTAssertEqual(working.statusText, "Working in tab")
+        XCTAssertEqual(working.timeText(now: Date(timeIntervalSince1970: 1176)), "2m 56s",
+                       "A working card counts up like the card it replaced")
+        let done = CantripHandoffResultCard(result: .init(
+            tabID: "t", state: .completed, startedAt: 1000, finishedAt: 1180, updatedAt: 1180
+        ))
+        XCTAssertTrue(done.timeText(now: Date(timeIntervalSince1970: 5000)).hasSuffix(" · took 3m 00s"))
     }
 
     func testHandoffResultCardsNeverPoseAsTheStreamingReply() throws {

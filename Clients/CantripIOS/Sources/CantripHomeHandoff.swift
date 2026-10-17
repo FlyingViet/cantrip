@@ -1,5 +1,24 @@
 import SwiftUI
 
+/// One card per handoff. A handoff's card starts under the Home reply that made it; once the tab
+/// reports back (asks, finishes, fails or stops), Cantrip posts a result card into Home's chat that
+/// carries the handoff from then on, so the original card is hidden rather than shown twice.
+enum CantripHandoffCards {
+    /// Handoffs that already have a result card in the loaded transcript.
+    static func reportedIDs(in transcript: [CantripRemoteMessage]) -> Set<String> {
+        Set(transcript.compactMap { $0.isHandoffResult ? $0.handoffResult?.delegationID : nil })
+    }
+
+    /// The message with only the handoff cards that are still its own to show.
+    static func visible(_ message: CantripRemoteMessage, reported: Set<String>) -> CantripRemoteMessage {
+        guard !reported.isEmpty, let handoffs = message.delegations,
+              handoffs.contains(where: { reported.contains($0.id) }) else { return message }
+        var visible = message
+        visible.delegations = handoffs.filter { !reported.contains($0.id) }
+        return visible
+    }
+}
+
 /// Home replies' handoffs to project tabs, shown like nested tasks.
 struct CantripHandoffStack: View {
     let handoffs: [CantripRemoteDelegation]
@@ -173,8 +192,10 @@ struct CantripHandoffCard: View {
     }
 }
 
-/// What a handed-off tab reported, posted once into Home's chat: its outcome, its question for
-/// the user, or why it failed or stopped. The text is the tab's own, shown only as data.
+/// A handoff's card once its tab has reported back: its question for the user, its outcome, or why
+/// it failed or stopped. Cantrip posts it once into Home's chat and updates it in place (including
+/// back to working after an answer); it replaces the card under the reply that made the handoff.
+/// The text is the tab's own, shown only as data.
 struct CantripHandoffResultCard: View {
     let result: CantripRemoteHandoffResult
     var onOpenTab: ((String) -> Void)?
@@ -198,7 +219,7 @@ struct CantripHandoffResultCard: View {
 
     var statusText: String {
         switch result.state {
-        case .working: return "Working in tab again"
+        case .working: return "Working in tab"
         case .needsInput: return "Needs your answer"
         case .completed: return "Done in tab"
         case .failed: return "Failed in tab"
@@ -217,7 +238,12 @@ struct CantripHandoffResultCard: View {
         }
     }
 
-    var timeText: String {
+    var timeText: String { timeText(now: Date()) }
+
+    func timeText(now: Date) -> String {
+        if result.state == .working, result.finishedAt == nil, let startedAt = result.startedAt {
+            return CantripSubagentFormat.elapsedLabel(startedAt: startedAt, finishedAt: nil, now: now)
+        }
         func clock(_ time: TimeInterval) -> String {
             Date(timeIntervalSince1970: time).formatted(date: .omitted, time: .shortened)
         }
@@ -231,6 +257,16 @@ struct CantripHandoffResultCard: View {
     }
 
     var body: some View {
+        if result.state == .working {
+            TimelineView(.periodic(from: Date(), by: 1)) { timeline in
+                card(now: timeline.date)
+            }
+        } else {
+            card(now: Date())
+        }
+    }
+
+    private func card(now: Date) -> some View {
         HStack(spacing: 0) {
             Rectangle()
                 .fill(tint)
@@ -250,7 +286,7 @@ struct CantripHandoffResultCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.leading, stacksRows ? 0 : iconSize + 8)
                 }
-                footer
+                footer(now: now)
                     .padding(.leading, stacksRows ? 0 : iconSize + 8)
             }
             .padding(.horizontal, 12)
@@ -269,7 +305,14 @@ struct CantripHandoffResultCard: View {
 
     private var headerAccessibilityLabel: String {
         let label = summary.isEmpty ? "" : ": \(summary)"
-        return "Handoff result. \(statusText), \(tabTitle)\(label)"
+        return "Handoff. \(statusText), \(tabTitle)\(label)"
+    }
+
+    private func timeAccessibilityLabel(now: Date) -> String {
+        guard result.state == .working, result.finishedAt == nil, let startedAt = result.startedAt else {
+            return timeText(now: now)
+        }
+        return CantripSubagentFormat.elapsedAccessibilityLabel(startedAt: startedAt, finishedAt: nil, now: now)
     }
 
     private var header: some View {
@@ -318,20 +361,21 @@ struct CantripHandoffResultCard: View {
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(tint)
         case .working:
-            Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(tint)
+            ProgressView().controlSize(.small)
         case .cancelled, .other:
             Image(systemName: "stop.circle.fill").foregroundStyle(.secondary)
         }
     }
 
-    private var footer: some View {
+    private func footer(now: Date) -> some View {
         let layout = stacksRows
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
             : AnyLayout(HStackLayout(alignment: .center, spacing: 8))
         return layout {
-            Text(timeText)
+            Text(timeText(now: now))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityLabel(timeAccessibilityLabel(now: now))
             if !stacksRows { Spacer(minLength: 8) }
             if canOpenTab {
                 Button {

@@ -461,6 +461,10 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsTabReordering: Bool? = nil
     var supportsPagedHistory: Bool? = nil
     var supportsVideoAttachments: Bool? = nil
+    /// Any document as an attachment; absent from Macs before file uploads.
+    var supportsFileAttachments: Bool? = nil
+    /// Photos, a video and files together in one message; older Macs take images or one video.
+    var supportsMixedAttachments: Bool? = nil
     var historyRevision: String? = nil
     var historyStartID: String? = nil
     var hasOlderMessages: Bool? = nil
@@ -1109,13 +1113,13 @@ private final class CantripLANRequest: @unchecked Sendable {
         if case .hostPort = endpoint { isDirect = true } else { isDirect = false }
         timeout = method == "GET"
             ? (CantripRemoteAPI.isContentRead(method: method, path: path) ? 20 : isDirect ? 3 : 2)
-            : (payload.count > 256 * 1024 || path.contains("/videos/") ? 60 : 12)
+            : (payload.count > 256 * 1024 || CantripRemoteAPI.isUploadRoute(path) ? 60 : 12)
         let header = """
         \(method) \(path) HTTP/1.1\r
         Host: cantrip.local\r
         Authorization: Bearer \(token)\r
         Accept: application/json\r
-        Content-Type: \(method == "PUT" && path.contains("/videos/") ? "application/octet-stream" : "application/json")\r
+        Content-Type: \(method == "PUT" && CantripRemoteAPI.isUploadRoute(path) ? "application/octet-stream" : "application/json")\r
         Content-Length: \(payload.count)\r
         Connection: close\r
         \r
@@ -1288,6 +1292,13 @@ struct CantripRemoteAPI {
     let transport: CantripTransport
     let token: String
     var urlSession: URLSession?
+
+    /// Chunked video and file uploads: raw bytes, a longer deadline, and the upload session.
+    static func isUploadRoute(_ path: String) -> Bool {
+        let parts = (URLComponents(string: path)?.percentEncodedPath ?? "").split(separator: "/")
+        return parts.count >= 5 && parts.prefix(3) == ["api", "v1", "sessions"]
+            && (parts[4] == "videos" || parts[4] == "files")
+    }
 
     static func isContentRead(method: String, path: String) -> Bool {
         let parts = (URLComponents(string: path)?.percentEncodedPath ?? "").split(separator: "/")
@@ -1699,7 +1710,8 @@ struct CantripRemoteAPI {
 
     fileprivate func prepareMessage(
         _ text: String, mode: CantripDeliveryMode, sessionID: String,
-        images: [ChatImageAttachment], videoID: String? = nil, inputRequestID: UUID? = nil
+        images: [ChatImageAttachment], videoID: String? = nil, fileIDs: [String] = [],
+        inputRequestID: UUID? = nil
     ) async throws -> Data {
         guard images.count <= ImageAttachmentProcessor.maximumCount else {
             throw ImageAttachmentError.tooMany
@@ -1722,16 +1734,23 @@ struct CantripRemoteAPI {
         guard videoID == nil || host.supportsVideoAttachments == true else {
             throw CantripRemoteError.videosUnsupported
         }
-        guard videoID == nil || images.isEmpty else { throw VideoAttachmentError.mixedAttachments }
+        guard fileIDs.isEmpty || host.supportsFileAttachments == true else {
+            throw FileAttachmentError.unsupportedHost
+        }
+        guard fileIDs.count <= FileAttachmentProcessor.maximumCount else { throw FileAttachmentError.tooMany }
+        guard videoID == nil || images.isEmpty || host.supportsMixedAttachments == true else {
+            throw VideoAttachmentError.mixedAttachments
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard videoID == nil || (!trimmed.hasPrefix("/") && !trimmed.hasPrefix("!")) else {
+        guard (videoID == nil && fileIDs.isEmpty) || (!trimmed.hasPrefix("/") && !trimmed.hasPrefix("!")) else {
             throw VideoAttachmentError.command
         }
         guard mode != .auto || host.supportsAutoDelivery == true else {
             throw CantripRemoteError.autoDeliveryUnsupported
         }
         return try JSONEncoder().encode(CantripMessageBody(text: text, mode: mode, images: images,
-                                                         videoID: videoID, inputRequestID: inputRequestID))
+                                                         videoID: videoID, fileIDs: fileIDs,
+                                                         inputRequestID: inputRequestID))
     }
 
     func videoStatus(sessionID: String, uploadID: UUID) async throws -> CantripVideoUploadStatus? {
@@ -1753,6 +1772,30 @@ struct CantripRemoteAPI {
             URLQueryItem(name: "name", value: video.name),
             URLQueryItem(name: "sha256", value: video.sha256),
         ]
+        guard let path = target.string else { throw CantripRemoteError.invalidResponse }
+        struct Response: Decodable { let upload: CantripVideoUploadStatus }
+        let response: Response = try await request(path: path, method: "PUT", body: data)
+        return response.upload
+    }
+
+    func fileStatus(sessionID: String, uploadID: UUID) async throws -> CantripVideoUploadStatus? {
+        struct Response: Decodable { let upload: CantripVideoUploadStatus }
+        do {
+            let response: Response = try await request(path: "/api/v1/sessions/\(sessionID)/files/\(uploadID)")
+            return response.upload
+        } catch CantripRemoteError.http(404, _) { return nil }
+    }
+
+    func uploadFileChunk(_ data: Data, file: ChatFileAttachment, sessionID: String,
+                         offset: Int) async throws -> CantripVideoUploadStatus {
+        var target = URLComponents()
+        target.path = "/api/v1/sessions/\(sessionID)/files/\(file.id)"
+        // Any file name round-trips: everything but ASCII unreserved characters is escaped.
+        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        target.percentEncodedQueryItems = [
+            ("offset", String(offset)), ("totalBytes", String(file.bytes)),
+            ("name", file.name), ("sha256", file.sha256),
+        ].map { URLQueryItem(name: $0.0, value: $0.1.addingPercentEncoding(withAllowedCharacters: unreserved)) }
         guard let path = target.string else { throw CantripRemoteError.invalidResponse }
         struct Response: Decodable { let upload: CantripVideoUploadStatus }
         let response: Response = try await request(path: path, method: "PUT", body: data)
@@ -2002,7 +2045,7 @@ struct CantripRemoteAPI {
             throw CantripRemoteError.invalidResponse
         }
         let url = try endpoint(path: path, baseURL: baseURL)
-        let isImageUpload = (body?.count ?? 0) > 256 * 1024 || (method != "GET" && path.contains("/videos/"))
+        let isImageUpload = (body?.count ?? 0) > 256 * 1024 || (method != "GET" && Self.isUploadRoute(path))
         let isContentRead = Self.isContentRead(method: method, path: path)
         var request = URLRequest(
             url: url,
@@ -2014,7 +2057,7 @@ struct CantripRemoteAPI {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if body != nil {
-            request.setValue(method == "PUT" && path.contains("/videos/") ? "application/octet-stream" : "application/json",
+            request.setValue(method == "PUT" && Self.isUploadRoute(path) ? "application/octet-stream" : "application/json",
                              forHTTPHeaderField: "Content-Type")
         }
 
@@ -3404,26 +3447,29 @@ final class CantripRemoteModel: ObservableObject {
         mode: CantripDeliveryMode,
         images: [ChatImageAttachment] = [],
         video: ChatVideoAttachment? = nil,
+        files: [ChatFileAttachment] = [],
         sessionID: String? = nil
     ) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !images.isEmpty || video != nil,
+        guard !trimmed.isEmpty || !images.isEmpty || video != nil || !files.isEmpty,
               let sessionID = sessionID ?? selectedSessionID else { return false }
         let question = mode == .auto && sessionID == selectedSessionID ? chatInputRequest : nil
         if let question, selectedSession?.supportsChatInputReplies != true {
-            guard images.isEmpty, video == nil else {
+            guard images.isEmpty, video == nil, files.isEmpty else {
                 errorMessage = "Update and reopen Cantrip on the Mac to attach files to this chat reply."
                 return false
             }
             return await respondToInput(sessionID: sessionID, id: question.id,
                 answer: .init(decision: "submit", text: trimmed), identity: usageIdentity, questionOnly: true)
         }
-        if let video {
-            guard await uploadVideo(video, text: trimmed, mode: mode, images: images, sessionID: sessionID) else { return false }
+        if video != nil || !files.isEmpty {
+            guard await uploadAttachments(video: video, files: files, text: trimmed, mode: mode,
+                                          images: images, sessionID: sessionID) else { return false }
         }
         guard let session = await mutate(prepare: { api in
             try await api.prepareMessage(trimmed, mode: mode, sessionID: sessionID, images: images,
-                                         videoID: video?.id.uuidString, inputRequestID: question?.id)
+                                         videoID: video?.id.uuidString, fileIDs: files.map(\.id.uuidString),
+                                         inputRequestID: question?.id)
         }, { api, body in
             try await api.sendMessage(body, sessionID: sessionID)
         }) else { return false }
@@ -3434,58 +3480,110 @@ final class CantripRemoteModel: ObservableObject {
 
     func cancelVideoUpload() { videoUploadTask?.cancel() }
 
-    private func uploadVideo(_ video: ChatVideoAttachment, text: String, mode: CantripDeliveryMode,
-                             images: [ChatImageAttachment], sessionID: String) async -> Bool {
+    /// Uploads a send's video and files before its prompt. Chunks resume where the Mac left off
+    /// and are verified there, so only these transfers retry; the prompt itself never does.
+    private func uploadAttachments(video: ChatVideoAttachment?, files: [ChatFileAttachment], text: String,
+                                   mode: CantripDeliveryMode, images: [ChatImageAttachment],
+                                   sessionID: String) async -> Bool {
         guard !isMutating, !isUploadingVideo else {
             errorMessage = "Wait for the current request to finish."
             return false
         }
         let generation = configurationGeneration
-        videoUploadProgress = VideoUploadProgress(fraction: 0, isPreparing: false)
+        let subject = video != nil && !files.isEmpty ? "attachments"
+            : video != nil ? "video" : files.count == 1 ? "file" : "files"
+        let total = (video?.bytes ?? 0) + files.reduce(0) { $0 + $1.bytes }
+        // An older Mac or a command prompt can't take this message: say so before uploading anything.
+        do {
+            _ = try await performHistoryRead {
+                try await $0.prepareMessage(text, mode: mode, sessionID: sessionID, images: images,
+                                            videoID: video?.id.uuidString, fileIDs: files.map(\.id.uuidString))
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+        guard !isMutating, !isUploadingVideo, generation == configurationGeneration else {
+            errorMessage = "Wait for the current request to finish."
+            return false
+        }
+        videoUploadProgress = VideoUploadProgress(fraction: 0, isPreparing: false, subject: subject)
         let task = Task {
-            _ = try await self.performHistoryRead {
-                try await $0.prepareMessage(text, mode: mode, sessionID: sessionID, images: images, videoID: video.id.uuidString)
+            var uploaded = 0
+            let report: (Int) -> Void = { offset in
+                self.videoUploadProgress = VideoUploadProgress(
+                    fraction: total > 0 ? Double(uploaded + offset) / Double(total) : 1,
+                    isPreparing: false, subject: subject
+                )
             }
-            var offset = 0
-            if let status = try await self.performHistoryRead({ try await $0.videoStatus(sessionID: sessionID, uploadID: video.id) }) {
-                guard status.totalBytes == video.bytes, status.sha256 == video.sha256,
-                      (0...video.bytes).contains(status.receivedBytes) else { throw CantripRemoteError.invalidResponse }
-                offset = status.receivedBytes
+            if let video {
+                try await self.uploadChunks(
+                    bytes: video.bytes, sha256: video.sha256,
+                    status: { try await $0.videoStatus(sessionID: sessionID, uploadID: video.id) },
+                    chunk: { try VideoAttachmentProcessor.chunk(video, offset: $0) },
+                    put: { try await $0.uploadVideoChunk($1, video: video, sessionID: sessionID, offset: $2) },
+                    progress: report
+                )
+                uploaded += video.bytes
             }
-            while offset < video.bytes {
-                try Task.checkCancellation()
-                let start = offset
-                let data = try await Task.detached(priority: .userInitiated) {
-                    try VideoAttachmentProcessor.chunk(video, offset: start)
-                }.value
-                // Chunk PUTs verify repeated bytes, and preparation is idempotent.
-                // Only these transfers may fail over/retry; the final prompt never does.
-                let status = try await self.performHistoryRead {
-                    try await $0.uploadVideoChunk(data, video: video, sessionID: sessionID, offset: start)
-                }
-                guard status.totalBytes == video.bytes, status.sha256 == video.sha256,
-                      status.receivedBytes >= start + data.count, status.receivedBytes <= video.bytes else {
-                    throw CantripRemoteError.invalidResponse
-                }
-                offset = status.receivedBytes
-                self.videoUploadProgress = VideoUploadProgress(fraction: Double(offset) / Double(video.bytes), isPreparing: false)
+            for file in files {
+                try await self.uploadChunks(
+                    bytes: file.bytes, sha256: file.sha256,
+                    status: { try await $0.fileStatus(sessionID: sessionID, uploadID: file.id) },
+                    chunk: { try FileAttachmentProcessor.chunk(file, offset: $0) },
+                    put: { try await $0.uploadFileChunk($1, file: file, sessionID: sessionID, offset: $2) },
+                    progress: report
+                )
+                uploaded += file.bytes
             }
-            self.videoUploadProgress = VideoUploadProgress(fraction: 1, isPreparing: true)
-            try await self.performHistoryRead { try await $0.prepareVideo(sessionID: sessionID, uploadID: video.id) }
+            if let video {
+                self.videoUploadProgress = VideoUploadProgress(fraction: 1, isPreparing: true, subject: subject)
+                try await self.performHistoryRead { try await $0.prepareVideo(sessionID: sessionID, uploadID: video.id) }
+            }
             try Task.checkCancellation()
             guard generation == self.configurationGeneration else { throw CancellationError() }
         }
         videoUploadTask = task
         defer { videoUploadTask = nil; videoUploadProgress = nil }
+        let what = subject == "video" ? "Video" : subject == "file" ? "The file" : "The \(subject)"
         do {
             try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
             return true
         } catch is CancellationError {
-            errorMessage = "Video upload cancelled. No prompt was sent; your draft has been kept."
+            errorMessage = "Upload cancelled. No prompt was sent; your draft has been kept."
             return false
         } catch {
-            errorMessage = "Video was not sent. \(error.localizedDescription) Retry to resume the upload."
+            errorMessage = "\(what) \(subject == "video" || subject == "file" ? "was" : "were") not sent. "
+                + "\(error.localizedDescription) Retry to resume the upload."
             return false
+        }
+    }
+
+    /// One resumable, verified chunked upload. Chunk PUTs check repeated bytes on the Mac.
+    private func uploadChunks(
+        bytes: Int, sha256: String,
+        status: (CantripRemoteAPI) async throws -> CantripVideoUploadStatus?,
+        chunk: @escaping @Sendable (Int) throws -> Data,
+        put: (CantripRemoteAPI, Data, Int) async throws -> CantripVideoUploadStatus,
+        progress: (Int) -> Void
+    ) async throws {
+        var offset = 0
+        if let current = try await performHistoryRead({ try await status($0) }) {
+            guard current.totalBytes == bytes, current.sha256 == sha256,
+                  (0...bytes).contains(current.receivedBytes) else { throw CantripRemoteError.invalidResponse }
+            offset = current.receivedBytes
+        }
+        while offset < bytes {
+            try Task.checkCancellation()
+            let start = offset
+            let data = try await Task.detached(priority: .userInitiated) { try chunk(start) }.value
+            let current = try await performHistoryRead { try await put($0, data, start) }
+            guard current.totalBytes == bytes, current.sha256 == sha256,
+                  current.receivedBytes >= start + data.count, current.receivedBytes <= bytes else {
+                throw CantripRemoteError.invalidResponse
+            }
+            offset = current.receivedBytes
+            progress(offset)
         }
     }
 
