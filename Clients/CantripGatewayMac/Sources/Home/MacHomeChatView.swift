@@ -18,6 +18,7 @@ struct MacHomeChatView: View {
     @State private var textDrafts: [String: String] = [:]
     @State private var imageDrafts: [String: [ChatImageAttachment]] = [:]
     @State private var videoDrafts: [String: ChatVideoAttachment] = [:]
+    @State private var fileDrafts: [String: [ChatFileAttachment]] = [:]
     @State private var imageImportID: UUID?
     @State private var submittingRemote = false
     @State private var imageSendError: String?
@@ -262,6 +263,8 @@ struct MacHomeChatView: View {
                             videoDraft(for: sessionID).wrappedValue = nil
                         }
                     }
+                    FileAttachmentPreviews(files: fileDraft(for: sessionID),
+                                           disabled: imagePickerDisabled || importingImages)
                     if importingImages {
                         Button("Cancel attachment preparation") { imageImportID = nil }
                     }
@@ -269,7 +272,7 @@ struct MacHomeChatView: View {
                         VStack(alignment: .leading) {
                             ProgressView(value: progress.fraction)
                             Text(progress.label).font(.caption).foregroundStyle(.secondary)
-                            Button("Cancel video upload") { remote.cancelVideoUpload() }
+                            Button("Cancel upload") { remote.cancelVideoUpload() }
                         }
                         .accessibilityElement(children: .contain)
                     }
@@ -295,7 +298,12 @@ struct MacHomeChatView: View {
                     disabled: imagePickerDisabled,
                     video: videoDraft(for: sessionID),
                     videoSupport: remote.selectedSession?.id == sessionID
-                        ? remote.selectedSession?.supportsVideoAttachments : nil
+                        ? remote.selectedSession?.supportsVideoAttachments : nil,
+                    files: fileDraft(for: sessionID),
+                    fileSupport: remote.selectedSession?.id == sessionID
+                        ? remote.selectedSession?.supportsFileAttachments : nil,
+                    mixedSupport: remote.selectedSession?.id == sessionID
+                        ? remote.selectedSession?.supportsMixedAttachments : nil
                 )
                 .id(sessionID)
             }
@@ -441,15 +449,18 @@ struct MacHomeChatView: View {
         let draftKey = remoteDraftKey(sessionID)
         let images = imageDrafts[draftKey] ?? []
         let video = videoDrafts[draftKey]
+        let files = fileDrafts[draftKey] ?? []
         let originalInput = input
         submittingRemote = true
         Task { @MainActor in
             defer { submittingRemote = false }
-            let sent = await vm.sendRemote(text, images: images, video: video, sessionID: sessionID)
+            let sent = await vm.sendRemote(text, images: images, video: video, files: files, sessionID: sessionID)
             if sent {
                 let sentIDs = Set(images.map(\.id))
                 imageDrafts[draftKey]?.removeAll { sentIDs.contains($0.id) }
                 if videoDrafts[draftKey]?.id == video?.id { videoDrafts.removeValue(forKey: draftKey) }
+                let sentFiles = Set(files.map(\.id))
+                fileDrafts[draftKey]?.removeAll { sentFiles.contains($0.id) }
                 if remoteDraftKey(remote.selectedSessionID ?? "") == draftKey, input == originalInput {
                     input = ""
                     composerRevision = UUID()
@@ -485,6 +496,11 @@ struct MacHomeChatView: View {
         return Binding(get: { imageDrafts[key] ?? [] }, set: { imageDrafts[key] = $0 })
     }
 
+    private func fileDraft(for sessionID: String) -> Binding<[ChatFileAttachment]> {
+        let key = remoteDraftKey(sessionID)
+        return Binding(get: { fileDrafts[key] ?? [] }, set: { fileDrafts[key] = $0 })
+    }
+
     private func videoDraft(for sessionID: String) -> Binding<ChatVideoAttachment?> {
         let key = remoteDraftKey(sessionID)
         return Binding(get: { videoDrafts[key] }, set: { videoDrafts[key] = $0 })
@@ -505,6 +521,7 @@ struct MacHomeChatView: View {
         guard let sessionID = remote.selectedSessionID else { return false }
         return !(imageDrafts[remoteDraftKey(sessionID)] ?? []).isEmpty
             || videoDrafts[remoteDraftKey(sessionID)] != nil
+            || !(fileDrafts[remoteDraftKey(sessionID)] ?? []).isEmpty
     }
 
     private var importingImages: Bool { imageImportID != nil }
@@ -522,7 +539,7 @@ struct MacHomeChatView: View {
             return false
         }
         let key = remoteDraftKey(sessionID)
-        guard videoDrafts[key] == nil else {
+        guard videoDrafts[key] == nil || remote.selectedSession?.supportsMixedAttachments == true else {
             attachmentError = VideoAttachmentError.mixedAttachments.localizedDescription
             return false
         }
