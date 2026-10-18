@@ -346,7 +346,7 @@ final class ChatSession: ObservableObject {
         messages.contains { message in
             message.activities.contains { activity in
                 activity.subagentActivities.contains {
-                    $0.subagent?.isActive == true && $0.subagent?.isBackgroundWatcher == true
+                    $0.subagent?.isActive == true && $0.subagent?.keepsRunAvailable == true
                 }
             }
         }
@@ -1206,6 +1206,7 @@ final class ChatSession: ObservableObject {
             return
         }
         let supportsInjection = activeBackend.supportsMidTurnInjection && preparationTask == nil
+        let supportsParallel = supportsInjection && activeBackend.supportsParallelSubagents
         let snapshot = MessageRoutingSnapshot(
             message: text.trimmingCharacters(in: .whitespacesAndNewlines),
             currentTask: currentRunPrompt ?? "",
@@ -1242,7 +1243,8 @@ final class ChatSession: ObservableObject {
             do {
                 let decision = try await MessageRouter.classify(snapshot, provider: provider)
                 resolution = MessageRoutingPolicy.resolve(
-                    decision, message: snapshot.message, supportsInjection: supportsInjection
+                    decision, message: snapshot.message, supportsInjection: supportsInjection,
+                    supportsParallel: supportsParallel
                 )
             } catch is CancellationError {
                 return
@@ -1278,6 +1280,8 @@ final class ChatSession: ObservableObject {
                 break
             case .inject:
                 self.injectQueued(item)
+            case .parallel:
+                self.injectQueued(item, parallel: true)
             case .redirect:
                 self.submit(item.text, interrupt: true, inject: false,
                             includesAmbientContext: item.includesAmbientContext,
@@ -1376,7 +1380,7 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    private func injectQueued(_ item: QueuedPrompt) {
+    private func injectQueued(_ item: QueuedPrompt, parallel: Bool = false) {
         guard activeBackend.supportsMidTurnInjection, currentRunMode == .single else {
             deliveryStatus = "Queued: the backend's live input channel is unavailable."
             return
@@ -1385,7 +1389,7 @@ final class ChatSession: ObservableObject {
         let privacy = isPrivate
         let predecessor = injectionTask
         pendingInjections.insert(item.id)
-        deliveryStatus = "Saving context before delivery..."
+        deliveryStatus = parallel ? "Saving your request before starting it..." : "Saving context before delivery..."
         injectionTask = Task { [weak self] in
             await predecessor?.value
             guard let self else { return }
@@ -1405,8 +1409,11 @@ final class ChatSession: ObservableObject {
                 guard !Task.isCancelled, self.streamGeneration == generation,
                       self.isPrivate == privacy, self.isStreaming,
                       self.queued.contains(where: { $0.id == item.id }) else { return }
-                guard self.activeBackend.supportsMidTurnInjection else {
-                    self.deliveryStatus = "Queued: the task finished before context could be sent."
+                guard self.activeBackend.supportsMidTurnInjection,
+                      !parallel || self.activeBackend.supportsParallelSubagents else {
+                    self.deliveryStatus = parallel
+                        ? "Queued: background agents became unavailable; it runs after the current task."
+                        : "Queued: the task finished before context could be sent."
                     return
                 }
                 // The durable message claims the queue ID before crossing the process
@@ -1420,10 +1427,13 @@ final class ChatSession: ObservableObject {
                 try await self.flushJournal()
                 guard !Task.isCancelled, self.streamGeneration == generation,
                       self.isPrivate == privacy, self.isStreaming else { return }
-                self.deliveryStatus = "Sending context to the current task..."
+                self.deliveryStatus = parallel
+                    ? "Handing your request to a background agent..."
+                    : "Sending context to the current task..."
                 dispatched = true
+                let text = parallel ? MessageRoutingPolicy.parallelDelivery(item.text) : item.text
                 let result = await withCheckedContinuation { continuation in
-                    self.activeBackend.injectMidTurn(item.text) { result in
+                    self.activeBackend.injectMidTurn(text) { result in
                         continuation.resume(returning: result)
                     }
                 }
@@ -1431,15 +1441,19 @@ final class ChatSession: ObservableObject {
                 switch result {
                 case .accepted(let messageID):
                     self.recordInjection(item, status: "accepted", nativeMessageID: messageID)
-                    self.deliveryStatus = "Context accepted; it will be applied at the next opportunity."
+                    self.deliveryStatus = parallel
+                        ? "Running in parallel; the reply will appear in this chat."
+                        : "Context accepted; it will be applied at the next opportunity."
                 case .notSent:
                     self.recordInjection(item, status: "not_sent")
                     self.queued.insert(item, at: min(queueIndex, self.queued.count))
                     self.recordQueueEvent(.queueAdded, item: item)
-                    self.deliveryStatus = "Queued: the task finished before context could be sent."
+                    self.deliveryStatus = parallel
+                        ? "Queued: the task finished before the request could start in parallel."
+                        : "Queued: the task finished before context could be sent."
                 case .uncertain(let message):
                     self.recordInjection(item, status: "uncertain", reason: message)
-                    let notice = "Context delivery uncertain; not resent. \(message)"
+                    let notice = "\(parallel ? "Parallel request" : "Context") delivery uncertain; not resent. \(message)"
                     self.deliveryStatus = notice
                     self.appendRunMessage(ChatMessage(role: .error, text: notice))
                 }
@@ -1472,7 +1486,7 @@ final class ChatSession: ObservableObject {
         let assistantID = appendRunMessage(ChatMessage(role: .assistant, text: ""))
         pendingInjections.insert(item.id)
         isWaitingOnBackgroundWatchers = false
-        deliveryStatus = "Sending while the background watcher continues..."
+        deliveryStatus = "Sending while the background task continues..."
         recordInjection(item, status: "submitting")
         injectionTask = Task { [weak self] in
             await predecessor?.value
@@ -1494,7 +1508,7 @@ final class ChatSession: ObservableObject {
                         self.isStreaming && self.hasActiveBackgroundWatcher
                     self.markWatcherInjectionFailure(
                         assistantID,
-                        "The watcher state changed before this message could be sent. Send again."
+                        "The background task state changed before this message could be sent. Send again."
                     )
                     return
                 }
@@ -1514,14 +1528,14 @@ final class ChatSession: ObservableObject {
                         status: "accepted",
                         nativeMessageID: messageID
                     )
-                    self.deliveryStatus = "Sent while the background watcher continues."
+                    self.deliveryStatus = "Sent while the background task continues."
                 case .notSent:
                     self.recordInjection(item, status: "not_sent")
                     self.isWaitingOnBackgroundWatchers =
                         self.isStreaming && self.hasActiveBackgroundWatcher
                     self.markWatcherInjectionFailure(
                         assistantID,
-                        "The watcher is still running, but the main thread was not ready. Send again."
+                        "The background task is still running, but the main thread was not ready. Send again."
                     )
                 case .uncertain(let message):
                     self.recordInjection(item, status: "uncertain", reason: message)
@@ -1547,7 +1561,7 @@ final class ChatSession: ObservableObject {
                 }
                 self.markWatcherInjectionFailure(
                     assistantID,
-                    "Could not send while the watcher continued because run history was unavailable."
+                    "Could not send while the background task continued because run history was unavailable."
                 )
             }
         }
@@ -2516,10 +2530,9 @@ final class ChatSession: ObservableObject {
             statusText = currentActivity?.title ?? "Thinking…"
         case .status(let status):
             statusText = status
-            if status == "Background watcher running"
-                || status.hasSuffix(" background watchers running") {
+            if BackgroundWaitStatus.isWaiting(status) {
                 isWaitingOnBackgroundWatchers = true
-            } else if status == "Watcher finished; resuming..." {
+            } else if BackgroundWaitStatus.isResuming(status) {
                 isWaitingOnBackgroundWatchers = false
             }
         case .activity(let activity):

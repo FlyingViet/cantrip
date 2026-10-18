@@ -158,6 +158,7 @@ struct SessionTabTests {
         try testSubagentPlacement()
         try await testSubagentMonitor()
         try await testBackgroundWatcherContinuation()
+        try await testParallelRequestRouting()
         try await testPromptUsage()
         try await testHostProtection(manager: manager)
         print("Session tab persistence, protection, privacy, and web controls passed")

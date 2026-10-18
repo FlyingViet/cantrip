@@ -77,9 +77,34 @@ struct MessageRoutingTests {
                "Unsupported injection never becomes a redirect")
         for intent in [MessageRoutingDecision.Intent.followUp, .ambiguous] {
             expect(MessageRoutingPolicy.resolve(.init(intent: intent, confidence: 1, evidence: "stop"),
-                                                message: "stop the server", supportsInjection: true).action == .queue,
+                                                message: "stop the server", supportsInjection: true,
+                                                supportsParallel: true).action == .queue,
                    "The policy follows semantic intent, not the word stop")
         }
+        let sideQuestion = "While that runs, what's the weather tomorrow?"
+        let parallel = MessageRoutingDecision(intent: .parallel, confidence: 0.9, evidence: "the weather tomorrow")
+        let resolved = MessageRoutingPolicy.resolve(parallel, message: sideQuestion,
+                                                    supportsInjection: true, supportsParallel: true)
+        expect(resolved.action == .parallel && resolved.explanation.hasPrefix("Running in parallel"),
+               "Independent requests run in a background agent when the tab can start one")
+        expect(MessageRoutingPolicy.resolve(parallel, message: sideQuestion, supportsInjection: true).action == .queue,
+               "Without background agents, a parallel request waits its turn")
+        expect(MessageRoutingPolicy.resolve(parallel, message: sideQuestion, supportsInjection: false,
+                                            supportsParallel: true).action == .queue,
+               "Parallel delivery needs the live input channel")
+        expect(MessageRoutingPolicy.resolve(.init(intent: .parallel, confidence: 0.7, evidence: "the weather tomorrow"),
+                                            message: sideQuestion, supportsInjection: true,
+                                            supportsParallel: true).action == .queue,
+               "Uncertain parallel decisions queue")
+        expect(MessageRoutingPolicy.resolve(.init(intent: .parallel, confidence: 1, evidence: "the README"),
+                                            message: sideQuestion, supportsInjection: true,
+                                            supportsParallel: true).action == .queue,
+               "Parallel decisions must be grounded in the new message")
+        let brief = MessageRoutingPolicy.parallelDelivery(sideQuestion)
+        expect(brief.hasSuffix("\n\n" + sideQuestion) && brief.contains("`side-`"),
+               "The agent brief names the side- prefix and ends with the user's exact words")
+        expect((try? MessageRoutingDecision.parse(#"{"intent":"parallel","confidence":0.9,"evidence":"x"}"#))?.intent == .parallel,
+               "The parallel intent decodes")
         for invalid in [
             "not JSON", #"{"intent":"redirect","confidence":1,"evidence":"stop"}"#,
             #"{"intent":"context","confidence":1.1,"evidence":"config"}"#,
@@ -144,7 +169,9 @@ struct MessageRoutingTests {
             for (text, expected) in [
                 ("The config lives in /config", MessageRoutingDecision.Intent.context),
                 ("After that, stop the server", .followUp),
-                ("Stop the server", .followUp),
+                ("Stop the server", .parallel),
+                ("While that runs, what's the weather forecast for Seattle tomorrow?", .parallel),
+                ("Once the README is done, commit it and open a pull request", .followUp),
                 ("Wait, you are editing the wrong repository. Use the other repo instead.", .correction),
                 ("Actually, don't edit the README, just explain the installation", .replacement),
                 ("Stop working on the README now. Cancel this task.", .cancellation),
@@ -161,11 +188,13 @@ struct MessageRoutingTests {
                 let action: MessageRoutingAction
                 switch expected {
                 case .context: action = .inject
+                case .parallel: action = .parallel
                 case .correction, .replacement: action = .redirect
                 case .cancellation: action = .cancel
                 default: action = .queue
                 }
-                expect(MessageRoutingPolicy.resolve(result, message: text, supportsInjection: true).action == action,
+                expect(MessageRoutingPolicy.resolve(result, message: text, supportsInjection: true,
+                                                    supportsParallel: true).action == action,
                        "Live decisions must pass grounding and confidence gates, not just intent labels")
             }
         }

@@ -51,8 +51,16 @@ The macOS app includes:
   its right-click menu. The Remote connection tab stays pinned first.
   Order survives restarts without switching conversations or interrupting work.
 - **Automatic sending:** a separate, tool-free model call interprets busy-run
-  messages as context, corrections, or follow-ups. Uncertain decisions queue
-  safely; manual Queue/Redirect/Inject overrides remain available.
+  messages as context, corrections, follow-ups, or independent requests. Uncertain
+  decisions queue safely; manual Queue/Redirect/Inject overrides remain available.
+- **Parallel requests:** when a local Copilot tab is busy and you send something
+  independent of its current task (a side question, a status check, work in another
+  project), Auto hands it to the running agent, which starts a background `side-*`
+  subagent and keeps working. The subagent appears in the monitor like any other, and
+  its answer is posted in the same chat. If the main task finishes first, the run stays
+  open and Cantrip wakes the agent to report. Requests that depend on or touch the same
+  files or state as the current task still queue. Needs subagents and tools enabled;
+  other backends queue as before.
 - **Background waiters:** after starting a long external build, TestFlight upload,
   download, or similar job, the agent can hand passive monitoring to a dedicated
   watcher and continue independent work. The watcher stays visible in the subagent

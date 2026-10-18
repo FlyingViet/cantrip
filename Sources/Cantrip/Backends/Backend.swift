@@ -121,6 +121,12 @@ struct SubagentInfo: Equatable, Codable {
     var isBackgroundWatcher: Bool {
         background && agentType == "task" && name.lowercased().hasPrefix("watch-")
     }
+    /// A background agent the root launched for a request Auto ran in parallel.
+    var isParallelRequest: Bool {
+        background && name.lowercased().hasPrefix("side-")
+    }
+    /// Detached agents keep the run available after the root idles; Cantrip wakes the root when they finish.
+    var keepsRunAvailable: Bool { isBackgroundWatcher || isParallelRequest }
 
     mutating func addReasoning(_ block: String) {
         guard reasoning.last != block else { return }
@@ -389,6 +395,8 @@ protocol Backend {
     /// (caller should queue instead).
     func injectMidTurn(_ text: String) -> Bool
     var supportsMidTurnInjection: Bool { get }
+    /// The live turn can hand a request to a background agent and report its result later.
+    var supportsParallelSubagents: Bool { get }
     /// Completion confirms transport acceptance, not model consumption.
     func injectMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void)
     /// Gracefully abort the CURRENT turn in-band, keeping the process and
@@ -401,10 +409,36 @@ protocol Backend {
 extension Backend {
     func injectMidTurn(_ text: String) -> Bool { false }
     var supportsMidTurnInjection: Bool { false }
+    var supportsParallelSubagents: Bool { false }
     func injectMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void) {
         completion(injectMidTurn(text) ? .accepted(messageID: nil) : .notSent)
     }
     func interruptTurn() -> Bool { false }
+}
+
+/// Status lines for a run kept open only by detached background agents.
+enum BackgroundWaitStatus {
+    static func waiting(watchers: Int, parallel: Int) -> String {
+        switch (watchers, parallel) {
+        case (_, 0): return watchers == 1 ? "Background watcher running" : "\(watchers) background watchers running"
+        case (0, _): return parallel == 1 ? "Parallel request running" : "\(parallel) parallel requests running"
+        default: return "\(watchers + parallel) background tasks running"
+        }
+    }
+
+    static func resuming(parallel: Bool) -> String {
+        parallel ? "Parallel request finished; replying..." : "Watcher finished; resuming..."
+    }
+
+    static func isWaiting(_ status: String) -> Bool {
+        ["Background watcher running", "Parallel request running"].contains(status)
+            || [" background watchers running", " parallel requests running", " background tasks running"]
+                .contains { status.hasSuffix($0) }
+    }
+
+    static func isResuming(_ status: String) -> Bool {
+        status == resuming(parallel: false) || status == resuming(parallel: true)
+    }
 }
 
 enum ToolActivityFactory {
