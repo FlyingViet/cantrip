@@ -338,7 +338,13 @@ final class CantripHomeDelegations {
         guard let result = CantripHomeHandoffResult(delegation, now: now) else { return false }
         var message = ChatMessage(role: .handoff, text: result.fallbackText)
         message.handoffResult = result
-        if home.isStreaming, let request = home.messages.lastIndex(where: { $0.role == .user }) {
+        if home.isStreaming, var request = home.messages.lastIndex(where: { $0.role == .user }) {
+            // Before the whole current turn: queued messages combined into it share its run ID.
+            let runID = home.messages[request].runID
+            while runID != nil, request > 0, home.messages[request - 1].role == .user,
+                  home.messages[request - 1].runID == runID {
+                request -= 1
+            }
             home.messages.insert(message, at: request)
         } else {
             home.messages.append(message)
@@ -905,7 +911,8 @@ extension ChatSession {
     func saveCantripHomeDelegations(
         _ blocks: [CantripHomeBlock], messageIndex index: Int, lintBlocking: Bool
     ) -> (notices: [String], failures: [CantripHomeBlockFailure]) {
-        let trigger = messages[..<index].last(where: { $0.role == .user })?.text ?? ""
+        let trigger = messages[..<index].lastIndex(where: { $0.role == .user })
+            .map { turnUserText(endingAt: $0) } ?? ""
         // Hidden background runs may hand off; the background log itself never runs work, and
         // the trigger checks cover automated runs older builds left in Home.
         let automated = isCantripHomeBackgroundLog

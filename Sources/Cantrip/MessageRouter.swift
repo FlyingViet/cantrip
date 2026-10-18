@@ -19,13 +19,31 @@ enum MessageRouter {
     static func completion(
         _ snapshot: MessageRoutingSnapshot, provider: Provider
     ) async throws -> String {
-        let input = try snapshot.encoded()
+        try await completion(input: snapshot.encoded(), instructions: MessageRoutingPolicy.instructions,
+                             provider: provider)
+    }
+
+    /// Which queued messages to run together with the next one (one tool-free inference).
+    static func groupQueue(
+        _ snapshot: QueueGroupingSnapshot, provider: Provider
+    ) async throws -> QueueGroupingDecision {
+        let response = try await completion(input: snapshot.encoded(),
+                                            instructions: QueueGroupingPolicy.instructions,
+                                            provider: provider)
+        return try QueueGroupingDecision.parse(response)
+    }
+
+    static func completion(
+        input: String, instructions: String, provider: Provider
+    ) async throws -> String {
         let response: String
         switch provider {
         case .local(let baseURL, let model, let key):
-            response = try await localCompletion(input, baseURL: baseURL, model: model, key: key)
+            response = try await localCompletion(input, instructions: instructions,
+                                                 baseURL: baseURL, model: model, key: key)
         case .copilot, .claude:
-            response = try await RouterProcess().run(provider: provider, input: input)
+            response = try await RouterProcess().run(provider: provider, input: input,
+                                                     instructions: instructions)
         case .unavailable(let reason):
             throw MessageRoutingError.unavailable(reason)
         }
@@ -33,9 +51,10 @@ enum MessageRouter {
     }
 
     private static func localCompletion(
-        _ input: String, baseURL: String, model: String, key: String
+        _ input: String, instructions: String, baseURL: String, model: String, key: String
     ) async throws -> String {
-        let request = try localRequest(input, baseURL: baseURL, model: model, key: key)
+        let request = try localRequest(input, instructions: instructions,
+                                       baseURL: baseURL, model: model, key: key)
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 12
         config.timeoutIntervalForResource = 12
@@ -52,7 +71,8 @@ enum MessageRouter {
     }
 
     static func localRequest(
-        _ input: String, baseURL: String, model: String, key: String
+        _ input: String, instructions: String = MessageRoutingPolicy.instructions,
+        baseURL: String, model: String, key: String
     ) throws -> URLRequest {
         let base = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
         guard let url = URL(string: base + "/chat/completions"),
@@ -66,7 +86,7 @@ enum MessageRouter {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "model": model, "stream": false, "max_tokens": 200,
             "messages": [
-                ["role": "system", "content": MessageRoutingPolicy.instructions],
+                ["role": "system", "content": instructions],
                 ["role": "user", "content": input],
             ],
         ])
@@ -105,7 +125,7 @@ private final class RouterProcess: @unchecked Sendable {
     private var output = Data()
     private var directory: URL?
 
-    func run(provider: MessageRouter.Provider, input: String) async throws -> String {
+    func run(provider: MessageRouter.Provider, input: String, instructions: String) async throws -> String {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 queue.async {
@@ -113,7 +133,7 @@ private final class RouterProcess: @unchecked Sendable {
                     if self.cancelled {
                         self.finish(.failure(CancellationError()))
                     } else {
-                        self.start(provider: provider, input: input)
+                        self.start(provider: provider, input: input, instructions: instructions)
                     }
                 }
             }
@@ -125,7 +145,7 @@ private final class RouterProcess: @unchecked Sendable {
         }
     }
 
-    private func start(provider: MessageRouter.Provider, input: String) {
+    private func start(provider: MessageRouter.Provider, input: String, instructions: String) {
         do {
             let scratch = FileManager.default.temporaryDirectory
                 .appendingPathComponent("cantrip-router-\(UUID().uuidString)", isDirectory: true)
@@ -155,7 +175,7 @@ private final class RouterProcess: @unchecked Sendable {
                 try data.write(to: scratch.appendingPathComponent("settings.json"))
                 env["COPILOT_HOME"] = scratch.path
                 arguments = [
-                    "-p", MessageRoutingPolicy.instructions + "\n\n" + input,
+                    "-p", instructions + "\n\n" + input,
                     "-s", "--stream", "on", "--output-format", "json",
                     "--model", "gpt-5.4-mini", "--reasoning-effort", "low",
                     "--available-tools=", "--disable-builtin-mcps",
@@ -166,7 +186,7 @@ private final class RouterProcess: @unchecked Sendable {
                 command = executable
                 arguments = [
                     "-p", input, "--model", "haiku", "--output-format", "text",
-                    "--system-prompt", MessageRoutingPolicy.instructions,
+                    "--system-prompt", instructions,
                     "--tools", "", "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}",
                     "--safe-mode", "--disable-slash-commands", "--no-session-persistence",
                 ]
