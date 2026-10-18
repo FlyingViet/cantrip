@@ -61,6 +61,13 @@ The macOS app includes:
   open and Cantrip wakes the agent to report. Requests that depend on or touch the same
   files or state as the current task still queue. Needs subagents and tools enabled;
   other backends queue as before.
+- **Combined queued messages:** before the next queued message runs, the same tool-free
+  router checks which later queued messages belong with it (refinements, corrections or
+  next steps for the same task) and runs them together in one turn; unrelated messages
+  keep their order and run after. The decision is made while the current task is still
+  working, so the next turn starts without waiting. Each message still appears as you
+  wrote it, and the run journal claims all of them at once so recovery never repeats one.
+  Commands (`!`, `/`), councils, Private Local and automated Home runs stay one at a time.
 - **Background waiters:** after starting a long external build, TestFlight upload,
   download, or similar job, the agent can hand passive monitoring to a dedicated
   watcher and continue independent work. The watcher stays visible in the subagent

@@ -259,6 +259,26 @@ extension SessionTabTests {
         precondition(busyHome.messages.last?.text == "Here is your plan."
                      && busyHome.messages.last?.role == .assistant,
                      "The reply finishes where it started")
+        // Queued messages combined into one turn stay together: the card goes above all of them.
+        let combinedHome = ChatSession(copilotBackend: CantripHomeBackendFixture())
+        defer { combinedHome.isStreaming = false; combinedHome.cancel() }
+        let combinedRun = UUID()
+        var firstAsk = ChatMessage(role: .user, text: "Make the save button blue")
+        var secondAsk = ChatMessage(role: .user, text: "Also make it bigger")
+        var combinedReply = ChatMessage(role: .assistant, text: "Working")
+        firstAsk.runID = combinedRun
+        secondAsk.runID = combinedRun
+        combinedReply.runID = combinedRun
+        combinedHome.messages = [firstAsk, secondAsk, combinedReply]
+        combinedHome.isStreaming = true
+        var another = stopped
+        another.id = UUID()
+        precondition(CantripHomeDelegations.noteResult(another, in: combinedHome))
+        precondition(combinedHome.messages.map(\.role) == [.handoff, .user, .user, .assistant],
+                     "A card never splits a combined turn: \(combinedHome.messages.map(\.role))")
+        combinedHome.messages.swapAt(0, 1)
+        precondition(combinedHome.turnUserText(endingAt: 2) == "Make the save button blue\n\nAlso make it bigger",
+                     "A combined turn's words include every message, even with a legacy card between them")
         // Even a card sitting between a request and its reply stays out of the model's history.
         let lateCard = try requireHome(busyHome.messages.first { $0.role == .handoff })
         busyHome.messages.removeAll { $0.role == .handoff }
