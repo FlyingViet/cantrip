@@ -21,6 +21,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     private var onEvent: ((BackendEvent) -> Void)?
     private let availabilityLock = NSLock()
     private var injectionAvailable = false
+    /// Whether the running session was opened with the `task` tool (fixed until the runtime restarts).
+    private var sessionHasSubagents = false
     private var ready = false {
         didSet { availabilityLock.withLock { injectionAvailable = ready } }
     }
@@ -123,10 +125,17 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     watcher is continuing and finish the root turn. Cantrip keeps that run available, wakes \
     you when the watcher finishes, and asks you to read its result once so you can continue \
     from the exact point you paused. Never use the `watch-` prefix for implementation, \
-    research, or other delegated work. While only `watch-*` agents remain, Cantrip may deliver \
+    research, or other delegated work. While only `watch-*` or `side-*` agents remain, Cantrip may deliver \
     new user prompts immediately into the idle root; handle them as normal new work without \
-    waiting for the watcher or describing them as queued. Wait for every other background \
-    agent before finishing your reply.
+    waiting for the watcher or describing them as queued.
+
+    When Cantrip forwards a user message it judged independent of your current task, it asks \
+    you to hand it to a background agent whose name starts with `side-`. Launch it, then keep \
+    working on your current task; reply to that request in the chat when the agent finishes. \
+    Like watchers, you need not block on `side-` agents: if your own work ends first, say the \
+    parallel request is still running and finish the root turn, and Cantrip wakes you to \
+    report its result. Use the `side-` prefix only for those forwarded requests. Wait for \
+    every other background agent before finishing your reply.
     """
 
     init(bridgeScript: String = CopilotSessionBridge.script) {
@@ -140,6 +149,10 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
 
     var supportsMidTurnInjection: Bool {
         availabilityLock.withLock { injectionAvailable }
+    }
+
+    var supportsParallelSubagents: Bool {
+        availabilityLock.withLock { injectionAvailable && sessionHasSubagents }
     }
 
     func send(_ request: BackendRequest, workdir: String,
@@ -425,6 +438,9 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         process = p
         input = stdin.fileHandleForWriting
         configuration = config
+        availabilityLock.withLock {
+            sessionHasSubagents = config.allowSubagents && config.allowTools && !config.readOnly
+        }
         Log.write("copilot: native session bridge started, pid=\(p.processIdentifier)")
     }
 
@@ -591,11 +607,12 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                     onEvent?(.status("Thinking..."))
                 case "watcherWaiting":
                     let count = object["count"] as? Int ?? 1
-                    onEvent?(.status(count == 1
-                        ? "Background watcher running"
-                        : "\(count) background watchers running"))
+                    let parallel = min(count, object["parallel"] as? Int ?? 0)
+                    onEvent?(.status(BackgroundWaitStatus.waiting(
+                        watchers: count - parallel, parallel: parallel)))
                 case "watcherResuming":
-                    onEvent?(.status("Watcher finished; resuming..."))
+                    onEvent?(.status(BackgroundWaitStatus.resuming(
+                        parallel: (object["parallel"] as? Int ?? 0) > 0)))
                 case "delivery":
                     guard let id = object["id"] as? String,
                           let completion = deliveries.removeValue(forKey: id) else { continue }
@@ -709,6 +726,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         ready = false
         idle = false
         configuration = nil
+        availabilityLock.withLock { sessionHasSubagents = false }
         if let old { Self.terminate(old) }
         return old
     }

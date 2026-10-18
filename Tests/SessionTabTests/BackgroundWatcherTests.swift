@@ -13,7 +13,7 @@ extension SessionTabTests {
         return {
           async abort() {},
           async send(options) {
-            if (options.prompt.includes('Cantrip internal watcher completion')) {
+            if (options.prompt.includes('Cantrip internal background completion')) {
               const continued = options.mode === 'immediate'
                 && options.prompt.includes('"agentID":"agent-release"');
               emit({ type: 'assistant.message', data: {
