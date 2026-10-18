@@ -49,10 +49,12 @@ struct MessageRoutingTests {
             if args[2].contains("TOOLS_FIXTURE") {
                 print(#"{"type":"tool.execution_start","data":{"toolCallId":"unexpected","toolName":"bash"}}"#)
             }
+            let grouping = args[2].hasPrefix("You group queued chat messages")
             let event: [String: Any] = [
                 "type": "assistant.message_delta",
-                "data": ["messageId": "fixture", "deltaContent":
-                    #"{"intent":"context","confidence":0.99,"evidence":"The config lives in /config"}"#],
+                "data": ["messageId": "fixture", "deltaContent": grouping
+                    ? #"{"combine":[3],"confidence":0.9}"#
+                    : #"{"intent":"context","confidence":0.99,"evidence":"The config lives in /config"}"#],
             ]
             print(String(decoding: try JSONSerialization.data(withJSONObject: event), as: UTF8.self))
             return
@@ -139,7 +141,17 @@ struct MessageRoutingTests {
             expect(false, "Tool calls must be rejected even alongside text")
         } catch { }
 
+        try testQueueGroupingPolicy()
+
         let provider = MessageRouter.Provider.copilot(command: URL(fileURLWithPath: CommandLine.arguments[0]).path)
+        let grouped = try await MessageRouter.groupQueue(
+            QueueGroupingSnapshot(recentConversation: [], messages: [
+                "Make the save button blue", "What's the weather?", "Also make it bigger",
+            ]),
+            provider: provider
+        )
+        expect(grouped == QueueGroupingDecision(combine: [3], confidence: 0.9),
+               "Queue grouping uses the same isolated, tool-free CLI with its own instructions")
         let decision = try await MessageRouter.classify(snapshot("The config lives in /config"), provider: provider)
         expect(decision.intent == .context, "Isolated CLI returns a parsed decision")
         do {
@@ -163,6 +175,7 @@ struct MessageRoutingTests {
         expect(Date().timeIntervalSince(start) < 15, "Router has a bounded deadline")
 
         if ProcessInfo.processInfo.environment["CANTRIP_ROUTER_LIVE_TEST"] == "1" {
+            try await liveQueueGrouping()
             let liveProvider: MessageRouter.Provider =
                 ProcessInfo.processInfo.environment["CANTRIP_ROUTER_LIVE_PROVIDER"] == "claude"
                 ? .claude(command: "claude") : .copilot(command: "copilot")
@@ -202,5 +215,89 @@ struct MessageRoutingTests {
         try await Task.sleep(nanoseconds: 2_500_000_000)
         if failures > 0 { exit(1) }
         print("Message routing tests passed")
+    }
+
+    private static func testQueueGroupingPolicy() throws {
+        let texts = ["Make the save button blue", "!git status", "What's the weather?",
+                     "Also make it bigger", "/deploy now", "[incident:abc] Investigate", ""]
+        expect(QueueGroupingPolicy.candidateIndices(texts) == [0, 2, 3],
+               "Commands, incidents and empty messages never join a combined turn")
+        expect(QueueGroupingPolicy.candidateIndices(texts, excluded: [3]) == [0, 2],
+               "Messages still being routed or delivered are left out")
+        expect(QueueGroupingPolicy.candidateIndices(["!ls", "Also fix it"]).isEmpty,
+               "A command at the front of the queue runs on its own")
+        expect(QueueGroupingPolicy.candidateIndices(texts, excluded: [0]).isEmpty,
+               "The next message itself must be eligible")
+        expect(QueueGroupingPolicy.candidateIndices(Array(repeating: "Fix it", count: 20)).count
+               == QueueGroupingPolicy.maxCandidates, "The router sees a bounded number of messages")
+        expect(QueueGroupingPolicy.candidateIndices([String(repeating: "a", count: 6_001), "b"]).isEmpty,
+               "Very large messages run alone")
+
+        let candidates = ["Make the save button blue", "What's the weather?", "Also make it bigger"]
+        expect(QueueGroupingPolicy.group(.init(combine: [3], confidence: 0.9), candidateTexts: candidates) == [0, 2],
+               "A later related message is pulled forward past an unrelated one")
+        expect(QueueGroupingPolicy.group(.init(combine: [3, 1, 3], confidence: 0.9), candidateTexts: candidates) == [0, 2],
+               "Message 1 and duplicates are ignored")
+        expect(QueueGroupingPolicy.group(.init(combine: [3], confidence: 0.7), candidateTexts: candidates) == [0],
+               "Uncertain grouping runs messages one at a time")
+        expect(QueueGroupingPolicy.group(.init(combine: [4], confidence: 1), candidateTexts: candidates) == [0],
+               "Out-of-range numbers invalidate the whole decision")
+        expect(QueueGroupingPolicy.group(.init(combine: [], confidence: 1), candidateTexts: candidates) == [0],
+               "No related messages means the next one runs alone")
+        let big = String(repeating: "x", count: 7_000)
+        expect(QueueGroupingPolicy.group(.init(combine: [2, 3], confidence: 1),
+                                         candidateTexts: [big, big, "short"]) == [0, 2],
+               "Combined turns stay within the length bound")
+
+        let prompt = QueueGroupingPolicy.combinedPrompt(["Make the save button blue", "Also make it bigger"])
+        expect(prompt.hasPrefix("(Cantrip note, not from the user:")
+               && prompt.contains("Message 1:\nMake the save button blue\n\nMessage 2:\nAlso make it bigger")
+               && prompt.contains("these 2 related messages"),
+               "The agent sees every message, numbered, with a note to handle them in one turn")
+
+        expect((try? QueueGroupingDecision.parse(#"{"combine":[2,3],"confidence":0.8}"#))?.combine == [2, 3],
+               "Grouping decisions decode")
+        for invalid in ["[]", #"{"combine":[2]}"#, #"{"combine":[2],"confidence":2}"#,
+                        #"{"combine":"2","confidence":0.9}"#] {
+            expect((try? QueueGroupingDecision.parse(invalid)) == nil, "Malformed grouping decisions fail: \(invalid)")
+        }
+        let encoded = try QueueGroupingSnapshot(
+            recentConversation: Array(repeating: .init(role: "user", text: big), count: 50),
+            messages: Array(repeating: big, count: 50)
+        ).encoded()
+        expect(encoded.count < 20_000, "Grouping snapshot remains bounded")
+        expect(encoded.contains(#""number":1"#) && encoded.contains(#""number":8"#) && !encoded.contains(#""number":9"#),
+               "Messages are numbered from 1 for the router")
+    }
+
+    /// Real router: related follow-ups are grouped, unrelated requests are not.
+    private static func liveQueueGrouping() async throws {
+        let provider: MessageRouter.Provider =
+            ProcessInfo.processInfo.environment["CANTRIP_ROUTER_LIVE_PROVIDER"] == "claude"
+            ? .claude(command: "claude") : .copilot(command: "copilot")
+        let conversation: [MessageRoutingSnapshot.Turn] = [
+            .init(role: "user", text: "Add a Save button to the settings screen"),
+            .init(role: "assistant", text: "Added a Save button to SettingsView.swift."),
+        ]
+        for (messages, expected) in [
+            (["Make the save button blue", "What's the weather in Seattle tomorrow?",
+              "Also make the save button a bit bigger"], [0, 2]),
+            (["Fix the crash when tapping Save", "Then commit it and push"], [0, 1]),
+            (["Rename the Save button to Apply", "What's a good recipe for dinner tonight?",
+              "Book a flight to Denver for Friday"], [0]),
+            (["Fix the login bug on the settings screen", "Deploy the current build to TestFlight",
+              "Also add a unit test for that login fix"], [0, 2]),
+            (["Update the README install steps", "Revert the last commit",
+              "After the revert, redo the README change with the new wording"], [0]),
+        ] {
+            let raw = try await MessageRouter.completion(
+                input: QueueGroupingSnapshot(recentConversation: conversation, messages: messages).encoded(),
+                instructions: QueueGroupingPolicy.instructions, provider: provider
+            )
+            let decision = try QueueGroupingDecision.parse(raw)
+            let group = QueueGroupingPolicy.group(decision, candidateTexts: messages)
+            print("Live grouping: \(decision.combine) at \(decision.confidence) -> \(group)")
+            expect(group == expected, "Live grouping for \(messages): expected \(expected), got \(group)")
+        }
     }
 }

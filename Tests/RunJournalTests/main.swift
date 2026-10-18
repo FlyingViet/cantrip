@@ -182,6 +182,27 @@ do {
         "starting a queued turn should atomically claim it during replay"
     )
 
+    let related = (0..<3).map { index in
+        RunJournal.QueueItem(id: UUID(), text: "Related \(index)", includesAmbientContext: false)
+    }
+    for item in related {
+        var added = RunJournal.Event(sessionID: sessionID, runID: claimedRunID, kind: .queueAdded)
+        added.queueItem = item
+        try journal.append(added, durable: true)
+    }
+    var combinedStart = RunJournal.Event(sessionID: sessionID, runID: claimedRunID, kind: .turnStarted)
+    combinedStart.prompt = "combined"
+    combinedStart.mode = .single
+    combinedStart.queueItemID = related[0].id
+    combinedStart.queueItemIDs = [related[2].id]
+    try journal.append(combinedStart, durable: true)
+    expect(journal.recoveryState()?.queued == [related[1]],
+           "A combined turn atomically claims every message it runs, leaving the others queued")
+    var removedRelated = RunJournal.Event(sessionID: sessionID, runID: claimedRunID, kind: .queueRemoved)
+    removedRelated.queueItem = related[1]
+    try journal.append(removedRelated, durable: true)
+    expect(journal.recoveryState()?.queued.isEmpty == true, "Remaining related messages can still be removed")
+
     var pendingRoute = RunJournal.Event(sessionID: sessionID, runID: claimedRunID, kind: .queueAdded)
     pendingRoute.queueItem = firstQueue
     try journal.append(pendingRoute, durable: true)

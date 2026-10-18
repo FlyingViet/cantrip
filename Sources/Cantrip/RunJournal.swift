@@ -93,6 +93,8 @@ final class RunJournal {
         var artifact: Artifact?
         var queueItem: QueueItem?
         var queueItemID: UUID?
+        /// Further queue items a turn handles together with `queueItemID`; starting it claims them all.
+        var queueItemIDs: [UUID]?
         var nativeMessageID: String?
         var attemptNumber: Int?
         var reason: String?
@@ -114,6 +116,10 @@ final class RunJournal {
             self.sessionID = sessionID
             self.runID = runID
             self.kind = kind
+        }
+
+        var claimedQueueItemIDs: [UUID] {
+            (queueItemID.map { [$0] } ?? []) + (queueItemIDs ?? [])
         }
     }
 
@@ -352,25 +358,25 @@ final class RunJournal {
         var latest: [UUID: Int] = [:]
         for index in events.indices {
             let event = events[index]
-            var claimed: UUID?
+            var claimed: [UUID] = []
             switch event.kind {
             case .queueAdded:
                 guard let id = event.queueItem?.id else { break }
                 if placed[id] == nil { placed[id] = index }
                 latest[id] = index
             case .queueRemoved:
-                claimed = event.queueItem?.id
+                claimed = event.queueItem.map { [$0.id] } ?? []
             case .queueCleared:
                 placed.removeAll()
                 latest.removeAll()
             case .turnStarted, .messageStarted:
-                claimed = event.queueItemID
+                claimed = event.claimedQueueItemIDs
             default:
                 break
             }
-            if let claimed {
-                placed[claimed] = nil
-                latest[claimed] = nil
+            for id in claimed {
+                placed[id] = nil
+                latest[id] = nil
             }
         }
         return Set(placed.values).union(latest.values)
@@ -474,7 +480,7 @@ final class RunJournal {
                 queueItems.removeAll()
                 queueOrder.removeAll()
             case .turnStarted, .messageStarted:
-                if let id = event.queueItemID {
+                for id in event.claimedQueueItemIDs {
                     queueItems.removeValue(forKey: id)
                     queueOrder.removeAll { $0 == id }
                 }

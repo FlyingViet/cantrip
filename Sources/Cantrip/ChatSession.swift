@@ -149,7 +149,10 @@ final class ChatSession: ObservableObject {
     @Published var attachments: [String] = []
     /// Messages queued while a response is streaming (run in order after).
     @Published private(set) var queued: [QueuedPrompt] = [] {
-        didSet { remoteQueueRevision = UUID() }
+        didSet {
+            remoteQueueRevision = UUID()
+            scheduleQueueGrouping()
+        }
     }
     @Published private(set) var deliveryStatus: String?
     @Published var pendingInputs: [InputRequestSnapshot] = [] {
@@ -166,6 +169,19 @@ final class ChatSession: ObservableObject {
     private var routingRevision = 0
     private var injectionTask: Task<Void, Never>?
     private var pendingInjections: Set<UUID> = []
+    /// Which queued messages run together next, decided while the current turn works.
+    private struct QueueGroupingPlan {
+        let candidates: [QueuedPrompt]
+        let group: [QueuedPrompt]
+    }
+    private var groupingPlan: QueueGroupingPlan?
+    private var groupingTask: Task<Void, Never>?
+    private var groupingTaskCandidates: [QueuedPrompt] = []
+    private var groupingClassifying = false
+    private var drainAfterGrouping = false
+    private var groupingRevision = 0
+    /// How long the queue must stay unchanged before grouping it during a turn.
+    static var queueGroupingDelay: UInt64 = 1_500_000_000
     private var deferredInjectionDone = false
     /// Text grabbed from another app via ⌥⇧Space, attached to next query.
     @Published var selectionContext: SelectionContext?
@@ -611,7 +627,8 @@ final class ChatSession: ObservableObject {
         backends: [String],
         backend: BackendKind?,
         includesAmbientContext: Bool,
-        queueItemID: UUID? = nil
+        queueItemID: UUID? = nil,
+        additionalQueueItemIDs: [UUID] = []
     ) -> UUID {
         autoResumePending = false
         interruptionAwaitsResume = false
@@ -642,6 +659,7 @@ final class ChatSession: ObservableObject {
         event.workdir = workdir
         event.includesAmbientContext = includesAmbientContext
         event.queueItemID = queueItemID
+        event.queueItemIDs = additionalQueueItemIDs.isEmpty ? nil : additionalQueueItemIDs
         appendRunEvent(event, durable: true)
         return runID
     }
@@ -912,6 +930,7 @@ final class ChatSession: ObservableObject {
 
     private func clearQueue() {
         invalidateRouting()
+        invalidateGrouping()
         guard !queued.isEmpty else { return }
         queued.removeAll()
         guard let runID = currentRunID ?? lastJournalRunID else { return }
@@ -1277,7 +1296,7 @@ final class ChatSession: ObservableObject {
             }
             switch resolution.action {
             case .queue:
-                break
+                self.scheduleQueueGrouping()
             case .inject:
                 self.injectQueued(item)
             case .parallel:
@@ -1589,7 +1608,8 @@ final class ChatSession: ObservableObject {
                       preamble: String? = nil, isResume: Bool = false,
                       includesAmbientContext: Bool = true,
                       consumesStagedContext: Bool = true,
-                      queuedItem: QueuedPrompt? = nil) {
+                      queuedItem: QueuedPrompt? = nil,
+                      combinedItems: [QueuedPrompt] = []) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isStreaming else { return }
         if !isLocalPrivate, prompt == "/login github" {
@@ -1670,7 +1690,8 @@ final class ChatSession: ObservableObject {
                 backends: [settings.backendLabel(backendKind)],
                 backend: backendKind,
                 includesAmbientContext: includesAmbientContext,
-                queueItemID: queuedItem?.id
+                queueItemID: queuedItem?.id,
+                additionalQueueItemIDs: combinedItems.map(\.id)
             )
             currentRunPrompt = prompt
             currentRunIncludesAmbientContext = includesAmbientContext
@@ -1683,7 +1704,14 @@ final class ChatSession: ObservableObject {
         let isFirstOfConversation = messages.isEmpty && automatedRun == nil
         let previousTurns = automatedRun == nil ? completedConversationTurns() : []
         if automaticTitle == "New chat" { automaticTitle = String(prompt.prefix(34)) }
-        promptUsageMessageID = appendRunMessage(ChatMessage(role: .user, text: displayText ?? prompt))
+        // A combined turn shows each queued message as the user wrote it, in one run.
+        var shownTexts = [displayText ?? prompt]
+        if let queuedItem, !combinedItems.isEmpty {
+            shownTexts = ([queuedItem] + combinedItems).map(\.text)
+        }
+        for shown in shownTexts {
+            promptUsageMessageID = appendRunMessage(ChatMessage(role: .user, text: shown))
+        }
         appendRunMessage(ChatMessage(role: .assistant, text: ""))
         isStreaming = true
         statusText = "Thinking…"
@@ -2248,10 +2276,20 @@ final class ChatSession: ObservableObject {
     private func completedConversationTurns() -> [ConversationTurn] {
         var turns: [ConversationTurn] = []
         var pendingUser: String?
+        var previous: ChatMessage?
         for message in messages {
+            // Result cards hold tab output for the user, not Home's own words.
+            if message.role == .handoff { continue }
+            defer { previous = message }
             switch message.role {
             case .user:
-                pendingUser = message.text
+                // Queued messages combined into one run are one turn.
+                if let pending = pendingUser, let runID = message.runID,
+                   previous?.role == .user, previous?.runID == runID {
+                    pendingUser = pending + "\n\n" + message.text
+                } else {
+                    pendingUser = message.text
+                }
             case .assistant:
                 guard let user = pendingUser, !message.text.isEmpty else { continue }
                 // Council rounds put several assistant messages after one
@@ -2263,11 +2301,26 @@ final class ChatSession: ObservableObject {
             case .error:
                 pendingUser = nil
             case .handoff:
-                // Result cards hold tab output for the user, not Home's own words.
                 continue
             }
         }
         return turns
+    }
+
+    /// The user's words for the turn whose last user message is at `index`: queued messages
+    /// combined into one run are consecutive user messages sharing its run ID.
+    func turnUserText(endingAt index: Int) -> String {
+        var texts = [messages[index].text]
+        guard let runID = messages[index].runID else { return texts[0] }
+        var probe = index - 1
+        while probe >= 0 {
+            let message = messages[probe]
+            probe -= 1
+            if message.role == .handoff { continue }
+            guard message.role == .user, message.runID == runID else { break }
+            texts.insert(message.text, at: 0)
+        }
+        return texts.joined(separator: "\n\n")
     }
 
     private var shellProcess: Process?
@@ -2864,7 +2917,7 @@ final class ChatSession: ObservableObject {
             } else {
                 backendTag = settings.backend.rawValue
             }
-            MemoryStore.shared.logExchange(user: messages[userIdx].text,
+            MemoryStore.shared.logExchange(user: turnUserText(endingAt: userIdx),
                                            assistant: messages[assistantIdx].text,
                                            backend: backendTag)
         }
@@ -2894,15 +2947,130 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    /// Queued messages the router may group, starting with the next one; empty when
+    /// the next message runs alone (commands, councils, private or automated tabs).
+    private func queueGroupingCandidates() -> [QueuedPrompt] {
+        guard !councilMode, !isLocalPrivate, !isCantripHomeBackground, queued.count >= 2 else { return [] }
+        if case .unavailable = routerProvider { return [] }
+        // Home handoffs keep their own turn so stopping one never stops another request.
+        let handoffs = Set(CantripHomeDelegations.shared.allHandoffs
+            .filter { $0.isActive && $0.tabID == id }.map(\.prompt))
+        let excluded = Set(queued.indices.filter {
+            queued[$0].id == routingItemID || pendingInjections.contains(queued[$0].id)
+                || handoffs.contains(queued[$0].text)
+        })
+        return QueueGroupingPolicy.candidateIndices(queued.map(\.text), excluded: excluded)
+            .map { queued[$0] }
+    }
+
+    /// While a turn runs, decide in the background which queued messages go together,
+    /// so the next turn starts without waiting for the router.
+    private func scheduleQueueGrouping() {
+        guard isStreaming, !drainAfterGrouping else { return }
+        let candidates = queueGroupingCandidates()
+        guard candidates.count >= 2 else {
+            if groupingTask != nil { invalidateGrouping() }
+            return
+        }
+        if groupingPlan?.candidates == candidates
+            || (groupingTask != nil && groupingTaskCandidates == candidates) { return }
+        startQueueGrouping(candidates, delay: Self.queueGroupingDelay)
+    }
+
+    private func startQueueGrouping(_ candidates: [QueuedPrompt], delay: UInt64) {
+        groupingTask?.cancel()
+        groupingRevision += 1
+        let revision = groupingRevision
+        groupingTaskCandidates = candidates
+        groupingClassifying = false
+        groupingTask = Task { [weak self] in
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+            guard let self, !Task.isCancelled, self.groupingRevision == revision else { return }
+            self.groupingClassifying = true
+            let snapshot = QueueGroupingSnapshot(
+                recentConversation: self.messages
+                    .filter { ($0.role == .user || $0.role == .assistant) && !$0.text.isEmpty }
+                    .suffix(6).map { .init(role: $0.role.rawValue, text: $0.text) },
+                messages: candidates.map(\.text)
+            )
+            var group = [candidates[0]]
+            do {
+                let decision = try await MessageRouter.groupQueue(snapshot, provider: self.routerProvider)
+                group = QueueGroupingPolicy.group(decision, candidateTexts: candidates.map(\.text))
+                    .map { candidates[$0] }
+            } catch is CancellationError {
+                return
+            } catch {
+                Log.write("queue-grouping: \(error.localizedDescription); running messages one at a time")
+            }
+            guard !Task.isCancelled, self.groupingRevision == revision else { return }
+            self.groupingTask = nil
+            self.groupingTaskCandidates = []
+            self.groupingClassifying = false
+            self.groupingPlan = QueueGroupingPlan(candidates: candidates, group: group)
+            guard self.drainAfterGrouping else { return }
+            self.drainAfterGrouping = false
+            guard !self.isStreaming, self.journalError == nil else { return }
+            // Messages added meanwhile run later. A removed or edited message, or a change
+            // that rules out grouping (such as council mode), means deciding again.
+            let current = self.queueGroupingCandidates()
+            guard self.queued.first == group[0], group.allSatisfy({ current.contains($0) }) else {
+                return self.drainQueue()
+            }
+            self.startQueued(group)
+        }
+    }
+
+    private func invalidateGrouping() {
+        groupingRevision += 1
+        groupingTask?.cancel()
+        groupingTask = nil
+        groupingTaskCandidates = []
+        groupingClassifying = false
+        groupingPlan = nil
+        if drainAfterGrouping {
+            drainAfterGrouping = false
+            deliveryStatus = nil
+        }
+    }
+
+    /// Starts the next queued message, together with any later ones the router judged
+    /// related to it. Grouping is normally decided while the previous turn was running.
     private func drainQueue() {
-        guard !isStreaming, journalError == nil, let next = queued.first else { return }
-        councilMode
-            ? sendCouncil(next.text, includesAmbientContext: next.includesAmbientContext,
-                          consumesStagedContext: false, queuedItem: next)
-            : send(next.text, includesAmbientContext: next.includesAmbientContext,
-                   consumesStagedContext: false, queuedItem: next)
-        removeQueued(next)
-        deliveryStatus = "Sent the next queued message."
+        guard !isStreaming, journalError == nil, !queued.isEmpty, !drainAfterGrouping else { return }
+        let candidates = queueGroupingCandidates()
+        guard candidates.count >= 2 else { return startQueued([queued[0]]) }
+        if let plan = groupingPlan, plan.candidates == candidates {
+            return startQueued(plan.group)
+        }
+        drainAfterGrouping = true
+        deliveryStatus = "Checking which queued messages belong together..."
+        // A decision already in progress for this exact queue is reused; anything else restarts now.
+        if !(groupingTask != nil && groupingClassifying && groupingTaskCandidates == candidates) {
+            startQueueGrouping(candidates, delay: 0)
+        }
+    }
+
+    private func startQueued(_ group: [QueuedPrompt]) {
+        guard let next = group.first else { return }
+        let rest = Array(group.dropFirst())
+        if rest.isEmpty {
+            councilMode
+                ? sendCouncil(next.text, includesAmbientContext: next.includesAmbientContext,
+                              consumesStagedContext: false, queuedItem: next)
+                : send(next.text, includesAmbientContext: next.includesAmbientContext,
+                       consumesStagedContext: false, queuedItem: next)
+            removeQueued(next)
+            deliveryStatus = "Sent the next queued message."
+        } else {
+            Log.write("queue-grouping: running \(group.count) related queued messages together")
+            // Ambient Mac context only when every message came from the Mac itself.
+            send(QueueGroupingPolicy.combinedPrompt(group.map(\.text)),
+                 includesAmbientContext: group.allSatisfy(\.includesAmbientContext),
+                 consumesStagedContext: false, queuedItem: next, combinedItems: rest)
+            for item in group { removeQueued(item) }
+            deliveryStatus = "Sent \(group.count) related queued messages together."
+        }
         if !isStreaming, !queued.isEmpty {
             let generation = streamGeneration
             DispatchQueue.main.async { [weak self] in
