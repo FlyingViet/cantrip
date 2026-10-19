@@ -3,6 +3,20 @@
 Cantrip Home as a native macOS app: the same Home as the Cantrip Agent iPhone app
 (Chat, Tasks, Artifacts, Background and every project tab), sized for a Mac window.
 
+## Install
+
+1. Download **CantripGatewayMac-*.dmg** from the
+   [latest release](https://github.com/FlyingViet/CantripGatewayMac/releases/latest).
+2. Open it and drag **Cantrip Gateway Mac** to **Applications**. Releases are signed with
+   Developer ID and notarized by Apple, so the app opens normally.
+3. Pair it with [Cantrip](https://github.com/FlyingViet/cantrip) (see
+   [Pair with Cantrip](#pair-with-cantrip) below).
+
+Requires macOS 26 or later. Cantrip Gateway Mac is a client: it needs Cantrip running on a
+Mac you own, the same Mac or another one, with **Remote control** enabled in Cantrip's
+Settings. Each person pairs with their own Cantrip; a pairing token gives full control of
+that Mac's agents, so never share yours.
+
 ## How it shares the iOS app's logic
 
 The iOS app lives in [FlyingViet/Hermes](https://github.com/FlyingViet/Hermes). This repo
@@ -25,17 +39,25 @@ Only Mac-specific code lives in this repo:
 The shared files need no Mac-specific knowledge beyond `#if os(iOS)` guards around
 UIKit-only classes, which this repo replaces with AppKit versions of the same names.
 
-## Build and install
+## Build from source
 
-Requires macOS 26, Xcode 26+ and XcodeGen.
+Requires macOS 26, Xcode 26+ and XcodeGen (`brew install xcodegen`).
 
 ```sh
 git clone --recurse-submodules https://github.com/FlyingViet/CantripGatewayMac.git
 cd CantripGatewayMac
-make install   # Release build signed with Apple Development, copied to /Applications
+make install   # Release build copied to /Applications
 make test      # Mac tests + shared Hermes logic suites
 make build     # Debug build in build/Debug
 ```
+
+`make install` signs with the maintainer's team by default. With your own Apple developer
+team use `make install TEAM=<your team ID>`; without one, sign ad hoc with
+`make install TEAM= SIGN_IDENTITY=-`.
+
+Maintainers publish a release with `Scripts/release.sh <version>`: it archives with
+Developer ID, notarizes and staples the app and a DMG, then creates the GitHub release.
+See the script's header for the one-time `notarytool` setup.
 
 Debug builds use the bundle ID `com.itzhoang.cantripgateway.mac.debug`, so test runs
 never touch the installed app's saved servers.

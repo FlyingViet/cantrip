@@ -67,11 +67,15 @@ targets:
         PRODUCT_MODULE_NAME: Hermes
         PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.cantripgateway.mac
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: Sources/App/CantripGatewayMac.entitlements
         ENABLE_HARDENED_RUNTIME: NO
       configs:
         # Debug runs (UI tests, fixture hosts) keep their own settings and saved servers.
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.cantripgateway.mac.debug
+        # Notarized Developer ID releases require the hardened runtime.
+        Release:
+          ENABLE_HARDENED_RUNTIME: YES
     dependencies:
       - package: MarkdownUI
       - package: Qwen3TTS

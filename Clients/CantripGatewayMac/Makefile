@@ -5,9 +5,10 @@ APP := Cantrip Gateway Mac.app
 XCODEBUILD := GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'platform=macOS' \
 	-clonedSourcePackagesDirPath .spm
-TEAM := 9M3XNFG4J7
+TEAM ?= 9M3XNFG4J7
+SIGN_IDENTITY ?= Apple Development
 
-.PHONY: project build test release install
+.PHONY: project build test release install dmg
 
 project:
 	@test -f Hermes/project.yml || git submodule update --init
@@ -21,7 +22,7 @@ test: project
 
 release: project
 	$(XCODEBUILD) -configuration Release -derivedDataPath build/Release \
-		CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Apple Development" DEVELOPMENT_TEAM=$(TEAM) build
+		CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$(SIGN_IDENTITY)" DEVELOPMENT_TEAM=$(TEAM) build
 
 # Builds Release, replaces /Applications/Cantrip Gateway Mac.app and reopens it.
 install: release
@@ -30,3 +31,7 @@ install: release
 	rm -rf "/Applications/$(APP)"
 	ditto "build/Release/Build/Products/Release/$(APP)" "/Applications/$(APP)"
 	open "/Applications/$(APP)"
+
+# Notarized Developer ID DMG + GitHub release: make dmg VERSION=1.0.1
+dmg:
+	Scripts/release.sh $(VERSION)
