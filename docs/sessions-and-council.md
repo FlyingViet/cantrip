@@ -123,10 +123,24 @@ text are bound to their submitted message rather than a later draft.
 
 ## Recover after a crash or interruption
 
-1. Reopen Cantrip.
-2. Read the recovery message and restored partial output.
-3. If offered, select **Resume from where it left off**.
-4. Check what already completed before repeating commands with side effects.
+When Cantrip reopens after a quit, crash or update, each tab picks up where it
+stopped: the run it was in the middle of resumes from where it left off, then
+the messages queued behind it are sent in order. Tabs start a few seconds apart.
+If a run is cut off by relaunches twice in a row, Cantrip stops resuming it on
+its own and offers **Resume from where it left off** instead.
+
+A dropped network doesn't fail the task either. A run that fails while the Mac
+is offline, or with a connection error such as a DNS failure, waits until the
+network has been back for a few seconds, then continues the same task. Queued
+messages wait too instead of failing one by one. Messages you send meanwhile
+queue behind the interrupted task; use **Redirect** to replace it. After six
+connection retries in one run, Cantrip reports the failure as usual.
+
+To check on recovered work:
+
+1. Read the recovery message and restored partial output.
+2. If offered, select **Resume from where it left off**.
+3. Check what already completed before repeating commands with side effects.
 
 Cantrip records normal runs in an append-only journal and can restore partial
 work. Resume is not a guarantee that an external command can continue at the
