@@ -70,7 +70,7 @@ struct RemoteConnectionView: View {
                                      : connection.isConnected
                                         ? Color.green
                                         : Color.secondary)
-                    .symbolEffect(.pulse, isActive: connection.isLoading)
+                    .visiblePulse(isActive: connection.isLoading)
 
                 Text(connection.endpointLabel)
                     .font(.caption.weight(.semibold))
