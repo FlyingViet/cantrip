@@ -90,6 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         // Floating panel
         panel = LauncherPanel()
+        PanelVisibility.shared.track(panel)
         panel.install(LauncherView(
             manager: manager,
             onDismiss: { [weak self] in self?.hidePanel() },

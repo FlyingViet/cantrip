@@ -276,7 +276,8 @@ enum CopilotSessionBridge {
           const messageID = await session.send({
             prompt: fresh && !resumed ? command.initialPrompt : command.prompt, mode: 'enqueue'
           });
-          emit({ kind: 'started', runID, messageID, sessionID: session.sessionId, resumed });
+          const runtimePID = typeof client?.cliProcess?.pid === 'number' ? client.cliProcess.pid : undefined;
+          emit({ kind: 'started', runID, messageID, sessionID: session.sessionId, resumed, runtimePID });
         } finally {
           sending--;
           finishIfIdle();
@@ -350,6 +351,22 @@ enum CopilotSessionBridge {
         reply({ error: errorText(error) });
       }
     }
+    // Running agents, shells and client tasks. Cantrip stops an idle runtime only when none remain.
+    async function activity(command) {
+      const reply = outcome => emit({ kind: 'activityResponse', id: command.id, ...outcome });
+      try {
+        if (stopping) throw new Error("This tab's Copilot session is not running.");
+        const tasks = session?.rpc?.tasks;
+        if (!tasks?.list) { reply({ running: runID ? ['turn'] : [], supported: false }); return; }
+        const listed = (await tasks.list())?.tasks ?? [];
+        const running = listed.filter(task => task.status === 'running').map(task =>
+          task.type === 'agent' ? `agent ${task.displayName || task.agentType || task.id}` : `${task.type} task`);
+        if (runID || sending) running.push('turn');
+        reply({ running, supported: true });
+      } catch (error) {
+        reply({ error: errorText(error) });
+      }
+    }
     async function stop() {
       if (stopping) return;
       stopping = true;
@@ -377,6 +394,7 @@ enum CopilotSessionBridge {
       // View requests must not wait behind a turn's session.send.
       if (immediate.kind === 'appRequest') { void appRequest(immediate); return; }
       if (immediate.kind === 'cancelAgent') { void cancelAgent(immediate); return; }
+      if (immediate.kind === 'activity') { void activity(immediate); return; }
       commands = commands.then(async () => {
         if (stopping) return;
         const command = JSON.parse(line);

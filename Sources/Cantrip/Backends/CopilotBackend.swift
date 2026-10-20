@@ -46,6 +46,19 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     var reusedStartupLimit: TimeInterval = 30
     /// New runtimes accepted prompts within about 5 seconds; resuming a long session takes longer.
     var newRuntimeStartupLimit: TimeInterval = 60
+    /// Idle time before the runtime (0.5-3 GB) is stopped to free memory; nil reads Settings.
+    /// The next prompt resumes the same Copilot session in a new runtime, about 3 s slower.
+    var idleRuntimeReleaseDelay: TimeInterval?
+    /// How often a runtime kept alive by a running command is checked again.
+    var idleRuntimeRecheckInterval: TimeInterval = 5 * 60
+    /// Queue-owned copy of the release delay in effect when the last turn started.
+    private var releaseDelay: TimeInterval = 0
+    /// The Copilot CLI process under the bridge, as the bridge reports it.
+    private var runtimePID: pid_t?
+    /// The runtime's children when its session opened: MCP servers and extensions.
+    private var runtimeBaseline: Set<CopilotRuntimeActivity.ProcessKey> = []
+    private var activityRequests: [String: (Result<[String], Error>) -> Void] = [:]
+    private var keptForWork: String?
     /// Queue-owned startup state that lets a lost runtime be replaced without losing the prompt.
     private struct Attempt {
         let request: BackendRequest
@@ -170,12 +183,14 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             mcpApps: settings.copilotMCPApps,
             guardrail: guardrail?.rawValue
         )
+        let releaseDelay = idleRuntimeReleaseDelay ?? TimeInterval(settings.copilotIdleReleaseMinutes * 60)
         queue.async { [weak self] in
             guard let self else { return }
             guard self.runID == nil else {
                 onEvent(.failure("Copilot already has a running turn. Queue this message instead."))
                 return
             }
+            self.releaseDelay = releaseDelay
             self.onEvent = onEvent
             let id = UUID().uuidString
             self.runID = id
@@ -557,6 +572,16 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                     }
                     continue
                 }
+                if kind == "activityResponse" {
+                    guard let id = object["id"] as? String,
+                          let completion = activityRequests.removeValue(forKey: id) else { continue }
+                    if let running = object["running"] as? [String] {
+                        completion(.success(running))
+                    } else {
+                        completion(.failure(CocoaError(.coderReadCorrupt)))
+                    }
+                    continue
+                }
                 guard let current = runID, object["runID"] as? String == current else { continue }
                 switch kind {
                 case "input" where object["inputKind"] as? String == "policy":
@@ -592,6 +617,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                     if let id = object["id"] as? String { inputRequests.removeValue(forKey: id)?.cancel() }
                 case "started":
                     ready = true
+                    if let pid = object["runtimePID"] as? Int { runtimePID = pid_t(pid) }
+                    if attempt?.newRuntime == true, let process { recordRuntimeBaseline(process) }
                     if let session = object["sessionID"] as? String {
                         agentSessionID = session
                         onAgentSession?(session)
@@ -679,7 +706,79 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         onEvent = nil
         attempt = nil
         lastTurnEnded = Date()
+        scheduleIdleRelease(after: releaseDelay)
         sink?(.done)
+    }
+
+    /// Stops a runtime left idle for `releaseDelay` so its memory is returned; the next prompt
+    /// resumes its session in a new runtime, as after an idle crash. A runtime still running a
+    /// background agent, shell command or script is kept (stopping it would kill them) and
+    /// checked again later.
+    private func scheduleIdleRelease(after delay: TimeInterval) {
+        guard releaseDelay > 0, let ended = lastTurnEnded else { return }
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.lastTurnEnded == ended else { return }
+            self.releaseIdleRuntime()
+        }
+    }
+
+    private func releaseIdleRuntime() {
+        guard runID == nil, let process, process.isRunning, appRequests.isEmpty,
+              agentSessionID != nil, configuration != nil else { return }
+        // Background agents run inside the runtime, so ask it before looking at processes.
+        let id = UUID().uuidString
+        activityRequests[id] = { [weak self] result in
+            guard let self, self.runID == nil, self.process === process else { return }
+            switch result {
+            case .success(let running) where running.isEmpty: self.releaseUnlessProcessesRun(process)
+            case .success(let running): self.keepIdleRuntime(running.joined(separator: ", "))
+            case .failure: self.keepIdleRuntime("an unanswered task check")
+            }
+        }
+        do {
+            try write(["kind": "activity", "id": id])
+        } catch {
+            activityRequests.removeValue(forKey: id)
+            return
+        }
+        queue.asyncAfter(deadline: .now() + 15) { [weak self] in
+            self?.activityRequests.removeValue(forKey: id)?(.failure(CocoaError(.fileReadUnknown)))
+        }
+    }
+
+    private func releaseUnlessProcessesRun(_ process: Process) {
+        let bridge = process.processIdentifier, runtime = runtimePID, baseline = runtimeBaseline
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let work = CopilotRuntimeActivity.liveWork(bridge: bridge, runtime: runtime, baseline: baseline)
+            self?.queue.async { [weak self] in
+                guard let self, self.runID == nil, self.process === process, process.isRunning,
+                      self.appRequests.isEmpty,
+                      let session = self.agentSessionID, let config = self.configuration else { return }
+                if let work { return self.keepIdleRuntime(work) }
+                let minutes = self.lastTurnEnded.map { Date().timeIntervalSince($0) / 60 } ?? 0
+                Log.write(String(format: "copilot: stopped a runtime idle for %.0f min to free memory; the next prompt resumes its session", minutes))
+                self.resumeTarget = (session, config)
+                self.stopProcess()
+            }
+        }
+    }
+
+    private func keepIdleRuntime(_ work: String) {
+        if keptForWork != work { Log.write("copilot: keeping an idle runtime while \(work) runs") }
+        keptForWork = work
+        scheduleIdleRelease(after: idleRuntimeRecheckInterval)
+    }
+
+    /// Records the new runtime's children (MCP servers, extensions) before the model can start a tool.
+    private func recordRuntimeBaseline(_ process: Process) {
+        let bridge = process.processIdentifier, runtime = runtimePID
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let baseline = CopilotRuntimeActivity.baseline(bridge: bridge, runtime: runtime)
+            self?.queue.async { [weak self] in
+                guard let self, self.process === process else { return }
+                self.runtimeBaseline = baseline
+            }
+        }
     }
 
     private func resolveUncertainDeliveries() {
@@ -726,6 +825,10 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         ready = false
         idle = false
         configuration = nil
+        runtimePID = nil
+        runtimeBaseline = []
+        activityRequests.removeAll()
+        keptForWork = nil
         availabilityLock.withLock { sessionHasSubagents = false }
         if let old { Self.terminate(old) }
         return old

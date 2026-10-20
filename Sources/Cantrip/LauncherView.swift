@@ -360,7 +360,7 @@ struct LauncherView: View {
                         .foregroundStyle(speech.isRecording
                                          ? Color.red
                                          : settings.voiceMode ? Color.accentColor : Color.secondary)
-                        .symbolEffect(.pulse, isActive: speech.isRecording)
+                        .visiblePulse(isActive: speech.isRecording)
                 }
                 .buttonStyle(.plain)
                 .help(settings.voiceMode
@@ -471,7 +471,7 @@ struct LauncherView: View {
                         .font(.system(size: 15))
                         .foregroundStyle(showTerminal ? Color.accentColor
                             : terminalBusy ? Color.orange : Color.secondary)
-                        .symbolEffect(.pulse, isActive: terminalBusy && !showTerminal)
+                        .visiblePulse(isActive: terminalBusy && !showTerminal)
                     if terminalBusy && !showTerminal {
                         Circle()
                             .fill(Color.orange)
@@ -524,7 +524,7 @@ struct LauncherView: View {
                         .foregroundStyle(showSteps && progressPaneSection == .background
                                          ? Color.accentColor
                                          : activeBackgroundTasks > 0 ? Color.orange : Color.secondary)
-                        .symbolEffect(.pulse, isActive: activeBackgroundTasks > 0
+                        .visiblePulse(isActive: activeBackgroundTasks > 0
                                       && (!showSteps || progressPaneSection != .background))
                     if activeBackgroundTasks > 0 {
                         Circle()
@@ -3086,6 +3086,18 @@ struct SettingsView: View {
                 Toggle("Show interactive MCP App views (e.g. Mobbin galleries) inline in chat", isOn: $settings.copilotMCPApps)
                     .font(.caption)
                     .toggleStyle(.checkbox)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Free an idle tab's memory after").font(.caption).foregroundStyle(.secondary)
+                    Picker("", selection: $settings.copilotIdleReleaseMinutes) {
+                        ForEach(AppSettings.copilotIdleReleaseChoices, id: \.minutes) { choice in
+                            Text(choice.label).tag(choice.minutes)
+                        }
+                    }
+                    .labelsHidden()
+                    Text("Each tab's Copilot runtime holds 0.5–3 GB. A freed tab picks up its conversation on your next message, about 3 seconds slower. Tabs with running commands or background agents are kept.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             case .copilotRemote:
                 labeledField("ACP server (host:port)", text: $settings.acpAddress, prompt: "127.0.0.1:3000")
                 labeledField("Working directory", text: $settings.claudeWorkdir, prompt: NSHomeDirectory())
