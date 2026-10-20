@@ -297,28 +297,52 @@ final class SessionManager: ObservableObject {
         let messageCount: Int
     }
 
+    /// What a transcript file says about itself, kept until the file changes. The toolbar's
+    /// "Reopen session" menu lists archived sessions on every redraw.
+    private struct TranscriptSummary {
+        let modified: Date
+        let size: Int
+        /// nil when the file isn't a readable transcript.
+        let messageCount: Int?
+        let firstUserText: String?
+    }
+    private var transcriptSummaries: [UUID: TranscriptSummary] = [:]
+
     func archivedSessions() -> [ArchivedSession] {
         let openIDs = Set(sessions.map(\.id))
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
         let files = ((try? FileManager.default.contentsOfDirectory(
-            at: Self.chatsDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+            at: Self.chatsDir, includingPropertiesForKeys: Array(keys))) ?? [])
             .filter { $0.pathExtension == "json" }
         var result: [ArchivedSession] = []
+        var present = Set<UUID>()
         for file in files {
             guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent),
-                  !Self.isCantripHomeReserved(id),
-                  !openIDs.contains(id),
-                  let data = try? Data(contentsOf: file),
-                  let messages = try? JSONDecoder().decode([ChatMessage].self, from: data)
-            else { continue }
+                  !Self.isCantripHomeReserved(id) else { continue }
+            present.insert(id)
+            guard !openIDs.contains(id) else { continue }
+            let values = try? file.resourceValues(forKeys: keys)
+            let date = values?.contentModificationDate ?? .distantPast
+            let size = values?.fileSize ?? -1
+            let summary: TranscriptSummary
+            if let cached = transcriptSummaries[id], cached.modified == date, cached.size == size {
+                summary = cached
+            } else {
+                let messages = (try? Data(contentsOf: file))
+                    .flatMap { try? JSONDecoder().decode([ChatMessage].self, from: $0) }
+                summary = TranscriptSummary(
+                    modified: date, size: size, messageCount: messages?.count,
+                    firstUserText: messages?.first(where: { $0.role == .user }).map { String($0.text.prefix(60)) })
+                transcriptSummaries[id] = summary
+            }
+            guard let messageCount = summary.messageCount else { continue }
             let metadata = SessionTabMetadata.load(id: id)
-            guard !messages.isEmpty || metadata.customTitle != nil || metadata.isLocked else { continue }
-            let title = metadata.customTitle ?? messages.first(where: { $0.role == .user })
-                .map { String($0.text.prefix(60)) } ?? "Untitled"
-            let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey])
-                .contentModificationDate) ?? .distantPast
+            guard messageCount > 0 || metadata.customTitle != nil || metadata.isLocked else { continue }
+            let title = metadata.customTitle ?? summary.firstUserText ?? "Untitled"
             result.append(ArchivedSession(id: id, title: title,
-                                          date: date, messageCount: messages.count))
+                                          date: date, messageCount: messageCount))
         }
+        transcriptSummaries = transcriptSummaries.filter { present.contains($0.key) }
         return result.sorted { $0.date > $1.date }
     }
 

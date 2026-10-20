@@ -27,6 +27,7 @@ extension SessionTabTests {
         let fakeSDK = #"""
         import { EventEmitter } from 'node:events';
         import { existsSync, unlinkSync, appendFileSync } from 'node:fs';
+        import { spawn } from 'node:child_process';
         const dir = 'FIXTURE_DIR';
         const take = name => {
           const path = `${dir}/${name}`;
@@ -35,6 +36,7 @@ extension SessionTabTests {
           return true;
         };
         export const RuntimeConnection = { forStdio: options => options };
+        const tasks = [];
         export class CopilotClient {
           constructor() { this.cliProcess = new EventEmitter(); }
           async start() {}
@@ -45,7 +47,7 @@ extension SessionTabTests {
             const say = text => config.onEvent({type:'assistant.message_delta', id:`e${count}`,
               data:{messageId:`m${count}`, deltaContent:text}});
             return {
-              sessionId: id, rpc: {},
+              sessionId: id, rpc: { tasks: { list: async () => ({ tasks }) } },
               async abort() { if (slowAbort) await new Promise(resolve => setTimeout(resolve, 1000)); },
               async send(options) {
                 count++;
@@ -64,6 +66,12 @@ extension SessionTabTests {
                 if (take('crash-after-accept')) { setTimeout(die, 50); return `native-${count}`; }
                 if (take('crash-mid-reply')) { say('partial'); setTimeout(die, 50); return `native-${count}`; }
                 if (take('die-when-idle')) setTimeout(die, 150);
+                if (options.prompt.includes('spawn work')) spawn('/bin/sleep', ['1.5'], { stdio: 'ignore' });
+                if (options.prompt.includes('spawn agent')) {
+                  const task = { id: 'a1', type: 'agent', status: 'running', agentType: 'task', displayName: 'build-check' };
+                  tasks.push(task);
+                  setTimeout(() => { task.status = 'completed'; }, 1500);
+                }
                 say(`${id}:${resumed ? 'resumed' : 'new'}:${count}:${options.prompt}\n`);
                 const idle = () => config.onEvent({type:'session.idle', data:{}});
                 if (options.prompt.includes('slow reply')) setTimeout(idle, 1500); else idle();
@@ -181,6 +189,36 @@ extension SessionTabTests {
         let quick = try await run("soon after")
         precondition(quick.text == "\(session):resumed:2:soon after\n", "a recently used runtime is reused: \(quick.text)")
         backend.idleRuntimeLimit = 3_600
+
+        // Memory: a runtime idle past the release delay is stopped, and the next prompt resumes
+        // the same session in a new one.
+        backend.idleRuntimeReleaseDelay = 0.3
+        backend.idleRuntimeRecheckInterval = 0.3
+        _ = try await run("before release")
+        try await Task.sleep(nanoseconds: 800_000_000)
+        let released = try await run("after release", history: history)
+        precondition(released.errors.isEmpty && released.text == "\(session):resumed:1:after release\n",
+                     "\(released.errors) \(released.text)")
+        // Stopping a runtime would kill a command it is still running, so it waits for the command.
+        _ = try await run("spawn work")
+        try await Task.sleep(nanoseconds: 700_000_000)
+        let kept = try await run("while working")
+        precondition(kept.text == "\(session):resumed:3:while working\n", "a busy runtime was stopped: \(kept.text)")
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let afterWork = try await run("after work")
+        precondition(afterWork.errors.isEmpty && afterWork.text == "\(session):resumed:1:after work\n",
+                     "\(afterWork.errors) \(afterWork.text)")
+        // A background agent runs inside the runtime with no process of its own; the runtime's task
+        // list keeps it alive until the agent finishes.
+        _ = try await run("spawn agent")
+        try await Task.sleep(nanoseconds: 700_000_000)
+        let agentKept = try await run("while agent runs")
+        precondition(agentKept.text == "\(session):resumed:3:while agent runs\n", "a runtime with a running agent was stopped: \(agentKept.text)")
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let afterAgent = try await run("after agent")
+        precondition(afterAgent.errors.isEmpty && afterAgent.text == "\(session):resumed:1:after agent\n",
+                     "\(afterAgent.errors) \(afterAgent.text)")
+        backend.idleRuntimeReleaseDelay = 0
 
         // Stopping a live turn still starts the next prompt in a new session, as before.
         arm("hang")

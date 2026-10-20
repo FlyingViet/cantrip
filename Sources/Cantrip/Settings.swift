@@ -208,6 +208,14 @@ final class AppSettings: ObservableObject {
     @Published var copilotMCPApps: Bool {
         didSet { d.set(copilotMCPApps, forKey: "copilotMCPApps") }
     }
+    /// Minutes a tab's Copilot runtime may sit idle before Cantrip stops it to free memory;
+    /// the next prompt resumes the same session in a new runtime. 0 keeps runtimes running.
+    @Published var copilotIdleReleaseMinutes: Int {
+        didSet { d.set(copilotIdleReleaseMinutes, forKey: "copilotIdleReleaseMinutes") }
+    }
+    static let copilotIdleReleaseChoices: [(minutes: Int, label: String)] = [
+        (10, "10 minutes"), (30, "30 minutes"), (60, "1 hour"), (120, "2 hours"), (0, "Never"),
+    ]
     /// Cached account model list from the configured Copilot runtime.
     @Published var copilotAvailableModels: [String] {
         didSet { d.set(copilotAvailableModels, forKey: "copilotAvailableModels") }
@@ -319,11 +327,25 @@ final class AppSettings: ObservableObject {
         copilotFileSetting("contextTier")
     }
 
+    /// Remote polls read these per tab, so the file is parsed again only after it changes.
+    private let copilotFileLock = NSLock()
+    private var copilotFileCache: (modified: Date, size: Int, object: [String: Any]?)?
+
     private func copilotFileSetting(_ key: String) -> String? {
-        let url = URL(fileURLWithPath: NSHomeDirectory() + "/.copilot/settings.json")
-        guard let data = try? Data(contentsOf: url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let value = obj[key] as? String, !value.isEmpty else { return nil }
+        let path = NSHomeDirectory() + "/.copilot/settings.json"
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let modified = attributes[.modificationDate] as? Date else { return nil }
+        let size = (attributes[.size] as? NSNumber)?.intValue ?? -1
+        let object: [String: Any]? = copilotFileLock.withLock {
+            if let cache = copilotFileCache, cache.modified == modified, cache.size == size {
+                return cache.object
+            }
+            let parsed = FileManager.default.contents(atPath: path)
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            copilotFileCache = (modified, size, parsed)
+            return parsed
+        }
+        guard let value = object?[key] as? String, !value.isEmpty else { return nil }
         return value
     }
 
@@ -589,6 +611,7 @@ final class AppSettings: ObservableObject {
             ? true : d.bool(forKey: "copilotAllowSubagents")
         copilotMCPApps = d.object(forKey: "copilotMCPApps") == nil
             ? true : d.bool(forKey: "copilotMCPApps")
+        copilotIdleReleaseMinutes = d.object(forKey: "copilotIdleReleaseMinutes") as? Int ?? 30
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
         copilotModelCatalog = (d.data(forKey: "copilotModelCatalog")
             .flatMap { try? JSONDecoder().decode([CopilotModelInfo].self, from: $0) }) ?? []

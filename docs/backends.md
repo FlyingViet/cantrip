@@ -144,7 +144,8 @@ Each view runs in its own sandbox:
 - It can call tools and read resources on **its own** MCP server only, and the
   Copilot runtime also blocks tools the server marked model-only. These
   calls go through the tab's live Copilot session. If that session has ended
-  (for example after Stop or a relaunch), send a message in the tab first.
+  (for example after Stop, a relaunch, or once an idle tab's memory is freed),
+  send a message in the tab first.
 - A view can ask Cantrip to send a chat message for you. The confirmation
   dialog shows the exact text; approved text goes to the model labelled with
   the view's server and never runs as a `!` or `/` command. Context a view
@@ -157,6 +158,20 @@ On the Mac, scrolling up or down over a view scrolls
 the conversation; sideways scrolling moves through the gallery. Turning the
 setting off hides all views, including saved ones, and stops opting in from
 each tab's next request.
+
+## Free memory from idle tabs
+
+Each tab keeps its own Copilot runtime, which holds 0.5–3 GB. **Free an idle
+tab's memory after** (Settings > Copilot, 30 minutes by default) stops a tab's
+runtime once it has been idle that long. Your next message in the tab resumes
+the same Copilot conversation in a new runtime, about 3 seconds slower than
+usual. Choose **Never** to keep runtimes running.
+
+A tab is kept while its runtime still has work running: a background agent,
+a shell command or script it started, or a turn in progress. Cantrip checks
+again every 5 minutes. MCP servers alone don't keep a tab running. Even with
+**Never**, a runtime idle for 2 hours is restarted before its next message,
+because the Copilot CLI can crash after long idle periods.
 
 ## Connect a local model
 
