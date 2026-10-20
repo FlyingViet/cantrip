@@ -221,6 +221,16 @@ final class ChatSession: ObservableObject {
     private(set) var autoResumePending = false
     /// An interrupted run waits for the user's Resume (handoffs show that the tab needs them).
     private(set) var interruptionAwaitsResume = false
+    /// Resumes after network failures in the current run, bounded by `networkRetryDelays`.
+    private var networkRetries = 0
+    /// The run Cantrip was in the middle of when it quit, until it continues or is replaced.
+    private var restoredRun: RunJournal.RecoveredRun?
+    private var drainWaitsForNetwork = false
+    /// Delays before resuming after a connection error while the Mac still has a network path
+    /// (DNS, VPN or upstream outages). Its length bounds network resumes per run.
+    static var networkRetryDelays: [TimeInterval] = [10, 20, 40, 80, 160, 300]
+    /// Relaunches a single run may resume after, so a run that crashes Cantrip can't loop.
+    static let launchResumeLimit = 2
     /// Durable run identity survives backend retries and process restarts.
     private var currentRunID: UUID?
     var currentRunIdentifier: UUID? { currentRunID }
@@ -632,6 +642,8 @@ final class ChatSession: ObservableObject {
     ) -> UUID {
         autoResumePending = false
         interruptionAwaitsResume = false
+        networkRetries = 0
+        restoredRun = nil
         if currentRunID != nil {
             cancelRun(reason: "superseded by a new run")
         }
@@ -970,6 +982,7 @@ final class ChatSession: ObservableObject {
         }
         lastJournalRunID = state.lastRunID
         guard let run = state.activeRun else { return }
+        restoredRun = run
 
         currentRunID = run.id
         lastJournalRunID = run.id
@@ -1186,7 +1199,7 @@ final class ChatSession: ObservableObject {
         guard !prompt.isEmpty else { return }
         invalidateRouting()
         deliveryStatus = nil
-        let wasBusy = isStreaming || !queued.isEmpty
+        let wasBusy = isStreaming || !queued.isEmpty || autoResumePending
         if !pendingInputs.isEmpty, mode != .interrupt {
             enqueue(prompt, includesAmbientContext: includesAmbientContext)
             deliveryStatus = "Queued. Answer the input request above to continue the current task."
@@ -1321,8 +1334,12 @@ final class ChatSession: ObservableObject {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         guard isStreaming else {
-            if !queued.isEmpty {
+            // Messages wait behind an interrupted run that is about to continue, unless redirected.
+            if !queued.isEmpty || (autoResumePending && !interrupt) {
                 enqueue(prompt, includesAmbientContext: includesAmbientContext)
+                if autoResumePending {
+                    deliveryStatus = "Queued: Cantrip finishes the interrupted task first."
+                }
                 drainQueue()
                 return
             }
@@ -2688,6 +2705,7 @@ final class ChatSession: ObservableObject {
         let resumable = currentRunPrompt != nil && lastRunHadProgress
         recordInterruption(errorText)
         appendRunMessage(ChatMessage(role: .error, text: errorText))
+        if waitForNetworkThenResume(after: errorText) { return }
         guard resumable else {
             completeRun(status: "failed", summary: errorText)
             finishStream()
@@ -2734,6 +2752,101 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    /// Error text a dropped or flaky connection produces (Node, URLSession and DNS failures).
+    static func isNetworkError(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return ["fetch failed", "enotfound", "econnreset", "econnrefused", "etimedout", "eai_again",
+                "enetunreach", "ehostunreach", "enetdown", "getaddrinfo", "socket hang up",
+                "network error", "network is unreachable", "network connection", "offline",
+                "connection reset", "connection was lost", "could not connect to the server", "und_err"]
+            .contains { lowered.contains($0) }
+    }
+
+    /// A dropped network ends a run with an error that isn't the task's fault. Rather than failing
+    /// the run (and starting the queue behind it, which would fail too), wait until the network is
+    /// back, then continue the same run. Returns false when this failure isn't a network one.
+    private func waitForNetworkThenResume(after errorText: String) -> Bool {
+        let offline = !NetworkMonitor.shared.isOnline
+        // A local model server needs no internet, and hidden Home runs have their own retry.
+        let localModel = isLocalPrivate || (runningBackendKind ?? currentRunBackend) == .localModel
+        guard offline || Self.isNetworkError(errorText), !localModel,
+              !isCantripHomeRun, !isCantripHomeBackground,
+              networkRetries < Self.networkRetryDelays.count,
+              currentRunPrompt != nil, currentRunMode == .single, !councilMode,
+              journalError == nil else { return false }
+        let delay = offline ? 0 : Self.networkRetryDelays[networkRetries]
+        networkRetries += 1
+        interruptionAwaitsResume = false
+        Log.write("resume: run interrupted by the network (\(offline ? "offline" : "connection error"));"
+                  + " resuming when it's back, attempt \(networkRetries)")
+        finishStream(dequeue: false, notify: false) { [weak self] in
+            guard let self else { return }
+            // Set only once the resume is really scheduled (a failed journal flush skips this).
+            self.autoResumePending = true
+            let generation = self.streamGeneration
+            self.deliveryStatus = offline
+                ? "Offline. Cantrip continues this task when the network is back."
+                : "Connection problem. Cantrip continues this task in \(Int(delay)) seconds."
+            self.resumeWhenOnline(generation: generation, after: delay)
+        }
+        return true
+    }
+
+    private func resumeWhenOnline(generation: Int, after delay: TimeInterval, reason: String? = nil,
+                                  waitsForNetwork: Bool = true) {
+        let resume = { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, !self.isStreaming, self.streamGeneration == generation,
+                      self.autoResumePending else { return }
+                // The network dropped again during the delay: keep waiting.
+                guard !waitsForNetwork || NetworkMonitor.shared.isOnline else {
+                    self.deliveryStatus = "Offline. Cantrip continues this task when the network is back."
+                    return self.resumeWhenOnline(generation: generation, after: 0, reason: reason)
+                }
+                self.autoResumePending = false
+                self.deliveryStatus = nil
+                self.performResume(auto: true, reason: reason)
+            }
+        }
+        waitsForNetwork ? NetworkMonitor.shared.whenOnline(resume) : resume()
+    }
+
+    /// Cantrip relaunched while there was work in this tab: the run it was in the middle of
+    /// and messages queued behind it.
+    var hasRestoredWork: Bool {
+        guard !isPrivate, !isCantripHomeBackground, journalError == nil else { return false }
+        return (restoredRun != nil && canResume) || !queued.isEmpty
+    }
+
+    /// After a relaunch, continues the run Cantrip quit in the middle of, then the queue behind
+    /// it, instead of leaving both waiting for the user. Waits for the network when offline.
+    /// The tab shows the pending resume at once; the work itself starts after `delay`.
+    func continueAfterLaunch(after delay: TimeInterval = 0) {
+        guard hasRestoredWork, !isStreaming, !autoResumePending else { return }
+        if let run = restoredRun, canResume, currentRunID == run.id {
+            guard run.launchResumes < Self.launchResumeLimit else {
+                Log.write("resume: run \(run.id.uuidString.prefix(8)) already resumed after"
+                          + " \(run.launchResumes) relaunches; waiting for Resume")
+                return
+            }
+            restoredRun = nil
+            canResume = false
+            autoResumePending = true
+            deliveryStatus = "Continuing the task that was running when Cantrip quit…"
+            Log.write("resume: continuing run \(run.id.uuidString.prefix(8)) after relaunch")
+            let localModel = isLocalPrivate || currentRunBackend == .localModel
+            resumeWhenOnline(generation: streamGeneration, after: delay,
+                             reason: RunJournal.launchResumeReason, waitsForNetwork: !localModel)
+        } else if !canResume {
+            let generation = streamGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.streamGeneration == generation, !self.isStreaming else { return }
+                Log.write("queue: sending \(self.queued.count) message(s) queued before Cantrip relaunched")
+                self.drainQueue()
+            }
+        }
+    }
+
     /// Delay so the killed backend process fully dies before the
     /// replacement launches — must outlast the backends' 3s SIGTERM →
     /// SIGKILL escalation so a hung process can't race the new stream.
@@ -2758,7 +2871,7 @@ final class ChatSession: ObservableObject {
         performResume(auto: false)
     }
 
-    private func performResume(auto: Bool) {
+    private func performResume(auto: Bool, reason: String? = nil) {
         guard !isStreaming, let original = currentRunPrompt else { return }
         canResume = false
         var preamble = "(My previous request was interrupted mid-run and cancelled."
@@ -2769,7 +2882,7 @@ final class ChatSession: ObservableObject {
         if let context = interruptedUserContext() { preamble += "\n\n\(context)" }
         preamble += "\nResume that task from where it left off: verify which steps already completed, then continue — don't redo finished work or start over.)"
         Log.write("resume: \(auto ? "auto" : "manual") resume of interrupted run")
-        recordResumeAttempt(reason: auto ? "automatic-resume" : "manual-resume")
+        recordResumeAttempt(reason: reason ?? (auto ? "automatic-resume" : "manual-resume"))
         send(
             Self.resumePrompt,
             preamble: preamble,
@@ -3038,6 +3151,21 @@ final class ChatSession: ObservableObject {
     /// related to it. Grouping is normally decided while the previous turn was running.
     private func drainQueue() {
         guard !isStreaming, journalError == nil, !queued.isEmpty, !drainAfterGrouping else { return }
+        // An interrupted run continues before anything queued behind it.
+        guard !autoResumePending else { return }
+        // Sending while offline would fail each queued message in turn; wait for the network.
+        if !isLocalPrivate, settings.backend != .localModel, !NetworkMonitor.shared.isOnline {
+            deliveryStatus = "Offline. Queued messages are sent when the network is back."
+            guard !drainWaitsForNetwork else { return }
+            drainWaitsForNetwork = true
+            NetworkMonitor.shared.whenOnline { [weak self] in
+                guard let self else { return }
+                self.drainWaitsForNetwork = false
+                if self.deliveryStatus?.hasPrefix("Offline.") == true { self.deliveryStatus = nil }
+                self.drainQueue()
+            }
+            return
+        }
         let candidates = queueGroupingCandidates()
         guard candidates.count >= 2 else { return startQueued([queued[0]]) }
         if let plan = groupingPlan, plan.candidates == candidates {
@@ -3099,6 +3227,8 @@ final class ChatSession: ObservableObject {
         deviceLogin.cancel()
         invalidateRouting()
         deliveryStatus = nil
+        autoResumePending = false
+        restoredRun = nil
         streamGeneration += 1        // orphan any in-flight events
         SpeechSynth.shared.stop()
         shellProcess?.terminate()
@@ -3169,6 +3299,9 @@ final class ChatSession: ObservableObject {
         currentRunPrompt = nil
         currentRunIncludesAmbientContext = true
         autoResumeSpent = false
+        autoResumePending = false
+        restoredRun = nil
+        networkRetries = 0
         if let runID = currentRunID ?? lastJournalRunID {
             appendRunEvent(RunJournal.Event(
                 sessionID: id,

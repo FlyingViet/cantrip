@@ -128,6 +128,17 @@ final class SessionManager: ObservableObject {
         persistOpenSessions()
     }
 
+    /// After launch, each tab Cantrip quit with work in continues it: the interrupted run, then
+    /// its queue. Tabs start a few seconds apart so their Copilot runtimes don't launch at once.
+    func continueRestoredWork(after initialDelay: TimeInterval = 3, spacing: TimeInterval = 2) {
+        let tabs = ([homeSession] + sessions).filter(\.hasRestoredWork)
+        guard !tabs.isEmpty else { return }
+        Log.write("launch: continuing work restored in \(tabs.count) tab(s)")
+        for (index, tab) in tabs.enumerated() {
+            tab.continueAfterLaunch(after: initialDelay + spacing * Double(index))
+        }
+    }
+
     /// Called after every tab mutation/selection, so a crash or force-quit
     /// still restores the right tabs.
     private func persistOpenSessions() {
