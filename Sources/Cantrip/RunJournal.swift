@@ -143,6 +143,9 @@ final class RunJournal {
         var messages: [RecoveredMessage]
         var attemptNumber: Int
         var lastInterruptionReason: String?
+        /// Automatic resumes after Cantrip relaunched mid-run; bounded so a run that keeps
+        /// crashing Cantrip can't loop.
+        var launchResumes = 0
 
         var hasProgress: Bool {
             messages.contains {
@@ -157,6 +160,9 @@ final class RunJournal {
         let queued: [QueueItem]
         let lastRunID: UUID?
     }
+
+    /// The attempt reason recorded when a run resumes because Cantrip relaunched.
+    static let launchResumeReason = "launch-resume"
 
     static var defaultDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -579,6 +585,7 @@ final class RunJournal {
                     recovered.attemptNumber,
                     event.attemptNumber ?? recovered.attemptNumber
                 )
+                if event.reason == Self.launchResumeReason { recovered.launchResumes += 1 }
             case .interruption:
                 recovered.lastInterruptionReason = event.reason
             default:

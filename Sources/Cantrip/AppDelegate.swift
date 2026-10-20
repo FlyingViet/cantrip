@@ -300,6 +300,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             Log.write("recovery: surfaced crash \(recoveryReport.id.uuidString)")
             DispatchQueue.main.async { [weak self] in self?.showPanel() }
         }
+        _ = NetworkMonitor.shared
+        manager.continueRestoredWork()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
