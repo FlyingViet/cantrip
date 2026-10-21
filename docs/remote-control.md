@@ -443,11 +443,34 @@ route recovery; neither promotes a connection based on `/health`.
 The Mac log's `remote-request:` entries contain generated request IDs,
 allowlisted route/method labels, status, response bytes, outcome, and monotonic
 millisecond timings for receiving/parsing, MainActor wait, handler work,
-snapshots, journal wait, JSON queue wait/encoding, and response sending.
+snapshots, journal wait, JSON queue wait/encoding, compression and response sending.
+`bytes` is the response body as encoded and `wire_bytes` what was actually sent
+after compression. Home's endpoints log as `home`, `home_tasks`,
+`home_artifacts` and `home_other`.
 Responses include `X-Cantrip-Request-ID` for correlation. These entries contain
 no pairing tokens, session IDs, raw paths, request/response bodies, or chat text.
 Other existing app log categories may contain sensitive information; do not
 share the entire log unredacted.
+
+### Data use while a client is open
+
+Clients poll the Mac: every 1.5 seconds while the tab on screen (or Home) is
+working, and every 5 seconds otherwise, so status for other tabs updates within
+5 seconds. Cantrip Gateway Mac polls every 15 seconds while another app is
+frontmost and catches up as soon as it's brought forward. The browser remote
+pauses while its page is hidden, and Cantrip Agent stops in the background.
+
+Responses of 4 KB or more are gzip-compressed (typically 3–4× smaller) for
+clients that send `Accept-Encoding: gzip`. Browsers and the Tailscale route
+ask for it automatically; the native local-network route asks for it with
+current Cantrip Agent, Cantrip Gateway Mac and Mac Remote builds. Older
+clients keep receiving uncompressed responses.
+
+`GET /api/v1/home/tasks` and `GET /api/v1/home/artifacts` accept
+`?revision=<revision>` from their last response. While nothing has changed
+they reply `{"unchanged":true,"revision":"…"}` instead of the full list (about
+640 KB for a large tracker workspace), as tab reads already do. A storage
+error always returns the full list with its error.
 
 Requests still pending after one second log their current stage, then every
 five seconds. Response writes have a 15-second deadline and log numeric network

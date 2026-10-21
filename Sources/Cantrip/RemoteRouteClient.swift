@@ -85,10 +85,22 @@ struct RemoteHTTPResponse {
             throw RemoteRouteError.invalidResponse
         }
         guard data.count - range.upperBound >= length else { return nil }
+        var body = data.subdata(in: range.upperBound..<(range.upperBound + length))
+        switch fields["content-encoding"]?.lowercased() {
+        case nil, "identity":
+            break
+        case "gzip":
+            guard let decoded = HTTPCompression.gunzip(body, limit: 32 << 20) else {
+                throw RemoteRouteError.invalidResponse
+            }
+            body = decoded
+        default:
+            throw RemoteRouteError.invalidResponse
+        }
         return RemoteHTTPResponse(
             status: status,
             contentType: fields["content-type"] ?? "application/octet-stream",
-            body: data.subdata(in: range.upperBound..<(range.upperBound + length)),
+            body: body,
             contentSecurityPolicy: fields["content-security-policy"]
         )
     }
@@ -383,6 +395,7 @@ private final class RemoteLANRequest: @unchecked Sendable {
                 for name in ["authorization", "content-type", "accept"] {
                     if let value = self.request.headers[name] { header += "\(name): \(value)\r\n" }
                 }
+                header += "Accept-Encoding: gzip\r\n"
                 header += "Content-Length: \(self.request.body.count)\r\nConnection: close\r\n\r\n"
                 connection.send(content: Data(header.utf8) + self.request.body, completion: .contentProcessed { [weak self] error in
                     guard let self, !self.finished else { return }
