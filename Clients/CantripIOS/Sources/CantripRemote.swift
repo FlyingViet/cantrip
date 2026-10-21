@@ -707,10 +707,12 @@ private struct CantripOTAIconResponse: Decodable {
 }
 
 private struct CantripHomeTasksResponse: Decodable {
-    let tasks: [CantripHomeTask]
+    /// Absent when the host answers `unchanged` for the revision the client already has.
+    let tasks: [CantripHomeTask]?
     let revision: String
     let error: String?
     let supportsReordering: Bool?
+    let unchanged: Bool?
 }
 
 typealias CantripHomeTasksSnapshot = (
@@ -718,8 +720,9 @@ typealias CantripHomeTasksSnapshot = (
 )
 
 private struct CantripHomeArtifactsResponse: Decodable {
-    let artifacts: [CantripHomeArtifact]
+    let artifacts: [CantripHomeArtifact]?
     let revision: String
+    let unchanged: Bool?
 }
 
 private struct CantripHomeArtifactDataResponse: Decodable {
@@ -1124,6 +1127,7 @@ private final class CantripLANRequest: @unchecked Sendable {
         Host: cantrip.local\r
         Authorization: Bearer \(token)\r
         Accept: application/json\r
+        Accept-Encoding: gzip\r
         Content-Type: \(method == "PUT" && CantripRemoteAPI.isUploadRoute(path) ? "application/octet-stream" : "application/json")\r
         Content-Length: \(payload.count)\r
         Connection: close\r
@@ -1260,20 +1264,30 @@ private final class CantripLANRequest: @unchecked Sendable {
         guard statusParts.count >= 2, let statusCode = Int(statusParts[1]) else {
             throw CantripRemoteError.invalidResponse
         }
-        let contentLength = lines.dropFirst().compactMap { line -> Int? in
+        return try Self.response(statusCode: statusCode, headerLines: lines.dropFirst(),
+                                 buffer: responseBuffer, bodyStart: headerRange.upperBound)
+    }
+
+    /// The body once all of it has arrived (nil before then), decoded when the host gzipped it.
+    private static func response(statusCode: Int, headerLines: ArraySlice<String>, buffer: Data,
+                         bodyStart: Int) throws -> CantripLANResponse? {
+        var fields: [String: String] = [:]
+        for line in headerLines {
             let parts = line.split(separator: ":", maxSplits: 1)
-            guard parts.count == 2,
-                  parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                    .lowercased() == "content-length"
-            else { return nil }
-            return Int(parts[1].trimmingCharacters(in: .whitespacesAndNewlines))
-        }.first
-        guard let contentLength, contentLength >= 0, contentLength <= 32 * 1024 * 1024 else {
+            guard parts.count == 2 else { continue }
+            fields[parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()]
+                = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let limit = 32 * 1024 * 1024
+        guard let contentLength = fields["content-length"].flatMap(Int.init),
+              contentLength >= 0, contentLength <= limit else {
             throw CantripRemoteError.invalidResponse
         }
-        let bodyStart = headerRange.upperBound
-        guard responseBuffer.count - bodyStart >= contentLength else { return nil }
-        let body = responseBuffer.subdata(in: bodyStart..<(bodyStart + contentLength))
+        guard buffer.count - bodyStart >= contentLength else { return nil }
+        guard let body = CantripGzip.body(buffer.subdata(in: bodyStart..<(bodyStart + contentLength)),
+                                          contentEncoding: fields["content-encoding"], limit: limit) else {
+            throw CantripRemoteError.invalidResponse
+        }
         return CantripLANResponse(statusCode: statusCode, body: body)
     }
 
@@ -1463,9 +1477,29 @@ struct CantripRemoteAPI {
     }
 
     func homeTasks() async throws -> CantripHomeTasksSnapshot {
-        let response: CantripHomeTasksResponse = try await request(path: "/api/v1/home/tasks")
-        return (response.tasks, response.revision, response.error,
-                response.supportsReordering == true)
+        guard let snapshot = try await homeTasks(ifChangedFrom: nil) else { throw CantripRemoteError.invalidResponse }
+        return snapshot
+    }
+
+    /// nil when the Mac's tasks still match `revision`; older hosts always send the full list.
+    func homeTasks(ifChangedFrom revision: String?) async throws -> CantripHomeTasksSnapshot? {
+        let response: CantripHomeTasksResponse = try await request(
+            path: Self.path("/api/v1/home/tasks", revision: revision)
+        )
+        if response.unchanged == true {
+            guard let revision, response.revision == revision else { throw CantripRemoteError.invalidResponse }
+            return nil
+        }
+        guard let tasks = response.tasks else { throw CantripRemoteError.invalidResponse }
+        return (tasks, response.revision, response.error, response.supportsReordering == true)
+    }
+
+    static func path(_ path: String, revision: String?) -> String {
+        guard let revision else { return path }
+        var components = URLComponents()
+        components.path = path
+        components.queryItems = [URLQueryItem(name: "revision", value: revision)]
+        return components.string ?? path
     }
 
     func moveHomeTask(id: UUID, targetID: UUID, after: Bool) async throws -> CantripHomeTasksSnapshot {
@@ -1475,8 +1509,8 @@ struct CantripRemoteAPI {
                 "targetID": targetID.uuidString, "placement": after ? "after" : "before",
             ])
         )
-        return (response.tasks, response.revision, response.error,
-                response.supportsReordering == true)
+        guard let tasks = response.tasks else { throw CantripRemoteError.invalidResponse }
+        return (tasks, response.revision, response.error, response.supportsReordering == true)
     }
 
     func homeBackground() async throws -> CantripHomeBackgroundSnapshot {
@@ -1488,8 +1522,22 @@ struct CantripRemoteAPI {
     }
 
     func homeArtifacts() async throws -> (artifacts: [CantripHomeArtifact], revision: String) {
-        let response: CantripHomeArtifactsResponse = try await request(path: "/api/v1/home/artifacts")
-        return (response.artifacts, response.revision)
+        guard let snapshot = try await homeArtifacts(ifChangedFrom: nil) else { throw CantripRemoteError.invalidResponse }
+        return snapshot
+    }
+
+    /// nil when the Mac's artifacts still match `revision`.
+    func homeArtifacts(ifChangedFrom revision: String?) async throws
+        -> (artifacts: [CantripHomeArtifact], revision: String)? {
+        let response: CantripHomeArtifactsResponse = try await request(
+            path: Self.path("/api/v1/home/artifacts", revision: revision)
+        )
+        if response.unchanged == true {
+            guard let revision, response.revision == revision else { throw CantripRemoteError.invalidResponse }
+            return nil
+        }
+        guard let artifacts = response.artifacts else { throw CantripRemoteError.invalidResponse }
+        return (artifacts, response.revision)
     }
 
     func homeBuilds() async throws -> CantripOTABuildsSnapshot {
@@ -2260,10 +2308,13 @@ final class CantripRemoteModel: ObservableObject {
         case .disconnected: return "Disconnected"
         }
     }
+    /// Fast only while the tab on screen (or Home) is working; other tabs' status still refreshes
+    /// every 5 s, and every 15 s while the Mac app is behind other apps.
     var pollDelay: Duration {
-        sessions.contains(where: { $0.isStreaming || $0.queuedCount > 0 })
-            || selectedSession?.isStreaming == true
-            || detailError != nil || !isConnected ? Self.pollInterval : .seconds(5)
+        let viewedBusy = selectedSession?.isStreaming == true || (selectedSession?.queuedCount ?? 0) > 0
+            || sessions.contains { $0.id == selectedSessionID && ($0.isStreaming || $0.queuedCount > 0) }
+        let delay = viewedBusy || detailError != nil || !isConnected ? Self.pollInterval : .seconds(5)
+        return isFrontmost ? delay : max(delay, Self.backgroundPollInterval)
     }
     var hasConfiguration: Bool { baseURL != nil || token != nil }
     var isConfigured: Bool {
@@ -2301,10 +2352,17 @@ final class CantripRemoteModel: ObservableObject {
     // Allow a bounded HTTPS-to-LAN failover plus the polling interval.
     private static let staleInterval: Duration = .seconds(10)
     private static let pollInterval: Duration = .milliseconds(1500)
+    private static let backgroundPollInterval: Duration = .seconds(15)
 
     private var baseURL: URL?
     private var token: String?
     private var appIsActive = false
+    /// False while the Mac app is visible but another app is frontmost; iOS never sets it.
+    private var isFrontmost = true
+    /// The revision each Home list came from, with the list as fetched: the revision is sent
+    /// only while the shown list is still that one, so any other change refetches in full.
+    private var homeTasksFetched: (revision: String, tasks: [CantripHomeTask])?
+    private var homeArtifactsFetched: (revision: String, artifacts: [CantripHomeArtifact])?
     private var pollingTask: Task<Void, Never>?
     private var detailRefreshTask: Task<Void, Never>?
     private var detailRefreshKey: String?
@@ -2458,6 +2516,12 @@ final class CantripRemoteModel: ObservableObject {
             }
         }
         try servers.remove(server)
+    }
+
+    /// Gateway Mac: slows polling while another app is frontmost and catches up on return.
+    func setFrontmost(_ frontmost: Bool) {
+        guard isFrontmost != frontmost else { return }
+        isFrontmost = frontmost
     }
 
     func setAppActive(_ active: Bool) {
@@ -2636,6 +2700,8 @@ final class CantripRemoteModel: ObservableObject {
             homeTasks = []
             homeTasksSupportReordering = false
             homeArtifacts = []
+            homeTasksFetched = nil
+            homeArtifactsFetched = nil
             homeBuilds = nil
             homeBuildsError = nil
             homeBackground = nil
@@ -2697,6 +2763,8 @@ final class CantripRemoteModel: ObservableObject {
             homeTasks = []
             homeTasksSupportReordering = false
             homeArtifacts = []
+            homeTasksFetched = nil
+            homeArtifactsFetched = nil
             homeBuilds = nil
             homeBuildsError = nil
             homeBackground = nil
@@ -2917,20 +2985,31 @@ final class CantripRemoteModel: ObservableObject {
             if showsInitialLoading { isLoadingHomeData = false }
         }
         let orderRevision = homeTaskOrderRevision
+        let tasksRevision = homeTasksFetched.flatMap { $0.tasks == homeTasks ? $0.revision : nil }
+        let artifactsRevision = homeArtifactsFetched.flatMap { $0.artifacts == homeArtifacts ? $0.revision : nil }
         do {
-            async let tasks = performHistoryRead { try await $0.homeTasks() }
-            async let artifacts = performHistoryRead { try await $0.homeArtifacts() }
+            async let tasks = performHistoryRead { try await $0.homeTasks(ifChangedFrom: tasksRevision) }
+            async let artifacts = performHistoryRead { try await $0.homeArtifacts(ifChangedFrom: artifactsRevision) }
             let values = try await (tasks, artifacts)
             guard isHomeSelected else { return }
-            // A snapshot fetched across a reorder may still carry the old order.
-            if orderRevision == homeTaskOrderRevision, homeTasks != values.0.tasks {
-                homeTasks = values.0.tasks
+            if let snapshot = values.0 {
+                // A snapshot fetched across a reorder may still carry the old order.
+                if orderRevision == homeTaskOrderRevision {
+                    if homeTasks != snapshot.tasks { homeTasks = snapshot.tasks }
+                    homeTasksFetched = (snapshot.revision, snapshot.tasks)
+                }
+                if homeTasksSupportReordering != snapshot.supportsReordering {
+                    homeTasksSupportReordering = snapshot.supportsReordering
+                }
+                if homeDataError != snapshot.error { homeDataError = snapshot.error }
+            } else if homeDataError != nil {
+                // Unchanged means the Mac saved its tasks fine; clear a stale fetch error.
+                homeDataError = nil
             }
-            if homeTasksSupportReordering != values.0.supportsReordering {
-                homeTasksSupportReordering = values.0.supportsReordering
+            if let snapshot = values.1 {
+                if homeArtifacts != snapshot.artifacts { homeArtifacts = snapshot.artifacts }
+                homeArtifactsFetched = (snapshot.revision, snapshot.artifacts)
             }
-            if homeArtifacts != values.1.artifacts { homeArtifacts = values.1.artifacts }
-            if homeDataError != values.0.error { homeDataError = values.0.error }
             if (selectedSession?.backgroundInputCount ?? 0) > 0
                 || homeBackground?.runs.contains(where: \.needsInput) == true {
                 await refreshHomeBackground()
@@ -3054,6 +3133,7 @@ final class CantripRemoteModel: ObservableObject {
             }
             guard isHomeSelected else { return false }
             if homeTasks != snapshot.tasks { homeTasks = snapshot.tasks }
+            homeTasksFetched = (snapshot.revision, snapshot.tasks)
             homeTasksSupportReordering = snapshot.supportsReordering
             homeDataError = snapshot.error
             return true
@@ -4072,8 +4152,13 @@ final class CantripRemoteModel: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.refresh()
+                // Re-reads the delay while waiting, so selecting a busy tab or bringing the Mac
+                // app forward shortens a slow wait instead of finishing it.
+                let started = ContinuousClock.now
                 do {
-                    try await Task.sleep(for: self.pollDelay)
+                    while ContinuousClock.now - started < self.pollDelay {
+                        try await Task.sleep(for: .milliseconds(250))
+                    }
                 } catch {
                     return
                 }
@@ -4131,13 +4216,21 @@ final class CantripRemoteModel: ObservableObject {
         refreshCompletionNotificationRegistration()
         staleTask?.cancel()
         staleTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: Self.staleInterval)
-            } catch {
-                return
+            while true {
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    return
+                }
+                guard let self, self.lastAuthenticatedAt == completedAt else { return }
+                // Measured against the current poll interval, so switching the Mac app to the
+                // background (15 s polls) never reads as a lost connection between polls.
+                let elapsed = Duration.seconds(Date().timeIntervalSince(completedAt))
+                if elapsed >= max(Self.staleInterval, self.pollDelay + .seconds(5)) {
+                    self.markDisconnected()
+                    return
+                }
             }
-            guard let self, self.lastAuthenticatedAt == completedAt else { return }
-            self.markDisconnected()
         }
     }
 
