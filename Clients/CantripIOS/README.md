@@ -25,7 +25,86 @@ A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.c
 
 ---
 
-## How it works
+## Connect to Cantrip
+
+Cantrip Agent is a client for [Cantrip](https://github.com/FlyingViet/cantrip), the agent
+harness on your Mac. Cantrip runs the agents (Claude Code, Copilot, Codex or a local
+model) and owns every tab, queue, run journal and Home task, so work continues while the
+phone sleeps. The app pairs with it, sends prompts and shows the live sessions.
+[Cantrip Gateway Mac](https://github.com/FlyingViet/CantripGatewayMac) compiles this
+repo's code to do the same in a Mac window.
+
+```
+  Cantrip Agent (iPhone/iPad)                        Cantrip on your Mac (harness)
+  Cantrip Gateway Mac          ── pairing token ──►    Remote control API  /api/v1
+                                  LAN: TLS-PSK          Cantrip Home + project tabs
+                                  Tailscale Serve       queue · run journal · recovery
+                                  Direct IP:port        Claude Code · Copilot · Codex · local
+```
+
+### 1. Enable Remote control on the Mac
+
+1. Install Cantrip ([quick start](https://github.com/FlyingViet/cantrip#quick-start)) and
+   set up one AI backend.
+2. Press **Option+Space**, open the **gear** and check **Remote control daemon**.
+3. Check **Cantrip Home** to use the app's Chat, Tasks and Artifacts screens. Cantrip must
+   stay running for scheduled tasks.
+4. Click **Copy pairing token** and move it to the phone privately. The token gives full
+   control of that Mac's agents; **Regenerate** disconnects every paired client.
+
+### 2. Pair the app
+
+Open **Settings**. Under **Cantrip Remote Servers**, paste the **Pairing token**, add a name
+if you like, fill in the route below, tap **Add Server**, then tap the saved server to
+connect. Allow Local Network access when asked.
+
+| Route | Use it when | What to enter |
+|---|---|---|
+| Local network | Phone and Mac are on the same network | Nothing more. The app finds the Mac with Bonjour (`_cantrip-remote._tcp`). |
+| Tailscale Serve | Home and away | **Tailscale URL**, e.g. `https://your-mac.your-tailnet.ts.net`, after running `tailscale serve --bg http://127.0.0.1:8765` on the Mac. Used first whenever it works; LAN is the fallback unless **Tailscale only** is on. |
+| Direct address | The Mac can't run Tailscale (e.g. a work laptop) | Set **Direct port** (e.g. `8766`) in that Mac's Cantrip settings, then enter **Direct address** as `IP:port`, e.g. `192.168.0.152:8766`. Works wherever the phone can route to that IP, such as through a router's Tailscale subnet route. |
+
+Send a short prompt to confirm. The work runs on the Mac, not the phone.
+
+Optional, on the Mac:
+
+- **Push alerts** for finished tabs and questions need an APNs key in
+  `~/.config/Cantrip/apns.json`; see
+  [push setup](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md#cantrip-agent-completion-notifications).
+- **View Mac** needs **Allow paired clients to view and control this Mac** checked in
+  Cantrip, plus Screen Recording (and Accessibility for control).
+- The **Builds** tab lists over-the-air installs published to `~/Sites/ota`; see
+  [Cantrip Home](https://github.com/FlyingViet/cantrip/blob/main/docs/cantrip-home.md#builds).
+
+### Host API
+
+The app uses Cantrip's authenticated REST API under `/api/v1/`, sending
+`Authorization: Bearer <pairing token>` with every request. Over Tailscale, Serve proxies
+HTTPS to Cantrip's loopback port (default 8765). On the local-network and direct-address
+routes, the same HTTP requests run inside TLS 1.2 with a pre-shared key (SHA-256 of the
+pairing token, identity `cantrip-remote-v1`), so they're end-to-end encrypted without
+certificates. See `CantripRemoteAPI` and `CantripLANProtocol` in
+[`Sources/CantripRemote.swift`](Sources/CantripRemote.swift).
+
+| Endpoint | Used for |
+|---|---|
+| `GET /api/v1/sessions`, `GET /api/v1/sessions/{id}` | Tab list; a tab's transcript, status, queue and capability flags |
+| `POST /api/v1/sessions/{id}/messages` | Send; `mode` is `auto` (default), `queue`, `interrupt` (Redirect) or `inject` |
+| `DELETE /api/v1/sessions/{id}/queue/{promptID}`, `POST …/queue/{promptID}/send` | Remove a queued prompt, or Send now |
+| `/api/v1/sessions/{id}/input` | Answer approvals, questions and secure input |
+| `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename and lock, reorder, per-tab model settings |
+| `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home |
+| `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
+| `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, Copilot usage, View Mac |
+
+New features are gated by capability flags in session snapshots (for example
+`supportsQueueSendNow` or `supportsTabReordering`), so an older Mac shows an update notice
+instead of failing. When an app feature needs a newer host, update and relaunch Cantrip on
+the Mac. Sends are never replayed automatically after a connection failure. The full
+reference is Cantrip's
+[remote-control guide](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md).
+
+## How it works (Hermes gateway)
 
 ```
   iPhone (Cantrip Agent) ──HTTPS + bearer key──►  private network / tunnel
