@@ -39,7 +39,7 @@ test-message-routing:
 test-remote-routing:
 	@BIN="/tmp/cantrip-remote-routing-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/HTTPRequest.swift Sources/Cantrip/RemoteLANProtocol.swift Sources/Cantrip/RemoteRouteClient.swift Sources/Cantrip/RemoteLANClient.swift Tests/RemoteRoutingTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/HTTPRequest.swift Sources/Cantrip/HTTPCompression.swift Sources/Cantrip/RemoteLANProtocol.swift Sources/Cantrip/RemoteRouteClient.swift Sources/Cantrip/RemoteLANClient.swift Tests/RemoteRoutingTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-remote-images:
 	@BIN="/tmp/cantrip-remote-image-tests-$$$$"; \

@@ -763,8 +763,10 @@ final class CantripHomeStore: ObservableObject {
     static let shared = CantripHomeStore()
     nonisolated static let maximumArtifactBytes = 20 * 1024 * 1024
 
-    @Published private(set) var tasks: [CantripHomeTask] = []
-    @Published private(set) var artifacts: [CantripHomeArtifact] = []
+    // Any change, saved or not, moves the revision: Remote clients that send their revision
+    // get "unchanged" only when what they show is exactly what the Mac holds.
+    @Published private(set) var tasks: [CantripHomeTask] = [] { didSet { revision = UUID() } }
+    @Published private(set) var artifacts: [CantripHomeArtifact] = [] { didSet { revision = UUID() } }
     @Published private(set) var revision = UUID()
     @Published private(set) var storageError: String?
     /// Newest first; what the Background sheet lists.

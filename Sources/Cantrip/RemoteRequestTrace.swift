@@ -6,7 +6,7 @@ final class RemoteRequestTrace {
     enum Phase: String {
         case receive, parse, mainWait = "main_wait", handler, snapshot
         case journalWait = "journal_wait"
-        case encodeWait = "encode_wait", encode, sendWait = "send_wait", send
+        case encodeWait = "encode_wait", encode, compress, sendWait = "send_wait", send
     }
 
     private let lock = NSLock()
@@ -19,7 +19,9 @@ final class RemoteRequestTrace {
     private var finished = false
     private var status = 0
     private var bytes = 0
+    private var wireBytes = 0
     private(set) var usesPagedHistory = false
+    private(set) var acceptsGzip = false
     let id = UUID().uuidString
     private let log: (String) -> Void
 
@@ -31,6 +33,7 @@ final class RemoteRequestTrace {
         lock.lock()
         defer { lock.unlock() }
         usesPagedHistory = request.query("history") == "recent"
+        acceptsGzip = HTTPCompression.acceptsGzip(request.headers["accept-encoding"])
         method = ["GET", "POST", "PUT", "DELETE"].contains(request.method) ? request.method : "other"
         switch request.path {
         case "/": route = "web"
@@ -43,8 +46,12 @@ final class RemoteRequestTrace {
         case "/api/v1/memory/document": route = "memory_document"
         case "/api/v1/notifications": route = "notifications"
         case "/api/v1/live-status", "/api/v1/live-status/subscription": route = "live-status"
+        case "/api/v1/home": route = "home"
+        case "/api/v1/home/tasks": route = "home_tasks"
+        case "/api/v1/home/artifacts": route = "home_artifacts"
         default:
-            route = request.path.hasPrefix("/api/v1/sessions/") ? "session" : "unknown"
+            route = request.path.hasPrefix("/api/v1/sessions/") ? "session"
+                : request.path.hasPrefix("/api/v1/home/") ? "home_other" : "unknown"
         }
     }
 
@@ -56,11 +63,13 @@ final class RemoteRequestTrace {
         phase = next
     }
 
-    func response(status: Int, bytes: Int) {
+    /// `bytes` is the body as encoded; `wireBytes` is what was sent after compression.
+    func response(status: Int, bytes: Int, wireBytes: Int? = nil) {
         lock.lock()
         defer { lock.unlock() }
         self.status = status
         self.bytes = bytes
+        self.wireBytes = wireBytes ?? bytes
     }
 
     func report(outcome: String, terminal: Bool) {
@@ -69,12 +78,12 @@ final class RemoteRequestTrace {
         accrue()
         finished = terminal
         let timings = [Phase.receive, .parse, .mainWait, .handler, .snapshot, .journalWait,
-                       .encodeWait, .encode, .sendWait, .send].map {
+                       .encodeWait, .encode, .compress, .sendWait, .send].map {
             "\($0.rawValue)_ms=\(String(format: "%.2f", durations[$0, default: 0]))"
         }.joined(separator: " ")
         let total = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
         let line = "remote-request: id=\(id) method=\(method) route=\(route) "
-            + "outcome=\(outcome) phase=\(phase.rawValue) status=\(status) bytes=\(bytes) "
+            + "outcome=\(outcome) phase=\(phase.rawValue) status=\(status) bytes=\(bytes) wire_bytes=\(wireBytes) "
             + "total_ms=\(String(format: "%.2f", total)) \(timings)"
         lock.unlock()
         log(line)
@@ -131,8 +140,8 @@ final class RemoteRequestConnection {
         socket.start(queue: queue)
     }
 
-    func send(_ response: Data, status: Int, bodyBytes: Int) {
-        trace.response(status: status, bytes: bodyBytes)
+    func send(_ response: Data, status: Int, bodyBytes: Int, wireBytes: Int? = nil) {
+        trace.response(status: status, bytes: bodyBytes, wireBytes: wireBytes)
         trace.enter(.sendWait)
         queue.async { [self] in
             guard !self.finished else { return }
