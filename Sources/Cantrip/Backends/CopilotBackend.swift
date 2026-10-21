@@ -113,7 +113,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     }
 
     static func systemGuidance(allowSubagents: Bool) -> String {
-        allowSubagents ? previewGuidance + "\n\n" + subagentGuidance : previewGuidance
+        let base = previewGuidance + "\n\n" + ReplyVisibility.guidance
+        return allowSubagents ? base + "\n\n" + subagentGuidance : base
     }
 
     /// Appended once to the session's system message, so images reach the Remote apps.
