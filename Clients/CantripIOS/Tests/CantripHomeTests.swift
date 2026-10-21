@@ -1548,6 +1548,113 @@ final class CantripHomeTests: XCTestCase {
         return nil
     }
 
+    func testHomeListsSendTheirRevisionAndHonorUnchanged() async throws {
+        let client = client()
+        let api = CantripRemoteAPI(
+            transport: .remote(try XCTUnwrap(URL(string: "https://cantrip.example"))),
+            token: "home-token", urlSession: client
+        )
+        var sent: [String: String?] = [:]
+        var hostSupportsRevision = true
+        CantripHomeRequestProtocol.handler = { request in
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
+            let revision = components.queryItems?.first { $0.name == "revision" }?.value
+            sent[components.percentEncodedPath] = .some(revision)
+            if hostSupportsRevision, let revision {
+                return (200, Data(#"{"unchanged":true,"revision":"\#(revision)"}"#.utf8))
+            }
+            return (200, components.percentEncodedPath.hasSuffix("tasks")
+                ? self.tasksPayload(enabled: true) : self.artifactsPayload())
+        }
+        addTeardownBlock { @MainActor in
+            client.invalidateAndCancel()
+            CantripHomeRequestProtocol.handler = nil
+        }
+        let unchangedTasks = try await api.homeTasks(ifChangedFrom: "task-revision")
+        XCTAssertNil(unchangedTasks)
+        XCTAssertEqual(sent["/api/v1/home/tasks"], .some("task-revision"))
+        let unchangedArtifacts = try await api.homeArtifacts(ifChangedFrom: "artifact-revision")
+        XCTAssertNil(unchangedArtifacts)
+        let full = try await api.homeTasks(ifChangedFrom: nil)
+        XCTAssertEqual(sent["/api/v1/home/tasks"], .some(nil), "No revision is sent without a fetched list")
+        XCTAssertEqual(full?.tasks.count, 2)
+
+        hostSupportsRevision = false
+        let fromOlderHost = try await api.homeTasks(ifChangedFrom: "task-revision")
+        XCTAssertEqual(fromOlderHost?.tasks.count, 2, "An older Mac ignores the revision and sends the list")
+        let artifactsFromOlderHost = try await api.homeArtifacts(ifChangedFrom: "artifact-revision")
+        XCTAssertEqual(artifactsFromOlderHost?.artifacts.count, 1)
+
+        CantripHomeRequestProtocol.handler = { _ in
+            (200, Data(#"{"unchanged":true,"revision":"other-revision"}"#.utf8))
+        }
+        do {
+            _ = try await api.homeTasks(ifChangedFrom: "task-revision")
+            XCTFail("An unchanged reply for another revision must not keep the old list")
+        } catch {}
+    }
+
+    func testHomeRefreshReusesTheFetchedRevisionOnlyForTheListItCameFrom() async throws {
+        let client = client()
+        let model = CantripRemoteModel(urlSession: client)
+        var taskRevisions: [String?] = []
+        var artifactRevisions: [String?] = []
+        CantripHomeRequestProtocol.handler = { request in
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
+            let revision = components.queryItems?.first { $0.name == "revision" }?.value
+            switch (request.httpMethod, components.percentEncodedPath) {
+            case ("GET", "/api/v1/home"):
+                return (200, self.homeSessionPayload())
+            case ("GET", "/api/v1/home/tasks"):
+                taskRevisions.append(revision)
+                if let revision { return (200, Data(#"{"unchanged":true,"revision":"\#(revision)"}"#.utf8)) }
+                return (200, self.tasksPayload(enabled: true))
+            case ("GET", "/api/v1/home/artifacts"):
+                artifactRevisions.append(revision)
+                if let revision { return (200, Data(#"{"unchanged":true,"revision":"\#(revision)"}"#.utf8)) }
+                return (200, self.artifactsPayload())
+            default:
+                return (200, Data(#"{"sessions":[]}"#.utf8))
+            }
+        }
+        addTeardownBlock { @MainActor in
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            CantripHomeRequestProtocol.handler = nil
+        }
+        let configured = await model.configure(
+            url: "https://cantrip.example", pairingToken: "home-revision-token", tailscaleOnly: true
+        )
+        XCTAssertTrue(configured)
+        await model.selectHome()
+        let tasks = model.homeTasks
+        let artifacts = model.homeArtifacts
+        XCTAssertEqual(tasks.count, 2)
+        XCTAssertEqual(artifacts.count, 1)
+        XCTAssertEqual(taskRevisions.first, .some(nil), "The first fetch asks for the full list")
+
+        await model.refreshHomeData()
+        XCTAssertEqual(taskRevisions.last, .some("task-revision"))
+        XCTAssertEqual(artifactRevisions.last, .some("artifact-revision"))
+        XCTAssertEqual(model.homeTasks, tasks, "An unchanged reply keeps the shown list")
+        XCTAssertEqual(model.homeArtifacts, artifacts)
+        XCTAssertNil(model.homeDataError)
+
+        model.clearConfiguration()
+        XCTAssertTrue(model.homeTasks.isEmpty)
+        let fetchesBeforeReconnect = taskRevisions.count
+        let reconfigured = await model.configure(
+            url: "https://cantrip.example", pairingToken: "home-revision-token", tailscaleOnly: true
+        )
+        XCTAssertTrue(reconfigured)
+        await model.selectHome()
+        XCTAssertGreaterThan(taskRevisions.count, fetchesBeforeReconnect)
+        XCTAssertNil(taskRevisions[fetchesBeforeReconnect], "A cleared list is fetched in full")
+        // The fixture stamps dates when generated, so compare identities.
+        XCTAssertEqual(model.homeTasks.map(\.id), tasks.map(\.id), "A cleared list is never kept empty")
+        XCTAssertEqual(model.homeArtifacts.map(\.id), artifacts.map(\.id))
+    }
+
     private func tasksPayload(
         enabled: Bool, reversed: Bool = false, supportsReordering: Bool? = nil
     ) -> Data {

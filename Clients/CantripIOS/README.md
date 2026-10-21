@@ -93,9 +93,15 @@ certificates. See `CantripRemoteAPI` and `CantripLANProtocol` in
 | `DELETE /api/v1/sessions/{id}/queue/{promptID}`, `POST …/queue/{promptID}/send` | Remove a queued prompt, or Send now |
 | `/api/v1/sessions/{id}/input` | Answer approvals, questions and secure input |
 | `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename and lock, reorder, per-tab model settings |
-| `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home |
+| `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, Copilot usage, View Mac |
+
+Responses of 4 KB or more come gzip-compressed when the request sends
+`Accept-Encoding: gzip`: URLSession does this on the Tailscale route, and `CantripLANRequest`
+requests and decodes it ([`Sources/CantripGzip.swift`](Sources/CantripGzip.swift)) on the
+local-network route. The app polls every 1.5 s while the tab on screen (or Home) is working
+and every 5 s otherwise; Cantrip Gateway Mac slows to 15 s while another app is frontmost.
 
 New features are gated by capability flags in session snapshots (for example
 `supportsQueueSendNow` or `supportsTabReordering`), so an older Mac shows an update notice

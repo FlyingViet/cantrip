@@ -121,6 +121,52 @@ final class CantripHistoryTests: XCTestCase {
         XCTFail(model.errorMessage ?? model.detailError ?? "No conversation loaded")
     }
 
+    func testPollingIsFastOnlyForTheViewedTabAndSlowsBehindOtherApps() async throws {
+        let model = try await model()
+        HistoryRequestProtocol.handler = { request in
+            guard request.url!.path == "/api/v1/sessions" else { return (200, try self.session()) }
+            // The selected tab is idle while another tab works.
+            var list = try XCTUnwrap(JSONSerialization.jsonObject(with: try self.session(list: true)) as? [String: Any])
+            var tabs = try XCTUnwrap(list["sessions"] as? [[String: Any]])
+            var other = tabs[0]
+            other["id"] = "00000000-0000-0000-0000-000000000002"
+            other["title"] = "Other tab"
+            other["isStreaming"] = true
+            tabs.append(other)
+            list["sessions"] = tabs
+            return (200, try JSONSerialization.data(withJSONObject: list))
+        }
+        model.setAppActive(true)
+        try await waitForRefresh(model)
+        XCTAssertEqual(model.selectedSessionID, id)
+        XCTAssertEqual(model.pollDelay, .seconds(5), "Another tab working does not speed up polling")
+        model.setFrontmost(false)
+        XCTAssertEqual(model.pollDelay, .seconds(15), "The Mac app polls slowly behind other apps")
+        model.setFrontmost(true)
+        XCTAssertEqual(model.pollDelay, .seconds(5))
+
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(revision: "r2", list: request.url!.path == "/api/v1/sessions", streaming: true))
+        }
+        await model.refreshNow()
+        XCTAssertEqual(model.pollDelay, .milliseconds(1500), "The tab on screen working polls fast")
+        model.setFrontmost(false)
+        XCTAssertEqual(model.pollDelay, .seconds(15))
+        model.setFrontmost(true)
+
+        // Behind other apps the next poll is 15 s away; the connection must not read as lost
+        // after the usual 10 s in between.
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(revision: "r3", list: request.url!.path == "/api/v1/sessions"))
+        }
+        await model.refreshNow()
+        XCTAssertTrue(model.isConnected)
+        model.setFrontmost(false)
+        try await Task.sleep(for: .milliseconds(11_500))
+        XCTAssertTrue(model.isConnected, "A slower background poll is not a lost connection")
+        model.setFrontmost(true)
+    }
+
     func testPagedQueriesConditionalRefreshAndLegacyFallback() async throws {
         let model = try await model()
         var paths: [String] = []
