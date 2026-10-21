@@ -69,6 +69,31 @@ final class CantripQueueTests: XCTestCase {
         XCTAssertNil(legacy.supportsAutoDelivery)
         XCTAssertNil(legacy.deliveryStatus)
         XCTAssertNil(legacy.supportsQueueRemoval)
+        XCTAssertNil(legacy.supportsQueueSendNow, "Older hosts must not offer Send now")
+    }
+
+    func testSendNowCapabilityDecodesNextToQueueRemoval() throws {
+        let data = Data(#"""
+        {"id":"session-a","title":"Chat","workdir":"/tmp","isStreaming":true,
+         "canResume":false,"councilMode":false,"queuedCount":2,"messages":[],
+         "queued":[{"id":"a","text":"First"},{"id":"b","text":"Second"}],
+         "supportsQueueRemoval":true,"supportsQueueSendNow":true}
+        """#.utf8)
+        let decoded = try JSONDecoder().decode(CantripRemoteSession.self, from: data)
+        XCTAssertEqual(decoded.supportsQueueSendNow, true)
+        XCTAssertEqual(decoded.supportsQueueRemoval, true)
+        XCTAssertEqual(decoded.queued?.map(\.id), ["a", "b"])
+    }
+
+    func testSendNowCapabilityIsIndependentOfQueueRemoval() throws {
+        let data = Data(#"""
+        {"id":"session-a","title":"Chat","workdir":"/tmp","isStreaming":false,
+         "canResume":false,"councilMode":false,"queuedCount":0,"messages":[],
+         "supportsQueueRemoval":true,"supportsQueueSendNow":false}
+        """#.utf8)
+        let decoded = try JSONDecoder().decode(CantripRemoteSession.self, from: data)
+        XCTAssertEqual(decoded.supportsQueueSendNow, false)
+        XCTAssertEqual(decoded.supportsQueueRemoval, true)
     }
 
     func testRoutingFeedbackDecodesWithoutChangingTheTranscript() throws {

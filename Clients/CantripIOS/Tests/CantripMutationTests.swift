@@ -42,6 +42,7 @@ final class CantripMutationTests: XCTestCase {
          "isStreaming":true,"canResume":true,"councilMode":false,"queuedCount":1,
          "supportsAutoDelivery":\(capabilities),"supportsImageAttachments":\(capabilities),
          "supportsTabMetadata":\(capabilities),"supportsQueueRemoval":\(capabilities),
+         "supportsQueueSendNow":\(capabilities),
          "supportsTabReordering":\(capabilities),"isLocked":true,
          "messages":[]}
         """
@@ -188,7 +189,8 @@ final class CantripMutationTests: XCTestCase {
             ("POST", { await $0.resume() }),
             ("POST", { await $0.newConversation() }),
             ("POST", { await $0.updateTab(self.sessionID, name: "Renamed", isLocked: true) }),
-            ("DELETE", { await $0.removeQueuedPrompt("pending", sessionID: self.sessionID) })
+            ("DELETE", { await $0.removeQueuedPrompt("pending", sessionID: self.sessionID) }),
+            ("POST", { await $0.sendQueuedPromptNow("pending", sessionID: self.sessionID) })
         ]
         for (method, operation) in operations {
             let model = try await model()
@@ -204,6 +206,88 @@ final class CantripMutationTests: XCTestCase {
             let succeeded = await operation(model)
             XCTAssertTrue(succeeded, model.errorMessage ?? "Expected recovered mutation")
             XCTAssertEqual(methods, ["GET", method])
+            model.clearConfiguration()
+        }
+    }
+
+    private func queueSnapshot(
+        _ ids: [String], sendNow: Bool? = true, transcript: [String] = [], list: Bool = false
+    ) throws -> Data {
+        var session: [String: Any] = [
+            "id": sessionID, "title": "Test", "workdir": "/tmp",
+            "isStreaming": true, "canResume": false, "councilMode": false,
+            "queuedCount": ids.count, "supportsQueueRemoval": true,
+            "queued": ids.map { ["id": $0, "text": "Prompt \($0)"] },
+            "messages": transcript.map {
+                ["id": "message-\($0)", "role": "user", "text": $0, "thinking": "", "activities": []] as [String: Any]
+            },
+        ]
+        if let sendNow { session["supportsQueueSendNow"] = sendNow }
+        return try JSONSerialization.data(withJSONObject: list ? ["sessions": [session]] : ["session": session])
+    }
+
+    private func isList(_ request: URLRequest) -> Bool {
+        request.httpMethod == "GET" && request.url?.path == "/api/v1/sessions"
+    }
+
+    func testSendQueuedPromptNowAppliesTheReturnedSession() async throws {
+        let model = try await model()
+        MutationRequestProtocol.handler = { request in
+            (200, try self.queueSnapshot(["first", "second"], list: self.isList(request)))
+        }
+        await model.selectSession(sessionID)
+        XCTAssertEqual(model.selectedSession?.queued?.map(\.id), ["first", "second"])
+        var methods: [String] = []
+        MutationRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            if request.httpMethod == "POST" {
+                XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.sessionID)/queue/first/send")
+                XCTAssertEqual(model.sendingQueuedPromptID, "first", "Queue controls show the send in flight")
+                XCTAssertTrue(model.isMutating)
+                return (200, try self.queueSnapshot(["second"], transcript: ["Prompt first"]))
+            }
+            return (200, try self.queueSnapshot(["first", "second"], list: self.isList(request)))
+        }
+        let sent = await model.sendQueuedPromptNow("first", sessionID: sessionID)
+        XCTAssertTrue(sent, model.errorMessage ?? "Expected the queued message to be sent")
+        XCTAssertEqual(methods, ["GET", "POST"])
+        XCTAssertEqual(model.selectedSession?.queued?.map(\.id), ["second"])
+        XCTAssertEqual(model.selectedSession?.queuedCount, 1)
+        XCTAssertEqual(model.selectedSession?.transcript.last?.text, "Prompt first")
+        XCTAssertNil(model.sendingQueuedPromptID)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isMutating)
+    }
+
+    func testSendQueuedPromptNowRejectionsKeepTheQueueAndExplainWhy() async throws {
+        let conflict = "This message is no longer queued. It may have started or been removed on another device."
+        for legacy in [false, true] {
+            let model = try await model()
+            MutationRequestProtocol.handler = { request in
+                (200, try self.queueSnapshot(
+                    ["first", "second"], sendNow: legacy ? nil : true, list: self.isList(request)
+                ))
+            }
+            await model.selectSession(sessionID)
+            var methods: [String] = []
+            MutationRequestProtocol.handler = { request in
+                methods.append(request.httpMethod ?? "")
+                if request.httpMethod == "POST" {
+                    return (409, try JSONSerialization.data(withJSONObject: ["error": conflict]))
+                }
+                return (200, try self.queueSnapshot(
+                    ["first", "second"], sendNow: legacy ? nil : true, list: self.isList(request)
+                ))
+            }
+            let sent = await model.sendQueuedPromptNow("first", sessionID: sessionID)
+            XCTAssertFalse(sent)
+            XCTAssertEqual(methods, legacy ? ["GET"] : ["GET", "POST"], "Older hosts never receive the write")
+            let message = try XCTUnwrap(model.errorMessage)
+            XCTAssertTrue(message.contains(legacy ? "Update and reopen Cantrip" : conflict), message)
+            XCTAssertFalse(message.contains("may have reached"), message)
+            XCTAssertEqual(model.selectedSession?.queued?.map(\.id), ["first", "second"])
+            XCTAssertNil(model.sendingQueuedPromptID)
+            XCTAssertFalse(model.isMutating)
             model.clearConfiguration()
         }
     }

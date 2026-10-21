@@ -455,6 +455,8 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsAutoDelivery: Bool? = nil
     var deliveryStatus: String? = nil
     var supportsQueueRemoval: Bool? = nil
+    /// The Mac can deliver a queued message now; absent from older hosts.
+    var supportsQueueSendNow: Bool? = nil
     var customTitle: String? = nil
     var isLocked: Bool? = nil
     var supportsTabMetadata: Bool? = nil
@@ -780,6 +782,7 @@ enum CantripRemoteError: LocalizedError {
     case videosUnsupported
     case autoDeliveryUnsupported
     case queueRemovalUnsupported
+    case queueSendNowUnsupported
     case tabMetadataUnsupported
     case tabReorderingUnsupported
     case githubBuildsUnsupported
@@ -828,6 +831,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac for Auto sending, or choose Queue, Redirect, or Inject. Your message has not been sent."
         case .queueRemovalUnsupported:
             return "Update and reopen Cantrip on your Mac to remove queued messages from Cantrip Agent."
+        case .queueSendNowUnsupported:
+            return "Update and reopen Cantrip on your Mac to send queued messages now from Cantrip Agent. The message is still queued."
         case .tabMetadataUnsupported:
             return "Update and reopen Cantrip on your Mac to rename or lock its tabs."
         case .tabReorderingUnsupported:
@@ -2017,6 +2022,27 @@ struct CantripRemoteAPI {
         return response.session
     }
 
+    /// Delivers a queued message now instead of waiting for its turn.
+    func sendQueuedPromptNow(id: String, sessionID: String) async throws -> CantripRemoteSession {
+        try await prepareQueueSendNow(sessionID: sessionID)
+        return try await postQueuedPromptNow(id: id, sessionID: sessionID)
+    }
+
+    fileprivate func prepareQueueSendNow(sessionID: String) async throws {
+        let host = try await session(id: sessionID)
+        guard host.supportsQueueSendNow == true else {
+            throw CantripRemoteError.queueSendNowUnsupported
+        }
+    }
+
+    fileprivate func postQueuedPromptNow(id: String, sessionID: String) async throws -> CantripRemoteSession {
+        let response: CantripSessionResponse = try await request(
+            path: "/api/v1/sessions/\(try Self.pathComponent(sessionID))/queue/\(try Self.pathComponent(id))/send",
+            method: "POST", body: Data("{}".utf8), includeRecentExchanges: true
+        )
+        return response.session
+    }
+
     private func request<Response: Decodable>(
         path: String,
         method: String = "GET",
@@ -2189,6 +2215,8 @@ final class CantripRemoteModel: ObservableObject {
     var isUploadingVideo: Bool { videoUploadTask != nil }
     @Published private(set) var isReorderingTabs = false
     @Published private(set) var stoppingSessionID: String?
+    /// The queued message being sent now, so every queue control can show it in flight.
+    @Published private(set) var sendingQueuedPromptID: String?
     @Published private(set) var detailError: String?
     @Published private(set) var isLoadingHistory = false
     @Published private(set) var historyPrependRevision = 0
@@ -3614,6 +3642,25 @@ final class CantripRemoteModel: ObservableObject {
         return true
     }
 
+    /// Delivers a queued message into the current turn now, or starts it if the tab is idle.
+    @discardableResult
+    func sendQueuedPromptNow(_ id: String, sessionID: String) async -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish, then try sending the message again."
+            return false
+        }
+        sendingQueuedPromptID = id
+        defer { sendingQueuedPromptID = nil }
+        guard let session = await mutate(prepare: { api in
+            try await api.prepareQueueSendNow(sessionID: sessionID)
+        }, { api, _ in
+            try await api.postQueuedPromptNow(id: id, sessionID: sessionID)
+        }) else { return false }
+        guard selectedSessionID == sessionID else { return true }
+        apply(session)
+        return true
+    }
+
     @discardableResult
     func resume() async -> Bool {
         await sessionAction("resume")
@@ -4127,6 +4174,7 @@ final class CantripRemoteModel: ObservableObject {
         case CantripRemoteError.http:
             return false
         case CantripRemoteError.imagesUnsupported, CantripRemoteError.videosUnsupported, CantripRemoteError.queueRemovalUnsupported,
+             CantripRemoteError.queueSendNowUnsupported,
              CantripRemoteError.autoDeliveryUnsupported, CantripRemoteError.tabMetadataUnsupported,
              CantripRemoteError.tabReorderingUnsupported,
              is ImageAttachmentError, is VideoAttachmentError:
