@@ -1,0 +1,162 @@
+[User Guide](README.md) / Cantrip Home
+
+# Cantrip Home
+
+Cantrip Home is an optional, permanent session that runs your Mac from one
+conversation. It powers the focused **Chat / Tasks / Artifacts** mode in
+[Cantrip Agent](https://github.com/FlyingViet/Hermes) (iPhone/iPad) and
+[Cantrip Gateway Mac](https://github.com/FlyingViet/CantripGatewayMac), and is
+the pinned first tab in the browser remote. It stays hidden from the ordinary
+Mac and Remote tab lists.
+
+Enable it under **Mac Settings > Remote control**. Home uses the same backend,
+per-session model controls, tools, attachments, input requests and history as
+[Cantrip Remote](remote-control.md). Cantrip must remain running for scheduled
+work.
+
+## Answer in Home or hand off to a project tab
+
+Home decides from each message's intent: references, questions and status
+checks about a project are answered in Home, while requests to change a project
+are handed to the open tab that owns it as a nested task. Home matches tabs by
+meaning, using each tab's title, the repositories its conversation works in and
+its latest requests, and a busy tab queues the handoff instead of being
+interrupted.
+
+Home shows one card per handoff. It starts under Home's reply with the tab's
+live status. When the tab needs the user's answer, finishes, fails or is
+stopped, Cantrip posts the handoff's result card into Home's chat and the
+earlier card is hidden. The result card shows the tab's question, outcome or
+error and a link to the tab (Cantrip Agent, Cantrip Gateway Mac and the browser
+remote). Later states, including working again after an answer, update that
+card in place. It never interrupts a Home reply, and its tab text is shown as
+data that Home's model never reads back as its own words.
+
+## Tasks and schedules
+
+Tasks can be one-time, interval or weekday automations, or structured
+workspaces such as trackers. A weekday task can run at several local times a
+day in its own time zone, with DST handled. After sleep or a quit, an overdue
+task runs once rather than once per missed time, and a task never runs twice at
+the same time. Touch and hold a task to drag it into a new order; the order is
+saved on the Mac.
+
+A task can list other tasks in `runsAfter` (for example a morning briefing that
+reviews the trackers): it starts after their runs due at or before it finish,
+or 30 minutes after its own time at the latest.
+
+Local maintenance can queue a change for an existing task by writing a JSON
+file into `~/.cache/Cantrip/home/task-edits/`. It is applied once that task is
+idle:
+
+```json
+{"version":1,"taskID":"…","schedule":{…}}
+```
+
+An edit can carry `schedule`, `"runsAfter":["…"]`,
+`"runsAfterTimeoutMinutes":45` and/or a replacement workspace `"list":{…}`.
+Schedule-only edits also work in `~/.cache/Cantrip/home/schedule-edits/`.
+
+### Workspaces
+
+Workspace tasks use a validated declarative schema for native list, detail and
+edit screens; their records can be updated conversationally or through the
+mobile UI. A workspace list can be grouped by a choice field
+(`list.groupField`, optionally `list.groups`) into collapsible sections with
+live record counts on Cantrip Agent, Cantrip Gateway Mac and the browser
+remote's Tasks panel:
+
+```json
+"groups": [{"title":"In progress","values":["Interviewing",…],"collapsed":false}]
+```
+
+Records keep their saved order within each section, values no group lists fall
+under Other, and each client remembers which sections the user collapsed.
+
+## Background runs
+
+Each due run and local ingestion incident runs in its own hidden, single-use
+session with a fresh model context, so unrelated jobs run in parallel (3 at
+once by default; change it under **Mac Settings > Remote control**) and never
+add turns to Home chat or wait for it. Jobs that write the same task workspace
+or concern the same failing job run one after another, and a repeated trigger
+folds into the run already queued or running.
+
+An incident in a repository that an open tab clearly owns (by title, folder or
+the repositories it works in) is handed to that tab's queue instead, using
+Home's handoff cards and a notification; an incident whose file is already
+resolved is skipped. Hidden runs follow the same handoff rules for change work
+they discover. Concurrent jobs refresh Apple Mail through
+`Scripts/mail-refresh`, which shares one refresh between them.
+
+Results appear in the Background list (with per-run Stop), task run summaries,
+workspaces and completion notifications (which open the run's report in Home's
+background log); finished sessions are removed and their transcripts kept in
+that log. A run whose reply ends with a section that begins on its own line
+with `Summary:` uses that section (from the last such label, up to 1,200
+characters, line breaks kept) as its summary, and its first two lines as the
+notification; other runs keep the start of the reply.
+
+After a quit, interrupted tasks run once more and an interrupted incident is
+retried once. Home can still discuss or rerun any of them on request.
+
+## Rules, safety and approvals
+
+Home's rules and safety checks are enforced by Cantrip, not by the model's CLI,
+so they hold whichever backend runs Home. Cantrip validates every task, record,
+handoff and artifact block (tolerating common JSON slips). When a block is
+invalid, or a task or handoff prompt leans on the conversation instead of
+standing alone, it asks the same model once, inside the same reply, for a
+corrected block. Handoffs are briefs (goal, context, constraints, done-when)
+that Cantrip turns into a standalone tab prompt with the user's own message.
+
+Before each tool runs in Home (Copilot, Claude Code or a local
+OpenAI-compatible model), Cantrip blocks catastrophic commands: administrator
+commands, erasing disks or the home folder, piping downloads into a shell,
+stopping Cantrip, and writing Home's own state files, under every approval
+mode.
+
+Otherwise Home follows the approval mode chosen for its backend. With **Act on
+my behalf** on (or Claude's **Allow everything**), Copilot and Claude Code runs,
+including scheduled tasks and incident investigations, approve tools and
+commands automatically. With a stricter mode, tools ask as usual, and in
+unattended background runs sending messages or email, pushing, deploying,
+deleting files outside temporary folders and Artifacts, and system changes wait
+for approval through a push-notified input request; unanswered after 10
+minutes, the step is skipped.
+
+Those requests are answered in place: in Cantrip Agent's Home Background list
+(the push opens it on that run; Tasks shows **Respond**) and in a header panel
+in browser and Mac Remote, never by opening the hidden run as a tab. See
+[background run input requests](remote-control.md#cantrip-agent-completion-notifications).
+Local models keep these pauses whatever the setting. Questions the agent asks
+you always reach you.
+
+Background runs can't create or change tasks. Codex and Copilot Remote (ACP)
+can run commands Cantrip never sees, so on them background runs fail closed
+with an explanation and the Home chat follows the rules on its own.
+
+## Artifacts
+
+Deliverable files the agent saves in Home's guarded artifact folder appear
+automatically in Artifacts and can be permanently deleted from the mobile app.
+Images and videos show thumbnails (a video's poster frame about one second in,
+with its duration), built on the Mac by the paired
+`GET /api/v1/home/artifacts/{id}/thumbnail` route (JPEG of at most 600 pixels;
+404 for documents, audio or unreadable media).
+
+Sources get the remote-preview guards: regular single-link files below the
+artifact folder, every folder opened without following symlinks, 20 MB and
+64-megapixel limits, and videos decoded from a private copy with a 15-second
+limit. Thumbnails are cached in `~/.cache/Cantrip/home/thumbnails/` until the
+file changes or is deleted.
+
+## Builds
+
+Cantrip Agent's **Builds** tab lists the over-the-air install page in
+`~/Sites/ota` (written by `ota-publish.py`) through the read-only
+`GET /api/v1/home/builds` route: entries grouped by `page_key` (else bundle
+id), builds newest first, with install links taken from each build's own
+`manifest.plist`, plus `GET /api/v1/home/builds/{bundle id}/{folder}/icon`.
+Folders without readable metadata, manifest or `app.ipa` are skipped and
+counted; symlinks are never followed. Publishing and removal stay on the Mac.
