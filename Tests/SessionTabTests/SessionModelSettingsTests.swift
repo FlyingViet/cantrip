@@ -191,8 +191,9 @@ extension SessionTabTests {
         precondition(allowed["excluded"] is NSNull, "Allowed subagents keep their tools")
         precondition(allowed["mode"] as? String == "append"
                      && allowed["guidance"] as? String
-                        == CopilotBackend.previewGuidance + "\n\n" + CopilotBackend.subagentGuidance,
-                     "Preview and subagent guidance belong in the appended system message")
+                        == CopilotBackend.previewGuidance + "\n\n" + ReplyVisibility.guidance
+                            + "\n\n" + CopilotBackend.subagentGuidance,
+                     "Preview, reply-visibility and subagent guidance belong in the appended system message")
         try await waitForJournalTest { !SessionOutputFolders.shared.roots(for: chat.id).isEmpty }
         precondition(SessionOutputFolders.shared.roots(for: chat.id).map(\.path) == [
             FileManager.default.homeDirectoryForCurrentUser
@@ -208,8 +209,9 @@ extension SessionTabTests {
         let disabled = try JSONSerialization.jsonObject(with: Data(chat.messages.last!.text.utf8)) as! [String: Any]
         precondition(disabled["excluded"] as? [String] == ["task", "read_agent", "write_agent", "list_agents"],
                      "Disabling subagents removes their tools")
-        precondition(disabled["guidance"] as? String == CopilotBackend.previewGuidance,
-                     "Disabled subagents get no delegation guidance")
+        precondition(disabled["guidance"] as? String
+                        == CopilotBackend.previewGuidance + "\n\n" + ReplyVisibility.guidance,
+                     "Disabled subagents get no delegation guidance, but keep reply visibility")
         precondition((disabled["prompt"] as? String)?.contains("Allowed subagents fixture") == true,
                      "Changing the subagent setting must carry recent conversation context")
     }

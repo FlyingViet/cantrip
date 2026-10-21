@@ -1,5 +1,20 @@
 import Foundation
 
+/// Appended to every agent session's system message: Cantrip's apps fold reasoning into a
+/// collapsed row, so answers written only there never reach the user.
+enum ReplyVisibility {
+    static let guidance = """
+    Cantrip's apps show your reasoning only as a collapsed "Reasoning" row that the user \
+    doesn't read. Anything meant for the user (explanations, findings, comparisons, the \
+    context behind a question) must be in your visible reply text. When the user asks for \
+    more detail, including as their answer to a question you asked, write that answer in the \
+    reply first and give it in full; a request for detail overrides brevity defaults. Ask a \
+    follow-up only after answering, and only if a decision is still needed. Before asking \
+    the user to choose, put what they need to choose well in the reply, because the question \
+    and its choices show nothing else.
+    """
+}
+
 enum ToolActivityState: Equatable {
     case running
     case succeeded
