@@ -426,7 +426,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         }
         if let sessionID { args += ["--resume", sessionID] }
         // Claude Code has no per-session files folder, so images go to Cantrip's output folder.
-        args += ["--append-system-prompt", RemoteGeneratedImages.agentGuidance(sessionFilesFolder: false)]
+        args += ["--append-system-prompt",
+                 RemoteGeneratedImages.agentGuidance(sessionFilesFolder: false) + "\n\n" + ReplyVisibility.guidance]
         // MCP servers from enabled+approved plugins (see Plugins.swift).
         if let mcpConfig = PluginManager.claudeMCPConfigPath() {
             args += ["--mcp-config", mcpConfig]
