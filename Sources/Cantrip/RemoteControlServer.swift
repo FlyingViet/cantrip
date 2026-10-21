@@ -1021,7 +1021,7 @@ final class RemoteControlServer {
                 sendError(404, "message no longer available", on: connection)
                 return
             }
-            let object = messageSnapshot(message, sessionID: id)
+            let object = messageSnapshot(message, sessionID: id, home: HomeReplyView(session))
             sendEncoded(on: connection, queue: detailEncodingQueue) {
                 try JSONSerialization.data(withJSONObject: ["message": object], options: [.sortedKeys])
             }
@@ -1928,8 +1928,9 @@ final class RemoteControlServer {
                 }
                 return object
             }
+            let home = HomeReplyView(session)
             result["messages"] = session.messages.map {
-                messageSnapshot($0, sessionID: session.id)
+                messageSnapshot($0, sessionID: session.id, home: home)
             }
         }
         return result
@@ -1944,7 +1945,31 @@ final class RemoteControlServer {
         return session.pendingInputs.first(where: { $0.id == id && $0.kind == .question })?.detail
     }
 
-    private func messageSnapshot(_ message: ChatMessage, sessionID: UUID) -> [String: Any] {
+    /// What Home's off-main message snapshots need from the session: which reply is still
+    /// streaming, and the text an in-progress block correction will restore.
+    struct HomeReplyView {
+        let streamingID: UUID?
+        let correction: (messageID: UUID, prefix: String)?
+
+        @MainActor
+        init?(_ session: ChatSession) {
+            guard SessionManager.isCantripHomeReserved(session) else { return nil }
+            streamingID = session.isStreaming
+                ? session.messages.last(where: { $0.role == .assistant })?.id : nil
+            correction = session.cantripHomeCorrection
+        }
+
+        func text(of message: ChatMessage) -> String {
+            // A correction reply is written for Cantrip; the user keeps seeing the original.
+            if let correction, correction.messageID == message.id { return correction.prefix }
+            return CantripHomeProtocol.visibleText(message.text, streaming: message.id == streamingID)
+        }
+    }
+
+    private func messageSnapshot(_ message: ChatMessage, sessionID: UUID,
+                                 home: HomeReplyView? = nil) -> [String: Any] {
+        var message = message
+        if let home, message.role == .assistant { message.text = home.text(of: message) }
         var object = RemoteHistory.message(message)
         object["isLocalPrivate"] = sessionID == ChatSession.privateLocalID
         if message.role == .user {
@@ -2024,16 +2049,17 @@ final class RemoteControlServer {
         let includesCompleteExchanges = exchangeStart != nil
         let historyStartID = session.messages.first?.id.uuidString ?? "empty"
         let queued = session.queued
+        let home = HomeReplyView(session)
         // Full-message sizing and encoding belong off the main actor and tab-list queue.
         sendEncoded(status: status, on: connection, queue: detailEncodingQueue) {
             var result = summary
             var messages: [[String: Any]] = []
             if includesCompleteExchanges {
-                messages = candidates.map { self.messageSnapshot($0, sessionID: sessionID) }
+                messages = candidates.map { self.messageSnapshot($0, sessionID: sessionID, home: home) }
             } else {
                 var bytes = 0
                 for candidate in candidates.suffix(RemoteHistory.pageSize).reversed() {
-                    let message = self.messageSnapshot(candidate, sessionID: sessionID)
+                    let message = self.messageSnapshot(candidate, sessionID: sessionID, home: home)
                     let size = try JSONSerialization.data(withJSONObject: message).count
                     if !messages.isEmpty, bytes + size > RemoteHistory.pageBytes { break }
                     messages.insert(message, at: 0)
@@ -2045,7 +2071,7 @@ final class RemoteControlServer {
                 if start < candidates.count, candidates[start].role != .user,
                    let prompt = candidates[..<start].lastIndex(where: { $0.role == .user }) {
                     messages = candidates[prompt..<start].map {
-                        self.messageSnapshot($0, sessionID: sessionID)
+                        self.messageSnapshot($0, sessionID: sessionID, home: home)
                     } + messages
                 }
             }
