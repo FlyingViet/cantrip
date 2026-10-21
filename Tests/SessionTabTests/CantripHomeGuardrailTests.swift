@@ -343,6 +343,25 @@ extension SessionTabTests {
         precondition(CantripHomeProtocol.extractBlocks(from: &plain).isEmpty
                      && plain == "No blocks here.\n```swift\nprint(1)\n```")
 
+        let streamed = "Handing it to the tab.\n\n```cantrip-delegate\n{\"tabID\":\"89478EB5\"}\n```\n\n"
+            + "```cantrip-task\n{\"id\":\"0D8032A8-3829"
+        precondition(CantripHomeProtocol.visibleText(streamed, streaming: true) == "Handing it to the tab.",
+                     "Finished and half-written Home blocks never show while streaming")
+        for pending in ["```", "``` ", "```js", "```json", "```json cant", "```cantrip-ta", "~~~cantrip_d",
+                        "````Cantrip"] {
+            let visible = CantripHomeProtocol.visibleText("Reply.\n\n" + pending, streaming: true)
+            precondition(visible == "Reply.", "A fence that may open a Home block waits: \(pending) -> \(visible)")
+        }
+        precondition(CantripHomeProtocol.visibleText("Done.```cant", streaming: true) == "Done.")
+        for kept in ["Reply.\n```swift", "Reply.\n```swift\nlet x = 1\n", "Use ```inline``` code",
+                     "Cantrip saved it."] {
+            precondition(CantripHomeProtocol.visibleText(kept, streaming: true) == kept,
+                         "Ordinary code and prose stream untouched: \(kept)")
+        }
+        precondition(CantripHomeProtocol.visibleText("Code:\n```swift\nlet x = 1\n```", streaming: false)
+                     == "Code:\n```swift\nlet x = 1\n```", "A finished reply keeps its closing fence")
+        precondition(CantripHomeProtocol.visibleText(streamed, streaming: false) == "Handing it to the tab.")
+
         struct Probe: Decodable, Equatable { let title: String; let count: Int; let ok: Bool; let note: String? }
         let repaired: [(String, Probe)] = [
             (#"{"title":"A", /* note */ "count": 2, "ok": True, "note": None,}"#,
@@ -492,7 +511,19 @@ extension SessionTabTests {
 
         // A block with a fixable mistake gets one correction inside the same run and reply.
         homeChat.submit("Check the apartment listings every weekday at 9.")
-        try await reply("I'll check them every weekday.\n\n" + taskBlock(#""nine""#))
+        let firstReply = "I'll check them every weekday.\n\n" + taskBlock(#""nine""#)
+        let cut = try requireHome(firstReply.range(of: #"{"title":"#)).upperBound
+        try await waitForJournalTest { fixture.sink != nil }
+        fixture.sink?(.textDelta(String(firstReply[..<cut])))
+        try await waitForJournalTest { lastReply().contains("cantrip-task") }
+        func clientText() throws -> String {
+            let view = try requireHome(RemoteControlServer.HomeReplyView(homeChat))
+            return view.text(of: try requireHome(homeChat.messages.last { $0.role == .assistant }))
+        }
+        let whileStreaming = try clientText()
+        precondition(whileStreaming == "I'll check them every weekday.",
+                     "Clients never see a Home block while it streams: \(whileStreaming)")
+        try await reply(String(firstReply[cut...]))
         try await waitForJournalTest { fixture.sink != nil }
         let correction = fixture.lastPrompt ?? ""
         precondition(correction.hasPrefix("(Cantrip check — automatic, not from the user.)")
@@ -501,7 +532,12 @@ extension SessionTabTests {
                      && homeChat.messages.filter { $0.role == .user }.count == 1
                      && fixture.lastTurnCount == 1,
                      "The correction is hidden, carries the error, and keeps the conversation: \(correction)")
-        try await reply("Here is the corrected block:\n" + taskBlock("9"))
+        fixture.sink?(.textDelta("Here is the corrected block:\n"))
+        try await waitForJournalTest { lastReply().contains("corrected block") }
+        let whileCorrecting = try clientText()
+        precondition(whileCorrecting == "I'll check them every weekday.",
+                     "Clients keep the original reply while the correction streams: \(whileCorrecting)")
+        try await reply(taskBlock("9"))
         try await waitForJournalTest { !homeChat.isStreaming }
         let fixed = lastReply()
         let created = try requireHome(store.tasks.first { $0.title == "Apartment check" })
