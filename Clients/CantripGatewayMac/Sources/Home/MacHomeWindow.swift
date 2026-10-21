@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Cantrip Home for the Mac: the iOS Home lane (Chat, Tasks, Artifacts, Background) and every
@@ -69,9 +70,17 @@ struct MacHomeWindow: View {
         }
         .onAppear {
             setActive(scenePhase)
+            remote.setFrontmost(NSApplication.shared.isActive)
             voice.requestAuth()
         }
         .onChange(of: scenePhase) { _, phase in setActive(phase) }
+        // Behind other apps Home still updates, every 15 s instead of every 1.5-5 s.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            remote.setFrontmost(true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            remote.setFrontmost(false)
+        }
         .onChange(of: env.executionLane) { _, lane in vm.switchLane(to: lane) }
         .onChange(of: vm.sending) { _, sending in
             // A tab or Home picked while a send (or image upload) was in flight opens after it.
@@ -298,7 +307,8 @@ struct MacHomeWindow: View {
     }
 
     /// macOS keeps visible windows "active" even when another app is frontmost, so Home
-    /// keeps updating on screen; a hidden or minimized-only app stops polling.
+    /// keeps updating on screen (slower; see setFrontmost); a hidden or minimized-only app
+    /// stops polling.
     private func setActive(_ phase: ScenePhase) {
         let active = phase != .background
         remote.setAppActive(active)
