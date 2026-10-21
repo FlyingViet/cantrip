@@ -1530,8 +1530,13 @@ final class RemoteControlServer {
                     sendError(405, "Tasks are created conversationally in Cantrip Home.", on: connection)
                     return
                 }
+                let revision = store.revision.uuidString
+                if store.storageError == nil, request.query("revision") == revision {
+                    sendJSON(["unchanged": true, "revision": revision], on: connection)
+                    return
+                }
                 let value = CantripHomeTasksSnapshot(
-                    tasks: store.tasks, revision: store.revision.uuidString,
+                    tasks: store.tasks, revision: revision,
                     error: store.storageError
                 )
                 sendEncoded(on: connection) { try JSONEncoder().encode(value) }
@@ -1642,8 +1647,13 @@ final class RemoteControlServer {
                     sendError(405, "method not allowed", on: connection)
                     return
                 }
+                let revision = store.revision.uuidString
+                if store.storageError == nil, request.query("revision") == revision {
+                    sendJSON(["unchanged": true, "revision": revision], on: connection)
+                    return
+                }
                 let value = CantripHomeArtifactsSnapshot(
-                    artifacts: store.artifacts, revision: store.revision.uuidString
+                    artifacts: store.artifacts, revision: revision
                 )
                 sendEncoded(on: connection) { try JSONEncoder().encode(value) }
                 return
@@ -2239,22 +2249,40 @@ final class RemoteControlServer {
         case 503: reason = "Service Unavailable"
         default: reason = "Internal Server Error"
         }
-        let header = """
-        HTTP/1.1 \(status) \(reason)\r
-        Content-Type: \(contentType)\r
-        Content-Length: \(body.count)\r
-        Cache-Control: no-store\r
-        X-Content-Type-Options: nosniff\r
-        X-Cantrip-Request-ID: \(connection.trace.id)\r
-        Content-Security-Policy: \(contentSecurityPolicy)\r
-        Referrer-Policy: no-referrer\r
-        Connection: close\r
-        \r
-
-        """
-        var response = Data(header.utf8)
-        response.append(body)
-        connection.send(response, status: status, bodyBytes: body.count)
+        let compress = connection.trace.acceptsGzip && body.count >= HTTPCompression.minimumBytes
+            && body.count <= HTTPCompression.maximumBytes
+            && HTTPCompression.isCompressible(contentType: contentType)
+        let respond = {
+            var payload = body
+            var encoding = ""
+            if compress {
+                connection.trace.enter(.compress)
+                if let gzipped = HTTPCompression.gzip(body), gzipped.count < body.count {
+                    payload = gzipped
+                    encoding = "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n"
+                }
+            }
+            let header = "HTTP/1.1 \(status) \(reason)\r\n"
+                + "Content-Type: \(contentType)\r\n"
+                + "Content-Length: \(payload.count)\r\n"
+                + encoding
+                + "Cache-Control: no-store\r\n"
+                + "X-Content-Type-Options: nosniff\r\n"
+                + "X-Cantrip-Request-ID: \(connection.trace.id)\r\n"
+                + "Content-Security-Policy: \(contentSecurityPolicy)\r\n"
+                + "Referrer-Policy: no-referrer\r\n"
+                + "Connection: close\r\n\r\n"
+            var response = Data(header.utf8)
+            response.append(payload)
+            connection.send(response, status: status, bodyBytes: body.count, wireBytes: payload.count)
+        }
+        // Never on the caller's queue: the main actor, or the serial JSON queue that also
+        // encodes every client's tab-list poll.
+        if compress {
+            DispatchQueue.global(qos: .userInitiated).async(execute: respond)
+        } else {
+            respond()
+        }
     }
 }
 
@@ -2600,7 +2628,8 @@ private extension RemoteControlServer {
         if(start>0)session={...session,messages:session.messages.slice(start),hasOlderMessages:true}}
       historyCache.delete(session.id);historyCache.set(session.id,session);while(historyCache.size>5){const id=historyCache.keys().next().value;historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}return session}
     function scheduleRefresh(){if(timer)clearTimeout(timer);timer=null;if(!token||document.hidden||uiNavigating)return;
-      const busy=sessionItems.some(s=>s.isStreaming||s.queuedCount)||$("historyError").textContent||document.documentElement.dataset.cantripConnected!=="true";
+      // Fast polling follows the open tab; other tabs' status still refreshes every 5 s.
+      const busy=sessionItems.some(s=>s.id===selected&&(s.isStreaming||s.queuedCount))||$("historyError").textContent||document.documentElement.dataset.cantripConnected!=="true";
       timer=setTimeout(refresh,busy?1500:5000)}
     function refresh(){refreshRequested=true;if(refreshTask)return refreshTask;
       refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision;
@@ -3249,7 +3278,8 @@ private extension RemoteControlServer {
       $("tasksSearch").value="";setText($("tasksError"),"");renderTasks();$("tasksPanel").showModal();loadTasks()}
     function closeTasks(){if(tasksState)clearInterval(tasksState.timer);tasksState=null}
     async function loadTasks(){const state=tasksState;if(!state||state.loading)return;state.loading=true;
-      try{const data=await api("/api/v1/home/tasks");if(state!==tasksState)return;state.failed=false;
+      try{const data=await api("/api/v1/home/tasks"+(state.loaded&&state.revision?`?revision=${encodeURIComponent(state.revision)}`:""));if(state!==tasksState)return;state.failed=false;
+        if(data.unchanged){setText($("tasksError"),"");return}
         setText($("tasksError"),data.error?`Cantrip couldn't save tasks: ${data.error}`:"");
         if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.tasks=data.tasks||[];state.loaded=true;renderTasks()}}
       catch(error){if(state===tasksState){setText($("tasksError"),`Couldn't load tasks: ${error.message}`);if(!state.loaded){state.loaded=true;state.failed=true;renderTasks()}}}

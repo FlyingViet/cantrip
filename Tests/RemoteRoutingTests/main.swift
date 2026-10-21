@@ -87,6 +87,17 @@ private final class TestServer: @unchecked Sendable {
             guard let self else { return }
             let buffer = buffer + (data ?? Data())
             if let request = HTTPRequest.parse(buffer) {
+                if request.path == "/gzip" {
+                    // Compressed only when the request asks for it, like Cantrip's server.
+                    let accepts = HTTPCompression.acceptsGzip(request.headers["accept-encoding"])
+                    let payload = accepts ? HTTPCompression.gzip(gzipTestBody)! : gzipTestBody
+                    let header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                        + "Content-Length: \(payload.count)\r\n"
+                        + (accepts ? "Content-Encoding: gzip\r\n" : "") + "Connection: close\r\n\r\n"
+                    connection.send(content: Data(header.utf8) + payload,
+                                    completion: .contentProcessed { _ in connection.cancel() })
+                    return
+                }
                 let authorized = request.headers["authorization"] == "Bearer test-token"
                 let response = RemoteHTTPResponse(
                     status: authorized ? 200 : 401, contentType: "application/json",
@@ -107,7 +118,76 @@ private final class TestServer: @unchecked Sendable {
     }
 }
 
+private let gzipTestBody = Data(String(repeating: #"{"text":"compressible ✦"},"#, count: 400).utf8)
+
+private func shell(_ command: String, input: Data) throws -> Data {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", command]
+    let stdin = Pipe(), stdout = Pipe()
+    process.standardInput = stdin
+    process.standardOutput = stdout
+    try process.run()
+    stdin.fileHandleForWriting.write(input)
+    try stdin.fileHandleForWriting.close()
+    let output = stdout.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return output
+}
+
+private func testHTTPCompression() throws {
+    for (header, expected) in [("gzip, deflate, br", true), ("GZIP", true), ("*", true), ("br;q=1, gzip;q=0.5", true),
+                               ("deflate", false), ("gzip;q=0", false), ("", false)] {
+        expect(HTTPCompression.acceptsGzip(header) == expected, "Accept-Encoding \(header) -> \(expected)")
+    }
+    expect(!HTTPCompression.acceptsGzip(nil), "a missing Accept-Encoding means no gzip")
+    expect(HTTPCompression.isCompressible(contentType: "application/json; charset=utf-8")
+           && HTTPCompression.isCompressible(contentType: "text/html; charset=utf-8")
+           && !HTTPCompression.isCompressible(contentType: "image/jpeg"), "only text-like types are compressed")
+    let gzipped = HTTPCompression.gzip(gzipTestBody)!
+    expect(gzipped.count < gzipTestBody.count / 10, "repetitive JSON compresses well")
+    expect(HTTPCompression.gunzip(gzipped, limit: 1 << 20) == gzipTestBody, "gzip round trips")
+    expect(try shell("/usr/bin/gunzip -c", input: gzipped) == gzipTestBody, "the system gunzip reads Cantrip's gzip")
+    let system = try shell("/usr/bin/gzip -c", input: gzipTestBody)
+    expect(HTTPCompression.gunzip(system, limit: 1 << 20) == gzipTestBody, "Cantrip reads the system gzip")
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cantrip-gzip-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("named.json")
+    try gzipTestBody.write(to: file)
+    let named = try shell("/usr/bin/gzip -c '\(file.path)'", input: Data())
+    expect(named[3] & 0x08 != 0, "the system gzip stored a file name")
+    expect(HTTPCompression.gunzip(named, limit: 1 << 20) == gzipTestBody, "gzip header fields are skipped")
+    var corrupt = gzipped
+    corrupt[corrupt.count / 2] ^= 0xFF
+    expect(HTTPCompression.gunzip(corrupt, limit: 1 << 20) == nil, "corrupt gzip is rejected")
+    expect(HTTPCompression.gunzip(gzipped.prefix(gzipped.count - 3), limit: 1 << 20) == nil, "truncated gzip is rejected")
+    expect(HTTPCompression.gunzip(gzipped, limit: 100) == nil, "gzip over the size limit is rejected")
+    expect(HTTPCompression.gunzip(Data("not gzip at all, really".utf8), limit: 1 << 20) == nil, "non-gzip is rejected")
+    let empty = try shell("/usr/bin/gzip -c", input: Data())
+    expect(HTTPCompression.gunzip(empty, limit: 10) == Data(), "an empty gzip body decodes to nothing")
+
+    func raw(_ encoding: String?, _ body: Data) -> Data {
+        Data(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n"
+              + (encoding.map { "Content-Encoding: \($0)\r\n" } ?? "") + "\r\n").utf8) + body
+    }
+    expect(try RemoteHTTPResponse.parse(raw("gzip", gzipped))?.body == gzipTestBody, "the relay decodes gzip")
+    expect(try RemoteHTTPResponse.parse(raw(nil, gzipTestBody))?.body == gzipTestBody, "plain bodies pass through")
+    do {
+        _ = try RemoteHTTPResponse.parse(raw("br", gzipped))
+        expect(false, "an unsupported encoding must not reach the web view as text")
+    } catch is RemoteRouteError {}
+    do {
+        _ = try RemoteHTTPResponse.parse(raw("gzip", corrupt))
+        expect(false, "a corrupt gzip body must fail")
+    } catch is RemoteRouteError {}
+    let relayed = try RemoteHTTPResponse.parse(raw("gzip", gzipped))!.data
+    expect(!String(decoding: relayed.prefix(200), as: UTF8.self).lowercased().contains("content-encoding"),
+           "the relay serves decoded bodies without a Content-Encoding header")
+}
+
 private func runTests() async throws {
+    try testHTTPCompression()
     let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: 8765)
     let lan = RemoteRoute.lan(endpoint)
     let url = URL(string: "http://127.0.0.1:9876")!
@@ -373,6 +453,8 @@ private func runTests() async throws {
                                                  URLQueryItem(name: "revision", value: "safe&encoded")])
     expect(String(decoding: try await live.request(historyRequest).body, as: UTF8.self) == historyRequest.target,
            "HTTPS forwarding must preserve and encode history cursors and revisions")
+    let gzipRequest = HTTPRequest(method: "GET", path: "/gzip", headers: read.headers, body: Data())
+    expect(try await live.request(gzipRequest).body == gzipTestBody, "the HTTPS route decodes gzip")
     await live.update(endpoints: [blackholeEndpoint], fallback: nil)
     let lanStart = Date()
     do {
@@ -407,6 +489,7 @@ private func runTests() async throws {
     expect(try await secure.request(read).status == 200, "real authenticated TLS-PSK request succeeds")
     expect(String(decoding: try await secure.request(historyRequest).body, as: UTF8.self) == historyRequest.target,
            "TLS-PSK forwarding must preserve history query parameters")
+    expect(try await secure.request(gzipRequest).body == gzipTestBody, "the LAN route asks for gzip and decodes it")
     await secure.stop()
 
     let bridge = RemoteLANBridge(token: "test-token")
