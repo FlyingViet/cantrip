@@ -19,6 +19,10 @@ struct SessionTabTests {
                 try await testCopilotRuntimeRecoveryLive()
                 return
             }
+            if ProcessInfo.processInfo.environment["CANTRIP_SENDNOW_LIVE_TEST"] == "1" {
+                try await testQueueSendNowLive()
+                return
+            }
             if ProcessInfo.processInfo.environment["CANTRIP_WATCHER_LIVE_TEST"] == "1" {
                 try await testBackgroundWatcherLive()
                 return
@@ -160,6 +164,7 @@ struct SessionTabTests {
         try testSubagentPlacement()
         try await testSubagentMonitor()
         try await testBackgroundWatcherContinuation()
+        try await testQueueSendNow()
         try await testParallelRequestRouting()
         try await testQueueGrouping()
         try await testPromptUsage()

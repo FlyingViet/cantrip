@@ -1270,6 +1270,26 @@ final class RemoteControlServer {
             sendSession(session, recentExchanges: recentExchanges, on: connection)
             return
         }
+        if parts.count == 4, parts[1] == "queue", parts[3] == "send" {
+            guard request.method == "POST" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            guard request.body.count <= 1024 else {
+                sendError(400, "Sending a queued message now takes no request body.", on: connection)
+                return
+            }
+            guard let promptID = UUID(uuidString: String(parts[2])) else {
+                sendError(400, "queued message ID must be a UUID", on: connection)
+                return
+            }
+            if let problem = session.sendQueuedNow(id: promptID) {
+                sendError(409, problem, on: connection)
+                return
+            }
+            sendSession(session, recentExchanges: recentExchanges, on: connection)
+            return
+        }
         guard request.method == "POST", parts.count == 2 else {
             sendError(405, "method not allowed", on: connection)
             return
@@ -1857,6 +1877,7 @@ final class RemoteControlServer {
             "supportsMixedAttachments": true,
             "supportsAutoDelivery": true,
             "supportsQueueRemoval": true,
+            "supportsQueueSendNow": true,
             "supportsPagedHistory": true,
         ]
         if let status = session.statusText { result["status"] = status }

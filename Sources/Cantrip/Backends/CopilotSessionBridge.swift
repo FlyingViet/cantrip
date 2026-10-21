@@ -6,6 +6,11 @@ enum CopilotSessionBridge {
     import { randomUUID } from 'node:crypto';
 
     let client, session, runID, stopping = false, sending = 0, idle = false;
+    // The CLI's `assistant.idle` ends the root turn while `session.idle` waits for every
+    // background agent and shell; the runtime then wakes the root for each completion itself.
+    let turnIdle = false, nativeIdle = false, waitEpoch = 0, announcedWait = '', lastCompletedKind = '';
+    const rootTurnTypes = new Set(['system.notification', 'user.message', 'assistant.turn_start',
+      'assistant.message_start', 'assistant.message', 'tool.execution_start']);
     const inputs = new Map();
     const subagentTools = ['task', 'read_agent', 'write_agent', 'list_agents'];
     const watcherCalls = new Map(), watcherAgents = new Map();
@@ -40,6 +45,7 @@ enum CopilotSessionBridge {
       const watcher = watcherCalls.get(callID);
       if (!watcher) return false;
       watcherCalls.delete(callID);
+      lastCompletedKind = watcher.kind;
       if (watcher.agentID) watcherAgents.delete(watcher.agentID);
       if (shouldWake) completedWatchers.push({
         agentID: watcher.agentID, name: watcher.name, kind: watcher.kind, status
@@ -88,6 +94,7 @@ enum CopilotSessionBridge {
       if (!runID || stopping || !idle || sending || inputs.size || !completedWatchers.length) return;
       const completed = completedWatchers.splice(0);
       idle = false;
+      resetBackgroundWait();
       sending++;
       emit({ kind: 'watcherResuming', runID, count: completed.length, parallel: parallelCount(completed) });
       try {
@@ -121,7 +128,18 @@ enum CopilotSessionBridge {
       });
     }
     function finishIfIdle() {
-      if (!idle || sending || inputs.size || !runID) return;
+      if (!runID || sending || inputs.size) return;
+      if (!idle) {
+        if (turnIdle) void announceBackgroundWait();
+        return;
+      }
+      if (nativeIdle) {
+        // session.idle means nothing is left running, and the runtime already woke the root
+        // for each completion; a Cantrip wake-up would only repeat that turn.
+        completedWatchers = [];
+        watcherCalls.clear();
+        watcherAgents.clear();
+      }
       if (completedWatchers.length) { scheduleWatcherResume(); return; }
       if (watcherCalls.size) {
         emit({ kind: 'watcherWaiting', runID, count: watcherCalls.size,
@@ -130,7 +148,44 @@ enum CopilotSessionBridge {
       }
       const completed = runID;
       runID = undefined;
+      resetBackgroundWait();
       emit({ kind: 'done', runID: completed });
+    }
+    function resetBackgroundWait() {
+      turnIdle = false;
+      announcedWait = '';
+      waitEpoch++;
+    }
+    // The root is idle but background agents or shells keep the run open: say so, so a new
+    // message goes straight to the root instead of waiting behind them.
+    async function announceBackgroundWait() {
+      const epoch = ++waitEpoch, owner = runID;
+      let count = 0, parallel = 0, watchers = 0;
+      try {
+        const listed = (await session?.rpc?.tasks?.list?.())?.tasks ?? [];
+        for (const task of listed) {
+          if (task.status !== 'running') continue;
+          count++;
+          const name = String(task.displayName ?? '').toLowerCase();
+          if (name.startsWith('side-')) parallel++;
+          else if (name.startsWith('watch-')) watchers++;
+        }
+      } catch {
+        count = watcherCalls.size;
+        parallel = parallelCount(watcherCalls.values());
+        watchers = count - parallel;
+      }
+      if (epoch !== waitEpoch || runID !== owner || !turnIdle || idle || sending || inputs.size
+          || stopping || !count || announcedWait === `${count}/${parallel}/${watchers}`) return;
+      announcedWait = `${count}/${parallel}/${watchers}`;
+      emit({ kind: 'watcherWaiting', runID, count, parallel, watchers });
+    }
+    // The runtime woke the root by itself (a background task finished).
+    function leaveBackgroundWait() {
+      const announced = announcedWait;
+      resetBackgroundWait();
+      if (announced) emit({ kind: 'watcherResuming', runID, count: 1,
+        parallel: lastCompletedKind === 'parallel' ? 1 : 0 });
     }
     function requestInput(kind, detail, options = {}) {
       if (!runID || stopping) return Promise.resolve({ decision: 'cancel' });
@@ -155,13 +210,20 @@ enum CopilotSessionBridge {
       // Subagents share this stream: only the root agent's idle or error ends the turn.
       if (event.type === 'session.idle' && !event.agentId) {
         idle = true;
+        turnIdle = true;
+        finishIfIdle();
+      } else if (event.type === 'assistant.idle' && !event.agentId) {
+        nativeIdle = true;
+        turnIdle = true;
+        emit({ kind: 'event', runID, event });
         finishIfIdle();
       } else if (event.type === 'session.error' && !event.agentId) {
         emit({ kind: 'failure', runID, message: event.data.message });
         runID = undefined;
       } else {
+        if (turnIdle && !idle && !event.agentId && rootTurnTypes.has(event.type)) leaveBackgroundWait();
         emit({ kind: 'event', runID, event });
-        if (watcherChanged) finishIfIdle();
+        if (watcherChanged || turnIdle && event.type === 'session.background_tasks_changed') finishIfIdle();
       }
     }
     // The SDK never settles a request in flight when its runtime process dies, so the turn
@@ -268,6 +330,7 @@ enum CopilotSessionBridge {
         if (runID) throw new Error('A Copilot turn is already running.');
         runID = command.runID;
         idle = false;
+        resetBackgroundWait();
         sending++;
         try {
           const fresh = !session;
@@ -289,8 +352,15 @@ enum CopilotSessionBridge {
         }
         sending++;
         idle = false;
+        resetBackgroundWait();
         try {
           const messageID = await session.send({ prompt: command.text, mode: 'immediate' });
+          // "Send now": a steering message already moves a blocking shell or sync agent to the
+          // background; promote explicitly too, in case the root was between steps.
+          if (command.promote) {
+            try { await session.rpc?.tasks?.promoteCurrentToBackground?.(); }
+            catch (error) { emit({ kind: 'log', message: 'could not move the current step to the background: ' + errorText(error) }); }
+          }
           emit({ kind: 'delivery', runID: command.runID, id: command.id, status: 'accepted', messageID });
         } catch (error) {
           // An RPC error can arrive after acceptance. Never turn it into an automatic retry.
