@@ -773,6 +773,17 @@ naming), `isLocked`, and `supportsTabMetadata`. To edit, use
 names is normalized; blank restores automatic naming, and names over 80
 characters are rejected without applying any part of the update.
 
+### Reorder remote tabs
+
+Mac Remote and browser tabs support drag reordering, move buttons in tab
+settings, and Option/Alt + arrow keys (up/down in the Mac Remote sidebar,
+left/right in the top strip). Cantrip Agent's drawer/sidebar provides drag
+handles and **Move Tab Up/Down** actions. The order belongs to the Mac session
+list and appears on every client. Remote tab lists keep their scroll position
+during refreshes. Reordering requires the updated host's
+`supportsTabReordering` capability; unsaved Private mode tabs remain hidden
+from Remote.
+
 ## Add access away from home
 
 Use **Tailscale Serve**, not Funnel and not a router port-forward.
