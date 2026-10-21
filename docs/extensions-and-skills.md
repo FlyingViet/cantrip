@@ -100,6 +100,37 @@ For a Copilot MCP server that uses OAuth, sign in once from Terminal with
 token that the CLI saved in the macOS Keychain. Tools appear in the next
 Copilot session Cantrip starts.
 
+### Start a large MCP server only when it's used
+
+Each Copilot tab starts its own copy of every stdio MCP server, so a server
+that needs a few hundred MB costs that much per open tab and per Cantrip Home
+job, even when nothing calls it. `Scripts/mcp-on-demand` stands in for such a
+server. It answers the connection handshake and the tool list from a cache
+saved the last time the server ran (about 9 MB of memory), and starts the real
+server the first time a tool is called. That call waits about a second longer;
+later calls go straight through.
+
+Put it in front of the server's command in `~/.copilot/mcp-config.json`:
+
+```json
+"rea": {
+  "type": "stdio",
+  "command": "/opt/homebrew/bin/python3",
+  "args": ["/Users/you/Coding/Cantrip/Scripts/mcp-on-demand", "--",
+           "/opt/homebrew/opt/node@22/bin/node", "/path/to/rea.mjs", "mcp"],
+  "tools": ["*"]
+}
+```
+
+The first session after a change records the cache by starting the server at
+once. The cache, in `~/.cache/Cantrip/mcp-on-demand/`, is keyed by the
+server's command, files and package version, so an update records a new one.
+When a started server's tool list differs from the cache, the cache is updated
+and the session is told its tools changed. The server stops when its tab's
+Copilot runtime does. Add `--log <file>` before `--` to see which requests
+were answered from the cache. Avoid it for servers whose tools change while
+they run or that must do work at startup; they need to start with the session.
+
 For manifests, tool configuration, and dashboard APIs, use the
 [plugin developer reference](../PLUGINS.md). Windows uses the same manifest
 format but a different host; follow [Windows plugins](../windows/PLUGINS.md).

@@ -1,0 +1,508 @@
+#!/usr/bin/env python3
+"""Start a stdio MCP server only when a session first uses it.
+
+Usage: mcp-on-demand [--cache-dir DIR] [--log FILE] -- COMMAND [ARGS...]
+
+Put it in front of a heavy server in ~/.copilot/mcp-config.json:
+
+    "rea": {"type": "stdio", "command": "/usr/bin/python3",
+            "args": ["~/Coding/Cantrip/Scripts/mcp-on-demand", "--", "node", "rea.mjs", "mcp"]}
+
+Every Copilot session starts its own copy of each MCP server, so a large server costs its
+memory once per open tab even when no tab calls it. This launcher answers the handshake and
+the catalog requests (initialize and the tools, prompts and resources lists) from a cache
+recorded the last time the server ran, and starts the real server on the first other request,
+such as a tool call. From then on every message passes through unchanged until the client
+closes stdin, which also stops the server.
+
+Without a cache for this exact command (or when the client asks for a different protocol
+version) it starts the server at once and records one. After each start it re-reads the
+server's catalog; when that differs from the cache, the cache is updated and the client is
+told the list changed. If the server exits, requests in flight fail and the next one starts
+it again. Standard library only, so it runs on the system Python 3.9.
+"""
+
+import hashlib
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+OWN = "mcp-on-demand:"
+CATALOG = {
+    "tools/list": "tools",
+    "prompts/list": "prompts",
+    "resources/list": "resources",
+    "resources/templates/list": "resources",
+}
+CHANGED = {
+    "tools/list": "notifications/tools/list_changed",
+    "prompts/list": "notifications/prompts/list_changed",
+    "resources/list": "notifications/resources/list_changed",
+}
+START_TIMEOUT = 120
+CACHE_VERSION = 1
+
+
+def log(message):
+    if LOG_PATH:
+        try:
+            with open(LOG_PATH, "a") as handle:
+                handle.write("%s %d %s\n" % (time.strftime("%H:%M:%S"), os.getpid(), message))
+        except OSError:
+            pass
+
+
+LOG_PATH = None
+
+
+def nearest_package_json(path):
+    directory = os.path.dirname(os.path.abspath(path))
+    for _ in range(6):
+        candidate = os.path.join(directory, "package.json")
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            break
+        directory = parent
+    return None
+
+
+def fingerprint(command):
+    """Identifies the installed server: the command line plus the files it names.
+
+    npm normalizes file times, so a package's version comes from its package.json contents.
+    """
+    files = []
+    for part in command:
+        path = os.path.expanduser(part)
+        if not os.path.isfile(path):
+            continue
+        status = os.stat(path)
+        files.append([os.path.realpath(path), status.st_size, status.st_mtime_ns])
+        package = nearest_package_json(path)
+        if package:
+            with open(package, "rb") as handle:
+                files.append([package, hashlib.sha256(handle.read()).hexdigest()])
+    blob = json.dumps({"command": command, "files": files}, sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()[:24]
+
+
+def list_key(method, params):
+    params = dict(params or {})
+    params.pop("_meta", None)
+    return method + " " + json.dumps(params, sort_keys=True)
+
+
+def write_atomic(path, text):
+    temporary = "%s.%d.tmp" % (path, os.getpid())
+    with open(temporary, "w") as handle:
+        handle.write(text)
+    os.replace(temporary, path)
+
+
+class Cache:
+    """One folder per server fingerprint; large lists live in their own files, read on demand."""
+
+    def __init__(self, root, key):
+        self.folder = os.path.join(root, key)
+        self.meta_path = os.path.join(self.folder, "meta.json")
+        self.lock = threading.Lock()
+        try:
+            with open(self.meta_path) as handle:
+                self.meta = json.load(handle)
+            if self.meta.get("version") != CACHE_VERSION:
+                self.meta = None
+        except (OSError, ValueError):
+            self.meta = None
+
+    def initialize(self, protocol):
+        if self.meta and self.meta.get("clientProtocol") == protocol:
+            return self.meta.get("initialize")
+        return None
+
+    def list_path(self, key):
+        return os.path.join(self.folder, hashlib.sha256(key.encode()).hexdigest()[:24] + ".json")
+
+    def list_file(self, key):
+        """The file holding a cached result's JSON text, or None."""
+        if not self.meta or key not in self.meta.get("lists", {}):
+            return None
+        path = self.list_path(key)
+        return path if os.path.isfile(path) else None
+
+    def save_initialize(self, protocol, result_text):
+        try:
+            self._save_initialize(protocol, result_text)
+        except OSError as error:
+            log("could not save the cache: %s" % error)
+
+    def save_list(self, key, result_text):
+        """Stores a list result; True when it replaced a different cached one."""
+        try:
+            return self._save_list(key, result_text)
+        except OSError as error:
+            log("could not save the cache: %s" % error)
+            return False
+
+    def _save_initialize(self, protocol, result_text):
+        with self.lock:
+            if self.meta and self.meta.get("clientProtocol") == protocol \
+                    and self.meta.get("initialize") == result_text:
+                return
+            lists = self.meta.get("lists", {}) if self.meta and self.meta.get("clientProtocol") == protocol else {}
+            self.meta = {"version": CACHE_VERSION, "clientProtocol": protocol,
+                         "initialize": result_text, "lists": lists}
+            self._write_meta()
+
+    def _save_list(self, key, result_text):
+        digest = hashlib.sha256(result_text.encode("utf-8", "surrogateescape")).hexdigest()
+        with self.lock:
+            if self.meta is None:
+                return False
+            lists = self.meta.setdefault("lists", {})
+            previous = lists.get(key)
+            if previous == digest:
+                return False
+            os.makedirs(self.folder, exist_ok=True)
+            write_atomic(self.list_path(key), result_text)
+            lists[key] = digest
+            self._write_meta()
+            return previous is not None
+
+    def _write_meta(self):
+        os.makedirs(self.folder, exist_ok=True)
+        write_atomic(self.meta_path, json.dumps(self.meta))
+
+
+def canonical(result):
+    return json.dumps(result, sort_keys=True, separators=(",", ":"))
+
+
+def with_list_changed(result_text):
+    """Makes sure the client listens for catalog changes, so a stale cache can be corrected."""
+    try:
+        result = json.loads(result_text)
+    except ValueError:
+        return result_text
+    capabilities = result.get("capabilities") or {}
+    for name in ("tools", "prompts", "resources"):
+        if isinstance(capabilities.get(name), dict):
+            capabilities[name]["listChanged"] = True
+    return json.dumps(result)
+
+
+class Proxy:
+    def __init__(self, command, cache):
+        self.command = command
+        self.cache = cache
+        self.out_lock = threading.Lock()
+        self.child_lock = threading.Lock()
+        self.child = None
+        self.ready = False
+        self.generation = 0
+        self.child_protocol = None
+        self.child_init_text = "{}"
+        self.client_init = None
+        self.log_level = None
+        self.in_flight = {}
+        self.waiters = {}
+        self.own_counter = 0
+        self.served_from_cache = set()
+
+    # Client side
+
+    def send_client(self, message=None, line=None):
+        text = line if line is not None else json.dumps(message)
+        with self.out_lock:
+            try:
+                sys.stdout.write(text.rstrip("\n") + "\n")
+                sys.stdout.flush()
+            except (BrokenPipeError, OSError):
+                pass
+
+    def reply(self, request_id, result_text):
+        self.send_client(line='{"jsonrpc":"2.0","id":%s,"result":%s}' % (json.dumps(request_id), result_text))
+
+    def reply_file(self, request_id, path):
+        """Streams a cached result so a large catalog never sits in this process's memory."""
+        try:
+            handle = open(path, encoding="utf-8", errors="surrogateescape")
+        except OSError:
+            return False
+        with handle, self.out_lock:
+            try:
+                sys.stdout.write('{"jsonrpc":"2.0","id":%s,"result":' % json.dumps(request_id))
+                shutil.copyfileobj(handle, sys.stdout, 65536)
+                sys.stdout.write("}\n")
+                sys.stdout.flush()
+            except (BrokenPipeError, OSError):
+                pass
+        return True
+
+    def fail(self, request_id, text, code=-32603):
+        self.send_client({"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": text}})
+
+    def handle_client(self, line):
+        try:
+            message = json.loads(line)
+        except ValueError:
+            if self.ready:
+                self.send_child(line)
+            return
+        if not isinstance(message, dict):
+            if self.ready:
+                self.send_child(line)
+            return
+        method = message.get("method")
+        has_id = "id" in message
+        if method and LOG_PATH:
+            log("client %s %s" % ("request" if has_id else "notification", method))
+        if method is None:
+            if self.ready:
+                self.send_child(line)
+            return
+        if not has_id:
+            if self.ready and method != "notifications/initialized":
+                self.send_child(line)
+            return
+        request_id = message["id"]
+        params = message.get("params") or {}
+        if method == "server/discover":
+            # Stateless discovery from newer MCP revisions: decline it, as servers that predate it
+            # do, so the client falls back to initialize, which the cache can answer.
+            self.fail(request_id, "Method not found", code=-32601)
+            return
+        if method == "initialize":
+            self.client_init = params
+            protocol = params.get("protocolVersion")
+            if self.ready and self.child_protocol != protocol:
+                log("restarting the server for protocol %s" % protocol)
+                self.stop_child()
+            if not self.ready:
+                cached = self.cache.initialize(protocol)
+                if cached:
+                    log("initialize from cache")
+                    self.reply(request_id, with_list_changed(cached))
+                    return
+                if not self.ensure_child():
+                    self.fail(request_id, "The MCP server could not start.")
+                    return
+            self.reply(request_id, self.child_init_text)
+            return
+        if self.ready:
+            self.forward(message, line)
+            return
+        if method in CATALOG:
+            key = list_key(method, params)
+            path = self.cache.list_file(key)
+            if path and self.reply_file(request_id, path):
+                log("%s from cache" % method)
+                self.served_from_cache.add(key)
+                return
+        elif method == "ping":
+            self.reply(request_id, "{}")
+            return
+        elif method == "logging/setLevel":
+            self.log_level = params
+            self.reply(request_id, "{}")
+            return
+        log("starting the server for %s" % method)
+        if not self.ensure_child():
+            self.fail(request_id, "The MCP server could not start.")
+            return
+        self.forward(message, line)
+
+    def forward(self, message, line):
+        method = message.get("method")
+        if method in CATALOG:
+            self.in_flight[json.dumps(message["id"])] = list_key(method, message.get("params"))
+        else:
+            self.in_flight[json.dumps(message["id"])] = None
+        if not self.send_child(line):
+            self.in_flight.pop(json.dumps(message["id"]), None)
+            self.fail(message["id"], "The MCP server stopped; try again.")
+
+    # Server side
+
+    def send_child(self, line):
+        child = self.child
+        if child is None:
+            return False
+        try:
+            child.stdin.write(line.rstrip("\n") + "\n")
+            child.stdin.flush()
+            return True
+        except (BrokenPipeError, OSError, ValueError):
+            return False
+
+    def own_request(self, method, params, timeout):
+        self.own_counter += 1
+        request_id = "%s%s:%d" % (OWN, method, self.own_counter)
+        waiter = {"event": threading.Event(), "message": None, "generation": self.generation}
+        self.waiters[request_id] = waiter
+        if not self.send_child(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})):
+            self.waiters.pop(request_id, None)
+            return None
+        waiter["event"].wait(timeout)
+        self.waiters.pop(request_id, None)
+        return waiter["message"]
+
+    def ensure_child(self):
+        with self.child_lock:
+            if self.ready:
+                return True
+            try:
+                child = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         encoding="utf-8", errors="surrogateescape", bufsize=1)
+            except OSError as error:
+                log("could not start: %s" % error)
+                return False
+            self.child = child
+            self.generation += 1
+            threading.Thread(target=self.read_child, args=(child, self.generation), daemon=True).start()
+            params = self.client_init or {"protocolVersion": "2025-06-18", "capabilities": {},
+                                          "clientInfo": {"name": "mcp-on-demand", "version": "1"}}
+            started = time.time()
+            response = self.own_request("initialize", params, START_TIMEOUT)
+            if not response or "result" not in response:
+                log("handshake failed: %s" % (response or "no reply"))
+                self.stop_child()
+                return False
+            self.cache.save_initialize(params.get("protocolVersion"), json.dumps(response["result"]))
+            self.child_protocol = params.get("protocolVersion")
+            self.child_init_text = json.dumps(response["result"])
+            self.send_child(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+            if self.log_level is not None:
+                self.own_request("logging/setLevel", self.log_level, 10)
+            self.ready = True
+            log("server ready in %.2fs" % (time.time() - started))
+            capabilities = response["result"].get("capabilities") or {}
+            threading.Thread(target=self.refresh_catalog, args=(capabilities,), daemon=True).start()
+            return True
+
+    def refresh_catalog(self, capabilities):
+        """Re-reads the started server's first catalog pages and corrects a stale cache."""
+        for method, capability in CATALOG.items():
+            if method == "resources/templates/list" or capability not in capabilities:
+                continue
+            response = self.own_request(method, {}, 60)
+            if not response or "result" not in response:
+                continue
+            key = list_key(method, {})
+            replaced = self.cache.save_list(key, canonical(response["result"]))
+            if replaced and key in self.served_from_cache:
+                log("%s changed since the cache was recorded" % method)
+                self.send_client({"jsonrpc": "2.0", "method": CHANGED[method]})
+
+    def read_child(self, child, generation):
+        for line in child.stdout:
+            if not line.strip():
+                continue
+            try:
+                message = json.loads(line)
+            except ValueError:
+                self.send_client(line=line)
+                continue
+            request_id = message.get("id") if isinstance(message, dict) else None
+            is_response = isinstance(message, dict) and "method" not in message and request_id is not None
+            if is_response and isinstance(request_id, str) and request_id.startswith(OWN):
+                waiter = self.waiters.get(request_id)
+                if waiter:
+                    waiter["message"] = message
+                    waiter["event"].set()
+                continue
+            if is_response:
+                key = self.in_flight.pop(json.dumps(request_id), None)
+                if key and "result" in message:
+                    self.cache.save_list(key, canonical(message["result"]))
+            self.send_client(line=line)
+        child.wait()
+        # Release a handshake that is waiting on this server before taking its lock.
+        for waiter in list(self.waiters.values()):
+            if waiter["generation"] == generation:
+                waiter["event"].set()
+        with self.child_lock:
+            if generation != self.generation:
+                return
+            log("server exited with status %s" % child.returncode)
+            self.ready = False
+            self.child = None
+        for key in list(self.in_flight):
+            self.in_flight.pop(key, None)
+            self.fail(json.loads(key), "The MCP server exited; the next request starts it again.")
+
+    def stop_child(self):
+        child = self.child
+        self.child = None
+        self.ready = False
+        if child is None or child.poll() is not None:
+            return
+        try:
+            child.stdin.close()
+        except OSError:
+            pass
+        for action, wait in ((None, 2), (child.terminate, 2), (child.kill, 2)):
+            if action:
+                try:
+                    action()
+                except OSError:
+                    return
+            try:
+                child.wait(wait)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+
+
+def main(argv):
+    global LOG_PATH
+    cache_root = os.path.expanduser("~/.cache/Cantrip/mcp-on-demand")
+    arguments = list(argv)
+    while arguments and arguments[0] != "--":
+        option = arguments.pop(0)
+        if option == "--cache-dir" and arguments:
+            cache_root = os.path.expanduser(arguments.pop(0))
+        elif option == "--log" and arguments:
+            LOG_PATH = os.path.expanduser(arguments.pop(0))
+        else:
+            sys.stderr.write("usage: mcp-on-demand [--cache-dir DIR] [--log FILE] -- COMMAND [ARGS...]\n")
+            return 2
+    command = [os.path.expanduser(part) for part in arguments[1:]]
+    if not command:
+        sys.stderr.write("usage: mcp-on-demand [--cache-dir DIR] [--log FILE] -- COMMAND [ARGS...]\n")
+        return 2
+    proxy = Proxy(command, Cache(cache_root, fingerprint(command)))
+
+    def shutdown(*_):
+        proxy.stop_child()
+        os._exit(0)
+
+    for name in ("SIGTERM", "SIGINT", "SIGHUP"):
+        signal.signal(getattr(signal, name), shutdown)
+    for stream in (sys.stdin, sys.stdout):
+        stream.reconfigure(encoding="utf-8", errors="surrogateescape")
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            proxy.handle_client(line)
+        except Exception as error:  # A bad message must not take every tool down with it.
+            log("could not handle a message: %r" % error)
+            try:
+                message = json.loads(line)
+                if isinstance(message, dict) and message.get("method") and "id" in message:
+                    proxy.fail(message["id"], "mcp-on-demand could not handle this request.")
+            except ValueError:
+                pass
+    proxy.stop_child()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
