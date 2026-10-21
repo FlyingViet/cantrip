@@ -101,6 +101,42 @@ enum CantripHomeProtocol {
         return blocks
     }
 
+    /// What clients show of a Home reply. Home blocks are written for Cantrip, never the user,
+    /// so they are hidden, including one still being written. While the reply streams, so is a
+    /// trailing fence whose tag could still turn into one: raw JSON never flashes in the chat.
+    static func visibleText(_ text: String, streaming: Bool) -> String {
+        var visible = text
+        if visible.range(of: "cantrip", options: .caseInsensitive) != nil,
+           !extractBlocks(from: &visible).isEmpty {
+            visible = visible.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return streaming ? trimmingPendingFence(visible) : visible
+    }
+
+    /// Drops a fence at the very end of streamed text while its tag is still too short to tell
+    /// whether it opens a Home block (```, ```js, ```json cant, ```cantrip-ta…).
+    private static func trimmingPendingFence(_ text: String) -> String {
+        let lineStart = text.lastIndex(of: "\n").map(text.index(after:)) ?? text.startIndex
+        let line = text[lineStart...]
+        guard let found = ["```", "~~~"].compactMap({ line.range(of: $0, options: .backwards) })
+            .max(by: { $0.lowerBound < $1.lowerBound }) else { return text }
+        let fence = line[found.lowerBound]
+        var start = found.lowerBound
+        while start > line.startIndex, line[line.index(before: start)] == fence {
+            start = line.index(before: start)
+        }
+        let info = line[found.upperBound...].drop { $0 == " " || $0 == "\t" }
+            .lowercased().replacingOccurrences(of: "_", with: "-")
+        var tag = Substring(info)
+        if tag.hasPrefix("json") { tag = tag.dropFirst(4).drop { $0 == " " || $0 == "\t" } }
+        guard "json".hasPrefix(info) || "cantrip".hasPrefix(tag) || tag.hasPrefix("cantrip") else {
+            return text
+        }
+        return String(text[..<start]).replacingOccurrences(
+            of: #"\s+$"#, with: "", options: .regularExpression
+        )
+    }
+
     private static func fenceOpening(_ line: String) -> (marker: String, info: String)? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let first = trimmed.first, first == "`" || first == "~" else { return nil }
