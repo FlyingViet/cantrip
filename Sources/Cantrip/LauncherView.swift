@@ -1212,6 +1212,14 @@ struct LauncherView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer()
+                    Button(action: { session.sendQueuedNow(id: item.id) }) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Send now, without waiting. Anything already running keeps going in the background.")
+                    .accessibilityLabel("Send now")
                     Button(action: { session.removeQueued(at: index) }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 11))

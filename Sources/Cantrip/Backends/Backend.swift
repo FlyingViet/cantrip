@@ -395,10 +395,16 @@ protocol Backend {
     /// (caller should queue instead).
     func injectMidTurn(_ text: String) -> Bool
     var supportsMidTurnInjection: Bool { get }
+    /// The backend can take live messages into a turn once it is running, even while
+    /// `supportsMidTurnInjection` is still false (the turn is starting or saving).
+    var canSteerTurns: Bool { get }
     /// The live turn can hand a request to a background agent and report its result later.
     var supportsParallelSubagents: Bool { get }
     /// Completion confirms transport acceptance, not model consumption.
     func injectMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void)
+    /// Like `injectMidTurn`, for a message the user pushed ahead of the current work. Copilot also
+    /// moves a step the turn is blocked on (a command or sync agent) to the background.
+    func sendNowMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void)
     /// Gracefully abort the CURRENT turn in-band, keeping the process and
     /// session alive for the next message (Claude control protocol).
     /// Returns false if unsupported/no live process (caller should
@@ -409,20 +415,28 @@ protocol Backend {
 extension Backend {
     func injectMidTurn(_ text: String) -> Bool { false }
     var supportsMidTurnInjection: Bool { false }
+    var canSteerTurns: Bool { false }
     var supportsParallelSubagents: Bool { false }
     func injectMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void) {
         completion(injectMidTurn(text) ? .accepted(messageID: nil) : .notSent)
+    }
+    func sendNowMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void) {
+        injectMidTurn(text, completion: completion)
     }
     func interruptTurn() -> Bool { false }
 }
 
 /// Status lines for a run kept open only by detached background agents.
 enum BackgroundWaitStatus {
-    static func waiting(watchers: Int, parallel: Int) -> String {
-        switch (watchers, parallel) {
-        case (_, 0): return watchers == 1 ? "Background watcher running" : "\(watchers) background watchers running"
-        case (0, _): return parallel == 1 ? "Parallel request running" : "\(parallel) parallel requests running"
-        default: return "\(watchers + parallel) background tasks running"
+    /// `other` counts background work that is neither a watch-* nor a side-* agent, such as a
+    /// command moved to the background.
+    static func waiting(watchers: Int, parallel: Int, other: Int = 0) -> String {
+        switch (watchers, parallel, other) {
+        case (_, 0, 0): return watchers == 1 ? "Background watcher running" : "\(watchers) background watchers running"
+        case (0, _, 0): return parallel == 1 ? "Parallel request running" : "\(parallel) parallel requests running"
+        default:
+            let total = watchers + parallel + other
+            return total == 1 ? "Background task running" : "\(total) background tasks running"
         }
     }
 
@@ -431,7 +445,7 @@ enum BackgroundWaitStatus {
     }
 
     static func isWaiting(_ status: String) -> Bool {
-        ["Background watcher running", "Parallel request running"].contains(status)
+        ["Background watcher running", "Parallel request running", "Background task running"].contains(status)
             || [" background watchers running", " parallel requests running", " background tasks running"]
                 .contains { status.hasSuffix($0) }
     }

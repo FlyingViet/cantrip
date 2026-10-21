@@ -164,6 +164,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         availabilityLock.withLock { injectionAvailable }
     }
 
+    var canSteerTurns: Bool { true }
+
     var supportsParallelSubagents: Bool {
         availabilityLock.withLock { injectionAvailable && sessionHasSubagents }
     }
@@ -292,6 +294,15 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     }
 
     func injectMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void) {
+        deliverMidTurn(text, promote: false, completion: completion)
+    }
+
+    func sendNowMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void) {
+        deliverMidTurn(text, promote: true, completion: completion)
+    }
+
+    private func deliverMidTurn(_ text: String, promote: Bool,
+                                completion: @escaping (MidTurnDelivery) -> Void) {
         queue.async { [weak self] in
             guard let self, self.ready, let runID = self.runID,
                   self.process?.isRunning == true else {
@@ -302,7 +313,9 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             let id = UUID().uuidString
             self.deliveries[id] = completion
             do {
-                try self.write(["kind": "inject", "runID": runID, "id": id, "text": text])
+                var command: [String: Any] = ["kind": "inject", "runID": runID, "id": id, "text": text]
+                if promote { command["promote"] = true }
+                try self.write(command)
             } catch {
                 self.deliveries.removeValue(forKey: id)?(.uncertain(
                     "Copilot's input channel failed; delivery could not be confirmed."
@@ -635,8 +648,9 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                 case "watcherWaiting":
                     let count = object["count"] as? Int ?? 1
                     let parallel = min(count, object["parallel"] as? Int ?? 0)
+                    let watchers = min(count - parallel, object["watchers"] as? Int ?? count - parallel)
                     onEvent?(.status(BackgroundWaitStatus.waiting(
-                        watchers: count - parallel, parallel: parallel)))
+                        watchers: watchers, parallel: parallel, other: count - parallel - watchers)))
                 case "watcherResuming":
                     onEvent?(.status(BackgroundWaitStatus.resuming(
                         parallel: (object["parallel"] as? Int ?? 0) > 0)))

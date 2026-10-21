@@ -543,6 +543,22 @@ uses the stable prompt ID and the same durable removal as the Mac UI. A prompt
 that has already started or been removed returns HTTP 409; no other prompt or
 running task is affected.
 
+Tap **Send now** on a queued prompt (or swipe right on it) to stop waiting for
+the current work. On the Mac, use the arrow button on the queued row. An idle tab
+starts the prompt at once. A local Copilot or Claude Code task takes it as a live
+message. Copilot also moves the step it was blocked on (a long command or
+synchronous agent) to the background. Background watchers and other agents keep
+running, and their results still arrive in the same chat. A Copilot task waiting on
+`read_agent` reads the message when that wait returns. Commands (`!`, `/`), councils
+and backends without live input redirect instead, which stops the current task. A
+pending question must be answered first. This requires the host's
+`supportsQueueSendNow` capability. The authenticated
+`POST /api/v1/sessions/{sessionID}/queue/{promptID}/send` endpoint takes an empty
+body (`{}`) and returns the updated session. A prompt that has already left the
+queue, or one that can't be sent yet, returns HTTP 409 with the reason. A message
+that can't be sent yet because the task is starting, saving or about to continue
+after an interruption moves to the front of the queue.
+
 ### Browse saved memory in Cantrip Agent
 
 Open **hamburger menu > Cantrip Memory** to see core facts/conventions,

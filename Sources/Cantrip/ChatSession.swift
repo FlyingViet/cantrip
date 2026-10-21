@@ -933,6 +933,68 @@ final class ChatSession: ObservableObject {
         recordQueueEvent(.queueRemoved, item: item)
     }
 
+    /// Sends a queued message now instead of after the current work. A live Copilot turn takes it
+    /// at once: a step it was blocked on (a command or sync agent) moves to the background, and
+    /// background agents keep running. Returns why it could not be sent.
+    @discardableResult
+    func sendQueuedNow(id: UUID) -> String? {
+        guard let item = queued.first(where: { $0.id == id }) else {
+            return "This message is no longer queued. It may have started or been removed on another device."
+        }
+        guard !pendingInjections.contains(id) else { return nil }
+        if routingItemID == id { invalidateRouting() }
+        guard isStreaming else {
+            if let journalError { return refuseSendNow(journalError) }
+            // Starting a new run would supersede the interrupted one waiting to continue.
+            guard !autoResumePending else {
+                moveQueuedToFront(item)
+                return refuseSendNow(
+                    "Cantrip is continuing an interrupted task first. This message is next in the queue."
+                )
+            }
+            invalidateGrouping()
+            Log.write("queue: sending a queued message now")
+            startQueued([item])
+            return nil
+        }
+        guard pendingInputs.isEmpty else {
+            return refuseSendNow("Answer the question above first, then send this message.")
+        }
+        let joinsTurn = activeBackend.canSteerTurns && currentRunMode == .single
+            && !councilRunning && !item.text.hasPrefix("!") && !item.text.hasPrefix("/")
+        guard joinsTurn else {
+            // Commands, councils and backends without a live input channel can't join the turn.
+            Log.write("queue: redirecting to a queued message sent now")
+            submit(item.text, interrupt: true, inject: false,
+                   includesAmbientContext: item.includesAmbientContext,
+                   consumesStagedContext: false, queuedItem: item)
+            removeQueued(item)
+            deliveryStatus = "Stopped the current task to send your message now."
+            return nil
+        }
+        // The turn is still starting, or has finished and is being saved.
+        guard preparationTask == nil, activeBackend.supportsMidTurnInjection else {
+            moveQueuedToFront(item)
+            return refuseSendNow(
+                "The current task is starting or saving. This message is next in the queue; try Send now again in a moment."
+            )
+        }
+        Log.write("queue: sending a queued message into the current turn now")
+        injectQueued(item, sendNow: true)
+        return nil
+    }
+
+    private func moveQueuedToFront(_ item: QueuedPrompt) {
+        guard let index = queued.firstIndex(where: { $0.id == item.id }), index > 0 else { return }
+        queued.remove(at: index)
+        queued.insert(item, at: 0)
+    }
+
+    private func refuseSendNow(_ reason: String) -> String {
+        deliveryStatus = reason
+        return reason
+    }
+
     private func removeQueued(_ item: QueuedPrompt) {
         guard let index = queued.firstIndex(where: { $0.id == item.id }) else { return }
         queued.remove(at: index)
@@ -1416,7 +1478,7 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    private func injectQueued(_ item: QueuedPrompt, parallel: Bool = false) {
+    private func injectQueued(_ item: QueuedPrompt, parallel: Bool = false, sendNow: Bool = false) {
         guard activeBackend.supportsMidTurnInjection, currentRunMode == .single else {
             deliveryStatus = "Queued: the backend's live input channel is unavailable."
             return
@@ -1424,8 +1486,10 @@ final class ChatSession: ObservableObject {
         let generation = streamGeneration
         let privacy = isPrivate
         let predecessor = injectionTask
+        let wasWaiting = isWaitingOnBackgroundWatchers
         pendingInjections.insert(item.id)
-        deliveryStatus = parallel ? "Saving your request before starting it..." : "Saving context before delivery..."
+        deliveryStatus = sendNow ? "Sending now..."
+            : parallel ? "Saving your request before starting it..." : "Saving context before delivery..."
         injectionTask = Task { [weak self] in
             await predecessor?.value
             guard let self else { return }
@@ -1463,29 +1527,35 @@ final class ChatSession: ObservableObject {
                 try await self.flushJournal()
                 guard !Task.isCancelled, self.streamGeneration == generation,
                       self.isPrivate == privacy, self.isStreaming else { return }
-                self.deliveryStatus = parallel
-                    ? "Handing your request to a background agent..."
+                self.deliveryStatus = sendNow ? "Sending now..."
+                    : parallel ? "Handing your request to a background agent..."
                     : "Sending context to the current task..."
                 dispatched = true
+                // The root takes the message now, so new messages no longer bypass the queue.
+                if sendNow { self.isWaitingOnBackgroundWatchers = false }
                 let text = parallel ? MessageRoutingPolicy.parallelDelivery(item.text) : item.text
                 let result = await withCheckedContinuation { continuation in
-                    self.activeBackend.injectMidTurn(text) { result in
-                        continuation.resume(returning: result)
-                    }
+                    let resume = { (result: MidTurnDelivery) in continuation.resume(returning: result) }
+                    sendNow ? self.activeBackend.sendNowMidTurn(text, completion: resume)
+                        : self.activeBackend.injectMidTurn(text, completion: resume)
                 }
                 guard self.streamGeneration == generation, self.isPrivate == privacy else { return }
                 switch result {
                 case .accepted(let messageID):
                     self.recordInjection(item, status: "accepted", nativeMessageID: messageID)
-                    self.deliveryStatus = parallel
-                        ? "Running in parallel; the reply will appear in this chat."
+                    self.deliveryStatus = sendNow
+                        ? self.sentNowStatus(rootWasIdle: wasWaiting)
+                        : parallel ? "Running in parallel; the reply will appear in this chat."
                         : "Context accepted; it will be applied at the next opportunity."
                 case .notSent:
                     self.recordInjection(item, status: "not_sent")
-                    self.queued.insert(item, at: min(queueIndex, self.queued.count))
+                    // A message sent now runs next once the task ends.
+                    self.queued.insert(item, at: sendNow ? 0 : min(queueIndex, self.queued.count))
                     self.recordQueueEvent(.queueAdded, item: item)
-                    self.deliveryStatus = parallel
-                        ? "Queued: the task finished before the request could start in parallel."
+                    if sendNow, wasWaiting, self.isStreaming { self.isWaitingOnBackgroundWatchers = true }
+                    self.deliveryStatus = sendNow
+                        ? "Queued: the task changed before your message could be sent; it runs next."
+                        : parallel ? "Queued: the task finished before the request could start in parallel."
                         : "Queued: the task finished before context could be sent."
                 case .uncertain(let message):
                     self.recordInjection(item, status: "uncertain", reason: message)
@@ -1498,13 +1568,20 @@ final class ChatSession: ObservableObject {
             } catch {
                 guard self.streamGeneration == generation else { return }
                 if claimed, !dispatched, !self.queued.contains(where: { $0.id == item.id }) {
-                    self.queued.insert(item, at: min(queueIndex, self.queued.count))
+                    self.queued.insert(item, at: sendNow ? 0 : min(queueIndex, self.queued.count))
                     self.recordQueueEvent(.queueAdded, item: item)
                 }
                 self.reportJournalFailure(error)
                 self.deliveryStatus = "Context delivery paused: run history could not be saved."
             }
         }
+    }
+
+    private func sentNowStatus(rootWasIdle: Bool) -> String {
+        if rootWasIdle { return "Sent now. Background work keeps running." }
+        return runningBackendKind == .copilot
+            ? "Sent now. Anything the task was waiting on keeps running in the background."
+            : "Sent now. It's applied as soon as the current step finishes."
     }
 
     private func injectWhileWaitingOnWatchers(
