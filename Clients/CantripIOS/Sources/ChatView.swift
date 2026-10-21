@@ -2027,6 +2027,14 @@ struct ChatView: View {
         }
     }
 
+    /// Sends the next queued message now; failures show in the remote notices like other chat actions.
+    private func sendQueuedPromptNow(_ id: String, sessionID: String) {
+        Task {
+            _ = await remote.sendQueuedPromptNow(id, sessionID: sessionID)
+            vm.syncRemoteTranscript()
+        }
+    }
+
     private func closeRemoteSession(_ id: String) {
         let draftKey = remoteDraftKey(id)
         let closesOpenTab = vm.activeLane == .cantrip && remote.selectedSessionID == id
@@ -2203,7 +2211,14 @@ struct ChatView: View {
                let session = remote.selectedSession,
                session.id == remote.selectedSessionID,
                session.queuedCount > 0 {
-                CantripQueueButton(session: session) {
+                let nextID = session.queued?.first?.id
+                CantripQueueButton(
+                    session: session,
+                    sendNow: nextID.map { id in { sendQueuedPromptNow(id, sessionID: session.id) } },
+                    isSendingNow: remote.sendingQueuedPromptID != nil
+                        && remote.sendingQueuedPromptID == nextID,
+                    canSendNow: remote.isConnected && !remote.isMutating
+                ) {
                     composerFocused = false
                     showQueue = true
                 }

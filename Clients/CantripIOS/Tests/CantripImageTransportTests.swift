@@ -431,18 +431,22 @@ final class CantripImageTransportTests: XCTestCase {
         XCTAssertEqual(methods, ["GET", "POST", "GET"], "Preparation and queue reads must not replay the send")
     }
 
-    private func queueSnapshot(ids: [String], support: Bool? = true) throws -> Data {
+    private func queueSnapshot(
+        ids: [String], support: Bool? = true, sendNow: Bool? = true, streaming: Bool = true,
+        messages: [[String: Any]]? = nil
+    ) throws -> Data {
         var session: [String: Any] = [
             "id": sessionID, "title": "Test", "workdir": "/tmp",
-            "isStreaming": true, "canResume": false, "councilMode": false,
+            "isStreaming": streaming, "canResume": false, "councilMode": false,
             "queuedCount": ids.count,
             "queued": ids.map { ["id": $0, "text": "Continue"] },
-            "messages": [
+            "messages": messages ?? [
                 ["id": "active-reply", "role": "assistant", "text": "Still working",
                  "thinking": "", "activities": []] as [String: Any],
             ],
         ]
         if let support { session["supportsQueueRemoval"] = support }
+        if let sendNow { session["supportsQueueSendNow"] = sendNow }
         return try JSONSerialization.data(withJSONObject: ["session": session])
     }
 
@@ -554,5 +558,115 @@ final class CantripImageTransportTests: XCTestCase {
             XCTFail("Authentication errors must be surfaced")
         } catch CantripRemoteError.authentication {}
         XCTAssertEqual(methods, ["GET"])
+    }
+
+    private func requestBody(_ request: URLRequest) throws -> Data {
+        if let body = request.httpBody { return body }
+        let stream = try XCTUnwrap(request.httpBodyStream)
+        stream.open()
+        defer { stream.close() }
+        var bytes = [UInt8](repeating: 0, count: 1024)
+        var collected = Data()
+        while stream.hasBytesAvailable {
+            let count = stream.read(&bytes, maxLength: bytes.count)
+            guard count >= 0 else { throw try XCTUnwrap(stream.streamError) }
+            if count == 0 { break }
+            collected.append(contentsOf: bytes.prefix(count))
+        }
+        return collected
+    }
+
+    func testQueueSendNowPostsEmptyBodyForStableIDAndReturnsTheSession() async throws {
+        let ids = (1...3).map { String(format: "00000000-0000-0000-0000-%012d", $0) }
+        let before = try queueSnapshot(ids: ids)
+        let after = try queueSnapshot(ids: [ids[0], ids[2]], messages: [
+            ["id": "active-reply", "role": "assistant", "text": "Still working",
+             "thinking": "", "activities": []] as [String: Any],
+            ["id": ids[1], "role": "user", "text": "Continue", "thinking": "", "activities": []],
+        ])
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            if request.httpMethod == "POST" {
+                XCTAssertEqual(
+                    request.url?.path,
+                    "/api/v1/sessions/\(self.sessionID)/queue/\(ids[1])/send"
+                )
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                let body = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: try self.requestBody(request)) as? [String: Any]
+                )
+                XCTAssertTrue(body.isEmpty, "Send now takes an empty JSON object")
+                return (200, after)
+            }
+            XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.sessionID)")
+            return (200, before)
+        }
+        let result = try await api().sendQueuedPromptNow(id: ids[1], sessionID: sessionID)
+        XCTAssertEqual(methods, ["GET", "POST"], "One capability read, then a single write")
+        XCTAssertEqual(result.queued?.map(\.id), [ids[0], ids[2]])
+        XCTAssertEqual(result.queuedCount, 2)
+        XCTAssertTrue(result.isStreaming)
+        XCTAssertEqual(result.transcript.map(\.id), ["active-reply", ids[1]])
+    }
+
+    func testLegacyHostsDoNotReceiveQueueSendNowMutations() async throws {
+        for support: Bool? in [nil, false] {
+            let response = try queueSnapshot(ids: ["pending"], sendNow: support)
+            var methods: [String] = []
+            ImageRequestProtocol.handler = { request in
+                methods.append(request.httpMethod ?? "")
+                return (200, response)
+            }
+            do {
+                _ = try await api().sendQueuedPromptNow(id: "pending", sessionID: sessionID)
+                XCTFail("An older host must show the update message")
+            } catch CantripRemoteError.queueSendNowUnsupported {}
+            XCTAssertEqual(methods, ["GET"])
+        }
+    }
+
+    func testQueueSendNowConflictsSurfaceTheHostMessage() async throws {
+        let messages = [
+            "This message is no longer queued. It may have started or been removed on another device.",
+            "Answer the question above first, then send this message.",
+            "The current task is still starting. Try again in a moment.",
+        ]
+        for message in messages {
+            let response = try queueSnapshot(ids: ["pending"])
+            var methods: [String] = []
+            ImageRequestProtocol.handler = { request in
+                methods.append(request.httpMethod ?? "")
+                if request.httpMethod == "POST" {
+                    return (409, try JSONSerialization.data(withJSONObject: ["error": message]))
+                }
+                return (200, response)
+            }
+            do {
+                _ = try await api().sendQueuedPromptNow(id: "pending", sessionID: sessionID)
+                XCTFail("A conflict must not look like a sent message")
+            } catch CantripRemoteError.http(let status, let received) {
+                XCTAssertEqual(status, 409)
+                XCTAssertEqual(received, message)
+            }
+            XCTAssertEqual(methods, ["GET", "POST"])
+        }
+    }
+
+    func testQueueSendNowLostResponseIsNotReplayed() async throws {
+        let response = try queueSnapshot(ids: ["pending"])
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            if request.httpMethod == "POST" {
+                throw URLError(.networkConnectionLost)
+            }
+            return (200, response)
+        }
+        do {
+            _ = try await api().sendQueuedPromptNow(id: "pending", sessionID: sessionID)
+            XCTFail("An unconfirmed send must not look successful")
+        } catch CantripRemoteError.transport {}
+        XCTAssertEqual(methods, ["GET", "POST"])
     }
 }

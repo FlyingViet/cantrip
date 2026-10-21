@@ -169,6 +169,16 @@ requires an updated, relaunched Cantrip host. Controls are disabled while
 disconnected or a request is pending; the queue changes only after the Mac
 confirms removal. If the prompt has already started, it is not cancelled.
 
+To push a queued prompt through without waiting, tap **Send now** on the
+Queued messages card (it sends the next prompt), or use a prompt's arrow
+button or swipe right in the queue. The Mac delivers it into the current turn
+right away; a step it was waiting on, such as a watcher, moves to the
+background and keeps running, as do background agents. An idle tab simply
+starts the prompt. Hosts that cannot steer the current turn redirect instead.
+Send now requires the host's `supportsQueueSendNow` capability; if the prompt
+has already started or been removed, or the Mac is waiting on an answer, the
+Mac's reason is shown and nothing else changes.
+
 Tap the conversation or session controls to dismiss the keyboard, or drag the
 conversation to dismiss it interactively. Chat stays at the latest message
 while following a reply, but scrolling up lets you read earlier messages
