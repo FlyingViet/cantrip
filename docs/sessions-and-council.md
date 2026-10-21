@@ -19,6 +19,12 @@ shared; do not rely on switching tabs to restore a different configured model.
 first local session, followed by **Command+3** through **Command+9** for later
 local sessions. Click tabs when more are open.
 
+Drag a session tab onto another to move it, or use **Move Tab Left/Right** in
+its right-click menu. The Remote tab stays pinned first. The order survives
+restarts without switching conversations or interrupting work, and syncs to
+Cantrip Remote and Cantrip Agent. Dragging a tab label does not move the
+launcher window; dragging the window background still does.
+
 ## Start over or return to an older session
 
 Right-click a local session tab for **Rename Tab** or **Lock Tab**. Names can
@@ -120,6 +126,47 @@ Late results cannot interrupt a newer or completed run. A newer submission
 supersedes an unfinished routing decision; the earlier message remains queued.
 Cancel/reset/removal invalidates pending decisions. Staged files and selected
 text are bound to their submitted message rather than a later draft.
+
+### Parallel requests
+
+When a local Copilot tab is busy and you send something independent of its
+current task (a side question, a status check, work in another project), Auto
+hands it to the running agent, which starts a background `side-*` subagent and
+keeps working. The subagent appears in the monitor like any other, and its
+answer is posted in the same chat. If the main task finishes first, the run
+stays open and Cantrip wakes the agent to report. Requests that depend on or
+touch the same files or state as the current task still queue. This needs
+subagents and tools enabled; other backends queue as before.
+
+### Combined queued messages
+
+Before the next queued message runs, the same tool-free router checks which
+later queued messages belong with it (refinements, corrections or next steps
+for the same task) and runs them together in one turn; unrelated messages keep
+their order and run after. The decision is made while the current task is still
+working, so the next turn starts without waiting. Each message still appears as
+you wrote it, and the run journal claims all of them at once so recovery never
+repeats one. Commands (`!`, `/`), councils, Private Local and automated Home
+runs stay one at a time.
+
+### Send now
+
+A queued message has a **Send now** action on the Mac (the arrow button on its
+row), in Cantrip Agent and in Cantrip Gateway Mac. It delivers the message
+without waiting for the current work. A busy Copilot task moves whatever step
+it was blocked on (a long command or a synchronous agent) to the background and
+keeps background agents running. Commands, councils and backends without live
+input redirect instead. See [Send now details](remote-control.md#see-queued-prompts-in-cantrip-agent).
+
+### Background waiters
+
+After starting a long external build, TestFlight upload, download, or similar
+job, the agent can hand passive monitoring to a dedicated watcher and continue
+independent work. The watcher stays visible in the subagent monitor; when it
+finishes, Cantrip wakes the same run and continues from where it paused instead
+of making you send another message. Once the agent's own turn ends, only
+background work remains, and new messages go straight to the agent instead of
+waiting for the watcher.
 
 ## Recover after a crash or interruption
 

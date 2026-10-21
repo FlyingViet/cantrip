@@ -103,7 +103,9 @@ Do not start voice mode near conversations you do not want submitted.
 ## See what the agent is doing
 
 Click **Progress**, the sidebar icon, to see tool steps. Expand a step to
-inspect available input, output, and file changes. **Usage**, the chart icon,
+inspect available input, output, and file changes. Its **Background** tab
+lists subagents and watchers still running; Cantrip Agent shows them in a
+compact button that opens their detail sheet. **Usage**, the chart icon,
 shows available backend usage figures; an unavailable quota is not zero usage.
 
 Copilot shows the account-wide included allowance used/remaining, reset date

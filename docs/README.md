@@ -18,7 +18,8 @@ only when you want the agent to make changes.
 | Ask about a screenshot, document, or selected text | [Files and screen context](files-and-screen-context.md) |
 | Keep projects separate, resume work, or compare models | [Sessions and council mode](sessions-and-council.md) |
 | Control my Mac from Cantrip Agent or another Mac | [Remote control](remote-control.md) |
-| Send a photo from my iPhone or iPad | [Cantrip Agent image attachments](remote-control.md#send-a-photo-or-screenshot-from-agentgateway) |
+| Run scheduled tasks, trackers, or hand off work from one conversation | [Cantrip Home](cantrip-home.md) |
+| Send a photo from my iPhone or iPad | [Cantrip Agent image attachments](remote-control.md#send-a-photo-or-screenshot-from-cantrip-agent) |
 | Decide what Cantrip can do, see, and remember | [Permissions, privacy, and memory](privacy-and-memory.md) |
 | Install a dashboard or add my own command | [Extensions and skills](extensions-and-skills.md) |
 | Update Cantrip or fix a problem | [Updates and troubleshooting](updating-and-troubleshooting.md) |
@@ -51,4 +52,6 @@ of Cantrip.
 
 For implementation details rather than user instructions, see the
 [repository overview](../README.md), [plugin reference](../PLUGINS.md), and
-[Windows parity checklist](../windows/PARITY.md).
+[Windows parity checklist](../windows/PARITY.md). The iPhone/iPad client is
+[Cantrip Agent](https://github.com/FlyingViet/Hermes) and the native Mac client
+is [Cantrip Gateway Mac](https://github.com/FlyingViet/CantripGatewayMac).
