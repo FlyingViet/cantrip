@@ -10,7 +10,7 @@ Cantrip Home as a native macOS app: the same Home as the Cantrip Agent iPhone ap
 2. Open it and drag **Cantrip Gateway Mac** to **Applications**. Releases are signed with
    Developer ID and notarized by Apple, so the app opens normally.
 3. Pair it with [Cantrip](https://github.com/FlyingViet/cantrip) (see
-   [Pair with Cantrip](#pair-with-cantrip) below).
+   [Connect to Cantrip](#connect-to-cantrip) below).
 
 Requires macOS 26 or later. Cantrip Gateway Mac is a client: it needs Cantrip running on a
 Mac you own, the same Mac or another one, with **Remote control** enabled in Cantrip's
@@ -62,16 +62,37 @@ See the script's header for the one-time `notarytool` setup.
 Debug builds use the bundle ID `com.itzhoang.cantripgateway.mac.debug`, so test runs
 never touch the installed app's saved servers.
 
-## Pair with Cantrip
+## Connect to Cantrip
 
-Open **Settings (⌘,) > Connection**, then add the pairing token from Cantrip's Remote
-control settings. A Tailscale Serve URL is optional. Without it the app finds Cantrip
-on the local network, exactly like the iPhone app.
+Cantrip Gateway Mac is a client for [Cantrip](https://github.com/FlyingViet/cantrip), the
+agent harness. Cantrip runs the agents and owns every tab, queue and Home task on the Mac
+that does the work; this app pairs with it and shows those live sessions. It can run on
+that same Mac or on another one.
 
-For a Mac that can't run Tailscale, set **Direct port** (e.g. 8766) in that Mac's Cantrip
-Settings > Remote control and add its **Direct address** (`IP:port`, e.g.
-`192.168.0.152:8766`) here. The app reaches it end-to-end encrypted with the pairing token
-wherever it can route to that IP, such as through a home router's Tailscale subnet route.
+**On the Mac running Cantrip:**
+
+1. Install Cantrip ([quick start](https://github.com/FlyingViet/cantrip#quick-start)) and
+   set up one AI backend.
+2. Press **Option+Space**, open the **gear** and check **Remote control daemon**, then
+   **Cantrip Home** (this app opens on Home).
+3. Click **Copy pairing token**. It gives full control of that Mac's agents, so keep it
+   private; **Regenerate** disconnects every paired client.
+
+**In Cantrip Gateway Mac:** open **Settings (⌘,) > Connection**. Under **Cantrip Remote
+Servers**, paste the **Pairing token**, fill in a route, click **Add Server**, then select
+the saved server.
+
+| Route | Use it when | What to enter |
+|---|---|---|
+| Local network | Both Macs are on the same network, or it's the same Mac | Nothing more. The app finds Cantrip with Bonjour, exactly like the iPhone app. |
+| Tailscale Serve | Home and away | **Tailscale URL**, e.g. `https://your-mac.your-tailnet.ts.net`, after running `tailscale serve --bg http://127.0.0.1:8765` on the Cantrip Mac. Used first whenever it works. |
+| Direct address | The Cantrip Mac can't run Tailscale (e.g. a work laptop) | Set **Direct port** (e.g. `8766`) in that Mac's Cantrip settings, then enter **Direct address** as `IP:port`, e.g. `192.168.0.152:8766`. Works wherever this Mac can route to that IP, such as through a home router's Tailscale subnet route. |
+
+Every route is end-to-end encrypted with the pairing token. The connection code, host API
+and capability checks are shared with the iPhone app; see
+[Host API](https://github.com/FlyingViet/Hermes#host-api) in the Hermes README and
+Cantrip's [remote-control guide](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md).
+If a control shows an update notice, update and relaunch Cantrip on the host Mac.
 
 ## Using it
 
