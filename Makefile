@@ -9,14 +9,14 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-prune prune-builds test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds cert artwork icon app run clean
+.PHONY: all build test test-prune prune-builds test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds
+test: test-prune test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand
 
 test-architectures:
 	@bash Tests/ArchitectureTests/run.sh
@@ -149,6 +149,9 @@ prune-builds:
 
 test-prune:
 	@bash Tests/PruneBuildTests/run.sh
+
+test-mcp-on-demand:
+	@python3 Tests/MCPOnDemandTests/test_mcp_on_demand.py
 
 run: app
 	-/usr/bin/osascript -e 'tell application id "com.brian.agentspotlight" to quit' 2>/dev/null
