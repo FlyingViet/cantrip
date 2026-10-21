@@ -98,6 +98,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         process?.isRunning == true && stdinHandle != nil && turnInFlight
     }
 
+    var canSteerTurns: Bool { true }
+
     func injectMidTurn(_ text: String) -> Bool {
         guard process?.isRunning == true, stdinHandle != nil else { return false }
         queue.async { [weak self] in self?.writeUserMessage(text) }

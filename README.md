@@ -72,9 +72,16 @@ The macOS app includes:
   download, or similar job, the agent can hand passive monitoring to a dedicated
   watcher and continue independent work. The watcher stays visible in the subagent
   monitor; when it finishes, Cantrip wakes the same run and continues from where it
-  paused instead of making you send another message. The Mac Progress pane has
+  paused instead of making you send another message. Once the agent's own turn ends,
+  only background work remains, and new messages go straight to the agent instead of
+  waiting for the watcher. The Mac Progress pane has
   separate **Steps** and **Background** tabs, while Cantrip Agent shows active
   background tasks in a compact button that opens their detail sheet.
+- **Send now:** a queued message has a **Send now** action on the Mac, in Cantrip Agent
+  and in Cantrip Gateway Mac. It delivers the message without waiting for the current
+  work. A busy Copilot task moves whatever step it was blocked on (a long command or a
+  synchronous agent) to the background and keeps background agents running. Commands,
+  councils and backends without live input redirect instead.
 - **Live context:** local Copilot and Claude Code can accept **Inject** messages
   without stopping their current work, including from Cantrip Agent and Mac/browser
   Remote. Copilot uses a persistent native SDK session per tab; accepted context is
@@ -128,7 +135,7 @@ The macOS app includes:
   routing uses LAN if Tailscale is unavailable and restores Tailscale with
   two confirmed read-only probes. Bounded reads and coalesced web refreshes avoid
   stalled request backlogs, without switching healthy Tailscale connections to LAN or replaying sends;
-  Tailscale-only mode is also available. Cantrip Agent can display and remove queued prompts.
+  Tailscale-only mode is also available. Cantrip Agent can display, remove and send queued prompts now.
   Host diagnostics separate lightweight `/health` liveness from authenticated
   session readiness, with content-free request timings and bounded response writes.
 - **Durable runs:** journal encoding, writes, and synchronization use an ordered

@@ -196,6 +196,14 @@ extension SessionTabTests {
                      == expectedThree.map { $0.id.uuidString },
                      "Send acknowledgements retain three full exchanges beyond the usual page budgets")
         let queuedID = chat.queued[0].id
+        let unknownID = UUID()
+        let (unknownStatus, _, _) = try await request("/queue/\(unknownID)/send", method: "POST", body: [:])
+        let (invalidIDStatus, _, _) = try await request("/queue/not-a-uuid/send", method: "POST", body: [:])
+        let (getSendStatus, _, _) = try await request("/queue/\(queuedID)/send")
+        precondition(unknownStatus == 409 && invalidIDStatus == 400 && getSendStatus == 405
+                     && chat.queued.count == 1,
+                     "Send now refuses unknown, malformed and non-POST requests without touching the queue")
+        precondition(queuedSession["supportsQueueSendNow"] as? Bool == true)
         let (removedStatus, removedResponse, _) = try await request(
             "/queue/\(queuedID)?history=recent&recentExchanges=3", method: "DELETE"
         )
