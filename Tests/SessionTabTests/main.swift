@@ -23,6 +23,10 @@ struct SessionTabTests {
                 try await testQueueSendNowLive()
                 return
             }
+            if ProcessInfo.processInfo.environment["CANTRIP_NARRATION_LIVE_TEST"] == "1" {
+                try await testReplyVisibilityLive()
+                return
+            }
             if ProcessInfo.processInfo.environment["CANTRIP_STARTFRESH_LIVE_TEST"] == "1" {
                 try await testStartFreshLive()
                 return
