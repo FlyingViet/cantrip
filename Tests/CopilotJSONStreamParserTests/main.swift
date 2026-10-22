@@ -414,6 +414,51 @@ private func testPromptContextUsage() {
            && PromptUsage.compact(1_260_000) == "1.3M" && PromptUsage.percent(1, of: 1000) == "<1%", "compact formatting")
 }
 
+/// Claude's "narration" blocks: text written before a tool call that the Copilot API returns only
+/// as a reasoning summary. The user should see that summary instead of nothing.
+private func testNarrationBecomesVisible() {
+    let narrationSignature = "CAQS6Q0KEQgTGAI4AUIJbmFycmF0aW9uEgyZJr1Ounr8WiF+bjAaDIHc+36mPzolJLfOkyIwqhBVRww9tvcBAhDhMU1JRzVY"
+    let thinkingSignature = "CAQSjRoKEAgTGAI4AUIIdGhpbmtpbmcSDA7/sEQu5bVu0gDVBRoMWjaxZhZXi/WlJhwzIjCJ0T7hwpNLOqwr+k31j7rXkKJR"
+    expect(CopilotJSONStreamParser.isNarration(narrationSignature), "a narration signature is recognized")
+    expect(!CopilotJSONStreamParser.isNarration(thinkingSignature), "a thinking signature is not narration")
+    expect(!CopilotJSONStreamParser.isNarration("not base64 at all!"), "an unknown signature is not narration")
+    func message(_ id: String, content: String, blocks: [(String, String)], agentID: String? = nil) -> String {
+        let reasoning = blocks.map { ["signature": $0.0, "thinking": $0.1, "type": "thinking"] }
+        var object: [String: Any] = ["type": "assistant.message", "id": "event-\(id)", "data": [
+            "messageId": id, "content": content,
+            "reasoningBlocks": ["provider": "anthropic-messages", "blocks": reasoning],
+            "toolRequests": [["toolCallId": "call-\(id)", "name": "ask_user", "arguments": ["question": "Which?"]]],
+        ] as [String: Any]]
+        if let agentID { object["agentId"] = agentID }
+        return String(decoding: try! JSONSerialization.data(withJSONObject: object), as: UTF8.self) + "\n"
+    }
+    var parser = CopilotJSONStreamParser()
+    let first = parser.consume(Data(message("m1", content: "", blocks: [
+        (thinkingSignature, "I should answer, then ask."),
+        (narrationSignature, "Memory growth is mostly unfreed per-call allocations; a restart reclaims it."),
+    ]).utf8)) { _, _ in }
+    expect(text(from: first) == "Memory growth is mostly unfreed per-call allocations; a restart reclaims it.",
+           "the narration summary is shown, without the private thinking: \(text(from: first))")
+    let second = parser.consume(Data(message("m2", content: "Short note.", blocks: [
+        (narrationSignature, "A summary that must not replace real text."),
+    ]).utf8)) { _, _ in }
+    expect(text(from: second) == "\n\nShort note.", "real text wins over a narration summary")
+    let third = parser.consume(Data(message("m3", content: "", blocks: [(thinkingSignature, "Private plan.")]).utf8)) { _, _ in }
+    expect(text(from: third).isEmpty, "thinking alone stays in Reasoning")
+    let subagent = parser.consume(Data(message("m4", content: "", blocks: [(narrationSignature, "Agent narration.")],
+                                               agentID: "agent-1").utf8)) { _, _ in }
+    expect(text(from: subagent).isEmpty, "a subagent's narration never joins the root reply")
+    let streamed = """
+    {"type":"assistant.message_delta","id":"event-d5","data":{"messageId":"m5","deltaContent":"Streamed."}}
+
+    """
+    _ = parser.consume(Data(streamed.utf8)) { _, _ in }
+    let duplicate = parser.consume(Data(message("m5", content: "", blocks: [(narrationSignature, "Late summary.")]).utf8)) { _, _ in }
+    expect(text(from: duplicate).isEmpty, "a message whose text already streamed isn't repeated")
+    expect(parser.answer.hasPrefix("Memory growth") && parser.answer.contains("Short note.") && !parser.answer.contains("Private plan"),
+           "the run's answer includes the narration summary: \(parser.answer)")
+}
+
 testMalformedLineDoesNotAbortBatch()
 testMalformedEventDoesNotPoisonLaterChunks()
 testMalformedFinalLineIsReportedAndSkipped()
@@ -426,10 +471,11 @@ testSubagentFailureAndNesting()
 testUnknownSubagentFallsBackToTopLevel()
 testReasoningBlocksAndSteps()
 testPromptContextUsage()
+testNarrationBecomesVisible()
 failures += runMCPAppTests()
 
 if failures > 0 {
     fputs("\(failures) Copilot parser test(s) failed\n", stderr)
     exit(1)
 }
-print("All 13 Copilot parser test groups passed (incl. MCP Apps)")
+print("All 14 Copilot parser test groups passed (incl. MCP Apps)")
