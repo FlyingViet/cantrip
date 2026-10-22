@@ -8,6 +8,7 @@ enum Log {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("Cantrip.log")
     }()
+    static var fileURL: URL { url }
     private static let queue = DispatchQueue(label: "log")
     private static let df: DateFormatter = {
         let f = DateFormatter()

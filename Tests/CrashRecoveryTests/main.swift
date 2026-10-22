@@ -35,6 +35,27 @@ expect(
     "relaunch should target the exact bundle path"
 )
 
+// A run marker only counts while its own process runs: after a reboot its pid can belong to a
+// process that started later, which must not keep a headless host from starting.
+let markers = FileManager.default.temporaryDirectory.appendingPathComponent("cantrip-markers-\(UUID().uuidString)")
+try! FileManager.default.createDirectory(at: markers, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: markers) }
+func writeMarker(pid: Int32, startedAt: Date) -> URL {
+    let url = markers.appendingPathComponent("run-\(UUID().uuidString).json")
+    let marker: [String: Any] = ["id": UUID().uuidString, "pid": Int(pid), "buildIdentity": "test",
+                                 "startedAt": startedAt.timeIntervalSinceReferenceDate, "bundlePath": "/tmp/Test.app"]
+    try! JSONSerialization.data(withJSONObject: marker).write(to: url)
+    return url
+}
+let parent = getppid()
+let stale = writeMarker(pid: parent, startedAt: Date(timeIntervalSince1970: 1_000))
+expect(CrashRecovery.otherRunningHost(in: markers) == nil, "a marker older than its pid's process is stale")
+expect(!FileManager.default.fileExists(atPath: stale.path), "stale markers are removed")
+_ = writeMarker(pid: parent, startedAt: Date())
+expect(CrashRecovery.otherRunningHost(in: markers) == parent, "a marker written after its process started is live")
+_ = writeMarker(pid: getpid(), startedAt: Date())
+expect(CrashRecovery.otherRunningHost(in: markers) == parent, "this process's own marker is never another host")
+
 let report = CrashRecovery.Report(
     id: UUID(),
     detectedAt: Date(timeIntervalSince1970: now),

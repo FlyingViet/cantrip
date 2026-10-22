@@ -89,6 +89,11 @@ current directory and its own conversation continuity, not the selected panel
 tab. It uses the running app or tries to launch the checkout's `Cantrip.app`.
 If `cantrip` is not found, try `~/.local/bin/cantrip` and check your shell PATH.
 
+The same command also sets up and pairs Cantrip from Terminal:
+`cantrip status`, `cantrip pair`, `cantrip config` and `cantrip daemon …`. To ask
+a question that starts with one of those words, quote it, such as
+`cantrip "status of my build"`. See [Headless host](headless.md).
+
 ## Use voice
 
 1. Click the **microphone** beside the input to start a voice conversation.

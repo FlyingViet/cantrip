@@ -80,6 +80,8 @@ final class AppSettings: ObservableObject {
                 return existing
             }
         } catch {
+            // A headless host reached over SSH can't use the locked login Keychain.
+            if HostMode.isHeadless { return useRemoteTokenFile(because: "Keychain unavailable (\(error.localizedDescription))") }
             MacAttention.report(.keychain)
             remoteControlError = "Keychain access is blocked. Review Cantrip's access on the Mac; the existing pairing token was not replaced."
             return nil
@@ -90,6 +92,7 @@ final class AppSettings: ObservableObject {
         }
         let status = RemoteControlCredentials.store(token)
         guard status == errSecSuccess else {
+            if HostMode.isHeadless { return useRemoteTokenFile(because: "Keychain save failed (OSStatus \(status))") }
             remoteControlError = "Could not save the pairing token in Keychain (OSStatus \(status))."
             return nil
         }
@@ -98,17 +101,47 @@ final class AppSettings: ObservableObject {
         return token
     }
 
-    func regenerateRemoteControlToken() {
+    /// Replaces the pairing token in whichever store holds it; paired devices must pair again.
+    @discardableResult
+    func regenerateRemoteControlToken() -> Bool {
         guard let token = RemoteControlCredentials.generate() else {
             remoteControlError = "Could not generate a secure pairing token."
-            return
+            return false
         }
         let status = RemoteControlCredentials.store(token)
         if status == errSecSuccess {
             remoteControlError = nil
             remoteControlCredentialRevision += 1
-        } else {
-            remoteControlError = "Could not save the pairing token in Keychain (OSStatus \(status))."
+            return true
+        }
+        if HostMode.isHeadless, !RemoteTokenFile.inUse {
+            return useRemoteTokenFile(because: "Keychain save failed (OSStatus \(status))", token: token) != nil
+        }
+        remoteControlError = RemoteTokenFile.inUse
+            ? "Could not save the pairing token file at \(RemoteTokenFile.url.path)."
+            : "Could not save the pairing token in Keychain (OSStatus \(status))."
+        return false
+    }
+
+    /// Moves the token to a file only this user can read. From then on the app uses it too.
+    private func useRemoteTokenFile(because reason: String, token: String? = nil) -> String? {
+        do {
+            if token == nil, let existing = try RemoteTokenFile.load() {
+                remoteControlError = nil
+                return existing
+            }
+            guard let token = token ?? RemoteControlCredentials.generate() else {
+                remoteControlError = "Could not generate a secure pairing token."
+                return nil
+            }
+            try RemoteTokenFile.store(token)
+            Log.write("remote-control: \(reason); the pairing token is now in \(RemoteTokenFile.url.path)")
+            remoteControlError = nil
+            remoteControlCredentialRevision += 1
+            return token
+        } catch {
+            remoteControlError = "Could not save the pairing token file at \(RemoteTokenFile.url.path): \(error.localizedDescription)"
+            return nil
         }
     }
 
@@ -434,8 +467,9 @@ final class AppSettings: ObservableObject {
             .appendingPathComponent(".cantriprc")
     }
 
-    func exportDotfile() {
-        let dict: [String: Any] = [
+    /// Settings by their ~/.cantriprc names; `cantrip config` reads and writes the same names.
+    var dotfileValues: [String: Any] {
+        [
             "backend": backend.rawValue,
             "claudePath": claudePath, "claudeWorkdir": claudeWorkdir,
             "claudeModel": claudeModel, "claudePermissionMode": claudePermissionMode,
@@ -458,9 +492,14 @@ final class AppSettings: ObservableObject {
             "remoteLANPort": remoteLANPort,
             "cantripHomeEnabled": cantripHomeEnabled,
             "cantripHomeParallelRuns": cantripHomeParallelRuns,
+            "copilotAllowSubagents": copilotAllowSubagents,
+            "copilotIdleReleaseMinutes": copilotIdleReleaseMinutes,
         ]
+    }
+
+    func exportDotfile() {
         if let data = try? JSONSerialization.data(
-            withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]) {
+            withJSONObject: dotfileValues, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: rcURL)
             Log.write("dotfile: exported to \(rcURL.path)")
         }
@@ -473,13 +512,33 @@ final class AppSettings: ObservableObject {
             Log.write("dotfile: nothing to import at \(rcURL.path)")
             return
         }
+        applySettings(dict)
+        Log.write("dotfile: imported from \(rcURL.path)")
+    }
+
+    /// Applies settings by their ~/.cantriprc names and returns the names it accepted; unknown
+    /// names and values of the wrong type are skipped.
+    @discardableResult
+    func applySettings(_ dict: [String: Any]) -> [String] {
+        var applied: [String] = []
         func str(_ key: String, _ apply: (String) -> Void) {
-            if let v = dict[key] as? String { apply(v) }
+            if let v = dict[key] as? String { apply(v); applied.append(key) }
         }
         func bool(_ key: String, _ apply: (Bool) -> Void) {
-            if let v = dict[key] as? Bool { apply(v) }
+            if let v = dict[key] as? NSNumber, CFGetTypeID(v) == CFBooleanGetTypeID() {
+                apply(v.boolValue); applied.append(key)
+            }
         }
-        str("backend") { if let k = BackendKind(rawValue: $0) { self.backend = k } }
+        func int(_ key: String, _ range: ClosedRange<Int>, _ apply: (Int) -> Void) {
+            if let v = dict[key] as? NSNumber, CFGetTypeID(v) != CFBooleanGetTypeID(),
+               v.doubleValue == Double(v.intValue), range.contains(v.intValue) {
+                apply(v.intValue); applied.append(key)
+            }
+        }
+        if let raw = dict["backend"] as? String, let kind = BackendKind(rawValue: raw) {
+            backend = kind
+            applied.append("backend")
+        }
         str("claudePath") { self.claudePath = $0 }
         str("claudeWorkdir") { self.claudeWorkdir = $0 }
         str("claudeModel") { self.claudeModel = $0 }
@@ -507,19 +566,19 @@ final class AppSettings: ObservableObject {
         bool("fileRAGEnabled") { self.fileRAGEnabled = $0 }
         bool("remoteControlEnabled") { self.remoteControlEnabled = $0 }
         bool("cantripHomeEnabled") { self.cantripHomeEnabled = $0 }
-        if let runs = dict["cantripHomeParallelRuns"] as? Int {
-            cantripHomeParallelRuns = runs
+        bool("copilotAllowSubagents") { self.copilotAllowSubagents = $0 }
+        int("cantripHomeParallelRuns", 1...CantripHomeBackgroundRunner.maximumParallelLimit) {
+            self.cantripHomeParallelRuns = $0
         }
-        if let port = dict["remoteControlPort"] as? Int {
-            remoteControlPort = port
+        int("copilotIdleReleaseMinutes", 0...1440) { self.copilotIdleReleaseMinutes = $0 }
+        int("remoteControlPort", 1...65535) { self.remoteControlPort = $0 }
+        int("remoteLANPort", 0...65535) { self.remoteLANPort = $0 }
+        if let opacity = dict["panelOpacity"] as? NSNumber, CFGetTypeID(opacity) != CFBooleanGetTypeID(),
+           opacity.doubleValue.isFinite {
+            panelOpacity = min(max(opacity.doubleValue, 0.5), 1.0)
+            applied.append("panelOpacity")
         }
-        if let port = dict["remoteLANPort"] as? Int, (0...65535).contains(port) {
-            remoteLANPort = port
-        }
-        if let opacity = dict["panelOpacity"] as? Double {
-            panelOpacity = min(max(opacity, 0.5), 1.0)
-        }
-        Log.write("dotfile: imported from \(rcURL.path)")
+        return applied
     }
 
     /// Launch at login via SMAppService (source of truth is the system).
@@ -642,11 +701,52 @@ final class AppSettings: ObservableObject {
     }
 }
 
+/// The pairing token as a file only this user can read: used when a headless host can't reach
+/// the Keychain (SSH-only Macs, later Linux). Once it exists, the app reads it too.
+enum RemoteTokenFile {
+    static var url: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Cantrip/remote-token")
+    }
+
+    static var inUse: Bool { FileManager.default.fileExists(atPath: url.path) }
+
+    static func load() throws -> String? {
+        guard inUse else { return nil }
+        // Never trust a token others could have read or replaced.
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let mode = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
+        guard mode & 0o077 == 0, (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid() else {
+            throw CocoaError(.fileReadNoPermission, userInfo: [
+                NSLocalizedDescriptionKey: "\(url.path) must belong to you and be readable only by you (chmod 600)."
+            ])
+        }
+        let token = try String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
+    }
+
+    static func store(_ token: String) throws {
+        let directory = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let temporary = directory.appendingPathComponent(".remote-token-\(UUID().uuidString)")
+        guard FileManager.default.createFile(atPath: temporary.path, contents: Data((token + "\n").utf8),
+                                             attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        guard rename(temporary.path, url.path) == 0 else {
+            try? FileManager.default.removeItem(at: temporary)
+            throw CocoaError(.fileWriteUnknown)
+        }
+    }
+}
+
 private enum RemoteControlCredentials {
     private static let service = "com.brian.agentspotlight.remote-control"
     private static let account = "pairing-token"
 
     static func load() throws -> String? {
+        if RemoteTokenFile.inUse { return try RemoteTokenFile.load() }
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -666,6 +766,10 @@ private enum RemoteControlCredentials {
     }
 
     static func store(_ token: String) -> OSStatus {
+        if RemoteTokenFile.inUse {
+            do { try RemoteTokenFile.store(token) } catch { return errSecIO }
+            return errSecSuccess
+        }
         let attributes: [String: Any] = [
             kSecValueData as String: Data(token.utf8),
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,

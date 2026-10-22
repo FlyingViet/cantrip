@@ -72,12 +72,16 @@ enum PendingUpdate {
         case .installed:
             Log.write("update: installed staged build \(buildIdentity(of: app) ?? "unknown"); starting it")
             Log.flush()
+            HostLock.release()
             // Relaunch through Launch Services: macOS hides the menu bar icon of
-            // a process that exec'd a new image after launch.
-            if open(app) {
+            // a process that exec'd a new image after launch. A headless host has no
+            // menu bar icon and must keep its arguments, so it execs in place.
+            if !HostMode.isHeadless, open(app) {
                 exit(EXIT_SUCCESS)
             }
-            Log.write("update: could not open the installed build; starting it in this process")
+            if !HostMode.isHeadless {
+                Log.write("update: could not open the installed build; starting it in this process")
+            }
             Log.flush()
             let executable = app.appendingPathComponent("Contents/MacOS")
                 .appendingPathComponent(Bundle.main.executableURL?.lastPathComponent ?? "Cantrip").path

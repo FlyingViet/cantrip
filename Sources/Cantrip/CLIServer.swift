@@ -72,19 +72,56 @@ final class CLIServer {
     }
 
     static var socketPath: String {
-        FileManager.default.homeDirectoryForCurrentUser
+        let preferred = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cache/Cantrip/cantrip.sock").path
+        // Unix socket paths are limited to 104 bytes; very long home folders use a short private one.
+        return preferred.utf8.count < 104 ? preferred : "/tmp/cantrip-\(getuid())/cantrip.sock"
     }
+
+    /// `cantrip status|pair|config` requests, answered on the main actor (set by HostServices).
+    var controlHandler: (@MainActor ([String: Any]) -> [String: Any])?
+    private let listenerQueue = DispatchQueue(label: "cantrip.cli.listener")
+    private var healthTimer: DispatchSourceTimer?
 
     func start() {
         _ = runJournal
+        listenerQueue.sync { startListener() }
+        // The socket is the headless host's only local control; recreate it if something deletes it.
+        let timer = DispatchSource.makeTimerSource(queue: listenerQueue)
+        timer.schedule(deadline: .now() + 30, repeating: 30)
+        timer.setEventHandler { [weak self] in
+            guard let self, !FileManager.default.fileExists(atPath: Self.socketPath) else { return }
+            Log.write("cli: socket file was removed; listening again")
+            self.startListener()
+        }
+        timer.resume()
+        healthTimer = timer
+    }
+
+    private func startListener() {
+        listener?.cancel()
+        try? FileManager.default.createDirectory(atPath: (Self.socketPath as NSString).deletingLastPathComponent,
+                                                 withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
         try? FileManager.default.removeItem(atPath: Self.socketPath)
         do {
-            let params = NWParameters()
+            // An empty NWParameters() fails with EINVAL on macOS 26; a stream stack works over a Unix path.
+            let params = NWParameters.tcp
             params.requiredLocalEndpoint = NWEndpoint.unix(path: Self.socketPath)
             let listener = try NWListener(using: params)
             listener.newConnectionHandler = { [weak self] connection in
                 self?.serve(connection)
+            }
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    // Only this user may connect: the socket hands out the pairing token.
+                    chmod(Self.socketPath, 0o600)
+                case .failed(let error):
+                    Log.write("cli: listener failed: \(error.localizedDescription)")
+                default:
+                    break
+                }
             }
             listener.start(queue: .global(qos: .userInitiated))
             self.listener = listener
@@ -116,6 +153,15 @@ final class CLIServer {
     }
 
     private func handleRequest(_ data: Data, on connection: NWConnection) {
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], obj["command"] is String {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let reply = MainActor.assumeIsolated { self.controlHandler?(obj) }
+                self.send(reply ?? ["error": "Cantrip is still starting. Try again in a moment."],
+                          on: connection, close: true)
+            }
+            return
+        }
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let text = obj["text"] as? String,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

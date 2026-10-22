@@ -20,6 +20,8 @@ enum CrashRecovery {
         let startedAt: Date
         let buildIdentity: String
         let bundlePath: String
+        /// A headless host is restarted by its supervisor (launchd/systemd), never reopened as the app.
+        var headless: Bool? = nil
     }
 
     private static let crashWindow: TimeInterval = 60
@@ -65,7 +67,8 @@ enum CrashRecovery {
             pid: getpid(),
             startedAt: Date(),
             buildIdentity: buildIdentity,
-            bundlePath: Bundle.main.bundlePath
+            bundlePath: Bundle.main.bundlePath,
+            headless: HostMode.isHeadless ? true : nil
         )
         let markerURL = stateDirectory
             .appendingPathComponent("run-\(marker.id.uuidString).json")
@@ -124,7 +127,9 @@ enum CrashRecovery {
         try? write(report, to: latestReportURL)
         appendLog("crash: unexpected exit of pid \(marker.pid), build \(marker.buildIdentity), bundle \(marker.bundlePath)")
 
-        if shouldRelaunch {
+        if marker.headless == true {
+            appendLog("recovery: headless host exited; its supervisor restarts it")
+        } else if shouldRelaunch {
             relaunchExactBundle(marker.bundlePath)
         } else {
             appendLog("recovery: paused after \(crashCount) crashes in \(Int(crashWindow)) seconds")
@@ -217,6 +222,35 @@ enum CrashRecovery {
         kill(pid, 0) == 0 || errno == EPERM
     }
 
+    private static func processStartTime(_ pid: Int32) -> Date? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let start = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000)
+    }
+
+    /// The marker's own process still runs. After a reboot or `killall` a marker can outlive its
+    /// host, and its pid may now belong to a process that started later.
+    private static func isLive(_ marker: RunMarker) -> Bool {
+        guard processExists(marker.pid) else { return false }
+        guard let started = processStartTime(marker.pid) else { return true }
+        return started <= marker.startedAt.addingTimeInterval(2)
+    }
+
+    /// Another live Cantrip host from any bundle (builds before the host lock didn't take it).
+    static func otherRunningHost(in directory: URL? = nil) -> Int32? {
+        let urls = (try? FileManager.default.contentsOfDirectory(at: directory ?? stateDirectory,
+                                                                 includingPropertiesForKeys: nil)) ?? []
+        for url in urls where url.lastPathComponent.hasPrefix("run-") && url.pathExtension == "json" {
+            guard let marker: RunMarker = read(from: url), marker.pid != getpid() else { continue }
+            if isLive(marker) { return marker.pid }
+            try? FileManager.default.removeItem(at: url)
+        }
+        return nil
+    }
+
     static func hasRunningInstance(from bundlePath: String) -> Bool {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: stateDirectory,
@@ -228,7 +262,7 @@ enum CrashRecovery {
                 try? FileManager.default.removeItem(at: url)
                 continue
             }
-            if processExists(marker.pid) {
+            if isLive(marker) {
                 if marker.bundlePath == bundlePath { return true }
             } else {
                 try? FileManager.default.removeItem(at: url)
