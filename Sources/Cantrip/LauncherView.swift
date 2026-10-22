@@ -731,6 +731,8 @@ struct LauncherView: View {
                     .help("Drag to reorder. Right-click for tab actions.")
                     .contextMenu {
                         Button(chat.isLocalPrivate ? "Private Local Settings..." : "Model Settings...") { modelSettingsSession = chat }
+                        Button("Start Fresh") { startFresh(chat) }
+                            .disabled(chat.startFreshUnavailableReason != nil)
                         if !chat.isLocalPrivate {
                             Button("Sign in to GitHub on Mac...") { chat.submitRemote("/login github", mode: .queue) }
                                 .disabled(chat.isStreaming || !chat.queued.isEmpty)
@@ -2145,6 +2147,21 @@ struct LauncherView: View {
         }
     }
 
+    private var errorRecovery: MessageRow.ErrorRecovery {
+        let chat = session
+        return MessageRow.ErrorRecovery(
+            changeModelTitle: chat.isLocalPrivate ? "Private Local Settings" : "Change Model",
+            isDisabled: chat.startFreshUnavailableReason != nil,
+            startFresh: { startFresh(chat) },
+            changeModel: { modelSettingsSession = chat }
+        )
+    }
+
+    private func startFresh(_ chat: ChatSession) {
+        do { try chat.startFresh() }
+        catch { manager.tabActionError = error.localizedDescription }
+    }
+
     private var mainTranscript: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -2152,12 +2169,14 @@ struct LauncherView: View {
                 // nothing after a tab switch until scrolled. The transcript
                 // is capped at ~30 messages, so laziness buys nothing.
                 VStack(alignment: .leading, spacing: 12) {
+                    let repeatedErrorID = session.repeatedErrorMessageID
                     ForEach(transcriptMessages) { message in
                         MessageRow(message: message, localOnly: session.isLocalPrivate,
                                    appActions: settings.copilotMCPApps ? mcpAppActions : nil,
                                    openSubagents: { background in
                                        openProgressPane(background ? .background : .steps)
-                                   })
+                                   },
+                                   errorRecovery: message.id == repeatedErrorID ? errorRecovery : nil)
                             .id(message.id)
                     }
                     RemoteInputView(session: session, openSecureInput: { showingInputRequests = true })
@@ -2506,13 +2525,22 @@ private struct SuggestionListHeightKey: PreferenceKey {
     }
 }
 
-private struct MessageRow: View {
+struct MessageRow: View {
+    struct ErrorRecovery {
+        let changeModelTitle: String
+        let isDisabled: Bool
+        let startFresh: () -> Void
+        let changeModel: () -> Void
+    }
+
     let message: ChatMessage
     var localOnly = false
     /// Nil while MCP App views are turned off: saved views stay hidden and inert.
     var appActions: MCPAppActions?
     /// Shows the Progress pane's subagent monitor.
     var openSubagents: ((Bool) -> Void)?
+    /// Offered on an error that repeated: the tab is likely stuck on its earlier context.
+    var errorRecovery: ErrorRecovery?
 
     private var visibleApps: [MCPAppPayload] { appActions == nil ? [] : message.apps }
     /// Finished subagents grouped by the reply block they follow; running ones are pinned below the transcript.
@@ -2581,10 +2609,38 @@ private struct MessageRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         case .error:
-            Label(message.text, systemImage: "exclamationmark.triangle")
-                .font(.callout)
-                .foregroundStyle(.orange)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                Label(message.text, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                if let errorRecovery {
+                    Text("This error happened twice in a row. Start fresh to drop the earlier context, or try another model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Button("Start Fresh", systemImage: "arrow.counterclockwise", action: errorRecovery.startFresh)
+                        Button(errorRecovery.changeModelTitle, systemImage: "slider.horizontal.3",
+                               action: errorRecovery.changeModel)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(errorRecovery.isDisabled)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case .freshStart:
+            HStack(spacing: 8) {
+                VStack { Divider() }
+                Label(message.text, systemImage: "arrow.counterclockwise")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .layoutPriority(1)
+                VStack { Divider() }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .accessibilityElement(children: .combine)
         case .handoff:
             VStack(alignment: .leading, spacing: 3) {
                 Label(message.handoffResult?.headline ?? "Handoff", systemImage: "rectangle.stack")

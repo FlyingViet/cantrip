@@ -30,14 +30,15 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     /// Cantrip Home only: a handed-off tab's result card (role `handoff`).
     var handoffResult: CantripHomeHandoffResult?
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
-    enum Role: String, Codable { case user, assistant, error, handoff }
+    /// `freshStart`: the Start Fresh divider; turns above it are never sent to the model.
+    enum Role: String, Codable { case user, assistant, error, handoff, freshStart }
     struct ReasoningMark: Equatable {
         let activities: Int
         let textBytes: Int
     }
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult
+        case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart
     }
 }
 
@@ -101,15 +102,25 @@ extension ChatMessage {
         handoffResult = try? container.decodeIfPresent(
             CantripHomeHandoffResult.self, forKey: .handoffResult
         )
-        role = handoffResult == nil ? storedRole : .handoff
+        if (try? container.decodeIfPresent(Bool.self, forKey: .freshStart)) == true {
+            role = .freshStart
+        } else {
+            role = handoffResult == nil ? storedRole : .handoff
+        }
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
-        // Result cards are saved as assistant messages so builds without the `handoff` role
-        // still load the transcript; `handoffResult` marks them.
-        try container.encode(role == .handoff && handoffResult != nil ? .assistant : role, forKey: .role)
+        // Result cards are saved as assistant messages and dividers as errors, so builds without
+        // those roles still load the transcript; `handoffResult` / `freshStart` mark them.
+        let storedRole: Role = switch role {
+        case .handoff where handoffResult != nil: .assistant
+        case .freshStart: .error
+        default: role
+        }
+        try container.encode(storedRole, forKey: .role)
+        if role == .freshStart { try container.encode(true, forKey: .freshStart) }
         try container.encode(text, forKey: .text)
         try container.encodeIfPresent(author, forKey: .author)
         try container.encodeIfPresent(runID, forKey: .runID)
@@ -498,8 +509,12 @@ final class ChatSession: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "codexSessionID-\(id.uuidString)")
         UserDefaults.standard.removeObject(forKey: "workdir-\(id.uuidString)")
         clearLastRunOutcome()
-        // Council scratch sessions: scan for this session's keys so no
-        // seat count or key scheme can strand them.
+        forgetCouncilSeatSessions()
+    }
+
+    /// Council seats (Claude/Codex) save their native session IDs and resume them when recreated
+    /// after a relaunch. Scan for this session's keys so no seat count or key scheme strands them.
+    private func forgetCouncilSeatSessions() {
         for key in UserDefaults.standard.dictionaryRepresentation().keys
         where key.hasPrefix("councilClaude-\(id.uuidString)")
             || key.hasPrefix("councilCodex-\(id.uuidString)") {
@@ -2394,6 +2409,10 @@ final class ChatSession: ObservableObject {
                 pendingUser = nil
             case .error:
                 pendingUser = nil
+            case .freshStart:
+                // Start Fresh: nothing above the divider reaches the model.
+                turns.removeAll()
+                pendingUser = nil
             case .handoff:
                 continue
             }
@@ -3369,6 +3388,7 @@ final class ChatSession: ObservableObject {
         resetBackendConversations()
         for backend in councilInstances.values { backend.reset() }
         councilInstances = [:]
+        forgetCouncilSeatSessions()
         messages.removeAll()
         isStreaming = false
         statusText = nil
@@ -3390,6 +3410,101 @@ final class ChatSession: ObservableObject {
         clearCurrentRun()
         clearLastRunOutcome()
         persistTranscript()
+    }
+
+    // MARK: - Start fresh
+
+    static let freshStartCaption = "Started fresh — earlier messages aren't sent to the model"
+
+    /// Cantrip Home keeps its own continuity; every other tab can start fresh.
+    var supportsStartFresh: Bool { !SessionManager.isCantripHomeReserved(self) }
+
+    var startFreshUnavailableReason: String? {
+        guard supportsStartFresh else {
+            return "Cantrip Home keeps its own conversation. Start fresh in a project tab instead."
+        }
+        if isStreaming || !queued.isEmpty || shell.isRunning || autoResumePending {
+            return "Wait for this tab and its queued work to finish before starting fresh."
+        }
+        return nil
+    }
+
+    /// Keeps the tab and its visible history, but the next prompt starts a new model session that
+    /// gets none of the earlier turns: a divider marks where the model's context begins again.
+    func startFresh() throws {
+        if let reason = startFreshUnavailableReason { throw SessionModelSettingsError(409, reason) }
+        invalidateRouting()
+        deliveryStatus = nil
+        mcpAppContext.removeAll()
+        streamGeneration += 1
+        councilRunning = false
+        councilAnswers = []
+        councilFinished = []
+        councilSynthesizing = false
+        // Drops each backend's native session (Copilot's runtime and resume target, Claude/Codex
+        // session IDs), so nothing is resumed with the old context.
+        resetBackendConversations()
+        for backend in councilInstances.values { backend.reset() }
+        councilInstances = [:]
+        forgetCouncilSeatSessions()
+        autoResumeSpent = false
+        restoredRun = nil
+        networkRetries = 0
+        if let runID = currentRunID ?? lastJournalRunID {
+            appendRunEvent(RunJournal.Event(sessionID: id, runID: runID, kind: .conversationReset),
+                           durable: true)
+        }
+        clearCurrentRun()
+        if !messages.isEmpty, messages.last?.role != .freshStart {
+            messages.append(ChatMessage(role: .freshStart, text: Self.freshStartCaption))
+            persistTranscript()
+        }
+        Log.write("tab: started fresh (\(id.uuidString.prefix(8)))")
+    }
+
+    /// The latest message when it's a model error repeating the previous error with no finished
+    /// turn between them: the tab is likely stuck on its earlier context, so clients offer
+    /// Start Fresh and Change Model on that row.
+    var repeatedErrorMessageID: UUID? {
+        guard supportsStartFresh, !isStreaming,
+              let last = messages.lastIndex(where: { !($0.role == .assistant && $0.text.isEmpty) }),
+              messages[last].role == .error, Self.isModelError(messages[last].text) else { return nil }
+        let key = Self.errorKey(messages[last].text)
+        var promptAfter = false
+        for message in messages[..<last].reversed() {
+            switch message.role {
+            case .error:
+                return Self.errorKey(message.text) == key ? messages[last].id : nil
+            case .user:
+                promptAfter = true
+            case .assistant where !message.text.isEmpty && promptAfter:
+                return nil // a reply followed by a new prompt: that turn finished
+            case .freshStart:
+                return nil
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
+    /// A failure reported by the model or its API, not Cantrip, the network or a local tool.
+    static func isModelError(_ text: String) -> Bool {
+        guard !isNetworkError(text) else { return false }
+        let lowered = text.lowercased()
+        return lowered.contains("execution failed") || lowered.contains("model")
+            || lowered.range(of: #"\b[45]\d\d\b"#, options: .regularExpression) != nil
+    }
+
+    /// Error text without the parts that change on every attempt (request IDs, token counts).
+    static func errorKey(_ text: String) -> String {
+        text.lowercased()
+            .replacingOccurrences(of: #"\([^)]*request[ _-]?id[^)]*\)"#, with: "", options: .regularExpression)
+            .split(whereSeparator: \.isWhitespace)
+            .map { word in
+                word.count >= 6 && word.contains(where: \.isNumber) ? "#" : String(word)
+            }
+            .joined(separator: " ")
     }
 
     private func updateActivity(_ activity: ToolActivity) {
