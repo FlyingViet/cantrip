@@ -93,6 +93,7 @@ certificates. See `CantripRemoteAPI` and `CantripLANProtocol` in
 | `DELETE /api/v1/sessions/{id}/queue/{promptID}`, `POST …/queue/{promptID}/send` | Remove a queued prompt, or Send now |
 | `/api/v1/sessions/{id}/input` | Answer approvals, questions and secure input |
 | `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename and lock, reorder, per-tab model settings |
+| `POST /api/v1/sessions/{id}/start-fresh` | Start Fresh (no body): the next prompt starts a new model session, history stays; `409` while the tab is busy or for Cantrip Home |
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, Copilot usage, View Mac |
@@ -104,8 +105,11 @@ local-network route. The app polls every 1.5 s while the tab on screen (or Home)
 and every 5 s otherwise; Cantrip Gateway Mac slows to 15 s while another app is frontmost.
 
 New features are gated by capability flags in session snapshots (for example
-`supportsQueueSendNow` or `supportsTabReordering`), so an older Mac shows an update notice
-instead of failing. When an app feature needs a newer host, update and relaunch Cantrip on
+`supportsQueueSendNow`, `supportsTabReordering` or `supportsStartFresh`), so an older Mac
+shows an update notice instead of failing. Snapshots may also carry `repeatedErrorMessageID`,
+the latest error when it repeats the one before it; that error row offers **Start Fresh** and
+**Change Model**. A message with role `freshStart` is Cantrip's Start Fresh divider, never a
+model reply. When an app feature needs a newer host, update and relaunch Cantrip on
 the Mac. Sends are never replayed automatically after a connection failure. The full
 reference is Cantrip's
 [remote-control guide](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md).
@@ -138,8 +142,8 @@ left edge. The drawer has **+** for a new tab, **Search tabs**, a pinned **Cantr
 row, a **Background jobs** row (scheduled and automated runs), then every tab with a spinner
 while it works (its live status in orange), its latest outcome when idle, and how long ago
 it last ran. Drag a tab's **≡** handle to reorder (not while searching); touch and hold a tab
-for Rename, Lock, Move, Model Settings, View Mac and Close. A connection line sits at the
-bottom.
+for Rename, Lock, Move, Model Settings, Start Fresh, View Mac and Close. A connection line
+sits at the bottom.
 
 A tab opens full screen with **‹ Home** on the left, its name and **Working / Idle** state in
 the center, and a **⋯** menu on the right: **All Tabs**, the tab's actions, delivery mode,
@@ -776,6 +780,20 @@ transferring the previous model's full internal context. Standard/Long labels
 show input budgets; the advertised maximum is shown separately. Long context
 may cost more. **Refresh models** reads account metadata without sending a
 prompt; errors retain the cached catalog.
+
+### Start fresh in a tab
+
+**Start Fresh** (after **Model Settings** in the Chat menu and a tab's actions) keeps the
+tab's name, folder, model settings, lock and every visible message, but its next prompt
+starts a brand-new model session: nothing above the divider Cantrip adds (**Started fresh —
+earlier messages aren't sent to the model**) is sent to the model. Use it when a tab keeps
+failing because of an earlier turn. When the latest error repeats the previous one, that
+error also shows **Start Fresh** and **Change Model** (**Private Local Settings** for the
+Private Local tab) buttons.
+
+Start Fresh is unavailable while the tab is working or has queued messages, and in Cantrip
+Home. It requires the host's `supportsStartFresh` capability; older Macs show an update
+notice. The Mac's reason is shown if it refuses, and nothing is deleted.
 
 ### Update and rebuild the Cantrip Mac
 

@@ -197,7 +197,8 @@ final class CantripRoutingTests: XCTestCase {
     func testMutationHostRejectionsDoNotFallBackOrWrite() async throws {
         let errors: [CantripRemoteError] = [
             .authentication, .http(409, "Busy"), .decoding, .autoDeliveryUnsupported,
-            .imagesUnsupported, .tabMetadataUnsupported, .queueRemovalUnsupported, .queueSendNowUnsupported
+            .imagesUnsupported, .tabMetadataUnsupported, .queueRemovalUnsupported, .queueSendNowUnsupported,
+            .startFreshUnsupported
         ]
         for error in errors {
             let router = CantripRemoteRouter()

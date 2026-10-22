@@ -8,6 +8,8 @@ struct CantripTabActionState: Equatable {
     let supportsTabMetadata: Bool
     let supportsTabReordering: Bool
     let supportsInputRequests: Bool
+    /// Nil from Macs before Start Fresh; false where it doesn't apply (Cantrip Home).
+    let supportsStartFresh: Bool?
     let isBusy: Bool
     let isFirst: Bool
     let isLast: Bool
@@ -21,6 +23,7 @@ struct CantripTabActionState: Equatable {
         supportsTabMetadata = session.supportsTabMetadata == true
         supportsTabReordering = session.supportsTabReordering == true
         supportsInputRequests = session.supportsInputRequests == true
+        supportsStartFresh = CantripStartFresh.support(for: session)
         isBusy = session.isStreaming || session.queuedCount > 0
         isFirst = model.sessions.first?.id == session.id
         isLast = model.sessions.last?.id == session.id
@@ -77,6 +80,8 @@ struct CantripTabActions: View {
             Label(state.isLocalPrivate ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
         }
         .disabled(state.isMutating)
+        CantripStartFreshMenuItem(model: model, sessionID: state.id, support: state.supportsStartFresh,
+                                  isDisabled: state.isMutating || state.isBusy)
         Button(action: onRename) {
             Label("Rename Tab", systemImage: "pencil")
         }
