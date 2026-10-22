@@ -1,10 +1,16 @@
 import SwiftUI
 
+extension FocusedValues {
+    /// The Home window's open tab while it can start fresh; nil disables the command.
+    @Entry var startFreshTabID: String?
+}
+
 /// Menu bar commands for the Home window.
 struct MacHomeCommands: Commands {
     let remote: CantripRemoteModel
     let navigation: MacHomeNavigation
     @AppStorage("hermes.paused") private var paused = false
+    @FocusedValue(\.startFreshTabID) private var startFreshTabID
 
     var body: some Commands {
         // Home is a single window.
@@ -34,6 +40,11 @@ struct MacHomeCommands: Commands {
                 if let session = remote.selectedSession { remote.modelSettingsSession = session }
             }
             .keyboardShortcut(";", modifiers: .command)
+            Button(CantripStartFresh.title) {
+                guard let id = startFreshTabID else { return }
+                Task { await remote.startFresh(sessionID: id) }
+            }
+            .disabled(startFreshTabID == nil)
             Button("Copilot Usage") { navigation.sheet = .usage }
             Button("Cantrip Memory") { navigation.sheet = .memory }
             Button("GitHub Builds") { navigation.sheet = .builds }

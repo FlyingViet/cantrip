@@ -38,6 +38,7 @@ struct MacHomeWindow: View {
         }
         .frame(minWidth: 760, minHeight: 540)
         .toolbar { toolbar }
+        .focusedSceneValue(\.startFreshTabID, startFreshTabID)
         .sheet(isPresented: $navigation.showingBackground) {
             CantripHomeBackgroundView(
                 remote: remote, openLog: nil, openSession: nil,
@@ -121,6 +122,14 @@ struct MacHomeWindow: View {
 
     /// The lane the chat actually shows; a requested switch waits for an in-flight send.
     private var isTabOpen: Bool { vm.activeLane == .cantrip }
+
+    /// The open tab, while the menu bar's Start Fresh can run on it.
+    private var startFreshTabID: String? {
+        guard isTabOpen, let session = remote.selectedSession, !remote.isMutating,
+              CantripStartFresh.support(for: session) == true, !CantripStartFresh.isBusy(session)
+        else { return nil }
+        return session.id
+    }
 
     @ViewBuilder private var detail: some View {
         if isTabOpen {
@@ -235,11 +244,15 @@ struct MacHomeWindow: View {
 
     private var moreMenu: some View {
         Menu {
-            if remote.selectedSession != nil {
+            if let session = remote.selectedSession {
                 Button("Model Settings…", systemImage: "slider.horizontal.3") {
                     remote.modelSettingsSession = remote.selectedSession
                 }
                 .disabled(remote.isMutating)
+                CantripStartFreshMenuItem(
+                    model: remote, sessionID: session.id, support: CantripStartFresh.support(for: session),
+                    isDisabled: remote.isMutating || CantripStartFresh.isBusy(session)
+                )
             }
             Button("Copilot Usage", systemImage: "gauge.with.dots.needle.33percent") {
                 navigation.sheet = .usage

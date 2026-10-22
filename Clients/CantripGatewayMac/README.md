@@ -100,11 +100,13 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   badges for questions waiting and running tasks, then **Tabs · N**: every project tab on
   the Mac with a spinner while it works (or a question mark while it waits for you), an idle
   dot otherwise, and how long ago it last ran. **+** (⌘T) starts a tab; drag to reorder;
-  right-click for Rename, Lock, Move, Model Settings, View Mac and Close. The footer shows
-  the connection.
+  right-click for Rename, Lock, Move, Model Settings, Start Fresh, View Mac and Close. The
+  footer shows the connection.
 - **Tabs:** selecting a tab shows its transcript and composer in place. The toolbar shows its
   name and **Working / Idle · folder**, with Stop, delivery (**Auto**) and **⋯** for the tab's
   actions, Resume, voice mode and **Back to Home**. ⌘1–⌘3 or any Home section returns.
+  **Start Fresh** (also in the Home menu) keeps the tab and its messages but starts the next
+  prompt in a new model session; a repeated error offers it, and **Change Model**, in place.
 - **Chat:** Return sends; Option-Return adds a line. Drag images onto the chat to
   attach them. Questions from Cantrip appear above the composer.
 - **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS),
