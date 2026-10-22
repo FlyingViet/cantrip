@@ -54,7 +54,8 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   chatting; Cantrip wakes the run when they finish.
 - **Remote control:** the Mac's sessions from Cantrip Agent, Cantrip Gateway
   Mac, another Mac or a browser, over LAN or Tailscale, with push alerts,
-  approvals, attachments and View Mac. [Remote control](docs/remote-control.md)
+  approvals, attachments and View Mac. [Remote control](docs/remote-control.md);
+  on a cloud or SSH-only Mac, run it headless. [Headless host](docs/headless.md)
 - **Cantrip Home:** one permanent conversation that answers questions, hands
   project changes to the right tab, and runs scheduled tasks, trackers and
   incident investigations. [Cantrip Home](docs/cantrip-home.md)

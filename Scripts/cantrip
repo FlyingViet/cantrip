@@ -6,6 +6,8 @@ Usage:
   cat build.log | cantrip "why did this fail?"
   cantrip --backend claude "review this diff" < changes.diff
   cantrip runs [session-or-run-id]
+  cantrip daemon start|stop|restart|run|logs   (headless background service)
+  cantrip pair | status | config | doctor      (see `cantrip help`)
 
 If the app isn't running, the exact bundle next to this script's repo is
 launched (never LaunchServices' pick among stale copies), with a warning
@@ -226,8 +228,22 @@ def inspect_runs(identifier=None):
     return 0
 
 
+HOST_COMMANDS = {"daemon", "pair", "config", "status", "doctor", "help"}
+
+
+def run_host_command(args):
+    """Setup and pairing commands live in the Cantrip binary itself (shared with headless hosts)."""
+    binary = os.path.join(repo_dir(), "Cantrip.app", "Contents", "MacOS", "Cantrip")
+    if not os.access(binary, os.X_OK):
+        print(f"cantrip: build Cantrip first: make -C {repo_dir()} app", file=sys.stderr)
+        return 1
+    os.execv(binary, [binary] + args)
+
+
 def main() -> int:
     args = sys.argv[1:]
+    if args and args[0] in HOST_COMMANDS:
+        return run_host_command(args)
     if args and args[0] == "runs":
         if len(args) > 2:
             print("cantrip: usage: cantrip runs [session-or-run-id]",

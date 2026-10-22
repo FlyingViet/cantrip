@@ -12,13 +12,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var selectionHotkey: HotkeyManager!
     private var pasteMonitor: Any?
     private var cancellables: Set<AnyCancellable> = []
-    private let manager = SessionManager()
+    private let manager: SessionManager
+    private let services: HostServices
     private let recoveryReport: CrashRecovery.Report?
-    private var remoteControlServer: RemoteControlServer?
     private var remoteControlMenuItem: NSMenuItem?
 
     init(recoveryReport: CrashRecovery.Report?) {
         self.recoveryReport = recoveryReport
+        manager = SessionManager()
+        services = HostServices(manager: manager)
         super.init()
     }
 
@@ -131,12 +133,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
             .store(in: &cancellables)
 
-        // Older replies point at agent files folders recorded before Cantrip tracked them.
-        let transcripts = SessionManager.chatsDir
-        DispatchQueue.global(qos: .utility).async {
-            SessionOutputFolders.shared.backfillIfNeeded(transcripts: transcripts)
-        }
-
         // Menu bar icon reflects streaming state.
         UNUserNotificationCenter.current().delegate = self
         manager.$anyStreaming
@@ -148,112 +144,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
             .store(in: &cancellables)
 
-        // Notify when any session's run finishes while the panel is hidden.
-        manager.onAnyRunFinished = { [weak self] finished in
-            self?.notifyIfHidden(for: finished)
-            self?.remoteControlServer?.notifyCompletion(for: finished)
+        // Sessions, the CLI socket, Remote and Cantrip Home; the panel and menus are added here.
+        services.onRunFinished = { [weak self] finished in self?.notifyIfHidden(for: finished) }
+        services.onRemoteControlEnabledChange = { [weak self] enabled in
+            self?.remoteControlMenuItem?.state = enabled ? .on : .off
         }
-        manager.onAnyInputNeeded = { [weak self] session, request in
-            self?.remoteControlServer?.notifyInput(for: session, request: request)
-            guard !session.isPrivate else { return }
-            Task { @MainActor in
-                do {
-                    let center = UNUserNotificationCenter.current()
-                    guard try await center.requestAuthorization(options: [.alert, .sound]),
-                          session.pendingInputs.contains(where: { $0.id == request.id }), !session.isPrivate else { return }
-                    let content = UNMutableNotificationContent()
-                    content.title = "Cantrip needs your input"
-                    content.body = "Open Cantrip to review a pending request."
-                    content.sound = .default
-                    content.userInfo = ["sessionID": session.id.uuidString]
-                    try await center.add(UNNotificationRequest(identifier: request.id.uuidString, content: content, trigger: nil))
-                } catch { Log.write("input: Mac attention notification could not be delivered") }
-            }
-        }
-        manager.onAnyInputResolved = { [weak self] id in
-            self?.remoteControlServer?.resolveInputNotification(id)
-            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id.uuidString])
-            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id.uuidString])
-        }
-        CantripHomeStore.shared.attach(manager: manager)
-        AppSettings.shared.$cantripHomeEnabled
-            .removeDuplicates()
-            .receive(on: DispatchQueue.main)
-            .sink { _ in CantripHomeStore.shared.homeAvailabilityChanged() }
-            .store(in: &cancellables)
-        MacAttention.shared.onAttention = { [weak self] issue in
-            guard let self, !manager.active.isPrivate, !manager.active.isLocalPrivate else { return }
-            remoteControlServer?.notifyMacAttention(sessionID: manager.active.id, issueID: issue.id)
-        }
-        MacAttention.shared.onResolved = { [weak self] id in
-            self?.remoteControlServer?.resolveInputNotification(id)
-        }
-
-        // Unix-socket server for the `cantrip` CLI.
-        CLIServer.shared.start()
-
-        // Authenticated loopback HTTP for Tailscale plus encrypted Bonjour LAN access.
-        let remoteControlServer = RemoteControlServer(manager: manager)
-        remoteControlServer.onError = { message in
-            DispatchQueue.main.async {
-                AppSettings.shared.reportRemoteControlError(message)
-            }
-        }
-        remoteControlServer.onLANStatus = { status in
-            DispatchQueue.main.async {
-                AppSettings.shared.reportRemoteLANStatus(status)
-            }
-        }
-        self.remoteControlServer = remoteControlServer
-        CantripHomeStore.shared.onHandoff = { [weak self] run, handoff in
-            let title = "Handed to \(handoff.tabTitle)"
-            let state = handoff.status == .running ? "Running now" : "Waiting in the tab's queue"
-            let summary = "\(run.label) · \(state)"
-            // Tapping opens the tab that took the work.
-            self?.remoteControlServer?.notify(RemoteCompletion(
-                id: handoff.id, sessionID: handoff.tabID, title: title,
-                summary: RemoteCompletion.preview(summary), completedAt: Date()
-            ))
-            let content = UNMutableNotificationContent()
-            content.title = "Cantrip — \(title)"
-            content.body = summary
-            content.userInfo = ["sessionID": handoff.tabID.uuidString]
-            UNUserNotificationCenter.current().add(UNNotificationRequest(
-                identifier: handoff.id.uuidString, content: content, trigger: nil
-            ))
-        }
-        AppSettings.shared.$remoteControlEnabled
-            .removeDuplicates()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] enabled in
-                self?.remoteControlMenuItem?.state = enabled ? .on : .off
-                if !enabled {
-                    self?.remoteControlServer?.stop()
-                    AppSettings.shared.reportRemoteControlError(nil)
-                }
-            }
-            .store(in: &cancellables)
-        Publishers.CombineLatest4(
-            AppSettings.shared.$remoteControlEnabled,
-            AppSettings.shared.$remoteControlPort,
-            AppSettings.shared.$remoteLANPort,
-            AppSettings.shared.$remoteControlCredentialRevision
-        )
-        .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
-        .sink { enabled, port, lanPort, _ in
-            guard enabled else { return }
-            guard let token = AppSettings.shared.ensureRemoteControlToken() else {
-                remoteControlServer.stop()
-                return
-            }
-            remoteControlServer.start(port: port, token: token, lanPort: lanPort == 0 ? nil : lanPort)
-        }
-        .store(in: &cancellables)
-
-        // Daily memory consolidation, off the launch path.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
-            Consolidator.runIfDue()
-        }
+        services.start(recoveryReport: recoveryReport)
 
         // Local key monitor: ⌘V image-paste, and ⌘←/⌘→ cursor jumps
         // (borderless panels don't always deliver ⌘-arrows to the editor).
@@ -292,24 +188,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         AppSettings.shared.refreshLaunchAtLoginRegistrationIfNeeded()
-        if let recoveryReport {
-            manager.active.messages.append(ChatMessage(
-                role: .error,
-                text: CrashRecovery.message(for: recoveryReport)
-            ))
-            Log.write("recovery: surfaced crash \(recoveryReport.id.uuidString)")
+        if recoveryReport != nil {
             DispatchQueue.main.async { [weak self] in self?.showPanel() }
         }
-        _ = NetworkMonitor.shared
-        manager.continueRestoredWork()
+        services.continueRestoredWork()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        remoteControlServer?.stop()
-        for error in RunJournal.drainForTermination() {
-            Log.write("run-journal: exit flush failed code=\((error as NSError).code)")
-        }
-        CrashRecovery.markCleanExit()
+        services.stop()
     }
 
     @objc func stopRequest() {
