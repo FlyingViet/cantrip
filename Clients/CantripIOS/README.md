@@ -58,6 +58,11 @@ Open **Settings**. Under **Cantrip Remote Servers**, paste the **Pairing token**
 if you like, fill in the route below, tap **Add Server**, then tap the saved server to
 connect. Allow Local Network access when asked.
 
+Or run `cantrip pair` on the host (handy on a headless Mac or a codespace) and scan its QR
+code with the iPhone Camera, or open the link it prints on a Mac with Cantrip Gateway. The
+app shows the host's name, routes and the token's last four characters, saves nothing until
+you tap **Pair**, then adds and connects to the server like **Add Server**.
+
 | Route | Use it when | What to enter |
 |---|---|---|
 | Local network | Phone and Mac are on the same network | Nothing more. The app finds the Mac with Bonjour (`_cantrip-remote._tcp`). |
@@ -85,6 +90,17 @@ routes, the same HTTP requests run inside TLS 1.2 with a pre-shared key (SHA-256
 pairing token, identity `cantrip-remote-v1`), so they're end-to-end encrypted without
 certificates. See `CantripRemoteAPI` and `CantripLANProtocol` in
 [`Sources/CantripRemote.swift`](Sources/CantripRemote.swift).
+
+`cantrip pair` prints a pairing link (percent-encoded values):
+
+```
+cantripagent://pair?v=1&name=<label>&token=<token>[&url=<https base URL>][&direct=<host:port>][&tailscaleOnly=1]
+```
+
+`token` (32-128 base64url characters) is required; `url` and `direct` follow the Tailscale URL
+and direct address rules above, and `tailscaleOnly=1` needs a `url`. With neither, the app finds
+the host on the local network. A newer `v` asks the user to update the app. See
+`CantripPairingLink` in [`Sources/CantripPairing.swift`](Sources/CantripPairing.swift).
 
 | Endpoint | Used for |
 |---|---|

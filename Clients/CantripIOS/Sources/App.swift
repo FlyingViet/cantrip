@@ -52,6 +52,13 @@ struct HermesApp: App {
         .onChange(of: notifications.pendingTarget) { _, _ in openNotification() }
         .onChange(of: notifications.deviceToken) { _, _ in remoteModel.refreshCompletionNotificationRegistration(force: true) }
         .onOpenURL { url in
+            if let pairing = CantripPairingLink.parse(url) {
+                launchSplash.skip()
+                CantripPairingPresenter.present(CantripPairingPrompt(result: pairing), model: remoteModel) { [env] in
+                    env.select(.home)
+                }
+                return
+            }
             guard let target = CantripDeepLink.parse(url) else { return }
             launchSplash.skip()
             switch target {
