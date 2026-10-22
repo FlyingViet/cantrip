@@ -63,6 +63,13 @@ struct MacHomeWindow: View {
             NavigationStack { CantripMacAccessView(remote: remote) }
                 .macSheetFrame(width: 760, height: 620)
         }
+        .sheet(item: $navigation.pairing) { prompt in
+            CantripPairingView(prompt: prompt, model: remote) { _ in navigation.pairing = nil }
+                .macSheetFrame(width: 520, height: prompt.link == nil ? 260 : 600)
+        }
+        .onOpenURL { url in
+            if let pairing = CantripPairingLink.parse(url) { navigation.showPairing(pairing) }
+        }
         .onChange(of: showingMaintenance) { _, showing in
             if showing {
                 navigation.sheet = .maintenance

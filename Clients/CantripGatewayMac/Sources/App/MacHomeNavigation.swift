@@ -14,6 +14,8 @@ final class MacHomeNavigation: ObservableObject {
     @Published var composerFocusRequest = 0
     /// The project tab being renamed from the sidebar or the tab's More menu.
     @Published var renamingTab: CantripRemoteSession?
+    /// A `cantrip pair` link opened on this Mac, waiting for the user to confirm.
+    @Published var pairing: CantripPairingPrompt?
     private weak var env: HermesEnv?
     private weak var remote: CantripRemoteModel?
 
@@ -83,6 +85,15 @@ final class MacHomeNavigation: ObservableObject {
         sheet = nil
         showingBackground = false
         renamingTab = nil
+    }
+
+    /// Shows a pairing link's confirmation in place of any open sheet (a window shows one at a time).
+    func showPairing(_ result: Result<CantripPairingLink, CantripPairingLinkError>) {
+        closeAll()
+        remote?.modelSettingsSession = nil
+        remote?.inputRequestsSession = nil
+        remote?.showingMacAccess = false
+        DispatchQueue.main.async { self.pairing = CantripPairingPrompt(result: result) }
     }
 }
 

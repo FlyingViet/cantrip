@@ -58,6 +58,11 @@ targets:
         NSLocalNetworkUsageDescription: "Cantrip Gateway discovers and connects securely to your paired Cantrip on the local network."
         NSBonjourServices:
           - _cantrip-remote._tcp
+        # `cantrip pair` links (cantripagent://pair?...) open the pairing confirmation.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.itzhoang.cantripgateway.mac.links
+            CFBundleURLSchemes:
+              - cantripagent
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
     settings:
@@ -93,6 +98,7 @@ targets:
       - path: Hermes/Tests/CantripImageTransportTests.swift
       - path: Hermes/Tests/ServerProfilesTests.swift
       - path: Hermes/Tests/CantripDirectAddressTests.swift
+      - path: Hermes/Tests/CantripPairingLinkTests.swift
       - path: Hermes/Tests/CantripGzipTests.swift
       - path: Hermes/Tests/CantripTabBackTransitionTests.swift
       - path: Hermes/Tests/CantripMCPAppTests.swift

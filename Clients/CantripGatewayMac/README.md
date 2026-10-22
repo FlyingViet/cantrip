@@ -80,7 +80,9 @@ that same Mac or on another one.
 
 **In Cantrip Gateway Mac:** open **Settings (⌘,) > Connection**. Under **Cantrip Remote
 Servers**, paste the **Pairing token**, fill in a route, click **Add Server**, then select
-the saved server.
+the saved server. Or run `cantrip pair` on the host and open the `cantripagent://pair` link
+it prints on this Mac: Cantrip Gateway shows the host and its routes and saves nothing until
+you click **Pair**.
 
 | Route | Use it when | What to enter |
 |---|---|---|
