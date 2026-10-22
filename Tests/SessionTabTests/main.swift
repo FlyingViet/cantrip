@@ -23,6 +23,10 @@ struct SessionTabTests {
                 try await testQueueSendNowLive()
                 return
             }
+            if ProcessInfo.processInfo.environment["CANTRIP_STARTFRESH_LIVE_TEST"] == "1" {
+                try await testStartFreshLive()
+                return
+            }
             if ProcessInfo.processInfo.environment["CANTRIP_WATCHER_LIVE_TEST"] == "1" {
                 try await testBackgroundWatcherLive()
                 return
@@ -135,6 +139,7 @@ struct SessionTabTests {
         try await testCopilotUsage()
         try await testCopilotModels()
         try await testSessionModelSettings()
+        try await testStartFresh()
         try await testRemoteInput()
         try await testRemoteDesktop()
         try await testPrivateLocal()
