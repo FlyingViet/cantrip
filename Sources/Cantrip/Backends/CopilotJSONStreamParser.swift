@@ -182,6 +182,17 @@ struct CopilotJSONStreamParser {
                 lastMessageID = messageID
                 streamedMessageIDs.insert(messageID)
                 events.append(.textDelta(delta))
+            } else if object["agentId"] as? String == nil,
+                      eventData?["parentToolCallId"] as? String == nil,
+                      let messageID = eventData?["messageId"] as? String,
+                      !streamedMessageIDs.contains(messageID),
+                      (eventData?["content"] as? String ?? "").isEmpty,
+                      let narration = Self.narration(in: eventData?["reasoningBlocks"]) {
+                let delta = (!answer.isEmpty && lastMessageID != messageID ? "\n\n" : "") + narration
+                answer += delta
+                lastMessageID = messageID
+                streamedMessageIDs.insert(messageID)
+                events.append(.textDelta(delta))
             }
             let requests = eventData?["toolRequests"] as? [[String: Any]] ?? []
             let parentID = subagentParent(object, eventData)
@@ -432,6 +443,27 @@ struct CopilotJSONStreamParser {
     }
 
     /// "Agent started in background with agent_id: <id>. ..."
+    /// Claude can return the text it writes before a tool call (or even a whole reply) as a
+    /// "narration" block, which the Copilot API passes on only as a reasoning summary, so the
+    /// user never sees it. That summary is the closest thing to what they should have read.
+    /// Only the block's signature records its kind, in a short header naming "thinking" or
+    /// "narration"; an unknown format shows nothing extra.
+    static func narration(in reasoningBlocks: Any?) -> String? {
+        guard let blocks = (reasoningBlocks as? [String: Any])?["blocks"] as? [[String: Any]] else { return nil }
+        let texts = blocks.compactMap { block -> String? in
+            guard let signature = block["signature"] as? String, isNarration(signature),
+                  let text = (block["thinking"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { return nil }
+            return text
+        }
+        return texts.isEmpty ? nil : texts.joined(separator: "\n\n")
+    }
+
+    static func isNarration(_ signature: String) -> Bool {
+        guard let header = Data(base64Encoded: String(signature.prefix(64))) else { return false }
+        return header.range(of: Data("narration".utf8)) != nil
+    }
+
     static func backgroundAgentID(in content: String) -> String? {
         guard let marker = content.range(of: "agent_id:") else { return nil }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
