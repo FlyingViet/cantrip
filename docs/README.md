@@ -18,6 +18,7 @@ only when you want the agent to make changes.
 | Ask about a screenshot, document, or selected text | [Files and screen context](files-and-screen-context.md) |
 | Keep projects separate, resume work, or compare models | [Sessions and council mode](sessions-and-council.md) |
 | Control my Mac from Cantrip Agent or another Mac | [Remote control](remote-control.md) |
+| Run Cantrip with no windows on a cloud, remote-desktop or SSH-only Mac | [Headless host](headless.md) |
 | Run scheduled tasks, trackers, or hand off work from one conversation | [Cantrip Home](cantrip-home.md) |
 | Send a photo from my iPhone or iPad | [Cantrip Agent image attachments](remote-control.md#send-a-photo-or-screenshot-from-cantrip-agent) |
 | Decide what Cantrip can do, see, and remember | [Permissions, privacy, and memory](privacy-and-memory.md) |

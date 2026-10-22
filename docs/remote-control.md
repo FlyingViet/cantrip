@@ -518,6 +518,9 @@ need Tailscale. Save a Tailscale URL for preferred access both at home and away.
 **Expected result:** no Remote error is shown in Settings. Native clients
 can discover the host and authenticate using the token.
 
+No one at the Mac, or reaching it over SSH or remote desktop? Run it without
+windows and pair from Terminal instead: see [Headless host](headless.md).
+
 The token authorizes access to non-private sessions and their controls, plus
 read-only access to saved Cantrip memory.
 Do not put it in a screenshot, shared note, issue, URL, or source repository.

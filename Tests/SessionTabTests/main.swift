@@ -140,6 +140,7 @@ struct SessionTabTests {
         try await testCopilotModels()
         try await testSessionModelSettings()
         try await testStartFresh()
+        try await testHeadless()
         try await testRemoteInput()
         try await testRemoteDesktop()
         try await testPrivateLocal()

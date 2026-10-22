@@ -319,6 +319,8 @@ final class RemoteMaintenance {
     }
 
     static func relaunch(_ app: URL) throws {
+        // A headless host restarts in place: same arguments and launchd job, never the menu bar app.
+        if HostMode.isHeadless { MainActor.assumeIsolated { HeadlessHost.restartInPlace() } }
         let helper = Process()
         helper.executableURL = URL(fileURLWithPath: "/bin/sh")
         // Wait for this exact process to exit; never kill another Cantrip instance.
