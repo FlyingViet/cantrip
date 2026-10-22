@@ -56,6 +56,23 @@ the panel instead. Closing is not the same as deleting a session permanently.
 The History view's delete control is permanent; private sessions are not
 archived for later recovery.
 
+### Start fresh but keep the history
+
+When a tab keeps failing because of something earlier in its conversation,
+right-click it and choose **Start Fresh** (also next to **Model Settings** in
+Mac/browser Remote and Cantrip Agent). The tab keeps its name, folder, model
+settings, lock and every visible message. A divider, *Started fresh — earlier
+messages aren't sent to the model*, marks the point: the next prompt starts a
+new model session with none of the earlier turns, and later context recaps
+only include turns below the divider. Earlier messages stay readable. It works
+on locked tabs, but not while the tab is running, has queued messages or a
+running shell command. Cantrip Home keeps its own conversation and has no
+Start Fresh.
+
+If the same model error ends two attempts in a row (for example a model
+declining, then `400 The requested model is not supported`), the error row
+offers **Start Fresh** and **Change Model**.
+
 ## Send instructions while the agent is busy
 
 | Goal | Mac shortcut | What happens |

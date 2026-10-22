@@ -132,6 +132,18 @@ the old model's entire internal context. No running prompt is stopped or
 replayed. Both apps need updated builds; the Mac must be reopened to activate
 the paired `GET/POST /api/v1/sessions/{id}/model-settings` endpoint.
 
+## Start fresh
+
+**Start Fresh**, next to **Model Settings** in the same menus, keeps a tab and
+its visible history but gives the next prompt a new model session with no
+earlier turns (see [Sessions](sessions-and-council.md#start-fresh-but-keep-the-history)).
+`POST /api/v1/sessions/{id}/start-fresh` takes no body and returns the session,
+whose messages then end with a `freshStart` divider. It returns `409` while the
+tab runs, has queued work or a running shell, and for Cantrip Home. Sessions
+advertise `supportsStartFresh`, and `repeatedErrorMessageID` names an error row
+that repeated the previous error, where clients offer Start Fresh and Change
+Model.
+
 ## Remote approvals and secure input
 
 Cantrip, Mac/browser Remote and Cantrip Agent display questions, approvals and

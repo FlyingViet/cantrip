@@ -1464,6 +1464,19 @@ final class RemoteControlServer {
             }
             session.newConversation()
             sendSession(session, recentExchanges: recentExchanges, on: connection)
+        case "start-fresh":
+            guard request.body.count <= 1024, json?.isEmpty ?? true else {
+                sendError(400, "Starting fresh takes no request body.", on: connection)
+                return
+            }
+            do {
+                try session.startFresh()
+                sendSession(session, recentExchanges: recentExchanges, on: connection)
+            } catch let error as SessionModelSettingsError {
+                sendError(error.status, error.message, on: connection)
+            } catch {
+                sendError(500, "Could not start this tab fresh on the Mac.", on: connection)
+            }
         case "close":
             guard !session.isLocked else {
                 sendError(409, SessionTabError.locked.localizedDescription, on: connection)
@@ -1889,9 +1902,13 @@ final class RemoteControlServer {
             "supportsQueueRemoval": true,
             "supportsQueueSendNow": true,
             "supportsPagedHistory": true,
+            "supportsStartFresh": session.supportsStartFresh,
         ]
         if let status = session.statusText { result["status"] = status }
         if let status = session.deliveryStatus { result["deliveryStatus"] = status }
+        if let repeated = session.repeatedErrorMessageID {
+            result["repeatedErrorMessageID"] = repeated.uuidString
+        }
         if session.isCantripHome {
             // Drives the Background button badge without fetching the run list.
             result["supportsBackgroundRuns"] = true
@@ -2345,6 +2362,8 @@ private extension RemoteControlServer {
     #imageStage{display:flex;overflow:auto;overscroll-behavior:contain}#imageFull{display:block;margin:auto;max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in}#imageViewer.zoomed #imageFull{max-width:none;max-height:none;cursor:zoom-out}#imageStatus{margin:auto;padding:16px;text-align:center;line-height:1.45}#imageStatus:empty{display:none}
     details{min-width:0}summary{list-style:none;cursor:pointer}summary::-webkit-details-marker{display:none}.disclosure{margin-top:7px;color:var(--secondary)}.disclosure>summary{display:flex;align-items:center;gap:7px;width:max-content;max-width:100%;font-size:12px}.disclosure>summary:before{content:"›";width:12px;color:var(--tertiary);font-size:17px;line-height:12px;transition:transform .12s}.disclosure[open]>summary:before{transform:rotate(90deg)}.disclosure-body{margin:7px 0 2px 18px;padding-left:10px;border-left:2px solid rgba(107,140,255,.22)}
     .subagents{display:grid;gap:6px;margin:8px 0}
+    .fresh-start{display:flex;align-items:center;gap:10px;margin:2px 0;color:var(--secondary);font-size:12px;text-align:center;overflow-wrap:anywhere}.fresh-start:before,.fresh-start:after{content:"";flex:1 1 24px;border-top:1px solid var(--line)}
+    .error-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.message.error .muted{margin:6px 0 0;color:var(--secondary)}
     .handoffs{display:grid;gap:6px;margin:8px 0}
     .handoff-card{padding:9px 11px 4px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:13px}
     .handoff-card.result{border-left:3px solid var(--tertiary)}.handoff-card.result.completed{border-left-color:var(--green)}.handoff-card.result.needsInput{border-left-color:var(--orange)}.handoff-card.result.failed{border-left-color:var(--red)}
@@ -2446,7 +2465,7 @@ private extension RemoteControlServer {
     <strong id="tabEditorTitle">Tab settings</strong><label>Tab name<input id="tabName" autocomplete="off"></label>
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
-    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button>
+    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
@@ -2819,7 +2838,7 @@ private extension RemoteControlServer {
       catch(error){if(modelEditorState===state){state.error=`${error.message} The change may have reached Cantrip. Reload settings before retrying.`;state.needsReload=true}}
       finally{if(modelEditorState===state){state.saving=false;renderModelSettings()}}};
     let editingTab=null,tabSaving=false;
-    function editTab(item){editingTab=item;$("tabName").value=item.customTitle||item.title;$("tabLocked").checked=Boolean(item.isLocked);$("tabLocked").disabled=Boolean(item.isLocalPrivate);$("tabModelSettings").textContent=item.isLocalPrivate?"Private Local Settings":"Model Settings";$("tabError").textContent=item.isLocalPrivate?"Permanent self-hosted-model tab. History is saved and available remotely.":"";updateTabMoveControls();$("tabEditor").showModal();$("tabName").focus();$("tabName").select()}
+    function editTab(item){editingTab=item;$("tabName").value=item.customTitle||item.title;$("tabLocked").checked=Boolean(item.isLocked);$("tabLocked").disabled=Boolean(item.isLocalPrivate);$("tabModelSettings").textContent=item.isLocalPrivate?"Private Local Settings":"Model Settings";$("tabStartFresh").classList.toggle("hidden",!item.supportsStartFresh);$("tabStartFresh").disabled=Boolean(item.isStreaming||item.queuedCount);$("tabError").textContent=item.isLocalPrivate?"Permanent self-hosted-model tab. History is saved and available remotely.":"";updateTabMoveControls();$("tabEditor").showModal();$("tabName").focus();$("tabName").select()}
     function updateTabMoveControls(){const index=sessionItems.findIndex(s=>s.id===editingTab?.id);
       $("tabMoveControls").classList.toggle("hidden",!editingTab?.supportsTabReordering);
       $("tabMoveEarlier").textContent=sidebarLayout?"Move up":"Move left";$("tabMoveLater").textContent=sidebarLayout?"Move down":"Move right";
@@ -2827,6 +2846,16 @@ private extension RemoteControlServer {
     $("tabMoveEarlier").onclick=()=>{if(editingTab)moveTabBy(editingTab.id,-1)};
     $("tabMoveLater").onclick=()=>{if(editingTab)moveTabBy(editingTab.id,1)};
     $("tabModelSettings").onclick=()=>{if(editingTab&&!tabSaving&&!movingTab){const item=editingTab;$("tabEditor").close();editingTab=null;editModelSettings(item)}};
+    $("tabStartFresh").onclick=async()=>{if(!editingTab||tabSaving||movingTab)return;const item=editingTab;tabSaving=true;$("tabStartFresh").disabled=true;$("tabError").textContent="";
+      try{await startFresh(item.id);if(editingTab===item){$("tabEditor").close();editingTab=null}}
+      catch(error){$("tabError").textContent=`Start Fresh failed: ${error.message}`}
+      finally{tabSaving=false;$("tabStartFresh").disabled=false}};
+    async function startFresh(id){await api(`/api/v1/sessions/${id}/start-fresh`,{method:"POST"});renderedPayload="";await refresh()}
+    function appendErrorRecovery(row,session){const note=document.createElement("p"),actions=document.createElement("div"),fresh=document.createElement("button"),model=document.createElement("button"),busy=Boolean(session.isStreaming||session.queuedCount);
+      note.className="muted";note.textContent="This error happened twice in a row. Start fresh to drop the earlier context, or try another model.";actions.className="error-actions";
+      fresh.className="control";fresh.textContent="Start Fresh";fresh.disabled=busy;model.className="control";model.textContent=session.isLocalPrivate?"Private Local Settings":"Change Model";model.disabled=busy;
+      fresh.onclick=async()=>{fresh.disabled=true;$("actionError").textContent="";try{await startFresh(session.id)}catch(error){$("actionError").textContent=`Start Fresh failed: ${error.message}`;fresh.disabled=false}};
+      model.onclick=()=>editModelSettings(session);actions.append(fresh,model);row.append(note,actions)}
     $("tabMacAccess").onclick=()=>{if(tabSaving||movingTab)return;$("tabEditor").close();editingTab=null;openDesktop()};
     $("tabCancel").onclick=()=>{$("tabEditor").close();editingTab=null};
     $("tabEditor").addEventListener("cancel",event=>{if(tabSaving||movingTab)event.preventDefault()});
@@ -3237,6 +3266,7 @@ private extension RemoteControlServer {
       const label=needs?"Needs your answer":{queued:"Queued in tab",running:"Working in tab",completed:"Done in tab",failed:"Failed in tab",cancelled:"Stopped"}[handoff.status]||"Handed off";
       const time=handoff.finishedAt?`Took ${handoffDuration(handoff.startedAt,handoff.finishedAt)}`:handoff.startedAt?`Started ${handoffClock(handoff.startedAt)}`:"";
       return handoffCardElement({state,label,tabID:handoff.tabID,tabTitle:handoff.tabTitle,summary:handoff.summary||handoff.prompt,time})}
+    function freshStartDivider(message){const divider=document.createElement("p");divider.className="fresh-start";divider.dataset.messageId=message.id;divider.textContent=message.text||"Started fresh — earlier messages aren't sent to the model";return divider}
     function handoffResultCard(result){const label={working:"Working in tab",needsInput:"Needs your answer",completed:"Done in tab",failed:"Failed in tab",cancelled:"Stopped"}[result.state]||"Handoff update";
       const time=result.finishedAt?`Finished ${handoffClock(result.finishedAt)} · took ${handoffDuration(result.startedAt,result.finishedAt)}`:`Updated ${handoffClock(result.updatedAt)}`;
       return handoffCardElement({state:result.state,label,tabID:result.tabID,tabTitle:result.tabTitle,summary:result.summary,detail:result.detail,time,result:true})}
@@ -3248,9 +3278,10 @@ private extension RemoteControlServer {
       else{if(session.isLocalPrivate){const notice=document.createElement("p");notice.className="muted";notice.textContent="Private Local - saved on the Mac and available remotely. Self-hosted models; no cloud fallback. Configure the server in the tab menu.";box.append(notice)}
         const answered=new Set(session.messages.filter(m=>m.role==="handoff"&&m.handoffResult).map(m=>m.handoffResult.delegationID));
         for(const message of session.messages){const handoffs=(message.delegations||[]).filter(handoff=>!answered.has(handoff.id)),subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id)),activities=(message.activities||[]).filter(activity=>!subagentIDs.has(activity.id)),apps=message.apps||[],settled=subagents.filter(agent=>!subagentActive(agent));for(const agent of subagents)if(subagentActive(agent))pinned.push([agent,message.id]);for(const app of apps)box.append(mcpAppSlot(session.id,app));
-          if(!message.text&&!message.thinking&&!activities.length&&!settled.length&&!handoffs.length)continue;const row=document.createElement("article");row.className=`message ${message.role}`;row.dataset.messageId=message.id;
+          if(!message.text&&!message.thinking&&!activities.length&&!settled.length&&!handoffs.length)continue;if(message.role==="freshStart"){box.append(freshStartDivider(message));continue}const row=document.createElement("article");row.className=`message ${message.role}`;row.dataset.messageId=message.id;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
           appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
+          if(message.role==="error"&&session.supportsStartFresh&&message.id===session.repeatedErrorMessageID)appendErrorRecovery(row,session);
           if(handoffs.length){const stack=document.createElement("div");stack.className="handoffs";for(const handoff of handoffs)stack.append(handoffCard(handoff));row.append(stack)}appendActivities(row,activities,message.id);
           if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
             const requestToken=token;button.disabled=true;try{const data=await api(`/api/v1/sessions/${session.id}/messages/${message.id}`);if(token!==requestToken||selected!==session.id)return;

@@ -44,7 +44,8 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   units and run shell commands. [Everyday tasks](docs/everyday-tasks.md)
 - **AI workspace:** streaming answers, attachments, voice, and renameable,
   lockable session tabs, each with its own terminal. Runs survive crashes,
-  relaunches and network drops. [Sessions](docs/sessions-and-council.md)
+  relaunches and network drops; **Start Fresh** drops a stuck tab's context but
+  keeps its history. [Sessions](docs/sessions-and-council.md)
 - **Busy-run messages:** Auto reads each new message and injects context,
   redirects, queues, combines related follow-ups, or starts a parallel
   subagent. Queue, Redirect, Inject and **Send now** stay available.
