@@ -157,8 +157,11 @@ struct ChatTurn: Identifiable, Codable {
     var thinking: String?
     var author: String?
     var images: [ChatMessageImage]?
+    /// A Cantrip error that repeats the one before it; offers Start Fresh and Change Model.
+    var isRepeatedError: Bool? = nil
 
-    enum Role: String, Codable { case user, assistant }
+    /// `freshStart` is Cantrip's divider where a tab started fresh, never a reply.
+    enum Role: String, Codable { case user, assistant, freshStart }
 
     /// Parse a confirmation prompt's choices into tappable actions. Gated on the
     /// "fallback: reply `/x`, …" marker Hermes emits, so normal replies (and the

@@ -429,6 +429,8 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var presentedText: String { displayText ?? text }
     /// Result cards Cantrip posts into Home's chat; never a model reply.
     var isHandoffResult: Bool { role == "handoff" }
+    /// The divider Cantrip adds when a tab starts fresh; never a model reply.
+    var isFreshStart: Bool { role == "freshStart" }
 }
 
 struct CantripRemoteQueuedPrompt: Decodable, Equatable, Identifiable {
@@ -490,6 +492,11 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var lastActivityAt: Double? = nil
     /// One line about the tab's latest reply, for tab lists. Nil from older hosts.
     var preview: String? = nil
+    /// The tab can start its next prompt in a new model session, keeping its history. Nil from
+    /// older Macs; false for Cantrip Home.
+    var supportsStartFresh: Bool? = nil
+    /// The latest message, when it is an error repeating the one before it with no reply between.
+    var repeatedErrorMessageID: String? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
     var lastActivityDate: Date? { lastActivityAt.map(Date.init(timeIntervalSince1970:)) }
@@ -786,6 +793,7 @@ enum CantripRemoteError: LocalizedError {
     case autoDeliveryUnsupported
     case queueRemovalUnsupported
     case queueSendNowUnsupported
+    case startFreshUnsupported
     case tabMetadataUnsupported
     case tabReorderingUnsupported
     case githubBuildsUnsupported
@@ -836,6 +844,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to remove queued messages from Cantrip Agent."
         case .queueSendNowUnsupported:
             return "Update and reopen Cantrip on your Mac to send queued messages now from Cantrip Agent. The message is still queued."
+        case .startFreshUnsupported:
+            return "Update and reopen Cantrip on your Mac to start fresh. Nothing in the tab has changed."
         case .tabMetadataUnsupported:
             return "Update and reopen Cantrip on your Mac to rename or lock its tabs."
         case .tabReorderingUnsupported:
@@ -2089,6 +2099,25 @@ struct CantripRemoteAPI {
             method: "POST", body: Data("{}".utf8), includeRecentExchanges: true
         )
         return response.session
+    }
+
+    /// Starts the tab's next prompt in a new model session; its title, settings and history stay.
+    func startFresh(sessionID: String) async throws -> CantripRemoteSession {
+        try await prepareStartFresh(sessionID: sessionID)
+        return try await postStartFresh(sessionID: sessionID)
+    }
+
+    fileprivate func prepareStartFresh(sessionID: String) async throws {
+        let host = try await session(id: sessionID)
+        switch host.supportsStartFresh {
+        case true?: return
+        case false?: throw CantripRemoteError.http(409, "This conversation can't start fresh.")
+        case nil: throw CantripRemoteError.startFreshUnsupported
+        }
+    }
+
+    fileprivate func postStartFresh(sessionID: String) async throws -> CantripRemoteSession {
+        try await action("start-fresh", sessionID: try Self.pathComponent(sessionID))
     }
 
     private func request<Response: Decodable>(
@@ -3741,6 +3770,27 @@ final class CantripRemoteModel: ObservableObject {
         return true
     }
 
+    /// The tab's next prompt starts a new model session. Its title, folder, settings, lock and
+    /// visible history stay; the Mac adds a divider so earlier messages read as not sent.
+    @discardableResult
+    func startFresh(sessionID: String) async -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish, then try starting fresh again."
+            return false
+        }
+        guard let session = await mutate(prepare: { api in
+            try await api.prepareStartFresh(sessionID: sessionID)
+        }, { api, _ in
+            try await api.postStartFresh(sessionID: sessionID)
+        }) else { return false }
+        if selectedSessionID == sessionID {
+            apply(session)
+        } else if let index = sessions.firstIndex(where: { $0.id == sessionID }) {
+            sessions[index] = session
+        }
+        return true
+    }
+
     @discardableResult
     func resume() async -> Bool {
         await sessionAction("resume")
@@ -4267,7 +4317,7 @@ final class CantripRemoteModel: ObservableObject {
         case CantripRemoteError.http:
             return false
         case CantripRemoteError.imagesUnsupported, CantripRemoteError.videosUnsupported, CantripRemoteError.queueRemovalUnsupported,
-             CantripRemoteError.queueSendNowUnsupported,
+             CantripRemoteError.queueSendNowUnsupported, CantripRemoteError.startFreshUnsupported,
              CantripRemoteError.autoDeliveryUnsupported, CantripRemoteError.tabMetadataUnsupported,
              CantripRemoteError.tabReorderingUnsupported,
              is ImageAttachmentError, is VideoAttachmentError:
@@ -4833,6 +4883,14 @@ private struct CantripRemoteMessageBubble: View {
     let sessionID: String
 
     var body: some View {
+        if message.isFreshStart {
+            CantripFreshStartDivider(text: message.text)
+        } else {
+            bubble
+        }
+    }
+
+    private var bubble: some View {
         HStack {
             if message.role == "user" { Spacer(minLength: 36) }
             VStack(alignment: .leading, spacing: 8) {

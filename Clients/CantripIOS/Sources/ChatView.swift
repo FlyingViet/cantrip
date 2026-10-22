@@ -302,7 +302,7 @@ final class ChatViewModel: ObservableObject {
         let transcript = session?.transcript ?? []
         reportedHandoffIDs = CantripHandoffCards.reportedIDs(in: transcript)
         let lastAssistantID = transcript.last(where: {
-            $0.role != "user" && $0.role != "error" && !$0.isHandoffResult
+            $0.role != "user" && $0.role != "error" && !$0.isHandoffResult && !$0.isFreshStart
         })?.id
         turns = transcript.map { message in
             let id = remoteMessageIDs[message.id] ?? UUID()
@@ -311,7 +311,7 @@ final class ChatViewModel: ObservableObject {
             return ChatTurn(
                 isLocalPrivate: session?.isLocalPrivate == true || message.isLocalPrivate == true,
                 id: id,
-                role: message.role == "user" ? .user : .assistant,
+                role: message.role == "user" ? .user : message.isFreshStart ? .freshStart : .assistant,
                 text: isError ? "" : message.presentedText,
                 tools: message.activities.map { activity in
                     ToolActivity(
@@ -328,7 +328,8 @@ final class ChatViewModel: ObservableObject {
                 executionLane: activeLane,
                 thinking: message.thinking.isEmpty ? nil : message.thinking,
                 author: message.author,
-                images: message.images?.map { $0.inSession(session?.id ?? "") }
+                images: message.images?.map { $0.inSession(session?.id ?? "") },
+                isRepeatedError: isError && message.id == session?.repeatedErrorMessageID ? true : nil
             )
         }
         // Publish prepends with the mapped turns, not a frame before their layout.
@@ -347,6 +348,7 @@ final class ChatViewModel: ObservableObject {
                 $0.role != "user"
                     && $0.role != "error"
                     && !$0.isHandoffResult
+                    && !$0.isFreshStart
                     && !remoteSpeechBaseline.contains($0.id)
             })?.id
         }
@@ -700,6 +702,10 @@ final class ChatViewModel: ObservableObject {
                     continue
                 }
                 pairs.append((user, turn.text))
+                pendingUser = nil
+            case .freshStart:
+                // Nothing before a fresh start is sent to the model.
+                pairs.removeAll()
                 pendingUser = nil
             }
         }
@@ -1635,6 +1641,9 @@ struct ChatView: View {
         let isHome: Bool
         let selectedSessionID: String?
         let isLocalPrivate: Bool
+        /// Nil from Macs before Start Fresh; false where it doesn't apply (Cantrip Home).
+        let supportsStartFresh: Bool?
+        let isSessionBusy: Bool
         let canResume: Bool
         let isRemoteMutating: Bool
         let remoteTabsEnabled: Bool
@@ -1659,6 +1668,8 @@ struct ChatView: View {
             isHome: vm.activeLane == .home,
             selectedSessionID: remote.selectedSession?.id,
             isLocalPrivate: remote.selectedSession?.isLocalPrivate == true,
+            supportsStartFresh: remote.selectedSession.flatMap(CantripStartFresh.support(for:)),
+            isSessionBusy: remote.selectedSession.map(CantripStartFresh.isBusy) ?? false,
             canResume: remote.selectedSession?.canResume == true,
             isRemoteMutating: remote.isMutating,
             remoteTabsEnabled: remoteTabsEnabled,
@@ -1734,6 +1745,12 @@ struct ChatView: View {
                         Label(state.isLocalPrivate ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
                     }
                     .disabled(state.isRemoteMutating)
+                    if let id = state.selectedSessionID {
+                        CantripStartFreshMenuItem(
+                            model: remote, sessionID: id, support: state.supportsStartFresh,
+                            isDisabled: state.isRemoteMutating || state.isSessionBusy
+                        )
+                    }
                 }
                 if !state.isLocalPrivate {
                     Button {
@@ -3113,6 +3130,8 @@ struct TurnView: View {
     var body: some View {
         if let result = remoteMessage?.handoffResult, remoteMessage?.isHandoffResult == true {
             CantripHandoffResultCard(result: result, onOpenTab: onOpenTab)
+        } else if turn.role == .freshStart {
+            CantripFreshStartDivider(text: turn.text)
         } else if turn.role == .user {
             VStack(alignment: .trailing, spacing: 2) {
                 HStack {
@@ -3221,6 +3240,10 @@ struct TurnView: View {
                 if let err = turn.error {
                     Label(err, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.red)
+                    if turn.isRepeatedError == true, let session = remote.selectedSession,
+                       session.id == cantripSessionID {
+                        CantripRepeatedErrorActions(model: remote, session: session)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
