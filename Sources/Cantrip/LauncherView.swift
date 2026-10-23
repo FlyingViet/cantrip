@@ -62,6 +62,10 @@ struct LauncherView: View {
     /// Natural (unscrolled) height of the suggestion rows, so the
     /// dropdown can size to its content below the scroll cap.
     @State private var suggestionListHeight: CGFloat = 0
+    /// The text field's current and smallest (one-line) heights; the
+    /// difference is what extra lines added.
+    @State private var composerHeight: CGFloat = 0
+    @State private var composerOneLineHeight = CGFloat.infinity
     @State private var showTerminal = false
     @State private var terminalCommand = ""
     @State private var terminalHistoryIndex: Int?
@@ -188,7 +192,7 @@ struct LauncherView: View {
         }
         .onChange(of: query) { _, newValue in
             if !session.isLocalPrivate {
-                fileSearch.search(newValue)
+                fileSearch.search(newValue.contains(where: \.isNewline) ? "" : newValue)
                 FileRAG.shared.prepare(for: newValue)
             }
         }
@@ -309,7 +313,7 @@ struct LauncherView: View {
             } else if showUsage {
                 Divider().opacity(0.3)
                 ScrollView { usageView }
-                    .frame(maxHeight: metrics.transcriptMaxHeight)
+                    .frame(maxHeight: lowerSectionMaxHeight)
             } else if showHistory {
                 Divider().opacity(0.3)
                 historyView
@@ -338,11 +342,22 @@ struct LauncherView: View {
                 .buttonStyle(.plain)
                 .help("\(backendBadge) — click for backend & settings")
 
-                TextField(placeholder, text: $query)
+                TextField(placeholder, text: $query, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 20, weight: .light))
+                    .lineLimit(1...6)
                     .focused($inputFocused)
+                    .onKeyPress(keys: [.return, Self.keypadEnter], phases: [.down, .repeat],
+                                action: handleModifiedReturn)
                     .onSubmit { submit() }
+                    .background(GeometryReader { geo in
+                        Color.clear.preference(key: ComposerHeightKey.self, value: geo.size.height)
+                    })
+                    .onPreferenceChange(ComposerHeightKey.self) { height in
+                        guard height > 1 else { return }
+                        composerHeight = height
+                        composerOneLineHeight = min(composerOneLineHeight, height)
+                    }
 
                 if session.isStreaming {
                     Button(action: session.cancel) {
@@ -1473,6 +1488,14 @@ struct LauncherView: View {
         onSizeChange(size)
     }
 
+    /// Below the composer, sections give up whatever height extra
+    /// composer lines take, so the panel keeps its size instead of
+    /// pushing the tabs out of the height-capped window.
+    private var lowerSectionMaxHeight: CGFloat {
+        let growth = composerOneLineHeight.isFinite ? max(0, composerHeight - composerOneLineHeight) : 0
+        return max(160, metrics.transcriptMaxHeight - growth)
+    }
+
     /// The section below the input bar exists (transcript, terminal,
     /// history, or usage) — i.e. there is content for suggestions to
     /// float over.
@@ -1588,7 +1611,8 @@ struct LauncherView: View {
 
     /// Top app hit for the current query (Spotlight-style).
     private var appSuggestion: AppMatch? {
-        guard !session.isLocalPrivate, !showHistory, !session.isStreaming else { return nil }
+        guard !session.isLocalPrivate, !showHistory, !session.isStreaming,
+              !query.contains(where: \.isNewline) else { return nil }
         return AppCatalog.shared.match(query: query)
     }
 
@@ -1817,7 +1841,7 @@ struct LauncherView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Color.clear.frame(height: 1).id("term-end")
                 }
-                .frame(maxHeight: metrics.transcriptMaxHeight)
+                .frame(maxHeight: lowerSectionMaxHeight)
                 .onChange(of: shell.output) {
                     proxy.scrollTo("term-end", anchor: .bottom)
                 }
@@ -2081,7 +2105,7 @@ struct LauncherView: View {
                         }
                     }
                 }
-                .frame(maxHeight: metrics.transcriptMaxHeight)
+                .frame(maxHeight: lowerSectionMaxHeight)
             }
         }
         .padding(12)
@@ -2092,6 +2116,28 @@ struct LauncherView: View {
         if settings.attachScreen {
             ScreenCapture.shared.requestAccess()
             ScreenCapture.shared.captureNow()
+        }
+    }
+
+    private static let keypadEnter = KeyEquivalent("\u{3}")
+
+    /// The field editor treats ⇧↩ as plain Return and swallows ⌥↩ as a
+    /// newline before the hidden ⌥↩ shortcut can fire, so both are
+    /// handled here. ⌘↩ still reaches its keyboard shortcut first.
+    private func handleModifiedReturn(_ press: KeyPress) -> KeyPress.Result {
+        switch press.modifiers.intersection([.shift, .option, .control, .command]) {
+        case .shift:
+            if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isFieldEditor {
+                editor.insertNewlineIgnoringFieldEditor(nil)
+            } else {
+                query += "\n"
+            }
+            return .handled
+        case .option:
+            if press.phase == .down { submit(inject: true) }
+            return .handled
+        default:
+            return .ignored
         }
     }
 
@@ -2126,12 +2172,12 @@ struct LauncherView: View {
                                 range: 220...560)
                     councilSeatColumn
                         .frame(width: CGFloat(councilPaneUserWidth))
-                        .frame(maxHeight: metrics.transcriptMaxHeight)
+                        .frame(maxHeight: lowerSectionMaxHeight)
                 } else {
                     Divider().opacity(0.3)
                     councilReopenStrip
                         .frame(width: 26)
-                        .frame(maxHeight: metrics.transcriptMaxHeight)
+                        .frame(maxHeight: lowerSectionMaxHeight)
                 }
             }
         }
@@ -2219,7 +2265,7 @@ struct LauncherView: View {
                     .overlay(alignment: .top) { Divider().opacity(0.5) }
                 }
             }
-            .frame(maxHeight: metrics.transcriptMaxHeight)
+            .frame(maxHeight: lowerSectionMaxHeight)
             // Fresh scroll-view identity per session: prevents stale layout
             // state from the previous tab leaving a blank transcript.
             .id(session.id)
@@ -2233,6 +2279,11 @@ struct LauncherView: View {
                 scrollConversationToBottom(proxy)
             }
             .onChange(of: session.canResume) {
+                scrollConversationToBottom(proxy)
+            }
+            // Extra composer lines shrink the transcript from the top; keep
+            // the end of the latest reply in view.
+            .onChange(of: lowerSectionMaxHeight) {
                 scrollConversationToBottom(proxy)
             }
         }
@@ -2513,6 +2564,13 @@ private struct InputBarFrameKey: PreferenceKey {
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
         let next = nextValue()
         if next != .zero { value = next }
+    }
+}
+
+private struct ComposerHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
