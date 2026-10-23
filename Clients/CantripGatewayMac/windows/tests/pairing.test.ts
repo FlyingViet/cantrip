@@ -68,7 +68,7 @@ describe("SettingsStore", () => {
     const folder = mkdtempSync(join(tmpdir(), "gateway-store-"));
     folders.push(folder);
     const file = join(folder, "settings.json");
-    new SettingsStore(file, box()).save(server, TOKEN);
+    new SettingsStore(file, box()).add(server, TOKEN);
     expect(readFileSync(file, "utf8")).not.toContain(TOKEN);
     expect(new SettingsStore(file, box()).load()).toEqual({ server, token: TOKEN });
   });
@@ -77,8 +77,8 @@ describe("SettingsStore", () => {
     const folder = mkdtempSync(join(tmpdir(), "gateway-store-"));
     folders.push(folder);
     const file = join(folder, "settings.json");
-    expect(() => new SettingsStore(file, box(false)).save(server, TOKEN)).toThrow(/encrypt/);
-    new SettingsStore(file, box()).save(server, TOKEN);
+    expect(() => new SettingsStore(file, box(false)).add(server, TOKEN)).toThrow(/encrypt/);
+    new SettingsStore(file, box()).add(server, TOKEN);
     const other: SecretBox = { ...box(), decryptString: () => { throw new Error("other user"); } };
     expect(new SettingsStore(file, other).load()).toBeNull();
   });
