@@ -243,8 +243,24 @@ struct MacHomeChatView: View {
 
     // MARK: Input
 
+    /// A tab's live background subagents (build/upload/download watchers), as iOS lists them
+    /// above a tab's composer. Home counts its own on the toolbar's Background button instead.
+    static func liveBackgroundTasks(in session: CantripRemoteSession?, selectedID: String?,
+                                    isTab: Bool) -> [CantripRemoteSubagent] {
+        guard isTab, let session, session.id == selectedID, session.isCantripHome != true else { return [] }
+        return CantripPinnedSubagents.liveBackground(in: session.transcript)
+    }
+
     private var inputBar: some View {
         VStack(spacing: 8) {
+            // Like iOS: a tab shows its running watchers here; Home keeps them behind Background.
+            let backgroundTasks = Self.liveBackgroundTasks(
+                in: remote.selectedSession, selectedID: remote.selectedSessionID, isTab: isTab
+            )
+            if !backgroundTasks.isEmpty {
+                CantripBackgroundTaskButton(subagents: backgroundTasks) { navigation.sheet = .backgroundTasks }
+                    .help("Show this tab's background tasks")
+            }
             if let session = remote.selectedSession, session.id == remote.selectedSessionID,
                session.queuedCount > 0 {
                 CantripQueueButton(session: session) { navigation.sheet = .queue }

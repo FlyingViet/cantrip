@@ -98,7 +98,7 @@ final class MacHomeNavigation: ObservableObject {
 }
 
 enum MacHomeSheet: String, Identifiable {
-    case usage, memory, builds, mascot, maintenance, voiceMode, queue
+    case usage, memory, builds, mascot, maintenance, voiceMode, queue, backgroundTasks
 
     var id: String { rawValue }
 }

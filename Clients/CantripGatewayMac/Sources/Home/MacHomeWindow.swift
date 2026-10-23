@@ -309,6 +309,11 @@ struct MacHomeWindow: View {
             if let sessionID = remote.selectedSessionID {
                 CantripQueueView(remote: remote, sessionID: sessionID).macSheetFrame()
             }
+        case .backgroundTasks:
+            if let sessionID = remote.selectedSessionID {
+                CantripBackgroundTasksView(remote: remote, sessionID: sessionID)
+                    .macSheetFrame(width: 620, height: 560)
+            }
         }
     }
 
