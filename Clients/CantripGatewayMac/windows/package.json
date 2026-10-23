@@ -1,9 +1,9 @@
 {
   "name": "cantrip-gateway-windows",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "productName": "Cantrip Gateway",
   "private": true,
-  "description": "Cantrip Gateway for Windows: Cantrip Home, project tabs, tasks and artifacts from a Cantrip Mac",
+  "description": "Cantrip Gateway for Windows: Cantrip Home, project tabs, tasks, artifacts and voice from a Cantrip Mac",
   "main": "dist/main/main.js",
   "author": "FlyingViet",
   "license": "MIT",
@@ -12,16 +12,21 @@
     "url": "https://github.com/FlyingViet/CantripGatewayMac.git"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-renderer.mjs",
+    "build": "tsc -p tsconfig.json && node scripts/build-gateway.mjs",
     "start": "npm run build && electron .",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.gateway.json",
     "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never"
   },
   "devDependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "@preact/signals": "2.11.3",
     "@types/node": "24.3.0",
     "electron": "41.6.1",
     "electron-builder": "25.1.8",
+    "esbuild": "0.28.2",
+    "lucide": "1.61.0",
+    "preact": "11.0.1",
     "typescript": "7.0.2",
     "vitest": "4.1.11"
   },

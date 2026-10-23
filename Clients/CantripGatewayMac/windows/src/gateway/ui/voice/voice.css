@@ -1,0 +1,89 @@
+/* Voice: composer microphone, voice status row, Voice Mode and Voice settings (ui/voice). */
+
+.voice-glyph { display: block; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.voice-check { flex: none; }
+.voice-check circle { fill: var(--accent); }
+.voice-check path { fill: none; stroke: #fff; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+.mic-button:focus-visible { box-shadow: var(--focus); }
+
+/* WaveformView */
+.voice-wave { display: inline-flex; align-items: center; flex: none; }
+.voice-wave > span { display: block; border-radius: 999px; transition: height 0.06s linear; }
+.voice-wave.small { gap: 3px; height: 24px; }
+.voice-wave.small > span { width: 3.5px; height: 6px; }
+.voice-wave.large { gap: 4px; height: 32px; }
+.voice-wave.large > span { width: 5px; height: 8px; }
+.voice-wave.red > span { background: var(--red); }
+.voice-wave.accent > span { background: var(--accent); }
+
+/* MacHomeChatView.voiceStatus */
+.voice-status { display: flex; align-items: center; gap: 10px; padding: 0 4px; min-height: 28px; }
+.voice-status-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; user-select: text; }
+.voice-status-progress { width: 90px; flex: none; }
+.voice-status-error { color: var(--red); }
+.voice-status-error .icon-btn { color: var(--secondary); }
+.voice-stop-speaking { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 14px; background: none; color: var(--accent); }
+.voice-stop-speaking:hover { background: var(--row-hover); }
+.voice-stop-speaking:focus-visible { box-shadow: var(--focus); }
+
+/* VoiceModeView */
+.sheet.voice-mode-sheet { background: linear-gradient(180deg, rgb(15, 13, 31) 0%, rgb(46, 23, 77) 100%); }
+.voice-mode-sheet > .sheet-header { display: none; }
+.voice-mode-sheet > .sheet-body.voice-mode-body { display: flex; flex-direction: column; gap: 16px; padding: 16px; overflow: hidden; color: #fff; }
+.voice-mode-header { display: flex; align-items: center; gap: 12px; flex: none; }
+.voice-mode-indicator { display: grid; place-items: center; width: 56px; height: 36px; flex: none; }
+.voice-mode-status {
+  flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; color: rgba(255, 255, 255, 0.85);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.voice-mode-close {
+  display: grid; place-items: center; width: 44px; height: 44px; flex: none; padding: 0; border: 0; border-radius: 22px;
+  color: #fff; background: rgba(255, 255, 255, 0.14); backdrop-filter: blur(20px);
+}
+.voice-mode-close:hover { background: rgba(255, 255, 255, 0.22); }
+.voice-mode-close .icon { stroke-width: 2.4; }
+.voice-mode-error { display: flex; align-items: flex-start; gap: 8px; flex: none; font-size: 11.5px; color: #ff8a80; }
+.voice-mode-error .icon { margin-top: 1px; }
+.voice-mode-transcript { display: flex; align-items: flex-start; gap: 8px; flex: none; }
+.voice-mode-quote { font: 700 20px/1 Georgia, serif; color: rgba(255, 255, 255, 0.45); margin-top: 1px; }
+.voice-mode-transcript p {
+  margin: 0; flex: 1; min-width: 0; font-size: 12.5px; color: rgba(255, 255, 255, 0.6); user-select: text;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.voice-mode-transcript.live p { color: rgba(255, 255, 255, 0.9); }
+.voice-mode-layout { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.voice-mode-reply { flex: 1; min-height: 0; width: 100%; display: flex; }
+.voice-mode-card {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 18px; border-radius: 20px;
+  background: rgba(255, 255, 255, 0.08); backdrop-filter: blur(24px); box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.92);
+}
+.voice-mode-card:focus-visible { box-shadow: var(--focus); outline: none; }
+.voice-mode-card a { color: #64d2ff; }
+.voice-mode-mic {
+  display: grid; place-items: center; width: 76px; height: 76px; flex: none; padding: 0; border: 0; border-radius: 38px;
+  color: #fff; background: rgba(255, 255, 255, 0.16); transition: background 0.15s;
+}
+.voice-mode-mic:hover:not(:disabled) { background: rgba(255, 255, 255, 0.24); }
+.voice-mode-mic.listening, .voice-mode-mic.listening:hover { background: var(--red); }
+.voice-mode-mic:disabled { opacity: 0.45; }
+.voice-mode-mic:focus-visible, .voice-mode-close:focus-visible { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.7); outline: none; }
+
+/* MacVoiceSettings */
+.voice-settings { padding-top: 4px; }
+.voice-state { display: inline-flex; align-items: center; gap: 6px; }
+.voice-nav-row {
+  width: 100%; border: 0; border-radius: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: default;
+}
+.voice-nav-row:hover, .voice-choice:hover { background: var(--row-hover); }
+.voice-nav-row:focus-visible, .voice-choice:focus-visible { box-shadow: inset var(--focus); outline: none; }
+.voice-slider { width: 200px; accent-color: var(--accent); margin: 0; }
+.voice-pause-value { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.voice-subpage-header { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+.voice-subpage-header h3 { margin: 0; }
+.voice-choice {
+  width: 100%; border: 0; border-radius: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: default;
+}
+.voice-choice + .voice-choice { border-top: 0.5px solid var(--separator); }
+.voice-choice-text { display: flex; flex-direction: column; gap: 1px; }

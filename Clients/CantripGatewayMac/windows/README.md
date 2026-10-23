@@ -1,25 +1,39 @@
 # Cantrip Gateway for Windows
 
-Cantrip Home on a Windows PC: Home chat, every project tab, Tasks and Artifacts from
-[Cantrip](https://github.com/FlyingViet/cantrip) running on your Mac. It's a client, so
-everything you send runs on the Mac, the same as the iPhone and Mac apps.
+Cantrip Home on a Windows PC, built to match [Cantrip Gateway Mac](../README.md) in design
+and features: Pip, Home chat, every project tab, Tasks, Artifacts, Background runs and voice,
+all from [Cantrip](https://github.com/FlyingViet/cantrip) running on your Mac. It's a client,
+so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 
-It shows the Mac's own web client (the one the browser and Mac Remote use) inside an
-Electron window, so new Remote features on the Mac reach Windows without a new build.
-The app adds what a browser can't do:
+## What's in it
 
-- **Encrypted direct connection.** It talks to the Mac's TLS-PSK listener (the same
-  pairing token) on your home network or over Tailscale, with no
-  certificates and no open port on the PC. Browsers can't use pre-shared-key TLS.
-- **Fallback to HTTPS.** With the Mac's Tailscale HTTPS address saved, it switches over
-  when the direct address can't be reached and moves back once it can.
-- **Token kept out of reach.** The pairing token is encrypted with Windows' DPAPI for
-  your account and handed only to the Mac's page.
-- **Pairing links.** `cantripagent://pair?...` links from `cantrip pair` open the app's
-  Connection settings with everything filled in.
+- **The Mac app's window.** A floating sidebar with Pip (same moods and outfits), Chat,
+  Tasks and Artifacts with their badges, and every project tab (status, age, drag to
+  reorder, right-click actions). A unified toolbar with Background, delivery (Auto, Queue,
+  Redirect, Inject), Refresh and More.
+- **Chat.** Replies with Markdown and the Mac's image previews, reasoning steps, MCP App
+  views, subagent cards (running ones pinned above the composer), handoff cards with
+  **Open tab**, questions answered in the reply panel, approvals and sign-ins inline,
+  prompt token usage, older history loading as you scroll up, and Start Fresh.
+- **Attachments.** Up to 4 images (pasted, dropped or picked), a video and up to 5 files
+  per message, uploaded resumably the way the Mac app sends them.
+- **Tasks and Artifacts.** Scheduled tasks with runs, workspaces and their records;
+  artifacts with thumbnails, the image viewer, Save and Delete.
+- **Sheets.** Background runs (answer a waiting run in place), a tab's background tasks and
+  queue, Model Settings (and Private Local), Rename, Copilot Usage, Cantrip Memory, GitHub
+  Builds, Update & Rebuild Cantrip, and Mac Permissions & View Mac.
+- **Voice.** Dictation from the composer's microphone and Voice Mode (hold the microphone),
+  with speech recognition running on this PC after a one-time model download, and replies
+  read aloud with a Windows voice.
+- **Encrypted direct connection.** The app talks to the Mac's TLS-PSK listener (the same
+  pairing token) on your home network or over Tailscale, with no certificates and no open
+  port on the PC, and falls back to the Mac's Tailscale HTTPS address.
+- **Several Macs.** Settings keeps a list of Macs, like the Mac app; pick one to connect.
+- **Token kept out of reach.** Pairing tokens are encrypted with Windows' DPAPI for your
+  account. The window's page never sees them; the app adds them to each request itself.
 
 Requires Windows 10 or 11 (x64) and Cantrip v1.0-161 or later on the Mac with **Remote
-control** on. Earlier Cantrip builds refuse the Windows app's encryption suite.
+control** on.
 
 ## Install
 
@@ -39,31 +53,48 @@ cantrip pair --direct
 ```
 
 It prints a `cantripagent://pair?...` link with the Mac's local address and current
-encrypted port, its Tailscale HTTPS address and the token. Paste the link into **Pairing link** and choose **Use link**,
-then **Save and connect**. Or fill in the fields yourself:
+encrypted port, its Tailscale HTTPS address and the token. In **Settings > Connection**,
+paste it under **Pair with a Link** and choose **Use Link**, then **Add Server**. Or fill in
+**Add Cantrip Remote** yourself:
 
 | Field | What to enter |
 | --- | --- |
-| Direct address | The Mac's address and the encrypted port shown in Cantrip's **Settings > Remote control** (or `cantrip status`), e.g. `192.168.0.20:50310`. On Tailscale, the Mac's Tailscale IP works too. While that port is on Auto it changes whenever Cantrip restarts; set a fixed port there to keep this address working. |
-| HTTPS URL | Optional. The Mac's Tailscale Serve address, used when the direct address can't be reached. |
 | Pairing token | From Cantrip's **Settings > Remote control** on the Mac. |
+| Direct address | The Mac's address and the encrypted port shown in Cantrip's **Settings > Remote control** (or `cantrip status`), e.g. `192.168.0.20:50310`. On Tailscale, the Mac's Tailscale IP works too. While that port is on Auto it changes whenever Cantrip restarts; set a fixed port there to keep this address working. |
+| Tailscale URL | Optional. The Mac's Tailscale Serve address, used when the direct address can't be reached. |
 
-**Test connection** checks each route without saving. **Save and connect** saves only if
-at least one route reaches the Mac with that token. Reopen these settings with
-**File > Connection Settings** (Ctrl+,). **Forget this Mac** removes the saved token
-from the PC.
+**Test Connection** checks each route without saving. **Add Server** saves only if at least
+one route reaches the Mac with that token; the first Mac you add connects right away.
+Click a saved Mac to switch to it; right-click (or the trash button) removes it. Open
+Settings any time with **Ctrl+,** or **More > Connection Settings…**.
 
-The window title shows the route in use, for example
-`Cantrip Gateway · Mac mini · Direct, encrypted (192.168.0.20:8766)`.
+The sidebar's footer shows the Mac's address on the route in use.
+
+## Keyboard
+
+| Keys | Does |
+| --- | --- |
+| Ctrl+1 / 2 / 3 | Chat, Tasks, Artifacts |
+| Ctrl+B | Background |
+| Ctrl+T | New tab |
+| Ctrl+N | New message (Home chat) |
+| Ctrl+R or F5 | Refresh |
+| Ctrl+; | Model Settings |
+| Ctrl+Shift+V | Voice Mode |
+| Ctrl+Shift+P | Pause or resume the agent |
+| Ctrl+, | Settings |
+| Enter / Shift+Enter | Send / new line |
+| Alt+Up / Alt+Down | Move the focused tab in the sidebar |
 
 ## Troubleshooting
 
 - **"refused the secure connection"**: the token doesn't match, or Cantrip on the Mac is
   older than v1.0-161. Copy the token again or update Cantrip.
 - **"Couldn't reach … (ECONNREFUSED / timed out)"**: Cantrip isn't running, Remote control
-  is off, or the PC isn't on the Mac's network or tailnet.
-- **Help > Show Log File** opens `%APPDATA%\Cantrip Gateway\logs\gateway.log`. It
-  records routes and connection errors only, never tokens or messages.
+  is off, the encrypted port changed (Auto), or the PC isn't on the Mac's network or
+  tailnet.
+- **More > Show Log File** opens `%APPDATA%\Cantrip Gateway\logs\gateway.log`. It records
+  routes and connection errors only, never tokens or messages.
 
 ## Build from source
 
@@ -72,7 +103,7 @@ Requires Node.js 22 or later.
 ```sh
 cd windows
 npm ci
-npm test           # pairing, routing and TLS-PSK transport tests
+npm test           # pairing, routing, TLS-PSK, store and interface logic tests
 npm start          # build and run (works on macOS too, for development)
 npm run dist:win   # Windows x64 installer in release/ (run on Windows)
 ```
@@ -83,13 +114,13 @@ checks that Electron's TLS library completes a real TLS-PSK request.
 
 | Path | What |
 | --- | --- |
-| `src/main/main.ts` | Windows, menu, the private `cantrip-host://` scheme that carries the web client to the Mac, Connection settings IPC |
+| `src/main/main.ts` | Windows, the private `cantrip-host://mac/` scheme (serves the bundled interface and carries API calls to the Mac, adding the token), Settings IPC |
 | `src/main/transport.ts` | HTTP over TLS-PSK (`ECDHE-PSK-CHACHA20-POLY1305`, identity `cantrip-remote-v1`, key SHA-256 of the token) and over HTTPS |
 | `src/main/router.ts` | Route order and fallback; a send that may have reached the Mac is never repeated |
-| `src/main/pairing.ts`, `store.ts` | Pairing link and address validation; DPAPI-encrypted settings |
-| `src/preload/` | Gives the Mac's page its token; gives the settings page its controls |
-| `src/renderer/` | Connection settings page |
+| `src/main/pairing.ts`, `store.ts` | Pairing link and address validation; saved Macs with DPAPI-encrypted tokens |
+| `src/preload/` | The main window's and Settings window's bridges to the app |
+| `src/gateway/` | The interface (Preact + TypeScript, bundled by `scripts/build-gateway.mjs`): `api/` (client and API types), `state/` (polling like the Mac's `CantripRemoteModel`, navigation), `ui/` (sidebar, toolbar, chat, Pip, Tasks, Artifacts, sheets, voice), `settings.tsx` |
 
-Not in this version: Pip, voice, the on-device Hermes model, Windows notifications for
-finished runs, and finding the Mac automatically on the network (enter its address or use
-a pairing link).
+Not on Windows: push alerts, widgets and Live Activities (iPhone features), the Home
+Builds tab (iPhone install links), Touch ID before approvals, and finding the Mac
+automatically on the network (enter its address or use a pairing link).
