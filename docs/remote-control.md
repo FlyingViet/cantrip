@@ -791,6 +791,27 @@ and progress indicators; no Cantrip Agent update is needed.
 
 Use **Change server** to configure a different host.
 
+## 2c. Connect from a Windows PC
+
+[Cantrip Gateway for Windows](https://github.com/FlyingViet/CantripGatewayMac/tree/main/windows)
+shows this web client (Home chat, project tabs, Tasks and Artifacts) in a Windows
+app that connects over the encrypted LAN listener. On the Mac, run
+`cantrip pair --direct` and paste the printed link into the app's **Connection
+settings**, or enter the Mac's address with port `8766` and the pairing token.
+
+The LAN listener accepts two pre-shared-key suites with the same identity and key:
+the original one Apple clients use, and ECDHE-PSK with ChaCha20-Poly1305 for
+clients built on BoringSSL, such as Electron. Apple clients are unchanged. The
+Windows app needs Cantrip v1.0-161 or later on the Mac.
+
+## Artifacts in the browser Remote
+
+When Cantrip Home is on, **Artifacts** sits next to **Tasks** in the browser
+Remote, Mac Remote and the Windows app. It lists the documents and media Home
+saved on the Mac, with thumbnails for images and videos. Images open in the
+viewer; other files download. **Delete** asks first and removes the file from
+the Mac. **Create in Chat** opens Home with "Create a " in the message box.
+
 ## Rename and protect remote tabs
 
 In the Mac Remote view or browser, click the **...** beside a session tab to

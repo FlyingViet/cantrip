@@ -420,7 +420,7 @@ final class RemoteControlServer {
     private func startLANListener(token: String, pinnedPort: Int?, fallbackFrom: Int? = nil, attempt: Int = 0) {
         let generation = lanGeneration
         do {
-            let parameters = RemoteLANProtocol.parameters(token: token)
+            let parameters = RemoteLANProtocol.listenerParameters(token: token)
             let listener = try pinnedPort.flatMap { NWEndpoint.Port(rawValue: UInt16($0)) }
                 .map { try NWListener(using: parameters, on: $0) } ?? NWListener(using: parameters)
             if advertisesLANService {
@@ -2427,6 +2427,13 @@ private extension RemoteControlServer {
     #tasksPanel{width:min(calc(100% - 24px),720px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
     #tasksPanel::backdrop{background:rgba(0,0,0,.35)}.tasks-bar{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:Canvas}
     #tasksPanel .control{min-height:44px;padding:4px 14px}#tasksPanel button:focus-visible,#tasksPanel summary:focus-visible,#tasksSearch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    #artifactsPanel{width:min(calc(100% - 24px),860px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#artifactsPanel::backdrop{background:rgba(0,0,0,.35)}
+    #artifactsPanel .control{min-height:44px;padding:4px 14px}#artifactsPanel button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}#artifactsTitle{font-size:16px}#artifactsTitle:focus{outline:0}
+    #artifactsError:not(:empty){margin:10px 14px 0;color:var(--red);font-size:13px}#artifactsBody{padding:10px 14px 16px}.artifact-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;margin:0;padding:0;list-style:none}.artifact-grid li{position:relative}
+    .artifact-card{display:grid;gap:6px;box-sizing:border-box;width:100%;height:100%;align-content:start;padding:8px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:inherit;font:inherit;text-align:left;cursor:pointer}.artifact-card:hover{background:var(--surface-2)}.artifact-card[aria-busy="true"]{opacity:.6}
+    .artifact-thumb{display:grid;place-items:center;aspect-ratio:4/3;overflow:hidden;border-radius:8px;background:var(--surface-2);color:var(--secondary);font-size:13px;font-weight:650;letter-spacing:.04em}.artifact-thumb img{width:100%;height:100%;object-fit:cover}
+    .artifact-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:14px;font-weight:600;overflow-wrap:anywhere}.artifact-meta{display:flex;justify-content:space-between;gap:6px;color:var(--secondary);font-size:12px}
+    .artifact-delete{position:absolute;top:14px;right:14px;display:grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:18px;background:rgba(0,0,0,.6);color:#fff;opacity:.85}.artifact-delete:hover,.artifact-delete:focus-visible{background:rgba(0,0,0,.82);opacity:1}.artifact-delete svg{width:18px;height:18px}
     #tasksTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}#tasksTitle:focus{outline:0}
     #tasksError:not(:empty){margin:10px 14px 0;color:var(--red);font-size:13px}#tasksSearch{display:block;box-sizing:border-box;width:calc(100% - 28px);min-height:40px;margin:12px 14px 0;padding:6px 10px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--text);font:inherit}
     #tasksBody{padding:10px 14px 16px}.tasks-empty{padding:18px 2px;font-size:14px}.task-list,.record-list,.run-list{display:grid;gap:8px;margin:0;padding:0;list-style:none}
@@ -2451,7 +2458,7 @@ private extension RemoteControlServer {
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
     <main id="app" class="hidden"><aside id="sessionSidebar" class="hidden" aria-labelledby="sessionSidebarTitle"><div id="sessionSidebarHeader"><strong id="sessionSidebarTitle">Tabs</strong></div></aside><header class="workspace">
     <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off"><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
-    <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><span class="tools-spacer"></span>
+    <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><button id="homeArtifacts" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home artifacts">Artifacts</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div>
@@ -2512,6 +2519,7 @@ private extension RemoteControlServer {
     <pre id="promptPage"></pre><div class="tab-actions"><button id="promptPrevious" class="control">Previous</button><span id="promptNumber"></span><button id="promptNext" class="control">Next</button><button id="promptDownload" class="control">Download all</button><button id="promptDone" class="control">Done</button></div></dialog>
     <dialog id="tasksPanel" aria-labelledby="tasksTitle"><div class="tasks-bar"><button id="tasksBack" type="button" class="control hidden" aria-label="Back to tasks">‹ Tasks</button><strong id="tasksTitle" class="grow" tabindex="-1">Tasks</strong><button id="tasksDone" type="button" class="control">Done</button></div>
     <div id="tasksError" role="alert"></div><input id="tasksSearch" class="hidden" type="search" autocomplete="off" aria-label="Search records"><div id="tasksBody"></div><div id="tasksStatus" class="sr-only" role="status" aria-live="polite"></div></dialog>
+    <dialog id="artifactsPanel" aria-labelledby="artifactsTitle"><div class="tasks-bar"><strong id="artifactsTitle" class="grow" tabindex="-1">Artifacts</strong><button id="artifactsCreate" type="button" class="control">Create in Chat</button><button id="artifactsDone" type="button" class="control">Done</button></div><div id="artifactsError" role="alert"></div><div id="artifactsBody"></div><div id="artifactsStatus" class="sr-only" role="status" aria-live="polite"></div></dialog>
     <dialog id="imageViewer" aria-labelledby="imageViewerTitle"><div class="viewer-bar"><strong id="imageViewerTitle" class="grow">Preview</strong><button id="imageZoom" type="button" class="control" aria-pressed="false">Actual size</button><button id="imageRetry" type="button" class="control hidden">Retry</button><button id="imageDone" type="button" class="control">Done</button></div>
     <div id="imageStage"><img id="imageFull" alt=""><p id="imageStatus" role="status" aria-live="polite"></p></div></dialog>
     <script>
@@ -2592,7 +2600,8 @@ private extension RemoteControlServer {
     document.addEventListener("compositionstart",()=>{uiComposing=true});
     document.addEventListener("compositionend",()=>{uiComposing=false;uiLastInteraction=Date.now()});
     // The native Mac embed exposes this bridge; ordinary browsers keep the top tab strip.
-    const sidebarLayout=Boolean(window.webkit?.messageHandlers?.cantripRemoteUnpair);
+    // Native shells (Mac Remote, Cantrip Gateway for Windows) get the left tab list and an unpair hook.
+    const sidebarLayout=Boolean(window.webkit?.messageHandlers?.cantripRemoteUnpair||window.cantripGateway?.sidebarLayout);
     if(sidebarLayout){document.documentElement.classList.add("remote-sidebar");$("sessionSidebar").classList.remove("hidden");$("sessionSidebar").append($("sessions"));$("sessionSidebarHeader").append($("newSession"));$("sessionProgress").prepend(brainIndicator())}
     function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false";const label=document.querySelector(".connection-label");if(label)label.textContent=active?"Connected":"Reconnecting…";updateProgressConnection()}
     function brainIndicator(){const icon=document.createElementNS("http://www.w3.org/2000/svg","svg");icon.setAttribute("class","brain-indicator");icon.setAttribute("viewBox","0 0 24 24");icon.setAttribute("aria-hidden","true");icon.setAttribute("focusable","false");
@@ -2681,7 +2690,7 @@ private extension RemoteControlServer {
         let listedSuccessfully=false,requestSelection=requestedID;
         try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);renderHomeInputs(listed.homeInputs||[]);
           // Cantrip Home is pinned first when the Mac has it on; it is never closed or moved.
-          const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;$("homeTasks").classList.toggle("hidden",!listed.home);
+          const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;$("homeTasks").classList.toggle("hidden",!listed.home);$("homeArtifacts").classList.toggle("hidden",!listed.home);
           for(const id of historyCache.keys())if(!sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}
           if(selected!==requestedID){refreshRequested=true;continue}
           if(tabLink&&sessions.some(s=>s.id===tabLink)){selectTab(tabLink);tabLink=null;history.replaceState(null,"",location.pathname+location.search)}
@@ -3160,8 +3169,8 @@ private extension RemoteControlServer {
       else if(zoomed){stage.scrollLeft=(stage.scrollWidth-stage.clientWidth)/2;stage.scrollTop=(stage.scrollHeight-stage.clientHeight)/2}}
     function updateImageZoomControl(){const stage=$("imageStage"),img=$("imageFull"),fits=!img.naturalWidth||(img.naturalWidth<=stage.clientWidth&&img.naturalHeight<=stage.clientHeight);$("imageZoom").disabled=fits&&!$("imageViewer").classList.contains("zoomed");img.style.cursor=fits?"default":""}
     async function loadViewerImage(){const state=viewerState,request=++viewerRequest,requestToken=token,img=$("imageFull");if(!state)return;$("imageRetry").classList.add("hidden");$("imageStatus").textContent=state.img?"":"Loading image…";
-      try{const data=await mcpFetch(macImagePath(state.sessionID,state.id,true));if(request!==viewerRequest||requestToken!==token||!$("imageViewer").open)return;img.src=`data:image/jpeg;base64,${data.data}`;await img.decode().catch(()=>{});
-        if(request!==viewerRequest)return;$("imageStatus").textContent="";img.classList.remove("hidden");updateImageZoomControl()}
+      try{const src=state.load?await state.load():`data:image/jpeg;base64,${(await mcpFetch(macImagePath(state.sessionID,state.id,true))).data}`;if(request!==viewerRequest||requestToken!==token||!$("imageViewer").open)return;img.src=src;const decoded=await img.decode().then(()=>true,()=>false);
+        if(request!==viewerRequest)return;if(!decoded){if(state.img)img.src=state.img.src;else img.classList.add("hidden");$("imageStatus").textContent=state.img?"Showing a smaller copy. This browser can't display the full image.":"This browser can't display this image.";updateImageZoomControl();return}$("imageStatus").textContent="";img.classList.remove("hidden");updateImageZoomControl()}
       catch(error){if(request!==viewerRequest||requestToken!==token)return;$("imageStatus").textContent=state.img?`Showing a smaller copy. The full image could not load: ${error.message}`:`Image unavailable. ${error.message}`;$("imageRetry").classList.remove("hidden");if(!state.img)img.classList.add("hidden")}}
     function openImageViewer(state){viewerState=state;const img=$("imageFull");$("imageViewer").classList.remove("zoomed");$("imageZoom").textContent="Actual size";$("imageZoom").setAttribute("aria-pressed","false");
       $("imageViewerTitle").textContent=state.kind==="preview"?(state.label||"Preview"):state.label;img.alt=state.label;img.classList.toggle("hidden",!state.img);if(state.img)img.src=state.img.src;else img.removeAttribute("src");
@@ -3303,7 +3312,7 @@ private extension RemoteControlServer {
       catch(error){$("actionError").textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false;scheduleUIReload()}};
     $("draft").onkeydown=event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selectTab(data.session.id);refresh()};
-    $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();selected=null;$("draft").value="";token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null)};
+    $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");artifactThumbs.clear();if($("artifactsPanel").open)$("artifactsPanel").close();historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();selected=null;$("draft").value="";token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null);window.cantripGateway?.unpair?.()};
     // Home Tasks: the task list, each workspace's records (grouped when its list declares a groupField) and record details.
     const appleEpochSeconds=978307200,workspaceGroupsKey="cantrip.workspaceGroups.",otherGroupID=String.fromCharCode(1)+"other";
     let tasksState=null;
@@ -3407,6 +3416,60 @@ private extension RemoteControlServer {
           list.append(homeNode("dt","",field.label),cell)}
         body.append(list)}
       return body}
+    // Artifacts: files Cantrip Home saved on the Mac. Images open in the viewer; other files download.
+    let artifactsState=null,artifactThumbActive=0;const artifactThumbs=new Map(),artifactThumbQueue=[];
+    function openArtifacts(){closeArtifacts();artifactsState={token,artifacts:[],revision:null,loaded:false,failed:false,loading:false,opening:null,timer:setInterval(()=>loadArtifacts(),15000)};
+      setText($("artifactsError"),"");renderArtifacts();$("artifactsPanel").showModal();$("artifactsTitle").focus();loadArtifacts()}
+    function closeArtifacts(){if(artifactsState)clearInterval(artifactsState.timer);artifactsState=null}
+    async function loadArtifacts(){const state=artifactsState;if(!state||state.loading)return;state.loading=true;
+      try{const data=await api("/api/v1/home/artifacts"+(state.loaded&&state.revision?`?revision=${encodeURIComponent(state.revision)}`:""));if(state!==artifactsState)return;state.failed=false;setText($("artifactsError"),"");
+        if(data.unchanged)return;
+        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.artifacts=data.artifacts||[];state.loaded=true;renderArtifacts()}}
+      catch(error){if(state===artifactsState){setText($("artifactsError"),`Couldn't load artifacts: ${error.message}`);if(!state.loaded){state.loaded=true;state.failed=true;renderArtifacts()}}}
+      finally{state.loading=false}}
+    function renderArtifacts(){const state=artifactsState;if(!state)return;const panel=$("artifactsPanel"),body=$("artifactsBody"),scroll=panel.scrollTop,focused=document.activeElement?.closest?.("#artifactsBody [data-focus-key]")?.dataset.focusKey;
+      if(!state.loaded)body.replaceChildren(homeNode("p","muted tasks-empty","Loading artifacts…"));
+      else if(!state.artifacts.length)body.replaceChildren(homeNode("p","muted tasks-empty",state.failed?"Artifacts are unavailable right now.":"No artifacts yet. Documents and media created in Cantrip Home are collected here automatically."));
+      else{const list=homeNode("ul","artifact-grid");for(const artifact of state.artifacts)list.append(artifactItem(artifact));body.replaceChildren(list)}
+      panel.scrollTop=scroll;if(focused)Array.from(body.querySelectorAll("[data-focus-key]")).find(node=>node.dataset.focusKey===focused)?.focus()}
+    function artifactKind(artifact){const kind=String(artifact.kind||"file");return kind[0].toUpperCase()+kind.slice(1)}
+    function artifactSize(bytes){if(!(bytes>=0))return"";const units=["bytes","KB","MB","GB"];let value=bytes,unit=0;while(value>=1000&&unit<units.length-1){value/=1000;unit++}
+      return unit?`${value<10?value.toFixed(1):Math.round(value)} ${units[unit]}`:`${bytes} ${bytes===1?"byte":"bytes"}`}
+    function artifactDuration(seconds){const total=Math.round(seconds),minutes=Math.floor(total/60),rest=total%60;return`${minutes}:${String(rest).padStart(2,"0")}`}
+    function artifactFileName(artifact){return String(artifact.relativePath||"").split("/").pop()||artifact.title}
+    function artifactBadge(artifact){const extension=artifactFileName(artifact).split(".");return extension.length>1?extension.pop().slice(0,5).toUpperCase():artifactKind(artifact)}
+    function artifactItem(artifact){const item=homeNode("li"),card=homeNode("button","artifact-card"),thumb=homeNode("span","artifact-thumb"),meta=homeNode("span","artifact-meta"),remove=homeNode("button","artifact-delete");
+      card.type="button";card.dataset.focusKey=`artifact:${artifact.id}`;card.title=artifact.kind==="image"?"Opens the image":"Downloads the file";card.onclick=()=>openArtifact(artifact,card);
+      meta.append(homeNode("span","artifact-kind",artifactKind(artifact)),homeNode("span",null,artifactSize(artifact.size)));card.append(thumb,homeNode("span","artifact-title",artifact.title),meta);
+      remove.type="button";remove.title="Delete";remove.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4zM6 9h12l-1 12H7zm4 2v8h1.5v-8zm2.5 0v8H14v-8z"/></svg>';remove.dataset.focusKey=`artifact-delete:${artifact.id}`;remove.setAttribute("aria-label",`Delete ${artifact.title}`);remove.onclick=()=>deleteArtifact(artifact);
+      item.append(card,remove);showArtifactThumb(artifact,card);return item}
+    function showArtifactThumb(artifact,card){const cached=artifactThumbs.get(artifact.id),thumb=card.querySelector(".artifact-thumb"),kind=card.querySelector(".artifact-kind");
+      if(cached?.src){const img=homeNode("img");img.alt="";img.src=cached.src;thumb.replaceChildren(img)}else thumb.replaceChildren(homeNode("span",null,artifactBadge(artifact)));
+      if(cached?.duration)setText(kind,`${artifactKind(artifact)} · ${artifactDuration(cached.duration)}`);
+      card.setAttribute("aria-label",[artifact.title,artifactKind(artifact),cached?.duration?artifactDuration(cached.duration):null,artifactSize(artifact.size)].filter(Boolean).join(", "));
+      if(!cached&&(artifact.kind==="image"||artifact.kind==="video")){artifactThumbs.set(artifact.id,{pending:true});artifactThumbQueue.push(artifact);pumpArtifactThumbs()}}
+    function pumpArtifactThumbs(){while(artifactThumbActive<3&&artifactThumbQueue.length){const artifact=artifactThumbQueue.shift(),requestToken=token;artifactThumbActive++;
+      api(`/api/v1/home/artifacts/${artifact.id}/thumbnail`).then(data=>{if(requestToken===token)artifactThumbs.set(artifact.id,{src:`data:image/jpeg;base64,${data.data}`,duration:data.durationSeconds})},
+        ()=>{if(requestToken===token)artifactThumbs.set(artifact.id,{failed:true})})
+      .finally(()=>{artifactThumbActive--;const card=document.querySelector(`#artifactsBody [data-focus-key="artifact:${artifact.id}"]`);if(card)showArtifactThumb(artifact,card);pumpArtifactThumbs()})}}
+    async function openArtifact(artifact,card){const state=artifactsState;if(!state||state.opening)return;
+      if(artifact.kind==="image"){openImageViewer({kind:"preview",label:artifact.title,img:card.querySelector(".artifact-thumb img"),
+        load:async()=>{const data=await mcpFetch(`/api/v1/home/artifacts/${artifact.id}`);return`data:${data.artifact?.mimeType||"image/png"};base64,${data.data}`}});return}
+      state.opening=artifact.id;card.setAttribute("aria-busy","true");setText($("artifactsStatus"),`Downloading ${artifact.title}…`);
+      try{const data=await mcpFetch(`/api/v1/home/artifacts/${artifact.id}`),binary=atob(data.data),bytes=new Uint8Array(binary.length);for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
+        const url=URL.createObjectURL(new Blob([bytes],{type:data.artifact?.mimeType||"application/octet-stream"})),link=homeNode("a");link.href=url;link.download=artifactFileName(artifact);document.body.append(link);link.click();link.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),60000);setText($("artifactsStatus"),`Downloaded ${artifact.title}.`)}
+      catch(error){setText($("artifactsError"),`Couldn't open ${artifact.title}: ${error.message}`)}
+      finally{if(state===artifactsState)state.opening=null;card.removeAttribute("aria-busy")}}
+    async function deleteArtifact(artifact){if(!confirm(`Delete ${artifact.title}?\n\nThis permanently deletes the file from your Mac.`))return;
+      try{await api(`/api/v1/home/artifacts/${artifact.id}`,{method:"DELETE"});artifactThumbs.delete(artifact.id);const state=artifactsState;if(!state)return;
+        state.artifacts=state.artifacts.filter(item=>item.id!==artifact.id);renderArtifacts();setText($("artifactsStatus"),`Deleted ${artifact.title}.`);$("artifactsTitle").focus();loadArtifacts()}
+      catch(error){setText($("artifactsError"),`Couldn't delete ${artifact.title}: ${error.message}`)}}
+    function createArtifactInChat(){const home=sessionItems.find(item=>item.isCantripHome);$("artifactsPanel").close();
+      if(home&&selected!==home.id){selectTab(home.id);renderedPayload="";renderProgress(home);refresh()}
+      const draft=$("draft");if(!draft.value.trim())draft.value="Create a ";draft.dispatchEvent(new Event("input",{bubbles:true}));draft.focus();draft.setSelectionRange(draft.value.length,draft.value.length)}
+    $("homeArtifacts").onclick=openArtifacts;$("artifactsDone").onclick=()=>$("artifactsPanel").close();$("artifactsCreate").onclick=createArtifactInChat;
+    $("artifactsPanel").addEventListener("close",()=>{closeArtifacts();$("artifactsBody").replaceChildren();setText($("artifactsStatus"),"")});
     $("homeTasks").onclick=openTasks;$("tasksDone").onclick=()=>$("tasksPanel").close();$("tasksBack").onclick=()=>showTask(null);
     $("tasksSearch").oninput=()=>{if(tasksState){renderTasks();$("tasksPanel").scrollTop=0}};
     $("tasksPanel").addEventListener("close",()=>{closeTasks();$("tasksBody").replaceChildren();setText($("tasksStatus"),"")});
