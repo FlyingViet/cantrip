@@ -17,6 +17,9 @@ Mac you own, the same Mac or another one, with **Remote control** enabled in Can
 Settings. Each person pairs with their own Cantrip; a pairing token gives full control of
 that Mac's agents, so never share yours.
 
+On a Windows PC, use [Cantrip Gateway for Windows](windows/) (Home chat, project tabs,
+Tasks and Artifacts over the same encrypted connection).
+
 ## How it shares the iOS app's logic
 
 The iOS app lives in [FlyingViet/Hermes](https://github.com/FlyingViet/Hermes). This repo

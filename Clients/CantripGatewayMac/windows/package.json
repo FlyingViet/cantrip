@@ -1,0 +1,62 @@
+{
+  "name": "cantrip-gateway-windows",
+  "version": "0.1.0",
+  "productName": "Cantrip Gateway",
+  "private": true,
+  "description": "Cantrip Gateway for Windows: Cantrip Home, project tabs, tasks and artifacts from a Cantrip Mac",
+  "main": "dist/main/main.js",
+  "author": "FlyingViet",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FlyingViet/CantripGatewayMac.git"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-renderer.mjs",
+    "start": "npm run build && electron .",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "electron": "41.6.1",
+    "electron-builder": "25.1.8",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  },
+  "build": {
+    "appId": "com.itzhoang.cantripgateway.windows",
+    "productName": "Cantrip Gateway",
+    "executableName": "CantripGateway",
+    "artifactName": "CantripGateway-Setup-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "protocols": [
+      {
+        "name": "Cantrip pairing link",
+        "schemes": [
+          "cantripagent"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "assets/icon.png",
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Cantrip Gateway"
+    }
+  }
+}
