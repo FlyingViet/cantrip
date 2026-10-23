@@ -8,6 +8,8 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
     private var panel: LauncherPanel!
+    /// Latest size the panel content asked for, applied once per run-loop turn.
+    private var pendingPanelSize: CGSize?
     private var hotkey: HotkeyManager!
     private var selectionHotkey: HotkeyManager!
     private var pasteMonitor: Any?
@@ -99,7 +101,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             onSizeChange: { [weak self] size in
                 // Defer: resizing the window inside SwiftUI's layout pass
                 // causes layout recursion and a blank (invisible) panel.
-                DispatchQueue.main.async { self?.panel.resizeContent(to: size) }
+                // Coalesce: a layout that settles over two passes (the
+                // composer gains a line, then the transcript gives it back)
+                // resizes once, instead of tripping the flip-flop damping.
+                guard let self else { return }
+                let scheduled = self.pendingPanelSize != nil
+                self.pendingPanelSize = size
+                guard !scheduled else { return }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let size = self.pendingPanelSize else { return }
+                    self.pendingPanelSize = nil
+                    self.panel.resizeContent(to: size)
+                }
             },
             onKeepVisibleChange: { [weak self] keep in self?.panel.keepVisibleWhileUnfocused = keep }
         ))
