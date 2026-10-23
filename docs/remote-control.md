@@ -797,7 +797,10 @@ Use **Change server** to configure a different host.
 shows this web client (Home chat, project tabs, Tasks and Artifacts) in a Windows
 app that connects over the encrypted LAN listener. On the Mac, run
 `cantrip pair --direct` and paste the printed link into the app's **Connection
-settings**, or enter the Mac's address with port `8766` and the pairing token.
+settings**, or enter the Mac's address, the encrypted port shown under
+**Settings > Remote control** and the pairing token. The Windows app doesn't use
+Bonjour, so set a fixed **Encrypted LAN port** if you don't want to re-enter it
+after Cantrip restarts.
 
 The LAN listener accepts two pre-shared-key suites with the same identity and key:
 the original one Apple clients use, and ECDHE-PSK with ChaCha20-Poly1305 for
