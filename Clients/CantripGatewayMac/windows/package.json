@@ -1,6 +1,6 @@
 {
   "name": "cantrip-gateway-windows",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "productName": "Cantrip Gateway",
   "private": true,
   "description": "Cantrip Gateway for Windows: Cantrip Home, project tabs, tasks and artifacts from a Cantrip Mac",

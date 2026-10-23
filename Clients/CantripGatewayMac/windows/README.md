@@ -9,7 +9,7 @@ Electron window, so new Remote features on the Mac reach Windows without a new b
 The app adds what a browser can't do:
 
 - **Encrypted direct connection.** It talks to the Mac's TLS-PSK listener (the same
-  pairing token, port 8766 by default) on your home network or over Tailscale, with no
+  pairing token) on your home network or over Tailscale, with no
   certificates and no open port on the PC. Browsers can't use pre-shared-key TLS.
 - **Fallback to HTTPS.** With the Mac's Tailscale HTTPS address saved, it switches over
   when the direct address can't be reached and moves back once it can.
@@ -38,13 +38,13 @@ On the Mac, in Terminal:
 cantrip pair --direct
 ```
 
-It prints a `cantripagent://pair?...` link with the Mac's local address, its Tailscale
-HTTPS address and the token. Paste the link into **Pairing link** and choose **Use link**,
+It prints a `cantripagent://pair?...` link with the Mac's local address and current
+encrypted port, its Tailscale HTTPS address and the token. Paste the link into **Pairing link** and choose **Use link**,
 then **Save and connect**. Or fill in the fields yourself:
 
 | Field | What to enter |
 | --- | --- |
-| Direct address | The Mac's address and Cantrip's encrypted port, e.g. `192.168.0.20:8766`. On Tailscale, the Mac's Tailscale IP works too. |
+| Direct address | The Mac's address and the encrypted port shown in Cantrip's **Settings > Remote control** (or `cantrip status`), e.g. `192.168.0.20:50310`. On Tailscale, the Mac's Tailscale IP works too. While that port is on Auto it changes whenever Cantrip restarts; set a fixed port there to keep this address working. |
 | HTTPS URL | Optional. The Mac's Tailscale Serve address, used when the direct address can't be reached. |
 | Pairing token | From Cantrip's **Settings > Remote control** on the Mac. |
 
