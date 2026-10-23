@@ -9,6 +9,7 @@
 | **Option+Space** | Show or hide Cantrip |
 | **Option+Shift+Space** | Capture selected text from the front app and open Cantrip |
 | **Return** | Launch the selected app suggestion, or submit a prompt; while busy, use Auto unless a delivery override is selected |
+| **Shift+Return** | Start a new line in the prompt; the input grows to six lines, then scrolls |
 | **Command+Return** | Send to AI instead of the app suggestion; while busy, interrupt and redirect |
 | **Option+Return** | Inject context into an active local Copilot or Claude Code task |
 | **Command+T** | New local session |
