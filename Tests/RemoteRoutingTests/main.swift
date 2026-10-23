@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import JavaScriptCore
 import Network
@@ -52,7 +53,7 @@ private final class TestServer: @unchecked Sendable {
     private let respond: Bool
 
     init(tls: Bool, respond: Bool = true) throws {
-        listener = try NWListener(using: tls ? RemoteLANProtocol.parameters(token: "test-token") : .tcp)
+        listener = try NWListener(using: tls ? RemoteLANProtocol.listenerParameters(token: "test-token") : .tcp)
         self.respond = respond
     }
 
@@ -491,6 +492,10 @@ private func runTests() async throws {
            "TLS-PSK forwarding must preserve history query parameters")
     expect(try await secure.request(gzipRequest).body == gzipTestBody, "the LAN route asks for gzip and decodes it")
     await secure.stop()
+    expect(await negotiatedSuite(at: tlsEndpoint, suites: [0xCCAC], token: "test-token") == 0xCCAC,
+           "the listener accepts ECDHE-PSK-ChaCha20 for BoringSSL clients (Windows app)")
+    expect(await negotiatedSuite(at: tlsEndpoint, suites: [0xCCAC], token: "wrong-token") == nil,
+           "ECDHE-PSK still requires the pairing token")
 
     let bridge = RemoteLANBridge(token: "test-token")
     await bridge.update(endpoints: [tlsEndpoint], fallback: nil)
@@ -619,6 +624,45 @@ private func runTests() async throws {
                "web recent and older pages allow complete messages to finish downloading")
         context.evaluateScript(#"fetches.at(-1).resolve({ok:true,json:async()=>({})})"#)
     }
+}
+
+/// Handshakes with only `suites` offered; the negotiated suite, or nil when the handshake fails.
+private func negotiatedSuite(at endpoint: NWEndpoint, suites: [UInt16], token: String) async -> UInt16? {
+    let tls = NWProtocolTLS.Options()
+    let key = Data(SHA256.hash(data: Data(token.utf8))).withUnsafeBytes { DispatchData(bytes: $0) }
+    let identity = Data("cantrip-remote-v1".utf8).withUnsafeBytes { DispatchData(bytes: $0) }
+    sec_protocol_options_add_pre_shared_key(tls.securityProtocolOptions, key as dispatch_data_t,
+                                            identity as dispatch_data_t)
+    sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
+    sec_protocol_options_set_max_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
+    for suite in suites {
+        sec_protocol_options_append_tls_ciphersuite(tls.securityProtocolOptions, tls_ciphersuite_t(rawValue: suite)!)
+    }
+    let connection = NWConnection(to: endpoint, using: NWParameters(tls: tls, tcp: NWProtocolTCP.Options()))
+    let queue = DispatchQueue(label: "cantrip-routing-test-suite")
+    let result: UInt16? = await withCheckedContinuation { continuation in
+        var finished = false
+        func finish(_ value: UInt16?) {
+            guard !finished else { return }
+            finished = true
+            continuation.resume(returning: value)
+        }
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                let metadata = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata
+                finish(metadata.map {
+                    sec_protocol_metadata_get_negotiated_tls_ciphersuite($0.securityProtocolMetadata).rawValue
+                })
+            case .failed, .waiting, .cancelled: finish(nil)
+            default: break
+            }
+        }
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 5) { finish(nil) }
+    }
+    connection.cancel()
+    return result
 }
 
 Task {
