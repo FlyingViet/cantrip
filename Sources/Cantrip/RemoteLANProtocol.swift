@@ -7,6 +7,23 @@ enum RemoteLANProtocol {
     static let serviceType = "_cantrip-remote._tcp"
 
     static func parameters(token: String) -> NWParameters {
+        parameters(token: token, cipherSuites: [
+            tls_ciphersuite_t(rawValue: UInt16(TLS_DHE_PSK_WITH_AES_128_GCM_SHA256))!
+        ])
+    }
+
+    /// The host's listener also accepts ECDHE-PSK with ChaCha20-Poly1305, which BoringSSL
+    /// clients (Electron, so the Windows app) support; they have neither the suite above nor
+    /// the PSK-AES-GCM one Apple negotiates for it. Apple clients keep offering only the
+    /// original suite, so their connections are unchanged.
+    static func listenerParameters(token: String) -> NWParameters {
+        parameters(token: token, cipherSuites: [
+            tls_ciphersuite_t(rawValue: UInt16(TLS_DHE_PSK_WITH_AES_128_GCM_SHA256))!,
+            tls_ciphersuite_t(rawValue: UInt16(TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256))!,
+        ])
+    }
+
+    private static func parameters(token: String, cipherSuites: [tls_ciphersuite_t]) -> NWParameters {
         let tls = NWProtocolTLS.Options()
         let derivedKey = Data(SHA256.hash(data: Data(token.utf8)))
         let key = derivedKey.withUnsafeBytes { DispatchData(bytes: $0) }
@@ -26,12 +43,9 @@ enum RemoteLANProtocol {
             tls.securityProtocolOptions,
             .TLSv12
         )
-        sec_protocol_options_append_tls_ciphersuite(
-            tls.securityProtocolOptions,
-            tls_ciphersuite_t(
-                rawValue: UInt16(TLS_DHE_PSK_WITH_AES_128_GCM_SHA256)
-            )!
-        )
+        for suite in cipherSuites {
+            sec_protocol_options_append_tls_ciphersuite(tls.securityProtocolOptions, suite)
+        }
         return NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
     }
 

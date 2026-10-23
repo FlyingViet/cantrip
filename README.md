@@ -26,6 +26,7 @@ live sessions.
 | **Cantrip for Windows** | Windows 10/11 x64 | [`windows/`](windows/) |
 | **Cantrip Agent** | iPhone, iPad (iOS 26+) | [FlyingViet/Hermes](https://github.com/FlyingViet/Hermes) |
 | **Cantrip Gateway Mac** | macOS 26+ | [FlyingViet/CantripGatewayMac](https://github.com/FlyingViet/CantripGatewayMac) |
+| **Cantrip Gateway for Windows** | Windows 10/11 x64 | [CantripGatewayMac/windows](https://github.com/FlyingViet/CantripGatewayMac/tree/main/windows) |
 | Browser remote | Any modern browser | Served by the Mac host |
 
 Cantrip Agent (formerly AgentGateway) is the native iPhone/iPad client.
