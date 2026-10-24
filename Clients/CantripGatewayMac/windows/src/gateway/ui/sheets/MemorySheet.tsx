@@ -1,6 +1,7 @@
 // Cantrip Memory (CantripMemoryView.swift): the read-only memory files saved on the Mac. A searchable
 // catalog in 50-file pages ("Load more files"), grouped by category, and a reader that pages through
-// a file 16 KiB at a time, pinned to the file's revision.
+// a file 16 KiB at a time (cut at line breaks), pinned to the file's revision, shown as formatted
+// Markdown or its source.
 import type { JSX } from "preact";
 import { batch, useSignal } from "@preact/signals";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
@@ -9,12 +10,28 @@ import type { MemoryCatalog, MemoryEntry, MemoryPage } from "../../api/types";
 import { formatBytes, unixDate } from "../../state/format";
 import { Icon } from "../icons";
 import { FormSection, Sheet } from "../kit";
+import { Markdown } from "../transcript/Markdown";
+import "../transcript/transcript.css";
 import { Caption, Loading, RefreshButton, StatusLabel, Warning, useAlive } from "./common";
 import {
   EMPTY_READER, InvalidResponseError, errorText, formatDateTime, isUnsupported, memoryCatalogPath, memoryCharacterCount,
   memoryDocumentPath, memoryEntriesByCategory, memoryName, memoryTitle, mergeCatalog, readerApply, readerRequest,
-  validCatalogPage, validMemoryPage, type ReaderDirection, type ReaderState,
+  renderableMemory, validCatalogPage, validMemoryPage, type ReaderDirection, type ReaderState,
 } from "./sheetLogic";
+
+const FORMATTED_KEY = "gateway.memory.formatted";
+
+/** Formatted Markdown or the file's exact text; remembered across files (the Mac's AppStorage). */
+function useFormattedPreference(): [boolean, (value: boolean) => void] {
+  const [formatted, setFormatted] = useState(() => {
+    try { return localStorage.getItem(FORMATTED_KEY) !== "false"; } catch { return true; }
+  });
+  const update = (value: boolean) => {
+    setFormatted(value);
+    try { localStorage.setItem(FORMATTED_KEY, String(value)); } catch { /* storage unavailable */ }
+  };
+  return [formatted, update];
+}
 
 export function MemorySheet(props: { onClose: () => void }): JSX.Element | null {
   const catalog = useSignal<MemoryCatalog | null>(null);
@@ -24,6 +41,7 @@ export function MemorySheet(props: { onClose: () => void }): JSX.Element | null 
   const loadedQuery = useRef("");
   const catalogRequest = useRef(0);
   const alive = useAlive();
+  const [formatted, setFormatted] = useFormattedPreference();
 
   const opened = useSignal<MemoryEntry | null>(null);
   const reader = useSignal<ReaderState>(EMPTY_READER);
@@ -162,7 +180,17 @@ export function MemorySheet(props: { onClose: () => void }): JSX.Element | null 
             <div class="sh-reader-text sh-stack wide">
               <MemoryRow entry={page.document} />
               {count ? <span class={`sh-caption${count.over ? " sh-warning" : ""}`}>{count.text}</span> : null}
-              <pre class="sh-pre" tabIndex={0} aria-label={`${memoryName(entry)} text`}>{page.text === "" ? "(Empty file)" : page.text}</pre>
+              <div class="segmented" role="group" aria-label="Show the file as">
+                <button type="button" aria-pressed={formatted ? "true" : "false"} onClick={() => setFormatted(true)}>Formatted</button>
+                <button type="button" aria-pressed={formatted ? "false" : "true"} onClick={() => setFormatted(false)}>Markdown source</button>
+              </div>
+              {page.text === "" ? <pre class="sh-pre">(Empty file)</pre> : formatted ? (
+                <div class="sh-markdown" tabIndex={0} aria-label={`${memoryName(entry)}, formatted`}>
+                  <Markdown text={renderableMemory(page.text, reader.value.pageFence)} remoteImages={false} />
+                </div>
+              ) : (
+                <pre class="sh-pre" tabIndex={0} aria-label={`${memoryName(entry)} text`}>{page.text}</pre>
+              )}
             </div>
           ) : null}
         </div>

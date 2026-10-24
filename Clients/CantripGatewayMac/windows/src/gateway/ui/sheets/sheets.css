@@ -87,3 +87,8 @@ details.sh-output .sh-pre { max-height: 260px; overflow: auto; padding: 8px 10px
 .sh-section-title { margin: 6px 0 0; font: 600 13px/1.3 var(--font); }
 .form-group > .sh-alert-row:not(:first-child) > .form-row { border-top: 0.5px solid var(--separator); }
 .sh-access p { margin: 0; }
+.sh-markdown { user-select: text; min-width: 0; }
+.sh-markdown:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+.sh-reader-text .segmented { align-self: flex-start; }
+/* The row's `grow` widens it in the list; in the reader's column it must not stretch vertically. */
+.sh-reader-text > .sh-stack.grow { flex-grow: 0; }

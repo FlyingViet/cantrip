@@ -379,34 +379,98 @@ export function validMemoryPage(page: MemoryPage, id: string, offset: number, re
 
 export type ReaderDirection = "reload" | "previous" | "next";
 
+/** A ``` or ~~~ code block a memory page leaves open (CantripMemoryMarkdown.Fence). */
+export interface CodeFence {
+  marker: "`" | "~";
+  count: number;
+}
+
 export interface ReaderState {
   page: MemoryPage | null;
   pageIndex: number;
   /** Start offset of every page reached so far (Previous walks back through them). */
   offsets: number[];
+  /** The code block each page reached so far starts inside. */
+  fences: (CodeFence | null)[];
+  /** The shown page's entry in `fences`. */
+  pageFence: CodeFence | null;
 }
 
-export const EMPTY_READER: ReaderState = { page: null, pageIndex: 0, offsets: [0] };
+export const EMPTY_READER: ReaderState = { page: null, pageIndex: 0, offsets: [0], fences: [null], pageFence: null };
+
+export interface ReaderRequest {
+  offset: number;
+  index: number;
+  revision: string | null;
+  fence?: CodeFence | null;
+}
 
 /** What to fetch for Reload / Previous / Next (CantripMemoryReaderModel.load), or null when there's nowhere to go. */
-export function readerRequest(state: ReaderState, direction: ReaderDirection): { offset: number; index: number; revision: string | null } | null {
+export function readerRequest(state: ReaderState, direction: ReaderDirection): ReaderRequest | null {
   switch (direction) {
-    case "reload": return { offset: 0, index: 0, revision: null };
+    case "reload": return { offset: 0, index: 0, revision: null, fence: null };
     case "previous":
       if (state.pageIndex <= 0) return null;
-      return { offset: state.offsets[state.pageIndex - 1], index: state.pageIndex - 1, revision: state.page?.revision ?? null };
+      return {
+        offset: state.offsets[state.pageIndex - 1], index: state.pageIndex - 1, revision: state.page?.revision ?? null,
+        fence: state.fences[state.pageIndex - 1] ?? null,
+      };
     case "next": {
-      const next = state.page?.nextOffset;
-      if (next === undefined) return null;
-      return { offset: next, index: state.pageIndex + 1, revision: state.page?.revision ?? null };
+      const page = state.page;
+      const next = page?.nextOffset;
+      if (!page || next === undefined) return null;
+      return {
+        offset: next, index: state.pageIndex + 1, revision: page.revision,
+        fence: codeFenceAfter(page.text, state.fences[state.pageIndex] ?? null),
+      };
     }
   }
 }
 
-export function readerApply(state: ReaderState, direction: ReaderDirection, request: { offset: number; index: number }, page: MemoryPage): ReaderState {
+export function readerApply(state: ReaderState, direction: ReaderDirection, request: { offset: number; index: number; fence?: CodeFence | null }, page: MemoryPage): ReaderState {
   const offsets = direction === "reload" ? [0] : [...state.offsets];
+  const fences = direction === "reload" ? [null] : [...state.fences];
   if (request.index === offsets.length) offsets.push(request.offset);
-  return { page, pageIndex: request.index, offsets };
+  const fence = request.fence ?? null;
+  if (request.index === fences.length) fences.push(fence);
+  else fences[request.index] = fence;
+  return { page: alignMemoryPage(page), pageIndex: request.index, offsets, fences, pageFence: fence };
+}
+
+/**
+ * Ends a page that would split a line at its last line break, so each 16 KiB page renders as
+ * Markdown on its own; the next page starts at the cut (the host accepts any byte offset).
+ */
+export function alignMemoryPage(page: MemoryPage): MemoryPage {
+  if (page.nextOffset === undefined || page.text.endsWith("\n")) return page;
+  const cut = page.text.lastIndexOf("\n");
+  if (cut < 0) return page;
+  const text = page.text.slice(0, cut + 1);
+  return { ...page, text, nextOffset: page.offset + utf8(text).length };
+}
+
+/** The ``` or ~~~ code block still open after `text`. */
+export function codeFenceAfter(text: string, open: CodeFence | null): CodeFence | null {
+  let fence = open;
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    const trimmed = line.replace(/^[ \t]+/, "");
+    const marker = trimmed[0];
+    if (marker !== "`" && marker !== "~") continue;
+    let count = 0;
+    while (trimmed[count] === marker) count++;
+    if (count < 3) continue;
+    if (fence) {
+      if (marker === fence.marker && count >= fence.count && trimmed.slice(count).trim() === "") fence = null;
+    } else {
+      fence = { marker, count };
+    }
+  }
+  return fence;
+}
+
+/** The Markdown to render for a page that may start inside a code block. */
+export function renderableMemory(text: string, fence: CodeFence | null): string {
+  return fence ? `${fence.marker.repeat(fence.count)}\n${text}` : text;
 }
 
 /** "1234 / 2200 characters" for MEMORY.md when the whole file is one page. */
