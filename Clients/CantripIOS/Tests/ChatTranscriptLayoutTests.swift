@@ -124,6 +124,23 @@ final class ChatTranscriptLayoutTests: XCTestCase {
         XCTAssertEqual(model.historyRequests, 0)
     }
 
+    /// A tab opens on a short transcript that fits (iPhone Duo's ~390-point viewport), then its
+    /// full transcript arrives and grows past the viewport: the reader lands on the latest message.
+    func testTranscriptThatGrowsPastTheViewportFollowsToTheLatestMessage() async throws {
+        let model = TranscriptLayoutModel()
+        model.heights = [120, 80]
+        model.viewportHeight = 390
+        let (window, controller) = try host(model)
+        defer { window.isHidden = true }
+        _ = try await settle(controller)
+        model.heights = [120, 80, 140, 60, 180, 90]
+        assertAtBottom(try await settle(controller))
+        model.topInset = 76
+        model.heights.append(120)
+        assertAtBottom(try await settle(controller))
+        XCTAssertEqual(model.historyRequests, 0, "Following the latest message never loads history")
+    }
+
     func testHistoryTriggerPrefetchesOnlyWhileTheUserHeadsIntoOlderHistory() {
         func sample(_ offset: CGFloat, height: CGFloat = 5000) -> HistoryScrollSample {
             HistoryScrollSample(offset: offset, contentHeight: height, visibleHeight: 500)
@@ -307,6 +324,8 @@ final class ChatTranscriptLayoutTests: XCTestCase {
         let (window, controller) = try host(model)
         defer { window.isHidden = true }
         let scroll = try await settle(controller)
+        // The reader scrolls up after the transcript has finished settling on its latest message.
+        try await Task.sleep(for: .milliseconds(2200))
         scroll.setContentOffset(.zero, animated: false)
         _ = try await settle(controller)
         model.prependAnchor = model.history.first?.id
