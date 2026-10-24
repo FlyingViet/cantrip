@@ -26,7 +26,8 @@ enum DirectLocalCheck {
         if let url = value("--url") { configuration.baseURL = url }
         if let model = value("--model") { configuration.model = model }
         let prompt = value("--prompt")
-        return wait { await run(configuration, prompt: prompt) }
+        let checked = configuration
+        return wait { await run(checked, prompt: prompt) }
     }
 
     private static func wait(_ body: @escaping @Sendable () async -> Int32) -> Int32 {
