@@ -9,13 +9,16 @@ struct MacHomeWindow: View {
     @ObservedObject var remote: CantripRemoteModel
     @ObservedObject var voice: VoiceController
     @ObservedObject var navigation: MacHomeNavigation
+    @ObservedObject var directLocal: DirectLocalChat
     @StateObject private var vm: ChatViewModel
     @StateObject private var usageModel = CopilotUsageModel()
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("hermes.paused") private var paused = false
     @State private var showingMaintenance = false
+    @State private var confirmingDirectLocalClear = false
 
-    init(env: HermesEnv, remote: CantripRemoteModel, voice: VoiceController, navigation: MacHomeNavigation) {
+    init(env: HermesEnv, remote: CantripRemoteModel, voice: VoiceController, navigation: MacHomeNavigation,
+         directLocal: DirectLocalChat) {
         // Home (with its tabs) is the Mac's only lane; HermesEnv always launches into it. Forcing
         // it here would undo an open tab, since SwiftUI re-runs this init whenever env changes.
         navigation.attach(env: env, remote: remote)
@@ -23,6 +26,7 @@ struct MacHomeWindow: View {
         self.remote = remote
         self.voice = voice
         self.navigation = navigation
+        self.directLocal = directLocal
         _vm = StateObject(wrappedValue: ChatViewModel(env: env, remote: remote, voice: voice))
     }
 
@@ -34,7 +38,7 @@ struct MacHomeWindow: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 248, max: 320)
         } detail: {
             NavigationStack { detail }
-                .id(isTabOpen ? "tab" : navigation.section.rawValue)
+                .id(navigation.showingDirectLocal ? "directLocal" : isTabOpen ? "tab" : navigation.section.rawValue)
         }
         .frame(minWidth: 760, minHeight: 540)
         .toolbar { toolbar }
@@ -51,6 +55,10 @@ struct MacHomeWindow: View {
                 .macSheetFrame(width: 420, height: 220)
         }
         .sheet(item: $navigation.sheet, content: sheet)
+        .sheet(isPresented: $navigation.showingDirectLocalSettings) {
+            MacDirectLocalSettingsView(chat: directLocal) { navigation.showingDirectLocalSettings = false }
+                .macSheetFrame(width: 560, height: 620)
+        }
         .sheet(item: $remote.modelSettingsSession) { session in
             CantripSessionSettingsView(model: remote, session: session, identity: remote.usageIdentity)
                 .macSheetFrame()
@@ -67,6 +75,11 @@ struct MacHomeWindow: View {
             CantripPairingView(prompt: prompt, model: remote) { _ in navigation.pairing = nil }
                 .macSheetFrame(width: 520, height: prompt.link == nil ? 260 : 600)
         }
+        .confirmationDialog("Clear the local conversation?", isPresented: $confirmingDirectLocalClear) {
+            Button("Clear Conversation", role: .destructive) { directLocal.clear() }
+        } message: {
+            Text("This deletes it from this Mac. It was never synced, so there is no other copy.")
+        }
         .onOpenURL { url in
             if let pairing = CantripPairingLink.parse(url) { navigation.showPairing(pairing) }
         }
@@ -79,7 +92,11 @@ struct MacHomeWindow: View {
         .onAppear {
             setActive(scenePhase)
             remote.setFrontmost(NSApplication.shared.isActive)
+            #if DEBUG
+            if !DirectLocalQA.isActive { voice.requestAuth() }
+            #else
             voice.requestAuth()
+            #endif
         }
         .onChange(of: scenePhase) { _, phase in setActive(phase) }
         // Behind other apps Home still updates, every 15 s instead of every 1.5-5 s.
@@ -139,7 +156,11 @@ struct MacHomeWindow: View {
     }
 
     @ViewBuilder private var detail: some View {
-        if isTabOpen {
+        if navigation.showingDirectLocal {
+            MacDirectLocalView(chat: directLocal, remote: remote) {
+                navigation.showingDirectLocalSettings = true
+            }
+        } else if isTabOpen {
             MacHomeChatView(remote: remote, vm: vm, voice: voice, navigation: navigation,
                             slashCommands: remote.slashCommands, isTab: true)
         } else {
@@ -164,10 +185,37 @@ struct MacHomeWindow: View {
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
-        if isTabOpen {
+        if navigation.showingDirectLocal {
+            directLocalToolbar
+        } else if isTabOpen {
             tabToolbar
         } else {
             homeToolbar
+        }
+    }
+
+    /// Direct local mode: its settings and conversation; nothing here talks to the paired host.
+    @ToolbarContentBuilder private var directLocalToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
+            Button {
+                navigation.showingDirectLocalSettings = true
+            } label: {
+                Label("Local Model Settings", systemImage: "slider.horizontal.3")
+            }
+            .help("Local model server, model, context and system prompt")
+            Menu {
+                Button("Clear Conversation…", systemImage: "trash", role: .destructive) {
+                    confirmingDirectLocalClear = true
+                }
+                .disabled(directLocal.messages.isEmpty || directLocal.isReplying)
+                Divider()
+                Button("Back to Home", systemImage: "house") { navigation.showHome() }
+                SettingsLink { Label("Settings…", systemImage: "gearshape") }
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
+            }
+            .help("Local model actions")
+            .accessibilityIdentifier("directLocal.menu")
         }
     }
 

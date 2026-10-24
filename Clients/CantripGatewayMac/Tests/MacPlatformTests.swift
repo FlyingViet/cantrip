@@ -199,8 +199,12 @@ final class MacHomeWindowSmokeTests: XCTestCase {
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 760),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        let localStore = DirectLocalStore(
+            directory: FileManager.default.temporaryDirectory.appendingPathComponent("direct-local-\(UUID().uuidString)"),
+            defaults: defaults)
         window.contentView = NSHostingView(rootView: MacHomeWindow(
-            env: env, remote: remote, voice: VoiceController(), navigation: navigation
+            env: env, remote: remote, voice: VoiceController(), navigation: navigation,
+            directLocal: DirectLocalChat(store: localStore)
         ))
         window.layoutIfNeeded()
         XCTAssertEqual(env.executionLane, .home)
@@ -210,6 +214,13 @@ final class MacHomeWindowSmokeTests: XCTestCase {
             RunLoop.main.run(until: Date().addingTimeInterval(0.2))
             window.layoutIfNeeded()
         }
+        // Direct local mode renders without a paired host.
+        navigation.showDirectLocal()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        window.layoutIfNeeded()
+        XCTAssertTrue(navigation.showingDirectLocal)
+        navigation.showHome(.chat)
+        XCTAssertFalse(navigation.showingDirectLocal, "Home sections leave direct local mode")
         let content = try XCTUnwrap(window.contentView)
         XCTAssertGreaterThan(content.fittingSize.width, 0)
         window.close()

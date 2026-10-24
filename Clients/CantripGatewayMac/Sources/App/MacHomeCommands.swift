@@ -21,6 +21,8 @@ struct MacHomeCommands: Commands {
                 Button(section.title) { navigation.showHome(section) }
                     .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
             }
+            Button("Local Model on This Mac") { navigation.showDirectLocal() }
+                .keyboardShortcut("4", modifiers: .command)
             Button("Background") { navigation.showBackground() }
                 .keyboardShortcut("b", modifiers: .command)
             Divider()

@@ -4,6 +4,8 @@ import SwiftUI
 enum MacHomeDestination: Hashable {
     case section(CantripHomeSection)
     case tab(String)
+    /// Direct local mode: a model served on this Mac, not through Cantrip.
+    case directLocal
 }
 
 /// Pip, the connection, Home's sections (Chat, Tasks, Artifacts) and every project tab.
@@ -43,6 +45,12 @@ struct MacHomeSidebar: View {
                 }
             }
             Section {
+                MacDirectLocalRow()
+                    .tag(MacHomeDestination.directLocal)
+            } header: {
+                Text("On This Mac")
+            }
+            Section {
                 ForEach(remote.sessions) { session in
                     MacHomeTabRow(session: session)
                         .tag(MacHomeDestination.tab(session.id))
@@ -76,6 +84,7 @@ struct MacHomeSidebar: View {
     private var selection: Binding<MacHomeDestination?> {
         Binding(
             get: {
+                if navigation.showingDirectLocal { return .directLocal }
                 if env.executionLane == .cantrip, !remote.isHomeSelected {
                     return remote.selectedSessionID.map { .tab($0) }
                 }
@@ -85,6 +94,7 @@ struct MacHomeSidebar: View {
                 switch destination {
                 case .section(let section): navigation.showHome(section)
                 case .tab(let id): navigation.openTab(id)
+                case .directLocal: navigation.showDirectLocal()
                 case nil: break
                 }
             }
@@ -184,6 +194,27 @@ struct MacHomeSidebar: View {
             hasProblem: remote.errorMessage != nil
                 || (remote.isHomeSelected && home?.transcript.last?.role == "error")
         )
+    }
+}
+
+/// Direct local mode's sidebar row: clearly on this Mac and not synced.
+struct MacDirectLocalRow: View {
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Local Model")
+                Text("Not synced")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: "laptopcomputer")
+        }
+        .help("Chat with a model running on this Mac. Not sent through Cantrip and not synced. (⌘4)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Local Model on this Mac")
+        .accessibilityValue("Not synced")
+        .accessibilityIdentifier("sidebar.directLocal")
     }
 }
 
