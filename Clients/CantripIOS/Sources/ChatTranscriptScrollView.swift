@@ -70,9 +70,6 @@ struct ChatTranscriptScrollView<Content: View>: View {
             guard current.isAwayFromBottom, canFollow else { return }
             followToLatest()
         }
-        .onScrollGeometryChange(for: CGFloat.self) { TranscriptFollowSample($0).distanceFromBottom } action: { _, distance in
-            follow.distanceFromBottom = distance
-        }
         // A tab's first transcript can finish laying out while the tab slides in, without any
         // geometry callback, so settle on the end a few times as it opens (unless the reader or
         // the history anchor has moved it).
@@ -83,6 +80,9 @@ struct ChatTranscriptScrollView<Content: View>: View {
             }
         }
         #endif
+        .onScrollGeometryChange(for: CGFloat.self) { TranscriptFollowSample($0).distanceFromBottom } action: { _, distance in
+            follow.distanceFromBottom = distance
+        }
         .onScrollGeometryChange(for: HistoryScrollGeometry.self) { geometry in
             HistoryScrollGeometry(geometry, prependRevision: prependRevision)
         } action: { previous, current in
@@ -94,12 +94,14 @@ struct ChatTranscriptScrollView<Content: View>: View {
             position.scrollTo(y: target)
         }
         #if os(macOS)
-        // macOS doesn't hold the bottom anchor while content grows (images loading, streaming
-        // replies), so stay on the latest message whenever the reader was already there.
+        // macOS holds the bottom anchor neither while content grows (images loading, streaming
+        // replies) nor when the transcript itself gets shorter (a question card, pinned subagents
+        // or queued messages opening below it), so stay on the latest message whenever the reader
+        // was already there. A scroll issued mid-layout can land short, so it's re-applied.
         .onScrollGeometryChange(for: HistoryScrollSample.self) { HistoryScrollSample($0) } action: { previous, current in
-            guard current.contentHeight > previous.contentHeight, previous.isNearBottom,
+            guard HistoryScrollSample.keepsLatestVisible(previous: previous, current: current),
                   prependAnchor == nil, !scrollPhase.isFingerDriven else { return }
-            position.scrollTo(edge: .bottom)
+            followToLatest()
         }
         #endif
         .overlay(alignment: .bottomTrailing) {
@@ -188,6 +190,13 @@ struct HistoryScrollSample: Equatable {
     }
 
     var isNearBottom: Bool { contentHeight - (offset + visibleHeight) < 72 }
+
+    /// A reader at the latest message stays there when the content grows or the visible area
+    /// changes height; one reading further up is left in place.
+    static func keepsLatestVisible(previous: Self, current: Self) -> Bool {
+        previous.isNearBottom
+            && (current.contentHeight > previous.contentHeight || current.visibleHeight != previous.visibleHeight)
+    }
 }
 
 enum HistoryScrollTrigger {
