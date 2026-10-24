@@ -439,7 +439,9 @@ Remote only, not the Hermes gateway's own execution lanes.
 
 In a Cantrip session, tap the circled **+** on the left inside the composer
 (**Attach images or video** in VoiceOver) to choose photos/screenshots from
-Photos, select image files, or paste a copied image. Tap a draft thumbnail to
+Photos, select image files, or paste a copied image. You can also paste straight into the
+message box: touch and hold it and choose **Paste** (or press ⌘V on a keyboard) with a copied
+photo, screenshot, video or file, and it's attached. Copied text still pastes as text. Tap a draft thumbnail to
 view the full image, or use **x** to remove it before sending. Up to four images can be sent
 at once; each is oriented, resized to at most 2048 pixels per side, and
 JPEG-compressed to at most 1 MB without the original photo's location metadata.
