@@ -96,6 +96,26 @@ See [Mac setup](docs/getting-started-macos.md) or the
 On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 **Alt+Space** (or **Ctrl+Space** if that is taken).
 
+## Command line (macOS)
+
+| Command | What it does | Details |
+|---|---|---|
+| `cantrip "question"` | Ask the active backend (pipe input: `cat log \| cantrip "why?"`) | [Ask from Terminal](docs/everyday-tasks.md#ask-cantrip-from-terminal) |
+| `cantrip --backend NAME "question"` | Ask a specific backend (`claude`, `copilot`, `codex` or `local`), e.g. `< changes.diff` | [Ask from Terminal](docs/everyday-tasks.md#ask-cantrip-from-terminal) |
+| `cantrip runs [session-or-run-id]` | List recent runs, or show one session's or run's events | [Recover after a crash](docs/sessions-and-council.md#recover-after-a-crash-or-interruption) |
+| `cantrip daemon start` | Run Cantrip in the background now and at every login (no windows) | [Headless](docs/headless.md#commands) |
+| `cantrip daemon stop` | Stop it and don't start it at login | [Headless](docs/headless.md#commands) |
+| `cantrip daemon restart` | Restart it (installs a staged update) | [Headless](docs/headless.md#commands) |
+| `cantrip daemon run` | Run in this terminal (for tmux, screen or containers) | [Headless](docs/headless.md#commands) |
+| `cantrip daemon logs [-f]` | Show the host log | [Headless](docs/headless.md#commands) |
+| `cantrip status [--json]` | Is Cantrip running, and is Remote reachable? | [Headless](docs/headless.md#commands) |
+| `cantrip pair [options]` | Show a QR code and details to pair Cantrip Agent or Gateway. Options: `--url URL`, `--direct [HOST:PORT]`, `--name NAME`, `--rotate` (new token; devices pair again), `--no-qr` or `--json` | [Pair a device](docs/headless.md#pair-a-device) |
+| `cantrip config` | List settings | [Headless](docs/headless.md#commands) |
+| `cantrip config get KEY` | Show one setting | [Headless](docs/headless.md#commands) |
+| `cantrip config set KEY VALUE [KEY VALUE ...]` | Change one or more settings | [Headless](docs/headless.md#commands) |
+| `cantrip doctor` | Check the host, Remote, backends and Tailscale | [Headless](docs/headless.md#commands) |
+| `cantrip help` | Show the usage of these host commands (`cantrip --help` shows the ask and `runs` examples) | [Headless](docs/headless.md#commands) |
+
 ## Permissions and privacy
 
 **Act on my behalf** is off by default. Keep it off, with Claude
