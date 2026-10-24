@@ -462,6 +462,27 @@ extension SessionTabTests {
             $0["id"] as? String == task.id.uuidString
         } == true)
         precondition(taskList.1["supportsReordering"] as? Bool == true)
+        // A failing memory consolidation shows above the tasks until a run succeeds, even when the
+        // client's revision is current (clients clear the warning on "unchanged").
+        let taskRevision = try requireHome(taskList.1["revision"] as? String)
+        precondition(taskList.1["error"] == nil, "No warning while consolidation is healthy")
+        let memoryWasEnabled = AppSettings.shared.memoryEnabled
+        AppSettings.shared.memoryEnabled = true
+        var consolidation = ConsolidationState()
+        consolidation.recordFailure("Claude Code can't run (Failed to authenticate: OAuth session expired).", at: Date())
+        consolidation.save(to: .standard)
+        let warned = try await call("/api/v1/home/tasks?revision=\(taskRevision)")
+        precondition(warned.1["unchanged"] == nil
+                     && (warned.1["error"] as? String)?.hasPrefix(
+                         "Memory consolidation failed (1 attempt): Claude Code can't run") == true
+                     && (warned.1["tasks"] as? [[String: Any]])?.isEmpty == false,
+                     "A failing consolidation is sent with the tasks: \(warned.1)")
+        consolidation.recordSuccess(backend: "Copilot", at: Date())
+        consolidation.save(to: .standard)
+        let healthy = try await call("/api/v1/home/tasks?revision=\(taskRevision)")
+        precondition(healthy.1["unchanged"] as? Bool == true,
+                     "Once consolidation succeeds the tasks are unchanged again")
+        AppSettings.shared.memoryEnabled = memoryWasEnabled
         func taskIDs(_ response: [String: Any]) -> [String] {
             (response["tasks"] as? [[String: Any]])?.compactMap { $0["id"] as? String } ?? []
         }

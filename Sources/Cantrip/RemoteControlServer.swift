@@ -1544,13 +1544,15 @@ final class RemoteControlServer {
                     return
                 }
                 let revision = store.revision.uuidString
-                if store.storageError == nil, request.query("revision") == revision {
+                // Clients clear the warning on "unchanged", so send it in full while one stands.
+                let warning = store.storageError ?? Consolidator.healthWarning
+                if warning == nil, request.query("revision") == revision {
                     sendJSON(["unchanged": true, "revision": revision], on: connection)
                     return
                 }
                 let value = CantripHomeTasksSnapshot(
                     tasks: store.tasks, revision: revision,
-                    error: store.storageError
+                    error: warning
                 )
                 sendEncoded(on: connection) { try JSONEncoder().encode(value) }
                 return
@@ -3346,7 +3348,7 @@ private extension RemoteControlServer {
     async function loadTasks(){const state=tasksState;if(!state||state.loading)return;state.loading=true;
       try{const data=await api("/api/v1/home/tasks"+(state.loaded&&state.revision?`?revision=${encodeURIComponent(state.revision)}`:""));if(state!==tasksState)return;state.failed=false;
         if(data.unchanged){setText($("tasksError"),"");return}
-        setText($("tasksError"),data.error?`Cantrip couldn't save tasks: ${data.error}`:"");
+        setText($("tasksError"),data.error||"");
         if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.tasks=data.tasks||[];state.loaded=true;renderTasks()}}
       catch(error){if(state===tasksState){setText($("tasksError"),`Couldn't load tasks: ${error.message}`);if(!state.loaded){state.loaded=true;state.failed=true;renderTasks()}}}
       finally{state.loading=false}}

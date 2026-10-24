@@ -292,6 +292,8 @@ tail -n 80 ~/Library/Logs/Cantrip.log
 cantrip runs
 ```
 
+The log rotates at 10 MB; older lines are in `Cantrip.log.1` to `.3`.
+
 Include your OS version, backend, the exact error, the relevant build identity
 from the startup log, and steps to reproduce. Redact pairing tokens, API keys,
 private prompts, personal paths, and image content before sharing logs or
