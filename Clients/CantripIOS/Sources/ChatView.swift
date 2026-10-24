@@ -1135,6 +1135,7 @@ struct ChatView: View {
     @State private var videoDrafts: [String: ChatVideoAttachment] = [:]
     @State private var fileDrafts: [String: [ChatFileAttachment]] = [:]
     @State private var imageImportID: UUID?
+    @State private var composerPaste: ComposerPasteRequest?
     @State private var submittingRemote = false
     @State private var imageSendError: String?
     @State private var composerRevision = UUID()
@@ -2550,7 +2551,8 @@ struct ChatView: View {
                     fileSupport: remote.selectedSession?.id == sessionID
                         ? remote.selectedSession?.supportsFileAttachments : nil,
                     mixedSupport: remote.selectedSession?.id == sessionID
-                        ? remote.selectedSession?.supportsMixedAttachments : nil
+                        ? remote.selectedSession?.supportsMixedAttachments : nil,
+                    paste: $composerPaste
                 )
                 .id(sessionID)
             } else if !vm.activeLane.usesCantripRemote {
@@ -2582,6 +2584,9 @@ struct ChatView: View {
             .disabled(!destinationReady || !composerAcceptsText || vm.sending || submittingRemote)
             .onSubmit(sendText)
             .modifier(BackendSlashKeyPresses(isActive: backendSlashPresentation != nil, onKey: handleBackendSlashKey))
+            .composerPaste(isEnabled: vm.activeLane.usesCantripRemote && !imagePickerDisabled && !importingImages) {
+                composerPaste = ComposerPasteRequest(providers: $0)
+            }
             .accessibilityIdentifier("chat.message")
         } trailing: {
             remoteStopButton

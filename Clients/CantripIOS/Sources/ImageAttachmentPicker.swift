@@ -3,11 +3,14 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// The composer's + menu: one Photos picker showing photos and videos together, Files for any
-/// document, and Paste Image. A message carries up to four photos, one video and five files.
+/// document, and Paste Image. It also takes what's pasted into the message box. A message carries
+/// up to four photos, one video and five files.
 struct ImageAttachmentPicker: View {
     @Binding var attachments: [ChatImageAttachment]
     @Binding var importID: UUID?
     @Binding var video: ChatVideoAttachment?
+    /// Photos, videos and files pasted into the message box (`composerPaste`).
+    @Binding var paste: ComposerPasteRequest?
     let imageSupport: Bool?
     let videoSupport: Bool?
     let disabled: Bool
@@ -38,8 +41,8 @@ struct ImageAttachmentPicker: View {
     init(attachments: Binding<[ChatImageAttachment]>, importID: Binding<UUID?>,
          imageSupport: Bool?, disabled: Bool, video: Binding<ChatVideoAttachment?> = .constant(nil),
          videoSupport: Bool? = nil, files: Binding<[ChatFileAttachment]>? = nil, fileSupport: Bool? = nil,
-         mixedSupport: Bool? = nil) {
-        _attachments = attachments; _importID = importID; _video = video
+         mixedSupport: Bool? = nil, paste: Binding<ComposerPasteRequest?> = .constant(nil)) {
+        _attachments = attachments; _importID = importID; _video = video; _paste = paste
         self.imageSupport = imageSupport; self.disabled = disabled; self.videoSupport = videoSupport
         self.files = files; self.fileSupport = fileSupport; self.mixedSupport = mixedSupport
     }
@@ -159,6 +162,87 @@ struct ImageAttachmentPicker: View {
         }
         .onChange(of: importID) { _, id in
             if id == nil { importTask?.cancel() }
+        }
+        .onChange(of: paste) { _, request in
+            guard let request else { return }
+            paste = nil
+            loadPasted(request.providers)
+        }
+    }
+
+    /// Pasted items go where picked ones would: photos and a video as media, the rest as files.
+    private func loadPasted(_ providers: [NSItemProvider]) {
+        let items = ComposerPaste.classify(providers)
+        do {
+            guard !items.isEmpty else { throw FileAttachmentError.invalid }
+            try checkPasted(items)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        let photos = items.filter { $0.kind == .image }
+        let videos = items.filter { $0.kind == .video }
+        let documents = items.filter { $0.kind == .file }
+        performImport {
+            let folder = ComposerPaste.temporaryFolder()
+            defer { try? FileManager.default.removeItem(at: folder) }
+            var images: [ChatImageAttachment] = []
+            for item in photos {
+                let data = try await ComposerPaste.loadData(item)
+                try Task.checkCancellation()
+                images.append(try await Task.detached(priority: .userInitiated) {
+                    try ImageAttachmentProcessor.prepare(data)
+                }.value)
+            }
+            var imported: ChatVideoAttachment?
+            if let item = videos.first {
+                imported = try await VideoAttachmentProcessor.importFile(try await ComposerPaste.copyFile(item, into: folder))
+            }
+            var urls: [URL] = []
+            for item in documents { urls.append(try await ComposerPaste.copyFile(item, into: folder)) }
+            try Task.checkCancellation()
+            try add(images: images, video: imported)
+            if let files, !urls.isEmpty {
+                let attached = try await FileAttachmentProcessor.importFiles(urls)
+                try Task.checkCancellation()
+                guard files.wrappedValue.count + attached.count <= FileAttachmentProcessor.maximumCount else {
+                    throw FileAttachmentError.tooMany
+                }
+                files.wrappedValue.append(contentsOf: attached)
+            }
+            var notes: [String] = []
+            if videos.count > 1 { notes.append("You can send one video per message, so only the first one was added.") }
+            let skipped = providers.count - items.count
+            if skipped > 0 {
+                notes.append("\(skipped == 1 ? "One item" : "\(skipped) items") couldn't be attached. Zip folders and packages first.")
+            }
+            if !notes.isEmpty { errorMessage = notes.joined(separator: "\n\n") }
+        }
+    }
+
+    /// Refuses a paste this Mac or message can't take before anything is copied.
+    private func checkPasted(_ items: [ComposerPaste.Item]) throws {
+        let photos = items.filter { $0.kind == .image }.count
+        let videos = items.filter { $0.kind == .video }.count
+        let documents = items.filter { $0.kind == .file }.count
+        if photos > 0 {
+            guard imageSupport == true else {
+                throw imageSupport == nil ? ComposerPasteError.updateMac : ComposerPasteError.chooseBackend
+            }
+            guard photos <= imageSlots else { throw ImageAttachmentError.tooMany }
+        }
+        if videos > 0 {
+            guard videoSupport == true else {
+                throw videoSupport == nil ? ComposerPasteError.updateMac : ComposerPasteError.chooseBackend
+            }
+            guard video == nil, mixed || (attachments.isEmpty && photos == 0) else {
+                throw VideoAttachmentError.mixedAttachments
+            }
+        }
+        if photos > 0, video != nil, !mixed { throw VideoAttachmentError.mixedAttachments }
+        if documents > 0 {
+            guard files != nil, fileSupport == true else { throw ComposerPasteError.documentsNeedUpdate }
+            guard fileCount + documents <= FileAttachmentProcessor.maximumCount else { throw FileAttachmentError.tooMany }
         }
     }
 
