@@ -674,6 +674,38 @@ still returned. The response is computed off the main thread and kept in
 memory for 10 minutes. `Cantrip.log` records only counts and timings
 (`voice-vocabulary:` lines).
 
+### Slash command suggestions
+
+Session snapshots (normal tabs and Cantrip Home) include
+`"supportsBackendCommands": true`. Clients then call authenticated
+`GET /api/v1/sessions/{id}/commands` (add `?refresh=true` to rediscover) when
+the composer text starts with `/`:
+
+```json
+{
+  "backend": "Copilot",
+  "workdir": "/Users/me/project",
+  "revision": "5b1c0e2a9f3d",
+  "status": null,
+  "commands": [
+    {"name": "plan", "description": "Create an implementation plan before coding", "kind": "builtin",
+     "source": "Copilot", "inputHint": "prompt", "requiresInput": false, "aliases": [],
+     "insert": "/plan ", "availability": "runs", "note": null, "action": null}
+  ]
+}
+```
+
+`kind` is `builtin`, `custom`, `skill` or `cantrip` (a script in
+`~/.config/cantrip/commands`). `availability` is `runs`, `cantrip` (handled by
+Cantrip, for example `"action": "modelSettings"`) or `unavailable` (`note`
+says why). Put `insert` into the composer exactly; Codex skills insert `$name`.
+`status` explains an empty or partial list, for example a backend that isn't
+installed or signed in. The first request for a folder can take a few seconds
+(at most 8; then `status` asks to try again); later ones are served from the
+Mac's cache. Clients send the chosen command as ordinary message text. See
+[Extensions and skills](extensions-and-skills.md#use-your-agents-own-slash-commands-and-skills)
+for what each backend lists and which commands are dimmed.
+
 ### Update and rebuild this Mac from Cantrip Agent
 
 Use **Settings > Cantrip Mac > Update & Rebuild Cantrip** in an updated

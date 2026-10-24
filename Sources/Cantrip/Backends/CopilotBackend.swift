@@ -108,6 +108,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
              "allowSubagents": allowSubagents, "mcpApps": mcpApps,
              "systemGuidance": CopilotBackend.systemGuidance(allowSubagents: allowSubagents)]
             if let guardrail { object["guardrail"] = guardrail }
+            object["blockedCommands"] = BackendCommandPolicy.blockedNames(family: .copilot)
             return object
         }
     }
@@ -225,7 +226,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         parser = CopilotJSONStreamParser(canCancelSubagents: true)
         do {
             var command: [String: Any] = [
-                "kind": "start", "runID": id, "config": config.json, "prompt": request.prompt
+                "kind": "start", "runID": id, "config": config.json, "prompt": request.prompt,
+                "userMessage": request.userMessage
             ]
             let newRuntime = process == nil
             if newRuntime {
@@ -684,6 +686,10 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                         tool: object["tool"] as? String ?? "tool",
                         decision: object["decision"] as? String ?? "denied", decidedBy: "Cantrip"
                     )))
+                case "commandText":
+                    // A slash command's own output (no model turn), shown as the reply.
+                    attempt?.visibleOutput = true
+                    if let text = object["text"] as? String, !text.isEmpty { onEvent?(.textDelta(text)) }
                 case "done":
                     idle = true
                     ready = false

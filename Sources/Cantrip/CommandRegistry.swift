@@ -25,24 +25,9 @@ final class CommandRegistry: ObservableObject {
         reload()
     }
 
+    /// Only the folder: no example script, so "/" lists only commands you actually have.
     private func ensureDir() {
-        let fm = FileManager.default
-        guard !fm.fileExists(atPath: dir.path) else { return }
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Seed one example so the feature is discoverable.
-        let example = """
-        #!/bin/sh
-        # description: Example skill — shows date, uptime, and your args
-        echo "## Hello from a Cantrip skill"
-        echo "- Today: $(date '+%A, %B %d %H:%M')"
-        echo "- Uptime: $(uptime | sed 's/.*up/up/')"
-        [ $# -gt 0 ] && echo "- You said: **$***"
-        echo ""
-        echo "Add your own: executable scripts in ~/.config/cantrip/commands"
-        """
-        let path = dir.appendingPathComponent("hello.sh")
-        try? example.write(to: path, atomically: true, encoding: .utf8)
-        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
     func reload() {
@@ -72,7 +57,7 @@ final class CommandRegistry: ObservableObject {
                                        path: file.path))
         }
         let sorted = found.sorted { $0.name < $1.name }
-        DispatchQueue.main.async { self.commands = sorted }
+        if Thread.isMainThread { commands = sorted } else { DispatchQueue.main.async { self.commands = sorted } }
     }
 
     /// Typeahead matches for a query beginning with "/".

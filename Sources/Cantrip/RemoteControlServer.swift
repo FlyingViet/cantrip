@@ -873,6 +873,23 @@ final class RemoteControlServer {
             return
         }
 
+        if parts.count >= 2, parts[1] == "commands" {
+            guard parts.count == 2 else {
+                sendError(404, "not found", on: connection)
+                return
+            }
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            let refresh = request.query("refresh") == "true"
+            Task { @MainActor in
+                let list = await BackendCommandCatalog.shared.list(for: session, refresh: refresh)
+                self.sendEncoded(on: connection) { try JSONEncoder().encode(list) }
+            }
+            return
+        }
+
         if parts.count >= 2, parts[1] == "subagents" {
             guard parts.count == 4, parts[3] == "cancel", !parts[2].isEmpty, parts[2].count <= 128 else {
                 sendError(404, "not found", on: connection)
@@ -1919,6 +1936,8 @@ final class RemoteControlServer {
             "supportsQueueSendNow": true,
             "supportsPagedHistory": true,
             "supportsStartFresh": session.supportsStartFresh,
+            // GET /api/v1/sessions/{id}/commands: the backend's slash commands and skills.
+            "supportsBackendCommands": true,
         ]
         if let status = session.statusText { result["status"] = status }
         if let status = session.deliveryStatus { result["deliveryStatus"] = status }
@@ -2492,11 +2511,16 @@ private extension RemoteControlServer {
     .record-subtitle{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--secondary);font-size:13px;overflow-wrap:anywhere}.record-date{color:var(--secondary);font-size:12px}
     .record-details{padding:2px 12px 12px}.record-details a{color:var(--accent);overflow-wrap:anywhere}@media(max-width:480px){.task-facts,.record-details dl{grid-template-columns:1fr;gap:1px}.task-facts dd,.record-details dd{margin-bottom:7px}}
     #uiUpdateStatus:not(:empty){padding:8px 14px}
+    .prompt-row{position:relative}.slash-popover{position:absolute;top:calc(100% + 2px);left:10px;right:10px;z-index:6;max-width:720px;max-height:320px;overflow-y:auto;overscroll-behavior:contain;padding:4px;border:1px solid var(--line);border-radius:10px;background:Canvas;color:var(--text);box-shadow:0 12px 32px rgba(0,0,0,.28)}.slash-popover.above{top:auto;bottom:calc(100% + 2px)}@media(prefers-color-scheme:dark){.slash-popover{background:#2a2b30}}
+    .slash-row{display:grid;grid-template-columns:fit-content(45%) minmax(0,1fr) auto;grid-template-areas:"cmd desc source" "note note note";align-items:baseline;gap:1px 12px;padding:7px 10px;border-radius:7px;cursor:pointer}.slash-row:hover{background:var(--surface)}.slash-row[aria-selected=true]{background:var(--surface-2);box-shadow:inset 3px 0 var(--accent)}.slash-row[aria-disabled=true]{cursor:default}.slash-row[aria-disabled=true]:hover{background:transparent}.slash-row[aria-disabled=true] .slash-cmd,.slash-row[aria-disabled=true] .slash-desc,.slash-row[aria-disabled=true] .slash-source{opacity:.5}
+    .slash-cmd{grid-area:cmd;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.slash-name{font-weight:650}.slash-hint{margin-left:6px;color:var(--secondary)}.slash-desc{grid-area:desc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--secondary);font-size:13px;line-height:1.4}.slash-source{grid-area:source;padding:0 6px;border-radius:4px;background:var(--surface-2);color:var(--secondary);font-size:10px;font-weight:600;line-height:1.6;white-space:nowrap}.slash-note{grid-area:note;color:var(--secondary);font-size:12px;line-height:1.35;overflow-wrap:anywhere}
+    .slash-info{display:flex;align-items:center;gap:7px;padding:7px 10px;color:var(--secondary);font-size:12px;line-height:1.35;overflow-wrap:anywhere}#slashList:not(:empty)~.slash-info{border-top:1px solid var(--line)}.slash-info .spinner{flex:none}
+    @media(max-width:620px){.slash-popover{left:8px;right:8px}.slash-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"cmd source" "desc desc" "note note";padding:8px 10px}.slash-desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow-wrap:anywhere}}@media(pointer:coarse){.slash-row,.slash-info{min-height:44px}}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
     <main id="app" class="hidden"><aside id="sessionSidebar" class="hidden" aria-labelledby="sessionSidebarTitle"><div id="sessionSidebarHeader"><strong id="sessionSidebarTitle">Tabs</strong></div></aside><header class="workspace">
-    <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off"><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
+    <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="slashList"><div id="slashPopover" class="slash-popover hidden"><div id="slashList" role="listbox" aria-label="Commands"></div><div id="slashLoading" class="slash-info hidden"><span class="spinner" aria-hidden="true"></span>Loading commands…</div><div id="slashInfo" class="slash-info hidden"></div></div><div id="slashStatus" class="sr-only" role="status" aria-live="polite"></div><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
     <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><button id="homeArtifacts" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home artifacts">Artifacts</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
@@ -2694,7 +2718,7 @@ private extension RemoteControlServer {
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
     let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;
     const tabDrafts=new Map();
-    function selectTab(id){if(selected)tabDrafts.set(selected,$("draft").value);selected=id;$("draft").value=tabDrafts.get(id)||""}
+    function selectTab(id){if(selected)tabDrafts.set(selected,$("draft").value);selected=id;$("draft").value=tabDrafts.get(id)||"";if(typeof syncSlashCommands==="function")syncSlashCommands()}
     // historyPaused: tabs whose last older page failed; automatic loading waits for Retry.
     const historyCache=new Map(),expandedHistory=new Set(),historyPaused=new Map(),initialHistoryGroups=sidebarLayout?3:11;
     function historySuffix(messages,groups){if(groups<=0)return [];const prompts=messages.flatMap((m,i)=>m.role==="user"?[i]:[]);return prompts.length>groups?messages.slice(prompts[prompts.length-groups]):messages}
@@ -3349,7 +3373,102 @@ private extension RemoteControlServer {
       if(mode==="auto"&&chatInputReply?.sessionID===sessionID&&chatInputReply.token===requestToken)body.inputRequestID=chatInputReply.id;
       $("send").disabled=true;try{await action("messages",body);if(selected===sessionID&&token===requestToken){if($("draft").value.trim()===text)$("draft").value="";$("mode").value="auto"}}
       catch(error){$("actionError").textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false;scheduleUIReload()}};
-    $("draft").onkeydown=event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
+    // Backend slash commands: the tab agent's commands, custom commands and skills, suggested while the composer holds a lone "/token".
+    function slashToken(text){if(typeof text!=="string"||!text.startsWith("/")||/\\s/.test(text))return null;const query=text.slice(1);return query.includes("/")?null:query.toLowerCase()}
+    function slashCommandScore(command,query){const name=String(command?.name||"").toLowerCase();if(!name)return null;if(!query)return 1;
+      if(name===query)return 0;if(name.startsWith(query))return 1;
+      if(Array.isArray(command.aliases)&&command.aliases.some(alias=>String(alias).toLowerCase().startsWith(query)))return 2;
+      const bare=value=>value.replace(/[-_:]/g,""),bareQuery=bare(query);
+      if(name.includes(query)||(bareQuery&&bare(name).includes(bareQuery)))return 3;
+      if([...query].length>=2&&String(command.description||"").toLowerCase().split(/[^\\p{L}\\p{M}\\p{N}]+/u).some(word=>word.startsWith(query)))return 4;
+      return null}
+    function matchCommands(commands,query){const rows=[];
+      (Array.isArray(commands)?commands:[]).forEach((command,index)=>{const score=slashCommandScore(command,query);if(score!==null)rows.push({command,score,index,unavailable:command.availability==="unavailable"})});
+      rows.sort((a,b)=>Number(a.unavailable)-Number(b.unavailable)||a.score-b.score||a.index-b.index);
+      const shown=rows.slice(0,50),first=shown[0];
+      return {rows:shown,highlighted:query!==""&&first&&first.score<=2&&!first.unavailable?0:-1}}
+    // how: "tab" inserts only; "return" (also click or tap) sends commands that take no argument.
+    function chooseCommand(command,how,canOpenModelSettings){if(!command||command.availability==="unavailable")return {kind:"none"};
+      if(command.action==="modelSettings"&&canOpenModelSettings)return {kind:"modelSettings",text:""};
+      const text=typeof command.insert==="string"?command.insert:"";if(!text)return {kind:"none"};
+      if(how==="tab"||command.requiresInput||String(command.inputHint??"").trim())return {kind:"insert",text};
+      return {kind:"send",text,send:text.trim()}}
+    // A row shows exactly what it inserts: "/plan", or "$imagegen" for a Codex skill.
+    function commandTitle(command){return String(command?.insert||"").trim().split(/\\s+/)[0]||`/${command?.name||""}`}
+    function slashCommandsStale(entry,session,now){return !entry?.data||now-entry.at>=30000||entry.workdir!==(session?.workdir??null)||entry.modelRevision!==(session?.modelSettingsRevision??null)}
+    const slashCache=new Map(),slashState={mode:null,dismissed:null,key:null,choice:null,signature:"",data:null,rows:[],highlighted:-1,open:false};let slashSequence=0,slashPointer=false;
+    function slashSession(){return sessionItems.find(item=>item.id===selected)||null}
+    // One request per tab at a time; a response is kept only for the tab, pairing and request sequence that asked for it.
+    function loadSlashCommands(session){if(!session?.supportsBackendCommands||!token)return;const id=session.id,previous=slashCache.get(id);
+      const entry=previous?.token===token?previous:{token,data:null,at:0,workdir:null,modelRevision:null,pending:0};
+      if(entry.pending||!slashCommandsStale(entry,session,Date.now()))return;
+      const sequence=++slashSequence,requestToken=token,workdir=session.workdir??null,modelRevision=session.modelSettingsRevision??null;entry.pending=sequence;slashCache.set(id,entry);
+      for(const key of slashCache.keys())if(key!==id&&!sessionItems.some(item=>item.id===key))slashCache.delete(key);
+      api(`/api/v1/sessions/${encodeURIComponent(id)}/commands`).then(data=>{if(slashCache.get(id)!==entry||entry.pending!==sequence||token!==requestToken)return;
+          if(!Array.isArray(data?.commands))throw new Error("Invalid command list");
+          Object.assign(entry,{pending:0,at:Date.now(),workdir,modelRevision,data:{revision:String(data.revision||""),status:typeof data.status==="string"?data.status.trim():"",
+            commands:data.commands.filter(command=>typeof command?.name==="string"&&command.name)}})})
+        .catch(()=>{if(slashCache.get(id)===entry&&entry.pending===sequence)entry.pending=0})
+        .finally(()=>{if(selected===id)syncSlashCommands()})}
+    function slashOption(row,index,canModel){const command=row.command,option=document.createElement("div"),cmd=document.createElement("span"),name=document.createElement("span");
+      const hint=String(command.inputHint??"").trim(),description=String(command.description||"").trim(),source=String(command.source||"").trim(),note=typeof command.note==="string"?command.note.trim():"";
+      option.id=`slashOption${index}`;option.className="slash-row";option.dataset.index=String(index);option.setAttribute("role","option");option.setAttribute("aria-selected","false");
+      cmd.className="slash-cmd";name.className="slash-name";name.textContent=commandTitle(command);cmd.append(name);
+      if(hint){const node=document.createElement("span");node.className="slash-hint";node.textContent=hint;cmd.append(node)}option.append(cmd);
+      for(const [className,value] of [["slash-desc",description],["slash-source",source],["slash-note",note]])if(value){const node=document.createElement(className==="slash-note"?"div":"span");node.className=className;node.textContent=value;option.append(node)}
+      option.setAttribute("aria-label",[commandTitle(command),description,source,note].filter(Boolean).join(", "));if(description)option.title=description;
+      if(row.unavailable)option.setAttribute("aria-disabled","true");
+      else option.setAttribute("aria-description",chooseCommand(command,"return",canModel).kind==="insert"?"Inserts the command":"Runs the command");
+      option.onclick=()=>chooseSlashRow(index,"return");return option}
+    function highlightSlashRow(index){const draft=$("draft"),list=$("slashList"),popover=$("slashPopover");if(!slashState.rows[index]||slashState.rows[index].unavailable)index=-1;
+      slashState.highlighted=index;slashState.choice=index>=0?slashState.rows[index].command.name:null;
+      for(const option of list.children)option.setAttribute("aria-selected",String(option.dataset.index===String(index)));
+      const active=index>=0?list.children[index]:null;if(!active){draft.removeAttribute("aria-activedescendant");return}
+      draft.setAttribute("aria-activedescendant",active.id);const top=active.offsetTop,bottom=top+active.offsetHeight;
+      if(top<popover.scrollTop)popover.scrollTop=top;else if(bottom>popover.scrollTop+popover.clientHeight)popover.scrollTop=bottom-popover.clientHeight}
+    // The list opens below the composer while it sits at the top of the page, and above it when more room is there.
+    function placeSlashPopover(){const popover=$("slashPopover");if(popover.classList.contains("hidden"))return;const rect=$("draft").getBoundingClientRect(),view=window.visualViewport;
+      const top=view?view.offsetTop:0,bottom=view?view.offsetTop+view.height:innerHeight,below=bottom-rect.bottom-12,above=rect.top-top-12,upward=above>below&&below<200;
+      const limit=matchMedia("(max-width:620px)").matches?(bottom-top)*0.4:320;popover.classList.toggle("above",upward);
+      popover.style.maxHeight=`${Math.round(Math.max(88,Math.min(limit,upward?above:below)))}px`}
+    function syncSlashCommands(){const draft=$("draft"),popover=$("slashPopover"),list=$("slashList"),text=draft.value,session=slashSession(),query=slashToken(text);
+      if(slashState.dismissed!==null&&slashState.dismissed!==text)slashState.dismissed=null;
+      const mode=query!==null&&token&&session?.supportsBackendCommands&&document.activeElement===draft?session.id:null;
+      if(mode&&mode!==slashState.mode)loadSlashCommands(session);slashState.mode=mode;
+      const entry=mode?slashCache.get(mode):null,current=entry?.token===token?entry:null,data=current?.data||null,loading=Boolean(mode&&!data&&current?.pending);
+      const matched=data?matchCommands(data.commands,query):{rows:[],highlighted:-1},status=data?.status||"";
+      const visible=Boolean(mode)&&slashState.dismissed!==text&&(loading||matched.rows.length>0||Boolean(status));
+      draft.setAttribute("aria-expanded",String(visible));popover.classList.toggle("hidden",!visible);slashState.open=visible;
+      if(!visible){Object.assign(slashState,{rows:[],highlighted:-1,choice:null,key:null,signature:"",data:null});list.replaceChildren();draft.removeAttribute("aria-activedescendant");setText($("slashStatus"),"");return}
+      const key=`${mode} ${query}`,canModel=Boolean(session.supportsModelSettings),signature=`${key} ${loading} ${canModel}`;let highlighted=matched.highlighted;
+      if(data&&slashState.key===key&&slashState.choice!==null){const kept=matched.rows.findIndex(row=>row.command.name===slashState.choice&&!row.unavailable);if(kept>=0)highlighted=kept}
+      slashState.key=data?key:null;slashState.rows=matched.rows;
+      if(slashState.data!==data||slashState.signature!==signature){slashState.data=data;slashState.signature=signature;list.replaceChildren(...matched.rows.map((row,index)=>slashOption(row,index,canModel)));popover.scrollTop=0}
+      $("slashLoading").classList.toggle("hidden",!loading);setText($("slashInfo"),status);$("slashInfo").classList.toggle("hidden",!status);
+      placeSlashPopover();highlightSlashRow(highlighted);const count=matched.rows.length;
+      setText($("slashStatus"),loading?"Loading commands…":`${count} command${count===1?"":"s"}${status?`. ${status}`:""}`)}
+    function chooseSlashRow(index,how){const row=slashState.rows[index],session=slashSession(),draft=$("draft");if(!row||!session||slashState.mode!==session.id)return;
+      const result=chooseCommand(row.command,how,Boolean(session.supportsModelSettings));if(result.kind==="none")return;
+      draft.value=result.text;slashState.dismissed=null;
+      if(result.kind==="modelSettings"){syncSlashCommands();editModelSettings(session);return}
+      draft.focus();draft.setSelectionRange(result.text.length,result.text.length);syncSlashCommands();if(result.kind==="send")$("send").click()}
+    // Returns true when the open suggestion list consumed the key.
+    function slashKeydown(event){if(!slashState.open||event.isComposing||event.altKey||event.ctrlKey||event.metaKey)return false;const rows=slashState.rows;
+      if(event.key==="ArrowDown"||event.key==="ArrowUp"){if(!rows.some(row=>!row.unavailable))return false;event.preventDefault();const step=event.key==="ArrowDown"?1:-1;let index=slashState.highlighted;
+        do index=index<0?(step>0?0:rows.length-1):(index+step+rows.length)%rows.length;while(rows[index].unavailable);highlightSlashRow(index);return true}
+      if(event.key==="Tab"&&!event.shiftKey&&slashState.highlighted>=0){event.preventDefault();chooseSlashRow(slashState.highlighted,"tab");return true}
+      if(event.key==="Enter"&&!event.shiftKey){if(slashState.highlighted>=0){event.preventDefault();chooseSlashRow(slashState.highlighted,"return");return true}
+        slashState.dismissed=$("draft").value;syncSlashCommands();return false}
+      if(event.key==="Escape"){event.preventDefault();slashState.dismissed=$("draft").value;syncSlashCommands();return true}
+      return false}
+    $("draft").addEventListener("input",syncSlashCommands);
+    $("draft").addEventListener("focus",()=>{const session=slashSession();if(session?.supportsBackendCommands&&token&&!slashCache.has(session.id))loadSlashCommands(session);syncSlashCommands()});
+    $("draft").addEventListener("blur",()=>setTimeout(()=>{if(!slashPointer&&document.activeElement!==$("draft"))syncSlashCommands()},0));
+    // Keeps the composer focused (and the touch keyboard up) while a row is clicked or tapped.
+    $("slashPopover").addEventListener("mousedown",event=>event.preventDefault());$("slashPopover").addEventListener("pointerdown",()=>{slashPointer=true});
+    for(const name of ["pointerup","pointercancel"])$("slashPopover").addEventListener(name,()=>setTimeout(()=>{slashPointer=false;if(document.activeElement!==$("draft"))syncSlashCommands()},300));
+    addEventListener("resize",placeSlashPopover);window.visualViewport?.addEventListener("resize",placeSlashPopover);
+    $("draft").onkeydown=event=>{if(slashKeydown(event))return;if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selectTab(data.session.id);refresh()};
     $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");artifactThumbs.clear();if($("artifactsPanel").open)$("artifactsPanel").close();historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();selected=null;$("draft").value="";token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null);window.cantripGateway?.unpair?.()};
     // Home Tasks: the task list, each workspace's records (grouped when its list declares a groupField) and record details.
