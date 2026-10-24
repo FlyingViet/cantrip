@@ -627,6 +627,53 @@ content deadline without holding the chat polling/mutation gate. No file text
 is prefetched or persisted as a mobile offline copy. Server changes reset the
 viewer, and old hosts show an update notice rather than an empty memory list.
 
+### Dictation vocabulary for Cantrip Agent
+
+Cantrip Agent asks the connected Mac for names that dictation should spell
+your way: project tab names, companies, and the people you contact most. The
+host needs this API (older hosts return 404).
+
+Authenticated `GET /api/v1/voice/vocabulary` uses the same pairing token and
+routes as the memory viewer (Tailscale HTTPS and the encrypted LAN listener):
+
+```json
+{
+  "version": 1,
+  "generatedAt": 1798000000.0,
+  "terms": [{"text": "Orbitly", "kind": "project", "weight": 0.9, "sources": ["tabs", "memory"], "aliases": []}],
+  "people": [{"name": "Marisol Quintero", "handles": ["+15550102030", "marisol@example.com"], "count": 12, "sources": ["messages", "calls"]}],
+  "unavailable": ["messages: Cantrip can't read Messages (Full Disk Access is off)"]
+}
+```
+
+| Source | What is read | Result |
+|---|---|---|
+| `tabs` | Custom names of open tabs, excluding private tabs, Private Local and Cantrip Home | `project` terms (0.9) |
+| `memory` | The first `# ` heading in the first 4 KB of each top-level note, excluding `MEMORY.md`, `USER.md` and `sessions/`. The file name is used if the heading has no names. | `note` terms (0.7) |
+| `home` | Names in Cantrip Home task titles, company/contact/vendor/venue-style text fields in task lists, and names NLTagger finds in those lists' text (at most 200 records) | `task` (0.6), `company`/`person` (0.8; 0.5 or 0.4 when found in text) |
+| `messages` | Messages per phone number or email address in the last 60 days | `people` |
+| `calls` | Calls per number or address in the last 60 days, with the saved caller name | `people` |
+| `calendar` | Attendee and organizer names from 30 days ago to 14 days ahead | `person` terms (0.6) and `people` |
+| `contacts` | Names for phone numbers and email addresses found in messages and calls | `people[].name` |
+
+Named people also become `person` terms weighted from 0.85 (most frequent) to 0.5.
+Terms are deduplicated without regard to case. The spelling with inner capitals,
+such as "QuillKit", is kept. Terms are sorted by weight, limited to 300, and
+accented terms get an unaccented alias. Entries in `people` merge when they share a
+handle or a name. The list is limited to 100 people with up to 4 handles each.
+Emails are lowercase. Phone numbers are `+` followed by digits, and 10-digit
+numbers get +1. Short codes are omitted.
+
+Cantrip opens every source read-only and writes nothing. It never asks for a
+permission for this endpoint. Messages and call history need Full Disk Access.
+Calendar needs full Calendar access, and names need Contacts access. Cantrip must
+already have these permissions. If a source is
+unavailable, fails, or takes more than 2 seconds, Cantrip skips it and adds a
+`source: reason` entry to `unavailable`. The rest of the response is
+still returned. The response is computed off the main thread and kept in
+memory for 10 minutes. `Cantrip.log` records only counts and timings
+(`voice-vocabulary:` lines).
+
 ### Update and rebuild this Mac from Cantrip Agent
 
 Use **Settings > Cantrip Mac > Update & Rebuild Cantrip** in an updated
