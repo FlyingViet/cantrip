@@ -493,6 +493,8 @@ export interface RemoteSessionSummary {
   supportsPagedHistory: true;
   /** False for Home-reserved sessions. */
   supportsStartFresh: boolean;
+  /** GET .../commands lists the backend's slash commands and skills. Absent on older hosts: never call it. */
+  supportsBackendCommands?: boolean;
 
   // Cantrip Home session only.
   /** Home only: always true there. */
@@ -574,6 +576,53 @@ export interface InputRequestsResponse {
 /** POST /api/v1/sessions/<id>/subagents/<agentID>/cancel. */
 export interface SubagentCancelResponse {
   cancelled: boolean;
+}
+
+// MARK: - Backend slash commands
+
+/** `BackendCommand.kind`. Unknown values are shown like "custom". */
+export const BACKEND_COMMAND_KINDS = ['builtin', 'custom', 'skill', 'cantrip'] as const;
+export type BackendCommandKind = (typeof BACKEND_COMMAND_KINDS)[number];
+
+/** "runs": the backend runs it; "cantrip": Cantrip's own equivalent (see `note`); "unavailable": can't run from Cantrip. */
+export const BACKEND_COMMAND_AVAILABILITIES = ['runs', 'cantrip', 'unavailable'] as const;
+export type BackendCommandAvailability = (typeof BACKEND_COMMAND_AVAILABILITIES)[number];
+
+/** One slash command, custom command or skill of the tab's backend. Unlike most types here, absent values may be `null`. */
+export interface BackendCommand {
+  /** Without the leading slash: what the user types after "/". */
+  name: string;
+  /** One line (may be long). */
+  description: string;
+  kind: BackendCommandKind | string;
+  /** Short display label ("Copilot", "Project", "Personal", "System", …). */
+  source: string;
+  /** Argument hint shown after the name, e.g. "prompt" or "[on|off]". */
+  inputHint?: string | null;
+  /** The command needs text after it. */
+  requiresInput: boolean;
+  aliases?: string[] | null;
+  /** Exact composer text when chosen (usually "/name ", Codex skills "$name "). Never build it. */
+  insert: string;
+  availability: BackendCommandAvailability | string;
+  /** Why it's unavailable, or how Cantrip handles it. */
+  note?: string | null;
+  /** Client action for "cantrip" rows: "modelSettings" opens the tab's model settings. Unknown: insert. */
+  action?: string | null;
+}
+
+/** GET /api/v1/sessions/<id>/commands[?refresh=true] (sessions with `supportsBackendCommands`; 404 for unknown sessions). */
+export interface BackendCommandsResponse {
+  /** Cantrip backend label of the tab ("Copilot", "Claude Code", "Codex", …). Display only. */
+  backend: string;
+  /** The tab folder the list was discovered for. */
+  workdir: string;
+  /** Changes whenever the list changes. */
+  revision: string;
+  /** One line to show when the list is empty or partial. */
+  status?: string | null;
+  /** Host order (kept for equal match scores). */
+  commands: BackendCommand[];
 }
 
 // MARK: - Session requests

@@ -187,7 +187,7 @@ button.reasoning-step:hover { background: rgba(255, 255, 255, 0.09); }
 .input-column { max-width: var(--readable); margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
 .paused-bar { display: flex; align-items: center; gap: 12px; padding: 6px 4px; }
 .work-status { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
-.composer { background: #1c1c1e; border: 0.5px solid rgba(255, 255, 255, 0.08); border-radius: 12px; display: flex; flex-direction: column; }
+.composer { position: relative; background: #1c1c1e; border: 0.5px solid rgba(255, 255, 255, 0.08); border-radius: 12px; display: flex; flex-direction: column; }
 .composer:focus-within { border-color: rgba(255, 255, 255, 0.16); }
 .composer-row { display: flex; align-items: flex-end; gap: 4px; padding: 2px 4px; }
 .composer-attach, .composer-stop {
@@ -222,4 +222,32 @@ button.reasoning-step:hover { background: rgba(255, 255, 255, 0.09); }
 .attachment-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 320px; height: 30px; padding: 0 4px 0 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.07); font-size: 12.5px; }
 .attachment-chip .icon-btn { width: 22px; height: 22px; }
 .upload-progress { display: flex; flex-direction: column; gap: 6px; }
+
+/* Slash-command suggestions: a popover above the composer, styled like the app's menus. */
+.slash-popover {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 20; display: flex; flex-direction: column;
+  max-height: 320px; padding: 5px; border-radius: 10px; background: rgba(40, 41, 44, 0.97); box-shadow: var(--shadow-pop);
+  backdrop-filter: blur(30px); animation: menu-in 0.12s ease-out;
+}
+@media (prefers-reduced-motion: reduce) { .slash-popover { animation: none; } }
+.slash-header { flex: none; padding: 3px 10px 4px; font-size: 11px; font-weight: 600; color: var(--secondary); }
+.slash-list { position: relative; flex: 0 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.slash-row { display: flex; flex-direction: column; gap: 2px; padding: 5px 10px; border-radius: 6px; color: var(--text); }
+.slash-row:not(.unavailable):hover { background: var(--row-selected); }
+.slash-row.selected { background: var(--accent); color: #fff; }
+.slash-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.slash-name { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 12.5px/1.45 var(--mono); }
+.slash-input-hint { flex: 0 1 auto; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px/1.45 var(--mono); color: var(--secondary); }
+.slash-description { flex: 1 1 0; min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--secondary); }
+.slash-source {
+  flex: none; align-self: center; padding: 1px 6px; border-radius: 5px; background: rgba(255, 255, 255, 0.08);
+  font-size: 10.5px; font-weight: 500; color: var(--secondary); white-space: nowrap;
+}
+.slash-note { font-size: 11.5px; color: var(--secondary); overflow-wrap: anywhere; }
+.slash-row.selected .slash-input-hint, .slash-row.selected .slash-description, .slash-row.selected .slash-note { color: rgba(255, 255, 255, 0.85); }
+.slash-row.selected .slash-source { background: rgba(255, 255, 255, 0.2); color: #fff; }
+.slash-row.unavailable .slash-line { opacity: 0.5; }
+.slash-row.unavailable .slash-note { font-style: italic; }
+.slash-info { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; color: var(--secondary); }
+.slash-list:not(:empty) + .slash-info { border-top: 0.5px solid var(--separator); margin-top: 4px; }
 .spinning { animation: spin 0.9s linear infinite; }
