@@ -20,7 +20,7 @@ packages:
     branch: main
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
-    revision: 5c19d5e12320e22bbfb7a1877b089d2665a69add
+    revision: c79c4106b954f81205113c3343e5a7e59a1089b5
 schemes:
   CantripGatewayMac:
     build:
@@ -107,6 +107,8 @@ targets:
       - path: Hermes/Tests/CantripStartFreshTests.swift
       - path: Hermes/Tests/ChatTabTests.swift
       - path: Hermes/Tests/CantripHomeWorkspaceGroupTests.swift
+      - path: Hermes/Tests/DictationTextTests.swift
+      - path: Hermes/Tests/DictationPipelineTests.swift
     dependencies:
       - target: CantripGatewayMac
     settings:
