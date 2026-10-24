@@ -372,13 +372,17 @@ struct MacHomeChatView: View {
             } else if input.isEmpty && !hasImageDraft {
                 ChatMicrophoneButton(
                     isListening: voice.isListening,
-                    isEnabled: voice.authorized && destinationReady && composerAcceptsText,
-                    onTap: {
-                        if voice.isSpeaking { vm.interruptAndListen() } else { voice.toggleListening() }
+                    isEnabled: voice.authorized && destinationReady && composerAcceptsText && !voice.isFinishing,
+                    onStart: {
+                        if voice.isSpeaking { vm.interruptAndListen() } else { voice.startListening() }
                     },
-                    onContinuousVoice: { navigation.sheet = .voiceMode }
+                    onFinish: { voice.stopListening(finalize: true) },
+                    onContinuousVoice: {
+                        voice.stopListening(finalize: false)
+                        navigation.sheet = .voiceMode
+                    }
                 )
-                .help("Dictate (press and hold for voice mode)")
+                .help("Talk to Cantrip: hold and release, or click to start and click again to send. Double-click for voice mode.")
             } else {
                 Button(action: sendText) {
                     Image(systemName: "arrow.up.circle.fill")
