@@ -1,14 +1,18 @@
 import SwiftUI
 
-struct ChatNavigationView<Sidebar: View, Content: View>: View {
+struct ChatNavigationView<Sidebar: View, Content: View, PersistentSidebar: View>: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Binding var isTabListPresented: Bool
     let hasTabs: Bool
     let canSelectTabs: Bool
     var isReorderingTabs = false
     var allowsSidebar = UIDevice.current.userInterfaceIdiom == .pad
+    /// iPhone Duo unfolded on its side: a Gateway Mac-style sidebar beside the one stack, in place
+    /// of the drawer. The stack keeps its identity, so drafts and scroll positions survive folding.
+    var showsPersistentSidebar = false
     @ViewBuilder var sidebar: (_ isModal: Bool, _ dismiss: @escaping () -> Void) -> Sidebar
     @ViewBuilder var content: () -> Content
+    @ViewBuilder var persistentSidebar: () -> PersistentSidebar
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
@@ -25,7 +29,7 @@ struct ChatNavigationView<Sidebar: View, Content: View>: View {
 
     private var drawerPresentation: Binding<Bool> {
         Binding(
-            get: { !usesSidebar && hasTabs && isTabListPresented },
+            get: { !usesSidebar && !showsPersistentSidebar && hasTabs && isTabListPresented },
             set: { isTabListPresented = $0 }
         )
     }
@@ -37,12 +41,18 @@ struct ChatNavigationView<Sidebar: View, Content: View>: View {
             if allowsSidebar {
                 splitNavigation
             } else {
-                NavigationStack { content() }
+                HStack(spacing: 0) {
+                    if showsPersistentSidebar {
+                        persistentSidebar()
+                        Divider().ignoresSafeArea()
+                    }
+                    NavigationStack { content() }
+                }
             }
         }
         .cantripTabDrawer(
             isPresented: drawerPresentation,
-            isEnabled: hasTabs && (canSelectTabs || isReorderingTabs) && !usesSidebar
+            isEnabled: hasTabs && (canSelectTabs || isReorderingTabs) && !usesSidebar && !showsPersistentSidebar
         ) {
             sidebar(true, { isTabListPresented = false })
         }
@@ -51,6 +61,9 @@ struct ChatNavigationView<Sidebar: View, Content: View>: View {
             columnVisibility = .all
         }
         .onChange(of: hasTabs) { _, _ in
+            isTabListPresented = false
+        }
+        .onChange(of: showsPersistentSidebar) { _, _ in
             isTabListPresented = false
         }
         .onChange(of: isTabListPresented) { _, presented in
@@ -77,5 +90,26 @@ struct ChatNavigationView<Sidebar: View, Content: View>: View {
                 .toolbar(removing: .sidebarToggle)
         }
         .navigationSplitViewStyle(.balanced)
+    }
+}
+
+extension ChatNavigationView where PersistentSidebar == EmptyView {
+    @MainActor
+    init(
+        isTabListPresented: Binding<Bool>,
+        hasTabs: Bool,
+        canSelectTabs: Bool,
+        isReorderingTabs: Bool = false,
+        allowsSidebar: Bool? = nil,
+        @ViewBuilder sidebar: @escaping (_ isModal: Bool, _ dismiss: @escaping () -> Void) -> Sidebar,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.init(
+            isTabListPresented: isTabListPresented, hasTabs: hasTabs, canSelectTabs: canSelectTabs,
+            isReorderingTabs: isReorderingTabs,
+            allowsSidebar: allowsSidebar ?? (UIDevice.current.userInterfaceIdiom == .pad),
+            showsPersistentSidebar: false,
+            sidebar: sidebar, content: content, persistentSidebar: { EmptyView() }
+        )
     }
 }

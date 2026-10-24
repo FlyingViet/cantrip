@@ -110,6 +110,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `/api/v1/sessions/{id}/input` | Answer approvals, questions and secure input |
 | `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename and lock, reorder, per-tab model settings |
 | `POST /api/v1/sessions/{id}/start-fresh` | Start Fresh (no body): the next prompt starts a new model session, history stays; `409` while the tab is busy or for Cantrip Home |
+| `GET /api/v1/sessions/{id}/commands` | The tab's (or Home's) backend slash commands, custom commands and skills for `/` suggestions; called only when the snapshot has `supportsBackendCommands` |
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, Copilot usage, View Mac |
@@ -807,6 +808,32 @@ show input budgets; the advertised maximum is shown separately. Long context
 may cost more. **Refresh models** reads account metadata without sending a
 prompt; errors retain the cached catalog.
 
+### Slash commands and skills
+
+Type `/` at the start of a tab's or Home's composer to list the commands, custom commands and
+skills of that tab's backend on the Mac (Copilot, Claude Code or Codex), filtered as you type.
+Each row shows the command, its argument hint, a description and where it comes from.
+Tapping a command that takes no argument sends it right away; anything else is inserted so
+you can type the argument. **/model** opens the tab's **Model Settings** where the tab has
+them. Commands Cantrip can't run from a phone stay listed but dimmed, with the reason. The
+list closes once you type a space, never shows for paths such as `/Users/...`, and holds
+at most 50 rows in a scrollable area above the composer, about two and a half rows tall.
+On iPhone Duo unfolded in landscape there is no pop-up: the sidebar's **Skills** section
+(grouped as *Your skills & commands*, *Built-in* and a collapsed *Can't run here*) filters as
+you type, highlights the best match and opens itself if collapsed; with a hardware keyboard
+Up/Down, Tab, Return and Escape drive the highlight as on Gateway Mac. Tapping a skill there
+follows the same rules.
+
+The list comes from `GET /api/v1/sessions/{id}/commands`, cached per tab for 30 seconds and
+refetched when the tab's folder or model settings change. Older Macs without
+`supportsBackendCommands` show no list, and a failed request never blocks sending: the text
+is sent exactly as typed. Logic and matching rules live in
+[`Sources/BackendSlashCommands.swift`](Sources/BackendSlashCommands.swift). Debug builds
+launched with `-CantripUITestBackendCommands` serve a generic fixture list, and
+`-CantripUITestComposerText /pl` types into the composer for screenshots
+(`-CantripUITestSlashScrollToEnd`, `-CantripUITestHardwareKeyboard` and
+`-CantripUITestChooseSlashCommand usage` scroll, highlight and choose a row).
+
 ### Start fresh in a tab
 
 **Start Fresh** (after **Model Settings** in the Chat menu and a tab's actions) keeps the
@@ -1159,9 +1186,13 @@ In Xcode: select the **Hermes** target → **Signing & Capabilities** → set yo
 ### Adaptive layouts and iPhone Duo
 
 The app supports portrait and both landscape orientations on iPhone, plus all
-orientations on iPad. Duo keeps chat full-width, with sessions in the existing
-drawer even on the expanded display. Where the system supplies a vertical bar,
-Tabs uses the bottom of Apple's native adaptive toolbar; a separate Settings gear,
+orientations on iPad. Duo unfolded in landscape (the system's vertical bar beside a
+landscape window) switches to Gateway Mac's layout: a persistent left sidebar with Pip,
+Home's sections, the tabs (with **+**), the open chat's **Skills** and the connection, and
+a chat header with the title and state on the left and Stop, delivery, Refresh, Settings
+and the menu on the right; the system status bar stays at the right edge. Folded and
+upright Duo keep chat full-width with sessions in the drawer: where the system supplies a
+vertical bar, Tabs uses the bottom of Apple's native adaptive toolbar; a separate Settings gear,
 Refresh, and the hamburger menu stay at the top instead of duplicating controls
 above the conversation. The title, connection/usage row,
 and composer remain with the chat. In other display configurations the familiar

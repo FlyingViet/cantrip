@@ -495,6 +495,9 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     /// The tab can start its next prompt in a new model session, keeping its history. Nil from
     /// older Macs; false for Cantrip Home.
     var supportsStartFresh: Bool? = nil
+    /// The Mac lists this tab's backend slash commands and skills
+    /// (`GET /api/v1/sessions/{id}/commands`). Nil from older Macs, which never get that call.
+    var supportsBackendCommands: Bool? = nil
     /// The latest message, when it is an error repeating the one before it with no reply between.
     var repeatedErrorMessageID: String? = nil
 
@@ -1336,7 +1339,9 @@ struct CantripRemoteAPI {
                 || parts.starts(with: ["api", "v1", "home"])
                 || parts == ["api", "v1", "memory"] || parts == ["api", "v1", "memory", "document"]
                 || (parts.starts(with: ["api", "v1", "sessions"])
-                    && (parts.count == 4 || (parts.count == 6 && (parts[4] == "messages" || parts[4] == "apps"))))
+                    && (parts.count == 4 || (parts.count == 6 && (parts[4] == "messages" || parts[4] == "apps"))
+                        // A folder's first command discovery can take a few seconds on the Mac.
+                        || (parts.count == 5 && parts[4] == "commands")))
         )
     }
 
@@ -1921,6 +1926,13 @@ struct CantripRemoteAPI {
         }
     }
 
+    /// The tab's backend slash commands, custom commands and skills. Call only for sessions with
+    /// `supportsBackendCommands`; `refresh` makes the Mac rediscover them (explicit refresh only).
+    func backendCommands(sessionID: String, refresh: Bool = false) async throws -> BackendCommandsResponse {
+        try await request(path: "/api/v1/sessions/\(try Self.pathComponent(sessionID))/commands"
+                          + (refresh ? "?refresh=true" : ""))
+    }
+
     func inputRequests(sessionID: String) async throws -> [CantripInputRequest] {
         struct Response: Decodable { let requests: [CantripInputRequest] }
         let response: Response = try await request(path: "/api/v1/sessions/\(sessionID)/input")
@@ -2270,6 +2282,8 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var homeTasks: [CantripHomeTask] = []
     @Published private(set) var homeArtifacts: [CantripHomeArtifact] = []
     let artifactThumbnails = CantripArtifactThumbnailStore()
+    /// Backend "/" commands per session; views observe it directly so fetches don't redraw everything.
+    let slashCommands = BackendSlashCommandStore()
     /// Home's Builds tab: the Mac's over-the-air install page; nil until first loaded.
     @Published private(set) var homeBuilds: CantripOTABuildsSnapshot?
     @Published private(set) var homeBuildsError: String?
@@ -2717,6 +2731,7 @@ final class CantripRemoteModel: ObservableObject {
             usageIdentity = UUID()
             imageCache.removeAllObjects()
             artifactThumbnails.removeAll()
+            slashCommands.removeAll()
             resetHistory()
             router.reset()
             baseURL = normalized
@@ -2779,6 +2794,7 @@ final class CantripRemoteModel: ObservableObject {
             usageIdentity = UUID()
             imageCache.removeAllObjects()
             artifactThumbnails.removeAll()
+            slashCommands.removeAll()
             resetHistory()
             router.reset()
             UserDefaults.standard.removeObject(forKey: Self.endpointKey)
@@ -3461,6 +3477,33 @@ final class CantripRemoteModel: ObservableObject {
 
     func privateLocalSettings(id: String) async throws -> CantripPrivateLocalSettings {
         try await performHistoryRead { try await $0.privateLocalSettings(id: id) }
+    }
+
+    /// The backend commands for "/" suggestions; never holds the polling/mutation gate.
+    func fetchBackendCommands(sessionID: String) async throws -> BackendCommandsResponse {
+        #if DEBUG
+        if let fixture = CantripUITestFixtures.backendCommands { return fixture }
+        #endif
+        return try await performHistoryRead { try await $0.backendCommands(sessionID: sessionID) }
+    }
+
+    /// The selected session's cache identity for "/" suggestions, when its Mac lists backend commands.
+    var slashCommandContext: BackendSlashCommandStore.Context? {
+        guard let session = selectedSession, session.id == selectedSessionID,
+              session.offersBackendCommands else { return nil }
+        return BackendSlashCommandStore.Context(
+            key: "\(usageIdentity.uuidString)/\(session.id)", sessionID: session.id,
+            workdir: session.workdir, modelSettingsRevision: session.modelSettingsRevision
+        )
+    }
+
+    /// Fetches the selected session's commands when the cache is missing, old or for another backend.
+    func refreshSlashCommandsIfNeeded() {
+        guard let context = slashCommandContext else { return }
+        slashCommands.refreshIfNeeded(context) { [weak self] sessionID in
+            guard let self else { throw CancellationError() }
+            return try await self.fetchBackendCommands(sessionID: sessionID)
+        }
     }
 
     func privateLocalModels(id: String, baseURL: String) async throws -> [String] {

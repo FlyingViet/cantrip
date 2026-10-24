@@ -157,7 +157,8 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
         .tabViewStyle(.tabBarOnly)
         .tabBarMinimizeBehavior(.never)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !displayTraits.hasVerticalBar {
+            // The sidebar layout lists Home's sections in its sidebar instead.
+            if !displayTraits.hasVerticalBar, !displayTraits.usesSidebarLayout {
                 CantripHomeCompactTabBar(
                     selection: $selection,
                     runningTasks: runningTasks
@@ -170,14 +171,14 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
     }
 
     private var systemTabBarVisibility: Visibility {
-        displayTraits.hasVerticalBar ? .visible : .hidden
+        displayTraits.placesActionsInVerticalBar ? .visible : .hidden
     }
 
     private func tabContent<Content: View>(_ content: Content) -> some View {
         content
             .safeAreaPadding(
                 .bottom,
-                displayTraits.hasVerticalBar
+                displayTraits.hasVerticalBar || displayTraits.usesSidebarLayout
                     ? 0
                     : CantripHomeLayout.compactContentBottomClearance
             )
