@@ -16,6 +16,9 @@ final class MacHomeNavigation: ObservableObject {
     @Published var renamingTab: CantripRemoteSession?
     /// A `cantrip pair` link opened on this Mac, waiting for the user to confirm.
     @Published var pairing: CantripPairingPrompt?
+    /// Direct local mode (a model served on this Mac, not through Cantrip) fills the detail pane.
+    @Published var showingDirectLocal = false
+    @Published var showingDirectLocalSettings = false
     private weak var env: HermesEnv?
     private weak var remote: CantripRemoteModel?
 
@@ -32,6 +35,7 @@ final class MacHomeNavigation: ObservableObject {
     func openTab(_ id: String) {
         guard let env, let remote else { return }
         closeAll()
+        showingDirectLocal = false
         if isTabOpen {
             Task { await remote.selectSession(id) }
         } else {
@@ -43,6 +47,7 @@ final class MacHomeNavigation: ObservableObject {
 
     /// Leaves an open tab for Home, optionally on one section.
     func showHome(_ section: CantripHomeSection? = nil) {
+        showingDirectLocal = false
         if let section { self.section = section }
         if let env, env.executionLane != .home { env.select(.home) }
     }
@@ -61,6 +66,12 @@ final class MacHomeNavigation: ObservableObject {
         Task {
             if await remote.closeSession(id), wasOpen, isTabOpen { showHome() }
         }
+    }
+
+    /// Direct local mode: chats with a model on this Mac without the paired host.
+    func showDirectLocal() {
+        closeAll()
+        showingDirectLocal = true
     }
 
     /// Background runs load from Home, so the list opens there.

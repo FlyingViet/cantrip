@@ -15,7 +15,9 @@ Cantrip Home as a native macOS app: the same Home as the Cantrip Agent iPhone ap
 Requires macOS 26 or later. Cantrip Gateway Mac is a client: it needs Cantrip running on a
 Mac you own, the same Mac or another one, with **Remote control** enabled in Cantrip's
 Settings. Each person pairs with their own Cantrip; a pairing token gives full control of
-that Mac's agents, so never share yours.
+that Mac's agents, so never share yours. The one exception is
+[Local Model](#local-model-on-this-mac-direct-not-synced), which talks to a model server on
+this Mac directly.
 
 On a Windows PC, use [Cantrip Gateway for Windows](windows/) (Home chat, project tabs,
 Tasks and Artifacts over the same encrypted connection).
@@ -122,13 +124,58 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
 - **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS),
   delivery mode, Refresh (⌘R) and More (model settings, Copilot usage, voice mode,
   pause, memory (formatted Markdown or its source), builds, mascot, Cantrip maintenance).
-- **Keyboard:** ⌘1–⌘3 switch sections, ⌘T opens a new tab and ⌘N focuses a new message.
-  ⇧⌘V opens voice mode and ⇧⌘P pauses the agent.
+- **Keyboard:** ⌘1–⌘3 switch sections, ⌘4 opens Local Model, ⌘T opens a new tab and ⌘N
+  focuses a new message. ⇧⌘V opens voice mode and ⇧⌘P pauses the agent.
 
 When a tab Home handed work to finishes, fails, stops or needs an answer, a result card in
 the chat shows its outcome; **Open tab** opens that tab right in the window. Not on the Mac:
 the iPhone's Builds tab (its OTA install links only work on iPhone), push alerts, widgets and
 Live Activities. Tab ages and outcomes need Cantrip host e8e5c0b or later.
+
+## Local model on this Mac (direct, not synced)
+
+**On This Mac › Local Model** in the sidebar (⌘4) chats with a model served on the Mac
+running Cantrip Gateway Mac, straight from the app. It works without a paired Cantrip, for
+example on a laptop with [Ollama](https://ollama.com) or
+[mlx-serve](https://github.com/ddalcu/mlx-serve) and no Cantrip host.
+
+1. Start an Ollama-compatible server on this Mac (Ollama listens on `http://127.0.0.1:11434`).
+2. Open **Local Model**, then **Set Up…** (or the sliders button in the toolbar).
+3. Enter the server address, for example `http://127.0.0.1:11434`, or `http://127.0.0.1:11234`
+   for `mlx-serve --serve --host 127.0.0.1`. Click **Load Models**, pick one, and **Save**.
+4. Type in the composer. Return sends, Option-Return adds a line, and the stop button ends a
+   reply early.
+
+The trade-off: this conversation exists only on this Mac. It doesn't go through Cantrip, it
+isn't stored on the Cantrip host, and it doesn't sync to Cantrip Agent, the browser Remote or
+your other Macs. The app saves it in `~/Library/Application Support/<bundle ID>/DirectLocal/`
+(readable only by you) and the settings in its preferences. **Clear Conversation…** in the
+toolbar's **⋯** menu deletes it.
+
+It follows the same rules as Cantrip's Private Local tab:
+
+- Plain HTTP only to `127.0.0.1`, `localhost` or `[::1]`; any other server needs HTTPS. No
+  password, API key, cookie or other credential is ever sent, and redirects and proxies aren't
+  followed.
+- Only models the server reports as installed: names containing `cloud` and models with
+  `remote_model` or `remote_host` are left out. Before each message the app asks `/api/show`
+  and requires `general.architecture`, so a cloud alias never gets your text.
+- No tools and no cloud fallback. If the server fails, the error appears in the chat (for
+  example mlx-serve's "Not enough free memory to load model" when the Mac is short of memory).
+- Context: 512 to 131072 tokens (default 8192). System prompt: up to 8000 characters. Older
+  messages are dropped from what's sent once the conversation outgrows the context window.
+
+The **Private Local** tab on your paired Cantrip is separate and unchanged: it runs on the
+host Mac and syncs like any other tab.
+
+To check the connection from Terminal without opening a window (nothing is saved):
+
+```sh
+"/Applications/Cantrip Gateway Mac.app/Contents/MacOS/Cantrip Gateway Mac" \
+  --direct-local-check --url http://127.0.0.1:11434 [--model NAME] [--prompt "Say hi"]
+```
+
+It lists the server's local models, confirms the model, and with `--prompt` streams one reply.
 
 ## Updating the shared code
 
