@@ -113,6 +113,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, Copilot usage, View Mac |
+| `GET /api/v1/voice/vocabulary` | Dictation names: project, tab, note, task and tracker terms plus the busiest people (handles, optional names); older hosts reply `404` and the app falls back to tab and task titles |
 
 Responses of 4 KB or more come gzip-compressed when the request sends
 `Accept-Encoding: gzip`: URLSession does this on the Tailscale route, and `CantripLANRequest`
@@ -176,12 +177,15 @@ In **Settings → Backends**, choose which execution backends appear in the pick
 and tap **Edit** to drag them into your preferred order. Cantrip Home always stays
 visible because it holds your tabs. A saved Cantrip Remote lane selection opens Home.
 
-**Tap the mic** for single-turn dictation, or **touch and hold it** for half a
-second to open full-screen **continuous voice mode**. Once open, release the
-mic and talk hands-free through the existing *listen → think → speak* loop.
-Close voice mode to end the loop. This works in Cantrip Home and its tabs, Copilot, and
-Private Local; **hamburger menu > Voice mode** remains available, and VoiceOver
-offers a **Continuous voice mode** action on the mic.
+The composer mic is **push-to-talk dictation**: recording starts on touch-down,
+and releasing a hold finishes at once (no end-of-speech wait). A quick **tap**
+starts hands-off dictation; tap again to finish. The text lands in the composer
+for editing instead of being sent, and the mic stays beside Send so you can keep
+dictating. **Double-tap** the mic to open full-screen **continuous voice mode**
+and talk hands-free through the *listen → think → speak* loop. Close voice mode
+to end the loop. This works in Cantrip Home and its tabs, Copilot, and Private
+Local; **hamburger menu > Voice mode** remains available, and VoiceOver offers a
+**Continuous voice mode** action on the mic.
 
 With Reduce Motion enabled the drawer's spinners stay still; VoiceOver announces each tab's
 state, latest line and age. The **Auto** delivery dropdown is in the tab's **⋯** menu;
@@ -1252,6 +1256,39 @@ Choose **Apple Speech** in Settings for the no-download fallback. The fallback
 sets `requiresOnDeviceRecognition`, so microphone audio is never intentionally
 sent to Apple's servers. Parakeet and Qwen release their loaded models before
 the other engine starts, limiting peak memory on iPhone.
+
+### Dictation final pass
+
+EOU 120M only shows live partials. While you talk, `DictationSession` cuts the
+audio at pauses and transcribes each finished phrase with **Parakeet TDT 0.6B
+v2** (punctuated, cased English), so only the last phrase remains when you
+release. Each phrase then goes through:
+
+1. **CTC vocabulary boosting** (`VocabularyBoostingSession`, CTC 110M) with up to
+   200 names, judged one replacement at a time so a term never replaces
+   ordinary words that do not sound like it.
+2. **Deterministic cleanup** (`DictationText.finalize`): fillers and stutters,
+   self-corrections of times, numbers, weekdays and months ("at 2, actually 3"),
+   FluidAudio inverse text normalization behind a guard ("another one" and list
+   ordinals stay words), clock times and money formats, name casing, and spoken
+   "first, second, third" lists.
+3. **Apple Intelligence edits** (when available, four words or more): the
+   on-device model returns find-and-replace edits with the tab title, the last
+   messages and only the names that sound like the dictation. Guardrails reject
+   edits that add words, repeat or drop content, swap in an unrelated name, or
+   change more than a third of the text. The composer swaps in the result only
+   if you have not edited it, with **Undo**; voice mode waits up to 1.2 s.
+
+Names come from your Mac (`/api/v1/voice/vocabulary`), the iPhone's Contacts
+(asked once after your first dictation; ranked by how often the Mac saw you
+talk to each person), and fixes you make before sending: a corrected name is
+boosted next time and an unusual misspelling fixed twice is replaced
+automatically. Everything stays on your devices. The models (about 560 MB)
+download once on Wi-Fi or from **Settings → Dictation**, load from disk in about
+half a second, and are released while the neural voice speaks. **Settings →
+Dictation** shows the words, the last dictation's stage timings and its live,
+model and final text, and a **Test dictation speed** run that synthesizes sample
+sentences on the device.
 
 > Get the key back any time: `grep '^API_SERVER_KEY=' ~/.hermes/.env | cut -d= -f2-` (or copy it to your clipboard with `… | pbcopy` on macOS and paste via Universal Clipboard).
 

@@ -23,6 +23,7 @@ struct SettingsView: View {
                 CantripRemoteSettingsSection(model: remote)
                 CantripNotificationSettingsSection(remote: remote)
                 speechRecognitionSection
+                DictationSettingsSection(remote: remote)
 
                 Section {
                     NavigationLink {

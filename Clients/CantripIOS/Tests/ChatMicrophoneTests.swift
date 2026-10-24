@@ -5,51 +5,68 @@ import XCTest
 
 @MainActor
 final class ChatMicrophoneTests: XCTestCase {
-    func testTapAndHoldDispatchExclusiveActionsWhileIdleOrListening() {
-        for listening in [false, true] {
-            var taps = 0
-            var holds = 0
+    func testHoldIsPushToTalkAndQuickTapLatches() {
+        let start = Date(timeIntervalSince1970: 0)
+        var gesture = MicrophoneGesture()
+        XCTAssertEqual(gesture.touchDown(at: start, isActive: false), .start)
+        XCTAssertEqual(gesture.touchUp(at: start + 0.6), .finish, "Releasing a hold finishes at once")
+        XCTAssertFalse(gesture.latched)
+
+        XCTAssertEqual(gesture.touchDown(at: start + 5, isActive: false), .start)
+        XCTAssertEqual(gesture.touchUp(at: start + 5.1), .none, "A quick tap keeps dictating hands-off")
+        XCTAssertTrue(gesture.latched)
+        XCTAssertEqual(gesture.touchDown(at: start + 8, isActive: true), .none)
+        XCTAssertEqual(gesture.touchUp(at: start + 8.1), .finish, "The next tap finishes")
+        XCTAssertFalse(gesture.latched)
+    }
+
+    func testDoubleTapOpensVoiceModeWithoutFinishing() {
+        let start = Date(timeIntervalSince1970: 0)
+        var gesture = MicrophoneGesture()
+        XCTAssertEqual(gesture.touchDown(at: start, isActive: false), .start)
+        XCTAssertEqual(gesture.touchUp(at: start + 0.08), .none)
+        XCTAssertEqual(gesture.touchDown(at: start + 0.25, isActive: false), .continuousVoice)
+        XCTAssertEqual(gesture.touchUp(at: start + 0.32), .none, "The second tap must not finish or restart dictation")
+        XCTAssertFalse(gesture.latched)
+    }
+
+    func testLatchIsClearedWhenListeningEndsElsewhere() {
+        let start = Date(timeIntervalSince1970: 0)
+        var gesture = MicrophoneGesture()
+        _ = gesture.touchDown(at: start, isActive: false)
+        _ = gesture.touchUp(at: start + 0.1)
+        gesture.reset()
+        XCTAssertEqual(gesture.touchDown(at: start + 0.2, isActive: false), .start,
+                       "After a timeout, a tap starts a new dictation instead of opening voice mode")
+    }
+
+    func testButtonDispatchesGestureActionsOnlyWhenEnabled() {
+        for enabled in [true, false] {
+            var starts = 0, finishes = 0, voice = 0
             let button = ChatMicrophoneButton(
-                isListening: listening, isEnabled: true,
-                onTap: { taps += 1 }, onContinuousVoice: { holds += 1 }
+                isListening: false, isEnabled: enabled,
+                onStart: { starts += 1 }, onFinish: { finishes += 1 }, onContinuousVoice: { voice += 1 }
             )
-            button.handleGesture(.first(true))
-            XCTAssertEqual(holds, 1)
-            XCTAssertEqual(taps, 0, "Entering voice mode must not toggle/finalize dictation")
-            button.handleGesture(.second(()))
-            XCTAssertEqual(taps, 1)
-            XCTAssertEqual(holds, 1)
-            button.handleGesture(.first(false))
-            XCTAssertEqual(taps, 1)
-            XCTAssertEqual(holds, 1, "An unsuccessful hold must not open voice mode")
+            button.perform(.start)
+            button.perform(.finish)
+            button.perform(.continuousVoice)
+            button.perform(.none)
+            XCTAssertEqual([starts, finishes, voice], enabled ? [1, 1, 1] : [0, 0, 0])
         }
     }
 
-    func testDisabledMicrophoneBlocksGesturesAndAccessibilityActions() {
-        let button = ChatMicrophoneButton(
-            isListening: false, isEnabled: false,
-            onTap: { XCTFail("Disabled dictation") },
-            onContinuousVoice: { XCTFail("Disabled continuous voice") }
-        )
-        button.handleGesture(.first(true))
-        button.handleGesture(.second(()))
-        button.tap()
-        button.continuousVoice()
-    }
-
-    func testAccessibilityAndKeyboardActionsMatchTouchActions() {
-        var taps = 0
-        var holds = 0
-        let button = ChatMicrophoneButton(
-            isListening: false, isEnabled: true,
-            onTap: { taps += 1 }, onContinuousVoice: { holds += 1 }
-        )
-        button.tap()
-        XCTAssertEqual(taps, 1)
-        XCTAssertEqual(holds, 0)
-        button.continuousVoice()
-        XCTAssertEqual(taps, 1)
-        XCTAssertEqual(holds, 1)
+    func testAccessibilityActivationTogglesDictation() {
+        for listening in [false, true] {
+            var starts = 0, finishes = 0, voice = 0
+            let button = ChatMicrophoneButton(
+                isListening: listening, isEnabled: true,
+                onStart: { starts += 1 }, onFinish: { finishes += 1 }, onContinuousVoice: { voice += 1 }
+            )
+            button.tap()
+            XCTAssertEqual([starts, finishes], listening ? [0, 1] : [1, 0])
+            button.continuousVoice()
+            XCTAssertEqual(voice, 1)
+        }
     }
 
     func testMicrophoneRetainsCompactTapTargetAtAllTextSizes() {
@@ -57,7 +74,7 @@ final class ChatMicrophoneTests: XCTestCase {
             for listening in [false, true] {
                 let button = ChatMicrophoneButton(
                     isListening: listening, isEnabled: true,
-                    onTap: {}, onContinuousVoice: {}
+                    onStart: {}, onFinish: {}, onContinuousVoice: {}
                 )
                 .environment(\.dynamicTypeSize, size)
                 let controller = UIHostingController(rootView: button)
