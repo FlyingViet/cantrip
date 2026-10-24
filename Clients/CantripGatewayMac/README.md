@@ -116,7 +116,7 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   attach them. Questions from Cantrip appear above the composer.
 - **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS),
   delivery mode, Refresh (⌘R) and More (model settings, Copilot usage, voice mode,
-  pause, memory, builds, mascot, Cantrip maintenance).
+  pause, memory (formatted Markdown or its source), builds, mascot, Cantrip maintenance).
 - **Keyboard:** ⌘1–⌘3 switch sections, ⌘T opens a new tab and ⌘N focuses a new message.
   ⇧⌘V opens voice mode and ⇧⌘P pauses the agent.
 

@@ -20,8 +20,8 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 - **Tasks and Artifacts.** Scheduled tasks with runs, workspaces and their records;
   artifacts with thumbnails, the image viewer, Save and Delete.
 - **Sheets.** Background runs (answer a waiting run in place), a tab's background tasks and
-  queue, Model Settings (and Private Local), Rename, Copilot Usage, Cantrip Memory, GitHub
-  Builds, Update & Rebuild Cantrip, and Mac Permissions & View Mac.
+  queue, Model Settings (and Private Local), Rename, Copilot Usage, Cantrip Memory (formatted
+  Markdown or its source), GitHub Builds, Update & Rebuild Cantrip, and Mac Permissions & View Mac.
 - **Voice.** Dictation from the composer's microphone and Voice Mode (hold the microphone),
   with speech recognition running on this PC after a one-time model download, and replies
   read aloud with a Windows voice.

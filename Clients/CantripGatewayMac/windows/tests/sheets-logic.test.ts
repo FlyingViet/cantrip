@@ -4,7 +4,7 @@ import type {
   MaintenanceSnapshot, MemoryCatalog, MemoryPage, ModelSettingsSnapshot,
 } from "../src/gateway/api/types";
 import {
-  EMPTY_READER, INVALID_RESPONSE, NotSentError, QueueReadiness, amountRatio, assignmentText, bucketSummary, bucketTitle,
+  EMPTY_READER, INVALID_RESPONSE, alignMemoryPage, codeFenceAfter, renderableMemory, NotSentError, QueueReadiness, amountRatio, assignmentText, bucketSummary, bucketTitle,
   buildEntries, buildQueue, buildsPollDelay, canStartMaintenance, capitalized, clearsPendingMaintenance, contextLabel,
   copilotAmount, decodeBase64, decryptDesktopFrame, desktopCommandJSON, encodeBase64, encryptDesktopCommand, endpointHost,
   frameAdditionalData, githubURL, graphemeCount, importDesktopKey, initialTabName, inputAdditionalData, isMaintenanceRequest,
@@ -228,19 +228,68 @@ describe("memory", () => {
     let reload = readerRequest(EMPTY_READER, "reload")!;
     let state = readerApply(EMPTY_READER, "reload", reload, page(0, 16384));
     const next = readerRequest(state, "next")!;
-    expect(next).toEqual({ offset: 16384, index: 1, revision: "r1" });
+    expect(next).toEqual({ offset: 16384, index: 1, revision: "r1", fence: null });
     state = readerApply(state, "next", next, page(16384, 32768));
     state = readerApply(state, "next", readerRequest(state, "next")!, page(32768));
     expect(state.offsets).toEqual([0, 16384, 32768]);
     expect(state.pageIndex).toBe(2);
     expect(readerRequest(state, "next")).toBeNull();
     const back = readerRequest(state, "previous")!;
-    expect(back).toEqual({ offset: 16384, index: 1, revision: "r1" });
+    expect(back).toEqual({ offset: 16384, index: 1, revision: "r1", fence: null });
     state = readerApply(state, "previous", back, page(16384, 32768));
     expect(state.offsets).toEqual([0, 16384, 32768]);
     reload = readerRequest(state, "reload")!;
     state = readerApply(state, "reload", reload, page(0, 16384, "r9"));
     expect(state).toMatchObject({ pageIndex: 0, offsets: [0] });
+  });
+
+  it("ends pages at their last line break so each renders as Markdown", () => {
+    const page = (text: string, offset: number, nextOffset?: number): MemoryPage => ({
+      document: entry("notes/a.md"), text, offset, nextOffset, revision: "r1",
+    });
+    const split = alignMemoryPage(page("# Notes\n- first item\n- second it", 100, 133));
+    expect(split.text).toBe("# Notes\n- first item\n");
+    expect(split.nextOffset).toBe(100 + new TextEncoder().encode("# Notes\n- first item\n").length);
+    const accented = alignMemoryPage(page("Café ☕️ notes\nhalf a li", 0, 40));
+    expect(accented.nextOffset).toBe(new TextEncoder().encode("Café ☕️ notes\n").length);
+    expect(alignMemoryPage(page("one\r\ntwo\r\nthr", 0, 13)).text).toBe("one\r\ntwo\r\n");
+    for (const same of [page("whole lines\n", 0, 12), page("last page", 0), page("x".repeat(64), 0, 64)]) {
+      expect(alignMemoryPage(same)).toEqual(same);
+    }
+  });
+
+  it("carries a code block that spans pages", () => {
+    const opened = codeFenceAfter("Intro\n```swift\nlet a = 1\n", null);
+    expect(opened).toEqual({ marker: "`", count: 3 });
+    expect(renderableMemory("let b = 2\n```\nAfter", opened)).toBe("```\nlet b = 2\n```\nAfter");
+    expect(codeFenceAfter("let b = 2\n```\nAfter\n", opened)).toBeNull();
+    expect(codeFenceAfter("~~~~\n```\nstill code\n~~~\n", null)).toEqual({ marker: "~", count: 4 });
+    expect(codeFenceAfter("  ~~~~~  \r\n", { marker: "~", count: 4 })).toBeNull();
+    expect(codeFenceAfter("Inline ``code`` and `x`\n", null)).toBeNull();
+    expect(codeFenceAfter("```\n``` not a close\n", null)).toEqual({ marker: "`", count: 3 });
+    expect(renderableMemory("plain", null)).toBe("plain");
+  });
+
+  it("pages at line breaks and remembers each page's open code block", () => {
+    const first = "# Runbook\n```sh\nmake test\nmake ap";
+    const cut = new TextEncoder().encode("# Runbook\n```sh\nmake test\n").length;
+    const page = (text: string, offset: number, nextOffset?: number): MemoryPage => ({
+      document: { ...entry("notes/a.md"), bytes: 4096 }, text, offset, nextOffset, revision: "r1",
+    });
+    let state = readerApply(EMPTY_READER, "reload", readerRequest(EMPTY_READER, "reload")!, page(first, 0, first.length));
+    expect(state.page?.text).toBe("# Runbook\n```sh\nmake test\n");
+    expect(state.pageFence).toBeNull();
+    const next = readerRequest(state, "next")!;
+    expect(next).toEqual({ offset: cut, index: 1, revision: "r1", fence: { marker: "`", count: 3 } });
+    state = readerApply(state, "next", next, page("make app\n```\nDone.\n", cut));
+    expect(state.pageFence).toEqual({ marker: "`", count: 3 });
+    const back = readerRequest(state, "previous")!;
+    expect(back.fence).toBeNull();
+    state = readerApply(state, "previous", back, page(first, 0, first.length));
+    expect(state.pageFence).toBeNull();
+    expect(readerRequest(state, "next")!.fence).toEqual({ marker: "`", count: 3 });
+    state = readerApply(state, "reload", readerRequest(state, "reload")!, page("Fresh\n", 0));
+    expect(state).toMatchObject({ pageIndex: 0, offsets: [0], fences: [null], pageFence: null });
   });
 
   it("counts MEMORY.md characters only when the whole file is shown", () => {

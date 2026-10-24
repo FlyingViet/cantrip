@@ -14,7 +14,16 @@ export interface InlineImages {
   images: Map<string, PreviewImage>;
   render(image: PreviewImage, alt: string): JSX.Element;
   link(image: PreviewImage, children: ComponentChildren): JSX.Element;
+  /** False shows a placeholder instead of fetching web images (Cantrip Memory loads nothing). */
+  remoteImages?: boolean;
 }
+
+/** No preview images and no web images: text only. */
+const TEXT_ONLY_IMAGES: InlineImages = {
+  sessionID: "", images: new Map(), remoteImages: false,
+  render: (_image, alt) => <span class="image-unavailable">{alt}</span>,
+  link: (_image, children) => <span>{children}</span>,
+};
 
 export function safeURL(raw: string, image = false): string | null {
   try {
@@ -72,9 +81,11 @@ export function inline(source: string, images: InlineImages | null, key = "i"): 
     if (image) {
       flush();
       const preview = images && image[2].startsWith(PREVIEW) ? images.images.get(image[2].slice(PREVIEW.length)) : undefined;
-      const url = /^https?:\/\//i.test(image[2]) ? safeURL(image[2], true) : null;
+      const remote = /^https?:\/\//i.test(image[2]);
+      const url = remote && images?.remoteImages !== false ? safeURL(image[2], true) : null;
       if (preview && images) out.push(<span key={id()} class="md-image-block">{images.render(preview, image[1] || preview.altText || "Generated image")}</span>);
       else if (url) out.push(<img key={id()} class="md-remote-image" alt={image[1]} src={url} loading="lazy" />);
+      else if (remote) out.push(<span key={id()} class="image-unavailable">{image[1] ? `Image not loaded: ${image[1]}` : "Image not loaded"}</span>);
       // Mac file paths are not served; show the description instead of a broken image.
       else out.push(<span key={id()} class="image-unavailable">{image[1] ? `Image on the Mac: ${image[1]}` : "Image on the Mac"}</span>);
       cursor += image[0].length;
@@ -163,8 +174,11 @@ function CodeBlock(props: { code: string; language: string }): JSX.Element {
   );
 }
 
-export function Markdown(props: { text: string; images?: InlineImages | null; class?: string }): JSX.Element {
-  return <div class={`prose selectable${props.class ? ` ${props.class}` : ""}`}>{blocks(props.text, props.images ?? null, "m")}</div>;
+export function Markdown(props: { text: string; images?: InlineImages | null; class?: string; remoteImages?: boolean }): JSX.Element {
+  const images = props.remoteImages === false
+    ? { ...(props.images ?? TEXT_ONLY_IMAGES), remoteImages: false }
+    : props.images ?? null;
+  return <div class={`prose selectable${props.class ? ` ${props.class}` : ""}`}>{blocks(props.text, images, "m")}</div>;
 }
 
 function blocks(source: string, images: InlineImages | null, key: string): ComponentChildren[] {
