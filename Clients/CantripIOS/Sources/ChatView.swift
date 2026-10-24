@@ -95,6 +95,7 @@ final class ChatViewModel: ObservableObject {
             runStatusText = "Reconnecting to the run on your Mac…"
         }
         voice.onFinalTranscript = { [weak self] text in self?.send(text, spoken: true) }
+        voice.polishContext = { [weak self] in self?.dictationContext() ?? DictationPolishContext() }
         Task { [weak self] in
             guard let self else { return }
             if self.activeLane.usesCantripRemote {
@@ -104,6 +105,19 @@ final class ChatViewModel: ObservableObject {
                 self.resumeActiveRun()
             }
         }
+    }
+
+    /// The tab and its last messages, so dictation cleanup can judge context.
+    func dictationContext() -> DictationPolishContext {
+        let title: String? = switch activeLane {
+        case .home: "Cantrip Home"
+        case .cantrip: remote.selectedSession?.title
+        default: activeLane.title
+        }
+        let recent = turns.suffix(4).map(\.text)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return DictationPolishContext(title: title, recentMessages: Array(recent.suffix(2)))
     }
 
     func send(_ raw: String, spoken: Bool = false) {
@@ -1126,6 +1140,8 @@ struct ChatView: View {
     @State private var chatHeaderHeight: CGFloat = 0
     @State private var showSettings = false
     @State private var showVoiceMode = false
+    @State private var dictationInsertion: DictationInsertion?
+    @State private var handledDictationID: UUID?
     @State private var showSkills = false
     @State private var showQueue = false
     @State private var showBackgroundTasks = false
@@ -1392,6 +1408,12 @@ struct ChatView: View {
         }
         .onChange(of: showVoiceMode) { _, showing in
             if showing { composerFocused = false }
+        }
+        .onChange(of: voice.dictation) { _, outcome in
+            insertDictation(outcome)
+        }
+        .onChange(of: input) { _, text in
+            if text.isEmpty { dictationInsertion = nil }
         }
         .onChange(of: showSettings) { _, showing in
             if showing {
@@ -2178,7 +2200,7 @@ struct ChatView: View {
                 }
             } else if env.isConfigured {
                 Text("Talk to Hermes").font(.title3.weight(.semibold))
-                Text("Type, or tap the mic to dictate. Touch and hold the mic for continuous, hands-free voice.")
+                Text("Type, or hold the mic to dictate and release to finish. Tap it to dictate hands-off; double-tap for continuous, hands-free voice.")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
             } else {
                 Text("Connect your gateway").font(.title3.weight(.semibold))
@@ -2404,7 +2426,75 @@ struct ChatView: View {
         }
     }
 
+    /// The mic stays beside Send once the composer has text, so you can keep dictating.
+    private var showsMicrophoneBesideSend: Bool {
+        !(input.isEmpty && !hasImageDraft) && !vm.sending && !submittingRemote && !importingImages
+            && voice.authorized && !hasImageDraft
+    }
+
+    private var microphoneButton: some View {
+        ChatMicrophoneButton(
+            isListening: voice.isListening && voice.listeningMode == .dictation,
+            isEnabled: voice.authorized && destinationReady && composerAcceptsText && !voice.isFinishing,
+            onStart: startDictation,
+            onFinish: { voice.stopListening(finalize: true) },
+            onContinuousVoice: {
+                voice.stopListening(finalize: false)
+                showVoiceMode = true
+            }
+        )
+    }
+
+    private func startDictation() {
+        DictationVocabularyStore.shared.refreshIfNeeded(remote: remote)
+        voice.startDictation()
+    }
+
+    /// Puts a finished dictation in the composer; swaps in the cleanup only if
+    /// you have not edited the text since.
+    private func insertDictation(_ outcome: DictationOutcome?) {
+        guard let outcome else { return }
+        if handledDictationID != outcome.id {
+            handledDictationID = outcome.id
+            let separator = input.isEmpty || input.hasSuffix(" ") || input.hasSuffix("\n") ? "" : " "
+            let prefix = input + separator
+            input = prefix + outcome.text
+            dictationInsertion = DictationInsertion(id: outcome.id, prefix: prefix, inserted: outcome.text)
+            #if os(iOS)
+            DictationVocabularyStore.shared.askForContactsOnce(remote: remote)
+            #endif
+        } else if let polished = outcome.polished, var insertion = dictationInsertion,
+                  insertion.id == outcome.id, insertion.beforeCleanup == nil, !insertion.undone,
+                  input == insertion.prefix + insertion.inserted {
+            insertion.beforeCleanup = insertion.inserted
+            insertion.inserted = polished
+            input = insertion.prefix + polished
+            dictationInsertion = insertion
+        }
+    }
+
+    private var cleanupUndoAvailable: Bool {
+        guard let insertion = dictationInsertion, insertion.beforeCleanup != nil else { return false }
+        return input == insertion.prefix + insertion.inserted
+    }
+
+    private func undoCleanup() {
+        guard var insertion = dictationInsertion, let original = insertion.beforeCleanup else { return }
+        insertion.inserted = original
+        insertion.beforeCleanup = nil
+        insertion.undone = true
+        input = insertion.prefix + original
+        dictationInsertion = insertion
+    }
+
     private var composerAction: some View {
+        HStack(spacing: 0) {
+            if showsMicrophoneBesideSend { microphoneButton }
+            composerPrimaryAction
+        }
+    }
+
+    private var composerPrimaryAction: some View {
         Group {
             if vm.sending, !vm.activeLane.usesCantripRemote {
                 Button { vm.stop() } label: {
@@ -2415,14 +2505,7 @@ struct ChatView: View {
             } else if vm.sending || submittingRemote || importingImages {
                 ProgressView().controlSize(.small)
             } else if input.isEmpty && !hasImageDraft {
-                ChatMicrophoneButton(
-                    isListening: voice.isListening,
-                    isEnabled: voice.authorized && destinationReady && composerAcceptsText,
-                    onTap: {
-                        if voice.isSpeaking { vm.interruptAndListen() } else { voice.toggleListening() }
-                    },
-                    onContinuousVoice: { showVoiceMode = true }
-                )
+                microphoneButton
             } else {
                 Button(action: sendText) {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 24))
@@ -2486,7 +2569,9 @@ struct ChatView: View {
         } else if voice.isListening {
             HStack(spacing: 10) {
                 WaveformView(active: true, color: .red)
-                Text(voice.partial.isEmpty ? "Listening…" : voice.partial)
+                Text(voice.partial.isEmpty
+                     ? (voice.listeningMode == .dictation ? "Dictating… release or tap the mic to finish" : "Listening…")
+                     : voice.partial)
                     .font(.callout).foregroundStyle(.secondary).lineLimit(2)
                 Spacer(minLength: 0)
             }
@@ -2494,6 +2579,18 @@ struct ChatView: View {
             Label(error, systemImage: "exclamationmark.triangle")
                 .font(.caption)
                 .foregroundStyle(.red)
+        } else if cleanupUndoAvailable {
+            HStack(spacing: 8) {
+                Label("Cleaned up", systemImage: "wand.and.sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Undo", action: undoCleanup)
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .accessibilityLabel("Undo dictation cleanup")
+                Spacer(minLength: 0)
+            }
         } else if voice.isSpeaking {
             HStack(spacing: 10) {
                 WaveformView(active: true, color: .accentColor)
@@ -2523,6 +2620,10 @@ struct ChatView: View {
               destinationReady, composerAcceptsText, !remote.isMutating,
               !text.isEmpty || hasImageDraft else { return }
         composerFocused = false
+        if let insertion = dictationInsertion {
+            DictationVocabularyStore.shared.learn(dictated: insertion.inserted, sent: text)
+            dictationInsertion = nil
+        }
         if vm.activeLane.usesCantripRemote, let sessionID = remote.selectedSessionID {
             let draftKey = remoteDraftKey(sessionID)
             let images = imageDrafts[draftKey] ?? []
@@ -3380,4 +3481,14 @@ private struct ToolRow: View {
         .padding(10)
         .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
     }
+}
+
+/// Where the last dictation went in the composer, so cleanup can be swapped
+/// in (or undone) and your edits before sending can be learned.
+struct DictationInsertion: Equatable {
+    let id: UUID
+    let prefix: String
+    var inserted: String
+    var beforeCleanup: String?
+    var undone = false
 }

@@ -589,6 +589,8 @@ private actor QwenSynth {
     }
 
     func unload() {
+        // Touching MLX when nothing was loaded initializes Metal for no reason.
+        guard model != nil || loadedDir != nil else { return }
         model = nil
         loadedDir = nil
         MLX.GPU.clearCache()

@@ -2,6 +2,18 @@ import Foundation
 import Speech
 import AVFoundation
 import Combine
+import FluidAudio
+#if os(iOS)
+import UIKit
+#endif
+
+/// One finished composer dictation: the cleaned transcript at once, then the
+/// Apple Intelligence cleanup when it passes the guardrails.
+struct DictationOutcome: Equatable {
+    let id: UUID
+    var text: String
+    var polished: String?
+}
 
 /// Fully on-device voice loop. Parakeet EOU is the primary transcription engine;
 /// Apple Speech remains available as a fallback. Replies use Qwen or the selected
@@ -16,9 +28,17 @@ final class VoiceController: NSObject, ObservableObject {
     @Published private(set) var recognitionStatusText: String?
     @Published var handsFree = false
     @Published var partial = ""
+    /// Composer dictation is push-to-talk: no end-of-speech timeout, and the
+    /// text goes into the composer instead of being sent.
+    enum ListeningMode { case conversation, dictation }
+    @Published private(set) var listeningMode = ListeningMode.conversation
+    @Published private(set) var isFinishing = false
+    @Published private(set) var dictation: DictationOutcome?
 
     /// Called with the finalized utterance when a listening turn ends.
     var onFinalTranscript: ((String) -> Void)?
+    /// Tab title and recent messages for the cleanup model.
+    var polishContext: (() -> DictationPolishContext)?
 
     private lazy var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var microphoneAuthorized = false
@@ -51,6 +71,7 @@ final class VoiceController: NSObject, ObservableObject {
     private var parakeetContinuation: AsyncStream<AudioChunk>.Continuation?
     private var parakeetProcessingTask: Task<Void, Never>?
     private var parakeetStartTask: Task<Void, Never>?
+    private var dictationSession: DictationSession?
     /// How long a pause must last before the utterance is treated as finished
     /// (and sent). Read live from UserDefaults so the Settings slider applies
     /// immediately; default is generous so catching your breath / thinking
@@ -68,6 +89,7 @@ final class VoiceController: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        DictationNetwork.start()
         // The Qwen engine's "everything spoken" moment — same hands-free resume
         // as the AVSpeech delegate's queue-drained path below. This must be an
         // OBSERVATION of the singleton, not a callback handed to it: ChatView's
@@ -137,6 +159,16 @@ final class VoiceController: NSObject, ObservableObject {
             }
         }
         .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(
+            for: UIApplication.didReceiveMemoryWarningNotification
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _ in
+            guard self?.isListening != true else { return }
+            Task { await DictationRecognizer.shared.release() }
+        }
+        .store(in: &cancellables)
         #endif
     }
 
@@ -156,13 +188,20 @@ final class VoiceController: NSObject, ObservableObject {
 
     func toggleListening() { isListening ? stopListening(finalize: true) : startListening() }
 
-    func startListening() {
+    /// Push-to-talk composer dictation (hold, or tap to start and tap to finish).
+    func startDictation() {
+        if isSpeaking { stopSpeaking() }
+        startListening(mode: .dictation)
+    }
+
+    func startListening(mode: ListeningMode = .conversation) {
         refreshAuthorization()
         guard authorized, !isListening, !isSpeaking, !isPreparingRecognition else {
             return
         }
         recognitionError = nil
         recognitionStatusText = nil
+        listeningMode = handsFree ? .conversation : mode
         let generation = UUID()
         recognitionGeneration = generation
         switch selectedInputEngine {
@@ -212,7 +251,7 @@ final class VoiceController: NSObject, ObservableObject {
                         let text = result.bestTranscription.formattedString
                         if text != self.partial {
                             self.partial = text
-                            self.bumpSilenceTimer()
+                            if self.listeningMode == .conversation { self.bumpSilenceTimer() }
                         }
                     }
                     if error != nil || (result?.isFinal ?? false) {
@@ -240,10 +279,14 @@ final class VoiceController: NSObject, ObservableObject {
         }
         isPreparingRecognition = true
         recognitionStatusText = "Preparing Parakeet…"
+        let session = DictationSession()
+        dictationSession = session
+        DictationPolisher.prewarm()
         parakeetStartTask = Task { [weak self] in
             guard let self else { return }
             do {
                 await QwenVoiceEngine.shared.releaseMemory()
+                Self.prepareFinalPass()
                 let speechEngine = ParakeetSpeechEngine.shared
                 try await speechEngine.startSession(
                     silenceSeconds: silenceSeconds,
@@ -260,7 +303,8 @@ final class VoiceController: NSObject, ObservableObject {
                         Task { @MainActor in
                             guard let self,
                                   self.recognitionGeneration == generation,
-                                  self.isListening else {
+                                  self.isListening,
+                                  self.listeningMode == .conversation else {
                                 return
                             }
                             self.stopListening(finalize: true)
@@ -282,6 +326,7 @@ final class VoiceController: NSObject, ObservableObject {
                     do {
                         for await chunk in streamPair.stream {
                             try Task.checkCancellation()
+                            await session.append(chunk.buffer)
                             try await speechEngine.process(chunk.buffer)
                         }
                     } catch is CancellationError {
@@ -328,6 +373,8 @@ final class VoiceController: NSObject, ObservableObject {
                 recognitionStatusText = nil
             } catch {
                 await ParakeetSpeechEngine.shared.cancelSession()
+                await session.cancel()
+                dictationSession = nil
                 stopAudioInput()
                 isPreparingRecognition = false
                 recognitionStatusText = nil
@@ -344,6 +391,7 @@ final class VoiceController: NSObject, ObservableObject {
     }
 
     func stopListening(finalize: Bool) {
+        let releasedAt = ContinuousClock.now
         silenceTimer?.invalidate()
         silenceTimer = nil
         maximumListenTimer?.invalidate()
@@ -365,6 +413,9 @@ final class VoiceController: NSObject, ObservableObject {
         )
         let inputEngine = activeInputEngine
         activeInputEngine = nil
+        let mode = listeningMode
+        let session = dictationSession
+        dictationSession = nil
         if inputEngine == .parakeet {
             let processingTask = parakeetProcessingTask
             parakeetContinuation?.finish()
@@ -372,41 +423,133 @@ final class VoiceController: NSObject, ObservableObject {
             parakeetProcessingTask = nil
             if finalize {
                 isPreparingRecognition = true
+                isFinishing = true
+                recognitionStatusText = "Transcribing…"
                 Task {
                     _ = await processingTask?.result
-                    do {
-                        let final = try await ParakeetSpeechEngine.shared.finish()
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        partial = ""
-                        isPreparingRecognition = false
-                        recognitionStatusText = nil
-                        let transcript = final.isEmpty ? capturedPartial : final
-                        if !transcript.isEmpty {
-                            onFinalTranscript?(transcript)
-                        }
-                    } catch {
-                        partial = ""
-                        isPreparingRecognition = false
-                        recognitionStatusText = nil
-                        recognitionError = error.localizedDescription
-                        if !capturedPartial.isEmpty {
-                            onFinalTranscript?(capturedPartial)
-                        }
+                    let drained = ContinuousClock.now
+                    async let streamed = try? ParakeetSpeechEngine.shared.finish()
+                    let transcript = await session?.finish()
+                    let streamedText = (await streamed ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if streamedText.isEmpty, transcript == nil, !capturedPartial.isEmpty {
+                        recognitionError = nil
                     }
+                    deliver(
+                        streaming: streamedText.isEmpty ? capturedPartial : streamedText,
+                        transcript: transcript,
+                        mode: mode,
+                        releasedAt: releasedAt,
+                        drainedAt: drained
+                    )
                 }
             } else {
                 processingTask?.cancel()
                 partial = ""
                 Task {
+                    await session?.cancel()
                     await ParakeetSpeechEngine.shared.cancelSession()
                 }
             }
         } else {
             partial = ""
+            Task { await session?.cancel() }
             if finalize, !capturedPartial.isEmpty {
-                onFinalTranscript?(capturedPartial)
+                deliver(
+                    streaming: capturedPartial, transcript: nil, mode: mode,
+                    releasedAt: releasedAt, drainedAt: releasedAt, engine: "Apple Speech"
+                )
             }
         }
+    }
+
+    /// Final pass: the model transcript (or the streaming one as a fallback),
+    /// deterministic cleanup, then the guarded Apple Intelligence edit pass —
+    /// in the background for the composer, within a short budget hands-free.
+    private func deliver(
+        streaming: String,
+        transcript: DictationTranscript?,
+        mode: ListeningMode,
+        releasedAt: ContinuousClock.Instant,
+        drainedAt: ContinuousClock.Instant,
+        engine: String? = nil
+    ) {
+        let cleanupStart = ContinuousClock.now
+        let base = transcript?.text ?? streaming
+        let store = DictationVocabularyStore.shared
+        let text = DictationText.finalize(base, rules: store.rules) {
+            TextNormalizer.shared.normalizeSentence($0)
+        }
+        let done = ContinuousClock.now
+        partial = ""
+        isPreparingRecognition = false
+        isFinishing = false
+        recognitionStatusText = nil
+        guard !text.isEmpty else { return }
+        DictationDiagnostics.shared.record(DictationReport(
+            engine: engine ?? (transcript == nil ? "Parakeet EOU (fallback)" : "Parakeet TDT v2"),
+            audioSeconds: transcript?.audioSeconds ?? 0,
+            segments: transcript?.segments ?? 0,
+            releaseToTextMilliseconds: (done - releasedAt) / .milliseconds(1),
+            drainMilliseconds: (drainedAt - releasedAt) / .milliseconds(1),
+            tailASRMilliseconds: transcript?.tailASRMilliseconds ?? 0,
+            tailBoostMilliseconds: transcript?.tailBoostMilliseconds ?? 0,
+            cleanupMilliseconds: (done - cleanupStart) / .milliseconds(1),
+            streamingText: streaming,
+            modelText: transcript?.raw ?? "",
+            finalText: text
+        ))
+        var context = polishContext?() ?? DictationPolishContext()
+        context.terms = DictationVocabulary.relevant(store.terms, to: text)
+        let polishes = DictationPolisher.shouldPolish(text)
+        switch mode {
+        case .dictation:
+            let outcome = DictationOutcome(id: UUID(), text: text)
+            dictation = outcome
+            guard polishes else { return }
+            Task {
+                let result = await DictationPolisher.polish(text, context: context)
+                Self.recordPolish(result)
+                guard let result, result.verdict == .accepted, dictation?.id == outcome.id else { return }
+                dictation?.polished = result.text
+            }
+        case .conversation:
+            guard polishes else {
+                onFinalTranscript?(text)
+                return
+            }
+            isFinishing = true
+            Task {
+                let result = await DictationPolisher.polish(text, context: context, budget: .milliseconds(1200))
+                Self.recordPolish(result)
+                isFinishing = false
+                onFinalTranscript?(result?.verdict == .accepted ? result!.text : text)
+            }
+        }
+    }
+
+    private static func recordPolish(_ result: DictationPolishResult?) {
+        DictationDiagnostics.shared.update { report in
+            guard let result else {
+                report.polishOutcome = "No reply in time"
+                return
+            }
+            report.polishMilliseconds = result.milliseconds
+            switch result.verdict {
+            case .accepted:
+                report.polishOutcome = "Applied \(result.edits.count) edit(s)"
+                report.finalText = result.text
+            case .rejected(let reason):
+                report.polishOutcome = "Kept original: \(reason)"
+            }
+        }
+    }
+
+    /// Loads the final-pass model from disk, or downloads it once on an
+    /// unmetered network (Settings can download it explicitly).
+    private static func prepareFinalPass() {
+        guard DictationRecognizer.modelsDownloaded || DictationNetwork.isUnmetered else { return }
+        Task { try? await DictationRecognizer.shared.prepare() }
     }
 
     /// Reset the "user stopped talking" timer on every new partial; when it fires,
@@ -421,13 +564,13 @@ final class VoiceController: NSObject, ObservableObject {
     private func acceptPartial(_ text: String) {
         guard text != partial else { return }
         partial = text
-        bumpSilenceTimer()
+        if listeningMode == .conversation { bumpSilenceTimer() }
     }
 
     private func armMaximumListenTimer() {
         maximumListenTimer?.invalidate()
         maximumListenTimer = Timer.scheduledTimer(
-            withTimeInterval: 120,
+            withTimeInterval: listeningMode == .dictation ? 300 : 120,
             repeats: false
         ) { [weak self] _ in
             Task { @MainActor in
@@ -501,6 +644,7 @@ final class VoiceController: NSObject, ObservableObject {
         if QwenVoiceEngine.routeActive {
             Task {
                 await ParakeetSpeechEngine.shared.releaseMemory()
+                await DictationRecognizer.shared.release()
             }
             QwenVoiceEngine.shared.beginReply()
         }

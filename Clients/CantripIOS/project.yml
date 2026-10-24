@@ -25,7 +25,7 @@ packages:
     branch: main
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
-    revision: 5c19d5e12320e22bbfb7a1877b089d2665a69add
+    revision: c79c4106b954f81205113c3343e5a7e59a1089b5
 schemes:
   Hermes:
     build:
@@ -74,6 +74,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSMicrophoneUsageDescription: "Cantrip Agent uses the microphone for voice conversations with your agent."
         NSSpeechRecognitionUsageDescription: "Cantrip Agent transcribes your speech on-device so you can talk to your agent hands-free."
+        NSContactsUsageDescription: "Cantrip Agent reads contact names on this iPhone so dictation spells the people you mention correctly. Names stay on your devices."
         NSFaceIDUsageDescription: "Confirm sensitive Cantrip approvals, secure input and remote Mac access with Face ID."
         NSLocalNetworkUsageDescription: "Cantrip Agent discovers and connects securely to your paired Cantrip on the local network."
         NSBonjourServices:

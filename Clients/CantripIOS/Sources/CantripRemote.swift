@@ -1451,6 +1451,15 @@ struct CantripRemoteAPI {
         return page
     }
 
+    /// Names and terms the Mac knows for dictation; nil on hosts without the route.
+    func voiceVocabulary() async throws -> CantripVoiceVocabulary? {
+        do {
+            return try await request(path: "/api/v1/voice/vocabulary")
+        } catch CantripRemoteError.http(404, _) {
+            return nil
+        }
+    }
+
     func imageData(sessionID: String, imageID: String, thumbnail: Bool) async throws -> Data {
         guard UUID(uuidString: sessionID) != nil, ChatMessageImage.validRemoteID(imageID) else {
             throw CantripRemoteError.invalidResponse
@@ -2851,6 +2860,11 @@ final class CantripRemoteModel: ObservableObject {
 
     func memoryDocument(id: String, offset: Int, revision: String?) async throws -> CantripMemoryPage {
         try await performHistoryRead { try await $0.memoryDocument(id: id, offset: offset, revision: revision) }
+    }
+
+    func voiceVocabulary() async throws -> CantripVoiceVocabulary? {
+        guard isConfigured else { return nil }
+        return try await performHistoryRead { try await $0.voiceVocabulary() }
     }
 
     func copilotUsage() async throws -> CopilotUsageSnapshot {

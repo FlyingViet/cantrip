@@ -48,6 +48,8 @@
 	<array>
 		<string>_cantrip-remote._tcp</string>
 	</array>
+	<key>NSContactsUsageDescription</key>
+	<string>Cantrip Agent reads contact names on this iPhone so dictation spells the people you mention correctly. Names stay on your devices.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Confirm sensitive Cantrip approvals, secure input and remote Mac access with Face ID.</string>
 	<key>NSLocalNetworkUsageDescription</key>
