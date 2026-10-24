@@ -139,10 +139,8 @@ final class HostServices {
         }
         .store(in: &cancellables)
 
-        // Daily memory consolidation, off the launch path.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
-            Consolidator.runIfDue()
-        }
+        // Daily memory consolidation, off the launch path; failed runs retry with backoff.
+        Consolidator.start()
 
         if let recoveryReport {
             manager.active.messages.append(ChatMessage(

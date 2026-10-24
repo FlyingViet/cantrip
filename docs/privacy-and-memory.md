@@ -122,6 +122,28 @@ never transmitted.
 To stop using the vault, turn **Memory vault** off. This does not delete it.
 Back up notes before manually removing or rewriting them.
 
+## Background memory upkeep
+
+While **Memory vault** is on, Cantrip tidies the vault about once a day in the
+background. A headless agent reads the last three days of `sessions/` logs,
+updates `MEMORY.md` and `USER.md` within their caps, merges overlapping notes,
+and deletes session logs older than 30 days.
+
+- **Which agent:** Claude Code with its Haiku model. If the Claude Code CLI is
+  missing or can't sign in, the GitHub Copilot CLI runs it instead, with the
+  newest Haiku model it offers.
+- **Permissions:** the same for both. With **Allow actions** on, the agent
+  can use any tool. Otherwise it can only edit files: no commands, so old
+  session logs stay until you allow actions.
+- **When:** a check runs 15 seconds after launch and every 15 minutes after
+  that. A run is due 20 hours after the last successful one. A failed run
+  doesn't count. It retries after 30 minutes, and the wait doubles after each
+  further failure, up to 12 hours. A run still going after 30 minutes is
+  stopped and counted as a failure.
+- **Failures:** Cantrip Home's **Tasks** shows a warning with the error and
+  the next retry until a run succeeds. Each attempt is also logged in
+  `Cantrip.log` as a `consolidator:` line.
+
 ## Know where data lives
 
 | Location | Contents |
@@ -131,7 +153,7 @@ Back up notes before manually removing or rewriting them.
 | `~/.cache/Cantrip/runs/` | Durable journals for non-private runs |
 | `~/.cache/Cantrip/remote-attachments/` | Retained images uploaded by Remote clients |
 | `~/.cache/Cantrip/session-output-folders.json` | Which Copilot CLI session folders each tab used |
-| `~/Library/Logs/Cantrip.log` | Diagnostic log |
+| `~/Library/Logs/Cantrip.log` | Diagnostic log; past 10 MB it moves to `Cantrip.log.1`, keeping three older logs (`.1` to `.3`) |
 | macOS Keychain | Remote host/client pairing credentials |
 
 Closing a tab or disabling Remote does not delete all of this data. Removing
