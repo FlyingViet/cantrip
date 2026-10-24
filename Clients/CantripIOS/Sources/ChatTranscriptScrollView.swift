@@ -13,6 +13,7 @@ struct ChatTranscriptScrollView<Content: View>: View {
     @State private var scrollPhase = ScrollPhase.idle
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var prependAnchorState = HistoryPrependAnchor()
+    @State private var follow = TranscriptFollowTracker()
 
     var body: some View {
         ScrollView {
@@ -61,6 +62,27 @@ struct ChatTranscriptScrollView<Content: View>: View {
         .onChange(of: scrollRequest) { _, _ in
             scrollToLatest()
         }
+        #if os(iOS)
+        // The bottom anchor leaves a transcript at its top when it starts shorter than the
+        // viewport and then grows past it (a tab opening on iPhone Duo's short, wide window
+        // before its full transcript arrives), so move a reader who follows it to the end.
+        .onScrollGeometryChange(for: TranscriptFollowSample.self) { TranscriptFollowSample($0) } action: { _, current in
+            guard current.isAwayFromBottom, canFollow else { return }
+            followToLatest()
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { TranscriptFollowSample($0).distanceFromBottom } action: { _, distance in
+            follow.distanceFromBottom = distance
+        }
+        // A tab's first transcript can finish laying out while the tab slides in, without any
+        // geometry callback, so settle on the end a few times as it opens (unless the reader or
+        // the history anchor has moved it).
+        .task {
+            for delay in [350, 900, 2000] {
+                guard (try? await Task.sleep(for: .milliseconds(delay))) != nil else { return }
+                if canFollow, position.edge == .bottom { position.scrollTo(edge: .bottom) }
+            }
+        }
+        #endif
         .onScrollGeometryChange(for: HistoryScrollGeometry.self) { geometry in
             HistoryScrollGeometry(geometry, prependRevision: prependRevision)
         } action: { previous, current in
@@ -95,6 +117,56 @@ struct ChatTranscriptScrollView<Content: View>: View {
     private func scrollToLatest() {
         followsBottom = true
         position.scrollTo(edge: .bottom)
+    }
+
+    private var canFollow: Bool { followsBottom && !userIsScrolling && prependAnchor == nil }
+
+    /// A `scrollTo` issued mid-transition (a tab sliding in) can be dropped, so check again shortly
+    /// after and re-apply until the end is actually showing.
+    private func followToLatest() {
+        position.scrollTo(edge: .bottom)
+        follow.generation += 1
+        let generation = follow.generation
+        Task { @MainActor in
+            for delay in [120, 250, 500] {
+                guard (try? await Task.sleep(for: .milliseconds(delay))) != nil,
+                      generation == follow.generation, follow.distanceFromBottom > 1, canFollow else { return }
+                position.scrollTo(edge: .bottom)
+            }
+        }
+    }
+}
+
+/// Follow bookkeeping read outside `body`, so per-frame scroll updates don't re-render the transcript.
+@MainActor
+private final class TranscriptFollowTracker {
+    var distanceFromBottom: CGFloat = 0
+    var generation = 0
+}
+
+/// Content and viewport sizes, compared alone so scrolling never triggers a follow; carries how far
+/// the visible area is from the end when they change.
+struct TranscriptFollowSample: Equatable {
+    var contentHeight: CGFloat
+    var containerHeight: CGFloat
+    var distanceFromBottom: CGFloat
+
+    init(contentHeight: CGFloat, containerHeight: CGFloat, distanceFromBottom: CGFloat) {
+        self.contentHeight = contentHeight
+        self.containerHeight = containerHeight
+        self.distanceFromBottom = distanceFromBottom
+    }
+
+    init(_ geometry: ScrollGeometry) {
+        self.init(contentHeight: geometry.contentSize.height, containerHeight: geometry.containerSize.height,
+                  distanceFromBottom: geometry.contentSize.height + geometry.contentInsets.bottom
+                      - geometry.visibleRect.maxY)
+    }
+
+    var isAwayFromBottom: Bool { distanceFromBottom > 1 }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.contentHeight == rhs.contentHeight && lhs.containerHeight == rhs.containerHeight
     }
 }
 
