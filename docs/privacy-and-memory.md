@@ -70,6 +70,7 @@ version; enable Cantrip only for a feature you intend to use.
 | Automation, including Calendar | Reading calendar context or controlling another app | Decline and use that app manually |
 | Location Services | Location-aware context | Enter a location in the prompt |
 | Full Disk Access | Some protected files, such as Messages history | Leave off unless that task needs it |
+| Contacts | Daily Briefing senders, and contact names in Cantrip Agent's [dictation vocabulary](remote-control.md#dictation-vocabulary-for-cantrip-agent) (which also reads Messages and call history only if Full Disk Access is already on) | Phone numbers and email addresses appear without names |
 | Local Network, when requested | Discovering/connecting to a LAN Cantrip host | Check the remote setup and network permissions |
 
 Trigger the feature first if Cantrip has not appeared in a permission list.
