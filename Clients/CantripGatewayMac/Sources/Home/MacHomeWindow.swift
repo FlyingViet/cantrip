@@ -140,7 +140,8 @@ struct MacHomeWindow: View {
 
     @ViewBuilder private var detail: some View {
         if isTabOpen {
-            MacHomeChatView(remote: remote, vm: vm, voice: voice, navigation: navigation, isTab: true)
+            MacHomeChatView(remote: remote, vm: vm, voice: voice, navigation: navigation,
+                            slashCommands: remote.slashCommands, isTab: true)
         } else {
             homeSection
         }
@@ -149,7 +150,8 @@ struct MacHomeWindow: View {
     @ViewBuilder private var homeSection: some View {
         switch navigation.section {
         case .chat:
-            MacHomeChatView(remote: remote, vm: vm, voice: voice, navigation: navigation)
+            MacHomeChatView(remote: remote, vm: vm, voice: voice, navigation: navigation,
+                            slashCommands: remote.slashCommands)
         case .tasks:
             CantripHomeTasksView(
                 remote: remote,

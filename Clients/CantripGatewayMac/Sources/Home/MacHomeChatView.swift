@@ -10,6 +10,8 @@ struct MacHomeChatView: View {
     @ObservedObject var vm: ChatViewModel
     @ObservedObject var voice: VoiceController
     @ObservedObject var navigation: MacHomeNavigation
+    /// The backend "/" commands of Home and every tab (`remote.slashCommands`).
+    @ObservedObject var slashCommands: BackendSlashCommandStore
     /// A project tab opened from the sidebar instead of Home's own chat.
     var isTab = false
     @AppStorage("hermes.paused") private var paused = false
@@ -26,7 +28,16 @@ struct MacHomeChatView: View {
     @State private var composerRevision = UUID()
     @State private var size = CGSize(width: 900, height: 700)
     @State private var isDropTargeted = false
+    /// Escape hides the "/" suggestions until the text changes.
+    @State private var slashDismissedText: String?
+    /// The row picked with the arrow keys, for the text it was picked on.
+    @State private var slashHighlight: SlashHighlight?
     @FocusState private var composerFocused: Bool
+
+    private struct SlashHighlight: Equatable {
+        let text: String
+        let index: Int
+    }
 
     /// Messages and the composer stay in a readable column on wide windows.
     static let readableWidth: CGFloat = 860
@@ -293,6 +304,16 @@ struct MacHomeChatView: View {
                         .accessibilityElement(children: .contain)
                     }
                 }
+                if let presentation = slashPresentation {
+                    BackendSlashSuggestionList(
+                        presentation: presentation,
+                        highlighted: slashHighlightIndex,
+                        maxHeight: min(320, max(120, size.height * 0.4)),
+                        canOpenModelSettings: canOpenModelSettingsFromSlash,
+                        style: .compact,
+                        onChoose: { chooseSlashCommand($0, via: .activate) }
+                    )
+                }
                 composer
             }
         }
@@ -301,6 +322,98 @@ struct MacHomeChatView: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
         .background(.bar)
+        .background {
+            MacSlashKeyMonitor(isActive: slashPresentation != nil, onKey: handleSlashKey)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+        .onChange(of: BackendSlashCommands.slashToken(input) != nil) { _, entered in
+            if entered { remote.refreshSlashCommandsIfNeeded() }
+        }
+        .onChange(of: input) { _, text in
+            // Escape hid the list for that text only.
+            if text != slashDismissedText { slashDismissedText = nil }
+        }
+        .onChange(of: composerFocused) { _, focused in
+            // A tab focuses its composer as it opens: prefetch so "/" usually shows a cached list.
+            if focused { remote.refreshSlashCommandsIfNeeded() }
+        }
+        .onChange(of: remote.slashCommandContext) { _, _ in
+            if slashToken != nil { remote.refreshSlashCommandsIfNeeded() }
+        }
+        #if DEBUG
+        .task {
+            if let text = await CantripUITestFixtures.composerTextWhenReady({ destinationReady && composerAcceptsText }) {
+                input = text
+                composerFocused = true
+                MacSlashKeyMonitor.moveInsertionPointToEnd()
+            }
+        }
+        #endif
+    }
+
+    // MARK: Slash commands
+
+    /// The typed "/" token while the backend's suggestions can show.
+    private var slashToken: String? {
+        guard !paused, composerFocused, composerAcceptsText, slashDismissedText != input,
+              // A reply to the agent's question is never a command.
+              !(vm.remoteDeliveryMode == .auto && remote.chatInputRequest != nil),
+              remote.slashCommandContext != nil else { return nil }
+        return BackendSlashCommands.slashToken(input)
+    }
+
+    private var slashPresentation: BackendSlashPresentation? {
+        guard let context = remote.slashCommandContext else { return nil }
+        return BackendSlashCommands.presentation(
+            token: slashToken,
+            response: slashCommands.response(for: context.key),
+            isLoading: slashCommands.isLoading(context.key)
+        )
+    }
+
+    /// The arrow-key row for this text, else the default: a strong, runnable first match.
+    private var slashHighlightIndex: Int? {
+        guard let token = slashToken, let presentation = slashPresentation else { return nil }
+        if let slashHighlight, slashHighlight.text == input { return slashHighlight.index }
+        return BackendSlashCommands.defaultHighlight(token: token, matches: presentation.matches)
+    }
+
+    private var canOpenModelSettingsFromSlash: Bool {
+        remote.selectedSession?.supportsModelSettings == true
+    }
+
+    private func handleSlashKey(_ key: BackendSlashKey) -> Bool {
+        guard let presentation = slashPresentation else { return false }
+        switch BackendSlashCommands.handle(key, matches: presentation.matches, highlighted: slashHighlightIndex) {
+        case .ignore:
+            return false
+        case .highlight(let index):
+            slashHighlight = SlashHighlight(text: input, index: index)
+        case .choose(let match, let trigger):
+            chooseSlashCommand(match, via: trigger)
+        case .dismiss:
+            slashDismissedText = input
+        }
+        return true
+    }
+
+    /// Model settings open; Return or a click sends a command without arguments; anything else
+    /// (and Tab) is inserted with the cursor after it, ready for the argument.
+    private func chooseSlashCommand(_ match: BackendCommandMatch, via trigger: BackendCommandTrigger) {
+        guard let choice = BackendSlashCommands.choose(
+            match.command, via: trigger, canOpenModelSettings: canOpenModelSettingsFromSlash
+        ) else { return }
+        input = choice.text
+        slashHighlight = nil
+        if choice.opensModelSettings {
+            remote.modelSettingsSession = remote.selectedSession
+        } else if choice.sendsImmediately {
+            sendText()
+        } else {
+            composerFocused = true
+            MacSlashKeyMonitor.moveInsertionPointToEnd()
+        }
     }
 
     private var composer: some View {
@@ -342,7 +455,7 @@ struct MacHomeChatView: View {
             .frame(maxWidth: .infinity, minHeight: 44)
             .disabled(!destinationReady || !composerAcceptsText || vm.sending || submittingRemote)
             .onSubmit(sendText)
-            .help("Return sends. Option-Return adds a new line.")
+            .help("Return sends. Option-Return adds a new line. Type / for this tab's commands and skills.")
             .accessibilityIdentifier("chat.message")
         } trailing: {
             CantripStopButton(

@@ -15,6 +15,9 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   views, subagent cards (running ones pinned above the composer), handoff cards with
   **Open tab**, questions answered in the reply panel, approvals and sign-ins inline,
   prompt token usage, older history loading as you scroll up, and Start Fresh.
+- **Slash commands.** Type `/` in a tab's or Home's composer to see the tab backend's
+  commands, custom commands and skills, as the Mac lists them (needs a Cantrip version that
+  offers them; older ones keep the composer as it was).
 - **Attachments.** Up to 4 images (pasted, dropped or picked), a video and up to 5 files
   per message, uploaded resumably the way the Mac app sends them.
 - **Tasks and Artifacts.** Scheduled tasks with runs, workspaces and their records;
@@ -84,6 +87,7 @@ The sidebar's footer shows the Mac's address on the route in use.
 | Ctrl+Shift+P | Pause or resume the agent |
 | Ctrl+, | Settings |
 | Enter / Shift+Enter | Send / new line |
+| Up / Down, Tab, Enter, Esc | In the `/` command list: move, insert, choose (or send as typed when nothing is highlighted), dismiss |
 | Alt+Up / Alt+Down | Move the focused tab in the sidebar |
 
 ## Troubleshooting

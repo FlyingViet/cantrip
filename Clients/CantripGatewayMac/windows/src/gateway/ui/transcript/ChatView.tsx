@@ -22,6 +22,7 @@ import {
 } from "./attachments";
 import { chatQuestion, composerAcceptsText, composerPlaceholder, InputTranscript, QuestionPanel } from "./Inputs";
 import { MessageRow, ThinkingIndicator } from "./Message";
+import { useSlashSuggestions } from "./SlashSuggestions";
 import "./transcript.css";
 
 interface Draft {
@@ -355,6 +356,7 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
   const [submitting, setSubmitting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const [focused, setFocused] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const draft = drafts.get(key) ?? emptyDraft();
   const update = (change: Partial<Draft>) => {
@@ -502,6 +504,28 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
     ...(session?.supportsFileAttachments === false ? [{ kind: "header" as const, label: "Update Cantrip on your Mac to attach documents other than photos and videos." }] : []),
   ], { align: "start", label: "Attach" });
 
+  const slash = useSlashSuggestions({
+    session, text: draft.text, focused, enabled: ready && acceptsText && !busy,
+    onChoose: (choice) => {
+      if (choice.openModelSettings) {
+        update({ text: "" });
+        nav.openModelSettings(session);
+        return;
+      }
+      update({ text: choice.text });
+      if (choice.send) {
+        void send();
+        return;
+      }
+      requestAnimationFrame(() => {
+        const node = textRef.current;
+        if (!node) return;
+        node.focus();
+        node.setSelectionRange(node.value.length, node.value.length);
+      });
+    },
+  });
+
   const sendLabel = nav.deliveryMode.value === "auto" && question ? "Send reply" : "Send prompt";
   return (
     <>
@@ -513,6 +537,8 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
         </div>
       ) : null}
       <div class="composer" data-id="chat.composer">
+        {slash.popover}
+        {slash.announcer}
         {session && question ? <QuestionPanel session={session} question={question} busy={busy || remote.isMutating.value} maxHeight={Math.min(360, Math.max(72, props.height * 0.45))} /> : null}
         <div class="composer-row">
           <button type="button" class="composer-attach" aria-label="Attach" title="Attach photos, a video or files" disabled={pickerDisabled}
@@ -529,12 +555,16 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
             placeholder={composerPlaceholder(question, recipient)} aria-label={`Message ${recipient}`}
             disabled={!ready || !acceptsText || submitting}
             title="Enter sends. Shift+Enter adds a new line."
+            {...slash.fieldProps}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             onInput={(event) => update({ text: (event.target as HTMLTextAreaElement).value })}
             onPaste={(event) => {
               const files = Array.from(event.clipboardData?.files ?? []).filter(isImageFile);
               if (files.length) { event.preventDefault(); void addFiles(files); }
             }}
             onKeyDown={(event) => {
+              if (slash.onKeyDown(event)) return;
               if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.isComposing) {
                 event.preventDefault();
                 void send();

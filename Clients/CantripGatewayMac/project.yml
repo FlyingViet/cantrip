@@ -109,6 +109,7 @@ targets:
       - path: Hermes/Tests/CantripHomeWorkspaceGroupTests.swift
       - path: Hermes/Tests/DictationTextTests.swift
       - path: Hermes/Tests/DictationPipelineTests.swift
+      - path: Hermes/Tests/BackendSlashCommandsTests.swift
     dependencies:
       - target: CantripGatewayMac
     settings:

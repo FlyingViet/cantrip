@@ -99,7 +99,7 @@ final class BackgroundTasksMacTests: XCTestCase {
         ])
         let navigation = MacHomeNavigation()
         let chat = MacHomeChatView(remote: model, vm: vm, voice: VoiceController(),
-                                   navigation: navigation, isTab: true)
+                                   navigation: navigation, slashCommands: model.slashCommands, isTab: true)
             .frame(width: 900, height: 560)
         let sheet = CantripBackgroundTasksView(remote: model, sessionID: sessionID)
             .frame(width: 620, height: 560)

@@ -114,6 +114,11 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   prompt in a new model session; a repeated error offers it, and **Change Model**, in place.
 - **Chat:** Return sends; Option-Return adds a line. Drag images onto the chat to
   attach them. Questions from Cantrip appear above the composer.
+- **Slash commands:** type `/` in Home's or a tab's composer to list that tab's backend
+  commands, custom commands and skills. Up/Down move the highlight (Return runs a command
+  without arguments, or inserts one that takes an argument), Tab inserts, Escape hides the list
+  for the current text; with nothing highlighted Return sends the text as typed. **/model** opens
+  Model Settings. Needs a Cantrip host with `supportsBackendCommands`.
 - **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS),
   delivery mode, Refresh (⌘R) and More (model settings, Copilot usage, voice mode,
   pause, memory (formatted Markdown or its source), builds, mascot, Cantrip maintenance).
