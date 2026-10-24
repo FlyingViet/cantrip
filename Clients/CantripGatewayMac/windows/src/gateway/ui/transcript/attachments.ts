@@ -3,6 +3,9 @@
 // resumable 1 MiB chunk uploads verified by SHA-256, then referenced by ID.
 import { api, bytesToBase64, pathComponent } from "../../api/client";
 import type { FileUploadResponse, VideoPrepareResponse, VideoUploadResponse } from "../../api/types";
+import { isImageFile } from "./fileKinds";
+
+export { isImageFile, isVideoFile, pastedFiles } from "./fileKinds";
 
 export const MAX_IMAGES = 4;
 export const MAX_FILES = 5;
@@ -69,14 +72,6 @@ export async function prepareImage(blob: Blob, name = "Image"): Promise<ImageDra
   }
   bitmap.close();
   throw new AttachmentError("This image is too large to send, even after shrinking it.");
-}
-
-export function isImageFile(file: File): boolean {
-  return /^image\/(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/i.test(file.type) || /\.(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/i.test(file.name);
-}
-
-export function isVideoFile(file: File): boolean {
-  return /\.(mov|mp4)$/i.test(file.name) || file.type === "video/mp4" || file.type === "video/quicktime";
 }
 
 export function prepareFile(file: File): FileDraft {

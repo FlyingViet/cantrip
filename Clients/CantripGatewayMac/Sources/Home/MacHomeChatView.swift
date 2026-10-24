@@ -22,6 +22,7 @@ struct MacHomeChatView: View {
     @State private var videoDrafts: [String: ChatVideoAttachment] = [:]
     @State private var fileDrafts: [String: [ChatFileAttachment]] = [:]
     @State private var imageImportID: UUID?
+    @State private var composerPaste: ComposerPasteRequest?
     @State private var submittingRemote = false
     @State private var imageSendError: String?
     @State private var attachmentError: String?
@@ -432,7 +433,8 @@ struct MacHomeChatView: View {
                     fileSupport: remote.selectedSession?.id == sessionID
                         ? remote.selectedSession?.supportsFileAttachments : nil,
                     mixedSupport: remote.selectedSession?.id == sessionID
-                        ? remote.selectedSession?.supportsMixedAttachments : nil
+                        ? remote.selectedSession?.supportsMixedAttachments : nil,
+                    paste: $composerPaste
                 )
                 .id(sessionID)
             }
@@ -455,7 +457,10 @@ struct MacHomeChatView: View {
             .frame(maxWidth: .infinity, minHeight: 44)
             .disabled(!destinationReady || !composerAcceptsText || vm.sending || submittingRemote)
             .onSubmit(sendText)
-            .help("Return sends. Option-Return adds a new line. Type / for this tab's commands and skills.")
+            .help("Return sends. Option-Return adds a new line. Type / for this tab's commands and skills. Paste attaches copied photos, videos and files.")
+            .composerPaste(isEnabled: !imagePickerDisabled && !importingImages) {
+                composerPaste = ComposerPasteRequest(providers: $0)
+            }
             .accessibilityIdentifier("chat.message")
         } trailing: {
             CantripStopButton(
