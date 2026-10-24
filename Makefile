@@ -9,14 +9,14 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-prune prune-builds test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary cert artwork icon app run clean
+.PHONY: all build test test-prune prune-builds test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary
+test: test-prune test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash
 
 test-architectures:
 	@bash Tests/ArchitectureTests/run.sh
@@ -86,6 +86,12 @@ test-voice-vocabulary:
 	@mkdir -p .build; BIN=".build/cantrip-voice-vocabulary-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc Sources/Cantrip/VoiceVocabulary.swift Sources/Cantrip/VoiceVocabularySources.swift Tests/VoiceVocabularyTests/main.swift -o "$$BIN" && VOICE_VOCABULARY_TEST_DIR="$(CURDIR)/.build" "$$BIN"
+
+# Fake CLIs and a temp project under $$TMPDIR; CANTRIP_COMMANDS_LIVE_TEST=1 also asks the real CLIs.
+test-backend-commands:
+	@BIN="/tmp/cantrip-backend-command-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/BackendCommands.swift Sources/Cantrip/BackendCommandDiscovery.swift Sources/Cantrip/CopilotRuntime.swift Tests/BackendCommandTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-run-journal:
 	@BIN="/tmp/cantrip-run-journal-tests-$$$$"; \
@@ -163,6 +169,10 @@ test-prune:
 
 test-mcp-on-demand:
 	@python3 Tests/MCPOnDemandTests/test_mcp_on_demand.py
+
+# Runs the browser Remote's slash-command matching and caching code straight from webAppTemplate.
+test-web-slash:
+	@node Tests/WebSlashCommandTests/run.mjs
 
 run: app
 	-/usr/bin/osascript -e 'tell application id "com.brian.agentspotlight" to quit' 2>/dev/null

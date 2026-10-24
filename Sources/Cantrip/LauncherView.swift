@@ -62,6 +62,14 @@ struct LauncherView: View {
     /// Natural (unscrolled) height of the suggestion rows, so the
     /// dropdown can size to its content below the scroll cap.
     @State private var suggestionListHeight: CGFloat = 0
+    /// The tab backend's commands, skills and Cantrip scripts for "/" suggestions.
+    @State private var commandList: BackendCommandList?
+    @State private var commandListSession: UUID?
+    @State private var commandsLoading = false
+    /// Keyboard-highlighted suggestion row (index into `commandMatches`).
+    @State private var commandHighlight: Int?
+    /// Escape hides the suggestions for exactly this text.
+    @State private var dismissedSlashText: String?
     /// The text field's current and smallest (one-line) heights; the
     /// difference is what extra lines added.
     @State private var composerHeight: CGFloat = 0
@@ -178,7 +186,19 @@ struct LauncherView: View {
             showTerminal = false
             if speech.isRecording { suppressVoiceSubmission = true }
             speech.stop()
+            commandList = nil
+            commandListSession = nil
+            commandHighlight = nil
+            BackendCommandCatalog.shared.prefetch(session)
+            if slashToken != nil { loadCommands() }
         }
+        .onChange(of: session.workdir) {
+            commandList = nil
+            commandListSession = nil
+            commandHighlight = nil
+            if slashToken != nil { loadCommands() }
+        }
+        .onAppear { BackendCommandCatalog.shared.prefetch(session) }
         // Agent commands mirror into the terminal silently (background);
         // the toolbar icon signals activity — open it when you want to look.
         .onChange(of: session.focusRequested) { _, requested in
@@ -190,11 +210,12 @@ struct LauncherView: View {
         .onChange(of: speech.transcript) { _, text in
             if speech.isRecording { query = text }
         }
-        .onChange(of: query) { _, newValue in
+        .onChange(of: query) { oldValue, newValue in
             if !session.isLocalPrivate {
                 fileSearch.search(newValue.contains(where: \.isNewline) ? "" : newValue)
                 FileRAG.shared.prepare(for: newValue)
             }
+            commandQueryChanged(from: oldValue, to: newValue)
         }
         // Any file dropped on the panel becomes an attachment.
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
@@ -349,6 +370,11 @@ struct LauncherView: View {
                     .focused($inputFocused)
                     .onKeyPress(keys: [.return, Self.keypadEnter], phases: [.down, .repeat],
                                 action: handleModifiedReturn)
+                    .onKeyPress(keys: [.upArrow, .downArrow, .tab, .escape], phases: [.down, .repeat],
+                                action: handleCommandKey)
+                    .accessibilityHint(slashToken != nil && !commandMatches.isEmpty
+                        ? "\(commandMatches.count) command suggestions. Up and Down arrows choose, Tab inserts, Return runs, Escape hides them."
+                        : "")
                     .onSubmit { submit() }
                     .background(GeometryReader { geo in
                         Color.clear.preference(key: ComposerHeightKey.self, value: geo.size.height)
@@ -1506,7 +1532,7 @@ struct LauncherView: View {
 
     private var hasSuggestions: Bool {
         !session.isLocalPrivate && (appSuggestion != nil
-            || query.hasPrefix("/")
+            || slashToken != nil
             || (!fileSearch.results.isEmpty && !showHistory))
     }
 
@@ -1516,7 +1542,7 @@ struct LauncherView: View {
         if let suggestion = appSuggestion {
             appSuggestionRow(suggestion)
         }
-        if query.hasPrefix("/") {
+        if slashToken != nil {
             commandSuggestionRows
         }
         if !fileSearch.results.isEmpty && !showHistory {
@@ -1530,14 +1556,20 @@ struct LauncherView: View {
     /// min(content, cap): short lists hug their content, long lists
     /// scroll instead of growing the dropdown or the panel.
     private var suggestionList: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                suggestionRows
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    suggestionRows
+                }
+                .background(GeometryReader { geo in
+                    Color.clear.preference(key: SuggestionListHeightKey.self,
+                                           value: geo.size.height)
+                })
             }
-            .background(GeometryReader { geo in
-                Color.clear.preference(key: SuggestionListHeightKey.self,
-                                       value: geo.size.height)
-            })
+            // Keyboard selection keeps the highlighted command in view.
+            .onChange(of: commandHighlight) { _, index in
+                if let index { proxy.scrollTo("command-\(index)") }
+            }
         }
         .frame(height: min(max(suggestionListHeight, 1), 320))
         .onPreferenceChange(SuggestionListHeightKey.self) {
@@ -1571,40 +1603,220 @@ struct LauncherView: View {
     }
 
     private var commandSuggestionRows: some View {
-        let matches = CommandRegistry.shared.matches(for: query)
+        let matches = commandMatches
         return VStack(alignment: .leading, spacing: 0) {
-            if matches.isEmpty {
-                Text("No matching skills — add executables to ~/.config/cantrip/commands")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
+            ForEach(Array(matches.enumerated()), id: \.element.command.name) { index, match in
+                commandRow(match.command, highlighted: index == commandHighlight)
+                    .id("command-\(index)")
             }
-            ForEach(matches.prefix(6)) { command in
-                Button(action: { query = "/\(command.name) " }) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "puzzlepiece.extension")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Color.accentColor)
-                        Text("/\(command.name)")
-                            .font(.system(size: 13, design: .monospaced))
-                        if !command.description.isEmpty {
-                            Text(command.description)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        keycap("↩", "run")
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 5)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+            if matches.isEmpty, commandsLoading {
+                commandInfoRow("Loading commands…")
+            } else if matches.isEmpty, slashToken?.isEmpty == false {
+                commandInfoRow("No matching commands. Return sends your text as typed.")
+            }
+            if let status = currentCommandList?.status {
+                commandInfoRow(status)
             }
         }
-        .padding(.bottom, 4)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Command suggestions")
+    }
+
+    private func commandInfoRow(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+    }
+
+    private func commandRow(_ command: BackendCommand, highlighted: Bool) -> some View {
+        let unavailable = command.availability == .unavailable
+        let choice = BackendCommandFilter.choose(command, canOpenModelSettings: canOpenModelSettingsFromCommand)
+        let detail = unavailable || command.availability == .cantrip ? (command.note ?? command.description) : command.description
+        return Button(action: { chooseCommand(command, viaTab: false) }) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: Self.commandIcon(command.kind))
+                    .font(.system(size: 12))
+                    .foregroundStyle(unavailable ? Color.secondary : Color.accentColor)
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
+                Text(command.title)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+                    .layoutPriority(2)
+                if let hint = command.inputHint {
+                    Text(hint)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .layoutPriority(0)
+                }
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+                Spacer(minLength: 6)
+                Text(command.source)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .fixedSize()
+                if highlighted, !unavailable {
+                    keycap("↩", { if case .insert(_, true) = choice { return "run" }; return "insert" }())
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+            .background(highlighted ? Color.accentColor.opacity(0.18) : Color.clear)
+            .opacity(unavailable ? 0.55 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(unavailable)
+        .help(unavailable ? (command.note ?? "Not available in Cantrip") : command.description)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.commandAccessibilityLabel(command))
+        .accessibilityHint(unavailable ? "" : {
+            switch choice {
+            case .insert(_, true): return "Runs the command"
+            case .openModelSettings: return "Opens this tab's model settings"
+            default: return "Inserts the command"
+            }
+        }())
+        .accessibilityAddTraits(highlighted ? .isSelected : [])
+    }
+
+    static func commandIcon(_ kind: BackendCommand.Kind) -> String {
+        switch kind {
+        case .builtin: return "command"
+        case .custom: return "text.badge.star"
+        case .skill: return "wand.and.stars"
+        case .cantrip: return "puzzlepiece.extension"
+        }
+    }
+
+    static func commandAccessibilityLabel(_ command: BackendCommand) -> String {
+        var parts = [command.title]
+        if !command.description.isEmpty { parts.append(command.description) }
+        parts.append(command.source)
+        if let note = command.note { parts.append(note) }
+        if command.availability == .unavailable { parts.append("unavailable") }
+        return parts.joined(separator: ", ")
+    }
+
+    // MARK: - Command suggestions
+
+    /// The command name being typed, unless the suggestions were dismissed for this text.
+    private var slashToken: String? {
+        guard !session.isLocalPrivate, !showHistory, dismissedSlashText != query else { return nil }
+        return BackendCommandFilter.slashToken(query)
+    }
+
+    /// This tab's list, or Cantrip's own scripts until the backend's list arrives.
+    private var currentCommandList: BackendCommandList? {
+        if commandListSession == session.id, let commandList { return commandList }
+        return nil
+    }
+
+    private var commandMatches: [BackendCommandFilter.Match] {
+        guard let token = slashToken else { return [] }
+        let commands = currentCommandList?.commands
+            ?? BackendCommandParsers.cantripScripts(CommandRegistry.shared.commands.map { ($0.name, $0.description) })
+        return BackendCommandFilter.matches(token: token, in: commands)
+    }
+
+    private var canOpenModelSettingsFromCommand: Bool {
+        !session.isLocalPrivate && session.modelSettingsUnavailableReason == nil
+    }
+
+    private func loadCommands() {
+        let chat = session
+        CommandRegistry.shared.reload()
+        commandsLoading = true
+        Task { @MainActor in
+            let list = await BackendCommandCatalog.shared.list(for: chat)
+            guard chat.id == session.id else { return }
+            commandList = list
+            commandListSession = chat.id
+            commandsLoading = false
+            resetCommandHighlight()
+        }
+    }
+
+    private func commandQueryChanged(from oldValue: String, to newValue: String) {
+        if dismissedSlashText != nil, dismissedSlashText != newValue { dismissedSlashText = nil }
+        let wasOpen = BackendCommandFilter.slashToken(oldValue) != nil
+        guard slashToken != nil else { commandHighlight = nil; return }
+        if !wasOpen {
+            loadCommands()
+            let count = commandMatches.count
+            if count > 0 {
+                AccessibilityNotification.Announcement(count == 1 ? "1 command" : "\(count) commands").post()
+            }
+        }
+        resetCommandHighlight()
+    }
+
+    private func resetCommandHighlight() {
+        guard let token = slashToken else { commandHighlight = nil; return }
+        commandHighlight = BackendCommandFilter.defaultHighlight(token: token, matches: commandMatches)
+    }
+
+    /// Up/Down move through the suggestions, Tab inserts, Escape hides them for this text.
+    private func handleCommandKey(_ press: KeyPress) -> KeyPress.Result {
+        guard slashToken != nil, press.modifiers.intersection([.command, .option, .control]).isEmpty else {
+            return .ignored
+        }
+        let matches = commandMatches
+        let choosable = matches.indices.filter { matches[$0].command.availability != .unavailable }
+        switch press.key {
+        case .escape:
+            dismissedSlashText = query
+            commandHighlight = nil
+            return .handled
+        case .tab:
+            guard !press.modifiers.contains(.shift) else { return .ignored }
+            guard let index = commandHighlight.flatMap({ matches.indices.contains($0) ? $0 : nil }) ?? choosable.first
+            else { return .handled }
+            chooseCommand(matches[index].command, viaTab: true)
+            return .handled
+        case .downArrow, .upArrow:
+            guard !choosable.isEmpty else { return .handled }
+            let down = press.key == .downArrow
+            if let current = commandHighlight, let position = choosable.firstIndex(of: current) {
+                let next = (position + (down ? 1 : choosable.count - 1)) % choosable.count
+                commandHighlight = choosable[next]
+            } else {
+                commandHighlight = down ? choosable.first : choosable.last
+            }
+            return .handled
+        default:
+            return .ignored
+        }
+    }
+
+    private func chooseCommand(_ command: BackendCommand, viaTab: Bool) {
+        switch BackendCommandFilter.choose(command, viaTab: viaTab, canOpenModelSettings: canOpenModelSettingsFromCommand) {
+        case .none:
+            return
+        case .openModelSettings:
+            query = ""
+            modelSettingsSession = session
+        case .insert(let text, let send):
+            commandHighlight = nil
+            if send {
+                query = text.trimmingCharacters(in: .whitespaces)
+                submit()
+            } else {
+                query = text
+                inputFocused = true
+            }
+        }
     }
 
     // MARK: - App typeahead
@@ -2142,6 +2354,12 @@ struct LauncherView: View {
     }
 
     private func submit(interrupt: Bool = false, inject: Bool = false) {
+        // Return with a command suggestion highlighted chooses it (runs it, or inserts it when it
+        // needs input); with nothing highlighted the text is sent as typed.
+        if !interrupt, !inject, slashToken != nil, let index = commandHighlight, commandMatches.indices.contains(index) {
+            chooseCommand(commandMatches[index].command, viaTab: false)
+            return
+        }
         // Enter with an app suggestion showing launches the app;
         // ⌘↩ bypasses the suggestion and asks the AI.
         if !session.isLocalPrivate, session.chatInputRequest == nil, !interrupt, !inject, let suggestion = appSuggestion {

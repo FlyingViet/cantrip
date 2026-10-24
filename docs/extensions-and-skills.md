@@ -9,6 +9,7 @@
 | Extension/plugin | A dashboard, an approved data command, or tools packaged in a folder |
 | MCP server | A process that exposes tools an AI backend can call |
 | Skill | An executable script you run by typing `/name` |
+| Backend command | A slash command, custom command or skill your agent CLI already has |
 
 Install only code you trust. A plugin's approval card is not a guarantee that
 its code is safe.
@@ -87,6 +88,57 @@ the panel. Scripts receive arguments as `$@` and the session folder as
 
 These are executable scripts, not prompts. Review a skill before running it;
 the AI action switch does not prevent an explicitly invoked skill from acting.
+
+## Use your agent's own slash commands and skills
+
+Type `/` in any tab or Cantrip Home composer, on the Mac, in Cantrip Agent, the
+browser Remote, Gateway Mac or the Windows app. Cantrip lists the commands
+that the tab's backend reports in the tab's folder, with a short description:
+
+| Backend | What Cantrip lists | How it asks |
+|---|---|---|
+| Copilot | Built-in commands that run outside the terminal, your personal and project skills (`.github/skills`, `.claude/skills`, `.agents/skills`, `.claude/commands`), and skills Copilot only uses automatically (shown dimmed) | A short-lived Copilot session in the folder: `commands.list` and `skills.list`, MCP servers off, deleted afterwards |
+| Claude Code | Built-in commands that work in SDK mode, personal and project skills and commands, bundled skills | The stream-json `initialize` handshake the Agent SDK uses; no prompt is sent |
+| Codex | Your user, repository and system skills. Codex's own built-ins only exist in its terminal app | `codex app-server` `skills/list` |
+| Copilot Remote | What the ACP server announces (`available_commands_update`) | After the tab connects |
+
+Your `~/.config/cantrip/commands` scripts are listed too, labeled **Cantrip**.
+
+1. Type `/` and then a few letters. The list narrows as you type: names first,
+   then aliases, then words in the description.
+2. On a keyboard, use **Up** and **Down**, **Tab** to insert, **Return** to
+   choose, **Escape** to hide the list. On iPhone, tap a row.
+3. A command that needs no input runs at once. One that takes input (for
+   example `/plan` or a skill) is inserted so you can type the rest.
+
+**Expected result:** the backend acts on it. Copilot output such as `/usage`
+or `/env` appears as the reply; `/plan`, `/review`, `/research` and skills
+start a normal agent turn. Codex skills are inserted as `$name`, the way Codex
+invokes a skill.
+
+Cantrip discovers the list on the Mac when you first type `/` in a folder and
+keeps it until a skill or command folder, the CLI or the tab's folder
+changes. Nothing about your skills is stored in Cantrip.
+
+Some commands are dimmed with the reason instead of running:
+
+- Copilot `/allow-all`, `/permissions` and `/sandbox`: Cantrip's approval
+  settings decide what the agent may do, and Cantrip Home's policy depends on
+  that.
+- Copilot `/remote`, `/every`, `/after` and `/cwd`: Cantrip already provides
+  remote access, stops idle runtimes (scheduled prompts would stop with it)
+  and sets each tab's folder. Ask Cantrip Home to schedule a task instead.
+- Claude `/color`, and `/fast` when Claude reports it is off for SDK sessions.
+
+Two map to Cantrip's own controls: Copilot `/model` opens the tab's model
+settings (or send `/model <model> [effort]`), and Claude `/clear` is
+**Start Fresh**. Commands that only exist in a terminal, such as `/help` or
+`/exit`, are not listed. Text such as `/Users/me/notes.txt` is never treated as
+a command, and pressing **Escape** sends whatever you typed unchanged.
+
+If Claude Code is signed out, only its local commands such as `/context` run
+until you sign in with `claude auth login`. If Codex isn't installed, the list
+says so.
 
 ## Add MCP tools
 
