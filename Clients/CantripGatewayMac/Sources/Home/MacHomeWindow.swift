@@ -57,7 +57,7 @@ struct MacHomeWindow: View {
         .sheet(item: $navigation.sheet, content: sheet)
         .sheet(isPresented: $navigation.showingDirectLocalSettings) {
             MacDirectLocalSettingsView(chat: directLocal) { navigation.showingDirectLocalSettings = false }
-                .macSheetFrame(width: 560, height: 620)
+                .macSheetFrame(width: 640, height: 760)
         }
         .sheet(item: $remote.modelSettingsSession) { session in
             CantripSessionSettingsView(model: remote, session: session, identity: remote.usageIdentity)

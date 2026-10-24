@@ -160,13 +160,45 @@ It follows the same rules as Cantrip's Private Local tab:
 - Only models the server reports as installed: names containing `cloud` and models with
   `remote_model` or `remote_host` are left out. Before each message the app asks `/api/show`
   and requires `general.architecture`, so a cloud alias never gets your text.
-- No tools and no cloud fallback. If the server fails, the error appears in the chat (for
-  example mlx-serve's "Not enough free memory to load model" when the Mac is short of memory).
+- No cloud fallback. If the server fails, the error appears in the chat (for example
+  mlx-serve's "Not enough free memory to load model" when the Mac is short of memory).
 - Context: 512 to 131072 tokens (default 8192). System prompt: up to 8000 characters. Older
   messages are dropped from what's sent once the conversation outgrows the context window.
 
 The **Private Local** tab on your paired Cantrip is separate and unchanged: it runs on the
-host Mac and syncs like any other tab.
+host Mac, syncs like any other tab and has no tools.
+
+### Tools from MCP servers on this Mac
+
+The local model can use tools from the MCP servers already set up for your coding agents on
+this Mac: Copilot CLI's `~/.copilot/mcp-config.json`, then Claude Code's `~/.claude.json`
+(the first file wins a name). Nothing is on until you turn it on:
+
+1. In Local Model **Settings…**, under **Tools from MCP servers**, turn on a server. The app
+   starts it once to list its tools.
+2. Open the tools list to turn individual tools off, and choose **Ask First** (the default) or
+   **Run Automatically** for each. Tools the server marks read-only run automatically. A
+   config file's own `tools` list still limits what's offered.
+3. **Save**, then ask for something that needs the tool, for example "summarize my latest
+   10 emails" with the `apple-mail` server.
+
+When the model calls a tool, the reply shows an approval card with the exact arguments:
+**Allow Once**, **Always Allow** (switches that tool to Run Automatically) or **Deny** (the
+model is told you declined). Each call and its result is kept under the reply's
+**Intermediate steps**. The model can chain up to 8 rounds of calls per reply; Stop ends it.
+
+- Only servers that run on this Mac (stdio) are used; remote HTTP servers are listed but
+  can't be turned on. Commands resolve with your login shell's `PATH`, so `npx` and Homebrew
+  tools work as in Terminal, and the config's `env`, `args` and `cwd` apply.
+- Servers start when first needed and stop after 5 idle minutes or when the app quits.
+- Tool descriptions are sent with every message, so they use context. Settings shows the
+  estimate, for example about 1,900 tokens for apple-mail's 9 reading tools; Local Model won't
+  send when turned-on tools would take more than 60% of the context window. Results are cut to
+  about a third of the window, and earlier turns' results to 600 characters.
+- Tools run with your access. A server that scripts another app (apple-mail drives Mail with
+  AppleScript) makes macOS ask once whether Cantrip Gateway Mac may control that app.
+- Tool lists are cached in the same `DirectLocal` folder (`mcp-tools.json`) and reloaded when a
+  server's command changes.
 
 To check the connection from Terminal without opening a window (nothing is saved):
 
@@ -176,6 +208,8 @@ To check the connection from Terminal without opening a window (nothing is saved
 ```
 
 It lists the server's local models, confirms the model, and with `--prompt` streams one reply.
+`--mcp-check [--server NAME]` instead lists the MCP servers it found, starts each one that can
+run here, lists its tools with their context cost and stops it, without calling any tool.
 
 ## Updating the shared code
 

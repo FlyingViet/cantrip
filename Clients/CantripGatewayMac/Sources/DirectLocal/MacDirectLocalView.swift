@@ -43,7 +43,7 @@ struct MacDirectLocalView: View {
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text("Runs on this Mac only. This conversation stays here: it doesn't go through Cantrip and isn't synced to your other devices.")
+                Text(bannerDetail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -66,7 +66,8 @@ struct MacDirectLocalView: View {
         ChatTranscriptScrollView(scrollRequest: scrollRequest) {
             if chat.messages.isEmpty { emptyState }
             ForEach(chat.messages) { message in
-                TurnView(turn: Self.turn(for: message), remote: remote)
+                TurnView(turn: Self.turn(for: message, awaitingApproval: chat.awaitingApproval), remote: remote,
+                         onApproval: { choice in respond(choice, in: message) })
                     .id(message.id)
             }
             if let status = chat.status {
@@ -82,11 +83,51 @@ struct MacDirectLocalView: View {
         .accessibilityIdentifier("directLocal.transcript")
     }
 
+    private var bannerDetail: String {
+        let servers = chat.configuration.tools.enabledServers.sorted()
+        guard !servers.isEmpty else {
+            return "Runs on this Mac only. This conversation stays here: it doesn't go through Cantrip and isn't synced to your other devices."
+        }
+        return "Runs on this Mac only and isn't synced. Tools on: \(ListFormatter.localizedString(byJoining: servers)). Each tool asks before it runs unless you've allowed it."
+    }
+
     /// Plain text, like the host's Private Local tab: a local model's Markdown can't load images.
-    static func turn(for message: DirectLocalMessage) -> ChatTurn {
-        ChatTurn(isLocalPrivate: true, id: message.id, role: message.role == .user ? .user : .assistant,
-                 text: message.content, streaming: message.streaming, error: message.error,
-                 thinking: message.thinking)
+    /// Tool calls show as the reply's steps; the one waiting for you gets the approval card.
+    static func turn(for message: DirectLocalMessage, awaitingApproval: UUID? = nil) -> ChatTurn {
+        var turn = ChatTurn(isLocalPrivate: true, id: message.id, role: message.role == .user ? .user : .assistant,
+                            text: message.role == .user ? message.content : message.displayText,
+                            streaming: message.streaming, error: message.error, thinking: message.thinking)
+        let calls = message.toolCalls
+        turn.tools = calls.map { call in
+            ToolActivity(id: call.id.uuidString, name: call.label, arguments: call.arguments,
+                         output: toolOutput(call), done: call.state.isFinished)
+        }
+        if let waiting = calls.first(where: { $0.id == awaitingApproval && $0.state == .waiting }) {
+            turn.approval = HermesRunApproval(
+                command: "\(waiting.label) \(waiting.arguments)",
+                description: "Allow \(waiting.server ?? "this server") to run \(waiting.tool ?? waiting.name)? It runs on this Mac with your access.",
+                choices: ["once", "always", "deny"])
+        }
+        return turn
+    }
+
+    private static func toolOutput(_ call: DirectLocalToolCall) -> String? {
+        switch call.state {
+        case .waiting: "Waiting for you to allow it."
+        case .running: "Running…"
+        case .done: call.result
+        case .failed: call.result.map { "Failed: \($0)" } ?? "Failed."
+        case .denied: call.result.map { "Not run: \($0)" } ?? "Not run."
+        }
+    }
+
+    private func respond(_ choice: String, in message: DirectLocalMessage) {
+        guard let id = chat.awaitingApproval, message.toolCalls.contains(where: { $0.id == id }) else { return }
+        switch choice {
+        case "once": chat.respond(to: id, with: .once)
+        case "always": chat.respond(to: id, with: .always)
+        default: chat.respond(to: id, with: .deny)
+        }
     }
 
     private var emptyState: some View {
@@ -263,8 +304,11 @@ struct MacDirectLocalSettingsView: View {
                     Text("Context and system prompt")
                 }
 
+                MacDirectLocalToolsSection(chat: chat, settings: $draft.tools, contextWindow: draft.contextWindow,
+                                           systemPromptCharacters: draft.systemPrompt.count)
+
                 Section {
-                    Text("Direct local mode talks only to this server, from this Mac. The model gets no tools and no internet access, there is no cloud fallback, and the conversation is saved only on this Mac. The Private Local tab on your paired Cantrip is separate and unchanged.")
+                    Text("Direct local mode talks only to this server, from this Mac. The model can use only the tools you turn on above, there is no cloud fallback, and the conversation is saved only on this Mac. The Private Local tab on your paired Cantrip is separate and unchanged.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -314,5 +358,9 @@ struct MacDirectLocalSettingsView: View {
     /// QA: choose a listed model by name.
     func select(_ model: String) { draft.model = model }
     func setServer(_ url: String) { draft.baseURL = url }
+    func setTools(_ server: String, on: Bool, only: Set<String>?, all: [String]) {
+        draft.tools.setEnabled(server, on)
+        for tool in all { draft.tools.setEnabled(server, tool, only?.contains(tool) ?? true) }
+    }
     #endif
 }
