@@ -1124,6 +1124,8 @@ struct ChatView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var env: HermesEnv
     @ObservedObject private var remote: CantripRemoteModel
+    /// Cantrip tabs' and Home's backend "/" commands, cached per session.
+    @ObservedObject private var slashCommands: BackendSlashCommandStore
     @StateObject private var voice: VoiceController
     @StateObject private var vm: ChatViewModel
     @ObservedObject private var router = AppRouter.shared
@@ -1137,6 +1139,8 @@ struct ChatView: View {
     @State private var imageSendError: String?
     @State private var composerRevision = UUID()
     @State private var chatAvailableHeight: CGFloat = 600
+    /// Reported by `ChatDisplayObserver`; drives the iPhone Duo sidebar layout.
+    @State private var displayTraits = ChatDisplayTraits()
     @State private var chatHeaderHeight: CGFloat = 0
     @State private var showSettings = false
     @State private var showVoiceMode = false
@@ -1163,6 +1167,10 @@ struct ChatView: View {
     @State private var showRenameLocalTab = false
     @State private var tabName = ""
     @FocusState private var composerFocused: Bool
+    /// Escape (hardware keyboard) hides the backend "/" list until the text changes.
+    @State private var backendSlashDismissedText: String?
+    /// The row picked with the arrow keys, for the text it was picked on.
+    @State private var backendSlashHighlight: (text: String, index: Int)?
     @State private var commands: [HermesCommand] = []
     @StateObject private var menuUsageModel: CopilotUsageModel
     /// When paused, the app sends nothing — guards against unintentional requests
@@ -1180,6 +1188,7 @@ struct ChatView: View {
     init(env: HermesEnv, remote: CantripRemoteModel) {
         _env = ObservedObject(wrappedValue: env)
         _remote = ObservedObject(wrappedValue: remote)
+        _slashCommands = ObservedObject(wrappedValue: remote.slashCommands)
         let v = VoiceController()
         _voice = StateObject(wrappedValue: v)
         _menuUsageModel = StateObject(wrappedValue: CopilotUsageModel())
@@ -1193,7 +1202,8 @@ struct ChatView: View {
             isTabListPresented: $showRemoteTabs,
             hasTabs: vm.activeLane == .home,
             canSelectTabs: remoteTabsEnabled,
-            isReorderingTabs: remote.isReorderingTabs
+            isReorderingTabs: remote.isReorderingTabs,
+            showsPersistentSidebar: showsDuoSidebar
         ) { isModal, dismiss in
             CantripHomeTabDrawer(
                 model: remote,
@@ -1361,11 +1371,14 @@ struct ChatView: View {
             } message: {
                 Text(imageSendError ?? "")
             }
+        } persistentSidebar: {
+            duoSidebar
         }
         // Inside a tab, the same left-edge swipe that opens the drawer in Home drags the tab away to Home.
         .cantripTabBackSwipe(
             backTransition,
-            isEnabled: vm.activeLane == .cantrip && !vm.sending && !importingImages && !submittingRemote,
+            isEnabled: vm.activeLane == .cantrip && !vm.sending && !importingImages && !submittingRemote
+                && !showsDuoSidebar,
             isHomeReady: isHomeLoadedAfterReturn,
             pop: returnHome
         )
@@ -1537,7 +1550,7 @@ struct ChatView: View {
             await env.refreshGateway()
             reloadCommands()
         }
-        .modifier(ChatDisplayObserver())
+        .modifier(ChatDisplayObserver { displayTraits = $0 })
     }
 
     private var conversationContent: some View {
@@ -1564,14 +1577,28 @@ struct ChatView: View {
 
     private var chatHeader: some View {
         ChatHeader(
-            style: vm.activeLane == .home ? .mascot
+            style: showsDuoSidebar ? .sidebar
+                : vm.activeLane == .home ? .mascot
                 : vm.activeLane == .cantrip ? .tab : .standard
         ) {
             if vm.activeLane == .cantrip {
                 CantripTabHeaderTitle(
                     session: remote.selectedSession,
-                    connectionState: remote.connectionState
+                    connectionState: remote.connectionState,
+                    alignment: showsDuoSidebar ? .leading : .center
                 )
+            } else if vm.activeLane == .home, showsDuoSidebar {
+                // Pip is in the sidebar; the header names the section like Gateway Mac's toolbar.
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(homeSection.title).font(.headline).lineLimit(1)
+                    Text(remote.isConnected ? remote.endpointHost : remote.connectionLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("chat.header.title")
             } else if vm.activeLane == .home {
                 ExecutionLanePicker(
                     env: env,
@@ -1618,6 +1645,19 @@ struct ChatView: View {
                 }
             }
         } delivery: {
+            if showsDuoSidebar, vm.activeLane == .cantrip {
+                // Gateway Mac's toolbar order: Stop, delivery, then the tab's menu.
+                CantripStopButton(
+                    session: remote.selectedSession,
+                    isConnected: remote.isConnected,
+                    isMutating: remote.isMutating,
+                    isStopping: remote.stoppingSessionID != nil
+                        && remote.stoppingSessionID == remote.selectedSessionID,
+                    iconOnly: true,
+                    onStop: vm.stopRemote
+                )
+                .disabled(vm.sending || importingImages || submittingRemote)
+            }
             if vm.activeLane.usesCantripRemote, remote.selectedSession != nil {
                 CantripDeliveryPicker(deliveryMode: $vm.remoteDeliveryMode, compact: true)
                     .disabled(remote.isMutating || vm.sending || importingImages || submittingRemote)
@@ -2295,11 +2335,180 @@ struct ChatView: View {
                         .accessibilityElement(children: .contain)
                     }
                 }
+                // The Duo sidebar's Skills section filters instead of a pop-up over the chat.
+                if !showsDuoSidebar, let presentation = backendSlashPresentation {
+                    BackendSlashSuggestionList(
+                        presentation: presentation,
+                        highlighted: backendSlashHighlightIndex,
+                        maxHeight: max(120, chatAvailableHeight * 0.4),
+                        canOpenModelSettings: canOpenModelSettingsFromSlash,
+                        maxVisibleRows: 2.5,
+                        onChoose: { chooseBackendCommand($0, via: .activate) }
+                    )
+                }
                 messageComposer
             }
         }
         .padding(.horizontal).padding(.vertical, 8)
         .background(.bar)
+        .onChange(of: BackendSlashCommands.slashToken(input) != nil) { _, entered in
+            if entered { remote.refreshSlashCommandsIfNeeded() }
+        }
+        .onChange(of: input) { _, text in
+            if text != backendSlashDismissedText { backendSlashDismissedText = nil }
+        }
+        .onChange(of: composerFocused) { _, focused in
+            // Prefetch while the keyboard comes up, so "/" usually shows a cached list at once.
+            if focused, vm.activeLane.usesCantripRemote { remote.refreshSlashCommandsIfNeeded() }
+        }
+        .onChange(of: remote.slashCommandContext) { _, _ in
+            // Another tab, folder or backend while the list is open.
+            if backendSlashToken != nil { remote.refreshSlashCommandsIfNeeded() }
+        }
+        #if DEBUG
+        .task {
+            if CantripUITestFixtures.composerText == nil, let name = CantripUITestFixtures.slashCommandToChoose {
+                // The Duo sidebar's Skills rows: choose from the chat's command list.
+                for _ in 0..<200 {
+                    if destinationReady, let context = remote.slashCommandContext,
+                       let response = slashCommands.response(for: context.key),
+                       let index = response.commands.firstIndex(where: { $0.name == name }) {
+                        try? await Task.sleep(for: .seconds(2))
+                        chooseBackendCommand(BackendCommandMatch(command: response.commands[index], score: 1, index: index),
+                                             via: .activate)
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                return
+            }
+            if let text = await CantripUITestFixtures.composerTextWhenReady({ destinationReady && composerAcceptsText }) {
+                input = text
+                composerFocused = true
+                guard let name = CantripUITestFixtures.slashCommandToChoose else { return }
+                for _ in 0..<150 {
+                    if let match = backendSlashPresentation?.matches.first(where: { $0.command.name == name }) {
+                        try? await Task.sleep(for: .seconds(1))
+                        chooseBackendCommand(match, via: .activate)
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            }
+        }
+        #endif
+    }
+
+    /// iPhone Duo unfolded on its side, in Cantrip: Gateway Mac's sidebar beside the chat.
+    private var showsDuoSidebar: Bool {
+        displayTraits.usesSidebarLayout && vm.activeLane.usesCantripRemote
+    }
+
+    private var duoSidebar: some View {
+        CantripDuoSidebar(
+            model: remote,
+            slashCommands: slashCommands,
+            isHomeShown: vm.activeLane == .home,
+            homeSection: homeSection,
+            showsSkills: vm.activeLane == .cantrip || homeSection == .chat,
+            slashToken: backendSlashToken,
+            highlighted: backendSlashHighlightIndex,
+            canOpenModelSettings: canOpenModelSettingsFromSlash,
+            backgroundStatus: duoSidebarBackground,
+            isListening: voice.isListening,
+            isSpeaking: voice.isSpeaking,
+            onSelectSection: { section in
+                homeSection = section
+                if vm.activeLane != .home { returnHome() }
+            },
+            onSelectTab: { openTab($0, picturesHome: false) },
+            onCreateTab: createRemoteSession,
+            onRename: { renamingRemoteSession = $0 },
+            onClose: closeRemoteSession,
+            onOpenBackground: {
+                composerFocused = false
+                showHomeBackground = true
+            },
+            onCustomizeMascot: {
+                composerFocused = false
+                showMascotCustomization = true
+            },
+            onChoose: { chooseBackendCommand($0, via: .activate) }
+        )
+        .disabled(vm.sending || importingImages || submittingRemote)
+    }
+
+    private var duoSidebarBackground: CantripDuoSidebarBackground? {
+        guard vm.activeLane == .home else { return nil }
+        let active = homeBackgroundCount, input = homeBackgroundInputCount
+        guard remote.selectedSession?.supportsBackgroundRuns == true || active > 0 || input > 0 else { return nil }
+        if input > 0 { return .init(text: input == 1 ? "Needs input" : "\(input) need input", isActive: true) }
+        return .init(text: active > 0 ? "\(active) running" : "None running", isActive: active > 0)
+    }
+
+    /// The typed "/" token while a Cantrip tab's or Home's backend suggestions can show.
+    private var backendSlashToken: String? {
+        guard vm.activeLane.usesCantripRemote, !paused, composerFocused, composerAcceptsText,
+              backendSlashDismissedText != input,
+              // A reply to the agent's question is never a command.
+              !(vm.remoteDeliveryMode == .auto && remote.chatInputRequest != nil),
+              remote.slashCommandContext != nil else { return nil }
+        return BackendSlashCommands.slashToken(input)
+    }
+
+    private var backendSlashPresentation: BackendSlashPresentation? {
+        guard let context = remote.slashCommandContext else { return nil }
+        return BackendSlashCommands.presentation(
+            token: backendSlashToken,
+            response: slashCommands.response(for: context.key),
+            isLoading: slashCommands.isLoading(context.key)
+        )
+    }
+
+    private var canOpenModelSettingsFromSlash: Bool {
+        remote.selectedSession?.supportsModelSettings == true
+    }
+
+    /// The arrow-key row for this text, else the default: a strong, runnable first match. The list
+    /// shows it only with compact rows and a hardware keyboard.
+    private var backendSlashHighlightIndex: Int? {
+        guard let token = backendSlashToken, let presentation = backendSlashPresentation else { return nil }
+        if let highlight = backendSlashHighlight, highlight.text == input { return highlight.index }
+        return BackendSlashCommands.defaultHighlight(token: token, matches: presentation.matches)
+    }
+
+    /// Hardware-keyboard keys while compact rows show (`BackendSlashKeyPresses` checks the style).
+    private func handleBackendSlashKey(_ key: BackendSlashKey) -> Bool {
+        guard let presentation = backendSlashPresentation else { return false }
+        switch BackendSlashCommands.handle(key, matches: presentation.matches, highlighted: backendSlashHighlightIndex) {
+        case .ignore:
+            return false
+        case .highlight(let index):
+            backendSlashHighlight = (input, index)
+        case .choose(let match, let trigger):
+            chooseBackendCommand(match, via: trigger)
+        case .dismiss:
+            backendSlashDismissedText = input
+        }
+        return true
+    }
+
+    /// A chosen suggestion: model settings open, a command without arguments sends now (tap or
+    /// Return), and anything else (or Tab) is inserted with the keyboard still up for its argument.
+    private func chooseBackendCommand(_ match: BackendCommandMatch, via trigger: BackendCommandTrigger) {
+        guard let choice = BackendSlashCommands.choose(
+            match.command, via: trigger, canOpenModelSettings: canOpenModelSettingsFromSlash
+        ) else { return }
+        input = choice.text
+        backendSlashHighlight = nil
+        if choice.opensModelSettings {
+            composerFocused = false
+            remote.modelSettingsSession = remote.selectedSession
+        } else if choice.sendsImmediately {
+            sendText()
+        } else {
+            composerFocused = true
+        }
     }
 
     /// Background-run requests waiting on the user, shown on Home's Background button.
@@ -2372,6 +2581,7 @@ struct ChatView: View {
             .frame(maxWidth: .infinity, minHeight: 44)
             .disabled(!destinationReady || !composerAcceptsText || vm.sending || submittingRemote)
             .onSubmit(sendText)
+            .modifier(BackendSlashKeyPresses(isActive: backendSlashPresentation != nil, onKey: handleBackendSlashKey))
             .accessibilityIdentifier("chat.message")
         } trailing: {
             remoteStopButton
@@ -2776,6 +2986,8 @@ enum ChatHeaderStyle {
     case mascot
     /// A project tab inside Home: "‹ Home" pill, centered title and state, glass menu.
     case tab
+    /// iPhone Duo's sidebar layout: Gateway Mac's toolbar, title and state leading, actions trailing.
+    case sidebar
 }
 
 struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delivery: View,
@@ -2805,24 +3017,33 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                 }
             case .tab:
                 tabRow
+            case .sidebar:
+                HStack(spacing: 6) {
+                    title().frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    delivery()
+                    refresh()
+                    settings()
+                    trailing().frame(width: 44, height: 44)
+                }
+                .frame(minHeight: 48)
             case .compact:
                 HStack(spacing: 8) {
-                    if !displayTraits.hasVerticalBar {
+                    if !displayTraits.placesActionsInVerticalBar {
                         leading().frame(width: 44, height: 44)
                     }
                     title().frame(maxWidth: .infinity, minHeight: 44)
-                    if !displayTraits.hasVerticalBar {
+                    if !displayTraits.placesActionsInVerticalBar {
                         trailing().frame(width: 44, height: 44)
                     }
                 }
                 .frame(minHeight: 44)
             case .standard:
                 HStack(spacing: 8) {
-                    if !displayTraits.hasVerticalBar {
+                    if !displayTraits.placesActionsInVerticalBar {
                         leading().frame(width: 44, height: 44)
                     }
                     title().frame(maxWidth: .infinity, minHeight: 44)
-                    if !displayTraits.hasVerticalBar {
+                    if !displayTraits.placesActionsInVerticalBar {
                         trailing().frame(width: 44, height: 44)
                     }
                 }
@@ -2831,7 +3052,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                     lane()
                     usage()
                     delivery()
-                    if !displayTraits.hasVerticalBar { refresh() }
+                    if !displayTraits.placesActionsInVerticalBar { refresh() }
                 }
             }
         }
@@ -2851,12 +3072,12 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
 
     /// The title stays centered on the screen and clear of the wider of the two side controls.
     private var tabRow: some View {
-        let inset = displayTraits.hasVerticalBar ? 0 : max(tabLeadingWidth, 44) + 8
+        let inset = displayTraits.placesActionsInVerticalBar ? 0 : max(tabLeadingWidth, 44) + 8
         return ZStack {
             title()
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .padding(.horizontal, inset)
-            if !displayTraits.hasVerticalBar {
+            if !displayTraits.placesActionsInVerticalBar {
                 HStack(spacing: 8) {
                     leading()
                         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabLeadingWidth = $0 }
@@ -2871,7 +3092,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     }
 
     @ViewBuilder private var floatingActions: some View {
-        if !displayTraits.hasVerticalBar {
+        if !displayTraits.placesActionsInVerticalBar {
             HStack(alignment: .top, spacing: 8) {
                 glassAction(leading())
                 Spacer(minLength: 0)

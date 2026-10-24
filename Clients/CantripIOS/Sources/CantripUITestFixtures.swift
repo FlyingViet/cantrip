@@ -21,6 +21,65 @@ enum CantripUITestFixtures {
         try await CantripBiometrics.authorize(reason)
     }
 
+    /// `-CantripUITestBackendCommands` answers every session's `/commands` call with the generic
+    /// contract fixture (and treats every session as listing commands), so "/" suggestions show
+    /// against fixture hosts that don't serve the route.
+    static let backendCommands: BackendCommandsResponse? = {
+        guard ProcessInfo.processInfo.arguments.contains("-CantripUITestBackendCommands") else { return nil }
+        return try? JSONDecoder().decode(BackendCommandsResponse.self, from: Data(backendCommandsJSON.utf8))
+    }()
+
+    /// The generic fixture from the host contract. Never put real skill names here.
+    static let backendCommandsJSON = """
+    {"backend":"Copilot","workdir":"/tmp/project","revision":"r1","status":null,"commands":[
+     {"name":"plan","description":"Create an implementation plan before coding","kind":"builtin","source":"Copilot","inputHint":"prompt","requiresInput":false,"aliases":[],"insert":"/plan ","availability":"runs","note":null,"action":null},
+     {"name":"usage","description":"Display session usage metrics and statistics","kind":"builtin","source":"Copilot","inputHint":null,"requiresInput":false,"aliases":[],"insert":"/usage ","availability":"runs","note":null,"action":null},
+     {"name":"model","description":"Select the AI model for this session","kind":"builtin","source":"Copilot","inputHint":"model","requiresInput":false,"aliases":[],"insert":"/model ","availability":"cantrip","note":"Opens this tab's model settings.","action":"modelSettings"},
+     {"name":"allow-all","description":"Enable all permissions","kind":"builtin","source":"Copilot","inputHint":"[on|off|show]","requiresInput":false,"aliases":["yolo"],"insert":"/allow-all ","availability":"unavailable","note":"Cantrip's approval settings decide what Copilot may do in this tab.","action":null},
+     {"name":"fixture-skill","description":"Fixture project skill for tests","kind":"skill","source":"Project","inputHint":"instructions for the skill","requiresInput":false,"aliases":[],"insert":"/fixture-skill ","availability":"runs","note":null,"action":null},
+     {"name":"review-helper","description":"Review the current diff","kind":"custom","source":"Personal","inputHint":null,"requiresInput":false,"aliases":[],"insert":"/review-helper ","availability":"runs","note":null,"action":null}
+    ]}
+    """
+
+    /// `-CantripUITestHardwareKeyboard` treats a hardware keyboard as attached (compact "/" rows
+    /// then show their keyboard highlight) on a simulator without one.
+    static var attachesHardwareKeyboard: Bool {
+        ProcessInfo.processInfo.arguments.contains("-CantripUITestHardwareKeyboard")
+    }
+
+    /// `-CantripUITestExpandUnavailableSkills` opens the Duo sidebar's "Can't run here" group.
+    static var expandsUnavailableSkills: Bool {
+        ProcessInfo.processInfo.arguments.contains("-CantripUITestExpandUnavailableSkills")
+    }
+
+    /// `-CantripUITestSlashScrollToEnd` scrolls the "/" list to its last rows once it shows.
+    static var scrollsSlashListToEnd: Bool {
+        ProcessInfo.processInfo.arguments.contains("-CantripUITestSlashScrollToEnd")
+    }
+
+    /// `-CantripUITestChooseSlashCommand usage` chooses that row through the same action as a tap
+    /// once the "/" list (or, without composer text, the chat's command list) has it, for
+    /// end-to-end checks where UI automation can't reach the app.
+    static var slashCommandToChoose: String? {
+        UserDefaults.standard.string(forKey: "CantripUITestChooseSlashCommand")
+    }
+
+    /// `-CantripUITestComposerText "/pl"` types that text into the composer and focuses it once a
+    /// session is ready, for screenshots of the "/" suggestions without driving the keyboard.
+    static var composerText: String? { UserDefaults.standard.string(forKey: "CantripUITestComposerText") }
+
+    @MainActor
+    static func composerTextWhenReady(_ isReady: () -> Bool) async -> String? {
+        guard let text = composerText else { return nil }
+        for _ in 0..<200 where !isReady() {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard isReady() else { return nil }
+        // Let the conversation settle so the focused composer isn't recreated under the text.
+        try? await Task.sleep(for: .seconds(1))
+        return text
+    }
+
     /// `-CantripUITestRemoteURL http://127.0.0.1:<port> -CantripUITestRemoteToken <token>` pairs
     /// with a local fixture host (saved like a server added in Settings), so UI tests can drive real
     /// Remote and Home flows on the simulator. `-CantripUITestRemoteDirect <host:port>` also saves a

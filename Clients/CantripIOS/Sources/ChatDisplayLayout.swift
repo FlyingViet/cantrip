@@ -5,6 +5,17 @@ import UIKit
 
 struct ChatDisplayTraits: Equatable {
     var hasVerticalBar = false
+    /// The window (not the keyboard-shortened content) is wider than tall.
+    var isLandscape = false
+    /// False on iPad, which keeps its own split navigation.
+    var allowsSidebarLayout = true
+
+    /// iPhone Duo unfolded on its side: a Gateway Mac-style layout with a persistent sidebar and the
+    /// chat's actions in its own header. Upright and folded windows and other iPhones keep today's.
+    var usesSidebarLayout: Bool { allowsSidebarLayout && hasVerticalBar && isLandscape }
+
+    /// Header actions go to the system's vertical bar, except in the sidebar layout.
+    var placesActionsInVerticalBar: Bool { hasVerticalBar && !usesSidebarLayout }
 }
 
 private struct ChatDisplayTraitsKey: EnvironmentKey {
@@ -20,10 +31,28 @@ extension EnvironmentValues {
 
 struct ChatDisplayObserver: ViewModifier {
     @State private var traits = ChatDisplayTraits()
+    /// Reports the traits to the view applying the observer, which can't read this environment.
+    var onChange: (ChatDisplayTraits) -> Void = { _ in }
 
     func body(content: Content) -> some View {
         content
             .environment(\.chatDisplayTraits, traits)
+            .onChange(of: traits, initial: true) { _, value in onChange(value) }
+            .onAppear {
+                #if os(iOS)
+                traits.allowsSidebarLayout = UIDevice.current.userInterfaceIdiom == .phone
+                #endif
+            }
+            .background {
+                // Window-local shape; ignoring the keyboard keeps a portrait window portrait while typing.
+                Color.clear
+                    .ignoresSafeArea()
+                    .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: {
+                        traits.isLandscape = $0
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
             .background {
                 #if AGENTGATEWAY_DUO_SDK
                 if #available(iOS 27.1, *) {
@@ -59,7 +88,7 @@ struct ChatNavigationActions<Leading: View, Refresh: View, Settings: View, Trail
     @ViewBuilder var settings: () -> Settings
     @ViewBuilder var trailing: () -> Trailing
 
-    private var usesVerticalBar: Bool { displayTraits.hasVerticalBar }
+    private var usesVerticalBar: Bool { displayTraits.placesActionsInVerticalBar }
 
     func body(content: Content) -> some View {
         content

@@ -57,9 +57,11 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
   iPad uses adaptive split navigation, with a sidebar at regular width and a
   drawer when compact. Never switch stack types based on folding or window width.
   Keep drafts, voice, and run ownership outside size-dependent branches.
-- `ChatDisplayObserver` reads window-local vertical-bar traits.
+- `ChatDisplayObserver` reads window-local vertical-bar traits and the window's shape.
   `ChatHeader` moves actions into the native vertical toolbar
-  only where the system supports it. Do not infer Duo from dimensions or device
+  only where the system supports it, except in the sidebar layout (vertical bar + landscape
+  window on iPhone: `ChatDisplayTraits.usesSidebarLayout`), which shows `CantripDuoSidebar`
+  beside the same stack and keeps the actions in the chat header. Do not infer Duo from dimensions or device
   names. `AGENTGATEWAY_DUO_SDK` is selected by SDK in `project.yml`, not by the
   Swift compiler version; keep both SDK and iOS availability guards.
 - Saved servers live in `ServerProfiles`; each server's credential is stored

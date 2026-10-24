@@ -232,10 +232,12 @@ struct CantripHomeBackPill: View {
 struct CantripTabHeaderTitle: View {
     let session: CantripRemoteSession?
     let connectionState: CantripRemoteConnectionState
+    /// Leading in the sidebar layout's header, like Gateway Mac's toolbar title.
+    var alignment: HorizontalAlignment = .center
 
     var body: some View {
         let state = CantripTabRowText.state(for: session, connection: connectionState)
-        VStack(spacing: 1) {
+        VStack(alignment: alignment, spacing: 1) {
             HStack(spacing: 4) {
                 if session?.isLocalPrivate == true {
                     Image(systemName: "lock.shield.fill").font(.caption)
