@@ -115,7 +115,8 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   **Start Fresh** (also in the Home menu) keeps the tab and its messages but starts the next
   prompt in a new model session; a repeated error offers it, and **Change Model**, in place.
 - **Chat:** Return sends; Option-Return adds a line. Drag images onto the chat to
-  attach them. Questions from Cantrip appear above the composer.
+  attach them, or press ⌘V in the message box with a copied screenshot, photo, video or
+  Finder file (copied text still pastes as text). Questions from Cantrip appear above the composer.
 - **Slash commands:** type `/` in Home's or a tab's composer to list that tab's backend
   commands, custom commands and skills. Up/Down move the highlight (Return runs a command
   without arguments, or inserts one that takes an argument), Tab inserts, Escape hides the list

@@ -18,8 +18,9 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 - **Slash commands.** Type `/` in a tab's or Home's composer to see the tab backend's
   commands, custom commands and skills, as the Mac lists them (needs a Cantrip version that
   offers them; older ones keep the composer as it was).
-- **Attachments.** Up to 4 images (pasted, dropped or picked), a video and up to 5 files
-  per message, uploaded resumably the way the Mac app sends them.
+- **Attachments.** Up to 4 images, a video and up to 5 files per message (pasted into the
+  message box, dropped or picked), uploaded resumably the way the Mac app sends them. Copied
+  text still pastes as text, even when Excel or Word put a picture of it on the clipboard too.
 - **Tasks and Artifacts.** Scheduled tasks with runs, workspaces and their records;
   artifacts with thumbnails, the image viewer, Save and Delete.
 - **Sheets.** Background runs (answer a waiting run in place), a tab's background tasks and

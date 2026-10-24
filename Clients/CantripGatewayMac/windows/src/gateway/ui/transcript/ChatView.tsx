@@ -17,7 +17,7 @@ import { mascotName } from "../pip/prefs";
 import { voiceState } from "../voice/state";
 import { VoiceButton, VoiceStatus } from "../voice/VoiceControls";
 import {
-  AttachmentError, isImageFile, isVideoFile, MAX_FILES, MAX_IMAGES, prepareFile, prepareImage, prepareVideo, uploadAttachments,
+  AttachmentError, isImageFile, isVideoFile, MAX_FILES, MAX_IMAGES, pastedFiles, prepareFile, prepareImage, prepareVideo, uploadAttachments,
   type FileDraft, type ImageDraft, type UploadProgress, type VideoDraft,
 } from "./attachments";
 import { chatQuestion, composerAcceptsText, composerPlaceholder, InputTranscript, QuestionPanel } from "./Inputs";
@@ -560,7 +560,7 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
             onBlur={() => setFocused(false)}
             onInput={(event) => update({ text: (event.target as HTMLTextAreaElement).value })}
             onPaste={(event) => {
-              const files = Array.from(event.clipboardData?.files ?? []).filter(isImageFile);
+              const files = pastedFiles(event.clipboardData);
               if (files.length) { event.preventDefault(); void addFiles(files); }
             }}
             onKeyDown={(event) => {
