@@ -65,6 +65,7 @@ targets:
               - cantripagent
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        NSAppleEventsUsageDescription: Tools you turn on for the local model (MCP servers on this Mac) can control apps such as Mail to read or act on your data. Each tool asks you first unless you allow it.
     settings:
       base:
         PRODUCT_NAME: "Cantrip Gateway Mac"

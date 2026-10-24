@@ -50,4 +50,9 @@ struct CantripGatewayMacApp: App {
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
     /// Home is one conversation in one window; quitting stops polling the Mac host.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// MCP servers started for the local model end with the app.
+    func applicationWillTerminate(_ notification: Notification) {
+        DirectLocalMCPConnection.terminateAll()
+    }
 }

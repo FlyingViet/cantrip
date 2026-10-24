@@ -11,12 +11,20 @@ final class DirectLocalStubProtocol: URLProtocol {
     }
 
     static var replies: [String: Reply] = [:]
+    /// Replies used once each, in order, before falling back to `replies`.
+    static var queued: [String: [Reply]] = [:]
     static var requests: [URLRequest] = []
     static var bodies: [String: Data] = [:]
+    /// Every body sent to each path, in order.
+    static var allBodies: [String: [Data]] = [:]
     private static let lock = NSLock()
 
     static func reset() {
-        lock.withLock { replies = [:]; requests = []; bodies = [:] }
+        lock.withLock { replies = [:]; queued = [:]; requests = []; bodies = [:]; allBodies = [:] }
+    }
+
+    static func sentBodies(_ path: String) -> [[String: Any]] {
+        lock.withLock { allBodies[path] ?? [] }.compactMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
     }
 
     static func json(_ object: Any, status: Int = 200) -> Reply {
@@ -49,7 +57,15 @@ final class DirectLocalStubProtocol: URLProtocol {
         }
         let reply: Reply? = Self.lock.withLock {
             Self.requests.append(request)
-            if let body { Self.bodies[path] = body }
+            if let body {
+                Self.bodies[path] = body
+                Self.allBodies[path, default: []].append(body)
+            }
+            if var queue = Self.queued[path], !queue.isEmpty {
+                let next = queue.removeFirst()
+                Self.queued[path] = queue
+                return next
+            }
             return Self.replies[path]
         }
         guard let reply, let url = request.url else {
@@ -159,8 +175,13 @@ final class DirectLocalTests: XCTestCase {
         XCTAssertEqual(try DirectLocalStream.events(fromLine: #"{"error":"model is loading"}"#), [.failure("model is loading")])
         XCTAssertEqual(try DirectLocalStream.events(fromLine: #"{"error":{"message":"Not enough free memory","type":"out_of_memory"}}"#),
                        [.failure("Not enough free memory")], "OpenAI-style error objects (mlx-serve) keep their message")
-        XCTAssertThrowsError(try DirectLocalStream.events(
-            fromLine: #"{"message":{"content":"","tool_calls":[{"function":{"name":"x"}}]},"done":false}"#))
+        XCTAssertEqual(try DirectLocalStream.events(
+            fromLine: #"{"message":{"content":"","tool_calls":[{"function":{"name":"x","arguments":{"b":2,"a":"z"}}}]},"done":false}"#),
+                       [.toolCalls([DirectLocalToolRequest(name: "x", arguments: #"{"a":"z","b":2}"#)])])
+        XCTAssertEqual(try DirectLocalStream.events(
+            fromLine: #"{"message":{"tool_calls":[{"function":{"name":"y","arguments":"{\"q\":1}"}},{"function":{}}]}}"#),
+                       [.toolCalls([DirectLocalToolRequest(name: "y", arguments: #"{"q":1}"#)])],
+                       "JSON-string arguments (OpenAI style) are parsed; calls without a name are dropped")
         XCTAssertThrowsError(try DirectLocalStream.events(fromLine: "not json"))
     }
 
@@ -188,7 +209,7 @@ final class DirectLocalTests: XCTestCase {
             DirectLocalMessage(role: .assistant, content: "failed", error: "The local server stopped"),
             DirectLocalMessage(role: .user, content: "latest"),
         ]
-        let messages = DirectLocalHistory.chatMessages(conversation, configuration: configuration)
+        let messages = strings(DirectLocalHistory.chatMessages(conversation, configuration: configuration))
         XCTAssertEqual(messages.first?["role"], "system")
         XCTAssertEqual(messages.dropFirst().compactMap { $0["content"] }, ["second", "latest"],
                        "newest turns that fit, without a leading reply")
@@ -197,9 +218,44 @@ final class DirectLocalTests: XCTestCase {
         XCTAssertFalse(messages.contains { $0["content"]?.hasPrefix("first") == true }, "older turns past the budget are dropped")
         XCTAssertNotEqual(messages.dropFirst().first?["role"], "assistant", "history never starts with a reply")
         configuration.systemPrompt = ""
-        XCTAssertEqual(DirectLocalHistory.chatMessages([DirectLocalMessage(role: .user, content: "hi")],
-                                                       configuration: configuration),
+        XCTAssertEqual(strings(DirectLocalHistory.chatMessages([DirectLocalMessage(role: .user, content: "hi")],
+                                                               configuration: configuration)),
                        [["role": "user", "content": "hi"]], "no empty system message")
+    }
+
+    func testHistoryEncodesToolRoundsAndShortensOlderResults() {
+        let long = String(repeating: "r", count: 2_000)
+        func call(_ name: String, _ result: String) -> DirectLocalToolCall {
+            DirectLocalToolCall(name: name, server: "notes", tool: name, arguments: #"{"q":"x"}"#, state: .done, result: result)
+        }
+        let conversation = [
+            DirectLocalMessage(role: .user, content: "earlier"),
+            DirectLocalMessage(role: .assistant, content: "old answer",
+                               toolRounds: [DirectLocalToolRound(content: "", calls: [call("search", long)])]),
+            DirectLocalMessage(role: .user, content: "now"),
+            DirectLocalMessage(role: .assistant, content: "", streaming: true,
+                               toolRounds: [DirectLocalToolRound(content: "Looking.", calls: [call("get", long)])]),
+        ]
+        let messages = DirectLocalHistory.chatMessages(conversation, configuration: base, systemNote: "Use tools.")
+        XCTAssertEqual(messages.map { $0["role"] as? String }, ["system", "user", "assistant", "tool", "assistant",
+                                                                "user", "assistant", "tool"])
+        XCTAssertTrue((messages[0]["content"] as? String)?.hasSuffix("\n\nUse tools.") == true, "the tool note follows the prompt")
+        let olderResult = messages[3]["content"] as? String ?? ""
+        XCTAssertTrue(olderResult.hasPrefix(String(repeating: "r", count: 600)) && olderResult.contains("Cut to 600"),
+                      "earlier turns' results are shortened")
+        XCTAssertEqual(messages[7]["content"] as? String, long, "this turn's results are whole")
+        XCTAssertEqual(messages[7]["tool_name"] as? String, "get")
+        XCTAssertEqual(messages[6]["content"] as? String, "Looking.")
+        let calls = messages[6]["tool_calls"] as? [[String: Any]]
+        let function = calls?.first?["function"] as? [String: Any]
+        XCTAssertEqual(function?["name"] as? String, "get")
+        XCTAssertEqual((function?["arguments"] as? [String: Any])?["q"] as? String, "x", "arguments go back as an object")
+        XCTAssertEqual(messages[4]["content"] as? String, "old answer")
+        XCTAssertEqual(conversation[3].displayText, "Looking.")
+    }
+
+    private func strings(_ messages: [[String: Any]]) -> [[String: String]] {
+        messages.map { $0.compactMapValues { $0 as? String } }
     }
 
     // MARK: Store

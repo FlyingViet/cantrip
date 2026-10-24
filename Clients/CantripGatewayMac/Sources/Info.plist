@@ -42,6 +42,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Tools you turn on for the local model (MCP servers on this Mac) can control apps such as Mail to read or act on your data. Each tool asks you first unless you allow it.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_cantrip-remote._tcp</string>
