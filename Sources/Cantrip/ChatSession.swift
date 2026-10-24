@@ -1763,6 +1763,29 @@ final class ChatSession: ObservableObject {
             // Unknown /command falls through to the LLM.
         }
 
+        // Backend commands Cantrip handles itself (/model on Copilot, /clear on Claude) or that
+        // would bypass Cantrip or break remotely (see BackendCommandPolicy): never sent on.
+        if !isLocalPrivate, let invocation = SlashInvocation(prompt),
+           let family = BackendCommandCatalog.family(for: effectiveBackendKind),
+           let rule = BackendCommandPolicy.rule(
+               family: family, name: invocation.name,
+               discovered: BackendCommandCatalog.shared.cachedList(for: self)?.command(named: invocation.name)) {
+            Log.write("command: /\(invocation.name) handled by Cantrip (\(rule.availability.rawValue))")
+            // This command's own queue entry must not count as "queued work" below.
+            if let queuedItem { removeQueued(queuedItem) }
+            if rule.action == "startFresh", (try? startFresh()) != nil { return }
+            let reply: String
+            switch rule.action {
+            case "modelSettings": reply = modelCommandReply(invocation.input)
+            case "startFresh": reply = startFreshUnavailableReason ?? "This tab couldn't start fresh."
+            default: reply = "`/\(invocation.name)` doesn't run from Cantrip. \(rule.note)"
+            }
+            messages.append(ChatMessage(role: .user, text: prompt))
+            messages.append(ChatMessage(role: .assistant, text: reply))
+            persistTranscript()
+            return
+        }
+
         // Instant answers: math, unit conversion, app launch — no LLM.
         if !isLocalPrivate, selectionContext == nil, let instant = InstantAnswers.answer(for: prompt) {
             Log.write("instant: \"\(prompt.prefix(60))\"")
@@ -1828,26 +1851,30 @@ final class ChatSession: ObservableObject {
             onCantripHomeRunStarted?(runID, automatedRun)
         }
 
-        // Attach context (shown to the backend, not in the UI).
+        // Attach context (shown to the backend, not in the UI). A slash command goes to the
+        // backend exactly as typed: anything appended would become the command's argument.
+        let isSlashCommand = !isLocalPrivate && SlashInvocation(prompt) != nil
         var backendPrompt = prompt
-        if let preamble {
-            backendPrompt = preamble + "\n\n" + backendPrompt
+        if !isSlashCommand {
+            if let preamble {
+                backendPrompt = preamble + "\n\n" + backendPrompt
+            }
+            if interrupted {
+                backendPrompt = "(I interrupted your previous in-progress response — treat this message as a course correction or update to that task, not a brand-new topic.) " + backendPrompt
+            }
+            backendPrompt = composeContext(onto: backendPrompt, query: prompt,
+                                           isFirstOfConversation: isFirstOfConversation,
+                                           backendKind: backendKind,
+                                           includesAmbientContext: includesAmbientContext,
+                                           consumesStagedContext: consumesStagedContext)
         }
-        if interrupted {
-            backendPrompt = "(I interrupted your previous in-progress response — treat this message as a course correction or update to that task, not a brand-new topic.) " + backendPrompt
-        }
-        backendPrompt = composeContext(onto: backendPrompt, query: prompt,
-                                       isFirstOfConversation: isFirstOfConversation,
-                                       backendKind: backendKind,
-                                       includesAmbientContext: includesAmbientContext,
-                                       consumesStagedContext: consumesStagedContext)
 
         UsageTracker.shared.recordQuery(backend: backendKind)
         armWatchdog()
         streamGeneration += 1
         let generation = streamGeneration
         prepareMemory(onto: backendPrompt, query: prompt, backendKind: backendKind,
-                      generation: generation) { [weak self] prepared in
+                      generation: generation, includeMemory: !isSlashCommand) { [weak self] prepared in
             guard let self else { return }
             if self.isLocalPrivate {
                 do {
@@ -1888,8 +1915,9 @@ final class ChatSession: ObservableObject {
     }
 
     private func prepareMemory(onto prompt: String, query: String, backendKind: BackendKind?,
-                               generation: Int, completion: @escaping (String) -> Void) {
-        let memoryEnabled = settings.memoryEnabled && !isLocalPrivate
+                               generation: Int, includeMemory: Bool = true,
+                               completion: @escaping (String) -> Void) {
+        let memoryEnabled = settings.memoryEnabled && !isLocalPrivate && includeMemory
         let path = settings.memoryPath
         let privacy = isPrivate
         let directory = workdir
@@ -1912,7 +1940,7 @@ final class ChatSession: ObservableObject {
             self.preparationTask = nil
             guard self.isPrivate == privacy, self.workdir == directory,
                   (self.isLocalPrivate || self.settings.backend == configuredBackend),
-                  (self.isLocalPrivate || self.settings.memoryEnabled == memoryEnabled),
+                  (self.isLocalPrivate || (self.settings.memoryEnabled && includeMemory) == memoryEnabled),
                   self.settings.memoryPath == path else {
                 self.cancel(keepQueue: true)
                 self.deliveryStatus = "Preparation cancelled because session settings changed. Send again to use the new settings."
@@ -3418,6 +3446,54 @@ final class ChatSession: ObservableObject {
 
     /// Cantrip Home keeps its own continuity; every other tab can start fresh.
     var supportsStartFresh: Bool { !SessionManager.isCantripHomeReserved(self) }
+
+    /// Commands the Copilot Remote server announced for this tab's ACP session.
+    var copilotRemoteCommands: (commands: [[String: Any]], endpoint: String)? {
+        copilotRemote.availableCommands
+    }
+
+    /// `/model [id] [effort]` on Copilot: this tab's model settings, same rules as the model menu.
+    func modelCommandReply(_ input: String) -> String {
+        if let reason = modelSettingsUnavailableReason { return reason }
+        let catalog = settings.copilotModelCatalog
+        let current = modelSelection
+        let parts = input.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let requested = parts.first else {
+            let name = current.model.isEmpty
+                ? (settings.copilotFileDefaultModel.map { "\($0) (the Mac's default)" } ?? "the Mac's default model")
+                : current.model
+            var lines = ["This tab uses **\(name)**\(current.effort.isEmpty ? "" : " with \(current.effort) effort"). "
+                         + "Change it in this tab's model settings, or send `/model <model> [effort]`."]
+            if !catalog.isEmpty {
+                lines.append("")
+                lines += catalog.map { model in
+                    let efforts = (model.reasoningEfforts ?? []).joined(separator: ", ")
+                    return "- `\(model.id)`" + (efforts.isEmpty ? "" : " (effort: \(efforts))")
+                }
+            }
+            return lines.joined(separator: "\n")
+        }
+        let model: String
+        if ["default", "mac", "reset"].contains(requested.lowercased()) {
+            model = ""
+        } else if let match = catalog.first(where: { $0.id.lowercased() == requested.lowercased() }) {
+            model = match.id
+        } else {
+            return "`\(requested)` isn't in the Mac's Copilot model list. Send `/model` to see the choices."
+        }
+        let info = catalog.first { $0.id == (model.isEmpty ? settings.copilotFileDefaultModel : model) }
+        let effort = parts.count > 1 ? parts[1].lowercased() : ""
+        let tier = info?.contextTiers?.contains(current.contextTier) == true ? current.contextTier : ""
+        let selection = model.isEmpty && effort.isEmpty
+            ? nil : SessionModelSelection(model: model, effort: effort, contextTier: tier)
+        do {
+            try updateModelSettings(selection, revision: modelSettingsRevision)
+        } catch {
+            return error.localizedDescription
+        }
+        let label = model.isEmpty ? "the Mac's default model" : "**\(model)**"
+        return "This tab now uses \(label)\(effort.isEmpty ? "" : " with \(effort) effort"). Your next message uses it."
+    }
 
     var startFreshUnavailableReason: String? {
         guard supportsStartFresh else {

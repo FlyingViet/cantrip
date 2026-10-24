@@ -68,7 +68,8 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
 - **Usage and context:** Copilot AI-credit usage and a per-prompt context
   window breakdown.
 - **Extensions:** dashboards, MCP tools with inline MCP App views, custom
-  slash commands and a `cantrip` CLI. [Extensions](docs/extensions-and-skills.md)
+  slash commands and a `cantrip` CLI. Typing `/` suggests the backend's own
+  commands and skills. [Extensions](docs/extensions-and-skills.md)
 
 Capabilities depend on the backend. The Local Model backend does not receive
 attachments or screen captures.

@@ -53,6 +53,14 @@ final class CopilotACPBackend: Backend, CantripHomeGuardedBackend {
     private var storedGuardrail: CantripHomeGuardrail?
     private var storedGuardrailLabel = "Cantrip Home"
     private var approvedScopes: Set<String> = []
+    private let commandsLock = NSLock()
+    private var storedCommands: (commands: [[String: Any]], endpoint: String)?
+
+    /// The server's `available_commands_update` for this tab's session, with the endpoint it came
+    /// from; nil until a session has started.
+    var availableCommands: (commands: [[String: Any]], endpoint: String)? {
+        commandsLock.withLock { storedCommands }
+    }
 
     var guardrail: CantripHomeGuardrail? {
         get { guardrailLock.withLock { storedGuardrail } }
@@ -372,8 +380,13 @@ final class CopilotACPBackend: Backend, CantripHomeGuardedBackend {
     }
 
     private func handleUpdate(_ update: [String: Any]) {
-        guard !suppressUpdates else { return } // aborted turn draining
         let kind = update["sessionUpdate"] as? String ?? ""
+        if kind == "available_commands_update" {
+            let commands = update["availableCommands"] as? [[String: Any]] ?? []
+            commandsLock.withLock { storedCommands = (commands, connectedEndpoint ?? "") }
+            return
+        }
+        guard !suppressUpdates else { return } // aborted turn draining
         switch kind {
         case "agent_message_chunk":
             if let text = Self.contentText(update["content"]) {

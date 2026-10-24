@@ -206,6 +206,10 @@ enum CopilotSessionBridge {
     }
     function onEvent(event) {
       if (!runID || stopping) return;
+      // A command that starts an agent turn (/fleet) ends with session.idle; compaction doesn't.
+      if (!event.agentId && (event.type === 'assistant.turn_start' || event.type === 'user.message')) {
+        slashTurnSeen = true;
+      }
       const watcherChanged = observeWatcher(event);
       // Subagents share this stream: only the root agent's idle or error ends the turn.
       if (event.type === 'session.idle' && !event.agentId) {
@@ -325,6 +329,105 @@ enum CopilotSessionBridge {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
     }
+    // Slash commands: only names this session lists run as commands. Anything else (a path,
+    // an unknown word) goes to the model as typed, as before.
+    let slashTurnSeen = false;
+    async function sessionCommands() {
+      try {
+        return (await session.rpc.commands.list({ includeBuiltins: true, includeSkills: true,
+          includeClientCommands: true }))?.commands ?? [];
+      } catch { return []; }
+    }
+    async function findSlashCommand(prompt, blocked) {
+      // Same name rule as Cantrip's SlashInvocation; a path ("/Users/x") is never a command.
+      const match = /^\/([\p{L}\p{N}_.:-]+)(?:[\s\uFEFF\u200B-\u200D\u2060]+([\s\S]*))?$/u
+        .exec(String(prompt ?? '').trim());
+      if (!match || !session?.rpc?.commands?.invoke) return null;
+      const wanted = match[1].toLowerCase();
+      const find = list => list.find(entry => String(entry.name).toLowerCase() === wanted
+        || (entry.aliases ?? []).some(alias => String(alias).toLowerCase() === wanted));
+      let found = find(await sessionCommands());
+      if (!found && session.rpc.skills?.reload) {
+        // A skill installed after this session started loads on demand.
+        try { await session.rpc.skills.reload(); found = find(await sessionCommands()); } catch {}
+      }
+      if (!found) return null;
+      // Cantrip refuses some commands (they would bypass its approvals or break remotely), also
+      // when typed as an alias: check the canonical name and every alias.
+      for (const name of [found.name, ...(found.aliases ?? [])]) {
+        const note = blocked?.[String(name).toLowerCase()];
+        if (note) return { name: String(found.name), blocked: note };
+      }
+      return { name: String(found.name), input: (match[2] ?? '').trim() };
+    }
+    const stripAnsi = value => String(value ?? '')
+      .replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, '').replace(/\u001b\][^\u0007]*\u0007/g, '');
+    function slashResultText(result, name) {
+      switch (result?.kind) {
+        case 'text': {
+          const text = (result.preserveAnsi ? stripAnsi(result.text) : String(result.text ?? '')).trim();
+          if (result.markdown || !text.includes('\n')) return text;
+          return '```text\n' + text.replace(/```/g, "'''") + '\n```';
+        }
+        case 'completed':
+          return result.message ? String(result.message) : `/${name} is done.`;
+        case 'select-subcommand': {
+          const parent = result.command || name;
+          return [`**${result.title || '/' + parent}**: send one of these:`, '',
+            ...(result.options ?? []).map(option =>
+              `- \`/${parent} ${option.name}\`${option.description ? ': ' + option.description : ''}`)].join('\n');
+        }
+        case 'add-timeline-entry':
+          return [result.entry?.text, result.entry?.url].filter(Boolean).join('\n') || `/${name} is done.`;
+        case 'show-dialog':
+          return "Choose a model in this tab's model settings in Cantrip.";
+        case 'set-model':
+        case 'set-plan-model':
+          return `Copilot switched this session to ${result.model}${result.reasoningEffort ? ' (' + result.reasoningEffort + ' effort)' : ''}.`;
+        default:
+          return '```json\n' + JSON.stringify(result ?? {}, null, 2) + '\n```';
+      }
+    }
+    async function runSlashCommand(slash, initialPrompt, originalPrompt) {
+      const owner = runID;
+      slashTurnSeen = false;
+      let result;
+      try {
+        result = await session.rpc.commands.invoke({ name: slash.name, input: slash.input || undefined });
+      } catch (error) {
+        // Usage errors ("Usage: /every <interval> <prompt>") are the reply.
+        const message = errorText(error).replace(/^Request session\.commands\.invoke failed with message:\s*/, '');
+        emit({ kind: 'commandText', runID: owner, text: message });
+        idle = true;
+        return;
+      }
+      if (result?.kind === 'agent-prompt') {
+        // Prompt commands and skills: the agent works on the prompt the command produced.
+        if (result.notice) emit({ kind: 'commandText', runID: owner, text: String(result.notice) + '\n\n' });
+        if (result.mode && session.rpc.mode?.set) {
+          try { await session.rpc.mode.set({ mode: result.mode }); } catch {}
+        }
+        let prompt = String(result.prompt ?? '');
+        // A brand-new session also needs the conversation recap Cantrip prepared.
+        if (initialPrompt && originalPrompt && initialPrompt.includes(originalPrompt)) {
+          prompt = initialPrompt.replace(originalPrompt, () => prompt);
+        }
+        let outcome = 'cancelled';
+        try {
+          await session.send({ prompt, mode: 'enqueue' });
+          outcome = 'applied';
+        } finally {
+          if (result.reservationToken && session.rpc.commands.finalizeInvocationEffect) {
+            try { await session.rpc.commands.finalizeInvocationEffect({ effect: result, outcome }); } catch {}
+          }
+        }
+        return;
+      }
+      emit({ kind: 'commandText', runID: owner, text: slashResultText(result, slash.name) });
+      // A few commands (/fleet, /compact) run a turn themselves: then session.idle ends the run.
+      await new Promise(resolve => setTimeout(resolve, 300));
+      if (!slashTurnSeen) idle = true;
+    }
     async function deliver(command) {
       if (command.kind === 'start') {
         if (runID) throw new Error('A Copilot turn is already running.');
@@ -335,11 +438,25 @@ enum CopilotSessionBridge {
         try {
           const fresh = !session;
           const resumed = fresh ? await open(command.config, command.resumeSessionID) : false;
+          const runtimePID = typeof client?.cliProcess?.pid === 'number' ? client.cliProcess.pid : undefined;
+          // Only what the user typed can be a command, never a prompt Cantrip added context to.
+          const typed = typeof command.userMessage === 'string'
+            && command.userMessage.trim() === String(command.prompt ?? '').trim() ? command.userMessage : null;
+          const slash = typed ? await findSlashCommand(typed, command.config?.blockedCommands) : null;
+          if (slash) {
+            emit({ kind: 'started', runID, messageID: null, sessionID: session.sessionId, resumed, runtimePID });
+            if (slash.blocked) {
+              emit({ kind: 'commandText', runID, text: `\`/${slash.name}\` doesn't run from Cantrip. ${slash.blocked}` });
+              idle = true;
+              return;
+            }
+            await runSlashCommand(slash, fresh && !resumed ? command.initialPrompt : null, command.prompt);
+            return;
+          }
           // A resumed session already holds the conversation; only a new one needs the recap.
           const messageID = await session.send({
             prompt: fresh && !resumed ? command.initialPrompt : command.prompt, mode: 'enqueue'
           });
-          const runtimePID = typeof client?.cliProcess?.pid === 'number' ? client.cliProcess.pid : undefined;
           emit({ kind: 'started', runID, messageID, sessionID: session.sessionId, resumed, runtimePID });
         } finally {
           sending--;

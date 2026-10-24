@@ -746,6 +746,13 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
                let result = obj["result"] as? String {
                 onEvent(.failure(result))
             } else {
+                // Local slash commands (/context, /cost, ...) answer with a synthetic message and
+                // no streamed text; their output is only in the result.
+                if !hasEmittedText, let result = obj["result"] as? String,
+                   !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    hasEmittedText = true
+                    onEvent(.textDelta(result))
+                }
                 // Turn complete — the process stays alive for the next
                 // message, so "result" is now the end-of-turn signal.
                 onEvent(.done)
