@@ -1,3 +1,4 @@
+import MarkdownUI
 import SwiftUI
 
 enum CantripMemoryCategory: String, Decodable, CaseIterable {
@@ -93,7 +94,10 @@ final class CantripMemoryReaderModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var error: String?
     @Published private(set) var pageIndex = 0
+    /// The code block the shown page starts inside, carried over from the pages before it.
+    @Published private(set) var pageFence: CantripMemoryMarkdown.Fence?
     private var offsets = [0]
+    private var fences: [CantripMemoryMarkdown.Fence?] = [nil]
 
     func load(_ direction: Direction,
               fetch: (Int, String?) async throws -> CantripMemoryPage) async {
@@ -101,31 +105,113 @@ final class CantripMemoryReaderModel: ObservableObject {
         let offset: Int
         let index: Int
         let revision: String?
+        let fence: CantripMemoryMarkdown.Fence?
         switch direction {
         case .reload:
-            offset = 0; index = 0; revision = nil
+            offset = 0; index = 0; revision = nil; fence = nil
         case .previous:
             guard pageIndex > 0 else { return }
-            index = pageIndex - 1; offset = offsets[index]; revision = page?.revision
+            index = pageIndex - 1; offset = offsets[index]; revision = page?.revision; fence = fences[index]
         case .next:
-            guard let next = page?.nextOffset else { return }
-            offset = next; index = pageIndex + 1; revision = page?.revision
+            guard let page, let next = page.nextOffset else { return }
+            offset = next; index = pageIndex + 1; revision = page.revision
+            fence = CantripMemoryMarkdown.fence(after: page.text, startingIn: fences[pageIndex])
         }
         isLoading = true
         defer { isLoading = false }
         do {
-            let value = try await fetch(offset, revision)
+            let value = CantripMemoryMarkdown.aligned(try await fetch(offset, revision))
             try Task.checkCancellation()
-            if direction == .reload { offsets = [0] }
+            if direction == .reload { offsets = [0]; fences = [nil] }
             if index == offsets.count { offsets.append(offset) }
+            if index == fences.count { fences.append(fence) } else { fences[index] = fence }
             pageIndex = index
             page = value
+            pageFence = fence
             error = nil
         } catch is CancellationError {
             return
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+/// Renders memory files as Markdown one 16 KiB page at a time: pages end at a line break, and a
+/// page that starts inside a code block reopens it.
+enum CantripMemoryMarkdown {
+    struct Fence: Equatable {
+        let marker: Character
+        let count: Int
+    }
+
+    /// Ends a page that would split a line at its last line break; the next page starts there.
+    static func aligned(_ page: CantripMemoryPage) -> CantripMemoryPage {
+        let bytes = page.text.utf8
+        guard page.nextOffset != nil, bytes.last != 0x0A,
+              let newline = bytes.lastIndex(of: 0x0A) else { return page }
+        let text = String(decoding: bytes[...newline], as: UTF8.self)
+        return CantripMemoryPage(document: page.document, text: text, offset: page.offset,
+                                 nextOffset: page.offset + text.utf8.count, revision: page.revision)
+    }
+
+    /// The ``` or ~~~ code block still open after `text`.
+    static func fence(after text: String, startingIn open: Fence?) -> Fence? {
+        var fence = open
+        for line in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            let trimmed = line.drop { $0 == " " || $0 == "\t" }
+            guard let marker = trimmed.first, marker == "`" || marker == "~" else { continue }
+            let count = trimmed.prefix { $0 == marker }.count
+            guard count >= 3 else { continue }
+            if let current = fence {
+                if marker == current.marker, count >= current.count,
+                   trimmed.dropFirst(count).allSatisfy(\.isWhitespace) {
+                    fence = nil
+                }
+            } else {
+                fence = Fence(marker: marker, count: count)
+            }
+        }
+        return fence
+    }
+
+    /// The Markdown to render for a page that may start inside a code block.
+    static func renderable(_ text: String, startingIn fence: Fence?) -> String {
+        guard let fence else { return text }
+        return String(repeating: fence.marker, count: fence.count) + "\n" + text
+    }
+}
+
+/// A memory page as formatted Markdown. Like the plain view it loads nothing from outside the
+/// Mac: images show a placeholder, and only web and mail links open (in the browser).
+struct CantripMemoryMarkdownText: View {
+    let text: String
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        Markdown(text)
+            .markdownImageProvider(CantripMemoryImagePlaceholder())
+            .markdownInlineImageProvider(CantripMemoryInlineImagePlaceholder())
+            .textSelection(.enabled)
+            .environment(\.openURL, OpenURLAction { url in
+                guard ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") else { return .discarded }
+                openURL(url)
+                return .handled
+            })
+    }
+}
+
+private struct CantripMemoryImagePlaceholder: ImageProvider {
+    func makeImage(url: URL?) -> some View {
+        Label("Image not loaded", systemImage: "photo")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+    }
+}
+
+private struct CantripMemoryInlineImagePlaceholder: InlineImageProvider {
+    func image(with url: URL, label: String) async throws -> Image {
+        Image(systemName: "photo")
     }
 }
 
@@ -239,6 +325,8 @@ struct CantripMemoryReader: View {
     @ObservedObject var remote: CantripRemoteModel
     let entry: CantripMemoryEntry
     @StateObject private var model = CantripMemoryReaderModel()
+    /// Formatted Markdown or the file's exact text; remembered across files.
+    @AppStorage("cantrip.memory.formatted") private var formatted = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -261,10 +349,26 @@ struct CantripMemoryReader: View {
                             Text("\(page.text.count) / \(cap) characters")
                                 .font(.caption).foregroundStyle(page.text.count > cap ? .orange : .secondary)
                         }
-                        Text(page.text.isEmpty ? "(Empty file)" : page.text)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Picker("Show", selection: $formatted) {
+                            Text("Formatted").tag(true)
+                            Text("Markdown source").tag(false)
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("memory.format")
+                        Group {
+                            if page.text.isEmpty {
+                                Text("(Empty file)")
+                            } else if formatted {
+                                CantripMemoryMarkdownText(
+                                    text: CantripMemoryMarkdown.renderable(page.text, startingIn: model.pageFence)
+                                )
+                            } else {
+                                Text(page.text)
+                                    .font(.system(.body, design: .monospaced))
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding()
                 }

@@ -732,8 +732,14 @@ hard links, and other directories are excluded.
 
 The list loads 50 files at a time; **Load more files** fetches the next page.
 Opening a file requests one UTF-8-safe 16 KiB page; **Previous** and **Next**
-read the rest without downloading the entire folder. Text is displayed as
-saved, with selection enabled and no external Markdown resources loaded.
+read the rest without downloading the entire folder. Each page ends at a line
+break (the next page starts there), so it renders on its own.
+
+Files show as formatted Markdown (headings, lists, tables, code, links) by
+default; **Markdown source** shows the exact saved text instead, and the choice
+is remembered. A code block that continues onto the next page stays a code
+block there. Both views allow selection and load nothing from outside the Mac:
+images show a placeholder, and only web and mail links open, in the browser.
 If a file changes between pages, **Reload file** starts with its current
 contents rather than joining different versions. Refresh/retry failures are
 visible, and changing the paired server clears the viewer's state.

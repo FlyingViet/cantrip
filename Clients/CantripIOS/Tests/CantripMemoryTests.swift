@@ -27,6 +27,22 @@ private final class MemoryRequestProtocol: URLProtocol {
     }
 }
 
+/// Records any request that leaves through the shared URL loading system (AsyncImage and
+/// Markdown image providers use it), so a test can prove nothing outside the Mac was fetched.
+private final class ExternalRequestRecorder: URLProtocol {
+    nonisolated(unsafe) static var hosts: [String] = []
+    private static let lock = NSLock()
+    static func reset() { lock.withLock { hosts = [] } }
+    static var recorded: [String] { lock.withLock { hosts } }
+    override class func canInit(with request: URLRequest) -> Bool {
+        lock.withLock { hosts.append(request.url?.host ?? "?") }
+        return true
+    }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)) }
+    override func stopLoading() {}
+}
+
 @MainActor
 final class CantripMemoryTests: XCTestCase {
     private func client() -> URLSession {
@@ -289,5 +305,140 @@ final class CantripMemoryTests: XCTestCase {
         let attachment = XCTAttachment(image: screenshot)
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    // MARK: Markdown pages
+
+    private func textPage(_ text: String, offset: Int = 0, next: Int?) -> CantripMemoryPage {
+        CantripMemoryPage(document: entry("notes.md"), text: text, offset: offset, nextOffset: next, revision: "r1")
+    }
+
+    func testPagesEndAtTheirLastLineBreak() {
+        let split = CantripMemoryMarkdown.aligned(textPage("# Notes\n- first item\n- second it", offset: 100, next: 133))
+        XCTAssertEqual(split.text, "# Notes\n- first item\n")
+        XCTAssertEqual(split.nextOffset, 100 + "# Notes\n- first item\n".utf8.count, "The next page starts at the cut line")
+
+        let accented = CantripMemoryMarkdown.aligned(textPage("Café ☕️ notes\nhalf a li", next: 40))
+        XCTAssertEqual(accented.text, "Café ☕️ notes\n")
+        XCTAssertEqual(accented.nextOffset, "Café ☕️ notes\n".utf8.count, "Offsets count UTF-8 bytes")
+
+        let windows = CantripMemoryMarkdown.aligned(textPage("one\r\ntwo\r\nthr", next: 13))
+        XCTAssertEqual(windows.text, "one\r\ntwo\r\n", "CRLF files cut after the line feed")
+
+        for unchanged in [textPage("ends with a break\n", next: 18), textPage("last page, no break", next: nil),
+                          textPage(String(repeating: "x", count: 64), next: 64)] {
+            XCTAssertEqual(CantripMemoryMarkdown.aligned(unchanged).text, unchanged.text)
+            XCTAssertEqual(CantripMemoryMarkdown.aligned(unchanged).nextOffset, unchanged.nextOffset,
+                           "Whole lines, the last page and a page-long line stay as sent")
+        }
+    }
+
+    func testCodeBlocksCarryAcrossPages() {
+        typealias Fence = CantripMemoryMarkdown.Fence
+        let opened = CantripMemoryMarkdown.fence(after: "Intro\n```swift\nlet a = 1\n", startingIn: nil)
+        XCTAssertEqual(opened, Fence(marker: "`", count: 3))
+        XCTAssertEqual(CantripMemoryMarkdown.renderable("let b = 2\n```\nAfter", startingIn: opened),
+                       "```\nlet b = 2\n```\nAfter", "A page that starts inside a code block reopens it")
+        XCTAssertNil(CantripMemoryMarkdown.fence(after: "let b = 2\n```\nAfter\n", startingIn: opened))
+        XCTAssertNil(CantripMemoryMarkdown.fence(after: "```\ncode\n```\n", startingIn: nil), "A closed block ends the page closed")
+        let tildes = CantripMemoryMarkdown.fence(after: "~~~~\n```\nstill code\n~~~\n", startingIn: nil)
+        XCTAssertEqual(tildes, Fence(marker: "~", count: 4), "Only the same marker, at least as long, closes a block")
+        XCTAssertNil(CantripMemoryMarkdown.fence(after: "  ~~~~~  \r\n", startingIn: tildes))
+        XCTAssertNil(CantripMemoryMarkdown.fence(after: "Inline ``code`` and `x`\n", startingIn: nil))
+        XCTAssertEqual(CantripMemoryMarkdown.fence(after: "```\n``` not a close\n", startingIn: nil), Fence(marker: "`", count: 3),
+                       "A fence line with text after it doesn't close the block")
+        XCTAssertEqual(CantripMemoryMarkdown.renderable("plain", startingIn: nil), "plain")
+    }
+
+    func testReaderPagesAtLineBreaksAndKeepsCodeBlocksOpen() async {
+        let model = CantripMemoryReaderModel()
+        let first = "# Runbook\n```sh\nmake test\nmake ap"
+        let cut = "# Runbook\n```sh\nmake test\n".utf8.count
+        await model.load(.reload) { _, _ in self.textPage(first, next: first.utf8.count) }
+        XCTAssertEqual(model.page?.text, "# Runbook\n```sh\nmake test\n")
+        XCTAssertNil(model.pageFence)
+        await model.load(.next) { offset, revision in
+            XCTAssertEqual(offset, cut, "Next starts at the cut line, not the server's byte boundary")
+            XCTAssertEqual(revision, "r1")
+            return self.textPage("make app\n```\nDone.\n", offset: offset, next: nil)
+        }
+        XCTAssertEqual(model.pageFence, CantripMemoryMarkdown.Fence(marker: "`", count: 3), "Page 2 starts inside the code block")
+        await model.load(.previous) { offset, _ in
+            XCTAssertEqual(offset, 0)
+            return self.textPage(first, next: first.utf8.count)
+        }
+        XCTAssertNil(model.pageFence)
+        XCTAssertEqual(model.pageIndex, 0)
+        await model.load(.next) { offset, _ in
+            XCTAssertEqual(offset, cut)
+            return self.textPage("make app\n```\nDone.\n", offset: offset, next: nil)
+        }
+        XCTAssertEqual(model.pageFence, CantripMemoryMarkdown.Fence(marker: "`", count: 3), "Revisiting keeps the carried block")
+        await model.load(.reload) { _, _ in self.textPage("Fresh\n", next: nil) }
+        XCTAssertNil(model.pageFence)
+    }
+
+    func testFormattedMemoryRendersMarkdownWithoutLoadingAnything() async throws {
+        let remote = CantripRemoteModel(urlSession: client())
+        addTeardownBlock { @MainActor in remote.clearConfiguration() }
+        let configured = await remote.configure(url: "https://cantrip.example", pairingToken: "memory-token", tailscaleOnly: true)
+        XCTAssertTrue(configured)
+        let markdown = """
+        # Saved memory
+        Plain **bold** and `code`, a [web link](https://example.com) and an inline ![badge](https://outside.example/badge.png) image.
+
+        ![Diagram](https://outside.example/diagram.png)
+
+        - First
+        - Second
+
+        | Key | Value |
+        |---|---|
+        | backend | Copilot |
+
+        ```sh
+        make test
+        ```
+        """ + String(repeating: "\nMore saved preferences and procedures.", count: 60)
+        MemoryRequestProtocol.handler = { _ in (200, try self.pageData(text: markdown)) }
+        URLProtocol.registerClass(ExternalRequestRecorder.self)
+        ExternalRequestRecorder.reset()
+        defer { URLProtocol.unregisterClass(ExternalRequestRecorder.self) }
+        let previous = UserDefaults.standard.object(forKey: "cantrip.memory.formatted")
+        defer { UserDefaults.standard.set(previous, forKey: "cantrip.memory.formatted") }
+
+        for formatted in [true, false] {
+            UserDefaults.standard.set(formatted, forKey: "cantrip.memory.formatted")
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            let controller = UIHostingController(rootView: NavigationStack {
+                CantripMemoryReader(remote: remote, entry: entry()).frame(width: 320, height: 600)
+            })
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            try await Task.sleep(for: .milliseconds(1200))
+            controller.view.layoutIfNeeded()
+            func findScroll(_ view: UIView) -> UIScrollView? {
+                if let scroll = view as? UIScrollView, scroll.bounds.height > 300 { return scroll }
+                return view.subviews.lazy.compactMap(findScroll).first
+            }
+            let scroll = try XCTUnwrap(findScroll(controller.view))
+            XCTAssertGreaterThan(scroll.contentSize.height, 600)
+            XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1, "No sideways scrolling (formatted: \(formatted))")
+            let screenshot = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
+                controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: screenshot)
+            attachment.name = formatted ? "memory-formatted" : "memory-source"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            if let directory = ProcessInfo.processInfo.environment["MEMORY_MARKDOWN_ARTIFACT_DIR"] {
+                try screenshot.pngData()?.write(to: URL(fileURLWithPath: directory)
+                    .appendingPathComponent("\(attachment.name ?? "memory").png"))
+            }
+            window.isHidden = true
+        }
+        XCTAssertFalse(ExternalRequestRecorder.recorded.contains("outside.example"),
+                       "Images in memory are never fetched: \(ExternalRequestRecorder.recorded)")
     }
 }
