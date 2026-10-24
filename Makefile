@@ -9,14 +9,14 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-prune prune-builds test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation cert artwork icon app run clean
+.PHONY: all build test test-prune prune-builds test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation
+test: test-prune test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary
 
 test-architectures:
 	@bash Tests/ArchitectureTests/run.sh
@@ -80,6 +80,12 @@ test-consolidation:
 	@BIN="/tmp/cantrip-consolidation-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc Sources/Cantrip/ConsolidationPolicy.swift Sources/Cantrip/Log.swift Tests/ConsolidationTests/main.swift -o "$$BIN" && "$$BIN"
+
+# Fixtures (SQLite databases, a memory folder) are written under .build and removed afterwards.
+test-voice-vocabulary:
+	@mkdir -p .build; BIN=".build/cantrip-voice-vocabulary-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/VoiceVocabulary.swift Sources/Cantrip/VoiceVocabularySources.swift Tests/VoiceVocabularyTests/main.swift -o "$$BIN" && VOICE_VOCABULARY_TEST_DIR="$(CURDIR)/.build" "$$BIN"
 
 test-run-journal:
 	@BIN="/tmp/cantrip-run-journal-tests-$$$$"; \

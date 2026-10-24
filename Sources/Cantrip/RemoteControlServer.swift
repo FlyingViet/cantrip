@@ -19,6 +19,9 @@ final class RemoteControlServer {
     private let encodingQueue: DispatchQueue
     private let detailEncodingQueue = DispatchQueue(label: "cantrip.remote-details", qos: .utility)
     private let memoryQueue = DispatchQueue(label: "cantrip.remote-memory", qos: .utility)
+    /// Serial, so a request that arrives while the vocabulary is being gathered reuses its result.
+    private let vocabularyQueue = DispatchQueue(label: "cantrip.remote-voice-vocabulary", qos: .utility)
+    private let voiceVocabulary: VoiceVocabularyService
     private let requestLog: (String) -> Void
     private let sendTimeout: TimeInterval
     private static let healthBody = Data(#"{"status":"ok"}"#.utf8)
@@ -57,6 +60,7 @@ final class RemoteControlServer {
          liveStatus: RemoteLiveStatus = RemoteLiveStatus(),
          maintenance: RemoteMaintenance? = nil,
          desktop: RemoteDesktop? = nil,
+         voiceVocabulary: VoiceVocabularyService? = nil,
          encodingQueue: DispatchQueue = DispatchQueue(label: "cantrip.remote-encoding", qos: .userInitiated),
          sendTimeout: TimeInterval = 15,
          requestLog: @escaping (String) -> Void = Log.write) {
@@ -67,6 +71,7 @@ final class RemoteControlServer {
         self.liveStatus = liveStatus
         self.maintenance = maintenance
         desktopOverride = desktop
+        self.voiceVocabulary = voiceVocabulary ?? VoiceVocabularyService(log: requestLog)
         self.encodingQueue = encodingQueue
         self.sendTimeout = sendTimeout
         self.requestLog = requestLog
@@ -612,6 +617,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/github/builds"
                 || request.path == "/api/v1/memory"
                 || request.path == "/api/v1/memory/document"
+                || request.path == "/api/v1/voice/vocabulary"
                 || request.path == "/api/v1/notifications"
                 || request.path == "/api/v1/live-status"
                 || request.path == "/api/v1/live-status/subscription"
@@ -751,6 +757,14 @@ final class RemoteControlServer {
             }
             serveMemory(request, directory: URL(fileURLWithPath: path),
                         enabled: AppSettings.shared.memoryEnabled, on: connection)
+            return
+        }
+        if request.path == "/api/v1/voice/vocabulary" {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            serveVoiceVocabulary(on: connection)
             return
         }
         if request.path == "/api/v1/copilot/usage" {
@@ -2137,6 +2151,29 @@ final class RemoteControlServer {
             } catch {
                 self.requestLog("remote-memory: id=\(connection.trace.id) error=\(error.localizedDescription)")
                 self.sendError(500, "Could not read Cantrip memory. Check file access on the Mac.", on: connection)
+            }
+        }
+    }
+
+    /// Read-only and cached for 10 minutes; sources are read on `vocabularyQueue`, and the main
+    /// actor only copies tab names, Home tasks and the memory path.
+    @MainActor
+    private func serveVoiceVocabulary(on connection: RemoteRequestConnection) {
+        if let data = voiceVocabulary.cachedData() {
+            send(status: 200, contentType: "application/json; charset=utf-8", body: data, on: connection)
+            return
+        }
+        let inputs = VoiceVocabularyService.Inputs.current(manager: manager)
+        let vocabulary = voiceVocabulary
+        connection.trace.enter(.encodeWait)
+        vocabularyQueue.async {
+            connection.trace.enter(.encode)
+            do {
+                let data = try vocabulary.responseData(for: inputs)
+                self.send(status: 200, contentType: "application/json; charset=utf-8", body: data, on: connection)
+            } catch {
+                self.requestLog("remote-voice-vocabulary: id=\(connection.trace.id) outcome=encoding_error")
+                self.sendError(500, "Could not prepare the voice vocabulary on the Mac.", on: connection)
             }
         }
     }

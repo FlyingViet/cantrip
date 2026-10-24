@@ -152,6 +152,7 @@ struct SessionTabTests {
         try await testRemoteHistory()
         try await testRemoteCompression()
         try await testRemoteMemory()
+        try await testRemoteVoiceVocabulary()
         try await testRemoteMaintenance()
         try await testRemoteNotifications()
         try await testLiveStatus()
