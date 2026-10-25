@@ -32,6 +32,16 @@ remote). Later states, including working again after an answer, update that
 card in place. It never interrupts a Home reply, and its tab text is shown as
 data that Home's model never reads back as its own words.
 
+To answer what a tab or child tab is doing, or why it did something, Home reads
+the tab's recent conversation itself (`tab read <tab ID>`, read-only) instead
+of guessing or searching source code. Each open tab in Home's data carries its
+ID, whose child tab it is, and its newest child tabs with their states. When
+only the tab itself can answer, Home can ask it (`tab ask`): the question runs
+as a turn in that tab and the reply comes back to Home as an *Answer from …*
+card. Change work still goes through handoffs. Private, Private Local and
+Home's own background conversations are never readable. See
+[Look into other tabs](sessions-and-council.md#look-into-other-tabs).
+
 ## Tasks and schedules
 
 Tasks can be one-time, interval or weekday automations, or structured
@@ -131,7 +141,8 @@ with a standalone `python3 -c` command that reads `tasks.json`.
 
 Scheduled-task runs don't get the open-tab list, other tasks' records or the
 task-creation schema. They read the open tabs and active handoffs from
-`~/.cache/Cantrip/home/tabs.txt` only when they hand off a fix.
+`~/.cache/Cantrip/home/tabs.txt` only when they hand off a fix, and can read a
+tab's conversation with `tab read` (never `tab ask`).
 
 Their Copilot sessions start only the MCP servers scheduled tasks use: `homelab`
 and GitHub's built-in server, or the list in the `cantripHomeTaskMCPServers`
@@ -154,7 +165,8 @@ session and survives compaction. Each message carries only that turn's data:
 - a one-line index of every task
 - the schema and records of the workspaces the message mentions (by title,
   record title or UUID)
-- the open tabs, recent handoffs and recent background results
+- the open tabs (with their child tabs), recent handoffs and recent background
+  results; the static protocol says how to read a tab's conversation on demand
 
 Home can print any task's records with the same `python3 -c` read command.
 Other backends, and council mode, still get the full protocol with every

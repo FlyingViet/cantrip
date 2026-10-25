@@ -59,6 +59,7 @@ encrypted TLS-PSK listener.
 | `cantrip config` / `get KEY` / `set KEY VALUE …` | Read and change settings |
 | `cantrip doctor` | Check the host, Remote, the backend CLI and Tailscale |
 | `cantrip cleanup [--dry-run] [--list] [--json]` | Remove unused agent sessions and worktrees now ([details](updating-and-troubleshooting.md#free-up-disk-space)) |
+| `cantrip tab list` / `read ID` / `ask ID "question"` / `reply ASK_ID` | Look into other tabs ([details](sessions-and-council.md#look-into-other-tabs)) |
 
 Settings use the same names as `~/.cantriprc`. Common ones: `backend`,
 `copilotModel`, `copilotEffort`, `allowActions`, `remoteControlPort`,

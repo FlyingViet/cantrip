@@ -3626,7 +3626,7 @@ private extension RemoteControlServer {
       const time=handoff.finishedAt?`Took ${handoffDuration(handoff.startedAt,handoff.finishedAt)}`:handoff.startedAt?`Started ${handoffClock(handoff.startedAt)}`:"";
       return handoffCardElement({state,label,tabID:handoff.tabID,tabTitle:handoff.tabTitle,summary:handoff.summary||handoff.prompt,time})}
     function freshStartDivider(message){const divider=document.createElement("p");divider.className="fresh-start";divider.dataset.messageId=message.id;divider.textContent=message.text||"Started fresh — earlier messages aren't sent to the model";return divider}
-    function handoffResultCard(result){const label={working:"Working in tab",needsInput:"Needs your answer",completed:"Done in tab",failed:"Failed in tab",cancelled:"Stopped"}[result.state]||"Handoff update";
+    function handoffResultCard(result){const label=(result.kind==="ask"?{working:"Asked tab",needsInput:"Needs your answer first",completed:"Answer from tab",failed:"Couldn't answer",cancelled:"Question stopped"}:{working:"Working in tab",needsInput:"Needs your answer",completed:"Done in tab",failed:"Failed in tab",cancelled:"Stopped"})[result.state]||"Handoff update";
       const time=result.finishedAt?`Finished ${handoffClock(result.finishedAt)} · took ${handoffDuration(result.startedAt,result.finishedAt)}`:`Updated ${handoffClock(result.updatedAt)}`;
       return handoffCardElement({state:result.state,label,tabID:result.tabID,tabTitle:result.tabTitle,summary:result.summary,detail:result.detail,time,result:true})}
     // Child tabs: a queued message runs in its own tab (and branch) and merges back; the parent shows
