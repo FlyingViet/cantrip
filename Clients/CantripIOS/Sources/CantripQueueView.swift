@@ -95,6 +95,7 @@ struct CantripQueueView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var removingPromptID: String?
     @State private var sendingPromptID: String?
+    @State private var forkingPromptID: String?
     @State private var actionError: ActionError?
 
     private struct ActionError {
@@ -152,6 +153,19 @@ struct CantripQueueView: View {
     private var canMutate: Bool {
         remote.isConnected && !remote.isMutating && removingPromptID == nil
             && sendingPromptID == nil && remote.sendingQueuedPromptID == nil
+            && forkingPromptID == nil && remote.forkingQueuedPromptID == nil
+    }
+
+    private var supportsChildTabs: Bool { session?.supportsChildTabs == true }
+
+    /// Child tabs are offered but can't start now (caps full, a child itself, …).
+    private var childTabsUnavailableReason: String? {
+        guard supportsChildTabs else { return nil }
+        return session?.childTabsUnavailableReason.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    private var canFork: Bool {
+        canMutate && supportsChildTabs && childTabsUnavailableReason == nil
     }
 
     private var canRemove: Bool {
@@ -164,6 +178,28 @@ struct CantripQueueView: View {
 
     private func isSending(_ prompt: CantripRemoteQueuedPrompt) -> Bool {
         sendingPromptID == prompt.id || remote.sendingQueuedPromptID == prompt.id
+    }
+
+    private func isForking(_ prompt: CantripRemoteQueuedPrompt) -> Bool {
+        forkingPromptID == prompt.id || remote.forkingQueuedPromptID == prompt.id
+    }
+
+    /// Starts the message now in a child tab under this one; this tab stays open.
+    private func fork(_ prompt: CantripRemoteQueuedPrompt) {
+        forkingPromptID = prompt.id
+        Task {
+            let child = await remote.forkQueuedPrompt(prompt.id, sessionID: sessionID)
+            forkingPromptID = nil
+            if child == nil {
+                actionError = ActionError(
+                    title: "Could not start a child tab",
+                    message: remote.errorMessage
+                        ?? "The child tab could not be confirmed. Check the tab list before trying again."
+                )
+            } else if session?.queuedCount == 0 {
+                dismiss()
+            }
+        }
     }
 
     private func remove(_ prompt: CantripRemoteQueuedPrompt) {
@@ -214,7 +250,26 @@ struct CantripQueueView: View {
                     ProgressView()
                         .frame(minWidth: 44, minHeight: 44)
                         .accessibilityLabel("Removing queued message")
+                } else if isForking(prompt) {
+                    ProgressView()
+                        .frame(minWidth: 44, minHeight: 44)
+                        .accessibilityLabel("Starting a child tab")
                 } else {
+                    if supportsChildTabs {
+                        Button { fork(prompt) } label: {
+                            Image(systemName: CantripChildTabStyle.glyph)
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .tint(CantripChildTabStyle.lane)
+                        .disabled(!canFork)
+                        .help(childTabsUnavailableReason
+                              ?? "Run in a child tab: its own tab and branch, merged back when it's done.")
+                        .accessibilityLabel("Run in child tab")
+                        .accessibilityHint(childTabsUnavailableReason ?? PromptText(prompt.presentedText).preview)
+                        .accessibilityIdentifier("cantrip-queue-fork-\(index)")
+                    }
                     if session?.supportsQueueSendNow == true {
                         Button { sendNow(prompt) } label: {
                             Image(systemName: "arrow.up.circle")
@@ -242,6 +297,9 @@ struct CantripQueueView: View {
             PromptTextView(text: prompt.presentedText)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+            if let plan = prompt.plan, !plan.reason.isEmpty {
+                CantripQueuePlanChip(plan: plan)
+            }
             ChatImageGallery(
                 images: (prompt.images ?? []).map { $0.inSession(sessionID) }, remote: remote
             )
@@ -254,6 +312,13 @@ struct CantripQueueView: View {
                 }
                 .tint(.blue)
                 .disabled(!canSendNow)
+            }
+            if supportsChildTabs {
+                Button("Child tab", systemImage: CantripChildTabStyle.glyph) {
+                    fork(prompt)
+                }
+                .tint(.teal)
+                .disabled(!canFork)
             }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -276,9 +341,18 @@ struct CantripQueueView: View {
                     ForEach(Array(queued.enumerated()), id: \.element.id) { index, prompt in
                         queueRow(prompt, index: index)
                     }
+                } header: {
+                    if let reason = childTabsUnavailableReason {
+                        Text(reason)
+                            .textCase(nil)
+                            .accessibilityIdentifier("cantrip-queue-child-unavailable")
+                    }
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("These prompts are accepted by your Mac and run in order. They move into the conversation when they start.")
+                        if supportsChildTabs {
+                            Text("Run in child tab starts a message now in its own tab under this one, on its own branch, and merges it back when it's done. Each message shows what your Mac suggests.")
+                        }
                         if session.supportsQueueSendNow == true {
                             Text("Send now delivers a message without waiting. Work already running keeps going in the background.")
                         }
@@ -288,6 +362,7 @@ struct CantripQueueView: View {
                             Text("Update and reopen Cantrip on your Mac to remove queued messages here.")
                         }
                     }
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
         } else {

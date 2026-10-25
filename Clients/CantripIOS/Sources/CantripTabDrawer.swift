@@ -158,7 +158,11 @@ struct CantripSessionDrawer: View {
                             if isModal { onDismiss() }
                             onRename(session)
                         },
-                        onClose: { onClose(session.id) }
+                        onClose: { onClose(session.id) },
+                        onOpenTab: { id in
+                            if isModal { onDismiss() }
+                            onSelect(id)
+                        }
                     )
                 }
                 .disabled(model.isMutating)
@@ -323,6 +327,9 @@ struct CantripTabList<Actions: View>: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         HStack(spacing: 4) {
+                            if session.isChildTab {
+                                CantripChildTabGlyph()
+                            }
                             if session.isLocalPrivate == true {
                                 Image(systemName: "lock.shield.fill").font(.caption)
                             } else if session.isLocked == true {
@@ -351,6 +358,7 @@ struct CantripTabList<Actions: View>: View {
             .background(selected ? Color.accentColor.opacity(0.15) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 12))
             .contentShape(Rectangle())
+            .cantripChildTabIndent(session, by: 20)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("cantrip-tab-\(session.id)")

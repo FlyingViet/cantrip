@@ -18,6 +18,9 @@ struct CantripTabActionState: Equatable {
     let sections: [CantripTabSection]
     let canFileInSection: Bool
     let sectionID: String?
+    /// A child tab's parent (it stays under it until its work merges).
+    let parentID: String?
+    let parentTitle: String?
 
     @MainActor
     init(session: CantripRemoteSession, model: CantripRemoteModel) {
@@ -35,6 +38,8 @@ struct CantripTabActionState: Equatable {
         canFileInSection = model.supportsTabSections && session.supportsTabSections == true
         sections = canFileInSection ? model.tabSections : []
         sectionID = CantripTabGrouping.sectionID(of: session, sections: model.tabSections)
+        parentID = session.parentID
+        parentTitle = session.child?.parentTitle
     }
 }
 
@@ -43,23 +48,36 @@ struct CantripTabActions: View {
     let state: CantripTabActionState
     let onRename: () -> Void
     let onClose: () -> Void
+    /// Opens another tab (a child tab's parent); nil hides Open Parent Tab.
+    var onOpenTab: ((String) -> Void)? = nil
 
     init(model: CantripRemoteModel, state: CantripTabActionState,
-         onRename: @escaping () -> Void, onClose: @escaping () -> Void) {
+         onRename: @escaping () -> Void, onClose: @escaping () -> Void,
+         onOpenTab: ((String) -> Void)? = nil) {
         self.model = model
         self.state = state
         self.onRename = onRename
         self.onClose = onClose
+        self.onOpenTab = onOpenTab
     }
 
     @MainActor
     init(model: CantripRemoteModel, session: CantripRemoteSession,
-         onRename: @escaping () -> Void, onClose: @escaping () -> Void) {
+         onRename: @escaping () -> Void, onClose: @escaping () -> Void,
+         onOpenTab: ((String) -> Void)? = nil) {
         self.init(model: model, state: CantripTabActionState(session: session, model: model),
-                  onRename: onRename, onClose: onClose)
+                  onRename: onRename, onClose: onClose, onOpenTab: onOpenTab)
     }
 
     var body: some View {
+        if let parentID = state.parentID, let onOpenTab {
+            Button {
+                onOpenTab(parentID)
+            } label: {
+                Label("Open Parent Tab", systemImage: CantripChildTabStyle.glyph)
+            }
+            Divider()
+        }
         Button {
             model.showingMacAccess = true
         } label: {
@@ -149,6 +167,8 @@ struct CantripTabActions: View {
                 Label("Move Tab Down", systemImage: "arrow.down")
             }
             .disabled(state.isMutating || state.isLast)
+        } else if state.parentID != nil {
+            Text("Child tab of \(state.parentTitle ?? "another tab"). It stays under it until its work merges.")
         } else {
             Text("Update and reopen Cantrip to reorder tabs.")
         }

@@ -296,6 +296,9 @@ struct CantripDuoSidebar: View {
                 CantripTabStatusIndicator(session: session)
                     .frame(width: 18)
                 HStack(spacing: 3) {
+                    if session.isChildTab {
+                        CantripChildTabGlyph()
+                    }
                     if session.isLocalPrivate == true {
                         Image(systemName: "lock.shield.fill").font(.caption2)
                     } else if session.isLocked == true {
@@ -310,11 +313,13 @@ struct CantripDuoSidebar: View {
                 CantripTabAgeText(date: session.lastActivityDate)
             }
             .sidebarRow(selected: selected)
+            .cantripChildTabIndent(session, by: 16)
         }
         .buttonStyle(.plain)
         .contextMenu {
             CantripTabActions(model: model, session: session,
-                              onRename: { onRename(session) }, onClose: { onClose(session.id) })
+                              onRename: { onRename(session) }, onClose: { onClose(session.id) },
+                              onOpenTab: onSelectTab)
         }
         // No handles: touch and hold, then drag, onto another tab to take its place.
         .cantripDraggable(canMove(session) ? CantripTabDrag.payload(tab: session.id) : nil)

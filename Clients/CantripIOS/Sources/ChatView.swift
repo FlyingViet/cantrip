@@ -1774,7 +1774,8 @@ struct ChatView: View {
                             composerFocused = false
                             renamingRemoteSession = remote.sessions.first { $0.id == tab.id }
                         },
-                        onClose: { closeRemoteSession(tab.id) }
+                        onClose: { closeRemoteSession(tab.id) },
+                        onOpenTab: { openTab($0) }
                     )
                 }
             }
@@ -2162,6 +2163,10 @@ struct ChatView: View {
         ) {
             if vm.activeLane.usesCantripRemote {
                 CantripHistoryControls(model: remote)
+                if vm.activeLane == .cantrip, let session = remote.selectedSession,
+                   session.id == remote.selectedSessionID, let child = session.child, let parentID = session.parentID {
+                    CantripChildTabBanner(child: child, onOpenParent: { openTab(parentID) })
+                }
             }
             if vm.turns.isEmpty { emptyState }
             ForEach(vm.turns) { turn in
@@ -2173,7 +2178,8 @@ struct ChatView: View {
                     remoteMessage: remoteMessage,
                     onAction: { vm.send($0.command) },
                     onApproval: { vm.approveRun($0, for: turn.id) },
-                    onOpenTab: vm.activeLane == .home ? { openTab($0) } : nil
+                    // Home's handoff cards and a parent tab's child-tab cards open tabs.
+                    onOpenTab: vm.activeLane.usesCantripRemote ? { openTab($0) } : nil
                 )
                 .id(turn.id)
                 if vm.activeLane.usesCantripRemote, let message = remoteMessage,
@@ -3456,7 +3462,9 @@ struct TurnView: View {
     }
 
     var body: some View {
-        if let result = remoteMessage?.handoffResult, remoteMessage?.isHandoffResult == true {
+        if let child = remoteMessage?.childResult, let parentID = cantripSessionID {
+            CantripChildTabCard(child: child, parentID: parentID, remote: remote, onOpenTab: onOpenTab)
+        } else if let result = remoteMessage?.handoffResult, remoteMessage?.isHandoffResult == true {
             CantripHandoffResultCard(result: result, onOpenTab: onOpenTab)
         } else if turn.role == .freshStart {
             CantripFreshStartDivider(text: turn.text)
