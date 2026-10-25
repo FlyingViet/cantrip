@@ -3465,7 +3465,13 @@ struct TurnView: View {
         if let child = remoteMessage?.childResult, let parentID = cantripSessionID {
             CantripChildTabCard(child: child, parentID: parentID, remote: remote, onOpenTab: onOpenTab)
         } else if let result = remoteMessage?.handoffResult, remoteMessage?.isHandoffResult == true {
-            CantripHandoffResultCard(result: result, onOpenTab: onOpenTab)
+            VStack(alignment: .leading, spacing: 8) {
+                if let message = remoteMessage, message.thread != nil {
+                    CantripThreadHeader(tag: message.thread, messageID: message.id,
+                                        sessionID: cantripSessionID, remote: remote)
+                }
+                CantripHandoffResultCard(result: result, onOpenTab: onOpenTab)
+            }
         } else if turn.role == .freshStart {
             CantripFreshStartDivider(text: turn.text)
         } else if turn.role == .user {
@@ -3487,7 +3493,10 @@ struct TurnView: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                if let lane = turn.executionLane {
+                if let message = remoteMessage, message.thread != nil {
+                    CantripThreadHeader(lane: turn.executionLane, tag: message.thread, messageID: message.id,
+                                        sessionID: cantripSessionID, remote: remote)
+                } else if let lane = turn.executionLane {
                     ExecutionLaneBadge(lane: lane)
                 }
                 if let author = turn.author, !author.isEmpty {

@@ -619,6 +619,10 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var handoffResult: CantripRemoteHandoffResult? = nil
     /// A child tab's card in its parent (role `assistant`; `text` is a plain fallback).
     var childResult: CantripRemoteChildResult? = nil
+    /// The prompt that started this message's thread; absent from older Mac hosts and older history.
+    var threadID: String? = nil
+    /// Cantrip Home: set when this reply belongs to a different thread than the message above it.
+    var thread: CantripRemoteThreadTag? = nil
 
     var presentedText: String { displayText ?? text }
     /// Result cards Cantrip posts into Home's chat; never a model reply.
@@ -1945,6 +1949,19 @@ struct CantripRemoteAPI {
             path: "/api/v1/sessions/\(id)?before=\(before)"
         )
         return response.session
+    }
+
+    /// A thread tag's thread: its prompt and the earlier messages in it, before `messageID`.
+    func thread(sessionID: String, threadID: String, before messageID: String) async throws -> CantripRemoteThread {
+        guard UUID(uuidString: sessionID) != nil, UUID(uuidString: threadID) != nil,
+              UUID(uuidString: messageID) != nil else {
+            throw CantripRemoteError.invalidResponse
+        }
+        struct Response: Decodable { let thread: CantripRemoteThread }
+        let response: Response = try await request(
+            path: "/api/v1/sessions/\(sessionID)/threads/\(threadID)?before=\(messageID)"
+        )
+        return response.thread
     }
 
     func fullMessage(sessionID: String, messageID: String) async throws -> CantripRemoteMessage {
@@ -3715,6 +3732,12 @@ final class CantripRemoteModel: ObservableObject {
     func fullMessage(sessionID: String, messageID: String) async throws -> CantripRemoteMessage {
         try await performHistoryRead { api in
             try await api.fullMessage(sessionID: sessionID, messageID: messageID)
+        }
+    }
+
+    func thread(sessionID: String, threadID: String, before messageID: String) async throws -> CantripRemoteThread {
+        try await performHistoryRead { api in
+            try await api.thread(sessionID: sessionID, threadID: threadID, before: messageID)
         }
     }
 
