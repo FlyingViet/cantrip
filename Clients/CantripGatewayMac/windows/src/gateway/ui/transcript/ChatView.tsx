@@ -21,6 +21,7 @@ import {
   type FileDraft, type ImageDraft, type UploadProgress, type VideoDraft,
 } from "./attachments";
 import { chatQuestion, composerAcceptsText, composerPlaceholder, InputTranscript, QuestionPanel } from "./Inputs";
+import { ChildBanner } from "./ChildTabs";
 import { MessageRow, ThinkingIndicator } from "./Message";
 import { useSlashSuggestions } from "./SlashSuggestions";
 import "./transcript.css";
@@ -204,6 +205,7 @@ function Transcript(props: { session: RemoteSessionSummary | null; messages: Rem
               ) : null}
             </div>
           ) : null}
+          {props.isTab && session?.parentID && session.child ? <ChildBanner parentID={session.parentID} child={session.child} /> : null}
           {!messages.length ? <EmptyState isTab={props.isTab} loaded={props.detailLoaded} /> : null}
           {session ? messages.map((message) => (
             <MessageRow key={message.id} message={message} session={session} lane={lane}

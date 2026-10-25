@@ -15,6 +15,7 @@ import { SubagentStack } from "../activity/Subagents";
 import { Icon, StatusIcon } from "../icons";
 import { Spinner, toast } from "../kit";
 import { openViewer } from "../viewer";
+import { ChildResultCard } from "./ChildTabs";
 import { MCPAppStack } from "./MCPApp";
 import { Markdown, type InlineImages } from "./Markdown";
 
@@ -434,6 +435,9 @@ export function MessageRow(props: {
   reported: Set<string>;
 }): JSX.Element | null {
   const { message, session } = props;
+  if (message.childResult) {
+    return <div class="turn" data-message-id={message.id}><ChildResultCard parentID={session.id} child={message.childResult} /></div>;
+  }
   if (message.role === "handoff" && message.handoffResult) {
     return <div class="turn" data-message-id={message.id}><HandoffResultCard result={message.handoffResult} /></div>;
   }

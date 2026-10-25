@@ -108,6 +108,10 @@ struct MacHomeChatView: View {
             loadOlder: { remote.requestOlderMessages() }
         ) {
             CantripHistoryControls(model: remote)
+            if isTab, let session = remote.selectedSession, session.id == remote.selectedSessionID,
+               let child = session.child, let parentID = session.parentID {
+                CantripChildTabBanner(child: child, onOpenParent: { navigation.openTab(parentID) })
+            }
             if vm.turns.isEmpty { emptyState }
             ForEach(vm.turns) { turn in
                 let message = vm.remoteMessage(for: turn.id)

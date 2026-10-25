@@ -4,7 +4,7 @@
 import { batch, computed, signal } from "@preact/signals";
 import { api, APIError, onWritesChanged, pathComponent } from "../api/client";
 import type {
-  HomeArtifactsResponse, HomeArtifactsSnapshot, HomeBackgroundSnapshot, HomeInputGroup, HomeTasksResponse,
+  ChildTabAction, ForkQueuedResponse, HomeArtifactsResponse, HomeArtifactsSnapshot, HomeBackgroundSnapshot, HomeInputGroup, HomeTasksResponse,
   HomeTasksSnapshot, InputAnswerRequest, MoveTabResponse, PagedRemoteSessionDetail, RemoteMessage,
   RemoteSessionSummary, SendMessageRequest, SessionResponse, SessionsListResponse, SessionUpdateResponse,
   SubagentCancelResponse, TabSection, TabSectionsResponse,
@@ -549,6 +549,29 @@ export async function removeQueued(sessionID: string, promptID: string): Promise
 
 export async function sendQueuedNow(sessionID: string, promptID: string): Promise<void> {
   await mutate(() => sessionAction(sessionID, `queue/${pathComponent(promptID)}/send`, {}));
+}
+
+/**
+ * Runs a queued message in a child tab: its own tab right after the parent (and, in a git
+ * repository, its own branch) that merges back when done. The parent stays open. Returns the
+ * child's ID.
+ */
+export async function forkQueued(sessionID: string, promptID: string): Promise<string> {
+  const data = await mutate(async () => {
+    const response = await api<ForkQueuedResponse>(sessionPath(sessionID, `queue/${pathComponent(promptID)}/fork`), {
+      method: "POST", body: {}, recent: true,
+    });
+    apply(response.session);
+    return response;
+  });
+  await refresh();
+  return data.childID;
+}
+
+/** One of a child tab card's `actions`, run in its parent. `open` brings back a finished child's tab. */
+export async function childAction(parentID: string, childID: string, action: ChildTabAction): Promise<void> {
+  await mutate(() => sessionAction(parentID, `children/${pathComponent(childID)}/${pathComponent(action)}`, {}));
+  await refresh();
 }
 
 export async function stopBackgroundRun(runID: string): Promise<void> {

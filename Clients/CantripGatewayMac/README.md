@@ -114,7 +114,8 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   sections. **New Section** (last row) makes an empty section; deleting one with tabs asks
   first and moves its tabs back to Tabs. **Edit Sections** renames, reorders (drag or
   arrows), deletes and adds them.
-  Collapsed sections still show working tabs. The footer
+  Collapsed sections still show working tabs. Child tabs sit indented under their parent
+  with a branch mark and stay there until their work merges. The footer
   shows the connection.
 - **Tabs:** selecting a tab shows its transcript and composer in place. The toolbar shows its
   name and **Working / Idle · folder**, with Stop, delivery (**Auto**) and **⋯** for the tab's

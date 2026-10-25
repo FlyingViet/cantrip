@@ -314,6 +314,85 @@ export interface RemoteHandoffResult {
   updatedAt: UnixSeconds;
 }
 
+// MARK: - Child tabs
+
+/**
+ * Where a child tab's work stands (`ChildTab.State`): running, then merging back into the parent's
+ * branch. Unknown strings come from newer Macs; treat them like `stopped`.
+ */
+export type ChildTabState =
+  | 'working' | 'needsInput' | 'finished' | 'merging' | 'merged' | 'conflict'
+  | 'unmerged' | 'noChanges' | 'failed' | 'stopped' | 'discarded';
+
+/** A card action (`POST /sessions/<parentID>/children/<childID>/<action>`). */
+export type ChildTabAction = 'open' | 'discard' | 'resolve' | 'keepParent' | 'keepChild' | 'leave' | 'retry' | 'merge';
+
+/** A child tab's own listing (`parentID` + `child` on a running or merging child). */
+export interface RemoteChildTab {
+  state: ChildTabState | string;
+  title: string;
+  parentTitle: string;
+  /** "Working", "Merging into main", … as the Mac words it. */
+  statusLine: string;
+  branch?: string;
+  baseBranch?: string;
+  repoName?: string;
+}
+
+/** A child tab's card in its parent (`ChildTab.snapshot`), on a message with role `assistant`. */
+export interface RemoteChildResult {
+  /** The child tab's session ID. */
+  id: UUIDString;
+  parentID: UUIDString;
+  title: string;
+  /** The queued request, as written. */
+  prompt: string;
+  parentTitle: string;
+  state: ChildTabState | string;
+  statusLine: string;
+  summary: string;
+  /** A few of the child's replies, for the expanded thread. */
+  replies: string[];
+  files: { path: string; added: Int; removed: Int }[];
+  added: Int;
+  removed: Int;
+  branch?: string;
+  baseBranch?: string;
+  repoName?: string;
+  /** Short hash. */
+  mergeCommit?: string;
+  conflictFiles: string[];
+  /** Lines starting with a space are context, "child " the child's side, others the parent's. */
+  conflictExcerpt?: string;
+  cleanFileCount: Int;
+  /** Why a merge is waiting or stopped. */
+  note?: string;
+  /** What the card offers now. */
+  actions: (ChildTabAction | string)[];
+  createdAt: UnixSeconds;
+  updatedAt: UnixSeconds;
+  finishedAt?: UnixSeconds;
+}
+
+export type QueuePlanKind = 'fork' | 'batch' | 'wait' | 'queue';
+
+/** The Mac's suggestion for a queued message while its tab works (`QueuePlan.snapshot`). */
+export interface QueuePlan {
+  kind: QueuePlanKind | string;
+  /** Shown on the queue row ("Independent: can run in a child tab"). */
+  reason: string;
+  /** A short name for the child tab. */
+  title: string;
+  repo?: string;
+}
+
+/** POST /api/v1/sessions/<id>/queue/<queuedID>/fork. */
+export interface ForkQueuedResponse<S extends RemoteSessionDetail = PagedRemoteSessionDetail> {
+  /** The parent. */
+  session: S;
+  childID: UUIDString;
+}
+
 /** Context size and token use for a prompt (user messages only). Absent keys are unknown. */
 export interface PromptUsage {
   modelCalls: Int;
@@ -370,6 +449,8 @@ export interface RemoteMessage {
   delegations?: RemoteDelegation[];
   /** role === 'handoff' only. */
   handoffResult?: RemoteHandoffResult;
+  /** A child tab's card in its parent (role `assistant`; `text` is a plain fallback). */
+  childResult?: RemoteChildResult;
   reasoning?: RemoteReasoningStep[];
   subagents?: RemoteSubagent[];
   apps?: MCPAppSummary[];
@@ -395,6 +476,8 @@ export interface QueuedPrompt {
   displayText?: string;
   /** Paged: always present (may be []). Full: only with `displayText`. */
   images?: MessageImageRef[];
+  /** The Mac's suggestion while the tab works (`supportsQueuePlans`). */
+  plan?: QueuePlan;
 }
 
 /** Image in a question's `detail` rewritten to a preview (`InputRequestSnapshot.PreviewImage`). */
@@ -499,6 +582,15 @@ export interface RemoteSessionSummary {
   supportsStartFresh: boolean;
   /** GET .../commands lists the backend's slash commands and skills. Absent on older hosts: never call it. */
   supportsBackendCommands?: boolean;
+  /** Queued messages can run in child tabs (POST .../queue/<id>/fork). Absent on older hosts. */
+  supportsChildTabs?: boolean;
+  /** Queued messages carry `plan`. Absent on older hosts. */
+  supportsQueuePlans?: boolean;
+  /** Why this tab can't start a child tab now (caps full, a child itself, …). */
+  childTabsUnavailableReason?: string;
+  /** A running or merging child tab: its parent (listed right before it). */
+  parentID?: UUIDString;
+  child?: RemoteChildTab;
 
   // Cantrip Home session only.
   /** Home only: always true there. */

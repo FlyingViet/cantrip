@@ -251,3 +251,63 @@ button.reasoning-step:hover { background: rgba(255, 255, 255, 0.09); }
 .slash-info { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; color: var(--secondary); }
 .slash-list:not(:empty) + .slash-info { border-top: 0.5px solid var(--separator); margin-top: 4px; }
 .spinning { animation: spin 0.9s linear infinite; }
+
+/* Child tabs: one card per child in its parent (CantripChildTabs.swift), and the banner in the child */
+.child-card { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; font-size: 13px; }
+.child-card > * { max-width: 100%; }
+.child-thread-toggle {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0; border: 0; border-radius: 999px;
+  background: none; color: inherit; text-align: left; min-width: 0; max-width: 100%;
+}
+.child-lane, .child-tag {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; padding: 3px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 600;
+}
+.child-lane { color: var(--child-lane); background: rgba(100, 210, 255, 0.13); }
+.child-tag { color: var(--secondary); background: var(--control); }
+.child-tag .truncate { max-width: 52ch; }
+.child-tag .flipped { transform: rotate(180deg); }
+.child-thread { display: flex; flex-direction: column; gap: 8px; width: 100%; margin: 0 0 2px 4px; padding-left: 12px; border-left: 2px solid var(--separator); }
+.child-prompt {
+  align-self: flex-end; max-width: 86%; margin: 0; padding: 6px 11px; border-radius: 14px; background: #3a5fcd; color: #fff;
+  line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.child-reply p { margin: 0; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.child-who { display: block; color: var(--secondary); font-size: 11px; font-weight: 600; }
+.child-files { margin: 0; color: var(--secondary); font-size: 12px; line-height: 1.7; font-variant-numeric: tabular-nums; }
+.child-files code, .child-question code { padding: 0 4px; border-radius: 4px; background: var(--control); font-family: var(--mono); font-size: 11.5px; }
+.child-summary { margin: 0; line-height: 1.5; }
+.child-note { margin: 0; color: var(--secondary); font-size: 12.5px; }
+.child-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.child-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; background: var(--control);
+  color: var(--secondary); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.child-chip.ok { color: var(--green); background: rgba(48, 209, 88, 0.13); }
+.child-chip.work { color: var(--orange); background: rgba(255, 159, 10, 0.13); }
+.child-chip.bad { color: #ff6961; background: rgba(255, 69, 58, 0.12); }
+.child-pulse { animation: child-pulse 1.1s ease-in-out infinite; }
+@keyframes child-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .child-pulse { animation: none; } }
+.child-link { min-height: 28px; font-weight: 600; }
+.child-question {
+  display: flex; flex-direction: column; gap: 8px; width: min(100%, 640px); padding: 12px 13px; border: 1px solid var(--separator);
+  border-radius: 12px; background: var(--card);
+}
+.child-question h4 { margin: 0; font-size: 14px; }
+.child-question > p { margin: 0; line-height: 1.45; }
+.child-excerpt {
+  margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--control); font: 11.5px/1.5 var(--mono); white-space: pre; overflow-x: auto;
+}
+.child-excerpt:focus-visible { outline: 2px solid var(--accent); }
+.child-excerpt .ours { color: var(--green); }
+.child-excerpt .theirs { color: var(--child-lane); }
+.child-excerpt .ctx { color: var(--secondary); }
+.child-options { display: flex; flex-direction: column; gap: 6px; }
+.child-options .btn { min-height: 34px; justify-content: center; }
+.child-banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 9px; margin-bottom: 4px; padding: 7px 11px; border: 1px solid var(--separator);
+  border-radius: 10px; background: var(--card); color: var(--secondary); font-size: 12.5px;
+}
+.child-glyph { color: var(--child-lane); flex: none; }
+.child-thread .child-link { align-self: flex-start; padding-left: 0; }

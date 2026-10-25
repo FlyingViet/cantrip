@@ -8,6 +8,7 @@ import type { QueuedPrompt, RemoteSessionDetail, RemoteSessionSummary, SessionUp
 import * as remote from "../../state/remote";
 import { Icon } from "../icons";
 import { alertDialog, openMenu, Sheet, Spinner, type MenuEntry } from "../kit";
+import { PlanChip } from "../transcript/ChildTabs";
 import { MacImage } from "../transcript/Message";
 import { promptPages, promptPreview, queuedText, queuePositionLabel } from "./activityLogic";
 import { DisconnectedNotice } from "./BackgroundTasksSheet";
@@ -15,6 +16,7 @@ import { ArrowUpCircle } from "./glyphs";
 
 const REMOVAL_UNSUPPORTED = "Update and reopen Cantrip on your Mac to remove queued messages from Cantrip Agent.";
 const SEND_NOW_UNSUPPORTED = "Update and reopen Cantrip on your Mac to send queued messages now from Cantrip Agent. The message is still queued.";
+const CHILD_TABS_UNSUPPORTED = "Update and reopen Cantrip on your Mac to run queued messages in child tabs. The message is still queued.";
 
 function queuedPrompts(session: RemoteSessionSummary): QueuedPrompt[] | undefined {
   return (session as Partial<RemoteSessionDetail>).queued ?? remote.details.value.get(session.id)?.queued;
@@ -38,7 +40,7 @@ export function QueueButton(props: { session: RemoteSessionSummary; onOpen: () =
 }
 
 /** The Mac's prepare step: re-read the tab (cheaply, by revision) and check it still supports the action. */
-async function requireCapability(sessionID: string, key: "supportsQueueRemoval" | "supportsQueueSendNow", message: string): Promise<void> {
+async function requireCapability(sessionID: string, key: "supportsQueueRemoval" | "supportsQueueSendNow" | "supportsChildTabs", message: string): Promise<void> {
   const cached = remote.details.peek().get(sessionID);
   const query = cached?.historyRevision ? `?revision=${encodeURIComponent(cached.historyRevision)}` : "";
   const data = await api<SessionUpdateResponse>(`/api/v1/sessions/${pathComponent(sessionID)}${query}`, { recent: true });
@@ -89,15 +91,19 @@ export function QueueSheet(props: { sessionID: string; onClose: () => void }): J
   const { sessionID } = props;
   const [removingID, setRemovingID] = useState<string | null>(null);
   const [sendingID, setSendingID] = useState<string | null>(null);
+  const [forkingID, setForkingID] = useState<string | null>(null);
   const [reading, setReading] = useState<string | null>(null);
   const detail = remote.details.value.get(sessionID);
   const summary = sessionID === remote.homeID.value ? remote.homeSummary.value : remote.sessions.value.find((item) => item.id === sessionID);
   const session: RemoteSessionSummary | undefined = detail ?? summary ?? undefined;
   const supportsSendNow = session?.supportsQueueSendNow === true;
   const supportsRemoval = session?.supportsQueueRemoval === true;
-  const canMutate = remote.isConnected.value && !remote.isMutating.value && removingID === null && sendingID === null;
+  const supportsChildTabs = session?.supportsChildTabs === true;
+  const childTabsUnavailable = supportsChildTabs ? session?.childTabsUnavailableReason || null : null;
+  const canMutate = remote.isConnected.value && !remote.isMutating.value && removingID === null && sendingID === null && forkingID === null;
   const canRemove = canMutate && supportsRemoval;
   const canSendNow = canMutate && supportsSendNow;
+  const canFork = canMutate && supportsChildTabs && !childTabsUnavailable;
 
   const remove = async (prompt: QueuedPrompt) => {
     if (remote.isMutating.peek()) {
@@ -137,8 +143,30 @@ export function QueueSheet(props: { sessionID: string; onClose: () => void }): J
     if (sent && (remote.details.peek().get(sessionID)?.queuedCount ?? 0) === 0) props.onClose();
   };
 
+  // Starts the message now in a child tab under this one; this tab stays open.
+  const fork = async (prompt: QueuedPrompt) => {
+    if (remote.isMutating.peek()) {
+      void alertDialog("Could not start a child tab", "Wait for the current request to finish, then try again.");
+      return;
+    }
+    setForkingID(prompt.id);
+    let forked = false;
+    try {
+      await requireCapability(sessionID, "supportsChildTabs", CHILD_TABS_UNSUPPORTED);
+      await remote.forkQueued(sessionID, prompt.id);
+      forked = true;
+    } catch (error) {
+      void alertDialog("Could not start a child tab",
+        (error as Error).message || "The child tab could not be confirmed. Check the tab list before trying again.");
+    } finally {
+      setForkingID(null);
+    }
+    if (forked && (remote.details.peek().get(sessionID)?.queuedCount ?? 0) === 0) props.onClose();
+  };
+
   const menu = (event: MouseEvent, prompt: QueuedPrompt) => {
     const entries: MenuEntry[] = [];
+    if (supportsChildTabs) entries.push({ label: "Run in Child Tab", icon: "arrow.triangle.branch", disabled: !canFork, onSelect: () => void fork(prompt) });
     if (supportsSendNow) entries.push({ label: "Send now", icon: "arrow.up", disabled: !canSendNow, onSelect: () => void sendNow(prompt) });
     if (supportsRemoval) entries.push({ label: "Remove", icon: "trash", destructive: true, disabled: !canRemove, onSelect: () => void remove(prompt) });
     if (!entries.length) return;
@@ -158,8 +186,17 @@ export function QueueSheet(props: { sessionID: string; onClose: () => void }): J
             <span class="act-row-busy"><Spinner label="Sending queued message now" /></span>
           ) : removingID === prompt.id ? (
             <span class="act-row-busy"><Spinner label="Removing queued message" /></span>
+          ) : forkingID === prompt.id ? (
+            <span class="act-row-busy"><Spinner label="Starting a child tab" /></span>
           ) : (
             <>
+              {supportsChildTabs ? (
+                <button type="button" class="icon-btn act-row-action child" aria-label="Run in child tab"
+                  title={childTabsUnavailable ?? `Run in a child tab (its own tab and branch, merged back when done): ${hint}`}
+                  disabled={!canFork} onClick={() => void fork(prompt)}>
+                  <Icon name="arrow.triangle.branch" size={16} />
+                </button>
+              ) : null}
               {supportsSendNow ? (
                 <button type="button" class="icon-btn act-row-action" aria-label="Send queued message now" title={`Send now: ${hint}`}
                   disabled={!canSendNow} onClick={() => void sendNow(prompt)}>
@@ -176,6 +213,7 @@ export function QueueSheet(props: { sessionID: string; onClose: () => void }): J
           )}
         </div>
         {text ? <PromptText text={text} onRead={setReading} /> : null}
+        {prompt.plan?.reason ? <PlanChip plan={prompt.plan} /> : null}
         {prompt.images?.length ? (
           <div class="act-gallery">
             {prompt.images.map((image, imageIndex) => (
@@ -209,9 +247,11 @@ export function QueueSheet(props: { sessionID: string; onClose: () => void }): J
     }
     return (
       <div class="act-content">
+        {childTabsUnavailable ? <p class="act-queue-note" role="note">{childTabsUnavailable}</p> : null}
         <ol class="act-queue-list" aria-label="Queued messages">{detail.queued.map(row)}</ol>
         <div class="act-footnotes">
           <p>These prompts are accepted by your Mac and run in order. They move into the conversation when they start.</p>
+          {supportsChildTabs ? <p>Run in child tab starts a message now in its own tab under this one, on its own branch, and merges it back when it's done. Each message shows what your Mac suggests.</p> : null}
           {supportsSendNow ? <p>Send now delivers a message without waiting. Work already running keeps going in the background.</p> : null}
           {supportsRemoval
             ? <p>Remove a prompt with the trash button or by right-clicking it. Removing a queued message does not stop the current task.</p>

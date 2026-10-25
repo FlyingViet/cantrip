@@ -12,11 +12,13 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   reorder, right-click actions), grouped under collapsible sections when the Mac has any
   (Move to Section, drop on a header, section menus; drag a header onto another, or focus it
   and press Alt+↑/↓, to reorder sections; **New Section** at the end makes an empty one; deleting
-  a section with tabs asks first and keeps its tabs). A unified toolbar with Background, delivery (Auto, Queue,
+  a section with tabs asks first and keeps its tabs). Child tabs sit indented under their
+  parent with a branch mark. A unified toolbar with Background, delivery (Auto, Queue,
   Redirect, Inject), Refresh and More.
 - **Chat.** Replies with Markdown and the Mac's image previews, reasoning steps, MCP App
   views, subagent cards (running ones pinned above the composer), handoff cards with
-  **Open tab**, questions answered in the reply panel, approvals and sign-ins inline,
+  **Open tab**, child tab cards (the request, replies and files; merge state; the merge
+  question on a conflict) and a child's banner with **Open parent**, questions answered in the reply panel, approvals and sign-ins inline,
   prompt token usage, older history loading as you scroll up, and Start Fresh.
 - **Slash commands.** Type `/` in a tab's or Home's composer to see the tab backend's
   commands, custom commands and skills, as the Mac lists them (needs a Cantrip version that
@@ -27,7 +29,7 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 - **Tasks and Artifacts.** Scheduled tasks with runs, workspaces and their records;
   artifacts with thumbnails, the image viewer, Save and Delete.
 - **Sheets.** Background runs (answer a waiting run in place), a tab's background tasks and
-  queue, Model Settings (and Private Local), Rename, Copilot Usage, Cantrip Memory (formatted
+  queue (each message's suggested plan, **Run in child tab**, Send now, Remove), Model Settings (and Private Local), Rename, Copilot Usage, Cantrip Memory (formatted
   Markdown or its source), GitHub Builds, Update & Rebuild Cantrip, and Mac Permissions & View Mac.
 - **Voice.** Dictation from the composer's microphone and Voice Mode (hold the microphone),
   with speech recognition running on this PC after a one-time model download, and replies

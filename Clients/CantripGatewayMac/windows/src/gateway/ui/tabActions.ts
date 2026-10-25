@@ -29,9 +29,12 @@ export function tabActions(session: RemoteSessionSummary): MenuEntry[] {
   const list = remote.sessions.value;
   const index = list.findIndex((item) => item.id === session.id);
   const mutating = remote.isMutating.value;
-  const entries: MenuEntry[] = [
-    { label: "Mac Permissions & View Mac", icon: "desktopcomputer", onSelect: () => { nav.sheet.value = { kind: "macAccess" }; } },
-  ];
+  const entries: MenuEntry[] = [];
+  const parentID = session.parentID;
+  if (parentID) {
+    entries.push({ label: "Open Parent Tab", icon: "arrow.triangle.branch", onSelect: () => nav.openTab(parentID) }, { kind: "separator" });
+  }
+  entries.push({ label: "Mac Permissions & View Mac", icon: "desktopcomputer", onSelect: () => { nav.sheet.value = { kind: "macAccess" }; } });
   if (session.supportsInputRequests) {
     entries.push({
       label: "View Questions in Chat", icon: "questionmark.circle",
@@ -94,6 +97,8 @@ export function tabActions(session: RemoteSessionSummary): MenuEntry[] {
         onSelect: () => void run("Move", () => remote.moveTab(session.id, list[index + 1].id, true)),
       },
     );
+  } else if (parentID) {
+    entries.push({ kind: "header", label: `Child tab of ${session.child?.parentTitle || "another tab"}. It stays under it until its work merges.` });
   } else {
     entries.push({ kind: "header", label: "Update Cantrip on the Mac to reorder tabs." });
   }
