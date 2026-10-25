@@ -141,6 +141,8 @@ final class HostServices {
 
         // Daily memory consolidation, off the launch path; failed runs retry with backoff.
         Consolidator.start()
+        // Daily cleanup of agent session folders and worktrees nothing uses anymore.
+        StorageUpkeepStatus.shared.start()
 
         if let recoveryReport {
             manager.active.messages.append(ChatMessage(
