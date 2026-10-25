@@ -502,10 +502,20 @@ struct CantripHomeTabDrawer: View {
                 AnyView(VStack(alignment: .leading, spacing: 10) {
                     homeRow
                     if showsBackgroundJobs { backgroundRow }
-                    tabsHeader
+                    // With sections, Tabs and each section get their own headers in the list.
+                    if model.tabSections.isEmpty || filteredSessions.isEmpty { tabsHeader }
                     if filteredSessions.isEmpty { emptyTabs }
                 }
                 .padding(.bottom, 2))
+            },
+            sectionModel: model,
+            onNewTabInSection: { sectionID in
+                Task {
+                    guard let id = await model.createTab(inSection: sectionID) else { return }
+                    searchFocused = false
+                    if isModal { onDismiss() }
+                    onSelect(id)
+                }
             }
         ) { session in
             CantripTabActions(

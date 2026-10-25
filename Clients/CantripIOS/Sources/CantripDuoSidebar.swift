@@ -33,6 +33,7 @@ struct CantripDuoSidebar: View {
     @AppStorage(CantripMascotOutfit.storageKey) private var outfit: CantripMascotOutfit = .starryPlush
     @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
     @AppStorage("cantrip.duoSidebar.tabsExpanded") private var tabsExpanded = true
+    @ObservedObject private var collapse = CantripTabSectionCollapse.shared
     @AppStorage("cantrip.duoSidebar.skillsExpanded") private var skillsExpanded = true
     @State private var expandedGroups: Set<BackendSkillsSidebar.Group> = Self.initialExpandedGroups
 
@@ -189,6 +190,56 @@ struct CantripDuoSidebar: View {
     // MARK: Tabs
 
     @ViewBuilder private var tabs: some View {
+        if let groups = CantripTabGrouping.groups(model.sessions, sections: model.tabSections) {
+            ForEach(groups) { group in
+                sectionedTabs(group)
+            }
+        } else {
+            flatTabs
+        }
+    }
+
+    /// One section (or Tabs, the unfiled ones): a collapsible header with its own + and menu.
+    @ViewBuilder private func sectionedTabs(_ group: CantripTabGrouping.Group) -> some View {
+        let collapsed = collapse.isCollapsed(group.id, scope: model.tabSectionScope)
+        let working = CantripHomeTabCounts.working(in: group.sessions)
+        sectionHeader(
+            title: "\(group.name) · \(group.sessions.count)",
+            detail: working > 0 ? "\(working) working" : nil,
+            isExpanded: !collapsed,
+            toggle: { collapse.toggle(group.id, scope: model.tabSectionScope) },
+            accessory: {
+                Button {
+                    if let section = group.section {
+                        Task { if let id = await model.createTab(inSection: section.id) { onSelectTab(id) } }
+                    } else {
+                        onCreateTab()
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.isConfigured || model.isMutating)
+                .accessibilityLabel(group.section == nil ? "New Tab" : "New Tab in \(group.name)")
+                .accessibilityIdentifier(group.section == nil ? "duo.sidebar.newTab" : "duo.sidebar.newTab.\(group.id)")
+            }
+        )
+        .contextMenu {
+            CantripTabSectionMenu(model: model, group: group, onNewTab: group.section.map { section in
+                { Task { if let id = await model.createTab(inSection: section.id) { onSelectTab(id) } } }
+            })
+        }
+        .accessibilityIdentifier(group.section == nil ? "duo.sidebar.tabsHeader" : "duo.sidebar.section.\(group.id)")
+        ForEach(CantripTabGrouping.visible(group, collapsed: collapsed,
+                                           selectedID: isHomeShown ? nil : model.selectedSessionID)) { session in
+            tabRow(session)
+        }
+    }
+
+    @ViewBuilder private var flatTabs: some View {
         sectionHeader(
             title: "Tabs · \(model.sessions.count)",
             detail: { let working = CantripHomeTabCounts.working(in: model.sessions)

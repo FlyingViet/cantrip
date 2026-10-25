@@ -108,7 +108,8 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `POST /api/v1/sessions/{id}/messages` | Send; `mode` is `auto` (default), `queue`, `interrupt` (Redirect) or `inject` |
 | `DELETE /api/v1/sessions/{id}/queue/{promptID}`, `POST …/queue/{promptID}/send` | Remove a queued prompt, or Send now |
 | `/api/v1/sessions/{id}/input` | Answer approvals, questions and secure input |
-| `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename and lock, reorder, per-tab model settings |
+| `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename, lock and file in a section (`sectionID`), reorder, per-tab model settings |
+| `/api/v1/sections`, `/api/v1/sections/{id}` | Tab sections: list, add (`name`), rename or reorder (`PATCH name/position`), delete; only when the list has `supportsTabSections` |
 | `POST /api/v1/sessions/{id}/start-fresh` | Start Fresh (no body): the next prompt starts a new model session, history stays; `409` while the tab is busy or for Cantrip Home |
 | `GET /api/v1/sessions/{id}/commands` | The tab's (or Home's) backend slash commands, custom commands and skills for `/` suggestions; called only when the snapshot has `supportsBackendCommands` |
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
@@ -248,6 +249,13 @@ Failed moves restore the previous order and show the error inside the tab panel.
 Order is saved on
 the host Mac, survives its restart, and syncs to Cantrip and other Remote clients.
 Update and reopen the host first: these controls require `supportsTabReordering`.
+
+Tabs can also be grouped into sections, like Slack's sidebar. Touch and hold a tab and
+choose **Move to Section** (or **New Section**); touch and hold a section's header for
+Rename, New Tab Here, Move Up/Down and Delete. Tap a header to collapse it; a collapsed
+section still shows the open tab and tabs that are working or waiting for you. The Mac keeps
+the sections (every device shows the same ones); collapsing is per device. Dragging reorders
+within a section. Needs an updated Mac (`supportsTabSections`).
 Moves use an authenticated read-only preflight and a single write; an uncertain
 write is not replayed automatically.
 

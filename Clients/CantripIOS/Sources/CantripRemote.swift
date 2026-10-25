@@ -463,6 +463,10 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var isLocked: Bool? = nil
     var supportsTabMetadata: Bool? = nil
     var supportsTabReordering: Bool? = nil
+    /// The tab can be filed under a section (`sectionID`); nil from Macs without sections.
+    var supportsTabSections: Bool? = nil
+    /// The section this tab is filed under; nil shows it under Tabs.
+    var sectionID: String? = nil
     var supportsPagedHistory: Bool? = nil
     var supportsVideoAttachments: Bool? = nil
     /// Any document as an attachment; absent from Macs before file uploads.
@@ -749,6 +753,14 @@ struct CantripSessionsResponse: Decodable {
     let sessions: [CantripRemoteSession]
     /// Cantrip Home's summary, listed alongside the tabs by hosts with Home enabled.
     var home: CantripRemoteSession?
+    /// Named groups for the tab lists, in order; nil from Macs without sections.
+    var sections: [CantripTabSection]?
+    var supportsTabSections: Bool?
+}
+
+struct CantripTabSectionsResponse: Decodable {
+    let sections: [CantripTabSection]
+    var section: CantripTabSection?
 }
 
 private struct CantripSessionResponse: Decodable {
@@ -799,6 +811,7 @@ enum CantripRemoteError: LocalizedError {
     case startFreshUnsupported
     case tabMetadataUnsupported
     case tabReorderingUnsupported
+    case tabSectionsUnsupported
     case githubBuildsUnsupported
     case memoryUnsupported
     case maintenanceUnsupported
@@ -853,6 +866,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to rename or lock its tabs."
         case .tabReorderingUnsupported:
             return "Update and reopen Cantrip on your Mac to reorder its tabs."
+        case .tabSectionsUnsupported:
+            return "Update and reopen Cantrip on your Mac to group its tabs into sections."
         case .githubBuildsUnsupported:
             return "Update and reopen Cantrip on your Mac to view GitHub builds."
         case .memoryUnsupported:
@@ -2074,6 +2089,45 @@ struct CantripRemoteAPI {
         return try JSONEncoder().encode(Body(targetID: targetID, placement: after ? "after" : "before"))
     }
 
+    fileprivate func requireTabSections() async throws {
+        guard try await sessionListing().supportsTabSections == true else {
+            throw CantripRemoteError.tabSectionsUnsupported
+        }
+    }
+
+    fileprivate func createSection(name: String) async throws -> CantripTabSectionsResponse {
+        try await request(path: "/api/v1/sections", method: "POST",
+                          body: try JSONSerialization.data(withJSONObject: ["name": name]))
+    }
+
+    /// Renames and/or reorders a section (`position` among the sections).
+    fileprivate func updateSection(id: String, name: String? = nil, position: Int? = nil) async throws
+        -> CantripTabSectionsResponse {
+        var body: [String: Any] = [:]
+        if let name { body["name"] = name }
+        if let position { body["position"] = position }
+        return try await request(path: "/api/v1/sections/\(id)", method: "PATCH",
+                                 body: try JSONSerialization.data(withJSONObject: body))
+    }
+
+    fileprivate func deleteSection(id: String) async throws -> CantripTabSectionsResponse {
+        try await request(path: "/api/v1/sections/\(id)", method: "DELETE")
+    }
+
+    /// Files a tab under a section; nil returns it to Tabs.
+    fileprivate func fileTab(id: String, sectionID: String?) async throws -> CantripRemoteSession {
+        let body = try JSONSerialization.data(withJSONObject: ["sectionID": sectionID as Any? ?? NSNull()])
+        return try await updateTab(id: id, body: body)
+    }
+
+    fileprivate func createSession(sectionID: String) async throws -> CantripRemoteSession {
+        let response: CantripSessionResponse = try await request(
+            path: "/api/v1/sessions", method: "POST",
+            body: try JSONSerialization.data(withJSONObject: ["sectionID": sectionID]), includeRecentExchanges: true
+        )
+        return response.session
+    }
+
     fileprivate func moveTab(id: String, body: Data) async throws -> [CantripRemoteSession] {
         let response: CantripSessionsResponse = try await request(
             path: "/api/v1/sessions/\(id)/move", method: "POST", body: body
@@ -2270,6 +2324,11 @@ final class CantripRemoteModel: ObservableObject {
     @Published var inputContext: CantripInputContext?
     @Published var inputReplyID: UUID?
     @Published var showingMacAccess = false
+    /// Sections the Mac groups its tabs into, in order (empty: one flat list).
+    @Published private(set) var tabSections: [CantripTabSection] = []
+    @Published private(set) var supportsTabSections = false
+    /// A section name being asked for, shown by `cantripSectionPrompt(model:)`.
+    @Published var sectionPrompt: CantripSectionPrompt?
     @Published private(set) var connectionState: CantripRemoteConnectionState = .disconnected
     @Published private(set) var configuredURL: String
     @Published private(set) var hasStoredToken: Bool
@@ -2747,6 +2806,8 @@ final class CantripRemoteModel: ObservableObject {
             isLocalNetworkAvailable = false
             sessions = []
             homeSummary = nil
+            tabSections = []
+            supportsTabSections = false
             selectedSessionID = nil
             selectedSession = nil
             isHomeSelected = false
@@ -2811,6 +2872,8 @@ final class CantripRemoteModel: ObservableObject {
             hasStoredToken = false
             sessions = []
             homeSummary = nil
+            tabSections = []
+            supportsTabSections = false
             selectedSessionID = nil
             selectedSession = nil
             isHomeSelected = false
@@ -3961,6 +4024,90 @@ final class CantripRemoteModel: ObservableObject {
         return await moveTab(id, relativeTo: sessions[index + offset].id, after: offset > 0)
     }
 
+    // MARK: Tab sections
+
+    /// Where this device's collapsed sections are kept: per paired Mac.
+    var tabSectionScope: String { selectedServerID?.uuidString ?? usageIdentity.uuidString }
+
+    /// Adds a section and, when `tabID` is given, files that tab in it.
+    @discardableResult
+    func createSection(named name: String, filing tabID: String? = nil) async -> Bool {
+        // Like a reorder: the tab drawer stays open while the Mac saves it.
+        isReorderingTabs = true
+        defer { isReorderingTabs = false }
+        guard let response = await mutate(prepare: { api in try await api.requireTabSections() }, { api, _ in
+            let created = try await api.createSection(name: name)
+            if let tabID, let section = created.section { _ = try await api.fileTab(id: tabID, sectionID: section.id) }
+            return created
+        }) else { return false }
+        tabSections = response.sections
+        await refreshNow()
+        return true
+    }
+
+    @discardableResult
+    func renameSection(_ id: String, to name: String) async -> Bool {
+        // Like a reorder: the tab drawer stays open while the Mac saves it.
+        isReorderingTabs = true
+        defer { isReorderingTabs = false }
+        guard let response = await mutate(prepare: { api in try await api.requireTabSections() }, { api, _ in
+            try await api.updateSection(id: id, name: name)
+        }) else { return false }
+        tabSections = response.sections
+        return true
+    }
+
+    /// Moves a section up (-1) or down (1) among the sections.
+    @discardableResult
+    func moveSection(_ id: String, offset: Int) async -> Bool {
+        guard let index = tabSections.firstIndex(where: { $0.id == id }),
+              tabSections.indices.contains(index + offset) else { return false }
+        isReorderingTabs = true
+        defer { isReorderingTabs = false }
+        guard let response = await mutate(prepare: { api in try await api.requireTabSections() }, { api, _ in
+            try await api.updateSection(id: id, position: index + offset)
+        }) else { return false }
+        tabSections = response.sections
+        return true
+    }
+
+    /// Deletes a section; its tabs go back to Tabs.
+    @discardableResult
+    func deleteSection(_ id: String) async -> Bool {
+        // Like a reorder: the tab drawer stays open while the Mac saves it.
+        isReorderingTabs = true
+        defer { isReorderingTabs = false }
+        guard let response = await mutate(prepare: { api in try await api.requireTabSections() }, { api, _ in
+            try await api.deleteSection(id: id)
+        }) else { return false }
+        tabSections = response.sections
+        await refreshNow()
+        return true
+    }
+
+    /// Files a tab under a section (nil: Tabs). The Mac puts it after the section's last tab.
+    @discardableResult
+    func fileTab(_ id: String, in sectionID: String?) async -> Bool {
+        // Like a reorder: the tab drawer stays open while the Mac saves it.
+        isReorderingTabs = true
+        defer { isReorderingTabs = false }
+        guard await mutate(prepare: { api in try await api.requireTabSections() }, { api, _ in
+            try await api.fileTab(id: id, sectionID: sectionID)
+        }) != nil else { return false }
+        if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].sectionID = sectionID }
+        await refreshNow()
+        return true
+    }
+
+    /// A new tab filed under a section, not opened (callers open it). Returns its ID.
+    func createTab(inSection sectionID: String) async -> String? {
+        guard let session = await mutate(prepare: { api in try await api.requireTabSections() }, { api, _ in
+            try await api.createSession(sectionID: sectionID)
+        }) else { return nil }
+        if !sessions.contains(where: { $0.id == session.id }) { sessions.append(session) }
+        return session.id
+    }
+
     private func mutate<T>(
         sessionID: String? = nil,
         _ operation: @escaping (CantripRemoteAPI) async throws -> T
@@ -4041,6 +4188,11 @@ final class CantripRemoteModel: ObservableObject {
             guard revision == mutationRevision else { return }
             sessions = listed
             if homeSummary != listing.home { homeSummary = listing.home }
+            let sections = listing.sections ?? []
+            if tabSections != sections { tabSections = sections }
+            if supportsTabSections != (listing.supportsTabSections == true) {
+                supportsTabSections = listing.supportsTabSections == true
+            }
             errorMessage = nil
             syncLiveStatusPairing()
             liveStatus?.refreshIfDue(anyStreaming: listed.contains { $0.isStreaming }
