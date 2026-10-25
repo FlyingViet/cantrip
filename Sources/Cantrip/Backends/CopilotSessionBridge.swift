@@ -261,7 +261,12 @@ enum CopilotSessionBridge {
         enableConfigDiscovery: true, remoteSession: 'off', mcpOAuthTokenStorage: 'persistent',
         enableMcpApps: config.mcpApps === true,
         availableTools: config.readOnly ? [] : config.allowTools ? undefined : ['view', 'glob', 'grep'],
-        excludedTools: config.allowSubagents === false ? subagentTools : undefined,
+        excludedTools: config.allowSubagents === false || config.excludedTools?.length
+          ? [...(config.allowSubagents === false ? subagentTools : []), ...(config.excludedTools ?? [])]
+          : undefined,
+        disabledMcpServers: config.disabledMcpServers?.length ? config.disabledMcpServers : undefined,
+        toolSearch: Number.isInteger(config.toolDeferThreshold)
+          ? { enabled: true, deferThreshold: config.toolDeferThreshold } : undefined,
         systemMessage: config.systemGuidance ? { mode: 'append', content: config.systemGuidance } : undefined,
         includeSubAgentStreamingEvents: false,
         enableFileHooks: config.allowTools && !config.readOnly,
