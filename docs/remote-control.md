@@ -969,6 +969,39 @@ name}]`, in order) and each tab's `sectionID`; `GET|POST /api/v1/sections`
 `{"sectionID": "<id>" | null}`; `POST /api/v1/sessions` takes an optional
 `{"sectionID"}`; `…/move` files the moved tab in its target tab's section.
 
+### Child tabs
+
+A queued message can run in a child tab: a nested tab with its own git branch
+that merges back into its parent (see
+[Child tabs](sessions-and-council.md#child-tabs)). The browser Remote lists a
+tab's queue under its conversation with each message's suggested plan, **Run in
+child tab** and **Send now**. Child tabs are indented under their parent with
+a line (the browser sidebar) or marked ↳ (the strip) and can't be dragged. The
+parent shows one card per child with an expandable thread and, on a conflict,
+the merge question. Older clients show children as ordinary tabs and the card
+as text.
+
+API (`supportsChildTabs`, `supportsQueuePlans` on each session):
+- Queue items carry `plan` (`{kind: fork|batch|wait|queue, reason, title,
+  repo?}`) while the tab works.
+- `POST /api/v1/sessions/{id}/queue/{queuedID}/fork` starts a child tab and
+  returns `{session, childID}`; `409` with the reason when the caps are full or
+  the message already left the queue. A session that can't fork now has
+  `childTabsUnavailableReason`.
+- A running or merging child has `parentID` and `child` (`{state, title,
+  parentTitle, statusLine, branch?, baseBranch?, repoName?}`) and
+  `supportsTabReordering`/`supportsTabSections` false; the list keeps it right
+  after its parent.
+- The parent's card is a message with role `assistant` and `childResult`
+  (`{id, title, prompt, state, statusLine, summary, replies, files[{path,
+  added, removed}], added, removed, branch?, baseBranch?, repoName?,
+  mergeCommit?, conflictFiles, conflictExcerpt?, cleanFileCount, note?,
+  actions}`); its `text` is a plain fallback.
+- `POST /api/v1/sessions/{parentID}/children/{childID}/{action}` runs one of
+  the card's `actions`: `open`, `discard`, `resolve`, `keepParent`,
+  `keepChild`, `leave`, `retry`, `merge`. It returns the parent session; `409`
+  when the action no longer applies.
+
 ## Add access away from home
 
 Use **Tailscale Serve**, not Funnel and not a router port-forward.

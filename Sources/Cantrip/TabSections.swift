@@ -117,11 +117,14 @@ extension SessionManager {
     /// Files a tab under a section (nil = Tabs), placing it after the section's last tab.
     func setSection(_ sectionID: UUID?, for tabID: UUID) throws {
         guard let session = sessions.first(where: { $0.id == tabID }) else { throw SessionTabError.unavailable }
-        guard !Self.isCantripHomeReserved(session), !session.isPrivate else { throw TabSectionError.notAllowed }
+        guard !Self.isCantripHomeReserved(session), !session.isPrivate,
+              parentID(ofChild: tabID) == nil else { throw TabSectionError.notAllowed }
         if let sectionID, !tabSections.contains(where: { $0.id == sectionID }) { throw TabSectionError.unavailable }
         guard self.sectionID(of: session) != sectionID || session.tabMetadata.sectionID != sectionID else { return }
         let last = sessions.last { $0.id != tabID && self.sectionID(of: $0) == sectionID && !Self.isCantripHomeReserved($0) }
         try session.saveSection(sectionID)
+        // Its child tabs go with it.
+        for child in sessions where parentID(ofChild: child.id) == tabID { try child.saveSection(sectionID) }
         if let last { try moveSession(tabID, relativeTo: last.id, after: true) }
     }
 
