@@ -298,6 +298,8 @@ final class ChatSession: ObservableObject {
     var cantripHomeModelOverride: SessionModelSelection? {
         didSet { applyModelSelection() }
     }
+    /// The saved task a hidden run executes and its run notes; nil for incidents.
+    private(set) var cantripHomeTask: (id: UUID, note: String?)?
     /// Home confirmations and refusals waiting to be appended to this run's reply.
     var cantripHomeNotices: [String] = []
     /// Refusals held while Home corrects its blocks; replaced if the correction saves blocks.
@@ -1193,14 +1195,16 @@ final class ChatSession: ObservableObject {
         guard isCantripHomeBackground, !isStreaming, queued.isEmpty else { return }
         // The transcript shows only a short label; the agent still receives the full saved prompt.
         let schedule = scheduleSummary.trimmingCharacters(in: .whitespacesAndNewlines)
-        let note = note.map { "\n\($0)" } ?? ""
+        // Run notes change every run, so they go at the end of the message with the other
+        // per-run context.
+        cantripHomeTask = (id, note)
         send(
             Self.cantripHomeScheduledTaskPrefix + "\(title)\n\n\(prompt)",
             displayText: Self.cantripHomeScheduledTaskPrefix + title
                 + (schedule.isEmpty ? "" : "\n\(schedule) · running saved instructions"),
             preamble: """
             (This is execution of saved Cantrip Home task \(id.uuidString), not a request to
-            create another task. Run it now and report the result.)\(note)
+            create another task. Run it now and report the result.)
             """
         )
     }
@@ -1816,7 +1820,11 @@ final class ChatSession: ObservableObject {
             if automatedRun.isIncident { includesAmbientContext = false }
             // Each scheduled task or incident starts from a clean model context; the
             // transcript remains as the background log.
+            if automatedRun.isIncident { cantripHomeTask = nil }
             applyModelSelection()
+            if let backend = copilot as? CopilotBackend {
+                CantripHomeTaskTools.configure(backend, taskRun: cantripHomeTask != nil)
+            }
             resetBackendConversations()
         }
 
@@ -1866,7 +1874,22 @@ final class ChatSession: ObservableObject {
         // backend exactly as typed: anything appended would become the command's argument.
         let isSlashCommand = !isLocalPrivate && SlashInvocation(prompt) != nil
         var backendPrompt = prompt
-        if !isSlashCommand {
+        var taskHead: String?
+        if !isSlashCommand, automatedRun?.isIncident == false, let run = cantripHomeTask,
+           let task = CantripHomeStore.shared.tasks.first(where: { $0.id == run.id }) {
+            // Static protocol, then memory, then this task, then everything that changes per run.
+            writeCantripHomeTaskTabs()
+            taskHead = cantripHomeTaskStaticInstructions
+                .trimmingCharacters(in: .newlines)
+            let ambient = composeContext(onto: "", query: prompt, isFirstOfConversation: false,
+                                         backendKind: backendKind,
+                                         includesAmbientContext: includesAmbientContext,
+                                         consumesStagedContext: consumesStagedContext,
+                                         includesHomeInstructions: false)
+            backendPrompt = "\n\n" + (preamble.map { $0 + "\n\n" } ?? "") + prompt
+                + CantripHomeTaskContext.workspaceData(for: task, in: CantripHomeStore.shared.tasks)
+                + (run.note.map { "\n\n" + $0 } ?? "") + ambient
+        } else if !isSlashCommand {
             if let preamble {
                 backendPrompt = preamble + "\n\n" + backendPrompt
             }
@@ -1885,7 +1908,8 @@ final class ChatSession: ObservableObject {
         streamGeneration += 1
         let generation = streamGeneration
         prepareMemory(onto: backendPrompt, query: prompt, backendKind: backendKind,
-                      generation: generation, includeMemory: !isSlashCommand) { [weak self] prepared in
+                      generation: generation, includeMemory: !isSlashCommand,
+                      taskHead: taskHead) { [weak self] prepared in
             guard let self else { return }
             if self.isLocalPrivate {
                 do {
@@ -1925,8 +1949,10 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    /// With `taskHead`, memory goes between that static head and `prompt`, and retrieved
+    /// snippets go last, so a scheduled-task run's message starts with a shared prefix.
     private func prepareMemory(onto prompt: String, query: String, backendKind: BackendKind?,
-                               generation: Int, includeMemory: Bool = true,
+                               generation: Int, includeMemory: Bool = true, taskHead: String? = nil,
                                completion: @escaping (String) -> Void) {
         let memoryEnabled = settings.memoryEnabled && !isLocalPrivate && includeMemory
         let path = settings.memoryPath
@@ -1943,9 +1969,15 @@ final class ChatSession: ObservableObject {
                 self.finishStream(dequeue: false, notify: false, waitForJournal: false)
                 return
             }
-            let block = memoryEnabled ? await MemoryStore.contextBlock(
-                query: query, path: path, isPrivate: privacy, isLocal: backendKind == .localModel
-            ) : ""
+            var block = ""
+            var parts = (stable: "", retrieved: "")
+            if memoryEnabled, taskHead != nil {
+                parts = await MemoryStore.contextParts(query: query, path: path)
+            } else if memoryEnabled {
+                block = await MemoryStore.contextBlock(
+                    query: query, path: path, isPrivate: privacy, isLocal: backendKind == .localModel
+                )
+            }
             guard !Task.isCancelled, self.streamGeneration == generation,
                   self.isStreaming else { return }
             self.preparationTask = nil
@@ -1958,7 +1990,11 @@ final class ChatSession: ObservableObject {
                 return
             }
             self.statusText = "Thinking…"
-            completion(prompt + block)
+            if let taskHead {
+                completion(taskHead + parts.stable + prompt + parts.retrieved)
+            } else {
+                completion(prompt + block)
+            }
         }
     }
 
@@ -1971,11 +2007,14 @@ final class ChatSession: ObservableObject {
                                 isFirstOfConversation: Bool,
                                 backendKind: BackendKind?,
                                 includesAmbientContext: Bool = true,
-                                consumesStagedContext: Bool = true) -> String {
+                                consumesStagedContext: Bool = true,
+                                includesHomeInstructions: Bool = true) -> String {
         if isLocalPrivate { return prompt }
         var backendPrompt = prompt
-        if isCantripHome || isCantripHomeBackground {
-            backendPrompt += cantripHomeInstructions
+        if includesHomeInstructions, isCantripHome || isCantripHomeBackground {
+            // A task run's later turns (a resume) repeat only the shared task protocol.
+            backendPrompt += isCantripHomeBackground && cantripHomeTask != nil
+                ? cantripHomeTaskStaticInstructions : cantripHomeInstructions
         }
         if isFirstOfConversation,
            let digest = UserDefaults.standard.string(forKey: "lastConversationDigest"),
