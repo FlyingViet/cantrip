@@ -2545,7 +2545,7 @@ private extension RemoteControlServer {
     .spinner{width:12px;height:12px;border:1.5px solid rgba(255,255,255,.2);border-top-color:var(--secondary);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.empty{margin:auto;color:var(--tertiary)}
     #pair{width:min(calc(100% - 32px),430px);margin:18vh auto 0;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.2)}#pair h2{margin:0 0 7px;font-size:18px}#pair p{line-height:1.45}#pairControls{display:flex;gap:7px;margin-top:15px}#pair input{min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;outline:0;background:var(--surface)}#pair input:focus{border-color:var(--accent)}
     #tabEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#tabEditor::backdrop{background:rgba(0,0,0,.35)}#tabEditor form{display:grid;gap:12px}#tabName{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}.tab-actions{display:flex;justify-content:flex-end;gap:8px}#tabError,#actionError{color:var(--orange);font-size:12px}#actionError:not(:empty){padding:8px 14px}.session-close:disabled{opacity:.65;cursor:default}.session-menu{border:0;background:transparent;color:var(--secondary);padding:2px 5px}
-    .section-header{display:flex;align-items:center;flex:none;border-radius:999px;color:var(--secondary)}.section-header.drop-target{outline:2px solid var(--accent)}.section-toggle{display:flex;align-items:center;gap:5px;min-width:0;max-width:170px;padding:4px 4px 4px 9px;border:0;background:transparent;color:inherit;font-size:12px;font-weight:600;white-space:nowrap}.section-toggle .section-name{overflow:hidden;text-overflow:ellipsis}.section-toggle .section-count{color:var(--tertiary);font-weight:400}.section-header:hover{background:var(--surface);color:var(--text)}.section-menu{border:0;background:transparent;color:var(--tertiary);padding:2px 7px 2px 3px;opacity:.6}.section-header:hover .section-menu,.section-menu:focus-visible{opacity:1}
+    .section-header{display:flex;align-items:center;flex:none;border-radius:999px;color:var(--secondary)}.section-header.drop-target{outline:2px solid var(--accent)}.section-header[draggable=true]{cursor:grab}.section-header.dragging{opacity:.5}.section-toggle{display:flex;align-items:center;gap:5px;min-width:0;max-width:170px;padding:4px 4px 4px 9px;border:0;background:transparent;color:inherit;font-size:12px;font-weight:600;white-space:nowrap}.section-toggle .section-name{overflow:hidden;text-overflow:ellipsis}.section-toggle .section-count{color:var(--tertiary);font-weight:400}.section-header:hover{background:var(--surface);color:var(--text)}.section-menu{border:0;background:transparent;color:var(--tertiary);padding:2px 7px 2px 3px;opacity:.6}.section-header:hover .section-menu,.section-menu:focus-visible{opacity:1}
     .remote-sidebar .section-header{width:100%;min-height:30px;margin-top:6px;border-radius:7px}.remote-sidebar .section-toggle{flex:1;max-width:none;text-transform:uppercase;letter-spacing:.04em;font-size:11px}
     #sectionEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#sectionEditor::backdrop{background:rgba(0,0,0,.35)}#sectionEditor form{display:grid;gap:12px}#sectionName,#tabNewSection{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}#sectionActions{flex-wrap:wrap;justify-content:flex-start}#sectionError{color:var(--orange);font-size:12px}#tabSection{max-width:none;width:100%;height:32px;border:1px solid var(--line);background:var(--surface);color:var(--text)}
     .prompt-usage{margin-top:4px}.prompt-usage>summary{font-size:11px}.usage-table{margin:6px 0 2px 19px;max-width:340px;color:var(--text)}.usage-title{margin-top:6px;color:var(--secondary);font-size:11px;font-weight:600}.usage-table dl{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:3px 0;font-size:12px}.usage-table dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}.prompt-preview{white-space:pre-wrap}.prompt-preview.clipped{max-height:11.2em;overflow:hidden}#promptReader{width:min(calc(100% - 24px),680px);border:1px solid var(--line);border-radius:12px;background:Canvas;color:var(--text)}#promptReader::backdrop{background:rgba(0,0,0,.35)}#promptPage{height:55vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
@@ -2827,7 +2827,7 @@ private extension RemoteControlServer {
       catch(error){if(!controller)uiMutationWarning=`A Remote action failed: ${error.message}. Check the conversation before retrying; it was not resent.`;throw error}
       finally{if(deadline!==null)clearTimeout(deadline);if(!controller){uiActiveWrites--;scheduleUIReload()}}}
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
-    let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;
+    let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,draggedSectionID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;
     // Sections come from the Mac; which ones are collapsed is this browser's choice.
     const collapsedSectionsKey="cantrip.collapsedSections",looseSectionID="tabs";let tabSections=[],sectionsSupported=false,collapsedSections=new Set();
     try{collapsedSections=new Set(JSON.parse(localStorage.getItem(collapsedSectionsKey)||"[]"))}catch{}
@@ -2937,7 +2937,7 @@ private extension RemoteControlServer {
     $("olderHistoryReader").onclick=()=>loadOlderMessages();$("olderHistoryReader").onfocus=()=>loadOlderMessages(true);
     document.addEventListener("visibilitychange",()=>{if(document.hidden){if(timer)clearTimeout(timer);timer=null}else if(token)refresh()});
     function renderSessions(items){const nav=$("sessions"),previousLeft=nav.scrollLeft,previousTop=nav.scrollTop,selectionChanged=nav.dataset.selected!==(selected||"");
-      if(draggedTabID||movingTab)return;sessionItems=items;
+      if(draggedTabID||draggedSectionID||movingTab)return;sessionItems=items;
       // Keep existing controls mounted so polling does not interrupt scrolling or keyboard focus.
       const existing=new Map(),headers=new Map();for(const node of nav.children)(node.dataset.sessionId?existing:headers).set(node.dataset.sessionId||node.dataset.sectionId,node);
       const order=sectionedOrder(items),wanted=new Set(order.map(entry=>entry.item?entry.item.id:"section:"+entry.group.id));
@@ -2992,23 +2992,39 @@ private extension RemoteControlServer {
       menu.type="button";menu.className="section-menu";menu.textContent="…";header.append(toggle,menu);
       toggle.onclick=()=>{if(collapsedSections.has(id))collapsedSections.delete(id);else collapsedSections.add(id);
         try{localStorage.setItem(collapsedSectionsKey,JSON.stringify([...collapsedSections]))}catch{}renderSessions(sessionItems)};
-      header.ondragover=event=>{if(draggedTabID&&!movingTab){event.preventDefault();event.dataTransfer.dropEffect="move";header.classList.add("drop-target")}};
+      // Sections reorder by dragging their header onto another one (onto Tabs = first), or with Alt+arrows.
+      header.ondragstart=event=>{if(movingTab||id===looseSectionID){event.preventDefault();return}draggedSectionID=id;header.classList.add("dragging");
+        event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("text/plain",`cantrip-section:${id}`)};
+      header.ondragend=()=>{draggedSectionID=null;header.classList.remove("dragging");for(const row of $("sessions").children)row.classList.remove("drop-target");refresh()};
+      header.ondragover=event=>{if(!movingTab&&(draggedTabID||draggedSectionID&&draggedSectionID!==id)){event.preventDefault();event.dataTransfer.dropEffect="move";header.classList.add("drop-target")}};
       header.ondragleave=()=>header.classList.remove("drop-target");
-      header.ondrop=event=>{event.preventDefault();header.classList.remove("drop-target");const tabID=draggedTabID;draggedTabID=null;if(tabID)fileTab(tabID,id===looseSectionID?null:id)};
+      header.ondrop=event=>{event.preventDefault();header.classList.remove("drop-target");const tabID=draggedTabID,sectionID=draggedSectionID;draggedTabID=null;draggedSectionID=null;
+        if(tabID)fileTab(tabID,id===looseSectionID?null:id);
+        else if(sectionID&&sectionID!==id)moveSectionTo(sectionID,id===looseSectionID?0:tabSections.findIndex(section=>section.id===id))};
+      toggle.onkeydown=event=>{if(!event.altKey||id===looseSectionID)return;const earlier=sidebarLayout?"ArrowUp":"ArrowLeft",later=sidebarLayout?"ArrowDown":"ArrowRight";
+        if(event.key===earlier||event.key===later){event.preventDefault();moveSectionBy(id,event.key===earlier?-1:1)}};
       return header}
     function updateSectionHeader(header,group){const collapsed=collapsedSections.has(group.id),toggle=header.children[0],menu=header.children[1];
       setText(toggle.children[0],`${collapsed?"▸":"▾"} ${group.name}`);setText(toggle.children[1],String(group.items.length));
-      toggle.setAttribute("aria-expanded",String(!collapsed));toggle.title=`${collapsed?"Expand":"Collapse"} ${group.name}`;
+      const movable=group.id!==looseSectionID&&sectionsSupported,arrows=sidebarLayout?"Alt+ArrowUp Alt+ArrowDown":"Alt+ArrowLeft Alt+ArrowRight";header.draggable=movable;
+      if(movable)toggle.setAttribute("aria-keyshortcuts",arrows);else toggle.removeAttribute("aria-keyshortcuts");
+      toggle.setAttribute("aria-expanded",String(!collapsed));toggle.title=`${collapsed?"Expand":"Collapse"} ${group.name}${movable?` - drag to reorder sections, or press ${sidebarLayout?"Alt+↑/↓":"Alt+←/→"}`:""}`;
       menu.title=group.id===looseSectionID?"New section":`${group.name} section options`;menu.setAttribute("aria-label",menu.title);menu.onclick=()=>editSection(group)}
     async function fileTab(id,sectionID){if(movingTab||tabSaving)return;movingTab=true;tabOrderRevision++;$("actionError").textContent="";
       try{await api(`/api/v1/sessions/${id}/metadata`,{method:"POST",body:JSON.stringify({sectionID})})}
       catch(error){$("actionError").textContent=`${error.message} Refresh the tabs before trying again.`}
       finally{movingTab=false;refresh()}}
+    async function moveSectionTo(id,position){if(movingTab||tabSaving||position<0)return;movingTab=true;tabOrderRevision++;$("actionError").textContent="";
+      try{const data=await api(`/api/v1/sections/${id}`,{method:"PATCH",body:JSON.stringify({position})});if(data?.sections)tabSections=data.sections}
+      catch(error){$("actionError").textContent=`${error.message} Refresh the tabs before trying again.`}
+      finally{movingTab=false;renderSessions(sessionItems);refresh()}}
+    async function moveSectionBy(id,offset){const index=tabSections.findIndex(section=>section.id===id);if(index<0||!tabSections[index+offset])return;
+      await moveSectionTo(id,index+offset);$("sessions").querySelector(`[data-section-id="${id}"] .section-toggle`)?.focus()}
     let editingSection=null,sectionSaving=false;
     function editSection(group){editingSection=group;const creating=group.id===looseSectionID,index=tabSections.findIndex(section=>section.id===group.id);
       $("sectionEditorTitle").textContent=creating?"New section":"Section";$("sectionName").value=creating?"":group.name;$("sectionSave").textContent=creating?"Create":"Save";
       $("sectionActions").classList.toggle("hidden",creating);$("sectionUp").disabled=index<=0;$("sectionDown").disabled=index<0||index>=tabSections.length-1;
-      $("sectionNote").textContent=creating?"Sections show on every device. File a tab from its … menu, or drag it onto a section.":"Deleting a section moves its tabs back to Tabs.";
+      $("sectionNote").textContent=creating?"Sections show on every device. File a tab from its … menu, or drag it onto a section.":"Drag a section's header to reorder it. Deleting a section moves its tabs back to Tabs.";
       $("sectionError").textContent="";$("sectionEditor").showModal();$("sectionName").focus()}
     async function sectionRequest(work){if(sectionSaving||!editingSection)return;sectionSaving=true;$("sectionError").textContent="";
       for(const button of $("sectionForm").querySelectorAll("button"))button.disabled=true;
