@@ -18,6 +18,8 @@ struct SessionTabMetadata: Equatable {
     private(set) var customTitle: String?
     var isLocked = false
     var modelSettings: SessionModelSelection?
+    /// The sidebar section this tab is filed under; nil (or a deleted section) shows it under Tabs.
+    var sectionID: UUID?
 
     mutating func rename(_ name: String) throws {
         let normalized = name.split(whereSeparator: \.isWhitespace).joined(separator: " ")
@@ -32,7 +34,8 @@ struct SessionTabMetadata: Equatable {
     static func load(id: UUID, defaults: UserDefaults = .standard) -> Self {
         let value = defaults.dictionary(forKey: key(id)) ?? [:]
         var result = Self(customTitle: value["customTitle"] as? String,
-                          isLocked: value["isLocked"] as? Bool ?? false)
+                          isLocked: value["isLocked"] as? Bool ?? false,
+                          sectionID: (value["sectionID"] as? String).flatMap(UUID.init(uuidString:)))
         if let selection = value["modelSettings"] as? [String: String],
            let model = selection["model"], let effort = selection["effort"],
            let contextTier = selection["contextTier"] {
@@ -44,6 +47,7 @@ struct SessionTabMetadata: Equatable {
     func save(id: UUID, defaults: UserDefaults = .standard) {
         var value: [String: Any] = ["isLocked": isLocked]
         if let customTitle { value["customTitle"] = customTitle }
+        if let sectionID { value["sectionID"] = sectionID.uuidString }
         if let modelSettings {
             value["modelSettings"] = ["model": modelSettings.model, "effort": modelSettings.effort,
                                       "contextTier": modelSettings.contextTier]

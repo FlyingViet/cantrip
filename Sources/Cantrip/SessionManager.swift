@@ -18,6 +18,8 @@ final class SessionManager: ObservableObject {
     @Published var showingRemote = false
     @Published private(set) var anyStreaming = false
     @Published var tabActionError: String?
+    /// Named groups for the tab lists, in display order (`TabSections.swift`).
+    @Published var tabSections: [TabSection] = TabSectionStore.load()
     /// Fires when any session's run completes (for notifications).
     var onAnyRunFinished: ((ChatSession) -> Void)?
     var onAnyInputNeeded: ((ChatSession, InputRequestSnapshot) -> Void)?
@@ -228,6 +230,11 @@ final class SessionManager: ObservableObject {
             throw SessionTabError.unavailable
         }
         reordered.insert(moved, at: target + (after ? 1 : 0))
+        // Dropping a tab beside another files it in that tab's section.
+        if let target = sessions.first(where: { $0.id == targetID }), !Self.isCantripHomeReserved(moved),
+           moved.tabMetadata.sectionID != sectionID(of: target) {
+            try moved.saveSection(sectionID(of: target))
+        }
         guard reordered.map(\.id) != sessions.map(\.id) else { return }
         sessions = reordered
         activeIndex = reordered.firstIndex(where: { $0.id == selectedID })!

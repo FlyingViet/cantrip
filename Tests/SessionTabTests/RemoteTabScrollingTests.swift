@@ -195,6 +195,7 @@ extension SessionTabTests {
             try await testRemoteProgress(webView: webView)
         }
         try await testRemoteTabReordering(webView: webView)
+        try await testRemoteTabSections(webView: webView)
         try await testRecentExchangeWindow(webView: webView)
         try await testRemoteHistoryNavigation(webView: webView)
         try await testAutomaticHistoryNavigation(webView: webView)

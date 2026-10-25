@@ -35,6 +35,9 @@ struct LauncherView: View {
     @State private var modelSettingsSession: ChatSession?
     @State private var showingInputRequests = false
     @State private var tabName = ""
+    /// The tab "Move to Section > New Section..." files under the section being named.
+    @State private var sectioningSession: ChatSession?
+    @State private var sectionName = ""
     /// Instant caption for whichever toolbar icon is hovered.
     @State private var toolbarHint: String?
     /// Council seat column visibility (collapsible to a slim strip).
@@ -142,6 +145,22 @@ struct LauncherView: View {
             }
         } message: { _ in
             Text("Up to 80 characters. Leave blank to use the automatic name.")
+        }
+        .alert("New Section", isPresented: Binding(
+            get: { sectioningSession != nil },
+            set: { if !$0 { sectioningSession = nil } }
+        ), presenting: sectioningSession) { chat in
+            TextField("Section name", text: $sectionName)
+            Button("Cancel", role: .cancel) { sectioningSession = nil }
+            Button("Create") {
+                do {
+                    let section = try manager.createSection(named: sectionName)
+                    try manager.setSection(section.id, for: chat.id)
+                } catch { manager.tabActionError = error.localizedDescription }
+                sectioningSession = nil
+            }
+        } message: { chat in
+            Text("\(chat.title) moves into it. Sections group tabs in Cantrip Agent, Gateway and the browser.")
         }
         .alert("Tab Protected", isPresented: Binding(
             get: { manager.tabActionError != nil || session.tabActionError != nil },
@@ -787,6 +806,21 @@ struct LauncherView: View {
                             catch { manager.tabActionError = error.localizedDescription }
                         }
                         .disabled(chat.isLocalPrivate)
+                        if !chat.isPrivate {
+                            Menu("Move to Section") {
+                                let current = manager.sectionID(of: chat)
+                                Toggle("Tabs", isOn: Binding(get: { current == nil }, set: { _ in fileTab(chat, in: nil) }))
+                                ForEach(manager.tabSections) { section in
+                                    Toggle(section.name, isOn: Binding(get: { current == section.id },
+                                                                       set: { _ in fileTab(chat, in: section.id) }))
+                                }
+                                Divider()
+                                Button("New Section...") {
+                                    sectionName = ""
+                                    sectioningSession = chat
+                                }
+                            }
+                        }
                         Divider()
                         Button("Move Tab Left") {
                             moveTab(chat.id, offset: -1)
@@ -815,6 +849,11 @@ struct LauncherView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
         }
+    }
+
+    private func fileTab(_ chat: ChatSession, in sectionID: UUID?) {
+        do { try manager.setSection(sectionID, for: chat.id) }
+        catch { manager.tabActionError = error.localizedDescription }
     }
 
     private func moveTab(_ id: UUID, offset: Int) {

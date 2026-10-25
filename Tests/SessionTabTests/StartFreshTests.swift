@@ -412,10 +412,11 @@ extension SessionTabTests {
         let context = JSContext()!
         context.exceptionHandler = { _, error in fatalError("Start Fresh JavaScript failed: \(error!.toString()!)") }
         context.evaluateScript("""
-        const node=()=>({children:[],dataset:{},classList:{values:new Set(),toggle(name,on){on?this.values.add(name):this.values.delete(name)}},
-          append(...items){this.children.push(...items)},setAttribute(){},close(){},showModal(){},focus(){},select(){}});
+        const node=()=>({children:[],dataset:{},classList:{values:new Set(),toggle(name,on){on?this.values.add(name):this.values.delete(name)},
+            add(name){this.values.add(name)},remove(name){this.values.delete(name)},contains(name){return this.values.has(name)}},
+          append(...items){this.children.push(...items)},replaceChildren(...items){this.children=items},setAttribute(){},close(){},showModal(){},focus(){},select(){}});
         const elements={};const $=id=>elements[id]||(elements[id]=node());const document={createElement:node};
-        let calls=[],renderedPayload="x",refreshed=0,opened=null,editingTab=null,tabSaving=false,movingTab=false,sessionItems=[],sidebarLayout=false;
+        let calls=[],renderedPayload="x",refreshed=0,opened=null,editingTab=null,tabSaving=false,movingTab=false,sessionItems=[],sidebarLayout=false,tabSections=[],sectionsSupported=false;
         function api(path,options){calls.push({path,method:options?.method});return Promise.resolve({})}
         function refresh(){refreshed++;return Promise.resolve()}
         function editModelSettings(item){opened=item}

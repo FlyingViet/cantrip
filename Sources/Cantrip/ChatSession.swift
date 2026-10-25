@@ -579,6 +579,13 @@ final class ChatSession: ObservableObject {
         try saveTabMetadata(updated)
     }
 
+    /// Files the tab under a section; `SessionManager.setSection` validates and positions it.
+    func saveSection(_ sectionID: UUID?) throws {
+        var updated = tabMetadata
+        updated.sectionID = sectionID
+        try saveTabMetadata(updated)
+    }
+
     func saveModelSelection(_ selection: SessionModelSelection?) throws {
         var updated = tabMetadata
         updated.modelSettings = selection
