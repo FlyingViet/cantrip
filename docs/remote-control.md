@@ -978,8 +978,10 @@ tab's queue under its conversation with each message's suggested plan, **Run in
 child tab** and **Send now**. Child tabs are indented under their parent with
 a line (the browser sidebar) or marked ↳ (the strip) and can't be dragged. The
 parent shows one card per child with an expandable thread and, on a conflict,
-the merge question. Older clients show children as ordinary tabs and the card
-as text.
+the merge question. Cantrip Agent (iPhone, Duo), Cantrip Gateway Mac and
+Cantrip Gateway for Windows do the same: plans and **Run in child tab** in the
+queue sheet, indented child rows with a branch mark, the card and the child's
+banner. Older clients show children as ordinary tabs and the card as text.
 
 API (`supportsChildTabs`, `supportsQueuePlans` on each session):
 - Queue items carry `plan` (`{kind: fork|batch|wait|queue, reason, title,
