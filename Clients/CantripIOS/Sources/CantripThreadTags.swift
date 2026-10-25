@@ -143,18 +143,7 @@ struct CantripThreadHeader: View {
                     if message.role == "user" {
                         bubble(message.text)
                     } else {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(verbatim: name(of: message))
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            // Paragraphs run together in the 3-line preview.
-                            Text(TurnView.markdown(message.text.replacingOccurrences(
-                                of: #"\s*\n\s*"#, with: " ", options: .regularExpression)))
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(3)
-                                .textSelection(.enabled)
-                        }
+                        reply(message)
                     }
                 }
             } else if let error = store.errors[messageID] {
@@ -178,6 +167,27 @@ struct CantripThreadHeader: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("cantrip-thread-\(messageID)")
+    }
+
+    /// Pip's side of the thread: a gray bubble on the left, named above it.
+    private func reply(_ message: CantripRemoteThread.Message) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(verbatim: name(of: message))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 11)
+            // Paragraphs run together in the 3-line preview.
+            Text(TurnView.markdown(message.text.replacingOccurrences(
+                of: #"\s*\n\s*"#, with: " ", options: .regularExpression)))
+                .font(.callout)
+                .lineLimit(3)
+                .textSelection(.enabled)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(CantripChildTabStyle.neutralFill, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.trailing, 32)
     }
 
     private func bubble(_ text: String) -> some View {
