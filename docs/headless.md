@@ -58,11 +58,13 @@ encrypted TLS-PSK listener.
 | `cantrip pair [--url URL] [--direct [HOST:PORT]] [--name NAME] [--rotate] [--no-qr] [--json]` | Pairing QR code, link and details |
 | `cantrip config` / `get KEY` / `set KEY VALUE …` | Read and change settings |
 | `cantrip doctor` | Check the host, Remote, the backend CLI and Tailscale |
+| `cantrip cleanup [--dry-run] [--list] [--json]` | Remove unused agent sessions and worktrees now ([details](updating-and-troubleshooting.md#free-up-disk-space)) |
 
 Settings use the same names as `~/.cantriprc`. Common ones: `backend`,
 `copilotModel`, `copilotEffort`, `allowActions`, `remoteControlPort`,
 `remoteLANPort` (0 = any free port), `cantripHomeEnabled`, `memoryEnabled`,
-`memoryPath`. Run `cantrip config` for the full list.
+`memoryPath`, `storageUpkeepEnabled`, `storageSessionRetentionDays` (3–365,
+default 14). Run `cantrip config` for the full list.
 
 ## Good to know
 

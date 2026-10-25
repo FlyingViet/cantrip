@@ -154,6 +154,7 @@ and deletes session logs older than 30 days.
 | `~/.cache/Cantrip/runs/` | Durable journals for non-private runs |
 | `~/.cache/Cantrip/remote-attachments/` | Retained images uploaded by Remote clients |
 | `~/.cache/Cantrip/session-output-folders.json` | Which Copilot CLI session folders each tab used |
+| `~/.cache/Cantrip/storage-upkeep.log` | Session folders and worktrees the daily cleanup removed ([Free up disk space](updating-and-troubleshooting.md#free-up-disk-space)) |
 | `~/Library/Logs/Cantrip.log` | Diagnostic log; past 10 MB it moves to `Cantrip.log.1`, keeping three older logs (`.1` to `.3`) |
 | macOS Keychain | Remote host/client pairing credentials |
 
