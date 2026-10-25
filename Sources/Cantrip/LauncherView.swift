@@ -38,6 +38,7 @@ struct LauncherView: View {
     /// The tab "Move to Section > New Section..." files under the section being named.
     @State private var sectioningSession: ChatSession?
     @State private var sectionName = ""
+    @State private var editingSections = false
     /// Instant caption for whichever toolbar icon is hovered.
     @State private var toolbarHint: String?
     /// Council seat column visibility (collapsible to a slim strip).
@@ -124,6 +125,9 @@ struct LauncherView: View {
                 if chat.isLocalPrivate { PrivateLocalSettingsView(session: chat) }
                 else { SessionModelSettingsView(session: chat) }
             }
+        }
+        .sheet(isPresented: $editingSections) {
+            TabSectionsEditor(manager: manager)
         }
         .sheet(isPresented: $showingInputRequests) {
             VStack(alignment: .leading, spacing: 12) {
@@ -819,6 +823,7 @@ struct LauncherView: View {
                                     sectionName = ""
                                     sectioningSession = chat
                                 }
+                                Button("Edit Sections...") { editingSections = true }
                             }
                         }
                         Divider()

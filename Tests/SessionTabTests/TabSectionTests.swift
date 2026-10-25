@@ -62,6 +62,20 @@ extension SessionTabTests {
         precondition(manager.sectionID(of: a) == nil && manager.sectionID(of: d) == nil && a.tabMetadata.sectionID == nil,
                      "deleting a section returns its tabs to Tabs")
 
+        // Edit Sections drags: onMove's destination counts rows before the move.
+        let one = try manager.createSection(named: "One"), two = try manager.createSection(named: "Two")
+        let names = { manager.tabSections.map(\.name) }
+        let start = manager.tabSections.firstIndex { $0.id == one.id }!
+        try manager.moveSection(one.id, to: TabSectionStore.position(movingFrom: start, to: start + 2))
+        precondition(names() == ["Home stuff", "Two", "One"], "dragging a row below the next one moves it down one: \(names())")
+        let now = manager.tabSections.firstIndex { $0.id == one.id }!
+        try manager.moveSection(one.id, to: TabSectionStore.position(movingFrom: now, to: now - 1))
+        precondition(names() == ["Home stuff", "One", "Two"], "dragging a row above the previous one moves it up one: \(names())")
+        precondition(TabSectionStore.position(movingFrom: 2, to: 2) == 2 && TabSectionStore.position(movingFrom: 2, to: 3) == 2,
+                     "dropping a row on itself keeps its place")
+        try manager.deleteSection(one.id)
+        try manager.deleteSection(two.id)
+
         // Remote API.
         let server = RemoteControlServer(manager: manager)
         let port = Int.random(in: 49152...65535)
@@ -180,6 +194,27 @@ extension SessionTabTests {
           check($("sectionEditor").open&&$("sectionName").value==="Work"&&$("sectionUp").disabled&&!$("sectionDown").disabled,"The section menu opens with its order limits");
           $("sectionDown").click();await settle();
           check(calls[0]?.path==="/api/v1/sections/s1"&&calls[0].method==="PATCH"&&calls[0].body.position===1,"Move Down patches the position");
+
+          calls=[];renderSessions(items);
+          const s1=nav.querySelector('[data-section-id="s1"]'),s2=nav.querySelector('[data-section-id="s2"]'),loose=nav.querySelector('[data-section-id="tabs"]'),sectionDrag=new DataTransfer();
+          check(s1.draggable&&s2.draggable&&!loose.draggable,"Sections drag; Tabs stays first");
+          check(s1.children[0].getAttribute("aria-keyshortcuts")&&!loose.children[0].hasAttribute("aria-keyshortcuts"),"Section headers announce their move keys");
+          s2.dispatchEvent(new DragEvent("dragstart",{bubbles:true,cancelable:true,dataTransfer:sectionDrag}));
+          const ontoSection=new DragEvent("dragover",{bubbles:true,cancelable:true,dataTransfer:sectionDrag});s1.dispatchEvent(ontoSection);
+          check(ontoSection.defaultPrevented&&s1.classList.contains("drop-target"),"Section headers accept a dragged section");
+          const ontoTab=new DragEvent("dragover",{bubbles:true,cancelable:true,dataTransfer:sectionDrag});nav.querySelector('[data-session-id="b"]').dispatchEvent(ontoTab);
+          check(!ontoTab.defaultPrevented,"Tabs don't accept a dragged section");
+          renderSessions([...items,tab("e",{sectionID:"s2"})]);check(!keys().includes(",e"),"Polling waits while a section is dragged");
+          s1.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer:sectionDrag}));await settle();
+          check(calls[0]?.path==="/api/v1/sections/s2"&&calls[0].method==="PATCH"&&calls[0].body.position===0,"Dropping a section on another takes its place");
+          calls=[];s2.dispatchEvent(new DragEvent("dragstart",{bubbles:true,cancelable:true,dataTransfer:sectionDrag}));
+          loose.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer:sectionDrag}));await settle();
+          check(calls[0]?.body.position===0,"Dropping a section on Tabs moves it first");
+          calls=[];s1.children[0].dispatchEvent(new KeyboardEvent("keydown",{key:sidebarLayout?"ArrowDown":"ArrowRight",altKey:true,bubbles:true,cancelable:true}));await settle();
+          check(calls[0]?.path==="/api/v1/sections/s1"&&calls[0].body.position===1,"Alt+arrow moves a section without dragging");
+          check(document.activeElement===s1.children[0],"The moved header keeps keyboard focus");
+          calls=[];s2.children[0].dispatchEvent(new KeyboardEvent("keydown",{key:sidebarLayout?"ArrowDown":"ArrowRight",altKey:true,bubbles:true,cancelable:true}));await settle();
+          check(calls.length===0,"The last section can't move further down");
           nav.querySelector('[data-section-id="tabs"] .section-menu').click();
           check($("sectionEditorTitle").textContent==="New section"&&$("sectionActions").classList.contains("hidden"),"The Tabs header creates sections");
           $("sectionCancel").click();
