@@ -38,6 +38,20 @@ export function sectionOf(session: Pick<RemoteSessionSummary, "sectionID">, sect
   return session.sectionID && sections.some((section) => section.id === session.sectionID) ? session.sectionID : null;
 }
 
+/** Where a section dragged onto `targetGroupID`'s header lands: the target's place (Tabs: first). */
+export function sectionDropPosition(sections: TabSection[], targetGroupID: string): number {
+  return targetGroupID === LOOSE_ID ? 0 : sections.findIndex((section) => section.id === targetGroupID);
+}
+
+/** `sections` with `id` moved to `position` (as the Mac does it); unchanged for unknown ids or positions. */
+export function movedSections(sections: TabSection[], id: string, position: number): TabSection[] {
+  const index = sections.findIndex((section) => section.id === id);
+  if (index < 0 || position < 0 || position >= sections.length || position === index) return sections;
+  const next = [...sections];
+  next.splice(position, 0, ...next.splice(index, 1));
+  return next;
+}
+
 export function normalizeSectionName(name: string): string {
   return name.split(/\s+/).filter(Boolean).join(" ");
 }

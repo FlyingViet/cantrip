@@ -352,6 +352,8 @@ body.inactive .sidebar-row[aria-current="true"] .row-icon { color: var(--accent)
 /* Tab sections (CantripTabSections.swift): a collapsible header per section. */
 .tab-section { padding-top: 12px; border-radius: 6px; }
 .tab-section.drop-target { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tab-section[draggable="true"] { cursor: grab; }
+.tab-section.dragging { opacity: .5; }
 .tab-section .section-toggle { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 2px 4px 2px 0; border: 0; background: none; color: inherit; font: inherit; text-transform: uppercase; letter-spacing: .03em; cursor: default; }
 .tab-section .section-toggle:hover { color: var(--text); }
 .tab-section .section-toggle svg { flex: none; transition: transform .15s ease; }

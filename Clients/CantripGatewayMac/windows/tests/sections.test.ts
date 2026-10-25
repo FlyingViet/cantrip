@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { RemoteSessionSummary } from "../src/gateway/api/types";
 import {
-  collapsedSections, LOOSE_ID, normalizeSectionName, sectionNameError, sectionOf, tabGroups, toggleCollapsed, visibleTabs,
+  collapsedSections, LOOSE_ID, movedSections, normalizeSectionName, sectionDropPosition, sectionNameError, sectionOf, tabGroups,
+  toggleCollapsed, visibleTabs,
 } from "../src/gateway/state/sections";
 
 const tab = (id: string, extra: Partial<RemoteSessionSummary> = {}) => ({ id, title: id, isStreaming: false, ...extra }) as RemoteSessionSummary;
@@ -19,6 +20,19 @@ describe("tab sections", () => {
     expect(groups[0].id).toBe(LOOSE_ID);
     expect(sectionOf(tab("x", { sectionID: "gone" }), sections)).toBeNull();
     expect(sectionOf(tab("x", { sectionID: "s2" }), sections)).toBe("s2");
+  });
+
+  it("reorders sections like the Mac: a dropped header takes the target's place, Tabs means first", () => {
+    const three = [...sections, { id: "s3", name: "Games" }];
+    expect(sectionDropPosition(three, "s1")).toBe(0);
+    expect(sectionDropPosition(three, "s3")).toBe(2);
+    expect(sectionDropPosition(three, LOOSE_ID)).toBe(0);
+    expect(movedSections(three, "s3", 0).map((section) => section.id)).toEqual(["s3", "s1", "s2"]);
+    expect(movedSections(three, "s1", 2).map((section) => section.id)).toEqual(["s2", "s3", "s1"]);
+    expect(movedSections(three, "s1", 1).map((section) => section.id)).toEqual(["s2", "s1", "s3"]);
+    for (const [id, position] of [["s1", 0], ["s1", -1], ["s3", 3], ["gone", 0]] as const) {
+      expect(movedSections(three, id, position)).toBe(three);
+    }
   });
 
   it("keeps the open, working and waiting tabs of a collapsed section", () => {

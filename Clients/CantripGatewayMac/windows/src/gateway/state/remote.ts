@@ -10,6 +10,7 @@ import type {
   SubagentCancelResponse, TabSection, TabSectionsResponse,
 } from "../api/types";
 import { bridge, type HostStatus } from "../bridge";
+import { movedSections } from "./sections";
 
 export type Detail = PagedRemoteSessionDetail;
 
@@ -470,13 +471,27 @@ export async function renameSection(id: string, name: string): Promise<void> {
 
 /** Moves a section up (-1) or down (1). */
 export async function moveSection(id: string, offset: number): Promise<void> {
-  requireSections();
   const index = tabSections.value.findIndex((section) => section.id === id);
-  if (index < 0 || index + offset < 0 || index + offset >= tabSections.value.length) return;
-  const data = await mutate(() => api<TabSectionsResponse>(`/api/v1/sections/${encodeURIComponent(id)}`, {
-    method: "PATCH", body: { position: index + offset },
-  }));
-  tabSections.value = data.sections;
+  if (index < 0) return;
+  await moveSectionTo(id, index + offset);
+}
+
+/** Moves a section to `position`. The new order shows while the Mac saves it and reverts if it fails. */
+export async function moveSectionTo(id: string, position: number): Promise<void> {
+  requireSections();
+  const before = tabSections.value;
+  const moved = movedSections(before, id, position);
+  if (moved === before) return;
+  tabSections.value = moved;
+  try {
+    const data = await mutate(() => api<TabSectionsResponse>(`/api/v1/sections/${encodeURIComponent(id)}`, {
+      method: "PATCH", body: { position },
+    }));
+    tabSections.value = data.sections;
+  } catch (error) {
+    if (tabSections.value === moved) tabSections.value = before;
+    throw error;
+  }
 }
 
 /** Deletes a section; its tabs go back to Tabs. */
