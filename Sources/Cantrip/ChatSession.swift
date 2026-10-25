@@ -1875,6 +1875,12 @@ final class ChatSession: ObservableObject {
         let isSlashCommand = !isLocalPrivate && SlashInvocation(prompt) != nil
         var backendPrompt = prompt
         var taskHead: String?
+        // Attended Home on a backend that keeps Home's protocol in its system instructions sends
+        // only this turn's data with each message.
+        let homeCarrier = isCantripHome && !councilMode
+            ? backend(for: backendKind) as? CantripHomeProtocolCarrier : nil
+        if isCantripHome { (copilot as? CantripHomeProtocolCarrier)?.homeProtocol = nil }
+        homeCarrier?.homeProtocol = cantripHomeChatProtocol
         if !isSlashCommand, automatedRun?.isIncident == false, let run = cantripHomeTask,
            let task = CantripHomeStore.shared.tasks.first(where: { $0.id == run.id }) {
             // Static protocol, then memory, then this task, then everything that changes per run.
@@ -1900,7 +1906,8 @@ final class ChatSession: ObservableObject {
                                            isFirstOfConversation: isFirstOfConversation,
                                            backendKind: backendKind,
                                            includesAmbientContext: includesAmbientContext,
-                                           consumesStagedContext: consumesStagedContext)
+                                           consumesStagedContext: consumesStagedContext,
+                                           compactHome: homeCarrier != nil)
         }
 
         UsageTracker.shared.recordQuery(backend: backendKind)
@@ -2008,13 +2015,15 @@ final class ChatSession: ObservableObject {
                                 backendKind: BackendKind?,
                                 includesAmbientContext: Bool = true,
                                 consumesStagedContext: Bool = true,
-                                includesHomeInstructions: Bool = true) -> String {
+                                includesHomeInstructions: Bool = true,
+                                compactHome: Bool = false) -> String {
         if isLocalPrivate { return prompt }
         var backendPrompt = prompt
         if includesHomeInstructions, isCantripHome || isCantripHomeBackground {
             // A task run's later turns (a resume) repeat only the shared task protocol.
             backendPrompt += isCantripHomeBackground && cantripHomeTask != nil
-                ? cantripHomeTaskStaticInstructions : cantripHomeInstructions
+                ? cantripHomeTaskStaticInstructions
+                : compactHome ? cantripHomeChatTurnContext(query: query) : cantripHomeInstructions
         }
         if isFirstOfConversation,
            let digest = UserDefaults.standard.string(forKey: "lastConversationDigest"),

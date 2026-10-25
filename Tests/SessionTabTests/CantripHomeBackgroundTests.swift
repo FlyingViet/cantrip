@@ -780,6 +780,7 @@ extension SessionTabTests {
         try testCantripHomeOnceTaskRemoval(homeChat: homeChat)
         try await testCantripHomeTaskModelChoices(homeChat: homeChat)
         try testCantripHomeTaskContext(homeChat: homeChat)
+        try await testCantripHomeChatContext()
 
         // A scheduled task's message: the shared head, memory, the task, then its own and
         // named tasks' records and run notes; never the tab list or unrelated records.
