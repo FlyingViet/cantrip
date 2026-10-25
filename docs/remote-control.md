@@ -1008,6 +1008,37 @@ API (`supportsChildTabs`, `supportsQueuePlans` on each session):
   while it works, the summary *Started automatically: …*; a requeued child's
   state is `requeued`. Unknown states read as their `statusLine`.
 
+### Thread tags in Cantrip Home
+
+When several threads are running in Home, a reply that belongs to a different
+thread from the message just above it shows a tag: a reply arrow, the start
+of the prompt that started its thread and a chevron. A reply right under its
+own prompt has no tag, and a run of replies from the same thread shares one.
+Tapping or clicking the tag (or Enter or Space) opens the thread inline: the
+original prompt and the earlier messages in it, with Home's messages cut to
+three lines. The Mac supplies the thread, so it opens even when the prompt is
+in older messages that haven't loaded. The browser Remote, Cantrip Agent
+(iPhone, Duo), Cantrip Gateway Mac and Cantrip Gateway for Windows show the
+tags; VoiceOver reads each as a button, "Reply to: …", that's collapsed or
+expanded.
+
+Every message records the prompt that started its thread, in every tab:
+a prompt starts its own, a reply joins its prompt's, an answer to a question
+joins the thread that asked, and a handoff's result card joins the thread of
+the reply that made the handoff. A result from a background agent or shell
+(`watch-*`, `side-*` or any other) gets its own reply bubble in the thread that
+started it, instead of joining whichever reply is open. Messages from before
+this change have no thread and never get a tag.
+
+API:
+- Messages carry `threadID` (the prompt's message ID) when known. Home's
+  messages that need a tag also carry `thread` (`{id, prompt}`, the prompt's
+  start on one line).
+- `GET /api/v1/sessions/{id}/threads/{threadID}?before={messageID}` returns
+  `{thread: {id, prompt: {id, text}, messages: [{id, role, text, author?}],
+  hasEarlier}}`: the thread's messages before `messageID`, up to 30, with
+  `hasEarlier` when more were left out. `404` when the prompt is gone.
+
 ## Add access away from home
 
 Use **Tailscale Serve**, not Funnel and not a router port-forward.
