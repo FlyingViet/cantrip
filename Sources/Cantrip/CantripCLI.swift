@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 
@@ -15,6 +15,7 @@ enum CantripCLI {
             case "config": try config(Array(arguments.dropFirst()))
             case "status": try status(json: arguments.contains("--json"))
             case "doctor": return doctor()
+            case "cleanup": return cleanup(Array(arguments.dropFirst()))
             default: print(usage)
             }
             return 0
@@ -45,8 +46,56 @@ enum CantripCLI {
       cantrip config get KEY
       cantrip config set KEY VALUE [KEY VALUE ...]
       cantrip doctor              Check the host, Remote, backends and Tailscale
+      cantrip cleanup [options]   Remove unused agent sessions and worktrees now (Cantrip also does this daily)
+          --dry-run               Only show what would be removed
+          --list                  Name each session and worktree
+          --json
       cantrip "question"          Ask the active backend (pipe input: cat log | cantrip "why?")
     """
+
+    // MARK: - cleanup
+
+    /// Runs the daily storage cleanup now, in this process (no running host needed).
+    static func cleanup(_ arguments: [String]) -> Int32 {
+        let options: Set<String> = ["--dry-run", "--list", "--json"]
+        if let unknown = arguments.first(where: { !options.contains($0) }) {
+            FileHandle.standardError.write(Data("Unknown option \(unknown).\n\(usage)\n".utf8))
+            return 2
+        }
+        let dryRun = arguments.contains("--dry-run"), list = arguments.contains("--list")
+        let json = arguments.contains("--json")
+        let configuration = StorageUpkeep.Configuration.standard()
+        if !json {
+            FileHandle.standardError.write(Data((dryRun ? "Checking what a cleanup would remove…\n"
+                : "Cleaning up unused agent sessions and worktrees…\n").utf8))
+        }
+        guard let report = StorageUpkeep.perform(configuration, dryRun: dryRun, log: { line in
+            if list, !json { print("  " + line) }
+        }) else {
+            FileHandle.standardError.write(Data("Another cleanup is running (Cantrip's daily one). Try again in a few minutes.\n".utf8))
+            return 1
+        }
+        if json {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            print(String(decoding: (try? encoder.encode(report)) ?? Data(), as: UTF8.self))
+            return report.errors.isEmpty ? 0 : 1
+        }
+        print(report.summary)
+        if !report.keptSummary.isEmpty { print("Kept " + report.keptSummary.joined(separator: ", ") + ".") }
+        for worktree in report.worktreesKept {
+            print("Kept worktree \(worktree.path): \(worktree.reason ?? "")")
+        }
+        for error in report.errors { print("Error: \(error)") }
+        if let free = report.freeBytesAfter { print("\(StorageUpkeep.format(free)) free.") }
+        if !dryRun, report.bytesRemoved > 0 {
+            print("Each removal is listed in \(configuration.stateDirectory.path)/storage-upkeep.log.")
+        } else if dryRun, !list, report.sessionsRemoved + report.worktreesRemoved.count > 0 {
+            print("Add --list to name each one.")
+        }
+        return report.errors.isEmpty ? 0 : 1
+    }
 
     // MARK: - Host requests
 

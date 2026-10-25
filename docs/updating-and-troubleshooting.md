@@ -283,6 +283,41 @@ If System Settings shows a permission enabled but Mac Access reports
 running app's files were replaced after it launched. Quit and reopen Cantrip;
 do not re-grant or reset permissions.
 
+## Free up disk space
+
+Agents leave work behind: every Copilot CLI session keeps a folder in
+`~/.copilot/session-state/` (with whatever the agent saved in its `files/`),
+and agents often check out extra git worktrees. Cantrip cleans these up about
+once a day, 10 minutes after it starts and then every 24 hours, without using
+a model. Turn it off or change how long unused sessions stay in **Settings >
+Clean up unused agent sessions and worktrees daily**.
+
+- **Sessions** are removed after 14 days without changes (3 to 365, the
+  `storageSessionRetentionDays` setting). A session stays while an open or
+  closed tab, a Home run or a tab transcript uses it, while a memory note names
+  it (by its first 8 characters), while a running process holds it, and while
+  it contains a git checkout with uncommitted changes, a stash or commits no
+  remote has. This covers every Copilot CLI session on the Mac, including other
+  tools' (such as a gateway that calls `copilot -p`) and Terminal sessions you
+  could otherwise resume.
+- **Worktrees** are removed with `git worktree remove` (never `--force`) only
+  when they are inside a session folder, `~/.cache/Cantrip/` or a temporary
+  folder, unlocked, unused, unchanged for 3 days, clean, and their commits are
+  on a branch (which is kept) or, for a detached worktree, on another branch,
+  tag or remote. Checkouts in your own folders, such as `~/Coding`, are never
+  touched. Records of agent worktrees that were already deleted are pruned.
+
+To see what would go, or to clean up now:
+
+```sh
+cantrip cleanup --dry-run --list
+cantrip cleanup
+```
+
+Each removal is listed in `~/.cache/Cantrip/storage-upkeep.log`, and the last
+result in Settings and `~/.cache/Cantrip/storage-upkeep.json`. Copilot's own
+search index (`~/.copilot/session-store.db`) is left alone.
+
 ## Find diagnostics for a bug report
 
 On Mac:

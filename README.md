@@ -114,6 +114,7 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 | `cantrip config get KEY` | Show one setting | [Headless](docs/headless.md#commands) |
 | `cantrip config set KEY VALUE [KEY VALUE ...]` | Change one or more settings | [Headless](docs/headless.md#commands) |
 | `cantrip doctor` | Check the host, Remote, backends and Tailscale | [Headless](docs/headless.md#commands) |
+| `cantrip cleanup [--dry-run] [--list] [--json]` | Remove unused agent sessions and worktrees now (Cantrip also does this daily) | [Free up disk space](docs/updating-and-troubleshooting.md#free-up-disk-space) |
 | `cantrip help` | Show the usage of these host commands (`cantrip --help` shows the ask and `runs` examples) | [Headless](docs/headless.md#commands) |
 
 ## Permissions and privacy

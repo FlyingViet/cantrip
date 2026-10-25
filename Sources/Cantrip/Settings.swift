@@ -64,6 +64,20 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// Daily cleanup of agent session folders and worktrees nothing uses (`StorageUpkeep`).
+    @Published var storageUpkeepEnabled: Bool {
+        didSet { d.set(storageUpkeepEnabled, forKey: "storageUpkeepEnabled") }
+    }
+    /// Days an unused Copilot session folder is kept before the cleanup removes it.
+    @Published var storageSessionRetentionDays: Int {
+        didSet {
+            let range = StorageUpkeep.sessionRetentionDays
+            let clamped = min(max(storageSessionRetentionDays, range.lowerBound), range.upperBound)
+            if clamped != storageSessionRetentionDays { storageSessionRetentionDays = clamped }
+            d.set(storageSessionRetentionDays, forKey: "storageSessionRetentionDays")
+        }
+    }
+
     var remoteControlToken: String {
         do { return try RemoteControlCredentials.load() ?? "" }
         catch {
@@ -494,6 +508,8 @@ final class AppSettings: ObservableObject {
             "cantripHomeParallelRuns": cantripHomeParallelRuns,
             "copilotAllowSubagents": copilotAllowSubagents,
             "copilotIdleReleaseMinutes": copilotIdleReleaseMinutes,
+            "storageUpkeepEnabled": storageUpkeepEnabled,
+            "storageSessionRetentionDays": storageSessionRetentionDays,
         ]
     }
 
@@ -571,6 +587,10 @@ final class AppSettings: ObservableObject {
             self.cantripHomeParallelRuns = $0
         }
         int("copilotIdleReleaseMinutes", 0...1440) { self.copilotIdleReleaseMinutes = $0 }
+        bool("storageUpkeepEnabled") { self.storageUpkeepEnabled = $0 }
+        int("storageSessionRetentionDays", StorageUpkeep.sessionRetentionDays) {
+            self.storageSessionRetentionDays = $0
+        }
         int("remoteControlPort", 1...65535) { self.remoteControlPort = $0 }
         int("remoteLANPort", 0...65535) { self.remoteLANPort = $0 }
         if let opacity = dict["panelOpacity"] as? NSNumber, CFGetTypeID(opacity) != CFBooleanGetTypeID(),
@@ -649,6 +669,8 @@ final class AppSettings: ObservableObject {
         remoteControlPort = storedRemotePort == 0 ? 8765 : storedRemotePort
         remoteLANPort = min(max(d.integer(forKey: "remoteLANPort"), 0), 65535)
         cantripHomeEnabled = d.bool(forKey: "cantripHomeEnabled")
+        storageUpkeepEnabled = d.object(forKey: "storageUpkeepEnabled") == nil ? true : d.bool(forKey: "storageUpkeepEnabled")
+        storageSessionRetentionDays = StorageUpkeep.Configuration.retentionDays(d)
         let storedParallelRuns = d.integer(forKey: "cantripHomeParallelRuns")
         cantripHomeParallelRuns = storedParallelRuns == 0
             ? CantripHomeBackgroundRunner.defaultParallelRuns

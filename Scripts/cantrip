@@ -7,7 +7,7 @@ Usage:
   cantrip --backend claude "review this diff" < changes.diff
   cantrip runs [session-or-run-id]
   cantrip daemon start|stop|restart|run|logs   (headless background service)
-  cantrip pair | status | config | doctor      (see `cantrip help`)
+  cantrip pair | status | config | doctor | cleanup  (see `cantrip help`)
 
 If the app isn't running, the exact bundle next to this script's repo is
 launched (never LaunchServices' pick among stale copies), with a warning
@@ -228,7 +228,7 @@ def inspect_runs(identifier=None):
     return 0
 
 
-HOST_COMMANDS = {"daemon", "pair", "config", "status", "doctor", "help"}
+HOST_COMMANDS = {"daemon", "pair", "config", "status", "doctor", "cleanup", "help"}
 
 
 def run_host_command(args):
