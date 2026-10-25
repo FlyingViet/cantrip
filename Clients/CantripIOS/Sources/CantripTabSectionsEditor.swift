@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// Edit Sections: every section in the Mac's order, to rename, reorder, delete or add. Drag rows to
-/// reorder (iOS: the ≡ handles); Move Up and Move Down are in each row's menu and VoiceOver
-/// actions (Mac: its arrows). Names and order sync to every device. Shown by
+/// reorder (iOS: touch and hold, then drag; no handles; Move Up/Down as VoiceOver actions and in
+/// the tab list's section menus. Mac: click-drag, its arrows and its menu). Names and order sync to
+/// every device. Shown by
 /// `cantripSectionPrompt(model:)` when `model.editingSections` is set.
 struct CantripTabSectionsEditor: View {
     @ObservedObject var model: CantripRemoteModel
@@ -23,6 +24,7 @@ struct CantripTabSectionsEditor: View {
                     ForEach(Array(model.tabSections.enumerated()), id: \.element.id) { index, section in
                         row(section, index: index)
                     }
+                    // Outside edit mode: touch and hold, then drag (rows have no menu to compete).
                     .onMove(perform: move)
                     #if os(iOS)
                     .onDelete { offsets in
@@ -50,7 +52,6 @@ struct CantripTabSectionsEditor: View {
                 }
             }
             #if os(iOS)
-            .environment(\.editMode, .constant(.active))
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .navigationTitle("Edit Sections")
@@ -94,7 +95,7 @@ struct CantripTabSectionsEditor: View {
 
     private var footer: String {
         #if os(iOS)
-        "Drag ≡ to reorder. Tap a section to rename it. Names and order show on every device; deleting a section moves its tabs back to Tabs."
+        "Touch and hold a section, then drag, to reorder. Tap to rename; swipe left to delete. Names and order show on every device; deleting a section moves its tabs back to Tabs."
         #else
         // One line in a macOS list footer; Delete's confirmation says where the tabs go.
         "Drag or use the arrows to reorder. Changes show on every device."
@@ -106,23 +107,22 @@ struct CantripTabSectionsEditor: View {
         let count = tabCount(section)
         let tabs = count == 1 ? "1 tab" : "\(count) tabs"
         #if os(iOS)
-        Button {
-            prompt = .rename(section)
-        } label: {
-            HStack {
-                Text(section.name)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                Text(tabs)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            .contentShape(Rectangle())
+        // A tap gesture rather than a Button, like Home's task rows: a Button would claim the
+        // touch and hold that starts the list's drag.
+        HStack {
+            Text(section.name)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Text(tabs)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
         }
-        // Plain, so names read as text rather than links.
-        .buttonStyle(.plain)
-        .contextMenu { rowMenu(section, index: index, last: last) }
+        .contentShape(Rectangle())
+        .onTapGesture { prompt = .rename(section) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { prompt = .rename(section) }
         .accessibilityLabel("\(section.name), \(tabs)")
         .accessibilityValue("Section \(index + 1) of \(last + 1)")
         .accessibilityHint("Renames the section. Actions move or delete it.")
@@ -130,10 +130,6 @@ struct CantripTabSectionsEditor: View {
         .accessibilityIdentifier("sections.editor.row.\(section.id)")
         #else
         HStack(spacing: 8) {
-            Image(systemName: "line.3.horizontal")
-                .foregroundStyle(.tertiary)
-                .help("Drag to reorder")
-                .accessibilityHidden(true)
             Text(section.name)
                 .lineLimit(1)
             Spacer(minLength: 8)
@@ -159,6 +155,7 @@ struct CantripTabSectionsEditor: View {
         .buttonStyle(.borderless)
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+        .help("Drag to reorder. Double-click to rename.")
         .onTapGesture(count: 2) { prompt = .rename(section) }
         .contextMenu { rowMenu(section, index: index, last: last) }
         .accessibilityElement(children: .contain)

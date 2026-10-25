@@ -239,6 +239,14 @@ struct CantripDuoSidebar: View {
                 { Task { if let id = await model.createTab(inSection: section.id) { onSelectTab(id) } } }
             })
         }
+        // Touch and hold, then drag, onto another header to reorder sections; drop a tab to file it.
+        .cantripDraggable(group.section != nil ? CantripTabDrag.payload(section: group.id) : nil)
+        .cantripDropTarget(cornerRadius: 10) { payload in
+            guard let action = CantripTabDrag.drop(payload, onHeaderOf: group.section?.id,
+                                                   sections: model.tabSections, sessions: model.sessions) else { return false }
+            Task { await model.perform(action) }
+            return true
+        }
         .accessibilityIdentifier(group.section == nil ? "duo.sidebar.tabsHeader" : "duo.sidebar.section.\(group.id)")
         ForEach(CantripTabGrouping.visible(group, collapsed: collapsed,
                                            selectedID: isHomeShown ? nil : model.selectedSessionID)) { session in
@@ -308,12 +316,48 @@ struct CantripDuoSidebar: View {
             CantripTabActions(model: model, session: session,
                               onRename: { onRename(session) }, onClose: { onClose(session.id) })
         }
+        // No handles: touch and hold, then drag, onto another tab to take its place.
+        .cantripDraggable(canMove(session) ? CantripTabDrag.payload(tab: session.id) : nil)
+        .cantripDropTarget(cornerRadius: 10) { payload in
+            guard let action = CantripTabDrag.drop(payload, onTab: session, order: tabOrder) else { return false }
+            Task { await model.perform(action) }
+            return true
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(CantripSessionPicker.accessibilityTitle(for: session))
         .accessibilityValue(session.tabRowAccessibilityValue)
         .accessibilityHint("Opens this tab. Touch and hold for tab actions.")
         .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
         .accessibilityIdentifier("duo.sidebar.tab.\(session.id)")
+        .accessibilityActions {
+            if canMove(session), let index = tabOrder.firstIndex(where: { $0.id == session.id }) {
+                if index > 0 {
+                    Button("Move Tab Up") {
+                        Task { await model.moveTab(session.id, relativeTo: tabOrder[index - 1].id, after: false) }
+                    }
+                }
+                if index < tabOrder.count - 1 {
+                    Button("Move Tab Down") {
+                        Task { await model.moveTab(session.id, relativeTo: tabOrder[index + 1].id, after: true) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func canMove(_ session: CantripRemoteSession) -> Bool {
+        session.supportsTabReordering == true && model.sessions.count >= 2 && !model.isMutating
+    }
+
+    /// The tabs as shown here: grouped by section, leaving out collapsed sections' idle tabs.
+    private var tabOrder: [CantripRemoteSession] {
+        guard let groups = CantripTabGrouping.groups(model.sessions, sections: model.tabSections) else {
+            return tabsExpanded ? model.sessions : []
+        }
+        return groups.flatMap { group in
+            CantripTabGrouping.visible(group, collapsed: collapse.isCollapsed(group.id, scope: model.tabSectionScope),
+                                       selectedID: isHomeShown ? nil : model.selectedSessionID)
+        }
     }
 
     // MARK: Skills
