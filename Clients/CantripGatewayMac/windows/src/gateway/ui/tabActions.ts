@@ -1,6 +1,7 @@
 // A tab's action menu (CantripTabActions.swift): the sidebar's context menu and a tab's More menu.
 import type { RemoteSessionSummary } from "../api/types";
 import { isBusy, startFreshSupport } from "../state/format";
+import { sectionOf } from "../state/sections";
 import * as nav from "../state/nav";
 import * as remote from "../state/remote";
 import { confirmDialog, toast, type MenuEntry } from "./kit";
@@ -59,6 +60,26 @@ export function tabActions(session: RemoteSessionSummary): MenuEntry[] {
       onSelect: () => void run(session.isLocked ? "Unlock" : "Lock", () => remote.updateTab(session.id, { isLocked: !session.isLocked })),
     },
   );
+  if (remote.supportsTabSections.value && session.supportsTabSections) {
+    const sections = remote.tabSections.value;
+    const current = sectionOf(session, sections);
+    entries.push(
+      { kind: "separator" },
+      { kind: "header", label: "Move to Section" },
+      {
+        label: "Tabs", checked: current === null, disabled: mutating,
+        onSelect: () => void run("Move", () => remote.fileTab(session.id, null)),
+      },
+      ...sections.map((section) => ({
+        label: section.name, checked: current === section.id, disabled: mutating,
+        onSelect: () => void run("Move", () => remote.fileTab(session.id, section.id)),
+      })),
+      {
+        label: "New Section…", icon: "folder" as const, disabled: mutating,
+        onSelect: () => { nav.sheet.value = { kind: "sectionName", fileTabID: session.id }; },
+      },
+    );
+  }
   if (session.isLocalPrivate) entries.push({ kind: "header", label: "Permanent tab. History saved; self-hosted models only." });
   if (!session.supportsTabMetadata) entries.push({ kind: "header", label: "Update Cantrip on the Mac to rename or lock tabs." });
   entries.push({ kind: "separator" });

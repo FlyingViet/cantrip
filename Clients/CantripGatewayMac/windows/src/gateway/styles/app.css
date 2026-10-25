@@ -349,3 +349,13 @@ body.inactive .sidebar-row[aria-current="true"] .row-icon { color: var(--accent)
 .sidebar-row[aria-current="true"]:focus-visible { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.55) inset; }
 .glass-btn.delivery-pill { gap: 3px; margin: 0 2px; padding: 0 9px; background: rgba(10, 132, 255, 0.16); font-size: 12px; font-weight: 600; height: 24px; }
 .glass-btn.delivery-pill:hover:not(:disabled) { background: rgba(10, 132, 255, 0.26); }
+/* Tab sections (CantripTabSections.swift): a collapsible header per section. */
+.tab-section { padding-top: 12px; border-radius: 6px; }
+.tab-section.drop-target { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tab-section .section-toggle { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 2px 4px 2px 0; border: 0; background: none; color: inherit; font: inherit; text-transform: uppercase; letter-spacing: .03em; cursor: default; }
+.tab-section .section-toggle:hover { color: var(--text); }
+.tab-section .section-toggle svg { flex: none; transition: transform .15s ease; }
+.tab-section .section-toggle svg.rotated { transform: rotate(90deg); }
+.tab-section .count-muted { color: var(--tertiary); font-weight: 500; }
+.tab-section .icon-btn { opacity: .55; }
+.tab-section:hover .icon-btn, .tab-section .icon-btn:focus-visible { opacity: 1; }
