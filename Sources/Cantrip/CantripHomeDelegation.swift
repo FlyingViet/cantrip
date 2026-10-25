@@ -366,6 +366,7 @@ final class CantripHomeDelegations {
         guard let result = CantripHomeHandoffResult(delegation, now: now) else { return false }
         var message = ChatMessage(role: .handoff, text: result.fallbackText)
         message.handoffResult = result
+        message.threadID = home.messages.first { $0.delegations.contains { $0.id == delegation.id } }?.threadID
         if home.isStreaming, var request = home.messages.lastIndex(where: { $0.role == .user }) {
             // Before the whole current turn: queued messages combined into it share its run ID.
             let runID = home.messages[request].runID

@@ -31,6 +31,9 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var handoffResult: CantripHomeHandoffResult?
     /// A child tab's card in its parent (role `handoff`; `ChildTabs.swift`).
     var childResult: ChildTab?
+    /// The ID of the prompt that started this message's thread (a prompt's own ID for itself).
+    /// Nil for history from before threads were recorded: it gets no tag rather than a guess.
+    var threadID: UUID?
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
     /// `freshStart`: the Start Fresh divider; turns above it are never sent to the model.
     enum Role: String, Codable { case user, assistant, error, handoff, freshStart }
@@ -41,6 +44,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
+        case threadID
     }
 }
 
@@ -105,6 +109,7 @@ extension ChatMessage {
             CantripHomeHandoffResult.self, forKey: .handoffResult
         )
         childResult = try? container.decodeIfPresent(ChildTab.self, forKey: .childResult)
+        threadID = try? container.decodeIfPresent(UUID.self, forKey: .threadID)
         if (try? container.decodeIfPresent(Bool.self, forKey: .freshStart)) == true {
             role = .freshStart
         } else {
@@ -132,6 +137,7 @@ extension ChatMessage {
         if !delegations.isEmpty { try container.encode(delegations, forKey: .delegations) }
         try container.encodeIfPresent(handoffResult, forKey: .handoffResult)
         try container.encodeIfPresent(childResult, forKey: .childResult)
+        try container.encodeIfPresent(threadID, forKey: .threadID)
     }
 }
 
@@ -745,6 +751,7 @@ final class ChatSession: ObservableObject {
     private func appendRunMessage(_ message: ChatMessage, queueItemID: UUID? = nil) -> UUID {
         var message = message
         message.runID = message.runID ?? currentRunID
+        message.threadID = message.threadID ?? threadID(forNew: message)
         messages.append(message)
         guard let runID = message.runID else { return message.id }
 
@@ -757,9 +764,35 @@ final class ChatSession: ObservableObject {
         event.role = message.role.rawValue
         event.text = message.text
         event.author = message.author
+        event.threadID = message.threadID
         event.queueItemID = queueItemID
         appendRunEvent(event, durable: queueItemID != nil)
         return message.id
+    }
+
+    /// A prompt starts its own thread; a reply, error or question joins the thread of the
+    /// message it follows. Late background results and answers to questions set theirs first.
+    func threadID(forNew message: ChatMessage) -> UUID? {
+        switch message.role {
+        case .user: return message.id
+        case .assistant, .error: return currentThreadID
+        case .handoff, .freshStart: return nil
+        }
+    }
+
+    /// A prompt Cantrip answered itself, without a run.
+    private func appendLocalExchange(prompt: String, reply: String) {
+        var question = ChatMessage(role: .user, text: prompt)
+        question.threadID = question.id
+        var answer = ChatMessage(role: .assistant, text: reply)
+        answer.threadID = question.id
+        messages += [question, answer]
+        persistTranscript()
+    }
+
+    /// The thread the latest prompt or reply belongs to.
+    var currentThreadID: UUID? {
+        messages.last { $0.role == .user || $0.role == .assistant }?.threadID
     }
 
     private func recordOutput(
@@ -1258,6 +1291,7 @@ final class ChatSession: ObservableObject {
                 messages[index].activities = activities
                 messages[index].author = recovered.author
                 messages[index].runID = run.id
+                messages[index].threadID = messages[index].threadID ?? recovered.threadID
             } else {
                 messages.append(ChatMessage(
                     id: recovered.id,
@@ -1265,7 +1299,8 @@ final class ChatSession: ObservableObject {
                     text: recovered.text,
                     activities: activities,
                     author: recovered.author,
-                    runID: run.id
+                    runID: run.id,
+                    threadID: recovered.threadID
                 ))
             }
         }
@@ -1406,8 +1441,13 @@ final class ChatSession: ObservableObject {
         var echo = ChatMessage(role: .assistant, text: question)
         // Same ID as the request, so its image previews keep their IDs and cached copies.
         if !messages.contains(where: { $0.id == request.id }) { echo.id = request.id }
+        // The answer and what follows join the thread that asked.
+        let thread = currentThreadID
+        echo.threadID = thread
         appendRunMessage(echo)
-        appendRunMessage(ChatMessage(role: .user, text: answer))
+        var reply = ChatMessage(role: .user, text: answer)
+        reply.threadID = thread
+        appendRunMessage(reply)
         appendRunMessage(ChatMessage(role: .assistant, text: ""))
         persistTranscript()
     }
@@ -1967,18 +2007,14 @@ final class ChatSession: ObservableObject {
             case "startFresh": reply = startFreshUnavailableReason ?? "This tab couldn't start fresh."
             default: reply = "`/\(invocation.name)` doesn't run from Cantrip. \(rule.note)"
             }
-            messages.append(ChatMessage(role: .user, text: prompt))
-            messages.append(ChatMessage(role: .assistant, text: reply))
-            persistTranscript()
+            appendLocalExchange(prompt: prompt, reply: reply)
             return
         }
 
         // Instant answers: math, unit conversion, app launch — no LLM.
         if !isLocalPrivate, selectionContext == nil, let instant = InstantAnswers.answer(for: prompt) {
             Log.write("instant: \"\(prompt.prefix(60))\"")
-            messages.append(ChatMessage(role: .user, text: prompt))
-            messages.append(ChatMessage(role: .assistant, text: instant))
-            persistTranscript()
+            appendLocalExchange(prompt: prompt, reply: instant)
             return
         }
 
@@ -2472,7 +2508,7 @@ final class ChatSession: ObservableObject {
             }
         case .usage(let usage):
             recordUsage(usage)
-        case .context:
+        case .context, .backgroundWake:
             break // several models share the prompt
         case .approval(let approval):
             recordApproval(approval)
@@ -2571,7 +2607,7 @@ final class ChatSession: ObservableObject {
                     }
                 case .usage(let usage):
                     self.recordUsage(usage)
-                case .context:
+                case .context, .backgroundWake:
                     break
                 case .approval(let approval):
                     self.recordApproval(approval)
@@ -2979,6 +3015,8 @@ final class ChatSession: ObservableObject {
             updatePromptUsage { $0.apply(context, typedCharacters: $1) }
         case .approval(let approval):
             recordApproval(approval)
+        case .backgroundWake(let ids):
+            openBackgroundResultBubble(for: ids)
         case .done:
             isWaitingOnBackgroundWatchers = false
             if !pendingInjections.isEmpty {
@@ -3818,6 +3856,49 @@ final class ChatSession: ObservableObject {
                 word.count >= 6 && word.contains(where: \.isNumber) ? "#" : String(word)
             }
             .joined(separator: " ")
+    }
+
+    /// Finished background work (a watch-*/side-* agent or shell) woke the idle root: its result
+    /// gets its own bubble in the thread that started the work, instead of joining whichever
+    /// reply is open. Other tabs split only when that reply belongs to a different thread.
+    private func openBackgroundResultBubble(for ids: [String]) {
+        // A message still on its way to the root (its empty reply is last) takes what comes next,
+        // as before: splitting now would leave that reply empty and put its answer under a tag.
+        guard pendingInjections.isEmpty, let last = messages.last,
+              !(last.role == .assistant && last.text.isEmpty && last.activities.isEmpty) else { return }
+        let thread = backgroundThreadID(for: ids)
+        let open = messages.last { $0.role == .assistant }?.threadID
+        guard isCantripHome || thread != nil && thread != open else { return }
+        // The end of the run reads only the last reply: settle the closed one's blocks now.
+        if isCantripHome { cantripHomeNotices += runCantripHomeBlockPass(lintBlocking: false).map(\.notice) }
+        if !isLocalPrivate { processOverlayBlock() }
+        Log.write("thread: background result opens its own bubble (\(ids.joined(separator: ", ").prefix(80)))")
+        appendRunMessage(ChatMessage(role: .assistant, text: "", threadID: thread ?? currentThreadID))
+    }
+
+    /// The thread of the reply that started a background agent or shell. An agent or tool call ID
+    /// is matched exactly first; a shell ID only as a whole value in the call's input or result.
+    func backgroundThreadID(for ids: [String]) -> UUID? {
+        let wanted = Set(ids.filter { !$0.isEmpty })
+        guard !wanted.isEmpty else { return nil }
+        func tree(_ activity: ToolActivity, _ test: (ToolActivity) -> Bool) -> Bool {
+            test(activity) || activity.children.contains { tree($0, test) }
+        }
+        func thread(where test: (ToolActivity) -> Bool) -> UUID? {
+            messages.last { $0.threadID != nil && $0.activities.contains { tree($0, test) } }?.threadID
+        }
+        if let exact = thread(where: { activity in
+            wanted.contains(activity.id) || activity.subagent.map { wanted.contains($0.agentID) } == true
+        }) { return exact }
+        let shells = wanted.compactMap { id in
+            try? NSRegularExpression(pattern: "\"shellId\"\\s*:\\s*\"\(NSRegularExpression.escapedPattern(for: id))\""
+                + "|shellId: \(NSRegularExpression.escapedPattern(for: id))(?=[\\s>]|$)")
+        }
+        return thread { activity in
+            let text = (activity.input ?? "") + "\n" + (activity.output ?? "")
+            let range = NSRange(text.startIndex..., in: text)
+            return shells.contains { $0.firstMatch(in: text, range: range) != nil }
+        }
     }
 
     private func updateActivity(_ activity: ToolActivity) {

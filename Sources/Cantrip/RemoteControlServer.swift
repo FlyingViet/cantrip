@@ -1123,9 +1123,29 @@ final class RemoteControlServer {
                 sendError(404, "message no longer available", on: connection)
                 return
             }
-            let object = messageSnapshot(message, sessionID: id, home: HomeReplyView(session))
+            let index = session.messages.firstIndex { $0.id == messageID } ?? 0
+            let tags = ThreadTags.tags(in: session.messages, range: index..<index + 1, sessionID: id)
+            let object = messageSnapshot(message, sessionID: id, home: HomeReplyView(session), thread: tags[messageID])
             sendEncoded(on: connection, queue: detailEncodingQueue) {
                 try JSONSerialization.data(withJSONObject: ["message": object], options: [.sortedKeys])
+            }
+            return
+        }
+        // A thread tag's thread: its prompt and the earlier messages in it (Home).
+        if parts.count == 3, parts[1] == "threads", request.method == "GET" {
+            let home = HomeReplyView(session)
+            guard let threadID = UUID(uuidString: String(parts[2])),
+                  let thread = ThreadTags.thread(
+                    threadID, in: session.messages, before: request.query("before").flatMap(UUID.init(uuidString:)),
+                    sessionID: id, visibleText: { message in
+                        message.role == .assistant ? home?.text(of: message) ?? message.text : message.text
+                    }
+                  ) else {
+                sendError(404, "This thread's first message is no longer available.", on: connection)
+                return
+            }
+            sendEncoded(on: connection, queue: detailEncodingQueue) {
+                try JSONSerialization.data(withJSONObject: ["thread": thread], options: [.sortedKeys])
             }
             return
         }
@@ -2144,8 +2164,9 @@ final class RemoteControlServer {
                 return object
             }
             let home = HomeReplyView(session)
+            let tags = ThreadTags.tags(in: session.messages, range: session.messages.indices, sessionID: session.id)
             result["messages"] = session.messages.map {
-                messageSnapshot($0, sessionID: session.id, home: home)
+                messageSnapshot($0, sessionID: session.id, home: home, thread: tags[$0.id])
             }
         }
         return result
@@ -2182,10 +2203,11 @@ final class RemoteControlServer {
     }
 
     private func messageSnapshot(_ message: ChatMessage, sessionID: UUID,
-                                 home: HomeReplyView? = nil) -> [String: Any] {
+                                 home: HomeReplyView? = nil, thread: [String: Any]? = nil) -> [String: Any] {
         var message = message
         if let home, message.role == .assistant { message.text = home.text(of: message) }
         var object = RemoteHistory.message(message)
+        object["thread"] = thread
         object["isLocalPrivate"] = sessionID == ChatSession.privateLocalID
         if message.role == .user {
             let presentation = RemoteImageAttachments.presentation(message.text, sessionID: sessionID)
@@ -2266,16 +2288,18 @@ final class RemoteControlServer {
         let queued = session.queued
         let plans = session.queuePlans.mapValues(\.snapshot)
         let home = HomeReplyView(session)
+        let tags = ThreadTags.tags(in: session.messages, range: candidateStart..<end, sessionID: sessionID)
         // Full-message sizing and encoding belong off the main actor and tab-list queue.
         sendEncoded(status: status, on: connection, queue: detailEncodingQueue) {
             var result = summary
             var messages: [[String: Any]] = []
             if includesCompleteExchanges {
-                messages = candidates.map { self.messageSnapshot($0, sessionID: sessionID, home: home) }
+                messages = candidates.map { self.messageSnapshot($0, sessionID: sessionID, home: home, thread: tags[$0.id]) }
             } else {
                 var bytes = 0
                 for candidate in candidates.suffix(RemoteHistory.pageSize).reversed() {
-                    let message = self.messageSnapshot(candidate, sessionID: sessionID, home: home)
+                    let message = self.messageSnapshot(candidate, sessionID: sessionID, home: home,
+                                                       thread: tags[candidate.id])
                     let size = try JSONSerialization.data(withJSONObject: message).count
                     if !messages.isEmpty, bytes + size > RemoteHistory.pageBytes { break }
                     messages.insert(message, at: 0)
@@ -2287,7 +2311,7 @@ final class RemoteControlServer {
                 if start < candidates.count, candidates[start].role != .user,
                    let prompt = candidates[..<start].lastIndex(where: { $0.role == .user }) {
                     messages = candidates[prompt..<start].map {
-                        self.messageSnapshot($0, sessionID: sessionID, home: home)
+                        self.messageSnapshot($0, sessionID: sessionID, home: home, thread: tags[$0.id])
                     } + messages
                 }
             }
@@ -2610,7 +2634,7 @@ private extension RemoteControlServer {
     .child-lane,.child-tag{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600}
     .child-lane{color:var(--child-lane);background:color-mix(in srgb,var(--child-lane) 13%,transparent)}.child-tag{color:var(--secondary);background:var(--surface-2)}.child-tag>span{min-width:0;max-width:52ch;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
     .child-tag:before{content:"↩";content:"↩"/""}.child-tag:after{content:"⌄";content:"⌄"/"";transition:transform .12s}.child-thread[open] .child-tag:after{transform:rotate(180deg)}
-    .child-thread-body{display:grid;gap:8px;margin:8px 0 2px 4px;padding-left:12px;border-left:2px solid var(--line)}
+    .child-thread-body{display:grid;gap:8px;margin:8px 0 2px 4px;padding-left:12px;border-left:2px solid var(--line)}.thread-tag{margin-bottom:6px}.thread-tag>summary{width:fit-content;max-width:100%;min-height:24px}
     .child-prompt{justify-self:end;max-width:86%;margin:0;padding:6px 11px;border-radius:14px;background:#3a5fcd;color:#fff;font-size:13px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
     .child-reply p{margin:0;line-height:1.45;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.child-who{display:block;color:var(--secondary);font-size:11px;font-weight:600}
     .child-files{margin:0;color:var(--secondary);font-size:12px;line-height:1.7;font-variant-numeric:tabular-nums}.child-files code{padding:0 4px;border-radius:4px;background:var(--surface-2);font-size:11.5px}
@@ -3659,6 +3683,22 @@ private extension RemoteControlServer {
       for(const [action,label] of [["resolve","Keep both, then run the tests (Recommended)"],["keepParent",`Keep ${child.baseBranch?`${child.baseBranch}'s`:"the parent's"} version`],["keepChild","Keep the child's version"],["leave","Leave it unmerged; I'll look"]]){
         if(!(child.actions||[]).includes(action))continue;const button=document.createElement("button");button.type="button";button.className=`control${action==="resolve"?" primary":""}`;button.textContent=label;button.onclick=()=>childAction(sessionID,child,action,button);options.append(button)}
       box.append(options);return box}
+    // Thread tags (Home): a reply from a different thread than the message above names the prompt that
+    // started its thread. It opens that thread inline, fetched from the Mac so it works before older
+    // messages load: the prompt, then the earlier messages in the thread (unrelated ones skipped).
+    const threadPages=new Map();
+    function threadTag(sessionID,message){const thread=message.thread,details=remember(document.createElement("details"),`thread:${message.id}`),summary=document.createElement("summary"),tag=document.createElement("span"),label=document.createElement("span"),body=document.createElement("div");
+      details.className="child-thread thread-tag";summary.setAttribute("aria-label",`Reply to: ${thread.prompt}`);tag.className="child-tag";label.textContent=thread.prompt;tag.append(label);summary.append(tag);body.className="child-thread-body";details.append(summary,body);
+      const note=text=>{const line=document.createElement("p");line.className="child-note";line.textContent=text;body.append(line)};
+      const fill=page=>{body.replaceChildren();if(!page){note("Loading the thread…");return}if(page.error){note(page.error);return}
+        const prompt=document.createElement("p");prompt.className="child-prompt";prompt.textContent=page.prompt.text;body.append(prompt);if(page.hasEarlier)note("Earlier messages in this thread aren't shown.");
+        for(const item of page.messages||[]){if(item.role==="user"){const answer=document.createElement("p");answer.className="child-prompt";answer.textContent=item.text;body.append(answer);continue}
+          const reply=document.createElement("div"),who=document.createElement("span"),text=document.createElement("p");reply.className="child-reply";who.className="child-who";who.textContent=item.role==="handoff"?"Handoff":item.role==="error"?"Error":"Home";appendInline(text,item.text);reply.append(who,text);body.append(reply)}};
+      const load=retry=>{let page=threadPages.get(message.id);if(retry&&page?.error){threadPages.delete(message.id);page=null}
+        if(page&&!(page instanceof Promise)){fill(page);return}
+        if(!page){page=api(`/api/v1/sessions/${sessionID}/threads/${thread.id}?before=${message.id}`).then(data=>data.thread,error=>({error:`Couldn't load this thread: ${error.message}`}));threadPages.set(message.id,page)}
+        fill(null);page.then(result=>{threadPages.set(message.id,result);fill(result)})};
+      details.addEventListener("toggle",()=>{if(details.open)load(true)});if(details.open)load(false);return details}
     function childResultCard(sessionID,child){const card=document.createElement("section"),open=sessionItems.some(s=>s.id===child.id);card.className=`child-card ${child.state}`;card.setAttribute("role","group");card.setAttribute("aria-label",`Child tab ${child.title}`);
       const thread=remember(document.createElement("details"),`child:${child.id}`),summary=document.createElement("summary"),lane=document.createElement("span"),tag=document.createElement("span"),tagText=document.createElement("span");thread.className="child-thread";
       lane.className="child-lane";lane.append(branchGlyph(),`Child tab · ${child.title}`);tag.className="child-tag";tagText.textContent=(child.prompt||"").split("\\n")[0];tag.append(tagText);summary.append(lane,tag);summary.title="Show the request and the child tab's replies";thread.append(summary);
@@ -3700,6 +3740,7 @@ private extension RemoteControlServer {
         for(const message of session.messages){const handoffs=(message.delegations||[]).filter(handoff=>!answered.has(handoff.id)),subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id)),activities=(message.activities||[]).filter(activity=>!subagentIDs.has(activity.id)),apps=message.apps||[],settled=subagents.filter(agent=>!subagentActive(agent));for(const agent of subagents)if(subagentActive(agent))pinned.push([agent,message.id]);for(const app of apps)box.append(mcpAppSlot(session.id,app));
           if(!message.text&&!message.thinking&&!activities.length&&!settled.length&&!handoffs.length)continue;if(message.role==="freshStart"){box.append(freshStartDivider(message));continue}const row=document.createElement("article");row.className=`message ${message.role}`;row.dataset.messageId=message.id;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
+          if(message.thread&&message.role!=="user")row.append(threadTag(session.id,message));
           appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
           if(message.role==="error"&&session.supportsStartFresh&&message.id===session.repeatedErrorMessageID)appendErrorRecovery(row,session);
           if(handoffs.length){const stack=document.createElement("div");stack.className="handoffs";for(const handoff of handoffs)stack.append(handoffCard(handoff));row.append(stack)}appendActivities(row,activities,message.id);

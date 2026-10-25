@@ -381,6 +381,8 @@ enum BackendEvent {
     case context(BackendContextUsage) // root agent's context window for this prompt
     case approval(BackendApproval) // harness policy decision for a tool
     case inputRequired(BackendInputRequest)
+    /// The root agent was idle and finished background work (agent or shell IDs) woke it.
+    case backgroundWake([String])
     case done                      // stream finished successfully
     case failure(String)           // error message
 }

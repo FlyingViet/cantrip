@@ -140,11 +140,93 @@ extension SessionTabTests {
                      "Watcher completion should resume the same run: \(assistantText)")
         precondition(chat.messages.filter { $0.role == .user }.count == 2,
                      "The internal watcher wake-up must not appear as a user message")
+        // The watcher's result opens its own bubble in the thread that started it.
+        let prompts = chat.messages.filter { $0.role == .user }
+        let changelog = chat.messages.first { $0.text.contains("checked the changelog") }
+        let resumed = chat.messages.first { $0.text.contains("resumed the deployment handoff") }
+        precondition(prompts.allSatisfy { $0.threadID == $0.id }
+                     && changelog?.threadID == prompts[1].id && changelog?.id != resumed?.id
+                     && resumed?.threadID == prompts[0].id && chat.messages.last?.id == resumed?.id,
+                     "A late result must not join the reply that's open: "
+                        + chat.messages.map { "\($0.role.rawValue):\($0.threadID?.uuidString.prefix(4) ?? "-"):\($0.text.prefix(30))" }
+                            .joined(separator: " | "))
         guard let finished = chat.subagent(agentID: "agent-release") else {
             preconditionFailure("The finished watcher should remain in the transcript")
         }
         precondition(finished.status == .completed && finished.finishedAt != nil,
                      "The watcher card should settle before continuation: \(finished)")
+    }
+
+    private static let runtimeWakeFakeSDK = #"""
+    export const RuntimeConnection = { forStdio: value => value };
+    export class CopilotClient {
+      async start() {}
+      async forceStop() {}
+      async createSession(config) {
+        const emit = event => config.onEvent({
+          id: `event-${Math.random()}`, timestamp: new Date().toISOString(), ...event
+        });
+        return {
+          async abort() {},
+          async send(options) {
+            emit({ type: 'tool.execution_start', data: {
+              toolCallId: 'bash-build', toolName: 'bash',
+              arguments: { command: 'make app', description: 'Build', mode: 'async', shellId: 'build-1' }
+            } });
+            emit({ type: 'tool.execution_complete', data: {
+              toolCallId: 'bash-build', success: true, result: { content: '<shellId: build-1 running>' }
+            } });
+            emit({ type: 'assistant.message', data: { messageId: 'started', content: 'The build is running.' } });
+            emit({ type: 'assistant.idle', data: {} });
+            setTimeout(() => {
+              emit({ type: 'system.notification', data: {
+                content: '<system_notification>Shell build-1 completed</system_notification>',
+                kind: { type: 'shell_completed', shellId: 'build-1', exitCode: 0 }
+              } });
+              emit({ type: 'assistant.turn_start', data: { turnId: 'wake' } });
+              emit({ type: 'assistant.message', data: { messageId: 'finished', content: 'The build finished.' } });
+              emit({ type: 'session.idle', data: {} });
+            }, 300);
+            return 'started';
+          }
+        };
+      }
+    }
+    """#
+
+    /// The runtime itself wakes the idle root when a background shell finishes: that reply gets
+    /// its own bubble in the shell's thread (Home).
+    @MainActor
+    static func testBackgroundRuntimeWake() async throws {
+        let settings = AppSettings.shared
+        let saved = (settings.backend, settings.memoryEnabled, settings.attachScreen,
+                     settings.shareLocation, settings.shareCalendar, settings.fileRAGEnabled)
+        defer {
+            (settings.backend, settings.memoryEnabled, settings.attachScreen,
+             settings.shareLocation, settings.shareCalendar, settings.fileRAGEnabled) = saved
+        }
+        settings.backend = .copilot
+        settings.memoryEnabled = false
+        settings.attachScreen = false
+        settings.shareLocation = false
+        settings.shareCalendar = false
+        settings.fileRAGEnabled = false
+        let sdkURL = "data:text/javascript;base64," + Data(runtimeWakeFakeSDK.utf8).base64EncodedString()
+        let discovery = "function resolveCopilotRuntime(){return {sdk:'\(sdkURL)',runtime:'fixture',sessionRuntime:'fixture'}}"
+        let script = CopilotSessionBridge.script.replacingOccurrences(of: CopilotRuntime.discoveryScript, with: discovery)
+        let chat = ChatSession(id: ChatSession.cantripHomeID, copilotBackend: CopilotBackend(bridgeScript: script),
+                               makeJournal: { _ in try RunJournal(sessionID: UUID()) })
+        chat.messages = []
+        defer { chat.cancel() }
+        chat.submitRemote("Build the app")
+        try await waitForJournalTest { !chat.isStreaming && chat.messages.contains { $0.text.contains("build finished") } }
+        let prompt = chat.messages.first { $0.role == .user }
+        let replies = chat.messages.filter { $0.role == .assistant && !$0.text.isEmpty }
+        precondition(replies.count == 2 && replies[0].text.contains("build is running")
+                     && replies[1].text.contains("build finished") && !replies[0].text.contains("build finished")
+                     && replies.allSatisfy { $0.threadID == prompt?.id && prompt?.id != nil },
+                     "The shell's result opens its own bubble in its thread: "
+                        + chat.messages.map { "\($0.role.rawValue):\($0.text.prefix(30))" }.joined(separator: " | "))
     }
 
     @MainActor

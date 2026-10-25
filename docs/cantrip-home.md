@@ -40,6 +40,12 @@ Done when was met, and names what's still missing or what needs the user. If
 the check can't run or isn't confident, the card says "Done when not
 confirmed" instead of claiming the work is finished.
 
+When replies from different threads interleave (a background agent finishing
+while you've moved on, or a handoff's result card), each reply from another
+thread is tagged with the start of the prompt it belongs to, and the tag opens
+that thread inline. See
+[Thread tags in Cantrip Home](remote-control.md#thread-tags-in-cantrip-home).
+
 ## Tasks and schedules
 
 Tasks can be one-time, interval or weekday automations, or structured

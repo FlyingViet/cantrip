@@ -24,6 +24,7 @@ enum RemoteHistory {
             },
         ]
         if let author = message.author { result["author"] = author }
+        if let thread = message.threadID { result["threadID"] = thread.uuidString }
         if message.role == .user, let usage = message.promptUsage, !usage.isEmpty {
             result["promptUsage"] = usage.snapshot
         }

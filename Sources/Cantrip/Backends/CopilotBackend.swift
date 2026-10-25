@@ -718,6 +718,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                 case "watcherResuming":
                     onEvent?(.status(BackgroundWaitStatus.resuming(
                         parallel: (object["parallel"] as? Int ?? 0) > 0)))
+                case "backgroundWake":
+                    onEvent?(.backgroundWake((object["ids"] as? [Any] ?? []).compactMap { $0 as? String }))
                 case "delivery":
                     guard let id = object["id"] as? String,
                           let completion = deliveries.removeValue(forKey: id) else { continue }
@@ -930,7 +932,7 @@ private extension BackendEvent {
     var isVisibleOutput: Bool {
         switch self {
         case .textDelta, .thinkingDelta, .activity, .approval, .inputRequired: true
-        case .status, .usage, .context, .done, .failure: false
+        case .status, .usage, .context, .backgroundWake, .done, .failure: false
         }
     }
 }

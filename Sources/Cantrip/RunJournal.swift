@@ -88,6 +88,8 @@ final class RunJournal {
         var text: String?
         var author: String?
         var channel: String?
+        /// The prompt that started the message's thread (ChatMessage.threadID).
+        var threadID: UUID?
 
         var activity: Activity?
         var artifact: Artifact?
@@ -129,6 +131,7 @@ final class RunJournal {
         var text: String
         let author: String?
         var activities: [Activity]
+        var threadID: UUID? = nil
     }
 
     struct RecoveredRun: Equatable {
@@ -540,7 +543,8 @@ final class RunJournal {
                         role: role,
                         text: event.text ?? "",
                         author: event.author,
-                        activities: []
+                        activities: [],
+                        threadID: event.threadID
                     ))
                 }
             case .output:
