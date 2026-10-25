@@ -872,6 +872,8 @@ export interface HomeTaskRun {
   /** "succeeded" | "failed" | "cancelled" | … */
   status: string;
   summary: string;
+  /** The model the run used (newer hosts). */
+  model?: string;
 }
 
 export interface HomeTaskField {
@@ -959,6 +961,9 @@ export interface HomeTask {
   runsAfter?: UUIDString[];
   /** Wait limit for `runsAfter` (default 30). */
   runsAfterTimeoutMinutes?: Int;
+  /** The task's own Copilot model and effort; omitted runs on Home's model. */
+  model?: string;
+  effort?: string;
 }
 
 /** GET /api/v1/home/tasks (changed) and POST .../tasks/<id>/move. */
@@ -1089,6 +1094,8 @@ export interface HomeBackgroundRun {
   canStop: boolean;
   /** Pending requests of a live hidden run (omitted when none). */
   inputs?: InputRequest[];
+  /** The model a hidden run used (newer hosts). */
+  model?: string;
 }
 
 /** A job waiting to start. */

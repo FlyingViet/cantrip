@@ -24,8 +24,15 @@ export function recordNoun(workspace: Pick<HomeTaskWorkspace, "recordLabel" | "r
 /** A task row's second line: "5 briefings" for workspaces, else the schedule's summary. */
 export function taskSubtitle(task: HomeTask): string {
   const workspace = task.workspace;
-  if (workspace) return `${workspace.records.length} ${recordNoun(workspace, workspace.records.length)}`;
-  return task.schedule.summary;
+  const base = workspace ? `${workspace.records.length} ${recordNoun(workspace, workspace.records.length)}` : task.schedule.summary;
+  const model = taskModelSummary(task);
+  return model ? `${base} · ${model}` : base;
+}
+
+/** "claude-sonnet-5.5 · high effort", or undefined when the task follows Home's model. */
+export function taskModelSummary(task: Pick<HomeTask, "model" | "effort">): string | undefined {
+  if (!task.model && !task.effort) return undefined;
+  return [task.model ?? "Home's model", task.effort ? `${task.effort} effort` : undefined].filter(Boolean).join(" · ");
 }
 
 export function isScheduled(task: Pick<HomeTask, "hasSchedule">): boolean {

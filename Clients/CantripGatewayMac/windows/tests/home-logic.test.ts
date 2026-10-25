@@ -6,7 +6,7 @@ import {
   dateTimeValue, dateValue, displayValue, durationLabel, fileSize, filterRecords, fromLocalInput, groupStateKey,
   initialRecordValues, isLabelledSummary, isSectionCollapsed, loadGroupState, OTHER_GROUP_ID, parseDate, parseDateTime,
   recordBadge, recordDate, recordSubtitle, recordTitle, reorderMove, saveGroupState, spokenDuration, summaryLabelLength,
-  summaryLines, supportsThumbnail, taskStatusKind, taskSubtitle, taskTimeLine, toLocalInput, waitingRuns, workspaceSections,
+  summaryLines, supportsThumbnail, taskModelSummary, taskStatusKind, taskSubtitle, taskTimeLine, toLocalInput, waitingRuns, workspaceSections,
 } from "../src/gateway/ui/home/homeLogic";
 
 const stages = [
@@ -214,6 +214,13 @@ describe("task rows", () => {
     expect(taskSubtitle(task({ workspace: { ...tracker, records: tracker.records.slice(0, 1) } }))).toBe("1 interview application");
     expect(taskSubtitle(task({ workspace: { ...tracker, recordLabel: "trip", recordLabelPlural: undefined } }))).toBe("2 trips");
     expect(taskSubtitle(task())).toBe("Weekdays at 9:00 AM");
+  });
+
+  it("adds the task's own model to its subtitle", () => {
+    expect(taskModelSummary(task())).toBeUndefined();
+    expect(taskSubtitle(task({ model: "claude-sonnet-5.5" }))).toBe("Weekdays at 9:00 AM · claude-sonnet-5.5");
+    expect(taskModelSummary(task({ model: "claude-sonnet-5.5", effort: "high" }))).toBe("claude-sonnet-5.5 · high effort");
+    expect(taskModelSummary(task({ effort: "low" }))).toBe("Home's model · low effort");
   });
 
   it("picks the status glyph", () => {
