@@ -2552,7 +2552,7 @@ private extension RemoteControlServer {
     @media(max-width:620px){.prompt-row{padding-inline:12px}.tools{padding-inline:10px}.connection-label{display:none}.session-tab{max-width:145px}.session-select{max-width:115px}#messages{padding:14px 12px 22px}.live-subagents{padding:8px 12px}}
     .remote-sidebar{--sidebar-width:clamp(136px,30vw,240px)}.remote-sidebar #app{padding-left:var(--sidebar-width)}
     #sessionSidebar{position:fixed;inset:0 auto 0 0;z-index:5;display:flex;flex-direction:column;width:var(--sidebar-width);background:var(--chrome);border-right:1px solid var(--line)}
-    #sessionSidebarHeader{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;padding:12px;font-size:13px}
+    #sessionSidebarHeader{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;padding:12px;font-size:13px}#sessionSidebarHeader #newSection{margin-left:auto}#newSection svg{display:block}
     .remote-sidebar #sessions{flex:1;min-height:0;flex-direction:column;gap:4px;padding:0 8px 8px;overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain;scrollbar-width:thin}
     .remote-sidebar #sessions::-webkit-scrollbar{display:initial;width:6px}.remote-sidebar #sessions::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
     .remote-sidebar .session-tab{width:100%;max-width:none;min-height:40px;border-radius:8px}.remote-sidebar .session-tab.active{background:var(--surface-2);box-shadow:inset 3px 0 var(--accent)}
@@ -2625,7 +2625,7 @@ private extension RemoteControlServer {
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
     <main id="app" class="hidden"><aside id="sessionSidebar" class="hidden" aria-labelledby="sessionSidebarTitle"><div id="sessionSidebarHeader"><strong id="sessionSidebarTitle">Tabs</strong></div></aside><header class="workspace">
     <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="slashList"><div id="slashPopover" class="slash-popover hidden"><div id="slashList" role="listbox" aria-label="Commands"></div><div id="slashLoading" class="slash-info hidden"><span class="spinner" aria-hidden="true"></span>Loading commands…</div><div id="slashInfo" class="slash-info hidden"></div></div><div id="slashStatus" class="sr-only" role="status" aria-live="polite"></div><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
-    <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><button id="homeArtifacts" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home artifacts">Artifacts</button><span class="tools-spacer"></span>
+    <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSection" class="round hidden" title="New section" aria-label="New section"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M1.5 4.5v8a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3.5h-4a1 1 0 0 0-1 1z"/><path d="M8 7.5v4M6 9.5h4"/></svg></button><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><button id="homeArtifacts" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home artifacts">Artifacts</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div>
@@ -2647,7 +2647,7 @@ private extension RemoteControlServer {
     <dialog id="sectionEditor" aria-labelledby="sectionEditorTitle"><form id="sectionForm">
     <strong id="sectionEditorTitle">Section</strong><label>Name<input id="sectionName" maxlength="40" autocomplete="off"></label>
     <div id="sectionActions" class="tab-actions"><button id="sectionNewTab" type="button" class="control">New Tab Here</button><button id="sectionUp" type="button" class="control">Move Up</button><button id="sectionDown" type="button" class="control">Move Down</button><button id="sectionDelete" type="button" class="control">Delete Section</button></div>
-    <span id="sectionNote" class="muted"></span><div id="sectionError" role="alert"></div>
+    <span id="sectionNote" class="muted" role="status" aria-live="polite"></span><div id="sectionError" role="alert"></div>
     <div class="tab-actions"><button id="sectionCancel" type="button" class="control">Cancel</button><button id="sectionSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
     <dialog id="modelEditor" aria-labelledby="modelTitle"><form id="modelForm">
@@ -2776,7 +2776,7 @@ private extension RemoteControlServer {
     // The native Mac embed exposes this bridge; ordinary browsers keep the top tab strip.
     // Native shells (Mac Remote, Cantrip Gateway for Windows) get the left tab list and an unpair hook.
     const sidebarLayout=Boolean(window.webkit?.messageHandlers?.cantripRemoteUnpair||window.cantripGateway?.sidebarLayout);
-    if(sidebarLayout){document.documentElement.classList.add("remote-sidebar");$("sessionSidebar").classList.remove("hidden");$("sessionSidebar").append($("sessions"));$("sessionSidebarHeader").append($("newSession"));$("sessionProgress").prepend(brainIndicator())}
+    if(sidebarLayout){document.documentElement.classList.add("remote-sidebar");$("sessionSidebar").classList.remove("hidden");$("sessionSidebar").append($("sessions"));$("sessionSidebarHeader").append($("newSection"),$("newSession"));$("sessionProgress").prepend(brainIndicator())}
     function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false";const label=document.querySelector(".connection-label");if(label)label.textContent=active?"Connected":"Reconnecting…";updateProgressConnection()}
     function brainIndicator(){const icon=document.createElementNS("http://www.w3.org/2000/svg","svg");icon.setAttribute("class","brain-indicator");icon.setAttribute("viewBox","0 0 24 24");icon.setAttribute("aria-hidden","true");icon.setAttribute("focusable","false");
       const path=document.createElementNS(icon.namespaceURI,"path");path.setAttribute("d","M12 5C12 1 6 1 6 5C3 5 2 8 4 10C1 12 2 16 5 17C4 21 10 23 12 19C14 23 20 21 19 17C22 16 23 12 20 10C22 8 21 5 18 5C18 1 12 1 12 5V19M6 5C6 8 9 7 9 10M4 10C7 10 8 12 6 14M5 17C8 16 10 17 10 19M18 5C18 8 15 7 15 10M20 10C17 10 16 12 18 14M19 17C16 16 14 17 14 19");path.setAttribute("fill","none");path.setAttribute("stroke","currentColor");path.setAttribute("stroke-width","1.5");path.setAttribute("stroke-linecap","round");path.setAttribute("stroke-linejoin","round");icon.append(path);return icon}
@@ -2865,7 +2865,7 @@ private extension RemoteControlServer {
     function refresh(){refreshRequested=true;if(refreshTask)return refreshTask;
       refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision;
         let listedSuccessfully=false,requestSelection=requestedID;
-        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);tabSections=listed.sections||[];sectionsSupported=listed.supportsTabSections===true;renderHomeInputs(listed.homeInputs||[]);
+        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);tabSections=listed.sections||[];sectionsSupported=listed.supportsTabSections===true;$("newSection").classList.toggle("hidden",!sectionsSupported);renderHomeInputs(listed.homeInputs||[]);
           // Cantrip Home is pinned first when the Mac has it on; it is never closed or moved.
           const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;$("homeTasks").classList.toggle("hidden",!listed.home);$("homeArtifacts").classList.toggle("hidden",!listed.home);
           for(const id of historyCache.keys())if(!sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}
@@ -3020,8 +3020,8 @@ private extension RemoteControlServer {
       finally{movingTab=false;renderSessions(sessionItems);refresh()}}
     async function moveSectionBy(id,offset){const index=tabSections.findIndex(section=>section.id===id);if(index<0||!tabSections[index+offset])return;
       await moveSectionTo(id,index+offset);$("sessions").querySelector(`[data-section-id="${id}"] .section-toggle`)?.focus()}
-    let editingSection=null,sectionSaving=false;
-    function editSection(group){editingSection=group;const creating=group.id===looseSectionID,index=tabSections.findIndex(section=>section.id===group.id);
+    let editingSection=null,sectionSaving=false,sectionDeleteArmed=false;
+    function editSection(group){editingSection=group;sectionDeleteArmed=false;$("sectionDelete").textContent="Delete Section";const creating=group.id===looseSectionID,index=tabSections.findIndex(section=>section.id===group.id);
       $("sectionEditorTitle").textContent=creating?"New section":"Section";$("sectionName").value=creating?"":group.name;$("sectionSave").textContent=creating?"Create":"Save";
       $("sectionActions").classList.toggle("hidden",creating);$("sectionUp").disabled=index<=0;$("sectionDown").disabled=index<0||index>=tabSections.length-1;
       $("sectionNote").textContent=creating?"Sections show on every device. File a tab from its … menu, or drag it onto a section.":"Drag a section's header to reorder it. Deleting a section moves its tabs back to Tabs.";
@@ -3038,7 +3038,12 @@ private extension RemoteControlServer {
     $("sectionNewTab").onclick=()=>{const group=editingSection;sectionRequest(async()=>{const data=await api("/api/v1/sessions",{method:"POST",body:JSON.stringify({sectionID:group.id})});selectTab(data.session.id)})};
     $("sectionUp").onclick=()=>{const group=editingSection,index=tabSections.findIndex(section=>section.id===group?.id);sectionRequest(()=>api(`/api/v1/sections/${group.id}`,{method:"PATCH",body:JSON.stringify({position:index-1})}))};
     $("sectionDown").onclick=()=>{const group=editingSection,index=tabSections.findIndex(section=>section.id===group?.id);sectionRequest(()=>api(`/api/v1/sections/${group.id}`,{method:"PATCH",body:JSON.stringify({position:index+1})}))};
-    $("sectionDelete").onclick=()=>{const group=editingSection;sectionRequest(()=>api(`/api/v1/sections/${group.id}`,{method:"DELETE"}))};
+    // A section with tabs asks first (its tabs move back to Tabs; none close); an empty one goes at once.
+    $("sectionDelete").onclick=()=>{const group=editingSection;if(!group)return;const count=sessionItems.filter(item=>item.sectionID===group.id).length;
+      if(count&&!sectionDeleteArmed){sectionDeleteArmed=true;$("sectionDelete").textContent="Confirm Delete";
+        $("sectionNote").textContent=`Delete “${group.name}”? Its ${count===1?"tab moves":count+" tabs move"} back to Tabs; no tabs are closed. Press Confirm Delete to continue.`;return}
+      sectionRequest(()=>api(`/api/v1/sections/${group.id}`,{method:"DELETE"}))};
+    $("newSection").onclick=()=>editSection({id:looseSectionID,name:"Tabs",items:[]});
     $("sectionCancel").onclick=()=>{$("sectionEditor").close();editingSection=null};
     $("sectionEditor").addEventListener("cancel",event=>{if(sectionSaving)event.preventDefault()});
     $("tabSection").onchange=()=>{const creating=$("tabSection").value==="new";$("tabNewSection").classList.toggle("hidden",!creating);if(creating)$("tabNewSection").focus()};

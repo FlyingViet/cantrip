@@ -4,6 +4,8 @@ import SwiftUI
 struct SessionTabDragHandle: NSViewRepresentable {
     let id: UUID
     let title: String
+    /// What the drag carries before the ID: tabs, or sections ("cantrip-section:").
+    var payloadPrefix = "cantrip-tab:"
     let onSelect: () -> Void
 
     func makeNSView(context: Context) -> SessionTabDragView {
@@ -15,6 +17,7 @@ struct SessionTabDragHandle: NSViewRepresentable {
     func updateNSView(_ view: SessionTabDragView, context: Context) {
         view.tabID = id
         view.title = title
+        view.payloadPrefix = payloadPrefix
         view.onSelect = onSelect
     }
 }
@@ -22,6 +25,7 @@ struct SessionTabDragHandle: NSViewRepresentable {
 class SessionTabDragView: NSView, NSDraggingSource {
     var tabID = UUID()
     var title = ""
+    var payloadPrefix = "cantrip-tab:"
     var onSelect: () -> Void = {}
     private var mouseDownEvent: NSEvent?
     private var isDraggingTab = false
@@ -56,7 +60,7 @@ class SessionTabDragView: NSView, NSDraggingSource {
 
     func draggingItem() -> NSDraggingItem {
         let payload = NSPasteboardItem()
-        payload.setString("cantrip-tab:\(tabID.uuidString)", forType: .string)
+        payload.setString("\(payloadPrefix)\(tabID.uuidString)", forType: .string)
         let item = NSDraggingItem(pasteboardWriter: payload)
         let image = NSImage(size: bounds.size, flipped: false) { rect in
             NSColor.controlBackgroundColor.setFill()

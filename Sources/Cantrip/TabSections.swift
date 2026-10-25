@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// A named group of tabs in the tab lists, like a Slack sidebar section. Tabs without one (or
 /// whose section was deleted) show under "Tabs". Sections live on the host so every device
@@ -137,5 +138,62 @@ extension SessionManager {
         if tabSections.contains(where: { $0.id != id && $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
             throw TabSectionError.duplicate
         }
+    }
+}
+
+/// One group in a tab list: Tabs (unfiled, `section == nil`) or a section, with its tabs in order.
+struct TabSectionGroup: Identifiable {
+    static let looseID = "tabs"
+    let section: TabSection?
+    let sessions: [ChatSession]
+
+    var id: String { section?.id.uuidString ?? Self.looseID }
+    var name: String { section?.name ?? "Tabs" }
+}
+
+extension SessionManager {
+    /// Tabs (unfiled, including tabs of deleted sections) then every section in order, empty ones
+    /// too, like each client's tab list. Nil without sections: one flat list.
+    func tabSectionGroups() -> [TabSectionGroup]? {
+        guard !tabSections.isEmpty else { return nil }
+        var groups = [TabSectionGroup(section: nil, sessions: sessions.filter { sectionID(of: $0) == nil })]
+        for section in tabSections {
+            groups.append(TabSectionGroup(section: section, sessions: sessions.filter { sectionID(of: $0) == section.id }))
+        }
+        return groups
+    }
+
+    /// The panel's tabs in display order (what ⌘2-⌘9 and Move Tab Left/Right follow): grouped by
+    /// section, leaving out the idle tabs of collapsed sections.
+    func panelTabs(collapsed: Set<String>) -> [ChatSession] {
+        guard let groups = tabSectionGroups() else { return sessions }
+        let activeID = showingRemote || !sessions.indices.contains(activeIndex) ? nil : sessions[activeIndex].id
+        return groups.flatMap { TabSectionCollapse.visible($0, collapsed: collapsed.contains($0.id), activeID: activeID) }
+    }
+}
+
+/// Which sections this Mac's panel keeps collapsed; each device keeps its own.
+@MainActor
+final class TabSectionCollapse: ObservableObject {
+    static let shared = TabSectionCollapse()
+    static let key = "panelCollapsedTabSections"
+
+    @Published private(set) var collapsed: Set<String>
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        collapsed = Set(defaults.stringArray(forKey: Self.key) ?? [])
+    }
+
+    func toggle(_ id: String) {
+        if collapsed.contains(id) { collapsed.remove(id) } else { collapsed.insert(id) }
+        defaults.set(collapsed.sorted(), forKey: Self.key)
+    }
+
+    /// A collapsed group still shows the open tab and tabs that are working or waiting for an answer.
+    static func visible(_ group: TabSectionGroup, collapsed: Bool, activeID: UUID?) -> [ChatSession] {
+        guard collapsed else { return group.sessions }
+        return group.sessions.filter { $0.id == activeID || $0.isStreaming || !$0.pendingInputs.isEmpty }
     }
 }

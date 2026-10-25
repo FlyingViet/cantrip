@@ -76,6 +76,41 @@ extension SessionTabTests {
         try manager.deleteSection(one.id)
         try manager.deleteSection(two.id)
 
+        // An empty section persists across a relaunch, shows as its own group, and takes tabs later.
+        let later = try manager.createSection(named: "Later")
+        precondition(SessionManager().tabSections.contains(later), "an empty section persists")
+        precondition(manager.tabSectionGroups()?.contains { $0.section == later && $0.sessions.isEmpty } == true,
+                     "an empty section still shows as a group")
+        let kept = manager.newSession()
+        kept.messages = [ChatMessage(role: .user, text: "Keep this history")]
+        try manager.setSection(later.id, for: kept.id)
+        precondition(manager.sectionID(of: kept) == later.id)
+
+        // The panel strip follows the groups (Tabs, then sections in order); a collapsed section
+        // keeps only its open, working and waiting tabs; each Mac remembers what it collapsed.
+        let groups = manager.tabSectionGroups()!
+        precondition(groups.first?.section == nil && groups.dropFirst().map { $0.section?.id } == manager.tabSections.map(\.id))
+        precondition(manager.panelTabs(collapsed: []).map(\.id) == groups.flatMap { $0.sessions.map(\.id) },
+                     "the panel's order (and ⌘2-⌘9) follows the groups")
+        manager.select(kept.id)
+        precondition(manager.panelTabs(collapsed: [later.id.uuidString]).contains { $0.id == kept.id }, "the open tab stays visible")
+        manager.select(a.id)
+        precondition(!manager.panelTabs(collapsed: [later.id.uuidString]).contains { $0.id == kept.id }, "idle tabs fold away")
+        kept.isStreaming = true
+        precondition(manager.panelTabs(collapsed: [later.id.uuidString]).contains { $0.id == kept.id }, "working tabs stay visible")
+        kept.isStreaming = false
+        let collapseDefaults = UserDefaults(suiteName: "cantrip-tab-section-collapse-test")!
+        collapseDefaults.removePersistentDomain(forName: "cantrip-tab-section-collapse-test")
+        TabSectionCollapse(defaults: collapseDefaults).toggle(later.id.uuidString)
+        precondition(TabSectionCollapse(defaults: collapseDefaults).collapsed == [later.id.uuidString], "collapse is remembered")
+        collapseDefaults.removePersistentDomain(forName: "cantrip-tab-section-collapse-test")
+
+        // Deleting a section never closes its tabs or loses their history.
+        try manager.deleteSection(later.id)
+        precondition(manager.sessions.contains { $0.id == kept.id } && manager.sectionID(of: kept) == nil
+                     && kept.messages.map(\.text) == ["Keep this history"], "deleting a section keeps its tabs and history")
+        manager.close(kept.id)
+
         // Remote API.
         let server = RemoteControlServer(manager: manager)
         let port = Int.random(in: 49152...65535)
@@ -218,6 +253,22 @@ extension SessionTabTests {
           nav.querySelector('[data-section-id="tabs"] .section-menu').click();
           check($("sectionEditorTitle").textContent==="New section"&&$("sectionActions").classList.contains("hidden"),"The Tabs header creates sections");
           $("sectionCancel").click();
+
+          calls=[];check($("newSection").getAttribute("aria-label")==="New section","The tab list has a labeled New section button");
+          $("newSection").click();
+          check($("sectionEditor").open&&$("sectionEditorTitle").textContent==="New section"&&$("sectionName").value==="","New section opens an empty name prompt");
+          $("sectionName").value="Later";$("sectionForm").requestSubmit();await settle();
+          check(calls.length===1&&calls[0].path==="/api/v1/sections"&&calls[0].method==="POST"&&calls[0].body.name==="Later","New section creates an empty section without filing a tab");
+
+          calls=[];renderSessions(items);nav.querySelector('[data-section-id="s1"] .section-menu').click();
+          $("sectionDelete").click();await settle();
+          check(calls.length===0&&$("sectionEditor").open&&$("sectionDelete").textContent==="Confirm Delete"&&$("sectionNote").textContent.includes("2 tabs move back to Tabs"),"Deleting a section with tabs asks first");
+          $("sectionDelete").click();await settle();
+          check(calls[0]?.path==="/api/v1/sections/s1"&&calls[0].method==="DELETE","Confirming deletes it");
+          calls=[];renderSessions(items);nav.querySelector('[data-section-id="s2"] .section-menu').click();
+          check($("sectionDelete").textContent==="Delete Section","The confirmation resets for the next section");
+          $("sectionDelete").click();await settle();
+          check(calls[0]?.path==="/api/v1/sections/s2"&&calls[0].method==="DELETE","An empty section deletes at once");
           editTab({...items[1],supportsTabSections:false});check($("tabSectionLabel").classList.contains("hidden"),"Tabs that can't be filed hide the picker");$("tabCancel").click();
         }finally{
           api=originalAPI;refresh=originalRefresh;tabSections=[];sectionsSupported=false;collapsedSections=new Set();localStorage.removeItem("cantrip.collapsedSections");

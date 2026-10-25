@@ -39,6 +39,12 @@ struct LauncherView: View {
     @State private var sectioningSession: ChatSession?
     @State private var sectionName = ""
     @State private var editingSections = false
+    @State private var creatingSection = false
+    @State private var renamingSection: TabSection?
+    @State private var deletingSection: TabSection?
+    /// The section header a dragged tab or section is over.
+    @State private var sectionDropTarget: String?
+    @ObservedObject private var sectionCollapse = TabSectionCollapse.shared
     /// Instant caption for whichever toolbar icon is hovered.
     @State private var toolbarHint: String?
     /// Council seat column visibility (collapsible to a slim strip).
@@ -165,6 +171,39 @@ struct LauncherView: View {
             }
         } message: { chat in
             Text("\(chat.title) moves into it. Sections group tabs in Cantrip Agent, Gateway and the browser.")
+        }
+        .alert("New Section", isPresented: $creatingSection) {
+            TextField("Section name", text: $sectionName)
+            Button("Cancel", role: .cancel) {}
+            Button("Create") {
+                do { try manager.createSection(named: sectionName) }
+                catch { manager.tabActionError = error.localizedDescription }
+            }
+        } message: {
+            Text("An empty section. Drop tabs on its header or use a tab's Move to Section. It shows on every device.")
+        }
+        .alert("Rename Section", isPresented: Binding(
+            get: { renamingSection != nil },
+            set: { if !$0 { renamingSection = nil } }
+        ), presenting: renamingSection) { section in
+            TextField("Section name", text: $sectionName)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                do { try manager.renameSection(section.id, to: sectionName) }
+                catch { manager.tabActionError = error.localizedDescription }
+            }
+        } message: { _ in
+            Text("Up to \(TabSectionStore.maximumNameLength) characters.")
+        }
+        .alert(deletingSection.map { "Delete \u{201C}\($0.name)\u{201D}?" } ?? "Delete Section?", isPresented: Binding(
+            get: { deletingSection != nil },
+            set: { if !$0 { deletingSection = nil } }
+        ), presenting: deletingSection) { section in
+            Button("Delete Section", role: .destructive) { deleteSection(section) }
+            Button("Cancel", role: .cancel) {}
+        } message: { section in
+            let count = tabCount(section)
+            Text("Its \(count == 1 ? "tab moves" : "\(count) tabs move") back to Tabs. No tabs are closed.")
         }
         .alert("Tab Protected", isPresented: Binding(
             get: { manager.tabActionError != nil || session.tabActionError != nil },
@@ -685,7 +724,8 @@ struct LauncherView: View {
                 .keyboardShortcut("1", modifiers: .command)
             ForEach(2..<10, id: \.self) { n in
                 Button(action: {
-                    manager.select(n - 2)
+                    let tabs = panelTabs
+                    if tabs.indices.contains(n - 2) { manager.select(tabs[n - 2].id) }
                 }) { EmptyView() }
                     .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
             }
@@ -734,110 +774,18 @@ struct LauncherView: View {
                       ? "Connected to remote Cantrip"
                       : "Connect to sessions on another Cantrip")
 
-                ForEach(Array(manager.sessions.enumerated()), id: \.element.id) { index, chat in
-                    HStack(spacing: 0) {
-                        HStack(spacing: 5) {
-                            if chat.isStreaming {
-                                ProgressView().controlSize(.mini)
-                            }
-                            if index < 8 {
-                                shortcutBadge(index + 2)
-                            }
-                            Text(chat.title)
-                                .font(.caption)
-                                .lineLimit(1)
-                                .frame(maxWidth: 140)
-                            if chat.isLocked {
-                                Image(systemName: chat.isLocalPrivate ? "lock.shield.fill" : "lock.fill")
-                                    .font(.system(size: 10))
-                                    .help(chat.isLocalPrivate ? "Permanent self-hosted-model tab. History is saved and available remotely." : "Locked tab - unlock from the tab menu to close")
-                            }
-                        }
-                        .padding(.leading, 10)
-                        .padding(.trailing, chat.isLocked ? 10 : 0)
-                        .padding(.vertical, 4)
-                        .overlay {
-                            SessionTabDragHandle(id: chat.id, title: chat.title) {
-                                manager.select(chat.id)
-                            }
-                        }
-                        .accessibilityElement(children: .combine)
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityAction { manager.select(chat.id) }
-                        if !chat.isLocked {
-                            Button(action: { manager.close(chat.id) }) {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 8, weight: .bold))
-                                    .foregroundStyle(.tertiary)
-                                    .frame(width: 24)
-                                    .frame(maxHeight: .infinity)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Close \(chat.title)")
+                let order = panelTabs
+                if let groups = manager.tabSectionGroups() {
+                    ForEach(groups) { group in
+                        sectionPill(group)
+                        ForEach(TabSectionCollapse.visible(group, collapsed: sectionCollapse.collapsed.contains(group.id),
+                                                           activeID: activeTabID), id: \.id) { chat in
+                            tabPill(chat, position: order.firstIndex { $0.id == chat.id } ?? 0, order: order)
                         }
                     }
-                    .fixedSize(horizontal: false, vertical: true)
-                    .background(!manager.showingRemote && index == manager.activeIndex
-                                ? AnyShapeStyle(.quaternary)
-                                : AnyShapeStyle(.clear),
-                                in: Capsule())
-                    .contentShape(Capsule())
-                    .dropDestination(for: String.self) { items, _ in
-                        guard items.count == 1, let value = items.first,
-                              value.hasPrefix("cantrip-tab:"),
-                              let id = UUID(uuidString: String(value.dropFirst("cantrip-tab:".count))),
-                              let source = manager.sessions.firstIndex(where: { $0.id == id }),
-                              let target = manager.sessions.firstIndex(where: { $0.id == chat.id }),
-                              id != chat.id else { return false }
-                        return moveTab(id, relativeTo: chat.id, after: source < target)
-                    }
-                    .help("Drag to reorder. Right-click for tab actions.")
-                    .contextMenu {
-                        Button(chat.isLocalPrivate ? "Private Local Settings..." : "Model Settings...") { modelSettingsSession = chat }
-                        Button("Start Fresh") { startFresh(chat) }
-                            .disabled(chat.startFreshUnavailableReason != nil)
-                        if !chat.isLocalPrivate {
-                            Button("Sign in to GitHub on Mac...") { chat.submitRemote("/login github", mode: .queue) }
-                                .disabled(chat.isStreaming || !chat.queued.isEmpty)
-                        }
-                        Button("Rename Tab...") {
-                            tabName = chat.tabMetadata.customTitle ?? chat.title
-                            renamingSession = chat
-                        }
-                        Button(chat.isLocked ? "Unlock Tab" : "Lock Tab") {
-                            do { try chat.updateTab(isLocked: !chat.isLocked) }
-                            catch { manager.tabActionError = error.localizedDescription }
-                        }
-                        .disabled(chat.isLocalPrivate)
-                        if !chat.isPrivate {
-                            Menu("Move to Section") {
-                                let current = manager.sectionID(of: chat)
-                                Toggle("Tabs", isOn: Binding(get: { current == nil }, set: { _ in fileTab(chat, in: nil) }))
-                                ForEach(manager.tabSections) { section in
-                                    Toggle(section.name, isOn: Binding(get: { current == section.id },
-                                                                       set: { _ in fileTab(chat, in: section.id) }))
-                                }
-                                Divider()
-                                Button("New Section...") {
-                                    sectionName = ""
-                                    sectioningSession = chat
-                                }
-                                Button("Edit Sections...") { editingSections = true }
-                            }
-                        }
-                        Divider()
-                        Button("Move Tab Left") {
-                            moveTab(chat.id, offset: -1)
-                        }
-                        .disabled(index == 0)
-                        Button("Move Tab Right") {
-                            moveTab(chat.id, offset: 1)
-                        }
-                        .disabled(index == manager.sessions.count - 1)
-                        Divider()
-                        Button("Close Tab", role: .destructive) { manager.close(chat.id) }
-                            .disabled(chat.isLocked)
+                } else {
+                    ForEach(Array(manager.sessions.enumerated()), id: \.element.id) { index, chat in
+                        tabPill(chat, position: index, order: order)
                     }
                 }
 
@@ -850,10 +798,276 @@ struct LauncherView: View {
                 }
                 .buttonStyle(.plain)
                 .help("New session (⌘T)")
+
+                Button(action: promptNewSection) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("New Section: group tabs on every device")
+                .accessibilityLabel("New Section")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
         }
+    }
+
+    /// A tab's pill; `position` is its place in `order`, the strip's display order.
+    private func tabPill(_ chat: ChatSession, position: Int, order: [ChatSession]) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 5) {
+                if chat.isStreaming {
+                    ProgressView().controlSize(.mini)
+                }
+                if position < 8 {
+                    shortcutBadge(position + 2)
+                }
+                Text(chat.title)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .frame(maxWidth: 140)
+                if chat.isLocked {
+                    Image(systemName: chat.isLocalPrivate ? "lock.shield.fill" : "lock.fill")
+                        .font(.system(size: 10))
+                        .help(chat.isLocalPrivate ? "Permanent self-hosted-model tab. History is saved and available remotely." : "Locked tab - unlock from the tab menu to close")
+                }
+            }
+            .padding(.leading, 10)
+            .padding(.trailing, chat.isLocked ? 10 : 0)
+            .padding(.vertical, 4)
+            .overlay {
+                SessionTabDragHandle(id: chat.id, title: chat.title) {
+                    manager.select(chat.id)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { manager.select(chat.id) }
+            if !chat.isLocked {
+                Button(action: { manager.close(chat.id) }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 24)
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close \(chat.title)")
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .background(isActiveTab(chat)
+                    ? AnyShapeStyle(.quaternary)
+                    : AnyShapeStyle(.clear),
+                    in: Capsule())
+        .contentShape(Capsule())
+        .dropDestination(for: String.self) { items, _ in
+            guard items.count == 1, let value = items.first,
+                  value.hasPrefix("cantrip-tab:"),
+                  let id = UUID(uuidString: String(value.dropFirst("cantrip-tab:".count))),
+                  let source = order.firstIndex(where: { $0.id == id }),
+                  let target = order.firstIndex(where: { $0.id == chat.id }),
+                  id != chat.id else { return false }
+            return moveTab(id, relativeTo: chat.id, after: source < target)
+        }
+        .help("Drag to reorder. Right-click for tab actions.")
+        .contextMenu {
+            Button(chat.isLocalPrivate ? "Private Local Settings..." : "Model Settings...") { modelSettingsSession = chat }
+            Button("Start Fresh") { startFresh(chat) }
+                .disabled(chat.startFreshUnavailableReason != nil)
+            if !chat.isLocalPrivate {
+                Button("Sign in to GitHub on Mac...") { chat.submitRemote("/login github", mode: .queue) }
+                    .disabled(chat.isStreaming || !chat.queued.isEmpty)
+            }
+            Button("Rename Tab...") {
+                tabName = chat.tabMetadata.customTitle ?? chat.title
+                renamingSession = chat
+            }
+            Button(chat.isLocked ? "Unlock Tab" : "Lock Tab") {
+                do { try chat.updateTab(isLocked: !chat.isLocked) }
+                catch { manager.tabActionError = error.localizedDescription }
+            }
+            .disabled(chat.isLocalPrivate)
+            if !chat.isPrivate {
+                Menu("Move to Section") {
+                    let current = manager.sectionID(of: chat)
+                    Toggle("Tabs", isOn: Binding(get: { current == nil }, set: { _ in fileTab(chat, in: nil) }))
+                    ForEach(manager.tabSections) { section in
+                        Toggle(section.name, isOn: Binding(get: { current == section.id },
+                                                           set: { _ in fileTab(chat, in: section.id) }))
+                    }
+                    Divider()
+                    Button("New Section...") {
+                        sectionName = ""
+                        sectioningSession = chat
+                    }
+                    Button("Edit Sections...") { editingSections = true }
+                }
+            }
+            Divider()
+            Button("Move Tab Left") {
+                moveTab(chat.id, offset: -1)
+            }
+            .disabled(position == 0)
+            Button("Move Tab Right") {
+                moveTab(chat.id, offset: 1)
+            }
+            .disabled(position == order.count - 1)
+            Divider()
+            Button("Close Tab", role: .destructive) { manager.close(chat.id) }
+                .disabled(chat.isLocked)
+        }
+    }
+
+    // MARK: Tab sections in the strip
+
+    private static let sectionDragPrefix = "cantrip-section:"
+
+    /// The strip's tabs in display order (grouped by section; collapsed sections keep only busy tabs).
+    private var panelTabs: [ChatSession] { manager.panelTabs(collapsed: sectionCollapse.collapsed) }
+
+    private var activeTabID: UUID? {
+        manager.showingRemote || !manager.sessions.indices.contains(manager.activeIndex)
+            ? nil : manager.sessions[manager.activeIndex].id
+    }
+
+    private func isActiveTab(_ chat: ChatSession) -> Bool { activeTabID == chat.id }
+
+    private func tabCount(_ section: TabSection) -> Int {
+        manager.sessions.filter { manager.sectionID(of: $0) == section.id }.count
+    }
+
+    /// A section's header pill, like the browser strip: click to collapse, drag onto another
+    /// header to reorder, drop a tab on it to file the tab, right-click for its actions.
+    private func sectionPill(_ group: TabSectionGroup) -> some View {
+        let collapsed = sectionCollapse.collapsed.contains(group.id)
+        let targeted = sectionDropTarget == group.id
+        let count = group.sessions.count
+        return HStack(spacing: 4) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 8, weight: .bold))
+                .rotationEffect(.degrees(collapsed ? 0 : 90))
+            Text(group.name)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .frame(maxWidth: 120)
+            Text("\(count)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .monospacedDigit()
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(targeted ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear), in: Capsule())
+        .overlay { Capsule().strokeBorder(Color.accentColor, lineWidth: 1.5).opacity(targeted ? 1 : 0) }
+        .overlay {
+            if let section = group.section {
+                SessionTabDragHandle(id: section.id, title: section.name,
+                                     payloadPrefix: Self.sectionDragPrefix) { toggleSection(group) }
+            } else {
+                Color.clear.contentShape(Capsule()).onTapGesture { toggleSection(group) }
+            }
+        }
+        .contentShape(Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(group.name) section, \(count == 1 ? "1 tab" : "\(count) tabs")")
+        .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
+        .accessibilityAddTraits([.isButton, .isHeader])
+        .accessibilityAction { toggleSection(group) }
+        .accessibilityAction(named: "New Section") { promptNewSection() }
+        .accessibilityActions {
+            if let section = group.section {
+                Button("Rename Section") { promptRename(section) }
+                Button("Delete Section") { requestDelete(section) }
+            }
+        }
+        .dropDestination(for: String.self) { items, _ in
+            drop(items, on: group)
+        } isTargeted: { isTargeted in
+            if isTargeted { sectionDropTarget = group.id } else if sectionDropTarget == group.id { sectionDropTarget = nil }
+        }
+        .help(group.section == nil
+              ? "Click to collapse. Right-click for New Section."
+              : "Click to collapse. Drag onto another section to reorder. Drop a tab here to file it. Right-click for section actions.")
+        .contextMenu { sectionMenu(group) }
+    }
+
+    @ViewBuilder private func sectionMenu(_ group: TabSectionGroup) -> some View {
+        if let section = group.section {
+            let index = manager.tabSections.firstIndex { $0.id == section.id } ?? 0
+            Button("Rename Section...") { promptRename(section) }
+            Button("New Tab Here") { newTab(in: section) }
+            Divider()
+            Button("Move Section Left") { moveSection(section.id, to: index - 1) }
+                .disabled(index == 0)
+            Button("Move Section Right") { moveSection(section.id, to: index + 1) }
+                .disabled(index == manager.tabSections.count - 1)
+            Divider()
+            Button(tabCount(section) == 0 ? "Delete Section" : "Delete Section...", role: .destructive) {
+                requestDelete(section)
+            }
+            Divider()
+        }
+        Button("New Section...") { promptNewSection() }
+        Button("Edit Sections...") { editingSections = true }
+    }
+
+    private func toggleSection(_ group: TabSectionGroup) {
+        withAnimation(.snappy(duration: 0.2)) { sectionCollapse.toggle(group.id) }
+    }
+
+    private func promptNewSection() {
+        sectionName = ""
+        creatingSection = true
+    }
+
+    private func promptRename(_ section: TabSection) {
+        sectionName = section.name
+        renamingSection = section
+    }
+
+    /// Empty sections go at once; a section with tabs asks first (its tabs move back to Tabs).
+    private func requestDelete(_ section: TabSection) {
+        if tabCount(section) == 0 { deleteSection(section) } else { deletingSection = section }
+    }
+
+    private func deleteSection(_ section: TabSection) {
+        do { try manager.deleteSection(section.id) }
+        catch { manager.tabActionError = error.localizedDescription }
+    }
+
+    private func moveSection(_ id: UUID, to position: Int) {
+        guard manager.tabSections.indices.contains(position) else { return }
+        do { try manager.moveSection(id, to: position) }
+        catch { manager.tabActionError = error.localizedDescription }
+    }
+
+    private func newTab(in section: TabSection) {
+        do { manager.select(try manager.newSession(inSection: section.id).id) }
+        catch { manager.tabActionError = error.localizedDescription }
+    }
+
+    /// A tab dropped on a header is filed there; a section's header takes the target's place
+    /// (on Tabs: first).
+    private func drop(_ items: [String], on group: TabSectionGroup) -> Bool {
+        guard items.count == 1, let value = items.first else { return false }
+        if value.hasPrefix("cantrip-tab:"),
+           let id = UUID(uuidString: String(value.dropFirst("cantrip-tab:".count))),
+           let chat = manager.sessions.first(where: { $0.id == id }) {
+            guard manager.sectionID(of: chat) != group.section?.id else { return false }
+            fileTab(chat, in: group.section?.id)
+            return true
+        }
+        if value.hasPrefix(Self.sectionDragPrefix),
+           let id = UUID(uuidString: String(value.dropFirst(Self.sectionDragPrefix.count))),
+           id != group.section?.id {
+            moveSection(id, to: group.section.flatMap { target in manager.tabSections.firstIndex { $0.id == target.id } } ?? 0)
+            return true
+        }
+        return false
     }
 
     private func fileTab(_ chat: ChatSession, in sectionID: UUID?) {
@@ -861,13 +1075,15 @@ struct LauncherView: View {
         catch { manager.tabActionError = error.localizedDescription }
     }
 
+    /// Moves a tab past its neighbor in the strip's display order (into that tab's section).
     private func moveTab(_ id: UUID, offset: Int) {
-        guard let index = manager.sessions.firstIndex(where: { $0.id == id }),
-              manager.sessions.indices.contains(index + offset) else {
+        let order = panelTabs
+        guard let index = order.firstIndex(where: { $0.id == id }),
+              order.indices.contains(index + offset) else {
             manager.tabActionError = SessionTabError.unavailable.localizedDescription
             return
         }
-        moveTab(id, relativeTo: manager.sessions[index + offset].id, after: offset > 0)
+        moveTab(id, relativeTo: order[index + offset].id, after: offset > 0)
     }
 
     @discardableResult
