@@ -17,6 +17,7 @@ struct MacHomeSidebar: View {
     let customizeMascot: () -> Void
     @AppStorage(CantripMascotOutfit.storageKey) private var outfit: CantripMascotOutfit = .starryPlush
     @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
+    @ObservedObject private var collapse = CantripTabSectionCollapse.shared
 
     var body: some View {
         // Header and footer sit outside the list (not as safe-area insets, which let rows scroll
@@ -50,35 +51,116 @@ struct MacHomeSidebar: View {
             } header: {
                 Text("On This Mac")
             }
-            Section {
-                ForEach(remote.sessions) { session in
-                    MacHomeTabRow(session: session)
-                        .tag(MacHomeDestination.tab(session.id))
-                        .contextMenu {
-                            CantripTabActions(
-                                model: remote, session: session,
-                                onRename: { navigation.renamingTab = session },
-                                onClose: { navigation.closeTab(session.id) }
-                            )
-                        }
+            if let groups = CantripTabGrouping.groups(remote.sessions, sections: remote.tabSections) {
+                ForEach(groups) { group in
+                    sectionedTabs(group)
                 }
-                .onMove { offsets, destination in
-                    guard let move = CantripTabReorder.move(
-                        remote.sessions, fromOffsets: offsets, toOffset: destination
-                    ) else { return }
-                    Task { await remote.moveTab(move.id, relativeTo: move.targetID, after: move.after) }
+            } else {
+                Section {
+                    tabRows(remote.sessions)
+                    if remote.sessions.isEmpty, remote.isConfigured {
+                        Text("No tabs yet")
+                            .foregroundStyle(.secondary)
+                            .selectionDisabled()
+                    }
+                } header: {
+                    tabsHeader
                 }
-                if remote.sessions.isEmpty, remote.isConfigured {
-                    Text("No tabs yet")
-                        .foregroundStyle(.secondary)
-                        .selectionDisabled()
-                }
-            } header: {
-                tabsHeader
             }
         }
         .listStyle(.sidebar)
         .accessibilityIdentifier("sidebar.list")
+    }
+
+    /// Rows reorder inside their list; dropping one on a section's header files it there.
+    private func tabRows(_ sessions: [CantripRemoteSession]) -> some View {
+        ForEach(sessions) { session in
+            MacHomeTabRow(session: session)
+                .tag(MacHomeDestination.tab(session.id))
+                .contextMenu {
+                    CantripTabActions(
+                        model: remote, session: session,
+                        onRename: { navigation.renamingTab = session },
+                        onClose: { navigation.closeTab(session.id) }
+                    )
+                }
+                .itemProvider { NSItemProvider(object: (Self.dragPrefix + session.id) as NSString) }
+        }
+        .onMove { offsets, destination in
+            guard let move = CantripTabReorder.move(sessions, fromOffsets: offsets, toOffset: destination) else { return }
+            Task { await remote.moveTab(move.id, relativeTo: move.targetID, after: move.after) }
+        }
+    }
+
+    private static let dragPrefix = "cantrip-tab:"
+
+    /// A tab dropped on a section's header is filed there (after the section's last tab).
+    private func dropTab(_ providers: [NSItemProvider], into group: CantripTabGrouping.Group) -> Bool {
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let text = object as? String, text.hasPrefix(Self.dragPrefix) else { return }
+            let id = String(text.dropFirst(Self.dragPrefix.count))
+            Task { @MainActor in
+                guard !group.sessions.contains(where: { $0.id == id }) else { return }
+                await remote.fileTab(id, in: group.section?.id)
+            }
+        }
+        return true
+    }
+
+    @ViewBuilder private func sectionedTabs(_ group: CantripTabGrouping.Group) -> some View {
+        let collapsed = collapse.isCollapsed(group.id, scope: remote.tabSectionScope)
+        Section {
+            tabRows(CantripTabGrouping.visible(group, collapsed: collapsed, selectedID: selectedTabID))
+            if group.sessions.isEmpty, !collapsed {
+                Text(group.section == nil ? "No unfiled tabs" : "Drop a tab on this header, or use Move to Section")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .selectionDisabled()
+            }
+        } header: {
+            HStack(spacing: 4) {
+                Button {
+                    collapse.toggle(group.id, scope: remote.tabSectionScope)
+                } label: {
+                    CantripTabSectionTitle(group: group, collapsed: collapsed)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(collapsed ? "Show this section's tabs" : "Hide this section's idle tabs")
+                Button {
+                    if let section = group.section {
+                        Task { if let id = await remote.createTab(inSection: section.id) { navigation.openTab(id) } }
+                    } else {
+                        navigation.createTab()
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .disabled(!remote.isConfigured || remote.isMutating)
+                .help(group.section == nil ? "New Tab (⌘T)" : "New Tab in \(group.name)")
+                .accessibilityLabel(group.section == nil ? "New Tab" : "New Tab in \(group.name)")
+                .accessibilityIdentifier(group.section == nil ? "sidebar.newTab" : "sidebar.newTab.\(group.id)")
+            }
+            .contextMenu {
+                CantripTabSectionMenu(model: remote, group: group, onNewTab: group.section.map { section in
+                    { Task { if let id = await remote.createTab(inSection: section.id) { navigation.openTab(id) } } }
+                })
+            }
+            // Dropping a tab on a section's header files it there.
+            .onDrop(of: [.plainText], isTargeted: nil) { providers in
+                dropTab(providers, into: group)
+            }
+            .accessibilityIdentifier("sidebar.section.\(group.id)")
+        }
+    }
+
+    private var selectedTabID: String? {
+        env.executionLane == .cantrip && !remote.isHomeSelected ? remote.selectedSessionID : nil
     }
 
     private var selection: Binding<MacHomeDestination?> {

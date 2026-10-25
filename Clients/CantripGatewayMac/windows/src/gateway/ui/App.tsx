@@ -19,6 +19,7 @@ import { MaintenanceSheet } from "./sheets/MaintenanceSheet";
 import { MemorySheet } from "./sheets/MemorySheet";
 import { ModelSettingsSheet } from "./sheets/ModelSettingsSheet";
 import { RenameSheet } from "./sheets/RenameSheet";
+import { SectionNameSheet } from "./sheets/SectionNameSheet";
 import { UsageSheet } from "./sheets/UsageSheet";
 import { Sidebar } from "./Sidebar";
 import { Toolbar } from "./Toolbar";
@@ -115,6 +116,7 @@ function SheetHost(): JSX.Element | null {
   switch (sheet.kind) {
     case "background": return <BackgroundSheet focusSessionID={sheet.focusSessionID} onClose={close} />;
     case "rename": return <RenameSheet sessionID={sheet.sessionID} onClose={close} />;
+    case "sectionName": return <SectionNameSheet sectionID={sheet.sectionID} fileTabID={sheet.fileTabID} onClose={close} />;
     case "modelSettings": return <ModelSettingsSheet sessionID={sheet.sessionID} onClose={close} />;
     case "inputRequests": return <InputRequestsSheet sessionID={sheet.sessionID} onClose={close} />;
     case "macAccess": return <MacAccessSheet onClose={close} />;

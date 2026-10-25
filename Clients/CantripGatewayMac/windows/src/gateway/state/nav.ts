@@ -15,6 +15,8 @@ export const SECTIONS: { id: Section; title: string; icon: "bubble.left.and.bubb
 export type SheetState =
   | { kind: "background"; focusSessionID?: string }
   | { kind: "rename"; sessionID: string }
+  /** A section's name: a new one (filing `fileTabID` in it) or a rename of `sectionID`. */
+  | { kind: "sectionName"; sectionID?: string; fileTabID?: string }
   | { kind: "modelSettings"; sessionID: string }
   | { kind: "inputRequests"; sessionID: string }
   | { kind: "macAccess" }

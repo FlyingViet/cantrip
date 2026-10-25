@@ -1,14 +1,16 @@
 // The sidebar (MacHomeSidebar.swift): Pip, Home's sections, every project tab, and the connection.
 import type { JSX } from "preact";
 import { useRef, useState } from "preact/hooks";
+import { signal } from "@preact/signals";
 import type { RemoteSessionSummary } from "../api/types";
 import { bridge, shortcut } from "../bridge";
 import { now } from "../state/clock";
 import { relativeShort, runningTasks, tabRowDetail, workingTabs } from "../state/format";
 import * as nav from "../state/nav";
 import * as remote from "../state/remote";
+import { collapsedSections, LOOSE_ID, tabGroups, toggleCollapsed, visibleTabs, type TabGroup } from "../state/sections";
 import { Icon, StatusIcon } from "./icons";
-import { openMenu, Spinner, toast } from "./kit";
+import { openMenu, Spinner, toast, type MenuEntry } from "./kit";
 import { currentActivity, displayName, resolveMood } from "./pip/mascot";
 import { Pip } from "./pip/Pip";
 import { mascotName, mascotOutfit } from "./pip/prefs";
@@ -72,13 +74,53 @@ function sectionBadge(id: nav.Section): number {
   return 0;
 }
 
+/** Bumped when this device collapses or expands a section (kept in localStorage per Mac). */
+const collapseRevision = signal(0);
+const collapseScope = () => remote.hostStatus.value.server || "default";
+
+function sectionMenu(group: TabGroup): MenuEntry[] {
+  const mutating = remote.isMutating.value;
+  const fail = (error: Error) => toast(`Section change failed: ${error.message}`);
+  const entries: MenuEntry[] = [];
+  const section = group.section;
+  if (section) {
+    const sections = remote.tabSections.value;
+    entries.push(
+      { label: "Rename Section", icon: "pencil", disabled: mutating, onSelect: () => { nav.sheet.value = { kind: "sectionName", sectionID: section.id }; } },
+      { label: "New Tab Here", icon: "plus", disabled: mutating, onSelect: () => void newTabIn(section.id) },
+      { kind: "separator" },
+      { label: "Move Section Up", icon: "arrow.up", disabled: mutating || sections[0]?.id === section.id, onSelect: () => void remote.moveSection(section.id, -1).catch(fail) },
+      { label: "Move Section Down", icon: "arrow.down", disabled: mutating || sections[sections.length - 1]?.id === section.id, onSelect: () => void remote.moveSection(section.id, 1).catch(fail) },
+      { kind: "separator" },
+      { label: "Delete Section", icon: "trash", destructive: true, disabled: mutating, onSelect: () => void remote.deleteSection(section.id).catch(fail) },
+      { kind: "header", label: "Its tabs move back to Tabs." },
+      { kind: "separator" },
+    );
+  }
+  entries.push({ label: "New Section…", icon: "folder", disabled: mutating, onSelect: () => { nav.sheet.value = { kind: "sectionName" }; } });
+  return entries;
+}
+
+async function newTabIn(sectionID: string): Promise<void> {
+  try {
+    const session = await remote.createTabInSection(sectionID);
+    nav.openTab(session.id);
+  } catch (error) {
+    toast(`New tab failed: ${(error as Error).message}`);
+  }
+}
+
 function SidebarList(): JSX.Element {
   const tabs = remote.sessions.value;
   const openID = nav.openTabID.value;
   const working = workingTabs(tabs);
   const hasHome = remote.homeSummary.value !== null || !remote.listed.value;
   const [drag, setDrag] = useState<{ id: string; over: string | null; after: boolean } | null>(null);
+  const [overSection, setOverSection] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const groups = tabGroups(tabs, remote.tabSections.value);
+  void collapseRevision.value;
+  const collapsed = collapsedSections(localStorage, collapseScope());
 
   const onListKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -115,16 +157,61 @@ function SidebarList(): JSX.Element {
           </button>
         );
       }) : <div class="sidebar-empty">Cantrip Home is off on the Mac.</div>}
-      <div class="sidebar-section" role="heading" aria-level={2}>
-        <span>Tabs · {tabs.length}</span>
-        <span class="grow" />
-        {working > 0 ? <span class="working">{working} working</span> : null}
-        <button type="button" class="icon-btn" title={`New Tab (${shortcut("Ctrl+T")})`} aria-label="New Tab"
-          disabled={!remote.listed.value || remote.isMutating.value} onClick={() => void nav.createTab()}>
-          <Icon name="plus" size={14} />
-        </button>
-      </div>
-      {tabs.map((session) => (
+      {groups ? groups.map((group) => {
+        const isCollapsed = collapsed.has(group.id);
+        const groupWorking = workingTabs(group.sessions);
+        return [
+          <div key={`section-${group.id}`} class={`sidebar-section tab-section${overSection === group.id ? " drop-target" : ""}`}
+            role="heading" aria-level={2} data-section-id={group.id}
+            onContextMenu={(event) => { event.preventDefault(); openMenu({ x: event.clientX, y: event.clientY }, sectionMenu(group), { label: `${group.name} section` }); }}
+            onDragOver={(event) => { if (drag) { event.preventDefault(); setOverSection(group.id); } }}
+            onDragLeave={() => setOverSection(null)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setOverSection(null);
+              if (drag) void remote.fileTab(drag.id, group.section?.id ?? null).catch((error) => toast(`Move failed: ${error.message}`));
+              setDrag(null);
+            }}>
+            <button type="button" class="section-toggle" aria-expanded={!isCollapsed}
+              title={isCollapsed ? `Show ${group.name}'s tabs` : `Hide ${group.name}'s idle tabs`}
+              onClick={() => { toggleCollapsed(localStorage, collapseScope(), group.id); collapseRevision.value += 1; }}>
+              <Icon name="chevron.right" size={12} class={isCollapsed ? "" : "rotated"} />
+              <span class="truncate">{group.name}</span>
+              <span class="count-muted">{group.sessions.length}</span>
+            </button>
+            <span class="grow" />
+            {groupWorking > 0 ? <span class="working">{groupWorking} working</span> : null}
+            <button type="button" class="icon-btn" title={group.section ? `New Tab in ${group.name}` : `New Tab (${shortcut("Ctrl+T")})`}
+              aria-label={group.section ? `New Tab in ${group.name}` : "New Tab"}
+              disabled={!remote.listed.value || remote.isMutating.value}
+              onClick={() => void (group.section ? newTabIn(group.section.id) : nav.createTab())}>
+              <Icon name="plus" size={14} />
+            </button>
+            <button type="button" class="icon-btn" title={`${group.name} section options`} aria-label={`${group.name} section options`}
+              onClick={(event) => openMenu(event.currentTarget as HTMLElement, sectionMenu(group), { align: "end", label: `${group.name} section` })}>
+              <Icon name="ellipsis" size={14} />
+            </button>
+          </div>,
+          ...visibleTabs(group, isCollapsed, openID).map((session) => tabRow(session)),
+        ];
+      }) : <>
+        <div class="sidebar-section" role="heading" aria-level={2}>
+          <span>Tabs · {tabs.length}</span>
+          <span class="grow" />
+          {working > 0 ? <span class="working">{working} working</span> : null}
+          <button type="button" class="icon-btn" title={`New Tab (${shortcut("Ctrl+T")})`} aria-label="New Tab"
+            disabled={!remote.listed.value || remote.isMutating.value} onClick={() => void nav.createTab()}>
+            <Icon name="plus" size={14} />
+          </button>
+        </div>
+        {tabs.map((session) => tabRow(session))}
+      </>}
+      {!tabs.length && remote.listed.value ? <div class="sidebar-empty">No tabs yet</div> : null}
+    </div>
+  );
+
+  function tabRow(session: RemoteSessionSummary): JSX.Element {
+    return (
         <TabRow key={session.id} session={session} current={openID === session.id}
           dragClass={drag && drag.over === session.id && drag.id !== session.id ? (drag.after ? " drop-after" : " drop-before") : drag?.id === session.id ? " dragging" : ""}
           onDragStart={() => setDrag({ id: session.id, over: null, after: false })}
@@ -135,11 +222,9 @@ function SidebarList(): JSX.Element {
             }
             setDrag(null);
           }}
-          onDragEnd={() => setDrag(null)} />
-      ))}
-      {!tabs.length && remote.listed.value ? <div class="sidebar-empty">No tabs yet</div> : null}
-    </div>
-  );
+          onDragEnd={() => { setDrag(null); setOverSection(null); }} />
+    );
+  }
 }
 
 function TabRow(props: {

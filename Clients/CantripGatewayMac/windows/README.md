@@ -9,7 +9,8 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 
 - **The Mac app's window.** A floating sidebar with Pip (same moods and outfits), Chat,
   Tasks and Artifacts with their badges, and every project tab (status, age, drag to
-  reorder, right-click actions). A unified toolbar with Background, delivery (Auto, Queue,
+  reorder, right-click actions), grouped under collapsible sections when the Mac has any
+  (Move to Section, drop on a header, section menus). A unified toolbar with Background, delivery (Auto, Queue,
   Redirect, Inject), Refresh and More.
 - **Chat.** Replies with Markdown and the Mac's image previews, reasoning steps, MCP App
   views, subagent cards (running ones pinned above the composer), handoff cards with

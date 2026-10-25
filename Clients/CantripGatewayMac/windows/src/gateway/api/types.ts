@@ -479,6 +479,10 @@ export interface RemoteSessionSummary {
   /** False for Home/background sessions. */
   supportsTabMetadata: boolean;
   supportsTabReordering: boolean;
+  /** The tab can be filed under a section. Absent on hosts without sections. */
+  supportsTabSections?: boolean;
+  /** The section the tab is filed under; absent shows it under Tabs. */
+  sectionID?: string;
   /** False for Private Local and Home background sessions. */
   supportsModelSettings: boolean;
   /** True when the backend is Claude, Copilot or Codex. */
@@ -550,6 +554,9 @@ export interface SessionsListResponse {
   home?: RemoteSessionSummary;
   /** Present only when non-empty and Home is enabled. Not decoded by the Mac client. */
   homeInputs?: HomeInputGroup[];
+  /** Named groups for the tab list, in order. Absent on hosts without sections. */
+  sections?: TabSection[];
+  supportsTabSections?: boolean;
 }
 
 /** GET /api/v1/ready. */
@@ -561,6 +568,19 @@ export interface ReadyResponse {
 /** POST /api/v1/sessions/<id>/move response. */
 export interface MoveTabResponse {
   sessions: RemoteSessionSummary[];
+  sections?: TabSection[];
+}
+
+/** A named group of tabs (the Mac keeps them; `/api/v1/sections`). */
+export interface TabSection {
+  id: string;
+  name: string;
+}
+
+export interface TabSectionsResponse {
+  sections: TabSection[];
+  section?: TabSection;
+  sessions?: RemoteSessionSummary[];
 }
 
 /** GET /api/v1/sessions/<id>/messages/<messageID>. */

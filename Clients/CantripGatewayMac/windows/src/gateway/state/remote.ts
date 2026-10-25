@@ -7,7 +7,7 @@ import type {
   HomeArtifactsResponse, HomeArtifactsSnapshot, HomeBackgroundSnapshot, HomeInputGroup, HomeTasksResponse,
   HomeTasksSnapshot, InputAnswerRequest, MoveTabResponse, PagedRemoteSessionDetail, RemoteMessage,
   RemoteSessionSummary, SendMessageRequest, SessionResponse, SessionsListResponse, SessionUpdateResponse,
-  SubagentCancelResponse,
+  SubagentCancelResponse, TabSection, TabSectionsResponse,
 } from "../api/types";
 import { bridge, type HostStatus } from "../bridge";
 
@@ -20,6 +20,9 @@ export const connection = signal<{ state: ConnectionState; route: string; messag
 });
 export const hostStatus = signal<HostStatus>(bridge.status);
 export const sessions = signal<RemoteSessionSummary[]>([]);
+/** Sections the Mac groups its tabs into, in order (empty: one flat list). */
+export const tabSections = signal<TabSection[]>([]);
+export const supportsTabSections = signal(false);
 export const homeSummary = signal<RemoteSessionSummary | null>(null);
 export const homeInputs = signal<HomeInputGroup[]>([]);
 export const listed = signal(false);
@@ -165,6 +168,8 @@ async function refreshOnce(): Promise<void> {
     connection.value = { state: "connected", route: hostStatus.value.route, message: "" };
     errorMessage.value = null;
     sessions.value = list.sessions;
+    tabSections.value = list.sections ?? [];
+    supportsTabSections.value = list.supportsTabSections === true;
     homeSummary.value = list.home ?? null;
     homeInputs.value = list.homeInputs ?? [];
     listed.value = true;
@@ -437,10 +442,67 @@ export async function moveTab(id: string, targetID: string, after: boolean): Pro
       method: "POST", body: { targetID, placement: after ? "after" : "before" },
     }));
     sessions.value = data.sessions;
+    if (data.sections) tabSections.value = data.sections;
   } catch (error) {
     sessions.value = before;
     throw error;
   }
+}
+
+function requireSections(): void {
+  if (!supportsTabSections.value) throw new Error("Update and reopen Cantrip on your Mac to group its tabs into sections.");
+}
+
+/** Adds a section and, with `fileTabID`, files that tab in it. */
+export async function createSection(name: string, fileTabID?: string): Promise<void> {
+  requireSections();
+  const data = await mutate(() => api<TabSectionsResponse>("/api/v1/sections", { method: "POST", body: { name } }));
+  tabSections.value = data.sections;
+  if (fileTabID && data.section) await fileTab(fileTabID, data.section.id);
+  else await refresh();
+}
+
+export async function renameSection(id: string, name: string): Promise<void> {
+  requireSections();
+  const data = await mutate(() => api<TabSectionsResponse>(`/api/v1/sections/${encodeURIComponent(id)}`, { method: "PATCH", body: { name } }));
+  tabSections.value = data.sections;
+}
+
+/** Moves a section up (-1) or down (1). */
+export async function moveSection(id: string, offset: number): Promise<void> {
+  requireSections();
+  const index = tabSections.value.findIndex((section) => section.id === id);
+  if (index < 0 || index + offset < 0 || index + offset >= tabSections.value.length) return;
+  const data = await mutate(() => api<TabSectionsResponse>(`/api/v1/sections/${encodeURIComponent(id)}`, {
+    method: "PATCH", body: { position: index + offset },
+  }));
+  tabSections.value = data.sections;
+}
+
+/** Deletes a section; its tabs go back to Tabs. */
+export async function deleteSection(id: string): Promise<void> {
+  requireSections();
+  const data = await mutate(() => api<TabSectionsResponse>(`/api/v1/sections/${encodeURIComponent(id)}`, { method: "DELETE" }));
+  tabSections.value = data.sections;
+  await refresh();
+}
+
+/** Files a tab under a section (null: Tabs); the Mac puts it after the section's last tab. */
+export async function fileTab(id: string, sectionID: string | null): Promise<void> {
+  requireSections();
+  await mutate(() => sessionAction(id, "metadata", { sectionID }));
+  sessions.value = sessions.value.map((item) => (item.id === id ? { ...item, sectionID: sectionID ?? undefined } : item));
+  await refresh();
+}
+
+/** A new tab filed under a section. */
+export async function createTabInSection(sectionID: string): Promise<Detail> {
+  requireSections();
+  const data = await mutate(() => api<SessionResponse>("/api/v1/sessions", { method: "POST", body: { sectionID }, recent: true }));
+  apply(data.session);
+  if (!sessions.value.some((item) => item.id === data.session.id)) sessions.value = [...sessions.value, data.session];
+  void refresh();
+  return data.session;
 }
 
 export async function answerInput(sessionID: string, requestID: string, body: InputAnswerRequest): Promise<void> {
@@ -483,6 +545,8 @@ export async function stopBackgroundRun(runID: string): Promise<void> {
 export function reset(): void {
   batch(() => {
     sessions.value = [];
+    tabSections.value = [];
+    supportsTabSections.value = false;
     homeSummary.value = null;
     homeInputs.value = [];
     details.value = new Map();
