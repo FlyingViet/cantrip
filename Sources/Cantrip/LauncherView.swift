@@ -3287,9 +3287,14 @@ struct MessageRow: View {
             }
         case .handoff:
             VStack(alignment: .leading, spacing: 3) {
-                Label(message.handoffResult?.headline ?? "Handoff", systemImage: "rectangle.stack")
+                Label(message.handoffResult?.headline ?? "Handoff",
+                      systemImage: message.handoffResult?.isAsk == true ? "questionmark.bubble" : "rectangle.stack")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                if let ask = message.handoffResult, ask.isAsk, !ask.summary.isEmpty {
+                    Text(verbatim: "“\(ask.summary)”").font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
                 if let detail = message.handoffResult?.detail, !detail.isEmpty {
                     Text(verbatim: detail).font(.callout).textSelection(.enabled)
                 }

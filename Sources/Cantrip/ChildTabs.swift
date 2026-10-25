@@ -55,6 +55,9 @@ struct ChildTab: Codable, Equatable, Identifiable {
     var resolveRequested = false
     /// The parent's model has been told how this child ended (one line, once).
     var contextDelivered = false
+    /// The outcome the parent's model last heard about (optional: older records lack it). A later
+    /// outcome (stopped, then merged) is told again.
+    var reportedState: State?
     /// Started by auto-fork rather than Run in Child Tab (optional: older records lack it).
     var autoStarted: Bool?
     let createdAt: Date
@@ -119,6 +122,53 @@ struct ChildTab: Codable, Equatable, Identifiable {
         if !summary.isEmpty { line += " \(summary.prefix(400))" }
         if !files.isEmpty { line += " Files: \(files)." }
         return line + "]"
+    }
+
+    /// States the parent's model hears about with every message while they last.
+    var isLive: Bool { [.working, .needsInput, .finished, .merging, .conflict].contains(state) }
+
+    /// An outcome the parent's model hasn't heard about yet (told once, as `contextLine`).
+    var needsReport: Bool {
+        guard !isLive, state != .requeued, reportedState != state else { return false }
+        // Records from before `reportedState` only knew whether they had been told.
+        return !(reportedState == nil && contextDelivered)
+    }
+
+    /// The parent's live line for this child: its state, what it's doing or asking, and the files
+    /// it has touched so far. Nil once it has an outcome (`contextLine` tells that once).
+    func liveStatusLine(activity: String? = nil, question: String? = nil, touched: [String] = []) -> String? {
+        guard isLive else { return nil }
+        let base = baseBranch ?? "your branch"
+        func clean(_ text: String, _ limit: Int) -> String {
+            let line = text.split(whereSeparator: \.isNewline).joined(separator: " ")
+                .trimmingCharacters(in: .whitespaces)
+            return line.count > limit ? String(line.prefix(limit - 1)) + "…" : line
+        }
+        var line = "- “\(clean(title, 60))” (\(id.uuidString)): "
+        switch state {
+        case .working:
+            line += "working"
+            if let activity, !activity.isEmpty { line += " · now: \(clean(activity, 80))" }
+        case .needsInput:
+            line += "needs the user's answer"
+            if let question, !question.isEmpty { line += ": \(clean(question, 160))" }
+        case .finished:
+            line += note.map { "done; \(clean($0, 160))" }
+                ?? "done, waiting to merge into \(base) (Cantrip merges it when this tab is idle)"
+        case .merging:
+            line += resolveRequested ? "you were asked to resolve its merge conflict" : "merging into \(base)"
+        case .conflict:
+            let files = conflictFiles.prefix(4).joined(separator: ", ")
+            line += "merge conflict in \(files.isEmpty ? "some files" : files); the user picks how to merge on its card"
+        default:
+            return nil
+        }
+        let paths = touched.isEmpty ? files.map(\.path) : touched
+        if !paths.isEmpty {
+            let shown = paths.prefix(5).joined(separator: ", ")
+            line += " · files so far: \(shown)" + (paths.count > 5 ? " (+\(paths.count - 5) more)" : "")
+        }
+        return line
     }
 
     var snapshot: [String: Any] {

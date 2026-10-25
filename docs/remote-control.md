@@ -1008,6 +1008,23 @@ API (`supportsChildTabs`, `supportsQueuePlans` on each session):
   while it works, the summary *Started automatically: …*; a requeued child's
   state is `requeued`. Unknown states read as their `statusLine`.
 
+### Questions between tabs
+
+When a tab's model or Cantrip Home asks another tab something with `cantrip tab
+ask` (see [Look into other tabs](sessions-and-council.md#look-into-other-tabs)),
+the question is an ordinary user message in the tab asked, and the asker gets a
+card: a message with role `handoff` and `handoffResult` (the same object as
+Home's handoff results) with `kind: "ask"`, `tabID`/`tabTitle` of the tab asked,
+`summary` = the question and `detail` = its status, then the reply (up to 2,000
+characters). `state` is `working` while it waits or runs, `needsInput` when that
+tab waits for the user, then `completed`, `failed` or `cancelled`; the card
+updates in place. These cards can appear in any tab, not only Home. The
+browser Remote and the Mac panel label them *Asked …* / *Answer from …*;
+Cantrip Agent, Cantrip Gateway Mac and Cantrip Gateway for Windows show them
+with their usual handoff-result labels (*Done in tab*) until they read `kind`.
+There's no Remote endpoint to ask or read a tab: both go through the Mac's
+local `cantrip tab` command.
+
 ## Add access away from home
 
 Use **Tailscale Serve**, not Funnel and not a router port-forward.

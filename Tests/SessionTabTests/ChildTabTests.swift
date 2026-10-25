@@ -43,6 +43,7 @@ extension SessionTabTests {
         try await testChildTabLifecycle()
         try await testChildTabAPI()
         try await testChildTabAutoFork()
+        try await testTabInsight()
         print("Child tab plan, resource, merge, conflict, API and auto-fork tests passed")
     }
 
@@ -363,6 +364,8 @@ extension SessionTabTests {
         let brief = notesBackend.prompts[0]
         precondition(brief.contains("child tab of the Cantrip tab “Tab list”") && brief.contains(notesTree)
                      && brief.contains("Add a notes file to the repo"), brief)
+        precondition(brief.contains("tab read \(parent.id.uuidString)") && brief.contains("tab ask \(parent.id.uuidString)"),
+                     "the child can read its parent's conversation on demand")
         precondition(notesBackend.workdirs[0] == notesTree)
         precondition(notes.messages.first { $0.role == .user }?.text == "Add a notes file to the repo", "the brief stays hidden")
         let cardIndex = try requireChild(parent.messages.firstIndex { $0.childResult?.id == notes.id })
@@ -407,10 +410,12 @@ extension SessionTabTests {
         precondition(mergedCard < nextRequest && parent.messages[mergedCard - 1].text.hasSuffix("The tab list is refactored."),
                      "the merged card moved to where the merge happened, before the next request")
         let next = parentBackend.prompts[1]
-        precondition(next.contains("(Child tabs since your last turn:") && next.contains(current.contextLine)
-                     && next.contains("Run the tests"), "only the one-line result reaches the parent's model: \(next)")
-        let delivered = try record(notes).contextDelivered
-        precondition(delivered)
+        precondition(next.contains("(Child tabs of this tab") && next.contains("Since your last turn:")
+                     && next.contains(current.contextLine) && next.contains("tab read <child ID>")
+                     && !next.contains("Now:"), "only the one-line result reaches the parent's model: \(next)")
+        precondition(next.contains("Run the tests"))
+        let delivered = try record(notes)
+        precondition(delivered.contextDelivered && delivered.reportedState == .merged)
 
         // 3. A conflict: the card asks; Leave, Try Again, then Keep the Child's Version.
         let (greeting, greetingBackend, greetingTree) = try await fork("Change the greeting", from: parent)
