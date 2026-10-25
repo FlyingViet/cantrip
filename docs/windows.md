@@ -9,8 +9,9 @@ Cantrip for Windows is not yet a full copy of the Mac app.
 ## Install a release
 
 1. Open [Cantrip Releases](https://github.com/FlyingViet/cantrip/releases).
-2. Download the Windows `Cantrip Setup <version>.exe` asset from a release
-   that includes one.
+2. Download `Cantrip-Setup-<version>.exe` from the newest **Cantrip for
+   Windows** release (tagged `windows-v<version>`; the `v<version>` releases
+   are the Mac app).
 3. Run the installer and open Cantrip.
 4. Install and sign in to one backend using
    [the backend guide](backends.md#install-and-sign-in-to-a-cloud-backend).

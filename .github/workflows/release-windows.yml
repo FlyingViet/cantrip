@@ -1,28 +1,49 @@
-name: Release Windows app
+name: Windows app
 
+# Windows releases are tagged windows-vX.Y.Z (windows/package.json's version). Plain vX.Y tags
+# belong to the Mac host and don't run this workflow.
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    tags: ["windows-v*"]
+    paths:
+      - "windows/**"
+      - "Examples/plugins/**"
+      - ".github/workflows/release-windows.yml"
+  pull_request:
+    paths:
+      - "windows/**"
+      - "Examples/plugins/**"
+      - ".github/workflows/release-windows.yml"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the release (run from a windows-vX.Y.Z tag)"
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: windows-app-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  release-windows:
+  build:
+    name: Test and package
     runs-on: windows-latest
     defaults:
       run:
         working-directory: windows
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "20.20.0"
+          node-version: "24"
           cache: npm
           cache-dependency-path: windows/package-lock.json
 
@@ -33,15 +54,66 @@ jobs:
         run: npm test
 
       - name: Verify tag matches Windows version
-        if: github.ref_type == 'tag'
+        if: startsWith(github.ref, 'refs/tags/windows-v')
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $tagVersion = $env:GITHUB_REF_NAME.TrimStart("v")
+          $tagVersion = $env:GITHUB_REF_NAME.Substring("windows-v".Length)
           if ($version -ne $tagVersion) {
             throw "Tag $env:GITHUB_REF_NAME does not match windows/package.json $version"
           }
 
+      - name: Package installer
+        run: npm run package:win
+
+      - name: Check release files
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          foreach ($file in @("Cantrip-Setup-$version.exe", "Cantrip-Setup-$version.exe.blockmap", "latest.yml")) {
+            if (-not (Test-Path "release/$file")) { throw "Missing release/$file" }
+          }
+          if (-not (Select-String -Path release/latest.yml -SimpleMatch "Cantrip-Setup-$version.exe" -Quiet)) {
+            throw "latest.yml doesn't name Cantrip-Setup-$version.exe"
+          }
+
+      - name: Keep installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: cantrip-windows
+          path: |
+            windows/release/Cantrip-Setup-*.exe
+            windows/release/Cantrip-Setup-*.exe.blockmap
+            windows/release/latest.yml
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/windows-v') && (github.event_name == 'push' || inputs.publish)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download installer
+        uses: actions/download-artifact@v8
+        with:
+          name: cantrip-windows
+          path: release
+
       - name: Publish GitHub release
-        run: npm run release:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $version = $tag.Substring("windows-v".Length)
+          $files = Get-ChildItem release -File | ForEach-Object { $_.FullName }
+          # The Mac host's release stays "Latest"; the Windows app finds windows-v* releases itself.
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @files --clobber
+          } else {
+            gh release create $tag @files --verify-tag --latest=false `
+              --title "Cantrip for Windows $version" `
+              --notes "Windows installer for Cantrip $version. Installed copies update from Settings > Updates."
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release failed" }
