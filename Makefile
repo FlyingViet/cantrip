@@ -131,7 +131,7 @@ app: build cert icon
 	mkdir -p "$$STAGING/Contents/MacOS" "$$STAGING/Contents/Resources"; \
 	cp "$(BUILD_DIR)/$(APP_NAME)" "$$STAGING/Contents/MacOS/"; \
 	cp Resources/Info.plist "$$STAGING/Contents/"; \
-	BUILD_ID=$$(git describe --always --dirty 2>/dev/null || echo unknown); \
+	BUILD_ID=$$(git describe --always --dirty --match 'v[0-9]*' 2>/dev/null || echo unknown); \
 	case "$$BUILD_ID" in *-dirty) \
 		BUILD_ID="$$BUILD_ID-$$(git diff HEAD 2>/dev/null | cksum | cut -d' ' -f1)";; \
 	esac; \
