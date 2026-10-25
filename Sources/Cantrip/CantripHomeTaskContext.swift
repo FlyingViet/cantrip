@@ -89,6 +89,75 @@ enum CantripHomeTaskContext {
         """
     }
 
+    // MARK: - Attended Home messages
+
+    /// Record characters for the workspaces one attended Home message mentions.
+    static let mentionedBudget = 6_000
+    static let mentionedIndexBudget = 1_500
+    /// Words in task titles too common to say which task a message is about.
+    static let genericWords: Set<String> = [
+        "task", "tasks", "daily", "tracker", "trackers", "monitor", "record", "records", "home",
+        "cantrip", "workspace", "list", "run", "runs", "new", "add", "update", "check",
+    ]
+
+    /// One compact line per task: schedule, workspace size, dependencies, model and last run.
+    static func indexLine(_ task: CantripHomeTask) -> String {
+        var mode = task.isScheduled ? task.schedule.summary : "no schedule"
+        if task.isScheduled, task.schedule.kind == .weekdays {
+            let times = task.schedule.runTimes
+                .map { String(format: "%02d:%02d", $0.hour, $0.minute) }.joined(separator: ",")
+            let days = (task.schedule.weekdays ?? []).map(String.init).joined(separator: ",")
+            mode += " (times \(times); weekdays \(days); \(task.schedule.timeZone))"
+        }
+        let workspace = task.workspace.map {
+            "; \($0.records.count) " + ($0.records.count == 1 ? $0.recordLabel : $0.recordLabelPlural ?? $0.recordLabel)
+        } ?? ""
+        let after = (task.runsAfter ?? []).map(\.uuidString).joined(separator: ",")
+        let model = (task.model.map { "; model \($0)" } ?? "") + (task.effort.map { "; effort \($0)" } ?? "")
+        let lastRun = task.runs.first.map {
+            "; last run \($0.status) " + $0.finishedAt.formatted(date: .abbreviated, time: .shortened)
+        } ?? ""
+        return "- \(task.id.uuidString): \(task.title) — \(mode)\(workspace)"
+            + (after.isEmpty ? "" : "; runsAfter \(after)") + model + lastRun
+    }
+
+    /// Workspaces a message is about: named by UUID, by words of their title or record label,
+    /// or by a record's title (a provider, company or trip it lists). At most three.
+    static func relevantTasks(for query: String, in tasks: [CantripHomeTask]) -> [CantripHomeTask] {
+        let words = Set(ConversationContextBuilder.terms(from: query)).subtracting(genericWords)
+        let lowered = query.lowercased()
+        var scored: [(task: CantripHomeTask, score: Int)] = []
+        for task in tasks {
+            guard let workspace = task.workspace else { continue }
+            var score = lowered.contains(task.id.uuidString.lowercased()) ? 100 : 0
+            let label = [task.title, workspace.recordLabel, workspace.recordLabelPlural ?? ""].joined(separator: " ")
+            score += 3 * words.intersection(ConversationContextBuilder.terms(from: label)).count
+            var matches = 0
+            for record in workspace.records where matches < 5 {
+                guard let title = record.values[workspace.list.titleField], !title.isEmpty else { continue }
+                if !words.isDisjoint(with: ConversationContextBuilder.terms(from: title)) { matches += 1 }
+            }
+            score += matches
+            if score > 0 { scored.append((task, score)) }
+        }
+        return scored.sorted { $0.score > $1.score }.prefix(3).map(\.task)
+    }
+
+    /// The mentioned workspaces' schemas and records, within the per-message budget.
+    static func mentionedWorkspaces(_ tasks: [CantripHomeTask]) -> String {
+        guard !tasks.isEmpty else { return "" }
+        var indexLeft = mentionedIndexBudget
+        let sections = tasks.enumerated().map { offset, task in
+            let share = indexLeft / (tasks.count - offset)
+            return section(
+                task: task, workspace: task.workspace, heading: "mentioned in this message", lastRun: false,
+                budget: mentionedBudget / tasks.count, indexBudget: share, indexLeft: &indexLeft
+            )
+        }
+        return "Workspaces this message mentions (others: read them with the command in your instructions):\n"
+            + sections.joined(separator: "\n") + "\n"
+    }
+
     private static func recordLine(_ record: CantripHomeTaskRecord) -> String {
         let values = record.values.sorted { $0.key < $1.key }.map {
             "\($0.key)=" + String($0.value.prefix(valueLimit)).replacingOccurrences(of: "\n", with: " ")
@@ -146,7 +215,7 @@ enum CantripHomeTaskContext {
                         + (badgeKey.map { " · \($0)" } ?? "") + "):"))
         lines += index
         let rest = records.count - shown - indexed
-        if rest > 0 { lines.append("\(rest) more not listed; print every record with the command above.") }
+        if rest > 0 { lines.append("\(rest) more not listed; print every record with the read command.") }
         return lines.joined(separator: "\n")
     }
 }

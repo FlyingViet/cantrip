@@ -12,6 +12,9 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     var excludedTools: [String]?
     /// Tool count above which MCP tools load on demand through tool search (runtime default 30).
     var toolDeferThreshold: Int?
+    /// Attended Cantrip Home's static protocol, kept in the system instructions so it is sent once
+    /// per session and survives compaction; each message then carries only that turn's data.
+    var homeProtocol: String?
     var readOnly = false
     /// Receives each CLI session ID this backend runs on (called on the backend queue).
     var onAgentSession: ((String) -> Void)?
@@ -108,13 +111,15 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         var disabledMcpServers: [String]?
         var excludedTools: [String]?
         var toolDeferThreshold: Int?
+        var homeProtocol: String?
 
         var json: [String: Any] {
             var object: [String: Any] = ["command": command, "workdir": workdir, "model": model,
              "effort": effort, "contextTier": contextTier,
              "allowTools": allowTools, "readOnly": readOnly, "autoApprove": autoApprove,
              "allowSubagents": allowSubagents, "mcpApps": mcpApps,
-             "systemGuidance": CopilotBackend.systemGuidance(allowSubagents: allowSubagents)]
+             "systemGuidance": CopilotBackend.systemGuidance(allowSubagents: allowSubagents)
+                + (homeProtocol.map { "\n\n" + $0 } ?? "")]
             if let guardrail { object["guardrail"] = guardrail }
             if let disabledMcpServers, !disabledMcpServers.isEmpty {
                 object["disabledMcpServers"] = disabledMcpServers
@@ -202,7 +207,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             guardrail: guardrail?.rawValue,
             disabledMcpServers: disabledMcpServers,
             excludedTools: excludedTools,
-            toolDeferThreshold: toolDeferThreshold
+            toolDeferThreshold: toolDeferThreshold,
+            homeProtocol: homeProtocol
         )
     }
 
@@ -895,3 +901,10 @@ private extension BackendEvent {
         }
     }
 }
+
+/// Backends that keep attended Cantrip Home's static protocol in their system instructions.
+protocol CantripHomeProtocolCarrier: AnyObject {
+    var homeProtocol: String? { get set }
+}
+
+extension CopilotBackend: CantripHomeProtocolCarrier {}

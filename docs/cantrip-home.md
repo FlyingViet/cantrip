@@ -139,10 +139,27 @@ default. They also leave out built-in tools scheduled tasks don't call
 (subagents, `sql`, skills, code search and workflows). MCP tools load on demand
 through tool search.
 
-Incident runs and attended Home keep the full protocol and every tool. In
-October 2026 this cut the bills monitor's first message from about 119,500 to
-about 34,000 characters, and its first call from about 77,600 to under 33,000
-input tokens. Tool definitions fell from 9,357 tokens to about 3,600.
+Incident runs keep the full protocol and every tool. In October 2026 this cut
+the bills monitor's first message from about 119,500 to about 34,000
+characters, and its first call from about 77,600 to under 33,000 input tokens.
+Tool definitions fell from 9,357 tokens to about 3,600.
+
+### What a Home chat message carries
+
+On Copilot, Home's static protocol (rules, block formats, handoff and background
+guidance) lives in the session's system instructions. It's sent once per
+session and survives compaction. Each message carries only that turn's data:
+
+- the time zone and model IDs
+- a one-line index of every task
+- the schema and records of the workspaces the message mentions (by title,
+  record title or UUID)
+- the open tabs, recent handoffs and recent background results
+
+Home can print any task's records with the same `python3 -c` read command.
+Other backends, and council mode, still get the full protocol with every
+message. In October 2026 a Home message dropped from about 117,000 to about
+21,000 characters, memory included.
 
 ## Rules, safety and approvals
 
