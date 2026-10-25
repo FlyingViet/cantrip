@@ -278,8 +278,8 @@ extension SessionTabTests {
                      && sessionA.remoteCompletion?.title == "Parallel A"
                      && log.messages.contains { $0.text.hasPrefix("Scheduled task · Parallel A") }
                      && log.messages.contains { $0.text == "A finished." }
-                     && store.tasks.first { $0.id == taskA.id }?.runs.first?.status == "succeeded",
-                     "A finished run keeps its report in the background log and opens it from pushes")
+                     && !store.tasks.contains { $0.id == taskA.id },
+                     "A finished run keeps its report and push; its one-time task removes itself")
         let runFiles = try FileManager.default.contentsOfDirectory(atPath: CantripHomeStore.runsDirectory.path)
         precondition(!runFiles.contains { $0.hasPrefix(sessionA.id.uuidString) }
                      && UserDefaults.standard.object(forKey: "lastRunOutcome-\(sessionA.id.uuidString)") == nil
@@ -416,6 +416,9 @@ extension SessionTabTests {
                      && store.runner.waitReasons[waitingBriefing.id]?.contains("Trip") == false,
                      "A dependent task waits only for prerequisites due before it")
         try await finish(billsRun, "Bills done.")
+        precondition(!store.tasks.contains { $0.id == bills.id }
+                     && store.tasks.first { $0.id == briefing.id }?.runsAfter == [trip.id],
+                     "A finished one-time prerequisite leaves its dependents' runsAfter")
         try await waitForJournalTest { runningRun(forTask: briefing.id) != nil }
         let briefingRun = try requireHome(runningRun(forTask: briefing.id))
         try await waitForJournalTest { fixture(forRun: briefingRun)?.sink != nil }
@@ -747,15 +750,17 @@ extension SessionTabTests {
             atPath: CantripHomeStore.taskEditDirectory.path
         )
         precondition((editAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o700)
+        // Bills and the briefing removed themselves after their one-time runs; Trip and the
+        // interval check are still saved.
         let dependencyEdit = try writeEdit(CantripHomeStore.taskEditDirectory, "1-briefing.json",
-            #"{"version":1,"taskID":"\#(briefing.id.uuidString)","runsAfter":["\#(bills.id.uuidString)"],"runsAfterTimeoutMinutes":45}"#)
+            #"{"version":1,"taskID":"\#(trip.id.uuidString)","runsAfter":["\#(interval.id.uuidString)"],"runsAfterTimeoutMinutes":45}"#)
         let selfEdit = try writeEdit(CantripHomeStore.taskEditDirectory, "2-self.json",
-            #"{"version":1,"taskID":"\#(bills.id.uuidString)","runsAfter":["\#(bills.id.uuidString)"]}"#)
+            #"{"version":1,"taskID":"\#(trip.id.uuidString)","runsAfter":["\#(trip.id.uuidString)"]}"#)
         let emptyEdit = try writeEdit(CantripHomeStore.taskEditDirectory, "3-empty.json",
-            #"{"version":1,"taskID":"\#(bills.id.uuidString)"}"#)
+            #"{"version":1,"taskID":"\#(trip.id.uuidString)"}"#)
         store.checkNow()
-        let edited = try requireHome(store.tasks.first { $0.id == briefing.id })
-        precondition(edited.runsAfter == [bills.id] && edited.runsAfterTimeoutMinutes == 45
+        let edited = try requireHome(store.tasks.first { $0.id == trip.id })
+        precondition(edited.runsAfter == [interval.id] && edited.runsAfterTimeoutMinutes == 45
                      && !FileManager.default.fileExists(atPath: dependencyEdit.path)
                      && FileManager.default.fileExists(atPath: selfEdit.path + ".rejected")
                      && FileManager.default.fileExists(atPath: emptyEdit.path + ".rejected"),
@@ -772,6 +777,7 @@ extension SessionTabTests {
             homeChat: homeChat, pool: pool, useFixtureRuns: useFixtureRuns
         )
         try testMailRefreshCoalesces()
+        try testCantripHomeOnceTaskRemoval(homeChat: homeChat)
 
         for task in [taskA, taskB, taskC, taskD, interval, writerX, writerY, bills, trip, briefing,
                      slow, late, nightly, nightlyAgain, quitTask, source, digest, flaky, stuck] {

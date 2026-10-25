@@ -35,7 +35,10 @@ data that Home's model never reads back as its own words.
 ## Tasks and schedules
 
 Tasks can be one-time, interval or weekday automations, or structured
-workspaces such as trackers. A weekday task can run at several local times a
+workspaces such as trackers. A one-time task removes itself after its run
+succeeds, and its result stays in Background. A failed or stopped run, or a
+one-time task with a workspace, keeps the task so it can be retried or its
+records kept. A weekday task can run at several local times a
 day in its own time zone, with DST handled. After sleep or a quit, an overdue
 task runs once rather than once per missed time, and a task never runs twice at
 the same time. Touch and hold a task to drag it into a new order; the order is
