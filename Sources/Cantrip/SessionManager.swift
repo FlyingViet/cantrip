@@ -25,6 +25,8 @@ final class SessionManager: ObservableObject {
     @Published var tabSections: [TabSection] = TabSectionStore.load()
     /// Child tabs: forks queued messages into their own tabs and merges them back.
     private(set) var childTabs: ChildTabCoordinator!
+    /// `cantrip tab ask`: questions between tabs and their replies (TabInsight.swift).
+    private(set) var tabAsks: TabAskCoordinator!
     /// Fires when any session's run completes (for notifications).
     var onAnyRunFinished: ((ChatSession) -> Void)?
     var onAnyInputNeeded: ((ChatSession, InputRequestSnapshot) -> Void)?
@@ -136,6 +138,19 @@ final class SessionManager: ObservableObject {
         persistOpenSessions()
         childTabs = ChildTabCoordinator(manager: self)
         childTabs.attach()
+        tabAsks = TabAskCoordinator(manager: self)
+        tabAsks.attach()
+        ChatSession.tabContextProvider = { [weak self] session in self?.tabContextNotes(for: session) }
+    }
+
+    /// What `session`'s model hears about other tabs with its next message: its child tabs'
+    /// status and replies to its `tab ask` questions. Short lines; it reads more on demand.
+    func tabContextNotes(for session: ChatSession) -> String? {
+        let parts = [
+            session.isCantripHome ? nil : childTabs.contextNotes(for: session),
+            tabAsks.notes(for: session.id),
+        ].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 
     // MARK: - Child tabs
@@ -371,6 +386,8 @@ final class SessionManager: ObservableObject {
             return
         }
         let selectedID = active.id
+        // A question this tab just answered is collected while the tab can still be read.
+        tabAsks?.refresh()
         session.cancel()
         if session.isPrivate { session.deleteTranscript() }
         sessions.remove(at: index)

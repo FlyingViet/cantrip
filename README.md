@@ -56,6 +56,9 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
 - **Child tabs:** an independent queued message runs (on its own, with Auto
   delivery) in a nested tab with its own git branch; it merges back when the
   parent is idle and asks on a conflict. [Child tabs](docs/sessions-and-council.md#child-tabs)
+- **Tabs look into each other:** parents see live child status, and models and
+  Home read any non-private tab's conversation on demand or ask it a question.
+  [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs)
 - **Remote control:** the Mac's sessions from Cantrip Agent, Cantrip Gateway
   Mac, another Mac or a browser, over LAN or Tailscale, with push alerts,
   approvals, attachments and View Mac. [Remote control](docs/remote-control.md);
@@ -106,6 +109,7 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 | `cantrip "question"` | Ask the active backend (pipe input: `cat log \| cantrip "why?"`) | [Ask from Terminal](docs/everyday-tasks.md#ask-cantrip-from-terminal) |
 | `cantrip --backend NAME "question"` | Ask a specific backend (`claude`, `copilot`, `codex` or `local`), e.g. `< changes.diff` | [Ask from Terminal](docs/everyday-tasks.md#ask-cantrip-from-terminal) |
 | `cantrip runs [session-or-run-id]` | List recent runs, or show one session's or run's events | [Recover after a crash](docs/sessions-and-council.md#recover-after-a-crash-or-interruption) |
+| `cantrip tab list` / `read ID` / `ask ID "question"` | List tabs with their child tabs, read a tab's recent turns (read-only), or ask a tab and print its reply | [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs) |
 | `cantrip daemon start` | Run Cantrip in the background now and at every login (no windows) | [Headless](docs/headless.md#commands) |
 | `cantrip daemon stop` | Stop it and don't start it at login | [Headless](docs/headless.md#commands) |
 | `cantrip daemon restart` | Restart it (installs a staged update) | [Headless](docs/headless.md#commands) |
