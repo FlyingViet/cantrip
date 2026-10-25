@@ -129,7 +129,9 @@ struct CantripSessionPicker: View {
     }
 
     static func accessibilityTitle(for session: CantripRemoteSession) -> String {
-        session.isStreaming ? "\(session.title), Working" : session.title
+        let title = session.isStreaming ? "\(session.title), Working" : session.title
+        guard let child = session.child, session.isChildTab else { return title }
+        return "\(title), child tab of \(child.parentTitle.isEmpty ? "another tab" : child.parentTitle)"
     }
 
     static func menuTitle(for session: CantripRemoteSession) -> String {

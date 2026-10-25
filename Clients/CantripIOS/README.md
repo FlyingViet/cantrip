@@ -107,6 +107,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `GET /api/v1/sessions`, `GET /api/v1/sessions/{id}` | Tab list; a tab's transcript, status, queue and capability flags |
 | `POST /api/v1/sessions/{id}/messages` | Send; `mode` is `auto` (default), `queue`, `interrupt` (Redirect) or `inject` |
 | `DELETE /api/v1/sessions/{id}/queue/{promptID}`, `POST …/queue/{promptID}/send` | Remove a queued prompt, or Send now |
+| `POST /api/v1/sessions/{id}/queue/{promptID}/fork`, `POST …/children/{childID}/{action}` | Child tabs (`supportsChildTabs`): run a queued prompt in a child tab (`{session, childID}`; `409` with the reason when it can't), and a child card's actions (`open`, `discard`, `resolve`, `keepParent`, `keepChild`, `leave`, `retry`, `merge`); queued prompts carry `plan` (`supportsQueuePlans`), children `parentID` and `child`, the parent's card message `childResult` |
 | `/api/v1/sessions/{id}/input` | Answer approvals, questions and secure input |
 | `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename, lock and file in a section (`sectionID`), reorder, per-tab model settings |
 | `/api/v1/sections`, `/api/v1/sections/{id}` | Tab sections: list, add (`name`), rename or reorder (`PATCH name/position`), delete; only when the list has `supportsTabSections` |
@@ -300,6 +301,21 @@ starts the prompt. Hosts that cannot steer the current turn redirect instead.
 Send now requires the host's `supportsQueueSendNow` capability; if the prompt
 has already started or been removed, or the Mac is waiting on an answer, the
 Mac's reason is shown and nothing else changes.
+
+**Child tabs.** While a tab works, each queued prompt shows the Mac's suggested
+plan (*Independent: can run in a child tab*, *Batched: same tab-list code*,
+*Waits: releases run one at a time*, …). The branch button on a prompt, or a
+right swipe, runs it now in a **child tab**: its own tab under this one, on its
+own git branch, that merges back into this tab's branch when it's done. Child
+tabs are indented under their parent with a branch mark and can't be dragged
+away; open one to watch or steer it (its banner names the parent and branch,
+with **Open Parent**). The parent shows one card per child: tap its tag for the
+request, the child's replies and the files it changed; the card shows the
+summary and state (Working, Merged into main · 4 files +169 −9, …) and, on a
+merge conflict, asks: **Keep both, then run the tests (Recommended)**, keep
+either side, or leave it unmerged (then **Try Again** or **Discard**). Needs a
+Cantrip host with `supportsChildTabs`; older hosts show children as ordinary
+tabs and cards as text.
 
 Tap the conversation or session controls to dismiss the keyboard, or drag the
 conversation to dismiss it interactively. Chat stays at the latest message

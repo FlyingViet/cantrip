@@ -524,7 +524,11 @@ struct CantripHomeTabDrawer: View {
                     if isModal { onDismiss() }
                     onRename(session)
                 },
-                onClose: { onClose(session.id) }
+                onClose: { onClose(session.id) },
+                onOpenTab: { id in
+                    if isModal { onDismiss() }
+                    onSelect(id)
+                }
             )
         }
         .disabled(model.isMutating && !model.isReorderingTabs)

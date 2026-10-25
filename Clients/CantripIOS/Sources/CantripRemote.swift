@@ -394,6 +394,196 @@ struct CantripRemoteHandoffResult: Decodable, Equatable {
     }
 }
 
+/// Child tabs (`supportsChildTabs`): where a child tab's work stands, from running through its
+/// merge back into the parent's branch.
+enum CantripChildTabState: String, Decodable, Equatable {
+    case working, needsInput, finished, merging, merged, conflict, unmerged, noChanges, failed, stopped, discarded
+    /// A state from a newer Mac.
+    case other
+
+    var isRunning: Bool { self == .working || self == .needsInput }
+}
+
+/// A child tab's own listing: it runs a queued message from its parent (`parentID`) in its own
+/// tab and, in a git repository, its own branch that merges back.
+struct CantripRemoteChildTab: Decodable, Equatable {
+    let state: CantripChildTabState
+    let title: String
+    let parentTitle: String
+    /// "Working", "Merging into main", … as the Mac words it.
+    let statusLine: String
+    var branch: String? = nil
+    var baseBranch: String? = nil
+    var repoName: String? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case state, title, parentTitle, statusLine, branch, baseBranch, repoName
+    }
+
+    init(state: CantripChildTabState, title: String, parentTitle: String, statusLine: String,
+         branch: String? = nil, baseBranch: String? = nil, repoName: String? = nil) {
+        self.state = state
+        self.title = title
+        self.parentTitle = parentTitle
+        self.statusLine = statusLine
+        self.branch = branch
+        self.baseBranch = baseBranch
+        self.repoName = repoName
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = container.decodeLenient(String.self, forKey: .state, default: "")
+        self.init(
+            state: CantripChildTabState(rawValue: raw) ?? .other,
+            title: container.decodeLenient(String.self, forKey: .title, default: ""),
+            parentTitle: container.decodeLenient(String.self, forKey: .parentTitle, default: ""),
+            statusLine: container.decodeLenient(String.self, forKey: .statusLine, default: ""),
+            branch: container.decodeLenient(String.self, forKey: .branch),
+            baseBranch: container.decodeLenient(String.self, forKey: .baseBranch),
+            repoName: container.decodeLenient(String.self, forKey: .repoName)
+        )
+    }
+}
+
+/// A child tab's card in its parent's transcript (a message with `childResult`), updated in place
+/// from start to merge. Only the Mac's one-line summary of it reaches the parent's model.
+struct CantripRemoteChildResult: Decodable, Equatable, Identifiable {
+    struct FileChange: Decodable, Equatable {
+        let path: String
+        let added: Int
+        let removed: Int
+
+        private enum CodingKeys: String, CodingKey { case path, added, removed }
+
+        init(path: String, added: Int, removed: Int) {
+            self.path = path
+            self.added = added
+            self.removed = removed
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(path: container.decodeLenient(String.self, forKey: .path, default: ""),
+                      added: container.decodeLenient(Int.self, forKey: .added, default: 0),
+                      removed: container.decodeLenient(Int.self, forKey: .removed, default: 0))
+        }
+    }
+
+    /// The child tab's session ID.
+    let id: String
+    let title: String
+    /// The queued request, as written.
+    let prompt: String
+    let state: CantripChildTabState
+    let statusLine: String
+    let summary: String
+    /// A few of the child's replies, for the card's expanded thread.
+    let replies: [String]
+    let files: [FileChange]
+    var branch: String? = nil
+    var baseBranch: String? = nil
+    var repoName: String? = nil
+    var mergeCommit: String? = nil
+    var conflictFiles: [String] = []
+    var conflictExcerpt: String? = nil
+    /// Files that merged cleanly beside a conflict.
+    var cleanFileCount: Int = 0
+    /// Why a merge is waiting or stopped, in plain words.
+    var note: String? = nil
+    /// What the card offers now (`POST …/children/{id}/{action}`): open, discard, resolve,
+    /// keepParent, keepChild, leave, retry, merge.
+    var actions: [String] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, prompt, state, statusLine, summary, replies, files, branch, baseBranch, repoName
+        case mergeCommit, conflictFiles, conflictExcerpt, cleanFileCount, note, actions
+    }
+
+    init(id: String, title: String, prompt: String = "", state: CantripChildTabState, statusLine: String = "",
+         summary: String = "", replies: [String] = [], files: [FileChange] = [], branch: String? = nil,
+         baseBranch: String? = nil, repoName: String? = nil, mergeCommit: String? = nil,
+         conflictFiles: [String] = [], conflictExcerpt: String? = nil, cleanFileCount: Int = 0,
+         note: String? = nil, actions: [String] = []) {
+        self.id = id
+        self.title = title
+        self.prompt = prompt
+        self.state = state
+        self.statusLine = statusLine
+        self.summary = summary
+        self.replies = replies
+        self.files = files
+        self.branch = branch
+        self.baseBranch = baseBranch
+        self.repoName = repoName
+        self.mergeCommit = mergeCommit
+        self.conflictFiles = conflictFiles
+        self.conflictExcerpt = conflictExcerpt
+        self.cleanFileCount = cleanFileCount
+        self.note = note
+        self.actions = actions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = container.decodeLenient(String.self, forKey: .state, default: "")
+        self.init(
+            id: container.decodeLenient(String.self, forKey: .id, default: ""),
+            title: container.decodeLenient(String.self, forKey: .title, default: ""),
+            prompt: container.decodeLenient(String.self, forKey: .prompt, default: ""),
+            state: CantripChildTabState(rawValue: raw) ?? .other,
+            statusLine: container.decodeLenient(String.self, forKey: .statusLine, default: ""),
+            summary: container.decodeLenient(String.self, forKey: .summary, default: ""),
+            replies: container.decodeLenient([String].self, forKey: .replies, default: []),
+            files: container.decodeLenient([FileChange].self, forKey: .files, default: []),
+            branch: container.decodeLenient(String.self, forKey: .branch),
+            baseBranch: container.decodeLenient(String.self, forKey: .baseBranch),
+            repoName: container.decodeLenient(String.self, forKey: .repoName),
+            mergeCommit: container.decodeLenient(String.self, forKey: .mergeCommit),
+            conflictFiles: container.decodeLenient([String].self, forKey: .conflictFiles, default: []),
+            conflictExcerpt: container.decodeLenient(String.self, forKey: .conflictExcerpt),
+            cleanFileCount: container.decodeLenient(Int.self, forKey: .cleanFileCount, default: 0),
+            note: container.decodeLenient(String.self, forKey: .note),
+            actions: container.decodeLenient([String].self, forKey: .actions, default: [])
+        )
+    }
+}
+
+/// What the Mac suggests for a queued message while its tab works (`supportsQueuePlans`): run it in
+/// a child tab, together with related work, after a one-at-a-time action, or after the current task.
+struct CantripRemoteQueuePlan: Decodable, Equatable {
+    enum Kind: String, Decodable, Equatable {
+        case fork, batch, wait, queue
+        /// A plan from a newer Mac.
+        case other
+    }
+
+    let kind: Kind
+    /// Shown on the queue row ("Independent: can run in a child tab").
+    let reason: String
+    /// A short name for the child tab.
+    let title: String
+    var repo: String? = nil
+
+    private enum CodingKeys: String, CodingKey { case kind, reason, title, repo }
+
+    init(kind: Kind, reason: String, title: String = "", repo: String? = nil) {
+        self.kind = kind
+        self.reason = reason
+        self.title = title
+        self.repo = repo
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = container.decodeLenient(String.self, forKey: .kind, default: "")
+        self.init(kind: Kind(rawValue: raw) ?? .other,
+                  reason: container.decodeLenient(String.self, forKey: .reason, default: ""),
+                  title: container.decodeLenient(String.self, forKey: .title, default: ""),
+                  repo: container.decodeLenient(String.self, forKey: .repo))
+    }
+}
+
 private extension KeyedDecodingContainer {
     func decodeLenient<T: Decodable>(_ type: T.Type, forKey key: Key, default defaultValue: @autoclosure () -> T) -> T {
         (try? decodeIfPresent(type, forKey: key)) ?? defaultValue()
@@ -425,6 +615,8 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var delegations: [CantripRemoteDelegation]? = nil
     /// Cantrip Home only: a handoff's result card (role `handoff`).
     var handoffResult: CantripRemoteHandoffResult? = nil
+    /// A child tab's card in its parent (role `assistant`; `text` is a plain fallback).
+    var childResult: CantripRemoteChildResult? = nil
 
     var presentedText: String { displayText ?? text }
     /// Result cards Cantrip posts into Home's chat; never a model reply.
@@ -438,6 +630,8 @@ struct CantripRemoteQueuedPrompt: Decodable, Equatable, Identifiable {
     let text: String
     var displayText: String? = nil
     var images: [ChatMessageImage]? = nil
+    /// The Mac's suggestion for this message while the tab works; nil from Macs before child tabs.
+    var plan: CantripRemoteQueuePlan? = nil
 
     var presentedText: String { displayText ?? text }
 }
@@ -504,8 +698,19 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsBackendCommands: Bool? = nil
     /// The latest message, when it is an error repeating the one before it with no reply between.
     var repeatedErrorMessageID: String? = nil
+    /// Queued messages can run in child tabs (`POST …/queue/{id}/fork`). Nil from older Macs.
+    var supportsChildTabs: Bool? = nil
+    /// Queued messages carry the Mac's suggested `plan`. Nil from older Macs.
+    var supportsQueuePlans: Bool? = nil
+    /// Why this tab can't start a child tab right now (caps full, a child itself, …).
+    var childTabsUnavailableReason: String? = nil
+    /// A child tab: the tab whose queued message it runs. The Mac lists it right after its parent.
+    var parentID: String? = nil
+    var child: CantripRemoteChildTab? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
+    /// Runs a parent's queued message in its own tab (and branch) until its work merges back.
+    var isChildTab: Bool { parentID != nil }
     var lastActivityDate: Date? { lastActivityAt.map(Date.init(timeIntervalSince1970:)) }
 }
 
@@ -780,6 +985,11 @@ private struct CantripSessionResponse: Decodable {
     let session: CantripRemoteSession
 }
 
+private struct CantripChildForkResponse: Decodable {
+    let session: CantripRemoteSession
+    let childID: String
+}
+
 private struct CantripSessionUpdate: Decodable {
     let session: CantripRemoteSession?
     let unchanged: Bool?
@@ -821,6 +1031,7 @@ enum CantripRemoteError: LocalizedError {
     case autoDeliveryUnsupported
     case queueRemovalUnsupported
     case queueSendNowUnsupported
+    case childTabsUnsupported
     case startFreshUnsupported
     case tabMetadataUnsupported
     case tabReorderingUnsupported
@@ -873,6 +1084,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to remove queued messages from Cantrip Agent."
         case .queueSendNowUnsupported:
             return "Update and reopen Cantrip on your Mac to send queued messages now from Cantrip Agent. The message is still queued."
+        case .childTabsUnsupported:
+            return "Update and reopen Cantrip on your Mac to run queued messages in child tabs. The message is still queued."
         case .startFreshUnsupported:
             return "Update and reopen Cantrip on your Mac to start fresh. Nothing in the tab has changed."
         case .tabMetadataUnsupported:
@@ -2189,6 +2402,31 @@ struct CantripRemoteAPI {
         return response.session
     }
 
+    func prepareChildTabs(sessionID: String) async throws {
+        let host = try await session(id: sessionID)
+        guard host.supportsChildTabs == true else {
+            throw CantripRemoteError.childTabsUnsupported
+        }
+    }
+
+    /// Moves a queued message into a new child tab; returns the parent and the child's ID.
+    func forkQueuedPrompt(id: String, sessionID: String) async throws -> (session: CantripRemoteSession, childID: String) {
+        let response: CantripChildForkResponse = try await request(
+            path: "/api/v1/sessions/\(try Self.pathComponent(sessionID))/queue/\(try Self.pathComponent(id))/fork",
+            method: "POST", body: Data("{}".utf8), includeRecentExchanges: true
+        )
+        return (response.session, response.childID)
+    }
+
+    /// Runs one of a child tab card's `actions` in its parent; returns the parent.
+    func childAction(_ action: String, childID: String, parentID: String) async throws -> CantripRemoteSession {
+        let response: CantripSessionResponse = try await request(
+            path: "/api/v1/sessions/\(try Self.pathComponent(parentID))/children/\(try Self.pathComponent(childID))/\(try Self.pathComponent(action))",
+            method: "POST", body: Data("{}".utf8), includeRecentExchanges: true
+        )
+        return response.session
+    }
+
     /// Starts the tab's next prompt in a new model session; its title, settings and history stay.
     func startFresh(sessionID: String) async throws -> CantripRemoteSession {
         try await prepareStartFresh(sessionID: sessionID)
@@ -2393,6 +2631,10 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var stoppingSessionID: String?
     /// The queued message being sent now, so every queue control can show it in flight.
     @Published private(set) var sendingQueuedPromptID: String?
+    /// A queued message being moved into a child tab.
+    @Published private(set) var forkingQueuedPromptID: String?
+    /// A child tab card action in flight, as "childID/action".
+    @Published private(set) var childActionInFlight: String?
     @Published private(set) var detailError: String?
     @Published private(set) var isLoadingHistory = false
     @Published private(set) var historyPrependRevision = 0
@@ -3904,6 +4146,54 @@ final class CantripRemoteModel: ObservableObject {
         }) else { return false }
         guard selectedSessionID == sessionID else { return true }
         apply(session)
+        return true
+    }
+
+    /// Runs a queued message in a child tab: its own tab after the parent (and, in a git
+    /// repository, its own branch) that merges back when done. The parent stays open. Returns the
+    /// child's ID.
+    @discardableResult
+    func forkQueuedPrompt(_ id: String, sessionID: String) async -> String? {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish, then try again."
+            return nil
+        }
+        forkingQueuedPromptID = id
+        defer { forkingQueuedPromptID = nil }
+        guard let result = await mutate(prepare: { api in
+            try await api.prepareChildTabs(sessionID: sessionID)
+        }, { api, _ in
+            try await api.forkQueuedPrompt(id: id, sessionID: sessionID)
+        }) else { return nil }
+        if selectedSessionID == sessionID {
+            apply(result.session)
+        } else if let index = sessions.firstIndex(where: { $0.id == sessionID }) {
+            sessions[index] = result.session
+        }
+        // The new child is listed right after its parent.
+        await refresh()
+        return result.childID
+    }
+
+    /// One of a child tab card's `actions` (open, discard, resolve, keepParent, keepChild, leave,
+    /// retry, merge), run in the parent `parentID`. `open` brings back a finished child's tab.
+    @discardableResult
+    func performChildAction(_ action: String, childID: String, parentID: String) async -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish, then try again."
+            return false
+        }
+        childActionInFlight = "\(childID)/\(action)"
+        defer { childActionInFlight = nil }
+        guard let session = await mutate(sessionID: parentID, { api in
+            try await api.childAction(action, childID: childID, parentID: parentID)
+        }) else { return false }
+        if selectedSessionID == parentID {
+            apply(session)
+        } else if let index = sessions.firstIndex(where: { $0.id == parentID }) {
+            sessions[index] = session
+        }
+        await refresh()
         return true
     }
 
