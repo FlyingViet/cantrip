@@ -7,6 +7,11 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     var modelOverride: String?
     var effortOverride: String?
     var contextTierOverride: String?
+    /// MCP servers this session doesn't start and tools it hides (scheduled Home task runs).
+    var disabledMcpServers: [String]?
+    var excludedTools: [String]?
+    /// Tool count above which MCP tools load on demand through tool search (runtime default 30).
+    var toolDeferThreshold: Int?
     var readOnly = false
     /// Receives each CLI session ID this backend runs on (called on the backend queue).
     var onAgentSession: ((String) -> Void)?
@@ -100,6 +105,9 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         var mcpApps = true
         /// Cantrip Home sessions route every tool request through the host's action policy.
         var guardrail: String?
+        var disabledMcpServers: [String]?
+        var excludedTools: [String]?
+        var toolDeferThreshold: Int?
 
         var json: [String: Any] {
             var object: [String: Any] = ["command": command, "workdir": workdir, "model": model,
@@ -108,6 +116,11 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
              "allowSubagents": allowSubagents, "mcpApps": mcpApps,
              "systemGuidance": CopilotBackend.systemGuidance(allowSubagents: allowSubagents)]
             if let guardrail { object["guardrail"] = guardrail }
+            if let disabledMcpServers, !disabledMcpServers.isEmpty {
+                object["disabledMcpServers"] = disabledMcpServers
+            }
+            if let excludedTools, !excludedTools.isEmpty { object["excludedTools"] = excludedTools }
+            if let toolDeferThreshold { object["toolDeferThreshold"] = toolDeferThreshold }
             object["blockedCommands"] = BackendCommandPolicy.blockedNames(family: .copilot)
             return object
         }
@@ -172,9 +185,9 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         availabilityLock.withLock { injectionAvailable && sessionHasSubagents }
     }
 
-    func send(_ request: BackendRequest, workdir: String,
-              onEvent: @escaping (BackendEvent) -> Void) {
-        let config = Configuration(
+    /// The runtime configuration the next turn uses in `workdir`.
+    func configuration(workdir: String) -> Configuration {
+        Configuration(
             command: settings.copilotPath.trimmingCharacters(in: .whitespaces).isEmpty
                 ? "copilot" : settings.copilotPath,
             workdir: workdir,
@@ -183,10 +196,19 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             contextTier: contextTierOverride ?? settings.copilotContextTier,
             allowTools: settings.copilotAllowTools || settings.allowActions,
             readOnly: readOnly, autoApprove: settings.allowActions,
-            allowSubagents: settings.copilotAllowSubagents,
+            // Runs that hide the subagent tools also skip the subagent guidance.
+            allowSubagents: settings.copilotAllowSubagents && excludedTools?.contains("task") != true,
             mcpApps: settings.copilotMCPApps,
-            guardrail: guardrail?.rawValue
+            guardrail: guardrail?.rawValue,
+            disabledMcpServers: disabledMcpServers,
+            excludedTools: excludedTools,
+            toolDeferThreshold: toolDeferThreshold
         )
+    }
+
+    func send(_ request: BackendRequest, workdir: String,
+              onEvent: @escaping (BackendEvent) -> Void) {
+        let config = configuration(workdir: workdir)
         let releaseDelay = idleRuntimeReleaseDelay ?? TimeInterval(settings.copilotIdleReleaseMinutes * 60)
         queue.async { [weak self] in
             guard let self else { return }

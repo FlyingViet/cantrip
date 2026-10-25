@@ -779,6 +779,68 @@ extension SessionTabTests {
         try testMailRefreshCoalesces()
         try testCantripHomeOnceTaskRemoval(homeChat: homeChat)
         try await testCantripHomeTaskModelChoices(homeChat: homeChat)
+        try testCantripHomeTaskContext(homeChat: homeChat)
+
+        // A scheduled task's message: the shared head, memory, the task, then its own and
+        // named tasks' records and run notes; never the tab list or unrelated records.
+        do {
+            let memory = AppSettings.shared.memoryEnabled
+            AppSettings.shared.memoryEnabled = true
+            defer { AppSettings.shared.memoryEnabled = memory }
+            let fields = try JSONDecoder().decode(CantripHomeTaskWorkspaceProposal.self, from: Data(#"""
+                {"recordLabel":"Item","recordLabelPlural":"Items","icon":"list.bullet",
+                 "fields":[{"key":"name","label":"Name","kind":"text","required":true,"options":null}],
+                 "list":{"titleField":"name","subtitleFields":[],"badgeField":null,"dateField":null},
+                 "detailSections":[{"title":null,"fields":["name"]}]}
+                """#.utf8))
+            @MainActor func contextTask(_ title: String, _ prompt: String, scheduled: Bool,
+                                        record: String) throws -> CantripHomeTask {
+                try store.create(.init(
+                    id: nil, title: title, prompt: prompt,
+                    schedule: scheduled ? .init(kind: .interval, summary: "Every hour", timeZone: zone,
+                                                startAt: Date().addingTimeInterval(-60), intervalMinutes: 60) : nil,
+                    workspace: fields, initialRecords: [["name": record]]
+                ), now: Date().addingTimeInterval(-90))
+            }
+            AppSettings.shared.cantripHomeEnabled = false
+            let tracker = try contextTask("Context tracker", "Track things.", scheduled: true, record: "Tracker record A")
+            _ = try contextTask("Context other", "Other things.", scheduled: false, record: "Other secret record")
+            let digest = try contextTask("Context digest", "Summarize task \(tracker.id.uuidString).",
+                                         scheduled: true, record: "Digest record")
+            AppSettings.shared.cantripHomeEnabled = true
+            store.checkNow()
+            let trackerRun = try requireHome(runningRun(forTask: tracker.id))
+            try await waitForJournalTest { fixture(forRun: trackerRun)?.lastPrompt != nil }
+            let trackerPrompt = fixture(forRun: trackerRun)?.lastPrompt ?? ""
+            func offset(_ text: String, in prompt: String) -> Int {
+                prompt.range(of: text).map { prompt.distance(from: prompt.startIndex, to: $0.lowerBound) } ?? -1
+            }
+            let order = ["(CANTRIP HOME BACKGROUND", "(Persistent memory", "(This is execution of saved Cantrip Home task",
+                         "Scheduled task · Context tracker", "(Workspace data for this run", "name=Tracker record A"]
+                .map { offset($0, in: trackerPrompt) }
+            precondition(trackerPrompt.hasPrefix("(CANTRIP HOME BACKGROUND") && !order.contains(-1)
+                         && order == order.sorted()
+                         && !trackerPrompt.contains("Other secret record") && !trackerPrompt.contains("Digest record")
+                         && !trackerPrompt.contains("Project tabs —") && !trackerPrompt.contains("Existing tasks"),
+                         "A task run's message is head, memory, task, then its own records: \(order)")
+            // The digest names the tracker, so it waits for the tracker's run, then sees its records.
+            try await finish(trackerRun, "Tracked.")
+            try await waitForJournalTest { runningRun(forTask: digest.id) != nil }
+            let digestRun = try requireHome(runningRun(forTask: digest.id))
+            try await waitForJournalTest { fixture(forRun: digestRun)?.lastPrompt != nil }
+            let digestPrompt = fixture(forRun: digestRun)?.lastPrompt ?? ""
+            precondition(digestPrompt.contains("name=Digest record") && digestPrompt.contains("name=Tracker record A")
+                         && digestPrompt.contains("(named in this task's instructions)")
+                         && digestPrompt.contains("last run succeeded")
+                         && !digestPrompt.contains("Other secret record"),
+                         "A run also sees the records and last run of tasks its instructions name")
+            let shared = trackerPrompt.range(of: "(This is execution of saved Cantrip Home task")
+                .map { String(trackerPrompt[..<$0.lowerBound]) } ?? ""
+            precondition(shared.count > 2_000 && digestPrompt.hasPrefix(shared),
+                         "Every task run's message starts with the same bytes up to its task")
+            try await finish(digestRun, "Summarized.")
+            for task in store.tasks where task.title.hasPrefix("Context ") { try? store.delete(id: task.id) }
+        }
 
         // A task's own model reaches its hidden run and every record of it; tasks without one
         // follow Home, and an unavailable model falls back to Home's with a note in the summary.

@@ -112,6 +112,38 @@ notification; other runs keep the start of the reply.
 After a quit, interrupted tasks run once more and an interrupted incident is
 retried once. Home can still discuss or rerun any of them on request.
 
+### What a scheduled-task run receives
+
+A scheduled-task run's message is built for prompt caching:
+
+1. A static protocol that is the same for every task and run. It covers the
+   rules, the `cantrip-task-records` and `cantrip-artifact` formats, a short
+   handoff route and a read command for records.
+2. Persistent memory: core files, the notes list and the maintenance rule.
+3. The task's saved instructions.
+4. What changes per run: its own workspace schema and records, plus those of
+   tasks it lists in `runsAfter` or names by UUID, each with its last run;
+   then run notes, time and location, and retrieved memory snippets.
+
+Long record lists show the first records in full (about 12,000 characters
+per run), then an index of IDs and titles. The run can print every record
+with a standalone `python3 -c` command that reads `tasks.json`.
+
+Scheduled-task runs don't get the open-tab list, other tasks' records or the
+task-creation schema. They read the open tabs and active handoffs from
+`~/.cache/Cantrip/home/tabs.txt` only when they hand off a fix.
+
+Their Copilot sessions start only the MCP servers scheduled tasks use: `homelab`
+and GitHub's built-in server, or the list in the `cantripHomeTaskMCPServers`
+default. They also leave out built-in tools scheduled tasks don't call
+(subagents, `sql`, skills, code search and workflows). MCP tools load on demand
+through tool search.
+
+Incident runs and attended Home keep the full protocol and every tool. In
+October 2026 this cut the bills monitor's first message from about 119,500 to
+about 34,000 characters, and its first call from about 77,600 to under 33,000
+input tokens. Tool definitions fell from 9,357 tokens to about 3,600.
+
 ## Rules, safety and approvals
 
 Home's rules and safety checks are enforced by Cantrip, not by the model's CLI,

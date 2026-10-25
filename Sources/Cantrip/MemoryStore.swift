@@ -50,6 +50,36 @@ final class MemoryStore {
         }
     }
 
+    /// The same memory protocol split for prompts that keep a cacheable prefix: `stable` (core
+    /// files, notes list, sessions pointer, maintenance rule) changes only when memory does;
+    /// `retrieved` depends on the query, so it goes last.
+    static func contextParts(query: String, path: String) async -> (stable: String, retrieved: String) {
+        await withCheckedContinuation { continuation in
+            preparationQueue.async {
+                let store = MemoryStore(directory: URL(fileURLWithPath: path))
+                store.ensureVault()
+                let retrieved = store.retrieve(for: query).map {
+                    "\n\n(RETRIEVED — memory snippets auto-matched to this task (verify before relying on them):\n\($0))"
+                } ?? ""
+                let stable = """
+
+
+                (Persistent memory — three layers, all in \(path):
+
+                CORE — always loaded, maintain within caps:
+                \(store.coreMemoryBlock())
+
+                NOTES — procedures that worked; read relevant ones BEFORE acting: \(store.indexLine())
+
+                SESSIONS — past conversations logged in \(path)/sessions/ as daily markdown; grep them when I reference something from before.
+
+                Maintain memory silently as you work: new environment facts/conventions → edit MEMORY.md; new facts or preferences about me → edit USER.md; both must stay under their caps, so consolidate rather than append. After a task that took trial-and-error, write/update a concise procedure note. Don't mention the vault unless asked.)
+                """
+                continuation.resume(returning: (stable, retrieved))
+            }
+        }
+    }
+
     func ensureVault() {
         let fm = FileManager.default
         if !fm.fileExists(atPath: dirURL.path) {

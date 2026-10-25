@@ -593,6 +593,21 @@ struct CantripHomeError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+extension CantripHomeTaskWorkspace {
+    /// Field keys, kinds and choices plus list settings, as Home's prompts describe a workspace.
+    var promptSchema: String {
+        "\(recordLabel) fields: "
+            + fields.map { field in
+                guard field.kind == .choice, let options = field.options else {
+                    return "\(field.key):\(field.kind.rawValue)"
+                }
+                let choices = options.joined(separator: "|")
+                return "\(field.key):choice[\(choices.count > 600 ? choices.prefix(600) + "…" : choices)]"
+            }.joined(separator: ",")
+            + list.promptContext
+    }
+}
+
 extension CantripHomeTaskListPresentation {
     /// The saved list as compact JSON, so Home can send it back with changes.
     var promptContext: String {
@@ -1993,17 +2008,7 @@ extension ChatSession {
                 let days = ($0.schedule.weekdays ?? []).map(String.init).joined(separator: ",")
                 mode += " (times \(times); weekdays \(days); \($0.schedule.timeZone))"
             }
-            let workspace = $0.workspace.map { workspace in
-                "; \(workspace.recordLabel) fields: "
-                    + workspace.fields.map { field in
-                        guard field.kind == .choice, let options = field.options else {
-                            return "\(field.key):\(field.kind.rawValue)"
-                        }
-                        let choices = options.joined(separator: "|")
-                        return "\(field.key):choice[\(choices.count > 600 ? choices.prefix(600) + "…" : choices)]"
-                    }.joined(separator: ",")
-                    + workspace.list.promptContext
-            } ?? ""
+            let workspace = $0.workspace.map { "; " + $0.promptSchema } ?? ""
             let lastRun = $0.runs.first.map {
                 "; last run \($0.status) "
                     + $0.finishedAt.formatted(date: .abbreviated, time: .shortened)
