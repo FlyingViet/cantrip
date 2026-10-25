@@ -933,22 +933,31 @@ show under **Tabs**. Each device remembers which sections it has collapsed. A
 collapsed section still shows the open tab and any tab that is working or
 waiting for an answer.
 
+- **New section:** the **New Section** button on every tab list (the folder
+  button after **+** in the Mac panel and browser strip, beside **+** in the
+  browser sidebar, and the last row in Cantrip Agent, Gateway and Windows)
+  makes an empty section. Empty sections stay and show as headers you can drop
+  tabs on. **New Section** is also in every section menu and in Move to Section
+  (which files that tab in the new section).
 - **File a tab:** **Move to Section** in its menu (the Mac panel's tab
   right-click, Cantrip Agent, Gateway, Windows), the **Section** picker in the
-  browser's tab settings, or drag a tab onto a section's header (Gateway Mac,
-  Windows, browser). Dropping a tab beside another tab files it in that tab's
-  section. A filed tab moves after the section's last tab.
+  browser's tab settings, or drag a tab onto a section's header (Mac panel,
+  Gateway Mac, Windows, browser). Dropping a tab beside another tab files it in
+  that tab's section. A filed tab moves after the section's last tab.
 - **Manage a section:** its header's menu (**…**, right-click, or touch and
-  hold) has Rename, New Tab Here, Move Up/Down, Edit Sections and Delete.
-  Deleting a section moves its tabs back to Tabs. **New Section** is in the
-  Tabs header's menu and in Move to Section.
+  hold) has Rename, New Tab Here, Move Up/Down (Left/Right in the Mac panel),
+  Delete, New Section and Edit Sections.
+- **Delete a section:** from its header's menu. An empty section goes at once;
+  one with tabs asks first. Its tabs move back to Tabs: deleting a section never
+  closes a tab or touches its history.
 - **Reorder sections:** drag a section's header onto another one (onto Tabs
-  moves it first) in the browser, Mac Remote, Gateway Mac and Windows. In the
-  browser and Windows, a focused header also moves with Alt+↑/↓ (Alt+←/→ in
-  the browser's tab strip). **Edit
-  Sections** (the Mac panel's Move to Section menu, and every section menu in
-  Cantrip Agent and Gateway) lists them all to rename, drag into order, move
-  up or down, delete or add. Order and names sync to every device.
+  moves it first) in the Mac panel, browser, Mac Remote, Gateway Mac and
+  Windows. In the browser and Windows, a focused header also moves with
+  Alt+↑/↓ (Alt+←/→ in the browser's tab strip). **Edit Sections** (every
+  section menu, and Move to Section) lists them all to rename, drag into
+  order, move up or down, delete or add. Order and names sync to every device.
+- The Mac panel's strip shows each section as a pill before its tabs, like the
+  browser strip; ⌘2-⌘9 follow the strip's order.
 - Names are 1 to 40 characters and unique (ignoring case); up to 50 sections.
 
 API (`supportsTabSections`): `GET /api/v1/sessions` adds `sections` (`[{id,

@@ -58,6 +58,11 @@ extension SessionTabTests {
         let payload = view.draggingItem().item as! NSPasteboardItem
         precondition(payload.string(forType: .string) == "cantrip-tab:\(id.uuidString)",
                      "Native dragging must preserve the SwiftUI drop destination's stable-ID format")
+        view.payloadPrefix = "cantrip-section:"
+        let sectionPayload = view.draggingItem().item as! NSPasteboardItem
+        precondition(sectionPayload.string(forType: .string) == "cantrip-section:\(id.uuidString)",
+                     "A section pill's drag carries the section, so headers can reorder")
+        view.payloadPrefix = "cantrip-tab:"
 
         panel.install(
             Text("Tab label").padding(10)
