@@ -246,6 +246,14 @@ struct CantripTabList<Actions: View>: View {
                         move(fromOffsets: source, toOffset: destination)
                     }
                 }
+                if let sectionModel, sectionModel.supportsTabSections {
+                    CantripNewSectionButton(model: sectionModel)
+                        .padding(.horizontal, 12)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .moveDisabled(true)
+                }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)

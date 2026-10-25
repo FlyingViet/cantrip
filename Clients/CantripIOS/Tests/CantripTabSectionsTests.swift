@@ -135,8 +135,10 @@ final class CantripTabSectionsTests: XCTestCase {
                 let section: [String: Any] = ["id": "s2", "name": json?["name"] ?? ""]
                 sections.append(section)
                 return (201, ["section": section, "sections": sections])
-            case ("DELETE", "/api/v1/sections/s1"):
-                sections.removeFirst()
+            case ("DELETE", let deletePath) where deletePath.hasPrefix("/api/v1/sections/"):
+                let id = String(deletePath.dropFirst("/api/v1/sections/".count))
+                sections.removeAll { $0["id"] as? String == id }
+                for index in tabs.indices where tabs[index]["sectionID"] as? String == id { tabs[index]["sectionID"] = nil }
                 return (200, ["sections": sections])
             case ("POST", "/api/v1/sessions/a/metadata"):
                 tabs[0]["sectionID"] = json?["sectionID"] is NSNull ? nil : json?["sectionID"]
@@ -236,6 +238,29 @@ final class CantripTabSectionsTests: XCTestCase {
         XCTAssertEqual(model.tabSections.map(\.id), ["s1", "s2"], "A refused move puts the order back")
         XCTAssertNotNil(model.errorMessage, "A refused move says why")
         XCTAssertFalse(model.isMutating)
+    }
+
+    func testDeletingASectionWithTabsAsksFirstAndAnEmptyOneGoesAtOnce() async throws {
+        let (model, log) = try await configuredModel(supportsSections: true)
+        _ = await model.fileTab("a", in: "s1")
+        let work = try XCTUnwrap(model.tabSections.first { $0.id == "s1" })
+        model.requestDeleteSection(work)
+        XCTAssertEqual(model.sectionDeletion, work, "A section with tabs asks before deleting")
+        XCTAssertFalse(log().contains { $0.0 == "DELETE" }, "Nothing is deleted until confirmed")
+
+        _ = await model.createSection(named: "Later")
+        let later = try XCTUnwrap(model.tabSections.first { $0.name == "Later" })
+        XCTAssertFalse(model.sessions.contains { $0.sectionID == later.id }, "New Section makes an empty section")
+        model.requestDeleteSection(later)
+        for _ in 0..<50 where model.tabSections.contains(later) { try await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(log().last { $0.0 == "DELETE" }?.1, "/api/v1/sections/\(later.id)", "An empty section deletes at once")
+        XCTAssertFalse(model.tabSections.contains(later))
+
+        model.sectionDeletion = nil
+        let deleted = await model.deleteSection(work.id)
+        XCTAssertTrue(deleted)
+        XCTAssertTrue(model.sessions.contains { $0.id == "a" }, "Deleting a section keeps its tabs")
+        XCTAssertNil(model.sessions.first { $0.id == "a" }?.sectionID, "Its tabs go back to Tabs")
     }
 
     func testOlderMacsAreToldToUpdateAndNothingIsSent() async throws {

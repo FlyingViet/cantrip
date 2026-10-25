@@ -197,6 +197,10 @@ struct CantripDuoSidebar: View {
         } else {
             flatTabs
         }
+        if model.supportsTabSections {
+            CantripNewSectionButton(model: model)
+                .padding(.horizontal, 12)
+        }
     }
 
     /// One section (or Tabs, the unfiled ones): a collapsible header with its own + and menu.

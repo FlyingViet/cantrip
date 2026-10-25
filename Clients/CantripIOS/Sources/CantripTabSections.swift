@@ -127,9 +127,9 @@ struct CantripTabSectionMenu: View {
             .disabled(model.tabSections.last?.id == section.id)
             Divider()
             Button(role: .destructive) {
-                Task { await model.deleteSection(section.id) }
+                model.requestDeleteSection(section)
             } label: {
-                Label("Delete Section", systemImage: "trash")
+                Label(group.sessions.isEmpty ? "Delete Section" : "Delete Section…", systemImage: "trash")
             }
             Text("Its tabs move back to Tabs.")
         }
@@ -142,6 +142,37 @@ struct CantripTabSectionMenu: View {
             model.editingSections = true
         } label: {
             Label("Edit Sections…", systemImage: "list.bullet")
+        }
+    }
+}
+
+/// "New Section" at the end of a tab list: an empty section, shown when the Mac has sections.
+struct CantripNewSectionButton: View {
+    let model: CantripRemoteModel
+
+    var body: some View {
+        Button {
+            model.sectionPrompt = .create(fileTabID: nil)
+        } label: {
+            Label("New Section", systemImage: "folder.badge.plus")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Adds an empty section. Move tabs into it from their menu.")
+        .accessibilityIdentifier("cantrip-tab-new-section")
+    }
+}
+
+extension CantripRemoteModel {
+    /// Empty sections go at once; a section with tabs asks first (`sectionDeletion`).
+    func requestDeleteSection(_ section: CantripTabSection) {
+        if sessions.contains(where: { $0.sectionID == section.id }) {
+            sectionDeletion = section
+        } else {
+            Task { await deleteSection(section.id) }
         }
     }
 }
@@ -235,6 +266,18 @@ private struct CantripSectionPromptModifier: ViewModifier {
             prompted(content)
                 .sheet(isPresented: $model.editingSections) {
                     CantripTabSectionsEditor(model: model)
+                }
+                .confirmationDialog(model.sectionDeletion.map { "Delete \u{201C}\($0.name)\u{201D}?" } ?? "Delete Section?",
+                                    isPresented: Binding(get: { model.sectionDeletion != nil },
+                                                         set: { if !$0 { model.sectionDeletion = nil } }),
+                                    titleVisibility: .visible, presenting: model.sectionDeletion) { section in
+                    Button("Delete Section", role: .destructive) {
+                        Task { await model.deleteSection(section.id) }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: { section in
+                    let count = model.sessions.filter { $0.sectionID == section.id }.count
+                    Text("Its \(count == 1 ? "tab moves" : "\(count) tabs move") back to Tabs. No tabs are closed.")
                 }
         } else {
             prompted(content)

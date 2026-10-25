@@ -253,7 +253,9 @@ Update and reopen the host first: these controls require `supportsTabReordering`
 Tabs can also be grouped into sections, like Slack's sidebar. Touch and hold a tab and
 choose **Move to Section** (or **New Section**); a section header's **⋯** (or touch and hold)
 has Rename, New Tab Here, Move Up/Down, Delete and **Edit Sections**, which lists every
-section to drag into order (≡), rename (tap), delete or add. Tap a header to collapse it; a collapsed
+section to drag into order (≡), rename (tap), delete or add. **New Section** at the end of the
+tab list makes an empty section that stays until you delete it. Deleting a section with tabs
+asks first; its tabs move back to Tabs and stay open. Tap a header to collapse it; a collapsed
 section still shows the open tab and tabs that are working or waiting for you. The Mac keeps
 the sections, names and order (every device shows the same ones); collapsing is per device.
 Dragging a tab reorders it within its section. Needs an updated Mac (`supportsTabSections`).
