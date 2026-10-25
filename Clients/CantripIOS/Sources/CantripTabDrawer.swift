@@ -273,25 +273,28 @@ struct CantripTabList<Actions: View>: View {
 
     private func sectionHeader(_ group: CantripTabGrouping.Group, collapsed: Bool,
                                model: CantripRemoteModel) -> some View {
-        Button {
-            withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) {
-                collapse.toggle(group.id, scope: model.tabSectionScope)
+        let onNewTab = group.section.flatMap { section in onNewTabInSection.map { open in { open(section.id) } } }
+        return HStack(spacing: 0) {
+            Button {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) {
+                    collapse.toggle(group.id, scope: model.tabSectionScope)
+                }
+            } label: {
+                CantripTabSectionTitle(group: group, collapsed: collapsed, uppercase: true)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                    .padding(.leading, 12)
+                    .contentShape(Rectangle())
             }
-        } label: {
-            CantripTabSectionTitle(group: group, collapsed: collapsed, uppercase: true)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                .padding(.horizontal, 12)
-                .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .contextMenu {
+                CantripTabSectionMenu(model: model, group: group, onNewTab: onNewTab)
+            }
+            .accessibilityIdentifier("cantrip-tab-section-\(group.id)")
+            // The same menu as touch and hold, visible so renaming and ordering are easy to find.
+            CantripTabSectionMenuButton(model: model, group: group, onNewTab: onNewTab)
         }
-        .buttonStyle(.plain)
-        .contextMenu {
-            CantripTabSectionMenu(model: model, group: group, onNewTab: group.section.flatMap { section in
-                onNewTabInSection.map { open in { open(section.id) } }
-            })
-        }
-        .accessibilityIdentifier("cantrip-tab-section-\(group.id)")
         .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)

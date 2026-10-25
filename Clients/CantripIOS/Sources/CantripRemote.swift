@@ -2342,6 +2342,8 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var supportsTabSections = false
     /// A section name being asked for, shown by `cantripSectionPrompt(model:)`.
     @Published var sectionPrompt: CantripSectionPrompt?
+    /// Edit Sections is showing (`cantripSectionPrompt(model:)` presents it).
+    @Published var editingSections = false
     @Published private(set) var connectionState: CantripRemoteConnectionState = .disconnected
     @Published private(set) var configuredURL: String
     @Published private(set) var hasStoredToken: Bool
@@ -4075,11 +4077,28 @@ final class CantripRemoteModel: ObservableObject {
     func moveSection(_ id: String, offset: Int) async -> Bool {
         guard let index = tabSections.firstIndex(where: { $0.id == id }),
               tabSections.indices.contains(index + offset) else { return false }
+        return await moveSection(id, to: index + offset)
+    }
+
+    /// Moves a section to `position` among the sections. The new order shows while the Mac saves
+    /// it (a dragged row stays where it was dropped) and reverts if the Mac refuses.
+    @discardableResult
+    func moveSection(_ id: String, to position: Int) async -> Bool {
+        guard let index = tabSections.firstIndex(where: { $0.id == id }),
+              tabSections.indices.contains(position) else { return false }
+        guard position != index else { return true }
+        let previous = tabSections
+        var reordered = tabSections
+        reordered.insert(reordered.remove(at: index), at: position)
+        tabSections = reordered
         isReorderingTabs = true
         defer { isReorderingTabs = false }
         guard let response = await mutate(prepare: { api in try await api.requireTabSections() }, { api, _ in
-            try await api.updateSection(id: id, position: index + offset)
-        }) else { return false }
+            try await api.updateSection(id: id, position: position)
+        }) else {
+            if tabSections == reordered { tabSections = previous }
+            return false
+        }
         tabSections = response.sections
         return true
     }

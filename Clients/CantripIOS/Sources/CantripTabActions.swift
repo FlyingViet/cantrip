@@ -119,6 +119,11 @@ struct CantripTabActions: View {
                 } label: {
                     Label("New Section", systemImage: "folder.badge.plus")
                 }
+                Button {
+                    model.editingSections = true
+                } label: {
+                    Label("Edit Sections…", systemImage: "list.bullet")
+                }
             } label: {
                 Label("Move to Section", systemImage: "folder")
             }

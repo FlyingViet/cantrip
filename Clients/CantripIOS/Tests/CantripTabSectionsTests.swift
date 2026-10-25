@@ -4,6 +4,8 @@ import XCTest
 
 private final class SectionRequestProtocol: URLProtocol {
     @MainActor static var handler: ((URLRequest, Data?) throws -> (Int, Any))?
+    /// The Mac refuses section changes (e.g. another device deleted the section).
+    @MainActor static var refusesSectionChanges = false
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -114,6 +116,18 @@ final class CantripTabSectionsTests: XCTestCase {
             log.append((method, path, json))
             var listing: [String: Any] { supportsSections
                 ? ["sessions": tabs, "sections": sections, "supportsTabSections": true] : ["sessions": tabs] }
+            if method == "PATCH", path.hasPrefix("/api/v1/sections/") {
+                let id = String(path.dropFirst("/api/v1/sections/".count))
+                guard !SectionRequestProtocol.refusesSectionChanges,
+                      let index = sections.firstIndex(where: { $0["id"] as? String == id }) else {
+                    return (404, ["error": "That section no longer exists. Refresh the tabs and try again."])
+                }
+                if let name = json?["name"] as? String { sections[index]["name"] = name }
+                if let position = json?["position"] as? Int {
+                    sections.insert(sections.remove(at: index), at: min(max(position, 0), sections.count))
+                }
+                return (200, ["sections": sections])
+            }
             switch (method, path) {
             case ("GET", "/api/v1/sessions"): return (200, listing)
             case ("GET", "/api/v1/sessions/a"): return (200, ["session": tabs[0]])
@@ -121,9 +135,6 @@ final class CantripTabSectionsTests: XCTestCase {
                 let section: [String: Any] = ["id": "s2", "name": json?["name"] ?? ""]
                 sections.append(section)
                 return (201, ["section": section, "sections": sections])
-            case ("PATCH", "/api/v1/sections/s1"):
-                if let name = json?["name"] as? String { sections[0]["name"] = name }
-                return (200, ["sections": sections])
             case ("DELETE", "/api/v1/sections/s1"):
                 sections.removeFirst()
                 return (200, ["sections": sections])
@@ -150,6 +161,7 @@ final class CantripTabSectionsTests: XCTestCase {
             model.setAppActive(false)
             model.clearConfiguration()
             SectionRequestProtocol.handler = nil
+            SectionRequestProtocol.refusesSectionChanges = false
         }
         model.setAppActive(true)
         await model.refreshNow()
@@ -188,6 +200,41 @@ final class CantripTabSectionsTests: XCTestCase {
         let deleted = await model.deleteSection("s1")
         XCTAssertTrue(deleted)
         XCTAssertEqual(model.tabSections.map(\.id), ["s2"])
+        XCTAssertFalse(model.isMutating)
+    }
+
+    func testMovingASectionSendsItsPositionAndRevertsWhenTheMacRefuses() async throws {
+        let (model, log) = try await configuredModel(supportsSections: true)
+        _ = await model.createSection(named: "Clients")
+        XCTAssertEqual(model.tabSections.map(\.id), ["s1", "s2"])
+
+        // Edit Sections drags: onMove's destination counts rows before the move.
+        XCTAssertEqual(CantripTabGrouping.sectionPosition(movingFrom: 1, to: 0), 0)
+        XCTAssertEqual(CantripTabGrouping.sectionPosition(movingFrom: 0, to: 2), 1)
+        XCTAssertEqual(CantripTabGrouping.sectionPosition(movingFrom: 1, to: 1), 1)
+        let up = await model.moveSection("s2", to: CantripTabGrouping.sectionPosition(movingFrom: 1, to: 0))
+        XCTAssertTrue(up, model.errorMessage ?? "")
+        XCTAssertEqual(model.tabSections.map(\.id), ["s2", "s1"])
+        let patch = log().last { $0.0 == "PATCH" }
+        XCTAssertEqual(patch?.1, "/api/v1/sections/s2")
+        XCTAssertEqual(patch?.2?["position"] as? Int, 0)
+        XCTAssertNil(patch?.2?["name"], "Moving doesn't resend the name")
+
+        let down = await model.moveSection("s2", offset: 1)
+        XCTAssertTrue(down)
+        XCTAssertEqual(model.tabSections.map(\.id), ["s1", "s2"])
+        let past = await model.moveSection("s2", offset: 1)
+        XCTAssertFalse(past, "The last section can't move further down")
+        let patches = log().filter { $0.0 == "PATCH" }.count
+        let same = await model.moveSection("s1", to: 0)
+        XCTAssertTrue(same)
+        XCTAssertEqual(log().filter { $0.0 == "PATCH" }.count, patches, "Dropping a section in place sends nothing")
+
+        SectionRequestProtocol.refusesSectionChanges = true
+        let refused = await model.moveSection("s2", to: 0)
+        XCTAssertFalse(refused)
+        XCTAssertEqual(model.tabSections.map(\.id), ["s1", "s2"], "A refused move puts the order back")
+        XCTAssertNotNil(model.errorMessage, "A refused move says why")
         XCTAssertFalse(model.isMutating)
     }
 
