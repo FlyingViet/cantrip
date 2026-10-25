@@ -42,7 +42,8 @@ extension SessionTabTests {
         try testChildTabRecord()
         try await testChildTabLifecycle()
         try await testChildTabAPI()
-        print("Child tab plan, resource, merge, conflict and API tests passed")
+        try await testChildTabAutoFork()
+        print("Child tab plan, resource, merge, conflict, API and auto-fork tests passed")
     }
 
     static func testQueuePlanningPolicy() throws {
@@ -182,7 +183,11 @@ extension SessionTabTests {
     static func testChildTabRecord() throws {
         var record = ChildTab(id: UUID(), parentID: UUID(), queueItemID: UUID(), title: "Notes file",
                               prompt: "Add a notes file", parentTitle: "Cantrip", createdAt: Date(), updatedAt: Date())
-        precondition(record.statusLine == "Working" && record.actions == ["open", "discard"])
+        precondition(record.statusLine == "Working" && record.actions == ["open", "requeue", "discard"])
+        precondition(record.displaySummary.isEmpty, "a child started by hand has no auto note")
+        record.autoStarted = true
+        precondition(record.displaySummary == ChildTab.autoStartedNote)
+        record.autoStarted = nil
         record.state = .finished
         precondition(record.actions == ["open"] && record.statusLine == "Done; merges into the parent's branch when the parent tab is idle")
         record.note = "Waiting: uncommitted changes."
@@ -728,7 +733,7 @@ extension SessionTabTests {
         let messages = try requireChild((body["session"] as? [String: Any])?["messages"] as? [[String: Any]])
         let card = messages.first { ($0["childResult"] as? [String: Any])?["id"] as? String == childID }
         precondition(card?["role"] as? String == "assistant"
-                     && (card?["childResult"] as? [String: Any])?["actions"] as? [String] == ["open", "discard"],
+                     && (card?["childResult"] as? [String: Any])?["actions"] as? [String] == ["open", "requeue", "discard"],
                      "\(messages)")
 
         (status, body) = try await call("\(base)/children/\(childID)/resolve", "POST")
