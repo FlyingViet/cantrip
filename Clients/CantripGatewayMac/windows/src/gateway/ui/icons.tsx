@@ -3,7 +3,7 @@ import {
   Activity, Antenna, Archive, ArrowDown, ArrowUp, ArrowUpDown, AudioWaveform, Bell, Bot, Box, Brain, Calendar, Check,
   ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Circle, CircleCheck, CircleDot, CircleEllipsis, CircleHelp,
   CirclePause, CirclePlay, CirclePlus, CircleStop, CircleX, Clock, Cog, Copy, Download, Ellipsis, Eraser, ExternalLink,
-  Eye, EyeOff, File, FileText, Film, Folder, FolderOpen, FolderPlus, Gauge, GripVertical, Hammer, History, Hourglass, House, Image,
+  Eye, EyeOff, File, FileText, Film, Folder, FolderOpen, FolderPlus, Gauge, GitBranch, GripVertical, Hammer, History, Hourglass, House, Image,
   Images, Info, KeyRound, Layers, LayoutGrid, Link, ListChecks, ListOrdered, Lock, LogOut, MessagesSquare, Mic, Monitor,
   PanelLeft, Paperclip, Pause, Pencil, Play, Plus, Power, RadioTower, RotateCw, Rows3, Search, Send, Server, Settings,
   Settings2, Shirt, ShieldCheck, SlidersHorizontal, Sparkles, Square, SquareArrowOutUpRight, Star, Terminal, Timer, Trash2,
@@ -33,7 +33,7 @@ const ICONS = {
   "line.3.horizontal": GripVertical, "arrow.up.arrow.down": ArrowUpDown, star: Star, shippingbox: Box, doc: File,
   "rectangle.portrait.and.arrow.right": LogOut, power: Power, waveformPath: Activity, cpu: Bot, person: UserRound,
   "record.circle": CircleDot, circle: Circle, timer: Timer, "clock.arrow.circlepath": History, "list.bullet": Rows3,
-  server: Server,
+  server: Server, "arrow.triangle.branch": GitBranch,
 } satisfies Record<string, IconNode>;
 
 export type IconName = keyof typeof ICONS;

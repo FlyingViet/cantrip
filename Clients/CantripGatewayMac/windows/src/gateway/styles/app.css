@@ -35,6 +35,7 @@
   --teal: #64d2ff;
   --indigo: #5e5ce6;
   --active-tint: #ff9f0a;
+  --child-lane: #64d2ff;
   --font: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, Menlo, monospace;
@@ -209,6 +210,11 @@ a:hover { text-decoration: underline; }
 .sidebar-row .row-icon { color: var(--accent); }
 .sidebar-row .age { font-size: 11px; color: var(--secondary); font-variant-numeric: tabular-nums; }
 .sidebar-row.dragging { opacity: 0.45; }
+/* A child tab sits under its parent with a guide line and can't be dragged away. */
+.sidebar-row.child-tab { width: calc(100% - 14px); margin-left: 14px; }
+.sidebar-row .child-guide { position: absolute; left: -8px; top: 3px; bottom: 3px; width: 2px; border-radius: 1px; background: var(--separator); }
+.sidebar-row .child-glyph { color: var(--child-lane); }
+.sidebar-row[aria-current="true"] .child-glyph { color: #fff; }
 .sidebar-row.drop-before::before, .sidebar-row.drop-after::after {
   content: ""; position: absolute; left: 6px; right: 6px; height: 2px; background: var(--accent); border-radius: 1px;
 }

@@ -303,11 +303,13 @@ function TabRow(props: {
     ? <StatusIcon kind="needsInput" size={15} />
     : session.isStreaming ? <Spinner size="small" tint="tint" /> : <span class="dot gray" />;
   const lock = session.isLocalPrivate ? <Icon name="lock.shield.fill" size={12} /> : session.isLocked ? <Icon name="lock.fill" size={12} /> : null;
-  const label = [title, session.isLocalPrivate ? "Self-hosted, saved" : session.isLocked ? "Locked" : null, detail?.text, age && age !== "now" ? `${age} ago` : age ? "just now" : null]
+  const parent = session.parentID ? `child tab of ${session.child?.parentTitle || "another tab"}` : null;
+  const label = [title, parent, session.isLocalPrivate ? "Self-hosted, saved" : session.isLocked ? "Locked" : null, detail?.text, age && age !== "now" ? `${age} ago` : age ? "just now" : null]
     .filter(Boolean).join(", ");
+  const hover = session.child ? `Child tab of ${session.child.parentTitle} · ${session.child.statusLine}` : detail?.text ?? title;
   return (
-    <button type="button" class={`sidebar-row${props.dragClass}`} aria-current={props.current ? "true" : "false"}
-      data-tab-id={session.id} title={detail?.text ?? title} aria-label={label}
+    <button type="button" class={`sidebar-row${session.parentID ? " child-tab" : ""}${props.dragClass}`} aria-current={props.current ? "true" : "false"}
+      data-tab-id={session.id} title={hover} aria-label={label}
       draggable={session.supportsTabReordering}
       onClick={() => nav.openTab(session.id)}
       onContextMenu={(event) => { event.preventDefault(); openMenu({ x: event.clientX, y: event.clientY }, tabActions(session), { label: `${title} actions` }); }}
@@ -323,8 +325,12 @@ function TabRow(props: {
       }}
       onDrop={(event) => { event.preventDefault(); props.onDrop(); }}
       onDragEnd={props.onDragEnd}>
+      {session.parentID ? <span class="child-guide" aria-hidden="true" /> : null}
       <span class="tab-status" aria-hidden="true">{status}</span>
-      <span class="label row" style={{ gap: "3px" }}>{lock}<span class="truncate">{title}</span></span>
+      <span class="label row" style={{ gap: "3px" }}>
+        {session.parentID ? <Icon name="arrow.triangle.branch" size={12} class="child-glyph" /> : null}
+        {lock}<span class="truncate">{title}</span>
+      </span>
       {age ? <span class="age" aria-hidden="true">{age}</span> : null}
     </button>
   );

@@ -247,7 +247,8 @@ struct MacHomeWindow: View {
                 CantripTabActions(
                     model: remote, session: session,
                     onRename: { navigation.renamingTab = session },
-                    onClose: { navigation.closeTab(session.id) }
+                    onClose: { navigation.closeTab(session.id) },
+                    onOpenTab: { navigation.openTab($0) }
                 )
                 Divider()
             }

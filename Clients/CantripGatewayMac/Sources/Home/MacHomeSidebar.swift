@@ -90,10 +90,14 @@ struct MacHomeSidebar: View {
                     CantripTabActions(
                         model: remote, session: session,
                         onRename: { navigation.renamingTab = session },
-                        onClose: { navigation.closeTab(session.id) }
+                        onClose: { navigation.closeTab(session.id) },
+                        onOpenTab: { navigation.openTab($0) }
                     )
                 }
-                .itemProvider { NSItemProvider(object: (Self.dragPrefix + session.id) as NSString) }
+                // A child tab stays under its parent until its work merges.
+                .itemProvider(session.isChildTab ? nil : {
+                    NSItemProvider(object: (Self.dragPrefix + session.id) as NSString)
+                })
         }
         .onMove { offsets, destination in
             guard let move = CantripTabReorder.move(sessions, fromOffsets: offsets, toOffset: destination) else { return }
@@ -343,6 +347,9 @@ struct MacHomeTabRow: View {
             CantripTabStatusIndicator(session: session)
                 .frame(width: 16)
             HStack(spacing: 3) {
+                if session.isChildTab {
+                    CantripChildTabGlyph()
+                }
                 if session.isLocalPrivate == true {
                     Image(systemName: "lock.shield.fill").font(.caption2)
                 } else if session.isLocked == true {
@@ -355,7 +362,9 @@ struct MacHomeTabRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             CantripTabAgeText(date: session.lastActivityDate)
         }
-        .help(CantripTabRowText.detail(for: session)?.text ?? session.title)
+        .cantripChildTabIndent(session, by: 14)
+        .help(session.child.map { "Child tab of \($0.parentTitle) · \($0.statusLine)" }
+              ?? CantripTabRowText.detail(for: session)?.text ?? session.title)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(CantripSessionPicker.accessibilityTitle(for: session))
         .accessibilityValue(session.tabRowAccessibilityValue)
