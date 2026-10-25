@@ -54,6 +54,12 @@ enum CantripTabGrouping {
         return group.sessions.filter { $0.id == selectedID || $0.isStreaming || ($0.pendingInputCount ?? 0) > 0 }
     }
 
+    /// A list drag (`onMove`: `destination` counts rows before the move) as the section's new
+    /// position for `CantripRemoteModel.moveSection(_:to:)`.
+    static func sectionPosition(movingFrom source: Int, to destination: Int) -> Int {
+        destination > source ? destination - 1 : destination
+    }
+
     /// The section a tab shows under, or nil for Tabs.
     static func sectionID(of session: CantripRemoteSession, sections: [CantripTabSection]) -> String? {
         session.sectionID.flatMap { id in sections.contains { $0.id == id } ? id : nil }
@@ -132,6 +138,34 @@ struct CantripTabSectionMenu: View {
         } label: {
             Label("New Section", systemImage: "folder.badge.plus")
         }
+        Button {
+            model.editingSections = true
+        } label: {
+            Label("Edit Sections…", systemImage: "list.bullet")
+        }
+    }
+}
+
+/// The visible "…" on a section header: the same menu as touch and hold.
+struct CantripTabSectionMenuButton: View {
+    let model: CantripRemoteModel
+    let group: CantripTabGrouping.Group
+    var onNewTab: (() -> Void)? = nil
+
+    var body: some View {
+        Menu {
+            CantripTabSectionMenu(model: model, group: group, onNewTab: onNewTab)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .accessibilityLabel(group.section == nil ? "Tabs options" : "\(group.name) section options")
+        .accessibilityIdentifier("cantrip-tab-section-menu-\(group.id)")
     }
 }
 
@@ -169,22 +203,50 @@ struct CantripTabSectionTitle: View {
 }
 
 extension View {
-    /// Asks for a section's name when `model.sectionPrompt` is set (New Section, Rename Section).
+    /// Asks for a section's name when `model.sectionPrompt` is set (New Section, Rename Section),
+    /// and shows Edit Sections when `model.editingSections` is set. Attach once per app.
     func cantripSectionPrompt(model: CantripRemoteModel) -> some View {
-        modifier(CantripSectionPromptModifier(model: model))
+        modifier(CantripSectionPromptModifier(model: model, local: nil))
+    }
+
+    /// The same name prompt driven by `prompt`, for sheets that can't show the app's alert.
+    func cantripSectionPrompt(model: CantripRemoteModel, prompt: Binding<CantripSectionPrompt?>) -> some View {
+        modifier(CantripSectionPromptModifier(model: model, local: prompt))
     }
 }
 
 private struct CantripSectionPromptModifier: ViewModifier {
     @ObservedObject var model: CantripRemoteModel
+    /// Nil: the app-wide prompt (`model.sectionPrompt`), which also presents Edit Sections.
+    let local: Binding<CantripSectionPrompt?>?
     @State private var name = ""
 
-    func body(content: Content) -> some View {
+    private var current: CantripSectionPrompt? {
+        if let local { return local.wrappedValue }
+        return model.sectionPrompt
+    }
+
+    private func dismissPrompt() {
+        if let local { local.wrappedValue = nil } else { model.sectionPrompt = nil }
+    }
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if local == nil {
+            prompted(content)
+                .sheet(isPresented: $model.editingSections) {
+                    CantripTabSectionsEditor(model: model)
+                }
+        } else {
+            prompted(content)
+        }
+    }
+
+    private func prompted(_ content: Content) -> some View {
         content
             .alert(title, isPresented: Binding(
-                get: { model.sectionPrompt != nil },
-                set: { if !$0 { model.sectionPrompt = nil } }
-            ), presenting: model.sectionPrompt) { prompt in
+                get: { current != nil },
+                set: { if !$0 { dismissPrompt() } }
+            ), presenting: current) { prompt in
                 TextField("Section name", text: $name)
                     .accessibilityIdentifier("section.name")
                 Button("Cancel", role: .cancel) {}
@@ -201,12 +263,12 @@ private struct CantripSectionPromptModifier: ViewModifier {
                 Text(prompt.isRename ? "Up to 40 characters."
                      : "Sections group tabs on every device. Up to 40 characters.")
             }
-            .onChange(of: model.sectionPrompt) { _, prompt in
+            .onChange(of: current) { _, prompt in
                 if case .rename(let section) = prompt { name = section.name } else { name = "" }
             }
     }
 
-    private var title: String { model.sectionPrompt?.isRename == true ? "Rename Section" : "New Section" }
+    private var title: String { current?.isRename == true ? "Rename Section" : "New Section" }
 }
 
 private extension CantripSectionPrompt {

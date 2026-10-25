@@ -225,6 +225,9 @@ struct CantripDuoSidebar: View {
                 .disabled(!model.isConfigured || model.isMutating)
                 .accessibilityLabel(group.section == nil ? "New Tab" : "New Tab in \(group.name)")
                 .accessibilityIdentifier(group.section == nil ? "duo.sidebar.newTab" : "duo.sidebar.newTab.\(group.id)")
+                CantripTabSectionMenuButton(model: model, group: group, onNewTab: group.section.map { section in
+                    { Task { if let id = await model.createTab(inSection: section.id) { onSelectTab(id) } } }
+                })
             }
         )
         .contextMenu {
