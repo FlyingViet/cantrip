@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { backendArgs } from "../src/main/backends";
 import { codexMcpArguments } from "../src/main/backends";
@@ -90,9 +92,11 @@ describe("backend action policy", () => {
   });
 
   it("passes screen captures through each backend's supported mechanism", () => {
-    const paths = ["C:\\Temp\\Cantrip\\run\\screen-1.png"];
+    // The host platform's own path form (Windows in CI and in use; also passes on a Mac).
+    const folder = path.join(os.tmpdir(), "Cantrip", "run");
+    const paths = [path.join(folder, "screen-1.png")];
     const claude = backendArgs(request("claude", false), paths);
-    expect(claude).toEqual(expect.arrayContaining(["--add-dir", "C:\\Temp\\Cantrip\\run"]));
+    expect(claude).toEqual(expect.arrayContaining(["--add-dir", folder]));
     expect(claude.join(" ")).toContain("screen-1.png");
 
     expect(backendArgs(request("copilot", false), paths)).toEqual(

@@ -514,7 +514,10 @@ extension SessionTabTests {
           check($("homeTasks").closest(".tools")&&$("homeTasks").classList.contains("hidden"),"Tasks waits for a Mac that has Cantrip Home");
           api=async(path,options={})=>{calls.push([path,options.method||"GET"]);
             if(path==="/api/v1/sessions")return {sessions:[],home:{id:"7EAE0CE5-8C8B-4652-9FD0-214867A90E5D",title:"Cantrip Home",isCantripHome:true,messages:[],historyRevision:"h"}};
-            if(path==="/api/v1/home/tasks")return JSON.parse(JSON.stringify(snapshot));return {session:{id:"7EAE0CE5-8C8B-4652-9FD0-214867A90E5D",title:"Cantrip Home",messages:[]}}};
+            // Like the Mac: tasks take ?revision= and reply unchanged while nothing changed.
+            if(path.startsWith("/api/v1/home/tasks")){const asked=new URLSearchParams(path.split("?")[1]||"").get("revision");
+              return asked===snapshot.revision?{unchanged:true}:JSON.parse(JSON.stringify(snapshot))}
+            return {session:{id:"7EAE0CE5-8C8B-4652-9FD0-214867A90E5D",title:"Cantrip Home",messages:[]}}};
           await refresh();await settle();
           check(!$("homeTasks").classList.contains("hidden"),"A Mac with Cantrip Home shows Tasks");
           const button=$("homeTasks").getBoundingClientRect();

@@ -550,8 +550,15 @@ private func runTests() async throws {
         context.exceptionHandler = { _, error in expect(false, "web refresh JavaScript: \(error?.toString() ?? "unknown")") }
         context.evaluateScript("""
         let token="test",selected="a",pending=[],rendered=[],connections=[],timer=null,renderedSession="a";
-        const elements=new Map(),document={hidden:true,addEventListener(){}};
-        const $=id=>{if(!elements.has(id))elements.set(id,{textContent:""});return elements.get(id)};
+        // The rest of the page's globals the sliced code touches (sidebar layout off, no navigation).
+        let sidebarLayout=false,uiNavigating=false,uiActiveWrites=0,uiMutationWarning=null,tabLink=null;
+        const history={replaceState(){}},location={pathname:"/",search:""};
+        function setText(node,text){node.textContent=text}
+        function observeUIRevision(){}
+        function scheduleUIReload(){}
+        const elements=new Map(),document={hidden:true,addEventListener(){},querySelector(){return null},documentElement:{dataset:{}}};
+        const $=id=>{if(!elements.has(id))elements.set(id,{textContent:"",value:"",dataset:{},children:[],append(){},setAttribute(){},
+          classList:{toggle(){},add(){},remove(){},contains(){return false}}});return elements.get(id)};
         function api(path){return new Promise((resolve,reject)=>pending.push({path,resolve,reject}))}
         function renderSessions(items){}
         function render(session){if(session)rendered.push(session.id)}
