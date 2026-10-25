@@ -1106,7 +1106,9 @@ struct LauncherView: View {
         if value.hasPrefix(Self.sectionDragPrefix),
            let id = UUID(uuidString: String(value.dropFirst(Self.sectionDragPrefix.count))),
            id != group.section?.id {
-            moveSection(id, to: group.section.flatMap { target in manager.tabSections.firstIndex { $0.id == target.id } } ?? 0)
+            // Onto Tabs (always last): the last section.
+            moveSection(id, to: group.section.flatMap { target in manager.tabSections.firstIndex { $0.id == target.id } }
+                        ?? manager.tabSections.count - 1)
             return true
         }
         return false
