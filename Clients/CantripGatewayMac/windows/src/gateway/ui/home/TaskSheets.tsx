@@ -7,7 +7,7 @@ import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
 import { FormRow, FormSection, Sheet } from "../kit";
 import {
-  canSaveRecord, capitalized, formatDayTime, fromLocalInput, initialRecordValues, isScheduled, toLocalInput,
+  canSaveRecord, capitalized, formatDayTime, fromLocalInput, initialRecordValues, isScheduled, taskModelSummary, toLocalInput,
 } from "./homeLogic";
 import { homeDataError, mutationError, saveRecord, updateTask } from "./homeState";
 import { ErrorLine, RunSummary } from "./parts";
@@ -52,9 +52,10 @@ export function TaskEditSheet(props: { task: HomeTask; onClose: () => void }): J
           </FormRow>
         </FormSection>
         {isScheduled(task) ? (
-          <FormSection header="Schedule" footer="To change the schedule, ask Cantrip Home in Chat.">
+          <FormSection header="Schedule" footer="To change the schedule or model, ask Cantrip Home in Chat.">
             <FormRow label="Runs"><span class="form-value selectable">{task.schedule.summary}</span></FormRow>
             <FormRow label="Time zone"><span class="form-value selectable">{task.schedule.timeZone}</span></FormRow>
+            <FormRow label="Model"><span class="form-value selectable">{taskModelSummary(task) ?? "Home's model"}</span></FormRow>
             <FormRow>
               <button type="button" class="btn link" onClick={() => chat(`Change the schedule for ${task.title} to `)}>Change schedule in Chat</button>
             </FormRow>
@@ -72,6 +73,7 @@ export function TaskEditSheet(props: { task: HomeTask; onClose: () => void }): J
         {run ? (
           <FormSection header="Latest run">
             <FormRow label="Status"><span class="form-value">{capitalized(run.status)}</span></FormRow>
+            {run.model ? <FormRow label="Model"><span class="form-value selectable">{run.model}</span></FormRow> : null}
             {run.summary ? <FormRow><RunSummary summary={run.summary} class="selectable hm-sheet-summary" /></FormRow> : null}
           </FormSection>
         ) : null}
