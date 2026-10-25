@@ -27,6 +27,9 @@ describe("child tab cards", () => {
       .toEqual(["Try Again", "Discard"]);
     expect(extraActions(child({ state: "failed", actions: ["open", "discard"] }))).toEqual([]);
     expect(extraActions(child({ state: "working", branch: "b", actions: ["open", "discard"] }))).toEqual([]);
+    expect(extraActions(child({ state: "needsInput", branch: "b", actions: ["open", "requeue", "discard"] })).map((a) => a.label))
+      .toEqual(["Run in this tab instead"]);
+    expect(extraActions(child({ state: "requeued", actions: ["open"] }))).toEqual([]);
     expect(extraActions(child({ state: "conflict", branch: "b", actions: ["resolve", "open"] }))).toEqual([]);
     expect(extraActions(child({ state: "stopped", branch: "b", actions: ["merge", "discard", "open"] })).map((a) => a.action))
       .toEqual(["merge", "discard"]);

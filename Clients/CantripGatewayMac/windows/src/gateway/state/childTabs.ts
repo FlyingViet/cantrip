@@ -17,9 +17,15 @@ export function conflictOptions(child: RemoteChildResult): { action: ChildTabAct
   return all.filter((option) => child.actions.includes(option.action));
 }
 
-/** Try Again, Merge Its Work and Discard once the child stopped working; Discard needs a branch. */
+/**
+ * Run in this tab instead while the child works; Try Again, Merge Its Work and Discard once it
+ * stopped (Discard needs a branch).
+ */
 export function extraActions(child: RemoteChildResult): { action: ChildTabAction; label: string }[] {
-  if (["conflict", "working", "needsInput"].includes(child.state)) return [];
+  if (["working", "needsInput"].includes(child.state)) {
+    return child.actions.includes("requeue") ? [{ action: "requeue", label: "Run in this tab instead" }] : [];
+  }
+  if (child.state === "conflict") return [];
   const labels: Partial<Record<ChildTabAction, string>> = { retry: "Try Again", merge: "Merge Its Work", discard: "Discard" };
   return child.actions.flatMap((action) => {
     const label = labels[action as ChildTabAction];
@@ -70,6 +76,7 @@ export function chipGlyph(state: string): string {
     case "conflict": return "⚠";
     case "failed": return "!";
     case "working": case "merging": return "•";
+    case "requeued": return "↩";
     default: return "–";
   }
 }
