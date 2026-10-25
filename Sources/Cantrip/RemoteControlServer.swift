@@ -3069,14 +3069,14 @@ private extension RemoteControlServer {
       if(sidebarLayout||event.ctrlKey||event.shiftKey||Math.abs(event.deltaX)>=Math.abs(event.deltaY)||nav.scrollWidth<=nav.clientWidth)return;
       event.preventDefault();const unit=event.deltaMode===1?16:event.deltaMode===2?nav.clientWidth:1;nav.scrollLeft+=event.deltaY*unit
     },{passive:false});
-    // Home first, then unfiled tabs under "Tabs", then each section in the Mac's order. A collapsed
+    // Home first, then each section in the Mac's order, then unfiled tabs under "Tabs". A collapsed
     // section still shows the open tab and tabs that are working or waiting for an answer.
     function sectionedOrder(items){if(!tabSections.length)return items.map(item=>({item}));
       const known=new Set(tabSections.map(section=>section.id)),groups=[],order=[];
       const loose=items.filter(item=>!item.isCantripHome&&!known.has(item.sectionID));
       for(const item of items)if(item.isCantripHome)order.push({item});
-      if(loose.length)groups.push({id:looseSectionID,name:"Tabs",items:loose});
       for(const section of tabSections)groups.push({id:section.id,name:section.name,items:items.filter(item=>item.sectionID===section.id)});
+      if(loose.length)groups.push({id:looseSectionID,name:"Tabs",items:loose});
       for(const group of groups){order.push({group});const collapsed=collapsedSections.has(group.id);
         for(const item of group.items)if(!collapsed||item.id===selected||item.isStreaming||item.pendingInputCount>0)order.push({item})}
       return order}
@@ -3085,7 +3085,7 @@ private extension RemoteControlServer {
       menu.type="button";menu.className="section-menu";menu.textContent="…";header.append(toggle,menu);
       toggle.onclick=()=>{if(collapsedSections.has(id))collapsedSections.delete(id);else collapsedSections.add(id);
         try{localStorage.setItem(collapsedSectionsKey,JSON.stringify([...collapsedSections]))}catch{}renderSessions(sessionItems)};
-      // Sections reorder by dragging their header onto another one (onto Tabs = first), or with Alt+arrows.
+      // Sections reorder by dragging their header onto another one (onto Tabs = last), or with Alt+arrows.
       header.ondragstart=event=>{if(movingTab||id===looseSectionID){event.preventDefault();return}draggedSectionID=id;header.classList.add("dragging");
         event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("text/plain",`cantrip-section:${id}`)};
       header.ondragend=()=>{draggedSectionID=null;header.classList.remove("dragging");for(const row of $("sessions").children)row.classList.remove("drop-target");refresh()};
@@ -3093,7 +3093,7 @@ private extension RemoteControlServer {
       header.ondragleave=()=>header.classList.remove("drop-target");
       header.ondrop=event=>{event.preventDefault();header.classList.remove("drop-target");const tabID=draggedTabID,sectionID=draggedSectionID;draggedTabID=null;draggedSectionID=null;
         if(tabID)fileTab(tabID,id===looseSectionID?null:id);
-        else if(sectionID&&sectionID!==id)moveSectionTo(sectionID,id===looseSectionID?0:tabSections.findIndex(section=>section.id===id))};
+        else if(sectionID&&sectionID!==id)moveSectionTo(sectionID,id===looseSectionID?tabSections.length-1:tabSections.findIndex(section=>section.id===id))};
       toggle.onkeydown=event=>{if(!event.altKey||id===looseSectionID)return;const earlier=sidebarLayout?"ArrowUp":"ArrowLeft",later=sidebarLayout?"ArrowDown":"ArrowRight";
         if(event.key===earlier||event.key===later){event.preventDefault();moveSectionBy(id,event.key===earlier?-1:1)}};
       return header}
