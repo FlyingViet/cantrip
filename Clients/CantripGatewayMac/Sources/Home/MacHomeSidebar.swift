@@ -18,6 +18,8 @@ struct MacHomeSidebar: View {
     @AppStorage(CantripMascotOutfit.storageKey) private var outfit: CantripMascotOutfit = .starryPlush
     @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
     @ObservedObject private var collapse = CantripTabSectionCollapse.shared
+    /// The section header a drag is over (outlined).
+    @State private var dropTarget: String?
 
     var body: some View {
         // Header and footer sit outside the list (not as safe-area insets, which let rows scroll
@@ -93,16 +95,27 @@ struct MacHomeSidebar: View {
     }
 
     private static let dragPrefix = "cantrip-tab:"
+    private static let sectionDragPrefix = "cantrip-section:"
 
-    /// A tab dropped on a section's header is filed there (after the section's last tab).
-    private func dropTab(_ providers: [NSItemProvider], into group: CantripTabGrouping.Group) -> Bool {
+    /// A tab dropped on a section's header is filed there (after the section's last tab); a section's
+    /// header dropped on another takes its place (on Tabs: first).
+    private func drop(_ providers: [NSItemProvider], onto group: CantripTabGrouping.Group) -> Bool {
         guard let provider = providers.first else { return false }
         _ = provider.loadObject(ofClass: NSString.self) { object, _ in
-            guard let text = object as? String, text.hasPrefix(Self.dragPrefix) else { return }
-            let id = String(text.dropFirst(Self.dragPrefix.count))
+            guard let text = object as? String else { return }
             Task { @MainActor in
-                guard !group.sessions.contains(where: { $0.id == id }) else { return }
-                await remote.fileTab(id, in: group.section?.id)
+                if text.hasPrefix(Self.dragPrefix) {
+                    let id = String(text.dropFirst(Self.dragPrefix.count))
+                    guard !group.sessions.contains(where: { $0.id == id }) else { return }
+                    await remote.fileTab(id, in: group.section?.id)
+                } else if text.hasPrefix(Self.sectionDragPrefix) {
+                    let id = String(text.dropFirst(Self.sectionDragPrefix.count))
+                    guard id != group.section?.id else { return }
+                    let position = group.section.flatMap { target in
+                        remote.tabSections.firstIndex { $0.id == target.id }
+                    } ?? 0
+                    await remote.moveSection(id, to: position)
+                }
             }
         }
         return true
@@ -128,7 +141,8 @@ struct MacHomeSidebar: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(collapsed ? "Show this section's tabs" : "Hide this section's idle tabs")
+                .help((collapsed ? "Show this section's tabs" : "Hide this section's idle tabs")
+                      + (group.section == nil ? "" : ". Drag onto another section to reorder."))
                 Button {
                     if let section = group.section {
                         Task { if let id = await remote.createTab(inSection: section.id) { navigation.openTab(id) } }
@@ -151,9 +165,22 @@ struct MacHomeSidebar: View {
                     { Task { if let id = await remote.createTab(inSection: section.id) { navigation.openTab(id) } } }
                 })
             }
-            // Dropping a tab on a section's header files it there.
-            .onDrop(of: [.plainText], isTargeted: nil) { providers in
-                dropTab(providers, into: group)
+            .modifier(MacSectionDragSource(sectionID: group.section?.id, prefix: Self.sectionDragPrefix))
+            // Dropping a tab on a section's header files it there; dropping a section moves it.
+            .onDrop(of: [.plainText], isTargeted: Binding(
+                get: { dropTarget == group.id },
+                set: { targeted in
+                    if targeted { dropTarget = group.id } else if dropTarget == group.id { dropTarget = nil }
+                }
+            )) { providers in
+                drop(providers, onto: group)
+            }
+            .background {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.accentColor.opacity(0.15))
+                    .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) }
+                    .opacity(dropTarget == group.id ? 1 : 0)
+                    .allowsHitTesting(false)
             }
             .accessibilityIdentifier("sidebar.section.\(group.id)")
         }
@@ -326,5 +353,19 @@ struct MacHomeTabRow: View {
         .accessibilityLabel(CantripSessionPicker.accessibilityTitle(for: session))
         .accessibilityValue(session.tabRowAccessibilityValue)
         .accessibilityIdentifier("sidebar.tab.\(session.id)")
+    }
+}
+
+/// Lets a section's header be dragged onto another to reorder (Tabs stays first and doesn't drag).
+private struct MacSectionDragSource: ViewModifier {
+    let sectionID: String?
+    let prefix: String
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let sectionID {
+            content.onDrag { NSItemProvider(object: (prefix + sectionID) as NSString) }
+        } else {
+            content
+        }
     }
 }

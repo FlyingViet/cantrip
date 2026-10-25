@@ -8,7 +8,7 @@ import { now } from "../state/clock";
 import { relativeShort, runningTasks, tabRowDetail, workingTabs } from "../state/format";
 import * as nav from "../state/nav";
 import * as remote from "../state/remote";
-import { collapsedSections, LOOSE_ID, tabGroups, toggleCollapsed, visibleTabs, type TabGroup } from "../state/sections";
+import { collapsedSections, LOOSE_ID, sectionDropPosition, tabGroups, toggleCollapsed, visibleTabs, type TabGroup } from "../state/sections";
 import { Icon, StatusIcon } from "./icons";
 import { openMenu, Spinner, toast, type MenuEntry } from "./kit";
 import { currentActivity, displayName, resolveMood } from "./pip/mascot";
@@ -101,6 +101,16 @@ function sectionMenu(group: TabGroup): MenuEntry[] {
   return entries;
 }
 
+/** Moves a section and keeps keyboard focus on its header. */
+async function moveSectionTo(id: string, position: number): Promise<void> {
+  try {
+    await remote.moveSectionTo(id, position);
+  } catch (error) {
+    toast(`Section change failed: ${(error as Error).message}`);
+  }
+  document.querySelector<HTMLElement>(`[data-section-id="${CSS.escape(id)}"] .section-toggle`)?.focus();
+}
+
 async function newTabIn(sectionID: string): Promise<void> {
   try {
     const session = await remote.createTabInSection(sectionID);
@@ -117,6 +127,8 @@ function SidebarList(): JSX.Element {
   const hasHome = remote.homeSummary.value !== null || !remote.listed.value;
   const [drag, setDrag] = useState<{ id: string; over: string | null; after: boolean } | null>(null);
   const [overSection, setOverSection] = useState<string | null>(null);
+  /** A section header being dragged onto another to reorder. */
+  const [sectionDrag, setSectionDrag] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const groups = tabGroups(tabs, remote.tabSections.value);
   void collapseRevision.value;
@@ -161,19 +173,40 @@ function SidebarList(): JSX.Element {
         const isCollapsed = collapsed.has(group.id);
         const groupWorking = workingTabs(group.sessions);
         return [
-          <div key={`section-${group.id}`} class={`sidebar-section tab-section${overSection === group.id ? " drop-target" : ""}`}
+          <div key={`section-${group.id}`}
+            class={`sidebar-section tab-section${overSection === group.id ? " drop-target" : ""}${sectionDrag === group.id ? " dragging" : ""}`}
             role="heading" aria-level={2} data-section-id={group.id}
+            // Sections reorder by dragging their header onto another (onto Tabs: first), or Alt+Up/Down.
+            draggable={group.section !== null && !remote.isMutating.value}
+            onDragStart={(event) => {
+              if (!group.section) return;
+              setSectionDrag(group.id);
+              event.dataTransfer?.setData("text/plain", `cantrip-section:${group.id}`);
+              if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+            }}
+            onDragEnd={() => { setSectionDrag(null); setOverSection(null); }}
             onContextMenu={(event) => { event.preventDefault(); openMenu({ x: event.clientX, y: event.clientY }, sectionMenu(group), { label: `${group.name} section` }); }}
-            onDragOver={(event) => { if (drag) { event.preventDefault(); setOverSection(group.id); } }}
+            onDragOver={(event) => { if (drag || (sectionDrag && sectionDrag !== group.id)) { event.preventDefault(); setOverSection(group.id); } }}
             onDragLeave={() => setOverSection(null)}
             onDrop={(event) => {
               event.preventDefault();
               setOverSection(null);
               if (drag) void remote.fileTab(drag.id, group.section?.id ?? null).catch((error) => toast(`Move failed: ${error.message}`));
+              else if (sectionDrag && sectionDrag !== group.id) void moveSectionTo(sectionDrag, sectionDropPosition(remote.tabSections.value, group.id));
               setDrag(null);
+              setSectionDrag(null);
             }}>
             <button type="button" class="section-toggle" aria-expanded={!isCollapsed}
-              title={isCollapsed ? `Show ${group.name}'s tabs` : `Hide ${group.name}'s idle tabs`}
+              aria-keyshortcuts={group.section ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
+              title={(isCollapsed ? `Show ${group.name}'s tabs` : `Hide ${group.name}'s idle tabs`)
+                + (group.section ? ". Drag onto another section, or press Alt+↑/↓, to reorder." : "")}
+              onKeyDown={(event) => {
+                if (!event.altKey || !group.section || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const index = remote.tabSections.value.findIndex((section) => section.id === group.id);
+                void moveSectionTo(group.id, index + (event.key === "ArrowUp" ? -1 : 1));
+              }}
               onClick={() => { toggleCollapsed(localStorage, collapseScope(), group.id); collapseRevision.value += 1; }}>
               <Icon name="chevron.right" size={12} class={isCollapsed ? "" : "rotated"} />
               <span class="truncate">{group.name}</span>

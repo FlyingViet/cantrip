@@ -109,8 +109,10 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   dot otherwise, and how long ago it last ran. **+** (⌘T) starts a tab; drag to reorder;
   right-click for Rename, Lock, Move, Move to Section, Model Settings, Start Fresh, View Mac
   and Close. With sections (made on any device), tabs show under collapsible headers, each
-  with its own **+** and a right-click menu (Rename, New Tab Here, Move Up/Down, Delete); drop a
-  tab on a header to file it there. Collapsed sections still show working tabs. The footer
+  with its own **+** and a right-click menu (Rename, New Tab Here, Move Up/Down, Delete, Edit
+  Sections); drop a tab on a header to file it there, or drag a header onto another to reorder
+  sections. **Edit Sections** renames, reorders (drag or arrows), deletes and adds them.
+  Collapsed sections still show working tabs. The footer
   shows the connection.
 - **Tabs:** selecting a tab shows its transcript and composer in place. The toolbar shows its
   name and **Working / Idle · folder**, with Stop, delivery (**Auto**) and **⋯** for the tab's
