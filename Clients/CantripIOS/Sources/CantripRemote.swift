@@ -2344,6 +2344,8 @@ final class CantripRemoteModel: ObservableObject {
     @Published var sectionPrompt: CantripSectionPrompt?
     /// Edit Sections is showing (`cantripSectionPrompt(model:)` presents it).
     @Published var editingSections = false
+    /// A section with tabs waiting for Delete to be confirmed (`cantripSectionPrompt(model:)`).
+    @Published var sectionDeletion: CantripTabSection?
     @Published private(set) var connectionState: CantripRemoteConnectionState = .disconnected
     @Published private(set) var configuredURL: String
     @Published private(set) var hasStoredToken: Bool

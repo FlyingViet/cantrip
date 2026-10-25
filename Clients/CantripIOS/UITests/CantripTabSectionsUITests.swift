@@ -113,6 +113,111 @@ final class CantripTabSectionsUITests: XCTestCase {
         attach(app, "edit-7-drawer-after")
     }
 
+    /// From the tab drawer: New Section makes an empty section, a tab moves into it from its menu,
+    /// and the header's … deletes it after confirming; the tab stays open, back under Tabs.
+    func testNewEmptySectionThenDeleteFromTheDrawer() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let url = environment["CANTRIP_UITEST_REMOTE_URL"],
+              let token = environment["CANTRIP_UITEST_REMOTE_TOKEN"] else {
+            throw XCTSkip("Start a local host with sections and set CANTRIP_UITEST_REMOTE_URL and CANTRIP_UITEST_REMOTE_TOKEN")
+        }
+        continueAfterFailure = false
+        let name = "Later"
+        XCTAssertFalse(try hostSectionNames(url: url, token: token).contains(name))
+        let unfiled = try XCTUnwrap(try hostTabs(url: url, token: token).first { $0.sectionID == nil }, "The host needs an unfiled tab")
+        let app = XCUIApplication()
+        app.launchArguments = ["-CantripUITestRemoteURL", url, "-CantripUITestRemoteToken", token,
+                               "-CantripUITestLane", "home"]
+        app.launch()
+        dismissSystemAlerts()
+
+        let tabsButton = app.buttons.matching(NSPredicate(format: "label == 'Tabs'")).firstMatch
+        XCTAssertTrue(tabsButton.waitForExistence(timeout: 30))
+        tabsButton.tap()
+        // The list loads rows as they scroll in; New Section is the last one.
+        let list = app.collectionViews["cantrip-tab-list"]
+        XCTAssertTrue(list.waitForExistence(timeout: 15))
+        let newSection = app.buttons["cantrip-tab-new-section"]
+        for _ in 0..<10 where !(newSection.exists && newSection.isHittable) { list.swipeUp() }
+        XCTAssertTrue(newSection.waitForExistence(timeout: 5), "The tab list ends with New Section")
+        attach(app, "new-1-button")
+        newSection.tap()
+        let field = app.alerts["New Section"].textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "New Section asks for a name")
+        field.typeText(name)
+        attach(app, "new-2-prompt")
+        app.alerts["New Section"].buttons["Create"].tap()
+        XCTAssertTrue(waitUntil(timeout: 10) { (try? self.hostSectionNames(url: url, token: token))?.contains(name) == true },
+                      "The Mac saves the empty section")
+        XCTAssertFalse(try hostTabs(url: url, token: token).contains { $0.sectionID != nil && $0.sectionName == name },
+                       "New Section files no tab")
+        let header = app.buttons.matching(NSPredicate(format: "label == %@", "\(name), 0 tabs")).firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 10), "The empty section shows as a header")
+        attach(app, "new-3-empty-section")
+
+        // Move a tab into it from the tab's menu (the unfiled tabs are at the top).
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'cantrip-tab-' AND label == %@", unfiled.title)).firstMatch
+        for _ in 0..<10 where !(row.exists && row.isHittable) { list.swipeDown() }
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.press(forDuration: 1.2)
+        let move = app.buttons["Move to Section"]
+        XCTAssertTrue(move.waitForExistence(timeout: 5))
+        move.tap()
+        let target = app.buttons[name]
+        XCTAssertTrue(target.waitForExistence(timeout: 5), "Move to Section lists the empty section")
+        target.tap()
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            (try? self.hostTabs(url: url, token: token))?.first { $0.id == unfiled.id }?.sectionName == name
+        }, "The tab moves into the new section")
+        let filledHeader = app.buttons.matching(NSPredicate(format: "label == %@", "\(name), 1 tab")).firstMatch
+        for _ in 0..<10 where !(filledHeader.exists && filledHeader.isHittable) { list.swipeUp() }
+        XCTAssertTrue(filledHeader.waitForExistence(timeout: 10))
+        attach(app, "new-4-filed")
+
+        // Delete it from the header's …; it asks first because it has a tab.
+        let menu = app.buttons.matching(NSPredicate(format: "label == %@", "\(name) section options")).firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        menu.tap()
+        let delete = app.buttons["Delete Section…"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5), "A section with tabs offers Delete Section…")
+        attach(app, "delete-1-menu")
+        delete.tap()
+        let confirm = app.buttons["Delete Section"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Deleting a section with tabs asks first")
+        XCTAssertTrue(try hostSectionNames(url: url, token: token).contains(name), "Nothing is deleted before confirming")
+        attach(app, "delete-2-confirm")
+        confirm.tap()
+        XCTAssertTrue(waitUntil(timeout: 10) { (try? self.hostSectionNames(url: url, token: token))?.contains(name) == false },
+                      "The Mac deletes the section")
+        let after = try XCTUnwrap(try hostTabs(url: url, token: token).first { $0.id == unfiled.id }, "Deleting a section keeps its tabs")
+        XCTAssertNil(after.sectionID, "The tab goes back to Tabs")
+        for _ in 0..<10 where !(row.exists && row.isHittable) { list.swipeDown() }
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        attach(app, "delete-3-after")
+    }
+
+    private func hostTabs(url: String, token: String) throws -> [(id: String, title: String, sectionID: String?, sectionName: String?)] {
+        var request = URLRequest(url: try XCTUnwrap(URL(string: url + "/api/v1/sessions")))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 5
+        var result: Result<Data, Error>?
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            result = data.map { .success($0) } ?? .failure(error ?? URLError(.badServerResponse))
+            done.signal()
+        }.resume()
+        done.wait()
+        let object = try JSONSerialization.jsonObject(with: try XCTUnwrap(result).get()) as? [String: Any]
+        let names = Dictionary(uniqueKeysWithValues: (object?["sections"] as? [[String: Any]] ?? []).compactMap { section in
+            (section["id"] as? String).map { ($0, section["name"] as? String ?? "") }
+        })
+        return (object?["sessions"] as? [[String: Any]] ?? []).compactMap { tab in
+            guard let id = tab["id"] as? String, let title = tab["title"] as? String, tab["isCantripHome"] as? Bool != true else { return nil }
+            let section = tab["sectionID"] as? String
+            return (id, title, section, section.flatMap { names[$0] })
+        }
+    }
+
     private func hostSectionNames(url: String, token: String) throws -> [String] {
         try hostSections(url: url, token: token).map(\.name)
     }
