@@ -198,7 +198,8 @@ worktree and branch, merged back when it's done.
   another queued message, so it runs with it), *Waits: releases run one at a
   time*, or *Runs after the current task*. Nothing forks on its own yet.
 - **Start one:** **Run in Child Tab** on a queued row (the branch button on the
-  Mac, the button in the browser). The message leaves the queue and starts at
+  Mac, in Cantrip Agent's and the Gateways' queue sheets, the button in the
+  browser). The message leaves the queue and starts at
   once in a new tab after its parent, in the parent's section and with its
   model settings. The parent stays selected. The child gets the request as
   written plus a short brief (its worktree and branch, the parent's latest
