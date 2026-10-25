@@ -25,10 +25,14 @@ restarts without switching conversations or interrupting work, and syncs to
 Cantrip Remote and Cantrip Agent. Dragging a tab label does not move the
 launcher window; dragging the window background still does.
 
-**Move to Section** in a tab's right-click menu files it under a section (see
-[Group tabs into sections](remote-control.md#group-tabs-into-sections)).
-**Edit Sections...** there renames, reorders (drag a row or use its arrows),
-deletes or adds sections; every device shows the same names and order.
+With sections (see [Group tabs into sections](remote-control.md#group-tabs-into-sections)),
+the strip shows each section as a pill before its tabs; ⌘2-⌘9 follow that
+order. Click a pill to collapse it (busy tabs stay), drag it onto another to
+reorder, or drop a tab on it to file the tab. Right-click a pill for Rename,
+New Tab Here, Move Section Left/Right, Delete (asks first if it has tabs; its
+tabs move back to Tabs and stay open), New Section and Edit Sections. The
+folder button after **+** makes an empty section. **Move to Section** in a
+tab's right-click menu files it under one.
 
 ## Start over or return to an older session
 
