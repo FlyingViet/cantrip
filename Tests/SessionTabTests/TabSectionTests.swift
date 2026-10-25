@@ -86,10 +86,11 @@ extension SessionTabTests {
         try manager.setSection(later.id, for: kept.id)
         precondition(manager.sectionID(of: kept) == later.id)
 
-        // The panel strip follows the groups (Tabs, then sections in order); a collapsed section
+        // The panel strip follows the groups (sections in order, then Tabs); a collapsed section
         // keeps only its open, working and waiting tabs; each Mac remembers what it collapsed.
         let groups = manager.tabSectionGroups()!
-        precondition(groups.first?.section == nil && groups.dropFirst().map { $0.section?.id } == manager.tabSections.map(\.id))
+        precondition(groups.last?.section == nil && groups.dropLast().map { $0.section?.id } == manager.tabSections.map(\.id),
+                     "unfiled tabs (Tabs) come after every section")
         precondition(manager.panelTabs(collapsed: []).map(\.id) == groups.flatMap { $0.sessions.map(\.id) },
                      "the panel's order (and ⌘2-⌘9) follows the groups")
         manager.select(kept.id)
@@ -199,16 +200,16 @@ extension SessionTabTests {
           tabSections=[];selected="a";renderSessions(items);
           check(keys()==="h,a,b,c,d"&&!nav.querySelector(".section-header"),"Without sections the list is unchanged");
           tabSections=[{id:"s1",name:"Work"},{id:"s2",name:"Empty"}];renderSessions(items);
-          check(keys()==="h,#tabs,a,d,#s1,b,c,#s2","Home, then Tabs (with tabs of deleted sections), then sections in order: "+keys());
+          check(keys()==="h,#s1,b,c,#s2,#tabs,a,d","Home, then sections in order, then Tabs (with tabs of deleted sections) last: "+keys());
           const work=nav.querySelector('[data-section-id="s1"]'),buttonA=nav.querySelector('[data-session-id="a"]').children[0];
           check(work.querySelector(".section-name").textContent==="▾ Work"&&work.querySelector(".section-count").textContent==="2","Header shows name and count");
           work.children[0].click();
-          check(keys()==="h,#tabs,a,d,#s1,c,#s2","Collapsing hides idle tabs and keeps working ones: "+keys());
+          check(keys()==="h,#s1,c,#s2,#tabs,a,d","Collapsing hides idle tabs and keeps working ones: "+keys());
           check(JSON.parse(localStorage.getItem("cantrip.collapsedSections")).includes("s1"),"Collapse is remembered on this device");
           check(work.children[0].getAttribute("aria-expanded")==="false"&&nav.querySelector('[data-session-id="a"]').children[0]===buttonA,"Header reports its state; other tabs stay mounted");
           renderSessions(items);check(nav.querySelector('[data-section-id="s1"]')===work,"Polling keeps headers mounted");
           selected="b";renderSessions(items);check(keys().includes("#s1,b,c"),"The open tab shows in a collapsed section");
-          selected="a";work.children[0].click();check(keys()==="h,#tabs,a,d,#s1,b,c,#s2","Expanding shows every tab");
+          selected="a";work.children[0].click();check(keys()==="h,#s1,b,c,#s2,#tabs,a,d","Expanding shows every tab");
 
           const transfer=new DataTransfer();
           nav.querySelector('[data-session-id="a"]').dispatchEvent(new DragEvent("dragstart",{bubbles:true,cancelable:true,dataTransfer:transfer}));
@@ -232,7 +233,7 @@ extension SessionTabTests {
 
           calls=[];renderSessions(items);
           const s1=nav.querySelector('[data-section-id="s1"]'),s2=nav.querySelector('[data-section-id="s2"]'),loose=nav.querySelector('[data-section-id="tabs"]'),sectionDrag=new DataTransfer();
-          check(s1.draggable&&s2.draggable&&!loose.draggable,"Sections drag; Tabs stays first");
+          check(s1.draggable&&s2.draggable&&!loose.draggable,"Sections drag; Tabs stays last");
           check(s1.children[0].getAttribute("aria-keyshortcuts")&&!loose.children[0].hasAttribute("aria-keyshortcuts"),"Section headers announce their move keys");
           s2.dispatchEvent(new DragEvent("dragstart",{bubbles:true,cancelable:true,dataTransfer:sectionDrag}));
           const ontoSection=new DragEvent("dragover",{bubbles:true,cancelable:true,dataTransfer:sectionDrag});s1.dispatchEvent(ontoSection);
@@ -242,9 +243,9 @@ extension SessionTabTests {
           renderSessions([...items,tab("e",{sectionID:"s2"})]);check(!keys().includes(",e"),"Polling waits while a section is dragged");
           s1.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer:sectionDrag}));await settle();
           check(calls[0]?.path==="/api/v1/sections/s2"&&calls[0].method==="PATCH"&&calls[0].body.position===0,"Dropping a section on another takes its place");
-          calls=[];s2.dispatchEvent(new DragEvent("dragstart",{bubbles:true,cancelable:true,dataTransfer:sectionDrag}));
+          calls=[];s1.dispatchEvent(new DragEvent("dragstart",{bubbles:true,cancelable:true,dataTransfer:sectionDrag}));
           loose.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer:sectionDrag}));await settle();
-          check(calls[0]?.body.position===0,"Dropping a section on Tabs moves it first");
+          check(calls[0]?.path==="/api/v1/sections/s1"&&calls[0]?.body.position===1,"Dropping a section on Tabs moves it last");
           calls=[];s1.children[0].dispatchEvent(new KeyboardEvent("keydown",{key:sidebarLayout?"ArrowDown":"ArrowRight",altKey:true,bubbles:true,cancelable:true}));await settle();
           check(calls[0]?.path==="/api/v1/sections/s1"&&calls[0].body.position===1,"Alt+arrow moves a section without dragging");
           check(document.activeElement===s1.children[0],"The moved header keeps keyboard focus");

@@ -929,7 +929,7 @@ from Remote.
 
 Like Slack's sidebar sections, tabs can be filed under named sections. The Mac
 keeps the sections, so every client shows the same ones; tabs not in a section
-show under **Tabs**. Each device remembers which sections it has collapsed. A
+show under **Tabs**, after every section. Each device remembers which sections it has collapsed. A
 collapsed section still shows the open tab and any tab that is working or
 waiting for an answer.
 
@@ -951,7 +951,7 @@ waiting for an answer.
   one with tabs asks first. Its tabs move back to Tabs: deleting a section never
   closes a tab or touches its history.
 - **Reorder sections:** drag a section's header onto another one (onto Tabs
-  moves it first) in the Mac panel, browser, Mac Remote, Gateway Mac and
+  moves it last) in the Mac panel, browser, Mac Remote, Gateway Mac and
   Windows, or touch and hold it, then drag, in Cantrip Agent. No list shows drag
   handles: touch and hold (or click and drag) the row itself; a still hold
   still opens its menu, which has Move Up/Down. In the browser and Windows, a focused header also moves with

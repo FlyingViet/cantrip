@@ -155,14 +155,14 @@ struct TabSectionGroup: Identifiable {
 }
 
 extension SessionManager {
-    /// Tabs (unfiled, including tabs of deleted sections) then every section in order, empty ones
-    /// too, like each client's tab list. Nil without sections: one flat list.
+    /// Every section in order (empty ones too), then Tabs (unfiled, including tabs of deleted
+    /// sections) last, like each client's tab list. Nil without sections: one flat list.
     func tabSectionGroups() -> [TabSectionGroup]? {
         guard !tabSections.isEmpty else { return nil }
-        var groups = [TabSectionGroup(section: nil, sessions: sessions.filter { sectionID(of: $0) == nil })]
-        for section in tabSections {
-            groups.append(TabSectionGroup(section: section, sessions: sessions.filter { sectionID(of: $0) == section.id }))
+        var groups = tabSections.map { section in
+            TabSectionGroup(section: section, sessions: sessions.filter { sectionID(of: $0) == section.id })
         }
+        groups.append(TabSectionGroup(section: nil, sessions: sessions.filter { sectionID(of: $0) == nil }))
         return groups
     }
 
