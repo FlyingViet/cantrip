@@ -25,6 +25,11 @@ restarts without switching conversations or interrupting work, and syncs to
 Cantrip Remote and Cantrip Agent. Dragging a tab label does not move the
 launcher window; dragging the window background still does.
 
+**Move to Section** in a tab's right-click menu files it under a section (see
+[Group tabs into sections](remote-control.md#group-tabs-into-sections)).
+**Edit Sections...** there renames, reorders (drag a row or use its arrows),
+deletes or adds sections; every device shows the same names and order.
+
 ## Start over or return to an older session
 
 Right-click a local session tab for **Rename Tab** or **Lock Tab**. Names can

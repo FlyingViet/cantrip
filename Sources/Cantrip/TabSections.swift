@@ -50,6 +50,12 @@ enum TabSectionStore {
         if let data = try? JSONEncoder().encode(sections) { defaults.set(data, forKey: key) }
     }
 
+    /// A list drag (`onMove`: `destination` counts rows before the move) as the section's new
+    /// position for `SessionManager.moveSection`.
+    static func position(movingFrom source: Int, to destination: Int) -> Int {
+        destination > source ? destination - 1 : destination
+    }
+
     /// Whitespace collapsed to single spaces; 1 to `maximumNameLength` characters.
     static func normalizedName(_ raw: String) throws -> String {
         let name = raw.split(whereSeparator: \.isWhitespace).joined(separator: " ")

@@ -939,9 +939,16 @@ waiting for an answer.
   Windows, browser). Dropping a tab beside another tab files it in that tab's
   section. A filed tab moves after the section's last tab.
 - **Manage a section:** its header's menu (**…**, right-click, or touch and
-  hold) has Rename, New Tab Here, Move Up/Down and Delete. Deleting a section
-  moves its tabs back to Tabs. **New Section** is in the Tabs header's menu and
-  in Move to Section.
+  hold) has Rename, New Tab Here, Move Up/Down, Edit Sections and Delete.
+  Deleting a section moves its tabs back to Tabs. **New Section** is in the
+  Tabs header's menu and in Move to Section.
+- **Reorder sections:** drag a section's header onto another one (onto Tabs
+  moves it first) in the browser, Mac Remote, Gateway Mac and Windows. In the
+  browser and Windows, a focused header also moves with Alt+↑/↓ (Alt+←/→ in
+  the browser's tab strip). **Edit
+  Sections** (the Mac panel's Move to Section menu, and every section menu in
+  Cantrip Agent and Gateway) lists them all to rename, drag into order, move
+  up or down, delete or add. Order and names sync to every device.
 - Names are 1 to 40 characters and unique (ignoring case); up to 50 sections.
 
 API (`supportsTabSections`): `GET /api/v1/sessions` adds `sections` (`[{id,
