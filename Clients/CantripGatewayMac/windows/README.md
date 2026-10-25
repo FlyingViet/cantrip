@@ -42,7 +42,9 @@ control** on.
 
 ## Install
 
-1. Download **CantripGateway-Setup-<version>-x64.exe** from the latest
+1. Download **CantripGateway-Setup-<version>-x64.exe** from the
+   [latest release](https://github.com/FlyingViet/CantripGatewayMac/releases/latest)
+   (a preview build), or a newer build from the latest
    [Windows app workflow run](https://github.com/FlyingViet/CantripGatewayMac/actions/workflows/windows.yml)
    (Artifacts section).
 2. Run it. The installer isn't code-signed yet, so Windows SmartScreen may say
