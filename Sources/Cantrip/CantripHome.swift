@@ -1114,8 +1114,26 @@ final class CantripHomeStore: ObservableObject {
         guard tasks[index].state != .running else {
             throw CantripHomeError(409, "Pause this task after its current run finishes, then delete it.")
         }
-        tasks.remove(at: index)
+        removeTask(at: index, now: Date())
         try persistTasks()
+    }
+
+    /// Removes a task and drops it from other tasks' `runsAfter`, so nothing waits on it.
+    private func removeTask(at index: Int, now: Date) {
+        let id = tasks.remove(at: index).id
+        for other in tasks.indices {
+            guard let after = tasks[other].runsAfter, after.contains(id) else { continue }
+            let kept = after.filter { $0 != id }
+            tasks[other].runsAfter = kept.isEmpty ? nil : kept
+            tasks[other].updatedAt = now
+        }
+    }
+
+    /// A one-time reminder has nothing left to do once its run succeeds. A task with a
+    /// workspace keeps its records, and a failed or skipped run stays to be retried.
+    private static func removesAfterRun(_ task: CantripHomeTask, status: String) -> Bool {
+        status == "succeeded" && task.isScheduled && task.schedule.kind == .once
+            && task.workspace == nil
     }
 
     /// Relative placement keeps a stale client from discarding tasks created concurrently.
@@ -1655,6 +1673,15 @@ final class CantripHomeStore: ObservableObject {
         }
         guard let index = tasks.firstIndex(where: { $0.activeRunID == runID }) else { return }
         let finished = clock()
+        if Self.removesAfterRun(tasks[index], status: status) {
+            // The Background entry above keeps the run's result.
+            Log.write("home: one-time task \(tasks[index].id.uuidString) finished; removing it")
+            removeTask(at: index, now: finished)
+            do { try persistTasks() }
+            catch { recordStorageFailure(error) }
+            tick()
+            return
+        }
         let clipped = CantripHomeDelegations.runSummary(summary)
         tasks[index].runs.insert(.init(
             startedAt: tasks[index].lastRunAt ?? finished,
@@ -2011,6 +2038,9 @@ extension ChatSession {
         "runsAfter":["other task UUID"] or null,
         "list":null or a workspace list object (edits by id only)}
         Sunday is 1 and Saturday is 7. Current time zone: \(zone).
+        A once schedule runs a single time at startAt. When that run succeeds Cantrip removes
+        the task by itself (its result stays in Background), so once suits one-off reminders and
+        follow-ups and needs no cleanup. A failed or stopped run, or a task with a workspace, is kept.
         A weekdays schedule runs at every local time in `times` (up to \(CantripHomeSchedule.maximumDailyTimes)) on each
         listed weekday. When the same work should happen several times a day, use one task with
         several times; never create a second task for another time. Cantrip writes the summary
