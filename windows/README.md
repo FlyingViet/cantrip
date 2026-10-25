@@ -112,21 +112,31 @@ Version 0.2.0 and later include **Settings → Updates** and matching tray
 actions. Install the current release once; later versions can be checked,
 downloaded, and installed with a restart from inside Cantrip.
 
-Updates are distributed from releases in `FlyingViet/cantrip`. Publish by
-matching `windows\package.json` to a repository tag:
+Updates are distributed from releases in `FlyingViet/cantrip`, which also
+holds the Mac host's releases. Windows releases are tagged
+`windows-v<version>`, matching `windows\package.json`; plain `v<version>` tags
+are the Mac host's and don't build Windows. The app finds the newest
+`windows-v*` release itself (the repository's **Latest** release is the
+host's) and updates from its `latest.yml`. To publish:
 
 ```powershell
 cd windows
 npm version 0.4.0 --no-git-tag-version
 cd ..
 git add .
-git commit -m "Release 0.4.0"
-git tag v0.4.0
-git push origin main --tags
+git commit -m "Windows 0.4.0"
+git tag windows-v0.4.0
+git push origin main windows-v0.4.0
 ```
 
-`..\.github\workflows\release-windows.yml` tests and publishes the NSIS
-installer, blockmap, and `latest.yml` metadata. Code-sign production releases
+`..\.github\workflows\release-windows.yml` runs the tests and packages the
+NSIS installer on every change under `windows\`, keeping the installer as a
+workflow artifact for 7 days. On a `windows-v*` tag it also checks the tag
+against `package.json` and publishes `Cantrip-Setup-<version>.exe`, its
+blockmap and `latest.yml` as **Cantrip for Windows <version>**, without
+taking **Latest** from the host. To publish again from an existing tag, run the
+workflow from that tag with **publish** on; that replaces the release's
+files. Code-sign production releases
 before sharing broadly; the updater works unsigned for local testing, but
 signing is needed for a smooth SmartScreen experience.
 

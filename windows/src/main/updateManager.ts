@@ -1,11 +1,16 @@
-import { app } from "electron";
+import { app, net } from "electron";
 import {
   autoUpdater,
   type ProgressInfo,
   type UpdateInfo,
 } from "electron-updater";
 import type { UpdateState } from "../shared/types";
-import { sanitizeUpdateError } from "../shared/update";
+import {
+  latestWindowsReleaseTag,
+  sanitizeUpdateError,
+  WINDOWS_RELEASES_API,
+  windowsReleaseFeedURL,
+} from "../shared/update";
 
 type StateListener = (state: UpdateState) => void;
 
@@ -79,7 +84,17 @@ export class UpdateManager {
     if (["checking", "downloading"].includes(this.state.status)) {
       return this.getState();
     }
+    this.setState({ status: "checking", message: "Checking for updates…" });
     try {
+      const tag = await this.latestReleaseTag();
+      if (!tag) {
+        this.setState({
+          status: "error",
+          message: "Update check failed: no Windows release has been published yet.",
+        });
+        return this.getState();
+      }
+      autoUpdater.setFeedURL({ provider: "generic", url: windowsReleaseFeedURL(tag) });
       await autoUpdater.checkForUpdates();
     } catch (error) {
       this.setState({
@@ -88,6 +103,19 @@ export class UpdateManager {
       });
     }
     return this.getState();
+  }
+
+  /** The newest `windows-v*` release. The repository's "Latest" release is the Mac host's. */
+  private async latestReleaseTag(): Promise<string | null> {
+    const response = await net.fetch(WINDOWS_RELEASES_API, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": `Cantrip-Windows/${app.getVersion()}`,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) throw new Error(`GitHub releases returned ${response.status}`);
+    return latestWindowsReleaseTag(await response.json());
   }
 
   async download(): Promise<UpdateState> {

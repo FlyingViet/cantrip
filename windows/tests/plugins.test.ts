@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -89,11 +89,14 @@ describe("plugin manifests", () => {
     await writeFile(path.join(root, "panel.html"), "ok");
     await writeFile(path.join(parent, "secret.txt"), "secret");
 
+    // Resolved paths are real paths: the temp folder can be an 8.3 short name on Windows
+    // (C:\Users\RUNNER~1) or a symlink on macOS (/var -> /private/var).
     await expect(resolveInsidePlugin(root, "panel.html")).resolves.toBe(
-      path.join(root, "panel.html"),
+      path.join(await realpath(root), "panel.html"),
     );
-    await expect(resolveInsidePlugin(root, "..\\secret.txt")).rejects.toThrow(
-      "escapes its directory",
-    );
+    // The platform separator (a backslash on Windows) and a forward slash both escape.
+    for (const escape of [path.join("..", "secret.txt"), "../secret.txt"]) {
+      await expect(resolveInsidePlugin(root, escape)).rejects.toThrow("escapes its directory");
+    }
   });
 });
