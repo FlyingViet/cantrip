@@ -111,7 +111,9 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   and Close. With sections (made on any device), tabs show under collapsible headers, each
   with its own **+** and a right-click menu (Rename, New Tab Here, Move Up/Down, Delete, Edit
   Sections); drop a tab on a header to file it there, or drag a header onto another to reorder
-  sections. **Edit Sections** renames, reorders (drag or arrows), deletes and adds them.
+  sections. **New Section** (last row) makes an empty section; deleting one with tabs asks
+  first and moves its tabs back to Tabs. **Edit Sections** renames, reorders (drag or
+  arrows), deletes and adds them.
   Collapsed sections still show working tabs. The footer
   shows the connection.
 - **Tabs:** selecting a tab shows its transcript and composer in place. The toolbar shows its

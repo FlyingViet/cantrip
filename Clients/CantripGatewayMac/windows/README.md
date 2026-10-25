@@ -11,7 +11,8 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   Tasks and Artifacts with their badges, and every project tab (status, age, drag to
   reorder, right-click actions), grouped under collapsible sections when the Mac has any
   (Move to Section, drop on a header, section menus; drag a header onto another, or focus it
-  and press Alt+↑/↓, to reorder sections). A unified toolbar with Background, delivery (Auto, Queue,
+  and press Alt+↑/↓, to reorder sections; **New Section** at the end makes an empty one; deleting
+  a section with tabs asks first and keeps its tabs). A unified toolbar with Background, delivery (Auto, Queue,
   Redirect, Inject), Refresh and More.
 - **Chat.** Replies with Markdown and the Mac's image previews, reasoning steps, MCP App
   views, subagent cards (running ones pinned above the composer), handoff cards with

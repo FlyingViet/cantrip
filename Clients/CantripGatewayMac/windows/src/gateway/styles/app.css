@@ -353,6 +353,8 @@ body.inactive .sidebar-row[aria-current="true"] .row-icon { color: var(--accent)
 .tab-section { padding-top: 12px; border-radius: 6px; }
 .tab-section.drop-target { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tab-section[draggable="true"] { cursor: grab; }
+.sidebar-new-section { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; margin-top: 10px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--secondary); font-size: 13px; text-align: left; }
+.sidebar-new-section:hover:not(:disabled) { background: var(--row-hover); color: var(--text); }
 .tab-section.dragging { opacity: .5; }
 .tab-section .section-toggle { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 2px 4px 2px 0; border: 0; background: none; color: inherit; font: inherit; text-transform: uppercase; letter-spacing: .03em; cursor: default; }
 .tab-section .section-toggle:hover { color: var(--text); }
