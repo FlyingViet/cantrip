@@ -10,7 +10,7 @@ import * as nav from "../state/nav";
 import * as remote from "../state/remote";
 import { collapsedSections, LOOSE_ID, sectionDropPosition, tabGroups, toggleCollapsed, visibleTabs, type TabGroup } from "../state/sections";
 import { Icon, StatusIcon } from "./icons";
-import { openMenu, Spinner, toast, type MenuEntry } from "./kit";
+import { confirmDialog, openMenu, Spinner, toast, type MenuEntry } from "./kit";
 import { currentActivity, displayName, resolveMood } from "./pip/mascot";
 import { Pip } from "./pip/Pip";
 import { mascotName, mascotOutfit } from "./pip/prefs";
@@ -92,7 +92,7 @@ function sectionMenu(group: TabGroup): MenuEntry[] {
       { label: "Move Section Up", icon: "arrow.up", disabled: mutating || sections[0]?.id === section.id, onSelect: () => void remote.moveSection(section.id, -1).catch(fail) },
       { label: "Move Section Down", icon: "arrow.down", disabled: mutating || sections[sections.length - 1]?.id === section.id, onSelect: () => void remote.moveSection(section.id, 1).catch(fail) },
       { kind: "separator" },
-      { label: "Delete Section", icon: "trash", destructive: true, disabled: mutating, onSelect: () => void remote.deleteSection(section.id).catch(fail) },
+      { label: group.sessions.length ? "Delete Section…" : "Delete Section", icon: "trash", destructive: true, disabled: mutating, onSelect: () => void deleteSection(group) },
       { kind: "header", label: "Its tabs move back to Tabs." },
       { kind: "separator" },
     );
@@ -109,6 +109,23 @@ async function moveSectionTo(id: string, position: number): Promise<void> {
     toast(`Section change failed: ${(error as Error).message}`);
   }
   document.querySelector<HTMLElement>(`[data-section-id="${CSS.escape(id)}"] .section-toggle`)?.focus();
+}
+
+/** Empty sections go at once; a section with tabs asks first. Its tabs move back to Tabs; none close. */
+async function deleteSection(group: TabGroup): Promise<void> {
+  const section = group.section;
+  if (!section) return;
+  const count = group.sessions.length;
+  if (count && !(await confirmDialog({
+    title: `Delete “${section.name}”?`,
+    message: `Its ${count === 1 ? "tab moves" : `${count} tabs move`} back to Tabs. No tabs are closed.`,
+    confirm: "Delete Section", destructive: true,
+  }))) return;
+  try {
+    await remote.deleteSection(section.id);
+  } catch (error) {
+    toast(`Section change failed: ${(error as Error).message}`);
+  }
 }
 
 async function newTabIn(sectionID: string): Promise<void> {
@@ -240,6 +257,15 @@ function SidebarList(): JSX.Element {
         {tabs.map((session) => tabRow(session))}
       </>}
       {!tabs.length && remote.listed.value ? <div class="sidebar-empty">No tabs yet</div> : null}
+      {remote.supportsTabSections.value ? (
+        // Not a .sidebar-row: arrow keys select rows, and this one opens a sheet.
+        <button type="button" class="sidebar-new-section" disabled={remote.isMutating.value}
+          title="Add an empty section. Drop tabs on its header or use Move to Section."
+          onClick={() => { nav.sheet.value = { kind: "sectionName" }; }}>
+          <Icon name="folder.badge.plus" class="row-icon" />
+          <span class="label">New Section</span>
+        </button>
+      ) : null}
     </div>
   );
 

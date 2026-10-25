@@ -69,6 +69,13 @@ struct MacHomeSidebar: View {
                     tabsHeader
                 }
             }
+            if remote.supportsTabSections {
+                Section {
+                    CantripNewSectionButton(model: remote)
+                        .selectionDisabled()
+                        .help("Add an empty section. Drop tabs on its header or use Move to Section.")
+                }
+            }
         }
         .listStyle(.sidebar)
         .accessibilityIdentifier("sidebar.list")
