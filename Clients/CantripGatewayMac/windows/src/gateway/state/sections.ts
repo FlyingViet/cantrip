@@ -15,15 +15,15 @@ export interface TabGroup {
   section: TabSection | null;
 }
 
-/** Tabs (unfiled, and tabs of deleted sections) then each section; null without sections (flat list). */
+/** Each section, then Tabs (unfiled, and tabs of deleted sections) last; null without sections (flat list). */
 export function tabGroups(sessions: RemoteSessionSummary[], sections: TabSection[]): TabGroup[] | null {
   if (!sections.length) return null;
   const known = new Set(sections.map((section) => section.id));
   return [
-    { id: LOOSE_ID, name: "Tabs", sessions: sessions.filter((item) => !item.sectionID || !known.has(item.sectionID)), section: null },
     ...sections.map((section) => ({
       id: section.id, name: section.name, sessions: sessions.filter((item) => item.sectionID === section.id), section,
     })),
+    { id: LOOSE_ID, name: "Tabs", sessions: sessions.filter((item) => !item.sectionID || !known.has(item.sectionID)), section: null },
   ];
 }
 
@@ -38,9 +38,9 @@ export function sectionOf(session: Pick<RemoteSessionSummary, "sectionID">, sect
   return session.sectionID && sections.some((section) => section.id === session.sectionID) ? session.sectionID : null;
 }
 
-/** Where a section dragged onto `targetGroupID`'s header lands: the target's place (Tabs: first). */
+/** Where a section dragged onto `targetGroupID`'s header lands: the target's place (Tabs, always last: last). */
 export function sectionDropPosition(sections: TabSection[], targetGroupID: string): number {
-  return targetGroupID === LOOSE_ID ? 0 : sections.findIndex((section) => section.id === targetGroupID);
+  return targetGroupID === LOOSE_ID ? sections.length - 1 : sections.findIndex((section) => section.id === targetGroupID);
 }
 
 /** `sections` with `id` moved to `position` (as the Mac does it); unchanged for unknown ids or positions. */
