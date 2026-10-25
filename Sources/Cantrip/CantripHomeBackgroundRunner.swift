@@ -355,6 +355,8 @@ final class CantripHomeBackgroundRunner {
         }
         let sessionID = UUID()
         let session = makeSession(sessionID)
+        let model = CantripHomeTaskModels.resolve(task: task, settings: AppSettings.shared)
+        session.cantripHomeModelOverride = model.selection
         manager.adoptCantripHomeRun(session)
         let jobID = job.id
         session.onTurnCompleted = { [weak self] _, status, summary in
@@ -370,8 +372,10 @@ final class CantripHomeBackgroundRunner {
             id: jobID, kind: job.kind, label: job.label, taskID: job.taskID,
             startedAt: now, status: "running", summary: "", sessionID: sessionID,
             incidentID: job.incidentID, route: .hidden,
-            repeats: job.repeats > 0 ? job.repeats : nil, resources: job.resources
+            repeats: job.repeats > 0 ? job.repeats : nil, resources: job.resources,
+            model: model.model, modelNote: model.note
         ))
+        if let note = model.note { Log.write("home: \(job.label): \(note)") }
         if let task {
             session.submitCantripHomeTask(
                 id: task.id, title: task.title, scheduleSummary: task.schedule.summary,
@@ -387,7 +391,7 @@ final class CantripHomeBackgroundRunner {
         }
         Log.write(
             "home: started \(job.kind.rawValue) run \(jobID.uuidString) in hidden session "
-                + "\(sessionID.uuidString) (\(runningCount)/\(maximumParallelRuns))"
+                + "\(sessionID.uuidString) on \(model.model) (\(runningCount)/\(maximumParallelRuns))"
         )
     }
 

@@ -386,7 +386,7 @@ enum CantripHomeProtocol {
     static func schema(for kind: CantripHomeBlock.Kind) -> String {
         switch kind {
         case .task:
-            return #"{"id":null or "existing task UUID","title":"short title","prompt":"standalone brief","schedule":null or {"kind":"once|interval|weekdays","summary":"label","timeZone":"IANA zone","startAt":"ISO-8601 or null","intervalMinutes":null or number,"weekdays":[1-7] or null,"times":[{"hour":0-23,"minute":0-59}] or null},"workspace":null or {...},"initialRecords":null,"runsAfter":null,"list":null or {...} (edits by id only)}"#
+            return #"{"id":null or "existing task UUID","title":"short title","prompt":"standalone brief","schedule":null or {"kind":"once|interval|weekdays","summary":"label","timeZone":"IANA zone","startAt":"ISO-8601 or null","intervalMinutes":null or number,"weekdays":[1-7] or null,"times":[{"hour":0-23,"minute":0-59}] or null},"workspace":null or {...},"initialRecords":null,"runsAfter":null,"model":null or "model ID" or "","effort":null or "effort" or "","list":null or {...} (edits by id only)}"#
         case .records:
             return #"{"taskID":"task UUID","changes":[{"operation":"upsert","id":"record UUID or null","values":{"fieldKey":"string value"}},{"operation":"delete","id":"record UUID","values":null}]}"#
         case .artifact:

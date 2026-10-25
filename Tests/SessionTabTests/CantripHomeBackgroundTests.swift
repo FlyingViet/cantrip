@@ -778,6 +778,74 @@ extension SessionTabTests {
         )
         try testMailRefreshCoalesces()
         try testCantripHomeOnceTaskRemoval(homeChat: homeChat)
+        try await testCantripHomeTaskModelChoices(homeChat: homeChat)
+
+        // A task's own model reaches its hidden run and every record of it; tasks without one
+        // follow Home, and an unavailable model falls back to Home's with a note in the summary.
+        try await withTaskModelSettings {
+            @MainActor func hourly(_ title: String, model: String?) throws -> CantripHomeTask {
+                try store.create(.init(
+                    id: nil, title: title, prompt: "Check \(title).",
+                    schedule: .init(kind: .interval, summary: "Every hour", timeZone: zone,
+                                    startAt: Date().addingTimeInterval(-60), intervalMinutes: 60),
+                    model: model
+                ), now: Date().addingTimeInterval(-90))
+            }
+            AppSettings.shared.cantripHomeEnabled = false
+            let cheap = try hourly("Cheap tracker", model: "claude-sonnet-5.5")
+            let premium = try hourly("Opus briefing", model: nil)
+            AppSettings.shared.cantripHomeEnabled = true
+            store.checkNow()
+            let cheapRun = try requireHome(runningRun(forTask: cheap.id))
+            let premiumRun = try requireHome(runningRun(forTask: premium.id))
+            precondition(store.runner.session(forRun: cheapRun)?.cantripHomeModelOverride
+                            == .init(model: "claude-sonnet-5.5", effort: "xhigh", contextTier: "long_context")
+                         && store.runner.session(forRun: premiumRun)?.cantripHomeModelOverride == nil
+                         && run(cheapRun)?.model == "claude-sonnet-5.5" && run(cheapRun)?.modelNote == nil
+                         && run(premiumRun)?.model == "claude-opus-5.5",
+                         "Each hidden run gets its task's model; tasks without one follow Home")
+            let listedRuns = try await call("/api/v1/home/background")
+            let cheapListed = (listedRuns.1["runs"] as? [[String: Any]])?.first {
+                $0["id"] as? String == cheapRun.uuidString
+            }
+            precondition(cheapListed?["model"] as? String == "claude-sonnet-5.5",
+                         "The Background list shows each run's model")
+            try await finish(cheapRun, "Done.\n\nSummary:\nTracked.")
+            try await finish(premiumRun, "Briefed.")
+            let cheapTask = try requireHome(store.tasks.first { $0.id == cheap.id })
+            precondition(cheapTask.runs.first?.model == "claude-sonnet-5.5"
+                         && cheapTask.runs.first?.summary == "Tracked."
+                         && store.tasks.first { $0.id == premium.id }?.runs.first?.model == "claude-opus-5.5",
+                         "Each task run records the model it used")
+            let listedTasks = try await call("/api/v1/home/tasks")
+            let cheapJSON = (listedTasks.1["tasks"] as? [[String: Any]])?.first {
+                $0["id"] as? String == cheap.id.uuidString
+            }
+            precondition(cheapJSON?["model"] as? String == "claude-sonnet-5.5"
+                         && (cheapJSON?["runs"] as? [[String: Any]])?.first?["model"] as? String
+                            == "claude-sonnet-5.5",
+                         "The Tasks API carries the task's model and each run's")
+
+            // The model left the account's catalog after it was saved: Home's model runs instead.
+            AppSettings.shared.cantripHomeEnabled = false
+            let stale = try hourly("Stale model", model: "claude-haiku-4.5")
+            AppSettings.shared.copilotModelCatalog.removeAll { $0.id == "claude-haiku-4.5" }
+            AppSettings.shared.copilotAvailableModels.removeAll { $0 == "claude-haiku-4.5" }
+            AppSettings.shared.cantripHomeEnabled = true
+            store.checkNow()
+            let staleRun = try requireHome(runningRun(forTask: stale.id))
+            let note = "Ran on Home's model, claude-opus-5.5: claude-haiku-4.5 isn't available on this Mac right now."
+            precondition(store.runner.session(forRun: staleRun)?.cantripHomeModelOverride == nil
+                         && run(staleRun)?.model == "claude-opus-5.5" && run(staleRun)?.modelNote == note,
+                         "An unavailable task model falls back to Home's model instead of failing")
+            try await finish(staleRun, "Done.\n\nSummary:\nChecked.")
+            let staleTask = try requireHome(store.tasks.first { $0.id == stale.id })
+            precondition(run(staleRun)?.status == "succeeded" && run(staleRun)?.summary == "\(note)\n\nChecked."
+                         && staleTask.runs.first?.summary == "\(note)\nChecked."
+                         && staleTask.runs.first?.model == "claude-opus-5.5" && staleTask.model == "claude-haiku-4.5",
+                         "The fallback run succeeds and its summary says which model it used: \(run(staleRun)?.summary ?? "")")
+            for task in [cheap, premium, stale] { try? store.delete(id: task.id) }
+        }
 
         for task in [taskA, taskB, taskC, taskD, interval, writerX, writerY, bills, trip, briefing,
                      slow, late, nightly, nightlyAgain, quitTask, source, digest, flaky, stuck] {

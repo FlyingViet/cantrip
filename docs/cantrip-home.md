@@ -48,6 +48,14 @@ A task can list other tasks in `runsAfter` (for example a morning briefing that
 reviews the trackers): it starts after their runs due at or before it finish,
 or 30 minutes after its own time at the latest.
 
+A task runs on Home's model unless it has its own `model` (and optionally
+`effort`), set by asking Home, for example to move a simple tracker to a cheaper
+model. The ID must be one the model picker offers; `""` returns the task to
+Home's model. Home's effort and context window carry over when the task's model
+supports them. If the model isn't available when a run starts, that run uses
+Home's model and its summary says so. The Tasks screen shows a task's model, and
+each run records the model it used.
+
 Local maintenance can queue a change for an existing task by writing a JSON
 file into `~/.cache/Cantrip/home/task-edits/`. It is applied once that task is
 idle:
@@ -57,7 +65,8 @@ idle:
 ```
 
 An edit can carry `schedule`, `"runsAfter":["…"]`,
-`"runsAfterTimeoutMinutes":45` and/or a replacement workspace `"list":{…}`.
+`"runsAfterTimeoutMinutes":45`, `"model":"…"`, `"effort":"…"` and/or a
+replacement workspace `"list":{…}`.
 Schedule-only edits also work in `~/.cache/Cantrip/home/schedule-edits/`.
 
 ### Workspaces

@@ -3697,7 +3697,7 @@ private extension RemoteControlServer {
       for(const task of state.tasks){const item=homeNode("li"),card=homeNode("button","task-card");card.type="button";card.dataset.focusKey=`task:${task.id}`;
         const meta=[task.hasSchedule===false?"No schedule":task.enabled?task.schedule.summary:`Paused · ${task.schedule.summary}`];
         if(task.workspace)meta.push(`${task.workspace.records.length} ${homeNoun(task.workspace,task.workspace.records.length)}`);
-        if(task.state==="running")meta.push("Running now");
+        if(task.model)meta.push(task.model);if(task.state==="running")meta.push("Running now");
         card.append(homeNode("strong","task-title",task.title),homeNode("span","task-meta",meta.join(" · ")));
         if(task.runs?.[0]?.summary)card.append(homeNode("span","task-run",task.runs[0].summary));
         card.onclick=()=>showTask(task.id);item.append(card);list.append(item)}
@@ -3705,10 +3705,11 @@ private extension RemoteControlServer {
     function taskDetailView(task){const view=homeNode("div","task-detail"),facts=homeNode("dl","task-facts");
       const fact=(label,value)=>{if(value)facts.append(homeNode("dt","",label),homeNode("dd","",value))};
       fact("Schedule",task.hasSchedule===false?"No schedule":task.schedule.summary);fact("Status",!task.enabled?"Paused":task.state==="running"?"Running now":"On");
+      fact("Model",(task.model||"Home's model")+(task.effort?` · ${task.effort} effort`:""));
       if(task.enabled&&task.nextRunAt!==null&&task.nextRunAt!==undefined)fact("Next run",homeTime(task.nextRunAt));
       view.append(facts,homeNode("h3","","Recent runs"));
       if(!task.runs?.length)view.append(homeNode("p","muted","No runs yet."));
-      else{const runs=homeNode("ul","run-list");for(const run of task.runs.slice(0,5)){const item=homeNode("li");item.append(homeNode("span","task-meta",`${homeTime(run.finishedAt)} · ${run.status}`),homeNode("span","run-summary",run.summary||"No summary"));runs.append(item)}view.append(runs)}
+      else{const runs=homeNode("ul","run-list");for(const run of task.runs.slice(0,5)){const item=homeNode("li");item.append(homeNode("span","task-meta",`${homeTime(run.finishedAt)} · ${run.status}${run.model?` · ${run.model}`:""}`),homeNode("span","run-summary",run.summary||"No summary"));runs.append(item)}view.append(runs)}
       const prompt=homeNode("details","disclosure");prompt.append(homeNode("summary","","Instructions"),homeNode("p","run-summary",task.prompt));view.append(prompt);
       return view}
     function workspaceView(task){const workspace=task.workspace,query=$("tasksSearch").value.trim().toLowerCase(),searching=Boolean(query);

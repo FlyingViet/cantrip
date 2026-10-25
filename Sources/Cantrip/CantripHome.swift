@@ -232,6 +232,8 @@ struct CantripHomeTaskRun: Codable, Equatable, Identifiable {
     let finishedAt: Date
     let status: String
     let summary: String
+    /// The model the run used; older runs omit it.
+    var model: String? = nil
 }
 
 struct CantripHomeTaskField: Codable, Equatable, Identifiable {
@@ -327,6 +329,9 @@ struct CantripHomeTask: Codable, Equatable, Identifiable {
     var runsAfter: [UUID]? = nil
     /// How long past its due time this task waits for `runsAfter`; defaults to 30 minutes.
     var runsAfterTimeoutMinutes: Int? = nil
+    /// The task's own Copilot model and effort; nil follows Home's selection.
+    var model: String? = nil
+    var effort: String? = nil
 
     var isScheduled: Bool { hasSchedule != false }
 }
@@ -354,12 +359,15 @@ struct CantripHomeTaskProposal: Decodable {
     /// Edits by `id` may replace only the workspace's list presentation (groups, row fields),
     /// keeping its fields, detail sections and records.
     let list: CantripHomeTaskListPresentation?
+    /// The task's own Copilot model and effort: "" returns it to Home's, nil keeps the saved one.
+    let model: String?
+    let effort: String?
 
     init(
         id: UUID?, title: String?, prompt: String?, schedule: CantripHomeSchedule?,
         workspace: CantripHomeTaskWorkspaceProposal? = nil,
         initialRecords: [[String: String]]? = nil, runsAfter: [UUID]? = nil,
-        list: CantripHomeTaskListPresentation? = nil
+        list: CantripHomeTaskListPresentation? = nil, model: String? = nil, effort: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -369,6 +377,8 @@ struct CantripHomeTaskProposal: Decodable {
         self.initialRecords = initialRecords
         self.runsAfter = runsAfter
         self.list = list
+        self.model = model
+        self.effort = effort
     }
 }
 
@@ -436,6 +446,8 @@ private struct CantripHomeTaskEditEnvelope: Decodable {
     let runsAfter: [UUID]?
     let runsAfterTimeoutMinutes: Int?
     let list: CantripHomeTaskListPresentation?
+    let model: String?
+    let effort: String?
 }
 
 struct CantripHomeArtifactsSnapshot: Encodable {
@@ -473,6 +485,9 @@ struct CantripHomeBackgroundRun: Codable, Equatable, Identifiable {
     /// Duplicate triggers folded into this run.
     var repeats: Int? = nil
     var resources: [String]? = nil
+    /// The model a hidden run used, and why it fell back from the task's own model.
+    var model: String? = nil
+    var modelNote: String? = nil
 }
 
 struct CantripHomeBackgroundSnapshot: Encodable {
@@ -534,6 +549,7 @@ struct CantripHomeBackgroundSnapshot: Encodable {
         /// Approvals and questions the live run is waiting on, answered through
         /// `/api/v1/sessions/<sessionID>/input/<id>` without opening the hidden session.
         let inputs: [InputRequestSnapshot]?
+        let model: String?
 
         init(run: CantripHomeBackgroundRun, activity: String?, canStop: Bool,
              inputs: [InputRequestSnapshot]? = nil) {
@@ -553,6 +569,7 @@ struct CantripHomeBackgroundSnapshot: Encodable {
             self.activity = activity
             self.canStop = canStop
             self.inputs = inputs.flatMap { $0.isEmpty ? nil : $0 }
+            model = run.model
         }
     }
 
@@ -974,9 +991,14 @@ final class CantripHomeStore: ObservableObject {
             )
         }
         guard proposal.schedule != nil || proposal.workspace != nil
-            || (proposal.id != nil && (proposal.runsAfter != nil || proposal.list != nil)) else {
+            || (proposal.id != nil && (proposal.runsAfter != nil || proposal.list != nil
+                || proposal.model != nil || proposal.effort != nil)) else {
             throw CantripHomeError(400, "A task needs a schedule, a workspace, or both.")
         }
+        let modelChoice = try CantripHomeTaskModels.validated(
+            model: proposal.model, effort: proposal.effort,
+            saved: (existing?.model, existing?.effort), settings: AppSettings.shared
+        )
         let runsAfter = try proposal.runsAfter.map {
             try validatedRunsAfter($0, for: proposal.id)
         }
@@ -1041,6 +1063,8 @@ final class CantripHomeStore: ObservableObject {
             if let runsAfter {
                 tasks[index].runsAfter = runsAfter.isEmpty ? nil : runsAfter
             }
+            tasks[index].model = modelChoice.model
+            tasks[index].effort = modelChoice.effort
             tasks[index].updatedAt = now
             try persistTasks()
             return tasks[index]
@@ -1057,6 +1081,8 @@ final class CantripHomeStore: ObservableObject {
         task.nextRunAt = next
         task.state = schedule == nil ? .ready : .scheduled
         task.runsAfter = runsAfter?.isEmpty == false ? runsAfter : nil
+        task.model = modelChoice.model
+        task.effort = modelChoice.effort
         tasks.insert(task, at: 0)
         try persistTasks()
         if schedule != nil { tick() }
@@ -1560,14 +1586,15 @@ final class CantripHomeStore: ObservableObject {
                     CantripHomeTaskEditEnvelope.self, from: Data(contentsOf: url)
                 )
                 guard edit.version == 1,
-                      edit.schedule != nil || edit.runsAfter != nil || edit.list != nil,
+                      edit.schedule != nil || edit.runsAfter != nil || edit.list != nil
+                        || edit.model != nil || edit.effort != nil,
                       edit.runsAfterTimeoutMinutes.map({ (5...240).contains($0) }) ?? true else {
                     throw CantripHomeError(400, "Unsupported or empty task edit.")
                 }
                 if tasks.first(where: { $0.id == edit.taskID })?.state == .running { continue }
                 var task = try create(.init(
                     id: edit.taskID, title: nil, prompt: nil, schedule: edit.schedule,
-                    runsAfter: edit.runsAfter, list: edit.list
+                    runsAfter: edit.runsAfter, list: edit.list, model: edit.model, effort: edit.effort
                 ), now: clock())
                 if let minutes = edit.runsAfterTimeoutMinutes,
                    let index = tasks.firstIndex(where: { $0.id == task.id }) {
@@ -1590,6 +1617,8 @@ final class CantripHomeStore: ObservableObject {
                         + task.schedule.summary
                         + (after.isEmpty ? "" : "; runs after " + after.joined(separator: ", "))
                         + groups
+                        + (edit.model == nil && edit.effort == nil ? ""
+                            : "; model \(task.model ?? "Home's")" + (task.effort.map { " (\($0))" } ?? ""))
                 )
             } catch {
                 Log.write(
@@ -1660,14 +1689,19 @@ final class CantripHomeStore: ObservableObject {
     }
 
     func complete(runID: UUID, status: String, summary: String) {
+        var model: String?
+        var modelNote: String?
         if let run = backgroundRuns.firstIndex(where: { $0.id == runID }) {
+            model = backgroundRuns[run].model
+            modelNote = backgroundRuns[run].modelNote
             backgroundRuns[run].status = status
             backgroundRuns[run].finishedAt = Date()
             backgroundRuns[run].sessionID = nil
             // A closing "Summary:" section is the result; the full report stays in the log.
+            let result = CantripHomeDelegations.summarySection(summary)
+                ?? summary.trimmingCharacters(in: .whitespacesAndNewlines)
             backgroundRuns[run].summary = String(
-                (CantripHomeDelegations.summarySection(summary)
-                    ?? summary.trimmingCharacters(in: .whitespacesAndNewlines)).prefix(4_000)
+                (modelNote.map { "\($0)\n\n\(result)" } ?? result).prefix(4_000)
             )
             persistBackgroundRuns()
         }
@@ -1685,7 +1719,8 @@ final class CantripHomeStore: ObservableObject {
         let clipped = CantripHomeDelegations.runSummary(summary)
         tasks[index].runs.insert(.init(
             startedAt: tasks[index].lastRunAt ?? finished,
-            finishedAt: finished, status: status, summary: clipped
+            finishedAt: finished, status: status,
+            summary: modelNote.map { "\($0)\n\(clipped)" } ?? clipped, model: model
         ), at: 0)
         if tasks[index].runs.count > 20 { tasks[index].runs.removeLast(tasks[index].runs.count - 20) }
         tasks[index].activeRunID = nil
@@ -1947,6 +1982,8 @@ extension ChatSession {
 
     var cantripHomeInstructions: String {
         let zone = TimeZone.current.identifier
+        let offeredModels = CantripHomeTaskModels.offered(AppSettings.shared)
+        let modelList = offeredModels.isEmpty ? "the IDs in the model picker" : offeredModels.joined(separator: ", ")
         let savedTasks = CantripHomeStore.shared.tasks.prefix(20).map {
             var mode = $0.isScheduled ? $0.schedule.summary : "no schedule"
             if $0.isScheduled, $0.schedule.kind == .weekdays {
@@ -1973,7 +2010,8 @@ extension ChatSession {
             } ?? ""
             let after = ($0.runsAfter ?? []).map(\.uuidString).joined(separator: ",")
             let runsAfter = after.isEmpty ? "" : "; runsAfter \(after)"
-            return "- \($0.id.uuidString): \($0.title) — \(mode)\(workspace)\(runsAfter)\(lastRun)"
+            let model = ($0.model.map { "; model \($0)" } ?? "") + ($0.effort.map { "; effort \($0)" } ?? "")
+            return "- \($0.id.uuidString): \($0.title) — \(mode)\(workspace)\(runsAfter)\(model)\(lastRun)"
         }.joined(separator: "\n")
         var remainingRecords = 60
         var savedRecords: [String] = []
@@ -2036,6 +2074,8 @@ extension ChatSession {
         "detailSections":[{"title":"optional heading","fields":["key"]}]},
         "initialRecords":[{"fieldKey":"string value"}] or null,
         "runsAfter":["other task UUID"] or null,
+        "model":"Copilot model ID", "" for Home's model, or null to keep,
+        "effort":"reasoning effort", "" for the model's default, or null to keep,
         "list":null or a workspace list object (edits by id only)}
         Sunday is 1 and Saturday is 7. Current time zone: \(zone).
         A once schedule runs a single time at startAt. When that run succeeds Cantrip removes
@@ -2051,6 +2091,10 @@ extension ChatSession {
         results (for example a briefing that reviews the trackers), list those task UUIDs in
         `runsAfter`: it then starts after their runs due at or before it finish, waiting at most
         30 minutes. Send [] to clear it; omit it or send null to keep the saved list.
+        A task without `model` runs on Home's model. Set `model` (and optionally `effort`) only
+        when the user asks a task to use a specific or cheaper model; an edit may send just `id`
+        and `model`. Models: \(modelList). If the model is unavailable when a run starts, that
+        run uses Home's model and its summary says so.
         A task needs a schedule, a workspace, or both. Workspaces are declarative native mobile
         screens; choose only the fields necessary for the user's workflow. Date values use
         YYYY-MM-DD, dateTime uses ISO-8601, booleans use "true"/"false", and every stored value

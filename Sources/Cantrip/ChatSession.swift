@@ -294,6 +294,10 @@ final class ChatSession: ObservableObject {
     @Published var tabActionError: String?
     /// The scheduled task or incident the Home background conversation is running.
     private(set) var cantripHomeRunLabel: String?
+    /// A hidden run's task model; nil follows Home's model selection.
+    var cantripHomeModelOverride: SessionModelSelection? {
+        didSet { applyModelSelection() }
+    }
     /// Home confirmations and refusals waiting to be appended to this run's reply.
     var cantripHomeNotices: [String] = []
     /// Refusals held while Home corrects its blocks; replaced if the correction saves blocks.
@@ -595,9 +599,9 @@ final class ChatSession: ObservableObject {
 
     private func applyModelSelection() {
         guard let backend = copilot as? CopilotBackend else { return }
-        // Background runs use whatever model the user picked for Home.
+        // Background runs use their task's model, or whatever the user picked for Home.
         let selection = isCantripHomeBackground
-            ? SessionTabMetadata.load(id: Self.cantripHomeID).modelSettings
+            ? cantripHomeModelOverride ?? SessionTabMetadata.load(id: Self.cantripHomeID).modelSettings
             : tabMetadata.modelSettings
         backend.modelOverride = selection?.model
         backend.effortOverride = selection?.effort
