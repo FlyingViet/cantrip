@@ -263,6 +263,43 @@ final class CantripTabSectionsTests: XCTestCase {
         XCTAssertNil(model.sessions.first { $0.id == "a" }?.sectionID, "Its tabs go back to Tabs")
     }
 
+    func testHoldToDragDropsMoveTabsAndSectionsWithoutHandles() {
+        func movable(_ id: String, _ section: String? = nil) -> CantripRemoteSession {
+            var session = tab(id, section: section)
+            session.supportsTabReordering = true
+            session.supportsTabSections = true
+            return session
+        }
+        let sections = [CantripTabSection(id: "s1", name: "Work"), CantripTabSection(id: "s2", name: "Games"),
+                        CantripTabSection(id: "s3", name: "Later")]
+        let a = movable("a"), b = movable("b", "s1"), c = movable("c", "s1"), d = movable("d", "s2")
+        let all = [a, b, c, d]
+        typealias Drag = CantripTabDrag
+        XCTAssertEqual(Drag.item(Drag.payload(tab: "a")), .tab("a"))
+        XCTAssertEqual(Drag.item(Drag.payload(section: "s1")), .section("s1"))
+        XCTAssertNil(Drag.item("plain text"))
+
+        // On a tab: takes its place in the shown order.
+        XCTAssertEqual(Drag.drop(Drag.payload(tab: "a"), onTab: d, order: all), .moveTab(id: "a", targetID: "d", after: true))
+        XCTAssertEqual(Drag.drop(Drag.payload(tab: "d"), onTab: b, order: all), .moveTab(id: "d", targetID: "b", after: false))
+        XCTAssertNil(Drag.drop(Drag.payload(tab: "b"), onTab: b, order: all))
+
+        // On a header: a tab is filed there; a section takes the header's place (on Tabs: first).
+        XCTAssertEqual(Drag.drop(Drag.payload(tab: "a"), onHeaderOf: "s2", sections: sections, sessions: all),
+                       .fileTab(id: "a", sectionID: "s2"))
+        XCTAssertEqual(Drag.drop(Drag.payload(tab: "b"), onHeaderOf: nil, sections: sections, sessions: all),
+                       .fileTab(id: "b", sectionID: nil))
+        XCTAssertNil(Drag.drop(Drag.payload(tab: "b"), onHeaderOf: "s1", sections: sections, sessions: all), "Already there")
+        XCTAssertEqual(Drag.drop(Drag.payload(section: "s3"), onHeaderOf: "s1", sections: sections, sessions: all),
+                       .moveSection(id: "s3", position: 0))
+        XCTAssertEqual(Drag.drop(Drag.payload(section: "s1"), onHeaderOf: "s3", sections: sections, sessions: all),
+                       .moveSection(id: "s1", position: 2))
+        XCTAssertEqual(Drag.drop(Drag.payload(section: "s2"), onHeaderOf: nil, sections: sections, sessions: all),
+                       .moveSection(id: "s2", position: 0))
+        XCTAssertNil(Drag.drop(Drag.payload(section: "s1"), onHeaderOf: nil, sections: sections, sessions: all), "Already first")
+        XCTAssertNil(Drag.drop(Drag.payload(section: "s2"), onHeaderOf: "s2", sections: sections, sessions: all))
+    }
+
     func testOlderMacsAreToldToUpdateAndNothingIsSent() async throws {
         let (model, log) = try await configuredModel(supportsSections: false)
         XCTAssertFalse(model.supportsTabSections)

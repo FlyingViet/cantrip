@@ -317,3 +317,104 @@ private struct CantripSectionPromptModifier: ViewModifier {
 private extension CantripSectionPrompt {
     var isRename: Bool { if case .rename = self { return true } else { return false } }
 }
+
+/// Touch-and-hold (or click-and-drag) moves in the tab lists, with no drag handles. Payloads match
+/// the Mac and the browser: "cantrip-tab:<id>" and "cantrip-section:<id>".
+enum CantripTabDrag {
+    static let tabPrefix = "cantrip-tab:"
+    static let sectionPrefix = "cantrip-section:"
+
+    enum Item: Equatable {
+        case tab(String)
+        case section(String)
+    }
+
+    enum Action: Equatable {
+        case moveTab(id: String, targetID: String, after: Bool)
+        case fileTab(id: String, sectionID: String?)
+        case moveSection(id: String, position: Int)
+    }
+
+    static func payload(tab id: String) -> String { tabPrefix + id }
+    static func payload(section id: String) -> String { sectionPrefix + id }
+
+    static func item(_ payload: String) -> Item? {
+        if payload.hasPrefix(tabPrefix) { return .tab(String(payload.dropFirst(tabPrefix.count))) }
+        if payload.hasPrefix(sectionPrefix) { return .section(String(payload.dropFirst(sectionPrefix.count))) }
+        return nil
+    }
+
+    /// A tab dropped on another takes its place (after it moving down, before it moving up) and
+    /// joins its section.
+    static func drop(_ payload: String, onTab target: CantripRemoteSession, order: [CantripRemoteSession]) -> Action? {
+        guard case .tab(let id)? = item(payload), id != target.id,
+              let source = order.firstIndex(where: { $0.id == id }),
+              let destination = order.firstIndex(where: { $0.id == target.id }),
+              order[source].supportsTabReordering == true, target.supportsTabReordering == true else { return nil }
+        return .moveTab(id: id, targetID: target.id, after: source < destination)
+    }
+
+    /// Dropped on a header: a tab joins that section (Tabs: none); a section takes the header's
+    /// place (on Tabs: first).
+    static func drop(_ payload: String, onHeaderOf sectionID: String?, sections: [CantripTabSection],
+                     sessions: [CantripRemoteSession]) -> Action? {
+        switch item(payload) {
+        case .tab(let id)?:
+            guard let tab = sessions.first(where: { $0.id == id }), tab.supportsTabSections == true,
+                  CantripTabGrouping.sectionID(of: tab, sections: sections) != sectionID else { return nil }
+            return .fileTab(id: id, sectionID: sectionID)
+        case .section(let id)?:
+            guard id != sectionID, let source = sections.firstIndex(where: { $0.id == id }) else { return nil }
+            let position = sectionID.flatMap { target in sections.firstIndex { $0.id == target } } ?? 0
+            return position == source ? nil : .moveSection(id: id, position: position)
+        case nil:
+            return nil
+        }
+    }
+}
+
+extension CantripRemoteModel {
+    @discardableResult
+    func perform(_ action: CantripTabDrag.Action) async -> Bool {
+        switch action {
+        case .moveTab(let id, let targetID, let after): return await moveTab(id, relativeTo: targetID, after: after)
+        case .fileTab(let id, let sectionID): return await fileTab(id, in: sectionID)
+        case .moveSection(let id, let position): return await moveSection(id, to: position)
+        }
+    }
+}
+
+extension View {
+    /// Lets this row be dragged after touch and hold (or a click-drag on the Mac). A hold that
+    /// doesn't move still opens the row's menu: `onDrag`'s drag interaction coordinates with the
+    /// menu (`draggable` doesn't, and neither works on List rows that have a menu). Nil leaves the
+    /// row in place.
+    @ViewBuilder func cantripDraggable(_ payload: String?) -> some View {
+        if let payload { onDrag { NSItemProvider(object: payload as NSString) } } else { self }
+    }
+
+    /// A row that takes dropped tabs or sections, outlined while a drag is over it.
+    func cantripDropTarget(cornerRadius: CGFloat = 12, perform: @escaping (String) -> Bool) -> some View {
+        modifier(CantripDropTarget(cornerRadius: cornerRadius, perform: perform))
+    }
+}
+
+private struct CantripDropTarget: ViewModifier {
+    let cornerRadius: CGFloat
+    let perform: (String) -> Bool
+    @State private var targeted = false
+
+    func body(content: Content) -> some View {
+        content
+            .dropDestination(for: String.self) { items, _ in
+                guard items.count == 1, let payload = items.first else { return false }
+                return perform(payload)
+            } isTargeted: { targeted = $0 }
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+                    .opacity(targeted ? 1 : 0)
+                    .allowsHitTesting(false)
+            }
+    }
+}

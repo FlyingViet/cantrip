@@ -218,48 +218,35 @@ struct CantripTabList<Actions: View>: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            List {
-                if let header {
-                    header()
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                }
-                if let sectionModel, let groups = CantripTabGrouping.groups(sessions, sections: sectionModel.tabSections) {
-                    ForEach(groups) { group in
-                        let collapsed = collapse.isCollapsed(group.id, scope: sectionModel.tabSectionScope)
-                        sectionHeader(group, collapsed: collapsed, model: sectionModel)
-                        let visible = CantripTabGrouping.visible(group, collapsed: collapsed, selectedID: selectedSessionID)
-                        ForEach(visible) { session in
+            // A scroll view, not a List: in a List a row's touch-and-hold menu blocks dragging the
+            // row. Here touch and hold, then move, drags a tab or section (no ≡ handles) and a
+            // still hold opens its menu. Not lazy: a LazyVStack missed redraws (iOS 27.1).
+            ScrollView {
+                VStack(spacing: 0) {
+                    if let header {
+                        header()
+                    }
+                    if let sectionModel, let groups = CantripTabGrouping.groups(sessions, sections: sectionModel.tabSections) {
+                        ForEach(groups) { group in
+                            let collapsed = collapse.isCollapsed(group.id, scope: sectionModel.tabSectionScope)
+                            sectionHeader(group, collapsed: collapsed, model: sectionModel)
+                            ForEach(CantripTabGrouping.visible(group, collapsed: collapsed, selectedID: selectedSessionID)) { session in
+                                tabRow(session)
+                            }
+                        }
+                    } else {
+                        ForEach(sessions) { session in
                             tabRow(session)
                         }
-                        // Reordering stays inside a section; Move to Section files a tab elsewhere.
-                        .onMove { source, destination in
-                            move(visible, fromOffsets: source, toOffset: destination)
-                        }
                     }
-                } else {
-                    ForEach(sessions) { session in
-                        tabRow(session)
-                    }
-                    .onMove { source, destination in
-                        move(fromOffsets: source, toOffset: destination)
+                    if let sectionModel, sectionModel.supportsTabSections {
+                        CantripNewSectionButton(model: sectionModel)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 4)
                     }
                 }
-                if let sectionModel, sectionModel.supportsTabSections {
-                    CantripNewSectionButton(model: sectionModel)
-                        .padding(.horizontal, 12)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                        .moveDisabled(true)
-                }
+                .padding(.bottom, 8)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            // Rows open their actions on touch and hold, which would swallow a long-press drag,
-            // so reordering uses the native ≡ handles (taps and the actions menu still work).
-            .environment(\.editMode, .constant(onMove == nil ? .inactive : .active))
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: sessions.map(\.id))
             .scrollBounceBehavior(.basedOnSize)
             .defaultScrollAnchor(.top)
@@ -272,11 +259,20 @@ struct CantripTabList<Actions: View>: View {
 
     private func tabRow(_ session: CantripRemoteSession) -> some View {
         row(session)
+            .cantripDraggable(canMove(session) ? CantripTabDrag.payload(tab: session.id) : nil)
+            .cantripDropTarget { payload in drop(payload, onTab: session) }
+            .accessibilityActions {
+                if canMove(session) {
+                    let order = displayOrder
+                    if let index = order.firstIndex(where: { $0.id == session.id }) {
+                        if index > 0 { Button("Move Tab Up") { move(session.id, beside: order[index - 1].id, after: false) } }
+                        if index < order.count - 1 { Button("Move Tab Down") { move(session.id, beside: order[index + 1].id, after: true) } }
+                    }
+                }
+            }
             .id(session.id)
-            .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-            .moveDisabled(!canMove(session))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
     }
 
     private func sectionHeader(_ group: CantripTabGrouping.Group, collapsed: Bool,
@@ -303,10 +299,18 @@ struct CantripTabList<Actions: View>: View {
             // The same menu as touch and hold, visible so renaming and ordering are easy to find.
             CantripTabSectionMenuButton(model: model, group: group, onNewTab: onNewTab)
         }
-        .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
-        .moveDisabled(true)
+        // Touch and hold, then drag, onto another header to reorder sections.
+        .cantripDraggable(group.section != nil && onMove != nil && model.supportsTabSections
+                          ? CantripTabDrag.payload(section: group.id) : nil)
+        .cantripDropTarget { payload in
+            guard onMove != nil, let action = CantripTabDrag.drop(
+                payload, onHeaderOf: group.section?.id, sections: model.tabSections, sessions: sessions
+            ) else { return false }
+            Task { await model.perform(action) }
+            return true
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 6)
     }
 
     private func row(_ session: CantripRemoteSession) -> some View {
@@ -357,12 +361,33 @@ struct CantripTabList<Actions: View>: View {
         .contextMenu { actions(session) }
     }
 
+    /// The tabs as shown: grouped by section, leaving out the idle tabs of collapsed sections.
+    var displayOrder: [CantripRemoteSession] {
+        guard let sectionModel, let groups = CantripTabGrouping.groups(sessions, sections: sectionModel.tabSections) else {
+            return sessions
+        }
+        return groups.flatMap { group in
+            CantripTabGrouping.visible(group, collapsed: collapse.isCollapsed(group.id, scope: sectionModel.tabSectionScope),
+                                       selectedID: selectedSessionID)
+        }
+    }
+
+    private func move(_ id: String, beside targetID: String, after: Bool) {
+        onMove?(id, targetID, after)
+    }
+
+    /// A tab dropped on another takes its place in the shown order (moving down: after it; up:
+    /// before it) and joins its section. Moves go through `onMove`.
     @discardableResult
-    func move(_ list: [CantripRemoteSession]? = nil, fromOffsets offsets: IndexSet, toOffset destination: Int) -> Bool {
-        guard let onMove,
-              let move = CantripTabReorder.move(list ?? sessions, fromOffsets: offsets, toOffset: destination)
-        else { return false }
-        onMove(move.id, move.targetID, move.after)
+    func drop(_ payload: String, onTab target: CantripRemoteSession) -> Bool {
+        guard let onMove, let action = CantripTabDrag.drop(payload, onTab: target, order: displayOrder) else { return false }
+        switch action {
+        case .moveTab(let id, let targetID, let after):
+            onMove(id, targetID, after)
+        case .fileTab, .moveSection:
+            guard let sectionModel else { return false }
+            Task { await sectionModel.perform(action) }
+        }
         return true
     }
 }
