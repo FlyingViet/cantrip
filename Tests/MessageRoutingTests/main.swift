@@ -143,6 +143,14 @@ struct MessageRoutingTests {
 
         try testQueueGroupingPolicy()
 
+        // Models that fence the JSON or explain it afterwards still yield the object alone.
+        let fenced = "```json\n{\"combine\":[3],\"confidence\":0.95}\n```\n\nMessages 1 and 3 {both} concern the button."
+        expect(MessageRouter.jsonAnswer(fenced) == #"{"combine":[3],"confidence":0.95}"#, "Fenced answer is unwrapped")
+        expect(MessageRouter.jsonAnswer(#"{"evidence":"a } in \"text\"","x":{"y":1}} trailing"#)
+               == #"{"evidence":"a } in \"text\"","x":{"y":1}}"#, "Braces inside strings don't end the object")
+        expect(MessageRouter.jsonAnswer("no json here") == "no json here", "Text without an object is left for the parser to reject")
+        expect(MessageRouter.jsonAnswer("{\"open\":") == "{\"open\":", "An unterminated object is left for the parser to reject")
+
         let provider = MessageRouter.Provider.copilot(command: URL(fileURLWithPath: CommandLine.arguments[0]).path)
         let grouped = try await MessageRouter.groupQueue(
             QueueGroupingSnapshot(recentConversation: [], messages: [

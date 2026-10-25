@@ -138,11 +138,13 @@ request to cancel the agent. The status line explains the decision or fallback.
 Model confidence is not a guarantee; explicit Stop and manual overrides remain
 available.
 
-Copilot uses `gpt-5.4-mini` through the authenticated CLI; Claude uses `haiku`.
-Both run with tools and customizations disabled, outside the repository.
-The Local Model lane uses only its configured OpenAI-compatible endpoint and
-model, never a cloud fallback. Routing can consume provider usage. The inference
-deadline is 12 seconds. Codex and Copilot Remote (ACP) currently queue with an
+Copilot uses `claude-haiku-4.5` through the authenticated CLI (0.33 premium
+requests a call); Claude uses `haiku`. Both run with tools and customizations
+disabled, outside the repository. A JSON answer wrapped in a code fence or
+followed by an explanation still counts. The Local Model lane uses only its
+configured OpenAI-compatible endpoint and model, never a cloud fallback.
+Routing can consume provider usage. The inference deadline is 12 seconds (45
+for child-tab plans, which are made while the tab works). Codex and Copilot Remote (ACP) currently queue with an
 explanation because they do not expose an isolated tool-free router here.
 Councils, shell/slash commands, and messages over 6,000 characters also queue
 without classification.
@@ -183,6 +185,69 @@ without waiting for the current work. A busy Copilot task moves whatever step
 it was blocked on (a long command or a synchronous agent) to the background and
 keeps background agents running. Commands, councils and backends without live
 input redirect instead. See [Send now details](remote-control.md#see-queued-prompts-in-cantrip-agent).
+
+### Child tabs
+
+A queued message that doesn't depend on the current task can run in parallel
+in a **child tab**: its own tab, nested under the parent, with its own git
+worktree and branch, merged back when it's done.
+
+- **Plans:** while a tab works, the same tool-free router suggests a plan for
+  each queued message, shown as a chip on its row: *Independent: can run in a
+  child tab*, *Batched: same tab-list code* (it overlaps the current task or
+  another queued message, so it runs with it), *Waits: releases run one at a
+  time*, or *Runs after the current task*. Nothing forks on its own yet.
+- **Start one:** **Run in Child Tab** on a queued row (the branch button on the
+  Mac, the button in the browser). The message leaves the queue and starts at
+  once in a new tab after its parent, in the parent's section and with its
+  model settings. The parent stays selected. The child gets the request as
+  written plus a short brief (its worktree and branch, the parent's latest
+  progress, the shared-resource rules), not the parent's history.
+- **Worktree:** when the parent works in a git repository (its folder, the
+  repository the plan names, or the one its recent commands used), the child
+  gets `~/.cache/Cantrip/worktrees/<id>` on `cantrip/child/<title>-<id>`,
+  branched from the parent's HEAD and locked so storage cleanup skips it.
+  Without a repository the child shares the folder and has nothing to merge.
+- **Watch and steer:** open the child from its card or the tab list to watch
+  it, send messages or answer its questions. It can't start children of its own
+  and can't be moved away from its parent.
+- **Merge back:** when the child finishes, Cantrip commits anything it left
+  uncommitted, then waits until the parent is idle (never mid-turn, and before
+  the parent's next queued message). It checks the merge with
+  `git merge-tree` first, which touches nothing, then runs
+  `git merge --no-ff` into the parent's branch and removes the worktree and
+  branch. A merged child closes; its card still opens the conversation.
+- **Conflicts:** nothing is written. The card asks: **Keep both, then run the
+  tests (Recommended)** queues a merge request in the parent tab, which resolves
+  it and commits; **Keep main's version** or **Keep the child's version** merge
+  with that side winning the conflicting lines; **Leave it unmerged** keeps the
+  branch for later (**Try Again** or **Discard**). If uncommitted edits in the
+  parent's checkout touch the same files, or a merge, rebase, cherry-pick or
+  revert is unfinished there, the merge waits and tries again after the
+  parent's next turn; Cantrip never aborts work it didn't start. While a merge
+  runs (seconds), new messages to the parent wait in its queue.
+- **Your work is kept:** a child's worktree is deleted only once everything in
+  it is committed and merged (or you choose **Discard**). If Cantrip can't
+  commit the child's last changes (a signing prompt, say), the card says so and
+  keeps them; commit them, then **Try Again**.
+- **The card:** one per child in the parent, updated in place: "Child tab ·
+  title", a tag with the request that expands to the request, the child's
+  replies and its files with line counts, the summary, and its state (Working,
+  Needs your answer, Merged into main · 4 files +169 −9, Merge conflict, …).
+- **What the parent's model sees:** only one line per child, once it settles,
+  added to the parent's next message: its title, request, state, summary and
+  files. The card and the child's conversation are display-only.
+- **Guardrails:** at most 2 child tabs per tab and 3 overall. Children run
+  with the attended guardrail. Simulator runs (`xcodebuild test`, `simctl`)
+  take turns across children and wait for any other Simulator build or test on
+  the Mac. Restarting or deploying Cantrip, TestFlight uploads, releases and
+  device installs are refused in a child; it says so in its Summary and the
+  parent runs them after the merge. Home, Private Local and Private tabs can't
+  start child tabs.
+
+Records live in `~/.cache/Cantrip/child-tabs.json`; after a relaunch, running
+children resume like any tab and finished ones merge at the parent's next idle
+point.
 
 ### Background waiters
 

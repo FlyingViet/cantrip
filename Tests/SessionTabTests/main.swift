@@ -65,6 +65,8 @@ struct SessionTabTests {
         let home = ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"]!
         precondition(FileManager.default.homeDirectoryForCurrentUser.path == home)
         precondition(SessionManager.chatsDir.path.hasPrefix(home + "/"))
+        // Queue planning and routing never reach the real Copilot CLI here.
+        AppSettings.shared.copilotPath = "/usr/bin/false"
 
         var metadata = SessionTabMetadata()
         try metadata.rename("  Work\n  tab  ")
@@ -137,6 +139,7 @@ struct SessionTabTests {
         try await testPanelStaysOpenForAttachedConfirmation()
         try await testTabReordering()
         try await testTabSections()
+        try await testChildTabs()
         try await testTabListPreviews()
         try await testRemoteLANPort()
         try testPromptPaging()

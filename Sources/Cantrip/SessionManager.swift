@@ -20,6 +20,8 @@ final class SessionManager: ObservableObject {
     @Published var tabActionError: String?
     /// Named groups for the tab lists, in display order (`TabSections.swift`).
     @Published var tabSections: [TabSection] = TabSectionStore.load()
+    /// Child tabs: forks queued messages into their own tabs and merges them back.
+    private(set) var childTabs: ChildTabCoordinator!
     /// Fires when any session's run completes (for notifications).
     var onAnyRunFinished: ((ChatSession) -> Void)?
     var onAnyInputNeeded: ((ChatSession, InputRequestSnapshot) -> Void)?
@@ -127,8 +129,52 @@ final class SessionManager: ObservableObject {
         configure(self.homeSession)
         configure(self.homeBackgroundSession)
         self.homeSession.moveAutomatedCantripHomeTurns(to: self.homeBackgroundSession)
+        sessions = Self.keepingChildrenWithParents(sessions)
+        persistOpenSessions()
+        childTabs = ChildTabCoordinator(manager: self)
+        childTabs.attach()
+    }
+
+    // MARK: - Child tabs
+
+    /// The parent of an open child tab that is still running or waiting on its merge.
+    func parentID(ofChild id: UUID) -> UUID? {
+        ChildTabStore.shared.isActiveChild(id) ? ChildTabStore.shared.record(id)?.parentID : nil
+    }
+
+    /// Opens a new child tab right after its parent and its other children, in the parent's
+    /// section. The parent stays selected.
+    func placeChild(_ child: ChatSession, after parent: ChatSession) {
+        let selectedID = showingRemote ? nil : active.id
+        configure(child)
+        try? child.saveSection(parent.tabMetadata.sectionID)
+        let parentIndex = sessions.firstIndex { $0.id == parent.id } ?? (sessions.count - 1)
+        let lastSibling = sessions.indices.last { parentID(ofChild: sessions[$0].id) == parent.id }
+        sessions.insert(child, at: max(parentIndex, lastSibling ?? parentIndex) + 1)
+        if let selectedID, let index = sessions.firstIndex(where: { $0.id == selectedID }) { activeIndex = index }
+        anyStreaming = managedSessions.contains { $0.isStreaming }
         persistOpenSessions()
     }
+
+    /// `list` with each open child right after its parent (children keep their order).
+    static func keepingChildrenWithParents(_ list: [ChatSession]) -> [ChatSession] {
+        let store = ChildTabStore.shared
+        let openIDs = Set(list.map(\.id))
+        func parent(_ session: ChatSession) -> UUID? {
+            guard store.isActiveChild(session.id), let id = store.record(session.id)?.parentID,
+                  openIDs.contains(id) else { return nil }
+            return id
+        }
+        let children = list.filter { parent($0) != nil }
+        guard !children.isEmpty else { return list }
+        var result: [ChatSession] = []
+        for session in list where parent(session) == nil {
+            result.append(session)
+            result += children.filter { parent($0) == session.id }
+        }
+        return result
+    }
+
 
     /// After launch, each tab Cantrip quit with work in continues it: the interrupted run, then
     /// its queue. Tabs start a few seconds apart so their Copilot runtimes don't launch at once.
@@ -223,6 +269,21 @@ final class SessionManager: ObservableObject {
             throw SessionTabError.unavailable
         }
         guard id != targetID else { return }
+        if parentID(ofChild: id) != nil {
+            throw ChildTabError.notAllowed("A child tab stays under its parent tab until its work merges.")
+        }
+        // Beside a child tab means beside its parent's group: before the parent, or after its last child.
+        var targetID = targetID
+        var after = after
+        if let parent = parentID(ofChild: targetID) {
+            guard parent != id else { return }
+            if after, let last = sessions.last(where: { $0.id == parent || parentID(ofChild: $0.id) == parent }) {
+                targetID = last.id
+            } else {
+                targetID = parent
+                after = false
+            }
+        }
         let selectedID = active.id
         var reordered = sessions
         let moved = reordered.remove(at: source)
@@ -234,6 +295,11 @@ final class SessionManager: ObservableObject {
         if let target = sessions.first(where: { $0.id == targetID }), !Self.isCantripHomeReserved(moved),
            moved.tabMetadata.sectionID != sectionID(of: target) {
             try moved.saveSection(sectionID(of: target))
+        }
+        // A parent's children move with it.
+        reordered = Self.keepingChildrenWithParents(reordered)
+        for child in reordered where parentID(ofChild: child.id) == moved.id {
+            try? child.saveSection(moved.tabMetadata.sectionID)
         }
         guard reordered.map(\.id) != sessions.map(\.id) else { return }
         sessions = reordered
@@ -300,6 +366,7 @@ final class SessionManager: ObservableObject {
         session.cancel()
         if session.isPrivate { session.deleteTranscript() }
         sessions.remove(at: index)
+        childTabs?.sessionClosed(session.id)
         if sessions.isEmpty { adopt(ChatSession()) }
         activeIndex = sessions.firstIndex(where: { $0.id == selectedID }) ?? min(index, sessions.count - 1)
         anyStreaming = managedSessions.contains { $0.isStreaming }
@@ -375,9 +442,11 @@ final class SessionManager: ObservableObject {
             persistOpenSessions()
             return
         }
-        adopt(ChatSession(id: id))
+        let session = ChatSession(id: id)
+        adopt(session)
         activeIndex = sessions.count - 1
         persistOpenSessions()
+        childTabs?.sessionOpened(session)
     }
 
     func deleteArchived(_ id: UUID) {

@@ -899,6 +899,51 @@ final class RemoteControlServer {
             return
         }
 
+        // Child tabs: fork a queued message; act on a child's card in its parent.
+        if parts.count == 4, parts[1] == "queue", parts[3] == "fork" {
+            guard request.method == "POST" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            guard let promptID = UUID(uuidString: String(parts[2])) else {
+                sendError(400, "queued message ID must be a UUID", on: connection)
+                return
+            }
+            Task {
+                do {
+                    let child = try await manager.childTabs.fork(parentID: session.id, itemID: promptID)
+                    Log.write("remote-control: forked a queued message into a child tab")
+                    var body = ["session": snapshot(session, on: connection)] as [String: Any]
+                    body["childID"] = child.id.uuidString
+                    sendJSON(body, on: connection)
+                } catch let error as ChildTabError {
+                    sendError(error.status, error.localizedDescription, on: connection)
+                } catch {
+                    sendError(409, error.localizedDescription, on: connection)
+                }
+            }
+            return
+        }
+        if parts.count >= 2, parts[1] == "children" {
+            guard parts.count == 4, request.method == "POST", let childID = UUID(uuidString: String(parts[2])) else {
+                sendError(404, "child tab action not found", on: connection)
+                return
+            }
+            guard let record = ChildTabStore.shared.record(childID), record.parentID == session.id else {
+                sendError(404, "child tab not found", on: connection)
+                return
+            }
+            do {
+                try manager.childTabs.perform(String(parts[3]), childID: childID)
+                sendSession(session, recentExchanges: recentExchanges, on: connection)
+            } catch let error as ChildTabError {
+                sendError(error.status, error.localizedDescription, on: connection)
+            } catch {
+                sendError(409, error.localizedDescription, on: connection)
+            }
+            return
+        }
+
         if parts.count >= 2, parts[1] == "commands" {
             guard parts.count == 2 else {
                 sendError(404, "not found", on: connection)
@@ -2017,8 +2062,12 @@ final class RemoteControlServer {
             "supportsChatInputReplies": true,
             "pendingInputCount": session.pendingInputs.count,
             "supportsTabMetadata": !SessionManager.isCantripHomeReserved(session),
-            "supportsTabReordering": !SessionManager.isCantripHomeReserved(session),
-            "supportsTabSections": !SessionManager.isCantripHomeReserved(session),
+            "supportsTabReordering": !SessionManager.isCantripHomeReserved(session) && manager?.parentID(ofChild: session.id) == nil,
+            "supportsTabSections": !SessionManager.isCantripHomeReserved(session) && manager?.parentID(ofChild: session.id) == nil,
+            // Child tabs: queued messages can move into child tabs (POST …/queue/{id}/fork), and
+            // queue items carry a suggested plan.
+            "supportsChildTabs": session.supportsChildTabs,
+            "supportsQueuePlans": true,
             "supportsModelSettings": !session.isLocalPrivate && !session.isCantripHomeBackground,
             "modelSettingsRevision": session.modelSettingsRevision,
             "workdir": session.workdir,
@@ -2041,6 +2090,18 @@ final class RemoteControlServer {
         ]
         if let status = session.statusText { result["status"] = status }
         if let section = manager?.sectionID(of: session) { result["sectionID"] = section.uuidString }
+        if let parentID = manager?.parentID(ofChild: session.id), let record = ChildTabStore.shared.record(session.id) {
+            result["parentID"] = parentID.uuidString
+            var child: [String: Any] = ["state": record.state.rawValue, "title": record.title,
+                                        "parentTitle": record.parentTitle, "statusLine": record.statusLine]
+            child["branch"] = record.branch
+            child["baseBranch"] = record.baseBranch
+            child["repoName"] = record.repoName
+            result["child"] = child
+        }
+        if session.supportsChildTabs, let reason = manager?.childTabs.forkUnavailableReason(session) {
+            result["childTabsUnavailableReason"] = reason
+        }
         if let status = session.deliveryStatus { result["deliveryStatus"] = status }
         if let repeated = session.repeatedErrorMessageID {
             result["repeatedErrorMessageID"] = repeated.uuidString
@@ -2075,6 +2136,7 @@ final class RemoteControlServer {
                     "id": prompt.id.uuidString,
                     "text": prompt.text,
                 ]
+                object["plan"] = session.queuePlans[prompt.id]?.snapshot
                 if presentation.replacesText {
                     object["displayText"] = presentation.text
                     object["images"] = presentation.imageIDs.map { ["id": $0] }
@@ -2202,6 +2264,7 @@ final class RemoteControlServer {
         let includesCompleteExchanges = exchangeStart != nil
         let historyStartID = session.messages.first?.id.uuidString ?? "empty"
         let queued = session.queued
+        let plans = session.queuePlans.mapValues(\.snapshot)
         let home = HomeReplyView(session)
         // Full-message sizing and encoding belong off the main actor and tab-list queue.
         sendEncoded(status: status, on: connection, queue: detailEncodingQueue) {
@@ -2233,12 +2296,14 @@ final class RemoteControlServer {
             result["hasOlderMessages"] = end > messages.count
             result["queued"] = queued.map { prompt -> [String: Any] in
                 let presentation = RemoteImageAttachments.presentation(prompt.text, sessionID: sessionID)
-                return [
+                var object: [String: Any] = [
                     "id": prompt.id.uuidString,
                     "text": prompt.text,
                     "displayText": presentation.text,
                     "images": presentation.imageIDs.map { ["id": $0] },
                 ]
+                object["plan"] = plans[prompt.id]
+                return object
             }
             return try JSONSerialization.data(withJSONObject: ["session": result], options: [.sortedKeys])
         }
@@ -2536,6 +2601,33 @@ private extension RemoteControlServer {
     .handoff-detail{margin:4px 0 0 23px;white-space:pre-wrap;overflow-wrap:anywhere}
     .handoff-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:0 8px;margin:2px 0 0 23px;color:var(--secondary);font-size:12px;font-variant-numeric:tabular-nums}
     .handoff-open{min-height:36px;color:var(--accent);font-weight:600}
+    :root{--child-ok:#1d7a33;--child-work:#9e5700;--child-bad:#c42b39;--child-lane:#06708f}@media(prefers-color-scheme:dark){:root{--child-ok:#35c759;--child-work:#ff9f0a;--child-bad:#ff6961;--child-lane:#64d2ff}}
+    .remote-sidebar .session-tab.child-tab{position:relative;width:calc(100% - 14px);min-height:34px;margin-left:14px}.remote-sidebar .session-tab.child-tab:before{content:"";position:absolute;left:-8px;top:-3px;bottom:-3px;width:2px;border-radius:1px;background:var(--line)}.remote-sidebar .session-tab.child-tab .session-name{font-size:12.5px}
+    html:not(.remote-sidebar) .session-tab.child-tab .session-select:before{content:"↳ ";content:"↳ "/"";color:var(--secondary)}
+    .branch-glyph{flex:none;width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round}
+    .child-card{display:grid;gap:7px;justify-items:start}.child-card>*{max-width:100%}
+    .child-thread>summary{display:flex;flex-wrap:wrap;align-items:center;gap:6px;border-radius:999px}.child-thread>summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .child-lane,.child-tag{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600}
+    .child-lane{color:var(--child-lane);background:color-mix(in srgb,var(--child-lane) 13%,transparent)}.child-tag{color:var(--secondary);background:var(--surface-2)}.child-tag>span{min-width:0;max-width:52ch;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+    .child-tag:before{content:"↩";content:"↩"/""}.child-tag:after{content:"⌄";content:"⌄"/"";transition:transform .12s}.child-thread[open] .child-tag:after{transform:rotate(180deg)}
+    .child-thread-body{display:grid;gap:8px;margin:8px 0 2px 4px;padding-left:12px;border-left:2px solid var(--line)}
+    .child-prompt{justify-self:end;max-width:86%;margin:0;padding:6px 11px;border-radius:14px;background:#3a5fcd;color:#fff;font-size:13px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
+    .child-reply p{margin:0;line-height:1.45;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.child-who{display:block;color:var(--secondary);font-size:11px;font-weight:600}
+    .child-files{margin:0;color:var(--secondary);font-size:12px;line-height:1.7;font-variant-numeric:tabular-nums}.child-files code{padding:0 4px;border-radius:4px;background:var(--surface-2);font-size:11.5px}
+    .child-summary{margin:0;line-height:1.5}.child-note{margin:0;color:var(--secondary);font-size:12.5px}
+    .child-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+    .child-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;background:var(--surface-2);color:var(--secondary);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+    .child-chip.ok{color:var(--child-ok);background:color-mix(in srgb,var(--child-ok) 13%,transparent)}.child-chip.work{color:var(--child-work);background:color-mix(in srgb,var(--child-work) 13%,transparent)}.child-chip.bad{color:var(--child-bad);background:color-mix(in srgb,var(--child-bad) 12%,transparent)}
+    .child-pulse{animation:pulse 1.1s ease-in-out infinite}@media(prefers-reduced-motion:reduce){.child-pulse{animation:none}}
+    .child-link{min-height:32px;color:var(--accent);font-weight:600}.child-action{min-height:32px}
+    .child-question{display:grid;gap:8px;width:min(100%,640px);padding:12px 13px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.child-question h4{margin:0;font-size:14px}.child-question>p{margin:0;line-height:1.45}
+    .child-excerpt{margin:0;padding:8px 10px;border-radius:8px;background:var(--surface-2);font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;overflow-x:auto}.child-excerpt:focus-visible{outline:2px solid var(--accent)}.child-excerpt .ours{color:var(--child-ok)}.child-excerpt .theirs{color:var(--child-lane)}.child-excerpt .ctx{color:var(--secondary)}
+    .child-options{display:grid;gap:6px}.child-options .control{min-height:36px}
+    .child-banner{display:flex;flex-wrap:wrap;align-items:center;gap:6px 9px;padding:7px 11px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--secondary);font-size:12.5px}.child-banner .branch-glyph{color:var(--child-lane)}
+    .queue-list{display:grid;gap:6px;padding-top:10px;border-top:1px solid var(--line)}.queue-list h3{margin:0;color:var(--secondary);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}.queue-note{margin:0;color:var(--secondary);font-size:12px}
+    .queue-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:13px}.queue-text{flex:1 1 220px;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+    .plan-chip{flex:none;max-width:100%;padding:2px 8px;border-radius:999px;background:var(--surface-2);color:var(--secondary);font-size:11.5px;font-weight:600;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.plan-chip.fork{color:var(--child-lane);background:color-mix(in srgb,var(--child-lane) 13%,transparent)}
+    .queue-action{min-height:32px;color:var(--accent);font-weight:600}
     .session-tab.home-tab .session-select{font-weight:650}
     .session-close[hidden]{display:none}.live-subagents{position:sticky;bottom:0;z-index:3;display:grid;gap:6px;max-height:45vh;overflow-y:auto;padding:8px 16px;background:var(--chrome);border-top:1px solid var(--line);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.subagent{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-size:12px}.subagent.active{border-left:3px solid var(--accent)}.subagent-head{display:flex;align-items:flex-start;gap:7px}.subagent-head>.status-icon{flex:none;margin-top:2px}.subagent-title{display:flex;flex:1;flex-wrap:wrap;align-items:center;gap:3px 6px;min-width:0}.subagent-title strong{font-size:13px;overflow-wrap:anywhere}.subagent-badge{padding:0 5px;border-radius:4px;background:var(--surface-2);color:var(--secondary);font-size:10px}.subagent-stop{flex:none;min-height:32px;min-width:52px}.subagent-body{display:grid;gap:3px;margin:4px 0 0 21px;color:var(--secondary)}.subagent-now{color:var(--text);overflow-wrap:anywhere}.subagent-meta{font-variant-numeric:tabular-nums}.subagent-error{color:var(--red);font-weight:600;overflow-wrap:anywhere}.subagent-latest{margin:0 0 6px;color:var(--secondary);white-space:pre-wrap;overflow-wrap:anywhere}.subagent-step{display:flex;align-items:center;gap:7px;padding:2px 0;min-width:0}.subagent .disclosure{margin-top:3px}.status-icon.idle{color:var(--secondary)}
     .steps{margin-top:8px}.status-icon{display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;font-size:10px;font-weight:800;color:var(--tertiary)}.status-icon.succeeded{color:var(--green)}.status-icon.failed{color:var(--red)}.status-icon.cancelled{color:var(--secondary)}.status-icon.running{color:var(--accent);animation:pulse 1.1s ease-in-out infinite}@keyframes pulse{50%{opacity:.35}}
@@ -2949,7 +3041,7 @@ private extension RemoteControlServer {
           const button=document.createElement("button");button.className="session-select";
           if(sidebarLayout){const title=document.createElement("span"),status=document.createElement("span");title.className="session-name";status.className="session-status";button.append(brainIndicator(),title,status)}
           const close=document.createElement("button");close.className="session-close";tab.append(button,close)}
-        tab.className=`session-tab ${item.id===selected?"active":""}${item.isCantripHome?" home-tab":""}`;
+        tab.className=`session-tab ${item.id===selected?"active":""}${item.isCantripHome?" home-tab":""}${item.parentID?" child-tab":""}`;
         tab.draggable=Boolean(item.supportsTabReordering);
         tab.ondragstart=event=>{if(movingTab||!item.supportsTabReordering){event.preventDefault();return}draggedTabID=item.id;event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("text/plain",`cantrip-tab:${item.id}`)};
         tab.ondragend=()=>{draggedTabID=null;for(const row of nav.children)row.classList.remove("drop-target");refresh()};
@@ -2961,6 +3053,7 @@ private extension RemoteControlServer {
         tab.onkeydown=event=>{if(!event.altKey||!item.supportsTabReordering)return;const earlier=sidebarLayout?"ArrowUp":"ArrowLeft",later=sidebarLayout?"ArrowDown":"ArrowRight";
           if(event.key===earlier||event.key===later){event.preventDefault();moveTabBy(item.id,event.key===earlier?-1:1)}};
         const button=tab.children[0];if(sidebarLayout){setText(button.querySelector(".session-name"),item.title);tab.dataset.streaming=String(Boolean(item.isStreaming));button.dataset.title=item.title;button.dataset.status=progressSummary(item);button.dataset.locked=String(Boolean(item.isLocked))}else{button.textContent=item.title;button.title=item.title}
+        const childNote=item.parentID?`, child tab of ${item.child?.parentTitle||"another tab"}`:"";let note=button.querySelector(".child-note");if(childNote){if(!note){note=document.createElement("span");note.className="sr-only child-note";button.append(note)}setText(note,childNote)}else if(note)note.remove();
         button.setAttribute("aria-current",item.id===selected?"true":"false");button.onclick=()=>{selectTab(item.id);renderedPayload="";renderProgress(item);refresh()};
         const close=tab.children[1];close.textContent=item.isLocked?"🔒":"×";close.disabled=Boolean(item.isLocked);close.title=item.isLocked?"Locked - unlock in tab settings":`Close ${item.title}`;close.setAttribute("aria-label",close.title);close.hidden=Boolean(item.isCantripHome);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};
         let menu=tab.children[2];if(item.supportsTabMetadata){if(!menu){menu=document.createElement("button");menu.className="session-menu";menu.textContent="…";tab.append(menu)}
@@ -3536,17 +3629,77 @@ private extension RemoteControlServer {
     function handoffResultCard(result){const label={working:"Working in tab",needsInput:"Needs your answer",completed:"Done in tab",failed:"Failed in tab",cancelled:"Stopped"}[result.state]||"Handoff update";
       const time=result.finishedAt?`Finished ${handoffClock(result.finishedAt)} · took ${handoffDuration(result.startedAt,result.finishedAt)}`:`Updated ${handoffClock(result.updatedAt)}`;
       return handoffCardElement({state:result.state,label,tabID:result.tabID,tabTitle:result.tabTitle,summary:result.summary,detail:result.detail,time,result:true})}
+    // Child tabs: a queued message runs in its own tab (and branch) and merges back; the parent shows
+    // one card. Its tag opens the thread: the request, the child's replies and the files it changed.
+    function branchGlyph(){const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");svg.setAttribute("viewBox","0 0 16 16");svg.setAttribute("aria-hidden","true");svg.setAttribute("class","branch-glyph");
+      svg.innerHTML='<circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="5" r="1.6"/><path d="M4.5 5.1v5.8M11.5 6.6c0 3.2-7 2-7 4.3"/>';return svg}
+    const childVerbs={open:"open it",discard:"discard it",resolve:"start the merge",keepParent:"keep that version",keepChild:"keep that version",leave:"leave it unmerged",retry:"try the merge again",merge:"merge it"};
+    async function childAction(sessionID,child,name,button){if(name==="open"&&sessionItems.some(s=>s.id===child.id)){openHandoffTab(child.id);return}
+      if(name==="discard"&&!confirm(`Discard child tab “${child.title}”?${child.branch?` Its work on ${child.branch} is deleted.`:""}`))return;
+      $("actionError").textContent="";if(button)button.disabled=true;
+      try{await api(`/api/v1/sessions/${sessionID}/children/${child.id}/${name}`,{method:"POST"});if(name==="open")selectTab(child.id);renderedPayload="";await refresh()}
+      catch(error){$("actionError").textContent=`Couldn't ${childVerbs[name]||"do that"}: ${error.message}`;if(button)button.disabled=false}}
+    function childChip(child){const chip=document.createElement("span"),icon=document.createElement("span");chip.className=`child-chip ${{working:"work",needsInput:"work",conflict:"work",merged:"ok",noChanges:"ok",failed:"bad"}[child.state]||""}`;
+      icon.setAttribute("aria-hidden","true");icon.textContent={needsInput:"?",finished:"◷",merged:"✓",noChanges:"✓",conflict:"⚠",unmerged:"–",failed:"!",stopped:"–",discarded:"–"}[child.state]||"•";
+      if(child.state==="working"||child.state==="merging")icon.className="child-pulse";chip.append(icon,child.statusLine);return chip}
+    function childExcerpt(text){const pre=document.createElement("pre");pre.className="child-excerpt";pre.tabIndex=0;pre.setAttribute("aria-label","Conflicting lines");
+      for(const [index,line] of text.split("\\n").entries()){if(index)pre.append("\\n");const span=document.createElement("span");span.className=line.startsWith(" ")||line==="…"?"ctx":line.startsWith("child ")?"theirs":"ours";span.textContent=line;pre.append(span)}return pre}
+    function childFiles(files){const line=document.createElement("p");line.className="child-files";
+      files.slice(0,8).forEach((file,index)=>{if(index)line.append(" · ");const code=document.createElement("code");code.textContent=file.path;line.append(code,` +${file.added} −${file.removed}`)});
+      if(files.length>8)line.append(` · ${files.length-8} more`);return line}
+    function childQuestion(sessionID,child){const box=document.createElement("div"),title=document.createElement("h4"),text=document.createElement("p"),files=child.conflictFiles||[],clean=child.cleanFileCount||0;
+      box.className="child-question";box.setAttribute("role","group");title.id=`child-question-${child.id}`;title.textContent="Merge needs your answer";box.setAttribute("aria-labelledby",title.id);
+      const name=document.createElement("strong"),base=document.createElement("code");name.textContent=child.title;base.textContent=child.baseBranch||"the parent's branch";
+      text.append("Merging ",name," into ",base,clean?`: ${clean} ${clean===1?"file":"files"} merged cleanly, but both branches changed the same lines in `:": both branches changed the same lines in ");
+      files.slice(0,4).forEach((file,index)=>{if(index)text.append(", ");const code=document.createElement("code");code.textContent=file;text.append(code)});if(files.length>4)text.append(` and ${files.length-4} more`);text.append(".");
+      box.append(title,text);if(child.conflictExcerpt)box.append(childExcerpt(child.conflictExcerpt));
+      if(child.note){const note=document.createElement("p");note.className="child-note";note.textContent=child.note;box.append(note)}
+      const options=document.createElement("div");options.className="child-options";
+      for(const [action,label] of [["resolve","Keep both, then run the tests (Recommended)"],["keepParent",`Keep ${child.baseBranch?`${child.baseBranch}'s`:"the parent's"} version`],["keepChild","Keep the child's version"],["leave","Leave it unmerged; I'll look"]]){
+        if(!(child.actions||[]).includes(action))continue;const button=document.createElement("button");button.type="button";button.className=`control${action==="resolve"?" primary":""}`;button.textContent=label;button.onclick=()=>childAction(sessionID,child,action,button);options.append(button)}
+      box.append(options);return box}
+    function childResultCard(sessionID,child){const card=document.createElement("section"),open=sessionItems.some(s=>s.id===child.id);card.className=`child-card ${child.state}`;card.setAttribute("role","group");card.setAttribute("aria-label",`Child tab ${child.title}`);
+      const thread=remember(document.createElement("details"),`child:${child.id}`),summary=document.createElement("summary"),lane=document.createElement("span"),tag=document.createElement("span"),tagText=document.createElement("span");thread.className="child-thread";
+      lane.className="child-lane";lane.append(branchGlyph(),`Child tab · ${child.title}`);tag.className="child-tag";tagText.textContent=(child.prompt||"").split("\\n")[0];tag.append(tagText);summary.append(lane,tag);summary.title="Show the request and the child tab's replies";thread.append(summary);
+      const body=document.createElement("div"),prompt=document.createElement("p");body.className="child-thread-body";prompt.className="child-prompt";prompt.textContent=child.prompt||"";body.append(prompt);
+      for(const reply of child.replies||[]){const item=document.createElement("div"),who=document.createElement("span"),text=document.createElement("p");item.className="child-reply";who.className="child-who";who.textContent=child.title;appendInline(text,reply);item.append(who,text);body.append(item)}
+      if((child.files||[]).length)body.append(childFiles(child.files));
+      const full=document.createElement("button");full.type="button";full.className="control quiet child-link";full.textContent="Open the full conversation ↗";full.setAttribute("aria-label",`Open the full conversation of ${child.title}`);full.onclick=()=>childAction(sessionID,child,"open",full);body.append(full);thread.append(body);card.append(thread);
+      const said=child.summary||(child.state==="working"?"Working on it in its own tab.":"");if(said){const line=document.createElement("p");line.className="child-summary";appendInline(line,said);card.append(line)}
+      if(child.state==="conflict")card.append(childQuestion(sessionID,child));
+      const meta=document.createElement("div"),link=document.createElement("button");meta.className="child-meta";meta.append(childChip(child));
+      link.type="button";link.className="control quiet child-link";link.textContent=open?"Open tab ↗":"Open conversation ↗";link.setAttribute("aria-label",`${open?"Open tab":"Open conversation"}: ${child.title}`);link.onclick=()=>childAction(sessionID,child,"open",link);meta.append(link);
+      const extra={retry:"Try Again",merge:"Merge Its Work",discard:"Discard"};
+      if(!["conflict","working","needsInput"].includes(child.state))for(const action of child.actions||[])if(extra[action]&&!(action==="discard"&&!child.branch)){const button=document.createElement("button");button.type="button";button.className="control child-action";button.textContent=extra[action];button.onclick=()=>childAction(sessionID,child,action,button);meta.append(button)}
+      card.append(meta);return card}
+    function childBanner(session){const child=session.child,banner=document.createElement("div"),text=document.createElement("span");banner.className="child-banner";banner.setAttribute("role","note");
+      text.textContent=`Child tab of ${child.parentTitle}${child.branch?` · ${child.branch} → ${child.baseBranch||"the parent's branch"}`:""} · ${child.statusLine}`;banner.append(branchGlyph(),text);
+      if(session.parentID){const back=document.createElement("button");back.type="button";back.className="control quiet child-link";back.textContent="Open parent";back.setAttribute("aria-label",`Open the parent tab, ${child.parentTitle}`);back.onclick=()=>openHandoffTab(session.parentID);banner.append(back)}return banner}
+    async function queueAction(sessionID,item,name,button){$("actionError").textContent="";button.disabled=true;
+      try{await api(`/api/v1/sessions/${sessionID}/queue/${item.id}/${name}`,{method:"POST"});renderedPayload="";await refresh()}
+      catch(error){$("actionError").textContent=`Couldn't ${name==="fork"?"start a child tab":"send it now"}: ${error.message}`;button.disabled=false}}
+    // Queued messages with their suggested plan; each can run in a child tab or go now.
+    function queueList(session){const items=session.queued||[];if(!items.length||session.isCantripHome)return null;
+      const list=document.createElement("section"),head=document.createElement("h3"),reason=session.supportsChildTabs?session.childTabsUnavailableReason:null;list.className="queue-list";head.id=`queue-${session.id}`;head.textContent=`Queue · ${items.length}`;list.setAttribute("aria-labelledby",head.id);list.append(head);
+      if(reason){const note=document.createElement("p");note.className="queue-note";note.textContent=reason;list.append(note)}
+      for(const item of items){const row=document.createElement("div"),text=document.createElement("span"),label=item.displayText??item.text;row.className="queue-row";text.className="queue-text";text.textContent=label;text.title=label;row.append(text);
+        if(item.plan){const chip=document.createElement("span");chip.className=`plan-chip ${item.plan.kind}`;chip.textContent=item.plan.reason;chip.title=item.plan.reason;row.append(chip)}
+        if(session.supportsChildTabs){const fork=document.createElement("button");fork.type="button";fork.className="control quiet queue-action";fork.textContent="Run in child tab";fork.disabled=Boolean(reason);fork.setAttribute("aria-label",`Run “${label.slice(0,80)}” in a child tab`);fork.onclick=()=>queueAction(session.id,item,"fork",fork);row.append(fork)}
+        if(session.supportsQueueSendNow){const send=document.createElement("button");send.type="button";send.className="control quiet queue-action";send.textContent="Send now";send.setAttribute("aria-label",`Send “${label.slice(0,80)}” now`);send.onclick=()=>queueAction(session.id,item,"send",send);row.append(send)}
+        list.append(row)}
+      return list}
     function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight,anchor=prepend?visibleHistoryAnchor():null;
       $("inputBanner").classList.toggle("hidden",!session?.pendingInputs?.some(r=>r.kind==="secret"));$("inputBanner").textContent="Enter password securely";
       renderProgress(session);updateHistoryControls(session);const liveBox=$("messages"),box=document.createElement("div"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
       const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession),scrollRevision=++renderScrollRevision;renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;if(!sameSession)historyReading=false;$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
       const pinned=[];if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{if(session.isLocalPrivate){const notice=document.createElement("p");notice.className="muted";notice.textContent="Private Local - saved on the Mac and available remotely. Self-hosted models; no cloud fallback. Configure the server in the tab menu.";box.append(notice)}
+        if(session.child)box.append(childBanner(session));
         const answered=new Set(session.messages.filter(m=>m.role==="handoff"&&m.handoffResult).map(m=>m.handoffResult.delegationID));
         for(const message of session.messages){const handoffs=(message.delegations||[]).filter(handoff=>!answered.has(handoff.id)),subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id)),activities=(message.activities||[]).filter(activity=>!subagentIDs.has(activity.id)),apps=message.apps||[],settled=subagents.filter(agent=>!subagentActive(agent));for(const agent of subagents)if(subagentActive(agent))pinned.push([agent,message.id]);for(const app of apps)box.append(mcpAppSlot(session.id,app));
           if(!message.text&&!message.thinking&&!activities.length&&!settled.length&&!handoffs.length)continue;if(message.role==="freshStart"){box.append(freshStartDivider(message));continue}const row=document.createElement("article");row.className=`message ${message.role}`;row.dataset.messageId=message.id;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
-          appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
+          appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
           if(message.role==="error"&&session.supportsStartFresh&&message.id===session.repeatedErrorMessageID)appendErrorRecovery(row,session);
           if(handoffs.length){const stack=document.createElement("div");stack.className="handoffs";for(const handoff of handoffs)stack.append(handoffCard(handoff));row.append(stack)}appendActivities(row,activities,message.id);
           if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
@@ -3554,6 +3707,7 @@ private extension RemoteControlServer {
               const full=data.message,parts=[full.text];if(full.thinking)parts.push("Reasoning\\n"+full.thinking);for(const step of full.activities||[])parts.push([step.title,step.input,step.output].filter(Boolean).join("\\n"));readPrompt(parts.join("\\n\\n"));$("promptTitle").textContent="Message details"}
             catch(error){if(token===requestToken)$("historyError").textContent=`Could not load message details: ${error.message}`}finally{button.disabled=false}};row.append(button)}box.append(row)}
         appendChatInputs(box,session);
+        const queue=queueList(session);if(queue)box.append(queue);
         if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}
         if(!sidebarLayout&&(session.isStreaming||session.queuedCount)){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
       mcpReconcile(liveBox,box);pruneMacImages();renderPinnedSubagents(sessionID,pinned);

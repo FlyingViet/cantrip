@@ -42,6 +42,10 @@ struct LauncherView: View {
     @State private var creatingSection = false
     @State private var renamingSection: TabSection?
     @State private var deletingSection: TabSection?
+    @ObservedObject private var childTabStore = ChildTabStore.shared
+    /// A child tab whose Discard is waiting for confirmation.
+    @State private var discardingChild: ChildTab?
+    @State private var childTabError: String?
     /// The section header a dragged tab or section is over.
     @State private var sectionDropTarget: String?
     @ObservedObject private var sectionCollapse = TabSectionCollapse.shared
@@ -204,6 +208,24 @@ struct LauncherView: View {
         } message: { section in
             let count = tabCount(section)
             Text("Its \(count == 1 ? "tab moves" : "\(count) tabs move") back to Tabs. No tabs are closed.")
+        }
+        .alert(discardingChild.map { "Discard \u{201C}\($0.title)\u{201D}?" } ?? "Discard Child Tab?", isPresented: Binding(
+            get: { discardingChild != nil },
+            set: { if !$0 { discardingChild = nil } }
+        ), presenting: discardingChild) { child in
+            Button("Discard", role: .destructive) { performChildAction("discard", child) }
+            Button("Cancel", role: .cancel) {}
+        } message: { child in
+            Text(child.branch.map { "Its work on \($0) is deleted. The conversation stays in history." }
+                 ?? "The conversation stays in history.")
+        }
+        .alert("Child Tab", isPresented: Binding(
+            get: { childTabError != nil },
+            set: { if !$0 { childTabError = nil } }
+        )) {
+            Button("OK") { childTabError = nil }
+        } message: {
+            Text(childTabError ?? "")
         }
         .keepingLauncherPanelOpen(while: presentingPanelModal)
         .alert("Tab Protected", isPresented: Binding(
@@ -824,6 +846,12 @@ struct LauncherView: View {
                 if position < 8 {
                     shortcutBadge(position + 2)
                 }
+                if manager.parentID(ofChild: chat.id) != nil {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(ChildTabColors.lane)
+                        .accessibilityHidden(true)
+                }
                 Text(chat.title)
                     .font(.caption)
                     .lineLimit(1)
@@ -838,12 +866,14 @@ struct LauncherView: View {
             .padding(.trailing, chat.isLocked ? 10 : 0)
             .padding(.vertical, 4)
             .overlay {
-                SessionTabDragHandle(id: chat.id, title: chat.title) {
+                SessionTabDragHandle(id: chat.id, title: chat.title,
+                                     canDrag: manager.parentID(ofChild: chat.id) == nil) {
                     manager.select(chat.id)
                 }
             }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
+            .accessibilityHint(childParentTitle(chat).map { "Child tab of \($0)" } ?? "")
             .accessibilityAction { manager.select(chat.id) }
             if !chat.isLocked {
                 Button(action: { manager.close(chat.id) }) {
@@ -891,7 +921,10 @@ struct LauncherView: View {
                 catch { manager.tabActionError = error.localizedDescription }
             }
             .disabled(chat.isLocalPrivate)
-            if !chat.isPrivate {
+            if let parentID = manager.parentID(ofChild: chat.id) {
+                Button("Open Parent Tab") { manager.select(parentID) }
+            }
+            if !chat.isPrivate, manager.parentID(ofChild: chat.id) == nil {
                 Menu("Move to Section") {
                     let current = manager.sectionID(of: chat)
                     Toggle("Tabs", isOn: Binding(get: { current == nil }, set: { _ in fileTab(chat, in: nil) }))
@@ -911,11 +944,11 @@ struct LauncherView: View {
             Button("Move Tab Left") {
                 moveTab(chat.id, offset: -1)
             }
-            .disabled(position == 0)
+            .disabled(position == 0 || manager.parentID(ofChild: chat.id) != nil)
             Button("Move Tab Right") {
                 moveTab(chat.id, offset: 1)
             }
-            .disabled(position == order.count - 1)
+            .disabled(position == order.count - 1 || manager.parentID(ofChild: chat.id) != nil)
             Divider()
             Button("Close Tab", role: .destructive) { manager.close(chat.id) }
                 .disabled(chat.isLocked)
@@ -927,6 +960,7 @@ struct LauncherView: View {
         modelSettingsSession != nil || editingSections || showingInputRequests || renamingSession != nil
             || sectioningSession != nil || creatingSection || renamingSection != nil || deletingSection != nil
             || manager.tabActionError != nil || session.tabActionError != nil
+            || discardingChild != nil || childTabError != nil
     }
 
     // MARK: Tab sections in the strip
@@ -1523,6 +1557,32 @@ struct LauncherView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer()
+                    if let plan = session.queuePlans[item.id] {
+                        Text(plan.reason)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(plan.kind == .fork ? AnyShapeStyle(ChildTabColors.lane) : AnyShapeStyle(.secondary))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(plan.kind == .fork ? AnyShapeStyle(ChildTabColors.lane.opacity(0.13)) : AnyShapeStyle(.quaternary),
+                                        in: Capsule())
+                            .layoutPriority(-1)
+                            .help(plan.reason)
+                    }
+                    if session.supportsChildTabs {
+                        let unavailable = manager.childTabs.forkUnavailableReason(session)
+                        Button(action: { forkQueued(item.id) }) {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(unavailable == nil ? AnyShapeStyle(ChildTabColors.lane) : AnyShapeStyle(.tertiary))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(unavailable != nil)
+                        .help(unavailable ?? "Run in a child tab: its own tab and branch, merged back when it's done.")
+                        .accessibilityLabel("Run in Child Tab")
+                        .accessibilityHint(unavailable ?? "")
+                    }
                     Button(action: { session.sendQueuedNow(id: item.id) }) {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 11))
@@ -2694,6 +2754,40 @@ struct LauncherView: View {
         catch { manager.tabActionError = error.localizedDescription }
     }
 
+    // MARK: Child tabs
+
+    private func childParentTitle(_ chat: ChatSession) -> String? {
+        guard manager.parentID(ofChild: chat.id) != nil else { return nil }
+        return childTabStore.record(chat.id)?.parentTitle
+    }
+
+    /// Moves a queued message into a child tab; this tab stays selected.
+    private func forkQueued(_ itemID: UUID) {
+        let parentID = session.id
+        Task {
+            do { try await manager.childTabs.fork(parentID: parentID, itemID: itemID) }
+            catch { childTabError = error.localizedDescription }
+        }
+    }
+
+    /// A child card's button. Open selects an open child or reopens it from history.
+    private func runChildAction(_ action: String, _ child: ChildTab) {
+        if action == "open", manager.sessions.contains(where: { $0.id == child.id }) {
+            manager.select(child.id)
+            return
+        }
+        if action == "discard" {
+            discardingChild = child
+            return
+        }
+        performChildAction(action, child)
+    }
+
+    private func performChildAction(_ action: String, _ child: ChildTab) {
+        do { try manager.childTabs.perform(action, childID: child.id) }
+        catch { childTabError = error.localizedDescription }
+    }
+
     private var mainTranscript: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -2702,13 +2796,20 @@ struct LauncherView: View {
                 // is capped at ~30 messages, so laziness buys nothing.
                 VStack(alignment: .leading, spacing: 12) {
                     let repeatedErrorID = session.repeatedErrorMessageID
+                    if let parentID = manager.parentID(ofChild: session.id), let record = childTabStore.record(session.id) {
+                        ChildTabBanner(record: record) { manager.select(parentID) }
+                    }
                     ForEach(transcriptMessages) { message in
                         MessageRow(message: message, localOnly: session.isLocalPrivate,
                                    appActions: settings.copilotMCPApps ? mcpAppActions : nil,
                                    openSubagents: { background in
                                        openProgressPane(background ? .background : .steps)
                                    },
-                                   errorRecovery: message.id == repeatedErrorID ? errorRecovery : nil)
+                                   errorRecovery: message.id == repeatedErrorID ? errorRecovery : nil,
+                                   childAction: { action, child in runChildAction(action, child) },
+                                   childTabOpen: message.childResult.map { child in
+                                       manager.sessions.contains { $0.id == child.id }
+                                   } ?? false)
                             .id(message.id)
                     }
                     RemoteInputView(session: session, openSecureInput: { showingInputRequests = true })
@@ -3085,6 +3186,9 @@ struct MessageRow: View {
     var openSubagents: ((Bool) -> Void)?
     /// Offered on an error that repeated: the tab is likely stuck on its earlier context.
     var errorRecovery: ErrorRecovery?
+    /// A child tab card's buttons (`ChildTab.actions`).
+    var childAction: ((String, ChildTab) -> Void)?
+    var childTabOpen = false
 
     private var visibleApps: [MCPAppPayload] { appActions == nil ? [] : message.apps }
     /// Finished subagents grouped by the reply block they follow; running ones are pinned below the transcript.
@@ -3185,6 +3289,10 @@ struct MessageRow: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
             .accessibilityElement(children: .combine)
+        case .handoff where message.childResult != nil && childAction != nil:
+            if let child = message.childResult, let childAction {
+                ChildTabCard(record: child, isOpen: childTabOpen, action: childAction)
+            }
         case .handoff:
             VStack(alignment: .leading, spacing: 3) {
                 Label(message.handoffResult?.headline ?? "Handoff", systemImage: "rectangle.stack")

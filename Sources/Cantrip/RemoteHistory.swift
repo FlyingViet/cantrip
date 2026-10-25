@@ -7,7 +7,8 @@ enum RemoteHistory {
     static func message(_ message: ChatMessage) -> [String: Any] {
         var result: [String: Any] = [
             "id": message.id.uuidString,
-            "role": message.role.rawValue,
+            // A child tab's card reads as a reply to clients that don't draw it.
+            "role": message.childResult != nil ? "assistant" : message.role.rawValue,
             "text": message.text,
             "thinking": message.thinking,
             "activities": message.activities.map { activity -> [String: Any] in
@@ -30,6 +31,7 @@ enum RemoteHistory {
             result["delegations"] = message.delegations.map(\.snapshot)
         }
         if let handoff = message.handoffResult { result["handoffResult"] = handoff.snapshot }
+        if let child = message.childResult { result["childResult"] = child.snapshot }
         let reasoning = ReasoningStep.steps(from: message.reasoningBlocks)
         if !reasoning.isEmpty {
             result["reasoning"] = reasoning.enumerated().map { $1.snapshot(number: $0 + 1) }

@@ -29,6 +29,8 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var delegations: [CantripHomeDelegation] = []
     /// Cantrip Home only: a handed-off tab's result card (role `handoff`).
     var handoffResult: CantripHomeHandoffResult?
+    /// A child tab's card in its parent (role `handoff`; `ChildTabs.swift`).
+    var childResult: ChildTab?
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
     /// `freshStart`: the Start Fresh divider; turns above it are never sent to the model.
     enum Role: String, Codable { case user, assistant, error, handoff, freshStart }
@@ -38,7 +40,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     }
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart
+        case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
     }
 }
 
@@ -102,10 +104,11 @@ extension ChatMessage {
         handoffResult = try? container.decodeIfPresent(
             CantripHomeHandoffResult.self, forKey: .handoffResult
         )
+        childResult = try? container.decodeIfPresent(ChildTab.self, forKey: .childResult)
         if (try? container.decodeIfPresent(Bool.self, forKey: .freshStart)) == true {
             role = .freshStart
         } else {
-            role = handoffResult == nil ? storedRole : .handoff
+            role = handoffResult == nil && childResult == nil ? storedRole : .handoff
         }
     }
 
@@ -115,7 +118,7 @@ extension ChatMessage {
         // Result cards are saved as assistant messages and dividers as errors, so builds without
         // those roles still load the transcript; `handoffResult` / `freshStart` mark them.
         let storedRole: Role = switch role {
-        case .handoff where handoffResult != nil: .assistant
+        case .handoff where handoffResult != nil || childResult != nil: .assistant
         case .freshStart: .error
         default: role
         }
@@ -128,6 +131,7 @@ extension ChatMessage {
         try container.encodeIfPresent(promptUsage, forKey: .promptUsage)
         if !delegations.isEmpty { try container.encode(delegations, forKey: .delegations) }
         try container.encodeIfPresent(handoffResult, forKey: .handoffResult)
+        try container.encodeIfPresent(childResult, forKey: .childResult)
     }
 }
 
@@ -163,9 +167,20 @@ final class ChatSession: ObservableObject {
         didSet {
             remoteQueueRevision = UUID()
             scheduleQueueGrouping()
+            scheduleQueuePlanning()
         }
     }
     @Published private(set) var deliveryStatus: String?
+    /// Suggested plans for queued messages while this tab works (`QueuePlanning.swift`).
+    @Published private(set) var queuePlans: [UUID: QueuePlan] = [:] {
+        didSet { if queuePlans != oldValue { remoteQueueRevision = UUID() } }
+    }
+    private var planningTask: Task<Void, Never>?
+    private var plannedKey = ""
+    /// Set while a child tab's branch merges into this tab's checkout; the queue waits for it.
+    var childMergeHold = false
+    /// One line about child tabs that settled since this tab's model last heard (ChildTabCoordinator).
+    static var childContextProvider: ((UUID) -> String?)?
     @Published var pendingInputs: [InputRequestSnapshot] = [] {
         didSet { remoteMessageRevision = UUID() }
     }
@@ -436,7 +451,9 @@ final class ChatSession: ObservableObject {
         if isLocalPrivate, !FileManager.default.fileExists(atPath: transcriptURL.path) { persistTranscript() }
         // Home's safety rules are enforced by Cantrip for whichever backend runs it.
         let guardrail: CantripHomeGuardrail? = isCantripHome ? .attended
-            : isCantripHomeBackground ? .unattended : nil
+            : isCantripHomeBackground ? .unattended
+            // A child tab keeps Cantrip's blocked list too (it must not quit Cantrip, for one).
+            : ChildTabStore.shared.isActiveChild(id) ? .attended : nil
         let guarded: [CantripHomeGuardedBackend?] = [
             copilotBackend as? CantripHomeGuardedBackend, copilotRemote, claudeCode, localModel
         ]
@@ -951,6 +968,106 @@ final class ChatSession: ObservableObject {
         return item
     }
 
+    @discardableResult
+    func removeQueued(id: UUID) -> QueuedPrompt? {
+        guard let index = queued.firstIndex(where: { $0.id == id }) else { return nil }
+        let item = queued[index]
+        removeQueued(at: index)
+        return item
+    }
+
+    // MARK: - Child tabs
+
+    /// The request this tab is working on now.
+    var currentTaskPrompt: String? { currentRunPrompt }
+
+    /// Whether queued messages here can move into child tabs.
+    var supportsChildTabs: Bool {
+        !SessionManager.isCantripHomeReserved(self) && !isLocalPrivate && !isPrivate
+            && !ChildTabStore.shared.isActiveChild(id)
+    }
+
+    /// A child tab's first turn: the queued request as written, with its brief hidden.
+    func startChildTask(_ text: String, preamble: String) {
+        send(text, preamble: preamble, includesAmbientContext: false, consumesStagedContext: false)
+    }
+
+    /// Runs this tab's tools under Cantrip's blocked list and the child-tab resource rules.
+    func configureAsChildTab(label: String, policy: @escaping CopilotBackend.ChildPolicy) {
+        let guarded: [CantripHomeGuardedBackend?] = [
+            copilot as? CantripHomeGuardedBackend, copilotRemote, claudeCode, localModel
+        ]
+        for backend in guarded {
+            backend?.guardrail = .attended
+            backend?.guardrailLabel = label
+        }
+        (copilot as? CopilotBackend)?.childPolicy = policy
+    }
+
+    func clearChildTabPolicy() {
+        let guarded: [CantripHomeGuardedBackend?] = [
+            copilot as? CantripHomeGuardedBackend, copilotRemote, claudeCode, localModel
+        ]
+        for backend in guarded { backend?.guardrail = nil }
+        (copilot as? CopilotBackend)?.childPolicy = nil
+    }
+
+    /// After a child tab's merge held the queue.
+    func resumeQueueAfterChildMerge() {
+        guard !isStreaming, !childMergeHold else { return }
+        drainQueue()
+    }
+
+    /// While a turn runs, suggest a plan for each queued message (one router call per change).
+    private func scheduleQueuePlanning() {
+        let live = Set(queued.map(\.id))
+        if queuePlans.keys.contains(where: { !live.contains($0) }) {
+            queuePlans = queuePlans.filter { live.contains($0.key) }
+        }
+        guard isStreaming, supportsChildTabs, !queued.isEmpty, !councilMode else { return }
+        if case .unavailable = routerProvider { return }
+        let items = Array(queued.prefix(QueuePlanningPolicy.maxCandidates))
+        let key = items.map(\.id.uuidString).joined(separator: ",")
+        guard key != plannedKey else { return }
+        plannedKey = key
+        planningTask?.cancel()
+        let currentTask = currentRunPrompt ?? ""
+        let recent = messages.filter { ($0.role == .user || $0.role == .assistant) && !$0.text.isEmpty }
+            .suffix(4).map { MessageRoutingSnapshot.Turn(role: $0.role.rawValue, text: $0.text) }
+        let workdir = self.workdir
+        let activityRepo = ChildTabRepositories.recentRepository(in: self)
+        let children = ChildTabStore.shared.running.filter { $0.parentID == id }
+        let provider = routerProvider
+        planningTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.queueGroupingDelay)
+            guard !Task.isCancelled else { return }
+            let context = await Task.detached(priority: .utility) { () -> (changed: [String], repos: [String]) in
+                let repo = ChildTabGit.toplevel(workdir) ?? activityRepo
+                return (repo.map { ChildTabGit.changedFiles($0) } ?? [], ChildTabRepositories.names())
+            }.value
+            let snapshot = QueuePlanningSnapshot(
+                currentTask: currentTask, recentConversation: Array(recent), changedFiles: context.changed,
+                repositories: context.repos,
+                childTabs: children.enumerated().map { .init(number: $0.offset + 1, title: $0.element.title, touches: $0.element.touches) },
+                messages: items.enumerated().map { .init(number: $0.offset + 1, text: $0.element.text) }
+            )
+            do {
+                let decision = try await MessageRouter.planQueue(snapshot, provider: provider)
+                guard let self, !Task.isCancelled else { return }
+                let plans = QueuePlanningPolicy.plans(decision, items: items, repositories: context.repos,
+                                                      childTitles: children.map(\.title))
+                let live = Set(self.queued.map(\.id))
+                self.queuePlans = self.queuePlans.merging(plans) { $1 }.filter { live.contains($0.key) }
+            } catch is CancellationError {
+                return
+            } catch {
+                Log.write("queue-planning: \(error.localizedDescription)")
+                guard let self, !Task.isCancelled else { return }
+                self.plannedKey = ""
+            }
+        }
+    }
+
     func removeQueued(at index: Int) {
         guard queued.indices.contains(index) else { return }
         let item = queued.remove(at: index)
@@ -979,6 +1096,11 @@ final class ChatSession: ObservableObject {
                 return refuseSendNow(
                     "Cantrip is continuing an interrupted task first. This message is next in the queue."
                 )
+            }
+            // A child tab's branch is merging into this checkout; it goes first once that's done.
+            guard !childMergeHold else {
+                moveQueuedToFront(item)
+                return refuseSendNow("A child tab's work is merging into this tab's checkout. This message is next in the queue.")
             }
             invalidateGrouping()
             Log.write("queue: sending a queued message now")
@@ -1426,11 +1548,14 @@ final class ChatSession: ObservableObject {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         guard isStreaming else {
-            // Messages wait behind an interrupted run that is about to continue, unless redirected.
-            if !queued.isEmpty || (autoResumePending && !interrupt) {
+            // Messages wait behind an interrupted run that is about to continue, unless redirected,
+            // and behind a child tab's merge into this checkout (a few seconds).
+            if !queued.isEmpty || (autoResumePending && !interrupt) || childMergeHold {
                 enqueue(prompt, includesAmbientContext: includesAmbientContext)
                 if autoResumePending {
                     deliveryStatus = "Queued: Cantrip finishes the interrupted task first."
+                } else if childMergeHold {
+                    deliveryStatus = "Queued: a child tab's work is merging into this tab's checkout."
                 }
                 drainQueue()
                 return
@@ -1814,6 +1939,11 @@ final class ChatSession: ObservableObject {
         var includesAmbientContext = includesAmbientContext
         let automatedRun = isCantripHomeBackground && !isResume
             ? Self.cantripHomeAutomatedRun(for: prompt) : nil
+        // Child tabs that settled: only their one-line result reaches this tab's model.
+        if !isLocalPrivate, !isResume, automatedRun == nil, !SessionManager.isCantripHomeReserved(self),
+           SlashInvocation(prompt) == nil, let notes = Self.childContextProvider?(id) {
+            preamble = "(Child tabs since your last turn:\n\(notes))" + (preamble.map { "\n\n" + $0 } ?? "")
+        }
         if isCantripHomeBackground, !isResume { cantripHomeRunLabel = automatedRun?.label }
         if let automatedRun {
             preamble = preamble ?? automatedRun.preamble
@@ -3306,7 +3436,8 @@ final class ChatSession: ObservableObject {
             self.groupingPlan = QueueGroupingPlan(candidates: candidates, group: group)
             guard self.drainAfterGrouping else { return }
             self.drainAfterGrouping = false
-            guard !self.isStreaming, self.journalError == nil else { return }
+            // A child tab's merge started meanwhile: the queue resumes once it's done.
+            guard !self.isStreaming, self.journalError == nil, !self.childMergeHold else { return }
             // Messages added meanwhile run later. A removed or edited message, or a change
             // that rules out grouping (such as council mode), means deciding again.
             let current = self.queueGroupingCandidates()
@@ -3333,7 +3464,7 @@ final class ChatSession: ObservableObject {
     /// Starts the next queued message, together with any later ones the router judged
     /// related to it. Grouping is normally decided while the previous turn was running.
     private func drainQueue() {
-        guard !isStreaming, journalError == nil, !queued.isEmpty, !drainAfterGrouping else { return }
+        guard !isStreaming, journalError == nil, !queued.isEmpty, !drainAfterGrouping, !childMergeHold else { return }
         // An interrupted run continues before anything queued behind it.
         guard !autoResumePending else { return }
         // Sending while offline would fail each queued message in turn; wait for the network.

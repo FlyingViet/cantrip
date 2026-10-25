@@ -90,6 +90,16 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         set { guardrailLock.withLock { storedGuardrail = newValue } }
     }
 
+    /// A child tab's shared-resource rules, consulted before Cantrip's policy for shell commands:
+    /// `decide` once (proceed or deny), `status` while it waits.
+    typealias ChildPolicy = (CantripHomeActionRequest, @escaping (ChildPolicyVerdict) -> Void,
+                             @escaping (String) -> Void) -> Void
+    private var storedChildPolicy: ChildPolicy?
+    var childPolicy: ChildPolicy? {
+        get { guardrailLock.withLock { storedChildPolicy } }
+        set { guardrailLock.withLock { storedChildPolicy = newValue } }
+    }
+
     var guardrailLabel: String {
         get { guardrailLock.withLock { storedGuardrailLabel } }
         set { guardrailLock.withLock { storedGuardrailLabel = newValue } }
@@ -506,16 +516,39 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     /// Decides one Home tool request with the host policy (queue-owned). Asked actions become
     /// a normal approval request, so they reach the user's phone and expire like any other.
     private func answerPolicy(id: String, owner: String, detail: String) {
-        func reply(_ approved: Bool, _ feedback: String? = nil) {
+        let reply: (Bool, String?) -> Void = { [weak self] approved, feedback in
+            guard let self else { return }
             var answer: [String: Any] = ["kind": "inputAnswer", "runID": owner, "id": id,
                                          "decision": approved ? "approve" : "deny"]
             if let feedback { answer["text"] = feedback }
-            do { try write(answer) }
-            catch { fail("Could not deliver Cantrip's decision to Copilot. It was not retried.") }
+            do { try self.write(answer) }
+            catch { self.fail("Could not deliver Cantrip's decision to Copilot. It was not retried.") }
         }
         guard let request = CantripHomeActionRequest(copilotJSON: detail) else {
             return reply(false, "Cantrip couldn't read this tool request, so it was not run.")
         }
+        if request.kind == .shell, let childPolicy {
+            childPolicy(request, { [weak self] verdict in
+                self?.queue.async {
+                    guard let self, self.runID == owner else { return }
+                    switch verdict {
+                    case .proceed: self.decidePolicy(request, id: id, owner: owner, reply: reply)
+                    case .deny(let reason): reply(false, reason)
+                    }
+                }
+            }, { [weak self] status in
+                self?.queue.async {
+                    guard let self, self.runID == owner else { return }
+                    self.onEvent?(.status(status))
+                }
+            })
+            return
+        }
+        decidePolicy(request, id: id, owner: owner, reply: reply)
+    }
+
+    private func decidePolicy(_ request: CantripHomeActionRequest, id: String, owner: String,
+                              reply: @escaping (Bool, String?) -> Void) {
         let mode = guardrail ?? .unattended
         // The mode this turn started with ("Act on my behalf"), matching the bridge's own checks.
         let approval: CantripHomeApproval = configuration?.autoApprove == true ? .automatic : .ask
@@ -531,9 +564,9 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             if decision.automatic {
                 Log.write("home policy: approved \(decision.action) automatically (Act on my behalf)")
             }
-            return reply(true)
+            return reply(true, nil)
         }
-        if decision.verdict == .ask, approvedScopes.contains(decision.scope) { return reply(true) }
+        if decision.verdict == .ask, approvedScopes.contains(decision.scope) { return reply(true, nil) }
         let label = guardrailLabel
         let title = decision.verdict == .ask
             ? "\(label) wants to \(decision.action)"
@@ -549,7 +582,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                       self.inputRequests.removeValue(forKey: id) != nil else { return }
                 if answer.decision == .approve {
                     if !scope.isEmpty { self.approvedScopes.insert(scope) }
-                    reply(true)
+                    reply(true, nil)
                 } else {
                     let what = decision.action.isEmpty ? "this action" : decision.action
                     reply(false, answer.decision == .deny
