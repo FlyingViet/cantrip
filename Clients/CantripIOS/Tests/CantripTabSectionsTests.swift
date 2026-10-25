@@ -75,14 +75,14 @@ final class CantripTabSectionsTests: XCTestCase {
         XCTAssertNil(CantripTabGrouping.groups(sessions, sections: []), "Without sections the list stays flat")
         let sections = [CantripTabSection(id: "s1", name: "Work"), CantripTabSection(id: "s2", name: "Home")]
         let groups = try XCTUnwrap(CantripTabGrouping.groups(sessions, sections: sections))
-        XCTAssertEqual(groups.map(\.name), ["Tabs", "Work", "Home"])
-        XCTAssertEqual(groups.map { $0.sessions.map(\.id) }, [["a", "d"], ["c", "e", "f"], ["b"]],
+        XCTAssertEqual(groups.map(\.name), ["Work", "Home", "Tabs"], "Unfiled tabs come after every section")
+        XCTAssertEqual(groups.map { $0.sessions.map(\.id) }, [["c", "e", "f"], ["b"], ["a", "d"]],
                        "Tabs of a deleted section show under Tabs; order follows the Mac")
-        XCTAssertNil(groups[0].section)
-        XCTAssertEqual(CantripTabGrouping.visible(groups[1], collapsed: false, selectedID: nil).map(\.id), ["c", "e", "f"])
-        XCTAssertEqual(CantripTabGrouping.visible(groups[1], collapsed: true, selectedID: nil).map(\.id), ["c", "f"],
+        XCTAssertNil(groups[2].section)
+        XCTAssertEqual(CantripTabGrouping.visible(groups[0], collapsed: false, selectedID: nil).map(\.id), ["c", "e", "f"])
+        XCTAssertEqual(CantripTabGrouping.visible(groups[0], collapsed: true, selectedID: nil).map(\.id), ["c", "f"],
                        "A collapsed section keeps working tabs and tabs waiting for an answer")
-        XCTAssertEqual(CantripTabGrouping.visible(groups[1], collapsed: true, selectedID: "e").map(\.id), ["c", "e", "f"],
+        XCTAssertEqual(CantripTabGrouping.visible(groups[0], collapsed: true, selectedID: "e").map(\.id), ["c", "e", "f"],
                        "and the open tab")
         XCTAssertEqual(CantripTabGrouping.sectionID(of: tab("x", section: "gone"), sections: sections), nil)
         XCTAssertEqual(CantripTabGrouping.sectionID(of: tab("x", section: "s2"), sections: sections), "s2")
@@ -284,7 +284,7 @@ final class CantripTabSectionsTests: XCTestCase {
         XCTAssertEqual(Drag.drop(Drag.payload(tab: "d"), onTab: b, order: all), .moveTab(id: "d", targetID: "b", after: false))
         XCTAssertNil(Drag.drop(Drag.payload(tab: "b"), onTab: b, order: all))
 
-        // On a header: a tab is filed there; a section takes the header's place (on Tabs: first).
+        // On a header: a tab is filed there; a section takes the header's place (on Tabs: last).
         XCTAssertEqual(Drag.drop(Drag.payload(tab: "a"), onHeaderOf: "s2", sections: sections, sessions: all),
                        .fileTab(id: "a", sectionID: "s2"))
         XCTAssertEqual(Drag.drop(Drag.payload(tab: "b"), onHeaderOf: nil, sections: sections, sessions: all),
@@ -295,8 +295,9 @@ final class CantripTabSectionsTests: XCTestCase {
         XCTAssertEqual(Drag.drop(Drag.payload(section: "s1"), onHeaderOf: "s3", sections: sections, sessions: all),
                        .moveSection(id: "s1", position: 2))
         XCTAssertEqual(Drag.drop(Drag.payload(section: "s2"), onHeaderOf: nil, sections: sections, sessions: all),
-                       .moveSection(id: "s2", position: 0))
-        XCTAssertNil(Drag.drop(Drag.payload(section: "s1"), onHeaderOf: nil, sections: sections, sessions: all), "Already first")
+                       .moveSection(id: "s2", position: sections.count - 1))
+        XCTAssertNil(Drag.drop(Drag.payload(section: sections[sections.count - 1].id), onHeaderOf: nil,
+                               sections: sections, sessions: all), "Already last")
         XCTAssertNil(Drag.drop(Drag.payload(section: "s2"), onHeaderOf: "s2", sections: sections, sessions: all))
     }
 

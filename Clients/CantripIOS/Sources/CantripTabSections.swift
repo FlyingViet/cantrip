@@ -32,19 +32,19 @@ enum CantripTabGrouping {
         let section: CantripTabSection?
     }
 
-    /// Tabs (unfiled, including tabs of deleted sections) first, then each section in the Mac's
-    /// order; tabs keep the Mac's order inside a group. Nil when there are no sections: the list
+    /// Each section in the Mac's order, then Tabs (unfiled, including tabs of deleted sections)
+    /// last; tabs keep the Mac's order inside a group. Nil when there are no sections: the list
     /// stays flat, as before sections.
     static func groups(_ sessions: [CantripRemoteSession], sections: [CantripTabSection]) -> [Group]? {
         guard !sections.isEmpty else { return nil }
         let known = Set(sections.map(\.id))
-        var groups = [Group(id: looseID, name: "Tabs",
-                            sessions: sessions.filter { $0.sectionID.map { !known.contains($0) } ?? true },
-                            section: nil)]
-        for section in sections {
-            groups.append(Group(id: section.id, name: section.name,
-                                sessions: sessions.filter { $0.sectionID == section.id }, section: section))
+        var groups = sections.map { section in
+            Group(id: section.id, name: section.name,
+                  sessions: sessions.filter { $0.sectionID == section.id }, section: section)
         }
+        groups.append(Group(id: looseID, name: "Tabs",
+                            sessions: sessions.filter { $0.sectionID.map { !known.contains($0) } ?? true },
+                            section: nil))
         return groups
     }
 
@@ -355,7 +355,7 @@ enum CantripTabDrag {
     }
 
     /// Dropped on a header: a tab joins that section (Tabs: none); a section takes the header's
-    /// place (on Tabs: first).
+    /// place (on Tabs, which is always last: last).
     static func drop(_ payload: String, onHeaderOf sectionID: String?, sections: [CantripTabSection],
                      sessions: [CantripRemoteSession]) -> Action? {
         switch item(payload) {
@@ -365,7 +365,7 @@ enum CantripTabDrag {
             return .fileTab(id: id, sectionID: sectionID)
         case .section(let id)?:
             guard id != sectionID, let source = sections.firstIndex(where: { $0.id == id }) else { return nil }
-            let position = sectionID.flatMap { target in sections.firstIndex { $0.id == target } } ?? 0
+            let position = sectionID.flatMap { target in sections.firstIndex { $0.id == target } } ?? sections.count - 1
             return position == source ? nil : .moveSection(id: id, position: position)
         case nil:
             return nil
