@@ -241,6 +241,37 @@ final class LauncherPanel: NSPanel {
     }
 }
 
+extension View {
+    /// Keeps the launcher panel open while this view shows a SwiftUI alert, sheet or dialog:
+    /// an attached sheet takes key focus, which otherwise hides the panel with it.
+    func keepingLauncherPanelOpen(while presented: Bool) -> some View {
+        modifier(LauncherPanelModalHold(presented: presented))
+    }
+}
+
+private struct LauncherPanelModalHold: ViewModifier {
+    let presented: Bool
+    @State private var holding: LauncherPanel?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: presented, initial: true) { _, isUp in update(isUp) }
+            .onDisappear { update(false) }
+    }
+
+    private func update(_ isUp: Bool) {
+        if isUp, holding == nil,
+           let panel = NSApp.windows.lazy.compactMap({ $0 as? LauncherPanel }).first {
+            panel.beginAttachedModalPresentation()
+            holding = panel
+        } else if !isUp, let panel = holding {
+            holding = nil
+            // After the sheet has closed and handed key focus back.
+            DispatchQueue.main.async { panel.endAttachedModalPresentation() }
+        }
+    }
+}
+
 extension NSAlert {
     /// Shows the alert as a sheet on `window` (modal when there is none). An attached
     /// sheet takes key focus, so the launcher panel is told to stay open until it ends.

@@ -5,12 +5,11 @@ import SwiftUI
 struct TabSectionsEditor: View {
     @ObservedObject var manager: SessionManager
     @Environment(\.dismiss) private var dismiss
-    /// Names being typed, by section; committed on Return or when the field loses focus.
-    @State private var drafts: [UUID: String] = [:]
     @State private var newName = ""
     @State private var error: String?
     @State private var deleting: TabSection?
-    @FocusState private var focused: UUID?
+    @State private var renaming: TabSection?
+    @State private var renameText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -45,16 +44,25 @@ struct TabSectionsEditor: View {
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Spacer()
-                Button("Done") {
-                    commitDraft(focused)
-                    dismiss()
-                }
+                Button("Done") { dismiss() }
                 .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
         .frame(width: 460, height: 440)
-        .onChange(of: focused) { previous, _ in commitDraft(previous) }
+        .alert("Rename Section", isPresented: Binding(
+            get: { renaming != nil },
+            set: { if !$0 { renaming = nil } }
+        ), presenting: renaming) { section in
+            TextField("Section name", text: $renameText)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                let name = renameText
+                perform(nil) { try manager.renameSection(section.id, to: name) }
+            }
+        } message: { _ in
+            Text("Up to \(TabSectionStore.maximumNameLength) characters.")
+        }
         .confirmationDialog(deleting.map { "Delete \u{201C}\($0.name)\u{201D}?" } ?? "", isPresented: Binding(
             get: { deleting != nil },
             set: { if !$0 { deleting = nil } }
@@ -73,20 +81,14 @@ struct TabSectionsEditor: View {
         let last = manager.tabSections.count - 1
         let count = tabCount(section)
         return HStack(spacing: 8) {
-            Image(systemName: "line.3.horizontal")
-                .foregroundStyle(.tertiary)
-                .help("Drag to reorder")
-                .accessibilityHidden(true)
-            TextField("Section name", text: Binding(
-                get: { drafts[section.id] ?? section.name },
-                set: { drafts[section.id] = $0 }
-            ))
-            .textFieldStyle(.plain)
-            .focused($focused, equals: section.id)
-            .onSubmit { commitDraft(section.id) }
-            .accessibilityLabel("Name")
+            Text(section.name)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Text(count == 1 ? "1 tab" : "\(count) tabs")
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            Button { promptRename(section) } label: { Image(systemName: "pencil") }
+                .help("Rename Section")
+                .accessibilityLabel("Rename \(section.name)")
             Button { move(section, by: -1) } label: { Image(systemName: "chevron.up") }
                 .disabled(index == 0)
                 .help("Move Up")
@@ -101,7 +103,12 @@ struct TabSectionsEditor: View {
         }
         .buttonStyle(.borderless)
         .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .help("Drag to reorder. Double-click to rename.")
+        .onTapGesture(count: 2) { promptRename(section) }
         .contextMenu {
+            Button("Rename Section...") { promptRename(section) }
+            Divider()
             Button("Move Up") { move(section, by: -1) }.disabled(index == 0)
             Button("Move Down") { move(section, by: 1) }.disabled(index == last)
             Divider()
@@ -133,11 +140,9 @@ struct TabSectionsEditor: View {
         "Moved \(section.name) to position \(position + 1) of \(manager.tabSections.count)"
     }
 
-    private func commitDraft(_ id: UUID?) {
-        guard let id, let draft = drafts[id] else { return }
-        drafts[id] = nil
-        guard let section = manager.tabSections.first(where: { $0.id == id }), draft != section.name else { return }
-        perform(nil) { try manager.renameSection(id, to: draft) }
+    private func promptRename(_ section: TabSection) {
+        renameText = section.name
+        renaming = section
     }
 
     private func create() {
