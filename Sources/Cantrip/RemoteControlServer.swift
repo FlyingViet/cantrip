@@ -612,6 +612,8 @@ final class RemoteControlServer {
         guard request.path == "/api/v1/sessions"
                 || request.path == "/api/v1/ready"
                 || request.path.hasPrefix("/api/v1/sessions/")
+                || request.path == "/api/v1/sections"
+                || request.path.hasPrefix("/api/v1/sections/")
                 || request.path == "/api/v1/home"
                 || request.path.hasPrefix("/api/v1/home/")
                 || request.path == "/api/v1/github/builds"
@@ -823,13 +825,19 @@ final class RemoteControlServer {
         } else {
             recentExchanges = nil
         }
+        if request.path == "/api/v1/sections" || request.path.hasPrefix("/api/v1/sections/") {
+            handleTabSections(request, on: connection)
+            return
+        }
+
         if request.path == "/api/v1/sessions" {
             switch request.method {
             case "GET":
                 let sessions = manager.sessions
                     .filter { !$0.isPrivate }
                     .map { snapshot($0, includeMessages: false, on: connection) }
-                var listing: [String: Any] = ["sessions": sessions, "uiRevision": Self.webAppRevision]
+                var listing: [String: Any] = ["sessions": sessions, "uiRevision": Self.webAppRevision,
+                                              "sections": manager.tabSections.map(\.json), "supportsTabSections": true]
                 if AppSettings.shared.cantripHomeEnabled {
                     // Web clients pin it as their first tab; tab-list clients ignore it.
                     listing["home"] = snapshot(manager.homeSession, includeMessages: false, on: connection)
@@ -838,8 +846,26 @@ final class RemoteControlServer {
                 if !homeInputs.isEmpty { listing["homeInputs"] = homeInputs }
                 sendJSON(listing, on: connection)
             case "POST":
-                let session = manager.newSession()
-                sendSession(session, status: 201, recentExchanges: recentExchanges, on: connection)
+                // Optional {"sectionID": "<uuid>"} files the new tab under a section.
+                let rawSection = request.body.isEmpty ? nil : request.json?["sectionID"]
+                let sectionID: UUID?
+                if let rawSection, !(rawSection is NSNull) {
+                    guard let text = rawSection as? String, let id = UUID(uuidString: text) else {
+                        sendError(400, "sectionID must be a UUID or null.", on: connection)
+                        return
+                    }
+                    sectionID = id
+                } else {
+                    sectionID = nil
+                }
+                do {
+                    let session = try manager.newSession(inSection: sectionID)
+                    sendSession(session, status: 201, recentExchanges: recentExchanges, on: connection)
+                } catch let error as TabSectionError {
+                    sendError(error.status, error.localizedDescription, on: connection)
+                } catch {
+                    sendError(500, error.localizedDescription, on: connection)
+                }
             default:
                 sendError(405, "method not allowed", on: connection)
             }
@@ -1173,7 +1199,7 @@ final class RemoteControlServer {
                 try manager.moveSession(id, relativeTo: targetID, after: placement == "after")
                 let sessions = manager.sessions.filter { !$0.isPrivate }
                     .map { snapshot($0, includeMessages: false, on: connection) }
-                sendJSON(["sessions": sessions], on: connection)
+                sendJSON(["sessions": sessions, "sections": manager.tabSections.map(\.json)], on: connection)
             } catch {
                 sendError(409, error.localizedDescription, on: connection)
             }
@@ -1330,20 +1356,27 @@ final class RemoteControlServer {
         case "metadata":
             guard let body = json,
                   !body.isEmpty,
-                  Set(body.keys).isSubset(of: ["customTitle", "isLocked"]),
+                  Set(body.keys).isSubset(of: ["customTitle", "isLocked", "sectionID"]),
                   body["customTitle"] == nil || body["customTitle"] is String,
                   body["isLocked"] == nil || (body["isLocked"] as? NSNumber).map({
                       CFGetTypeID($0) == CFBooleanGetTypeID()
-                  }) == true else {
-                sendError(400, "Provide customTitle (string) and/or isLocked (boolean).", on: connection)
+                  }) == true,
+                  body["sectionID"] == nil || body["sectionID"] is NSNull
+                    || (body["sectionID"] as? String).flatMap(UUID.init(uuidString:)) != nil else {
+                sendError(400, "Provide customTitle (string), isLocked (boolean) and/or sectionID (UUID or null).", on: connection)
                 return
             }
             do {
+                if body.keys.contains("sectionID") {
+                    try manager.setSection((body["sectionID"] as? String).flatMap(UUID.init(uuidString:)), for: session.id)
+                }
                 try session.updateTab(name: body["customTitle"] as? String,
                                       isLocked: body["isLocked"] as? Bool)
                 sendSession(session, recentExchanges: recentExchanges, on: connection)
             } catch let error as SessionTabError {
                 sendError(400, error.localizedDescription, on: connection)
+            } catch let error as TabSectionError {
+                sendError(error.status, error.localizedDescription, on: connection)
             } catch let error as SessionModelSettingsError {
                 sendError(error.status, error.message, on: connection)
             } catch {
@@ -1830,6 +1863,72 @@ final class RemoteControlServer {
         }
     }
 
+    /// `/api/v1/sections`: GET lists them; POST {"name"} adds one; `/api/v1/sections/{id}` PATCH
+    /// {"name"?, "position"?} renames or reorders it; DELETE removes it (its tabs go back to Tabs).
+    @MainActor
+    private func handleTabSections(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
+        guard let manager else {
+            sendError(503, "Cantrip is shutting down.", on: connection)
+            return
+        }
+        let parts = request.path.split(separator: "?")[0].split(separator: "/").dropFirst(3)
+        func reply(_ status: Int = 200, extra: [String: Any] = [:]) {
+            var body: [String: Any] = ["sections": manager.tabSections.map(\.json)]
+            body.merge(extra) { $1 }
+            sendJSON(body, status: status, on: connection)
+        }
+        do {
+            if parts.isEmpty {
+                switch request.method {
+                case "GET":
+                    reply()
+                case "POST":
+                    guard let json = request.json, Set(json.keys) == ["name"], let name = json["name"] as? String else {
+                        sendError(400, "Provide the section's name.", on: connection)
+                        return
+                    }
+                    let section = try manager.createSection(named: name)
+                    Log.write("remote-control: tab section added")
+                    reply(201, extra: ["section": section.json])
+                default:
+                    sendError(405, "method not allowed", on: connection)
+                }
+                return
+            }
+            guard parts.count == 1, let id = UUID(uuidString: String(parts.first!)) else {
+                sendError(404, "section not found", on: connection)
+                return
+            }
+            switch request.method {
+            case "PATCH":
+                guard let json = request.json, !json.isEmpty, Set(json.keys).isSubset(of: ["name", "position"]),
+                      json["name"] == nil || json["name"] is String,
+                      json["position"] == nil || (json["position"] as? NSNumber).map({
+                          CFGetTypeID($0) != CFBooleanGetTypeID() && $0.doubleValue == $0.doubleValue.rounded()
+                      }) == true else {
+                    sendError(400, "Provide name (string) and/or position (integer).", on: connection)
+                    return
+                }
+                if let name = json["name"] as? String { try manager.renameSection(id, to: name) }
+                if let position = json["position"] as? NSNumber { try manager.moveSection(id, to: position.intValue) }
+                reply()
+            case "DELETE":
+                try manager.deleteSection(id)
+                Log.write("remote-control: tab section removed")
+                let sessions = manager.sessions.filter { !$0.isPrivate }
+                    .map { snapshot($0, includeMessages: false, on: connection) }
+                reply(extra: ["sessions": sessions])
+            default:
+                sendError(405, "method not allowed", on: connection)
+            }
+        } catch let error as TabSectionError {
+            sendError(error.status, error.localizedDescription, on: connection)
+        } catch {
+            Log.write("remote-control: tab section change failed: \(error.localizedDescription)")
+            sendError(500, "Could not save the section on the Mac.", on: connection)
+        }
+    }
+
     @MainActor
     private func sendSession(_ session: ChatSession, status: Int = 200,
                              recentExchanges: Int?,
@@ -1919,6 +2018,7 @@ final class RemoteControlServer {
             "pendingInputCount": session.pendingInputs.count,
             "supportsTabMetadata": !SessionManager.isCantripHomeReserved(session),
             "supportsTabReordering": !SessionManager.isCantripHomeReserved(session),
+            "supportsTabSections": !SessionManager.isCantripHomeReserved(session),
             "supportsModelSettings": !session.isLocalPrivate && !session.isCantripHomeBackground,
             "modelSettingsRevision": session.modelSettingsRevision,
             "workdir": session.workdir,
@@ -1940,6 +2040,7 @@ final class RemoteControlServer {
             "supportsBackendCommands": true,
         ]
         if let status = session.statusText { result["status"] = status }
+        if let section = manager?.sectionID(of: session) { result["sectionID"] = section.uuidString }
         if let status = session.deliveryStatus { result["deliveryStatus"] = status }
         if let repeated = session.repeatedErrorMessageID {
             result["repeatedErrorMessageID"] = repeated.uuidString
@@ -2444,6 +2545,9 @@ private extension RemoteControlServer {
     .spinner{width:12px;height:12px;border:1.5px solid rgba(255,255,255,.2);border-top-color:var(--secondary);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.empty{margin:auto;color:var(--tertiary)}
     #pair{width:min(calc(100% - 32px),430px);margin:18vh auto 0;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.2)}#pair h2{margin:0 0 7px;font-size:18px}#pair p{line-height:1.45}#pairControls{display:flex;gap:7px;margin-top:15px}#pair input{min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;outline:0;background:var(--surface)}#pair input:focus{border-color:var(--accent)}
     #tabEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#tabEditor::backdrop{background:rgba(0,0,0,.35)}#tabEditor form{display:grid;gap:12px}#tabName{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}.tab-actions{display:flex;justify-content:flex-end;gap:8px}#tabError,#actionError{color:var(--orange);font-size:12px}#actionError:not(:empty){padding:8px 14px}.session-close:disabled{opacity:.65;cursor:default}.session-menu{border:0;background:transparent;color:var(--secondary);padding:2px 5px}
+    .section-header{display:flex;align-items:center;flex:none;border-radius:999px;color:var(--secondary)}.section-header.drop-target{outline:2px solid var(--accent)}.section-toggle{display:flex;align-items:center;gap:5px;min-width:0;max-width:170px;padding:4px 4px 4px 9px;border:0;background:transparent;color:inherit;font-size:12px;font-weight:600;white-space:nowrap}.section-toggle .section-name{overflow:hidden;text-overflow:ellipsis}.section-toggle .section-count{color:var(--tertiary);font-weight:400}.section-header:hover{background:var(--surface);color:var(--text)}.section-menu{border:0;background:transparent;color:var(--tertiary);padding:2px 7px 2px 3px;opacity:.6}.section-header:hover .section-menu,.section-menu:focus-visible{opacity:1}
+    .remote-sidebar .section-header{width:100%;min-height:30px;margin-top:6px;border-radius:7px}.remote-sidebar .section-toggle{flex:1;max-width:none;text-transform:uppercase;letter-spacing:.04em;font-size:11px}
+    #sectionEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#sectionEditor::backdrop{background:rgba(0,0,0,.35)}#sectionEditor form{display:grid;gap:12px}#sectionName,#tabNewSection{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}#sectionActions{flex-wrap:wrap;justify-content:flex-start}#sectionError{color:var(--orange);font-size:12px}#tabSection{max-width:none;width:100%;height:32px;border:1px solid var(--line);background:var(--surface);color:var(--text)}
     .prompt-usage{margin-top:4px}.prompt-usage>summary{font-size:11px}.usage-table{margin:6px 0 2px 19px;max-width:340px;color:var(--text)}.usage-title{margin-top:6px;color:var(--secondary);font-size:11px;font-weight:600}.usage-table dl{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:3px 0;font-size:12px}.usage-table dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}.prompt-preview{white-space:pre-wrap}.prompt-preview.clipped{max-height:11.2em;overflow:hidden}#promptReader{width:min(calc(100% - 24px),680px);border:1px solid var(--line);border-radius:12px;background:Canvas;color:var(--text)}#promptReader::backdrop{background:rgba(0,0,0,.35)}#promptPage{height:55vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
     @media(max-width:620px){.prompt-row{padding-inline:12px}.tools{padding-inline:10px}.connection-label{display:none}.session-tab{max-width:145px}.session-select{max-width:115px}#messages{padding:14px 12px 22px}.live-subagents{padding:8px 12px}}
     .remote-sidebar{--sidebar-width:clamp(136px,30vw,240px)}.remote-sidebar #app{padding-left:var(--sidebar-width)}
@@ -2535,9 +2639,16 @@ private extension RemoteControlServer {
     <strong id="tabEditorTitle">Tab settings</strong><label>Tab name<input id="tabName" autocomplete="off"></label>
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
+    <label id="tabSectionLabel" class="hidden">Section<select id="tabSection"></select></label><input id="tabNewSection" class="hidden" maxlength="40" autocomplete="off" placeholder="New section name" aria-label="New section name">
     <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
+    </form></dialog>
+    <dialog id="sectionEditor" aria-labelledby="sectionEditorTitle"><form id="sectionForm">
+    <strong id="sectionEditorTitle">Section</strong><label>Name<input id="sectionName" maxlength="40" autocomplete="off"></label>
+    <div id="sectionActions" class="tab-actions"><button id="sectionNewTab" type="button" class="control">New Tab Here</button><button id="sectionUp" type="button" class="control">Move Up</button><button id="sectionDown" type="button" class="control">Move Down</button><button id="sectionDelete" type="button" class="control">Delete Section</button></div>
+    <span id="sectionNote" class="muted"></span><div id="sectionError" role="alert"></div>
+    <div class="tab-actions"><button id="sectionCancel" type="button" class="control">Cancel</button><button id="sectionSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
     <dialog id="modelEditor" aria-labelledby="modelTitle"><form id="modelForm">
     <strong id="modelTitle">Model Settings</strong><span id="modelTabTitle"></span>
@@ -2717,6 +2828,9 @@ private extension RemoteControlServer {
       finally{if(deadline!==null)clearTimeout(deadline);if(!controller){uiActiveWrites--;scheduleUIReload()}}}
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
     let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;
+    // Sections come from the Mac; which ones are collapsed is this browser's choice.
+    const collapsedSectionsKey="cantrip.collapsedSections",looseSectionID="tabs";let tabSections=[],sectionsSupported=false,collapsedSections=new Set();
+    try{collapsedSections=new Set(JSON.parse(localStorage.getItem(collapsedSectionsKey)||"[]"))}catch{}
     const tabDrafts=new Map();
     function selectTab(id){if(selected)tabDrafts.set(selected,$("draft").value);selected=id;$("draft").value=tabDrafts.get(id)||"";if(typeof syncSlashCommands==="function")syncSlashCommands()}
     // historyPaused: tabs whose last older page failed; automatic loading waits for Retry.
@@ -2751,7 +2865,7 @@ private extension RemoteControlServer {
     function refresh(){refreshRequested=true;if(refreshTask)return refreshTask;
       refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision;
         let listedSuccessfully=false,requestSelection=requestedID;
-        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);renderHomeInputs(listed.homeInputs||[]);
+        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);tabSections=listed.sections||[];sectionsSupported=listed.supportsTabSections===true;renderHomeInputs(listed.homeInputs||[]);
           // Cantrip Home is pinned first when the Mac has it on; it is never closed or moved.
           const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;$("homeTasks").classList.toggle("hidden",!listed.home);$("homeArtifacts").classList.toggle("hidden",!listed.home);
           for(const id of historyCache.keys())if(!sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}
@@ -2825,9 +2939,12 @@ private extension RemoteControlServer {
     function renderSessions(items){const nav=$("sessions"),previousLeft=nav.scrollLeft,previousTop=nav.scrollTop,selectionChanged=nav.dataset.selected!==(selected||"");
       if(draggedTabID||movingTab)return;sessionItems=items;
       // Keep existing controls mounted so polling does not interrupt scrolling or keyboard focus.
-      const existing=new Map(Array.from(nav.children,tab=>[tab.dataset.sessionId,tab])),ids=new Set(items.map(item=>item.id));
-      for(const tab of Array.from(nav.children))if(!ids.has(tab.dataset.sessionId))tab.remove();
-      for(const [index,item] of items.entries()){let tab=existing.get(item.id);
+      const existing=new Map(),headers=new Map();for(const node of nav.children)(node.dataset.sessionId?existing:headers).set(node.dataset.sessionId||node.dataset.sectionId,node);
+      const order=sectionedOrder(items),wanted=new Set(order.map(entry=>entry.item?entry.item.id:"section:"+entry.group.id));
+      for(const node of Array.from(nav.children))if(!wanted.has(node.dataset.sessionId||"section:"+node.dataset.sectionId))node.remove();
+      for(const [index,entry] of order.entries()){if(entry.group){const header=headers.get(entry.group.id)||sectionHeader(entry.group.id);updateSectionHeader(header,entry.group);
+          if(nav.children[index]!==header)nav.insertBefore(header,nav.children[index]||null);continue}
+        const item=entry.item;let tab=existing.get(item.id);
         if(!tab){tab=document.createElement("span");tab.dataset.sessionId=item.id;
           const button=document.createElement("button");button.className="session-select";
           if(sidebarLayout){const title=document.createElement("span"),status=document.createElement("span");title.className="session-name";status.className="session-status";button.append(brainIndicator(),title,status)}
@@ -2859,6 +2976,56 @@ private extension RemoteControlServer {
       if(sidebarLayout||event.ctrlKey||event.shiftKey||Math.abs(event.deltaX)>=Math.abs(event.deltaY)||nav.scrollWidth<=nav.clientWidth)return;
       event.preventDefault();const unit=event.deltaMode===1?16:event.deltaMode===2?nav.clientWidth:1;nav.scrollLeft+=event.deltaY*unit
     },{passive:false});
+    // Home first, then unfiled tabs under "Tabs", then each section in the Mac's order. A collapsed
+    // section still shows the open tab and tabs that are working or waiting for an answer.
+    function sectionedOrder(items){if(!tabSections.length)return items.map(item=>({item}));
+      const known=new Set(tabSections.map(section=>section.id)),groups=[],order=[];
+      const loose=items.filter(item=>!item.isCantripHome&&!known.has(item.sectionID));
+      for(const item of items)if(item.isCantripHome)order.push({item});
+      if(loose.length)groups.push({id:looseSectionID,name:"Tabs",items:loose});
+      for(const section of tabSections)groups.push({id:section.id,name:section.name,items:items.filter(item=>item.sectionID===section.id)});
+      for(const group of groups){order.push({group});const collapsed=collapsedSections.has(group.id);
+        for(const item of group.items)if(!collapsed||item.id===selected||item.isStreaming||item.pendingInputCount>0)order.push({item})}
+      return order}
+    function sectionHeader(id){const header=document.createElement("div"),toggle=document.createElement("button"),name=document.createElement("span"),count=document.createElement("span"),menu=document.createElement("button");
+      header.className="section-header";header.dataset.sectionId=id;toggle.type="button";toggle.className="section-toggle";name.className="section-name";count.className="section-count";toggle.append(name,count);
+      menu.type="button";menu.className="section-menu";menu.textContent="…";header.append(toggle,menu);
+      toggle.onclick=()=>{if(collapsedSections.has(id))collapsedSections.delete(id);else collapsedSections.add(id);
+        try{localStorage.setItem(collapsedSectionsKey,JSON.stringify([...collapsedSections]))}catch{}renderSessions(sessionItems)};
+      header.ondragover=event=>{if(draggedTabID&&!movingTab){event.preventDefault();event.dataTransfer.dropEffect="move";header.classList.add("drop-target")}};
+      header.ondragleave=()=>header.classList.remove("drop-target");
+      header.ondrop=event=>{event.preventDefault();header.classList.remove("drop-target");const tabID=draggedTabID;draggedTabID=null;if(tabID)fileTab(tabID,id===looseSectionID?null:id)};
+      return header}
+    function updateSectionHeader(header,group){const collapsed=collapsedSections.has(group.id),toggle=header.children[0],menu=header.children[1];
+      setText(toggle.children[0],`${collapsed?"▸":"▾"} ${group.name}`);setText(toggle.children[1],String(group.items.length));
+      toggle.setAttribute("aria-expanded",String(!collapsed));toggle.title=`${collapsed?"Expand":"Collapse"} ${group.name}`;
+      menu.title=group.id===looseSectionID?"New section":`${group.name} section options`;menu.setAttribute("aria-label",menu.title);menu.onclick=()=>editSection(group)}
+    async function fileTab(id,sectionID){if(movingTab||tabSaving)return;movingTab=true;tabOrderRevision++;$("actionError").textContent="";
+      try{await api(`/api/v1/sessions/${id}/metadata`,{method:"POST",body:JSON.stringify({sectionID})})}
+      catch(error){$("actionError").textContent=`${error.message} Refresh the tabs before trying again.`}
+      finally{movingTab=false;refresh()}}
+    let editingSection=null,sectionSaving=false;
+    function editSection(group){editingSection=group;const creating=group.id===looseSectionID,index=tabSections.findIndex(section=>section.id===group.id);
+      $("sectionEditorTitle").textContent=creating?"New section":"Section";$("sectionName").value=creating?"":group.name;$("sectionSave").textContent=creating?"Create":"Save";
+      $("sectionActions").classList.toggle("hidden",creating);$("sectionUp").disabled=index<=0;$("sectionDown").disabled=index<0||index>=tabSections.length-1;
+      $("sectionNote").textContent=creating?"Sections show on every device. File a tab from its … menu, or drag it onto a section.":"Deleting a section moves its tabs back to Tabs.";
+      $("sectionError").textContent="";$("sectionEditor").showModal();$("sectionName").focus()}
+    async function sectionRequest(work){if(sectionSaving||!editingSection)return;sectionSaving=true;$("sectionError").textContent="";
+      for(const button of $("sectionForm").querySelectorAll("button"))button.disabled=true;
+      try{await work();$("sectionEditor").close();editingSection=null;tabOrderRevision++;await refresh()}
+      catch(error){$("sectionError").textContent=error.message}
+      finally{sectionSaving=false;for(const button of $("sectionForm").querySelectorAll("button"))button.disabled=false;
+        if(editingSection){const index=tabSections.findIndex(section=>section.id===editingSection.id);$("sectionUp").disabled=index<=0;$("sectionDown").disabled=index<0||index>=tabSections.length-1}}}
+    $("sectionForm").onsubmit=event=>{event.preventDefault();const group=editingSection,name=$("sectionName").value;if(!group)return;
+      sectionRequest(()=>group.id===looseSectionID?api("/api/v1/sections",{method:"POST",body:JSON.stringify({name})})
+        :name===group.name?Promise.resolve():api(`/api/v1/sections/${group.id}`,{method:"PATCH",body:JSON.stringify({name})}))};
+    $("sectionNewTab").onclick=()=>{const group=editingSection;sectionRequest(async()=>{const data=await api("/api/v1/sessions",{method:"POST",body:JSON.stringify({sectionID:group.id})});selectTab(data.session.id)})};
+    $("sectionUp").onclick=()=>{const group=editingSection,index=tabSections.findIndex(section=>section.id===group?.id);sectionRequest(()=>api(`/api/v1/sections/${group.id}`,{method:"PATCH",body:JSON.stringify({position:index-1})}))};
+    $("sectionDown").onclick=()=>{const group=editingSection,index=tabSections.findIndex(section=>section.id===group?.id);sectionRequest(()=>api(`/api/v1/sections/${group.id}`,{method:"PATCH",body:JSON.stringify({position:index+1})}))};
+    $("sectionDelete").onclick=()=>{const group=editingSection;sectionRequest(()=>api(`/api/v1/sections/${group.id}`,{method:"DELETE"}))};
+    $("sectionCancel").onclick=()=>{$("sectionEditor").close();editingSection=null};
+    $("sectionEditor").addEventListener("cancel",event=>{if(sectionSaving)event.preventDefault()});
+    $("tabSection").onchange=()=>{const creating=$("tabSection").value==="new";$("tabNewSection").classList.toggle("hidden",!creating);if(creating)$("tabNewSection").focus()};
     let modelEditorState=null;
     function modelInfo(state){return state.data?.models.find(m=>m.id===(state.draft.model||state.data.fileDefaultModel))}
     function modelValidation(state){if(state.usesDefaults)return "";const info=modelInfo(state),draft=state.draft;
@@ -2910,7 +3077,9 @@ private extension RemoteControlServer {
       catch(error){if(modelEditorState===state){state.error=`${error.message} The change may have reached Cantrip. Reload settings before retrying.`;state.needsReload=true}}
       finally{if(modelEditorState===state){state.saving=false;renderModelSettings()}}};
     let editingTab=null,tabSaving=false;
-    function editTab(item){editingTab=item;$("tabName").value=item.customTitle||item.title;$("tabLocked").checked=Boolean(item.isLocked);$("tabLocked").disabled=Boolean(item.isLocalPrivate);$("tabModelSettings").textContent=item.isLocalPrivate?"Private Local Settings":"Model Settings";$("tabStartFresh").classList.toggle("hidden",!item.supportsStartFresh);$("tabStartFresh").disabled=Boolean(item.isStreaming||item.queuedCount);$("tabError").textContent=item.isLocalPrivate?"Permanent self-hosted-model tab. History is saved and available remotely.":"";updateTabMoveControls();$("tabEditor").showModal();$("tabName").focus();$("tabName").select()}
+    function editTab(item){editingTab=item;$("tabName").value=item.customTitle||item.title;$("tabLocked").checked=Boolean(item.isLocked);$("tabLocked").disabled=Boolean(item.isLocalPrivate);$("tabModelSettings").textContent=item.isLocalPrivate?"Private Local Settings":"Model Settings";$("tabStartFresh").classList.toggle("hidden",!item.supportsStartFresh);$("tabStartFresh").disabled=Boolean(item.isStreaming||item.queuedCount);$("tabError").textContent=item.isLocalPrivate?"Permanent self-hosted-model tab. History is saved and available remotely.":"";updateTabMoveControls();
+      const picker=$("tabSection"),choices=[["","Tabs"],...tabSections.map(section=>[section.id,section.name]),["new","New section…"]];picker.replaceChildren(...choices.map(([value,label])=>{const option=document.createElement("option");option.value=value;option.textContent=label;return option}));
+      picker.value=tabSections.some(section=>section.id===item.sectionID)?item.sectionID:"";$("tabNewSection").value="";$("tabNewSection").classList.add("hidden");$("tabSectionLabel").classList.toggle("hidden",!(sectionsSupported&&item.supportsTabSections));$("tabEditor").showModal();$("tabName").focus();$("tabName").select()}
     function updateTabMoveControls(){const index=sessionItems.findIndex(s=>s.id===editingTab?.id);
       $("tabMoveControls").classList.toggle("hidden",!editingTab?.supportsTabReordering);
       $("tabMoveEarlier").textContent=sidebarLayout?"Move up":"Move left";$("tabMoveLater").textContent=sidebarLayout?"Move down":"Move right";
@@ -2934,15 +3103,19 @@ private extension RemoteControlServer {
     $("tabForm").onsubmit=async event=>{event.preventDefault();if(!editingTab||tabSaving||movingTab)return;const item=editingTab,body={};
       if($("tabName").value!==(item.customTitle||item.title))body.customTitle=$("tabName").value;
       if($("tabLocked").checked!==Boolean(item.isLocked))body.isLocked=$("tabLocked").checked;
-      if(!Object.keys(body).length){$("tabEditor").close();return}tabSaving=true;$("tabSave").disabled=true;$("tabCancel").disabled=true;updateTabMoveControls();
-      try{await api(`/api/v1/sessions/${item.id}/metadata`,{method:"POST",body:JSON.stringify(body)});$("tabEditor").close();editingTab=null;await refresh()}
+      const pickedSection=$("tabSectionLabel").classList.contains("hidden")?null:$("tabSection").value,currentSection=tabSections.some(section=>section.id===item.sectionID)?item.sectionID:"";
+      if(pickedSection!==null&&pickedSection!=="new"&&pickedSection!==currentSection)body.sectionID=pickedSection||null;
+      const newSectionName=pickedSection==="new"?$("tabNewSection").value:null;
+      if(!Object.keys(body).length&&newSectionName===null){$("tabEditor").close();return}tabSaving=true;$("tabSave").disabled=true;$("tabCancel").disabled=true;updateTabMoveControls();
+      try{if(newSectionName!==null){const created=await api("/api/v1/sections",{method:"POST",body:JSON.stringify({name:newSectionName})});body.sectionID=created.section.id;tabSections=created.sections}
+        await api(`/api/v1/sessions/${item.id}/metadata`,{method:"POST",body:JSON.stringify(body)});$("tabEditor").close();editingTab=null;tabOrderRevision++;await refresh()}
       catch(error){$("tabError").textContent=`${error.message} Refresh the session if the result is uncertain.`}
       finally{tabSaving=false;$("tabSave").disabled=false;$("tabCancel").disabled=false;updateTabMoveControls()}};
     function moveTabBy(id,offset){const index=sessionItems.findIndex(s=>s.id===id),target=sessionItems[index+offset];if(index>=0&&target?.supportsTabReordering)moveTab(id,target.id,offset>0)}
     async function moveTab(id,targetID,after){if(movingTab||tabSaving)return;movingTab=true;tabOrderRevision++;const requestToken=token;
       $("actionError").textContent="";$("tabError").textContent="";$("tabSave").disabled=true;$("tabCancel").disabled=true;updateTabMoveControls();
       try{const data=await api(`/api/v1/sessions/${id}/move`,{method:"POST",body:JSON.stringify({targetID,placement:after?"after":"before"})});
-        if(token===requestToken){movingTab=false;renderSessions(data.sessions)}}
+        if(token===requestToken){movingTab=false;if(data.sections)tabSections=data.sections;renderSessions(data.sessions)}}
       catch(error){if(token===requestToken){const message=`${error.message} Refresh the tabs before trying again; the move may have reached Cantrip.`;$("actionError").textContent=message;$("tabError").textContent=message}}
       finally{movingTab=false;$("tabSave").disabled=false;$("tabCancel").disabled=false;updateTabMoveControls();refresh()}}
     let privateEditorState=null;

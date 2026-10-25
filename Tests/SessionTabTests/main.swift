@@ -136,6 +136,7 @@ struct SessionTabTests {
         try testNativeTabDragging()
         try await testPanelStaysOpenForAttachedConfirmation()
         try await testTabReordering()
+        try await testTabSections()
         try await testTabListPreviews()
         try await testRemoteLANPort()
         try testPromptPaging()
@@ -428,12 +429,12 @@ struct SessionTabTests {
         context.evaluateScript("""
         const elements={};
         function node(){return {children:[],value:"",checked:false,disabled:false,
-          classList:{toggle(){}},
+          classList:{toggle(){},add(){},remove(){},contains(){return true}},
           append(...items){this.children.push(...items)},replaceChildren(){this.children=[]},
           setAttribute(){},addEventListener(){},showModal(){this.open=true},close(){this.open=false},focus(){},select(){}}}
         const $=id=>elements[id]||(elements[id]=node());
         const document={createElement:node};let selected="a",renderedPayload="",calls=[];
-        let sessionItems=[],movingTab=false,tabOrderRevision=0,token="test",sidebarLayout=false;
+        let sessionItems=[],movingTab=false,tabOrderRevision=0,token="test",sidebarLayout=false,tabSections=[],sectionsSupported=false;
         function refresh(){return Promise.resolve()}
         function closeSession(id){calls.push({close:id})}
         function api(path,options){calls.push({path,body:JSON.parse(options.body)});return Promise.resolve({})}
