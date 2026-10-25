@@ -52,7 +52,7 @@ function ThreadBody(props: ThreadTagProps & { view: ThreadView }): JSX.Element {
   return <ThreadMessages thread={load.thread} assistantName={mascotDisplayName.value} />;
 }
 
-/** The prompt as a bubble, then each earlier message: answers as bubbles, the rest labeled and clamped to 3 lines. */
+/** The prompt as a bubble, then each earlier message: answers on the right, Pip's (and cards') on the left, named and clamped to 3 lines. */
 export function ThreadMessages(props: { thread: RemoteThread; assistantName: string }): JSX.Element {
   const { thread } = props;
   return (
@@ -62,10 +62,12 @@ export function ThreadMessages(props: { thread: RemoteThread; assistantName: str
       {thread.messages.map((message, index) => message.role === "user" ? (
         <p key={message.id || index} class="child-prompt selectable">{message.text}</p>
       ) : (
-        <div key={message.id || index} class="child-reply">
+        <div key={message.id || index} class="child-reply thread-reply">
           <span class="child-who">{speaker(message, props.assistantName)}</span>
           {/* Paragraph breaks become line breaks, so the 3 lines show text rather than a blank line. */}
-          <p class="selectable">{inline(message.text.replace(/\n\s*\n/g, "\n"), null, `m${index}`)}</p>
+          <div class="thread-bubble">
+            <p class="selectable">{inline(message.text.replace(/\n\s*\n/g, "\n"), null, `m${index}`)}</p>
+          </div>
         </div>
       ))}
     </>

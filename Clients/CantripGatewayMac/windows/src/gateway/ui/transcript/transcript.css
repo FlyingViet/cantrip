@@ -328,4 +328,7 @@ button.reasoning-step:hover { background: rgba(255, 255, 255, 0.09); }
 @media (prefers-reduced-motion: reduce) { .thread-chevron { transition: none; } }
 .thread-panel { align-self: stretch; width: auto; font-size: 13px; }
 .thread-panel[hidden] { display: none; }
+.thread-reply { align-self: flex-start; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 86%; }
+.thread-reply .child-who { padding-left: 11px; }
+.thread-bubble { padding: 6px 11px; border-radius: 14px; background: var(--card-2); color: var(--text); }
 .thread-failed { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
