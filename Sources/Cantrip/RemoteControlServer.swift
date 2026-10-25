@@ -2624,7 +2624,7 @@ private extension RemoteControlServer {
     .child-excerpt{margin:0;padding:8px 10px;border-radius:8px;background:var(--surface-2);font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;overflow-x:auto}.child-excerpt:focus-visible{outline:2px solid var(--accent)}.child-excerpt .ours{color:var(--child-ok)}.child-excerpt .theirs{color:var(--child-lane)}.child-excerpt .ctx{color:var(--secondary)}
     .child-options{display:grid;gap:6px}.child-options .control{min-height:36px}
     .child-banner{display:flex;flex-wrap:wrap;align-items:center;gap:6px 9px;padding:7px 11px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--secondary);font-size:12.5px}.child-banner .branch-glyph{color:var(--child-lane)}
-    .queue-list{display:grid;gap:6px;padding-top:10px;border-top:1px solid var(--line)}.queue-list h3{margin:0;color:var(--secondary);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}.queue-note{margin:0;color:var(--secondary);font-size:12px}
+    .queue-list{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;padding-top:10px;border-top:1px solid var(--line)}.queue-list h3{margin:0;color:var(--secondary);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}.queue-note{margin:0;color:var(--secondary);font-size:12px}
     .queue-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:13px}.queue-text{flex:1 1 220px;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
     .plan-chip{flex:none;max-width:100%;padding:2px 8px;border-radius:999px;background:var(--surface-2);color:var(--secondary);font-size:11.5px;font-weight:600;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.plan-chip.fork{color:var(--child-lane);background:color-mix(in srgb,var(--child-lane) 13%,transparent)}
     .queue-action{min-height:32px;color:var(--accent);font-weight:600}
@@ -3633,14 +3633,15 @@ private extension RemoteControlServer {
     // one card. Its tag opens the thread: the request, the child's replies and the files it changed.
     function branchGlyph(){const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");svg.setAttribute("viewBox","0 0 16 16");svg.setAttribute("aria-hidden","true");svg.setAttribute("class","branch-glyph");
       svg.innerHTML='<circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="5" r="1.6"/><path d="M4.5 5.1v5.8M11.5 6.6c0 3.2-7 2-7 4.3"/>';return svg}
-    const childVerbs={open:"open it",discard:"discard it",resolve:"start the merge",keepParent:"keep that version",keepChild:"keep that version",leave:"leave it unmerged",retry:"try the merge again",merge:"merge it"};
+    const childVerbs={open:"open it",requeue:"move it back to this tab",discard:"discard it",resolve:"start the merge",keepParent:"keep that version",keepChild:"keep that version",leave:"leave it unmerged",retry:"try the merge again",merge:"merge it"};
     async function childAction(sessionID,child,name,button){if(name==="open"&&sessionItems.some(s=>s.id===child.id)){openHandoffTab(child.id);return}
       if(name==="discard"&&!confirm(`Discard child tab “${child.title}”?${child.branch?` Its work on ${child.branch} is deleted.`:""}`))return;
+      if(name==="requeue"&&!confirm(`Run “${child.title}” in this tab instead? The child tab stops${child.branch?` and its work on ${child.branch} is deleted`:""}. The request goes back to the front of this tab's queue.`))return;
       $("actionError").textContent="";if(button)button.disabled=true;
       try{await api(`/api/v1/sessions/${sessionID}/children/${child.id}/${name}`,{method:"POST"});if(name==="open")selectTab(child.id);renderedPayload="";await refresh()}
       catch(error){$("actionError").textContent=`Couldn't ${childVerbs[name]||"do that"}: ${error.message}`;if(button)button.disabled=false}}
     function childChip(child){const chip=document.createElement("span"),icon=document.createElement("span");chip.className=`child-chip ${{working:"work",needsInput:"work",conflict:"work",merged:"ok",noChanges:"ok",failed:"bad"}[child.state]||""}`;
-      icon.setAttribute("aria-hidden","true");icon.textContent={needsInput:"?",finished:"◷",merged:"✓",noChanges:"✓",conflict:"⚠",unmerged:"–",failed:"!",stopped:"–",discarded:"–"}[child.state]||"•";
+      icon.setAttribute("aria-hidden","true");icon.textContent={needsInput:"?",finished:"◷",merged:"✓",noChanges:"✓",conflict:"⚠",unmerged:"–",failed:"!",stopped:"–",discarded:"–",requeued:"↩"}[child.state]||"•";
       if(child.state==="working"||child.state==="merging")icon.className="child-pulse";chip.append(icon,child.statusLine);return chip}
     function childExcerpt(text){const pre=document.createElement("pre");pre.className="child-excerpt";pre.tabIndex=0;pre.setAttribute("aria-label","Conflicting lines");
       for(const [index,line] of text.split("\\n").entries()){if(index)pre.append("\\n");const span=document.createElement("span");span.className=line.startsWith(" ")||line==="…"?"ctx":line.startsWith("child ")?"theirs":"ours";span.textContent=line;pre.append(span)}return pre}
@@ -3669,8 +3670,8 @@ private extension RemoteControlServer {
       if(child.state==="conflict")card.append(childQuestion(sessionID,child));
       const meta=document.createElement("div"),link=document.createElement("button");meta.className="child-meta";meta.append(childChip(child));
       link.type="button";link.className="control quiet child-link";link.textContent=open?"Open tab ↗":"Open conversation ↗";link.setAttribute("aria-label",`${open?"Open tab":"Open conversation"}: ${child.title}`);link.onclick=()=>childAction(sessionID,child,"open",link);meta.append(link);
-      const extra={retry:"Try Again",merge:"Merge Its Work",discard:"Discard"};
-      if(!["conflict","working","needsInput"].includes(child.state))for(const action of child.actions||[])if(extra[action]&&!(action==="discard"&&!child.branch)){const button=document.createElement("button");button.type="button";button.className="control child-action";button.textContent=extra[action];button.onclick=()=>childAction(sessionID,child,action,button);meta.append(button)}
+      const running=["working","needsInput"].includes(child.state),extra=running?{requeue:"Run in this tab instead"}:{retry:"Try Again",merge:"Merge Its Work",discard:"Discard"};
+      if(child.state!=="conflict")for(const action of child.actions||[])if(extra[action]&&!(action==="discard"&&!child.branch)){const button=document.createElement("button");button.type="button";button.className="control child-action";button.textContent=extra[action];button.onclick=()=>childAction(sessionID,child,action,button);meta.append(button)}
       card.append(meta);return card}
     function childBanner(session){const child=session.child,banner=document.createElement("div"),text=document.createElement("span");banner.className="child-banner";banner.setAttribute("role","note");
       text.textContent=`Child tab of ${child.parentTitle}${child.branch?` · ${child.branch} → ${child.baseBranch||"the parent's branch"}`:""} · ${child.statusLine}`;banner.append(branchGlyph(),text);

@@ -166,10 +166,17 @@ final class ChatSession: ObservableObject {
     @Published private(set) var queued: [QueuedPrompt] = [] {
         didSet {
             remoteQueueRevision = UUID()
+            if !autoDeliveredItemIDs.isEmpty { autoDeliveredItemIDs.formIntersection(queued.map(\.id)) }
             scheduleQueueGrouping()
             scheduleQueuePlanning()
         }
     }
+    /// Queued messages sent with Auto delivery (not commands, councils or very long messages): the
+    /// only ones auto-fork may start in a child tab, once routing leaves them queued. An explicit
+    /// Queue means "after this".
+    private(set) var autoDeliveredItemIDs: Set<UUID> = []
+    /// A queued message's plan changed, or Auto routing left one in the queue (auto-fork checks).
+    var onQueuePlansChanged: ((ChatSession) -> Void)?
     @Published private(set) var deliveryStatus: String?
     /// Suggested plans for queued messages while this tab works (`QueuePlanning.swift`).
     @Published private(set) var queuePlans: [UUID: QueuePlan] = [:] {
@@ -1018,6 +1025,41 @@ final class ChatSession: ObservableObject {
         drainQueue()
     }
 
+    /// This queued message was sent with Auto delivery: auto-fork may start it in a child tab.
+    func noteAutoDelivered(_ itemID: UUID) {
+        guard queued.contains(where: { $0.id == itemID }) else { return }
+        autoDeliveredItemIDs.insert(itemID)
+        onQueuePlansChanged?(self)
+    }
+
+    /// Whether Auto routing is still deciding, or a delivery is in flight, for this queued message.
+    func isDeliveringQueued(_ itemID: UUID) -> Bool {
+        routingItemID == itemID || pendingInjections.contains(itemID)
+    }
+
+    /// Replaces a queued message's plan (auto-fork explains why it waits).
+    func adjustQueuePlan(_ itemID: UUID, _ plan: QueuePlan) {
+        guard queued.contains(where: { $0.id == itemID }) else { return }
+        queuePlans[itemID] = plan
+    }
+
+    /// Plans as the planner would set them (tests).
+    func applyQueuePlans(_ plans: [UUID: QueuePlan]) {
+        let live = Set(queued.map(\.id))
+        queuePlans = queuePlans.merging(plans) { $1 }.filter { live.contains($0.key) }
+        onQueuePlansChanged?(self)
+    }
+
+    /// A child tab's request comes back to run here (Run in This Tab Instead): first in the
+    /// queue, or now if this tab is idle. It isn't auto-forked again.
+    func returnFromChildTab(_ text: String) {
+        let item = QueuedPrompt(text: text, includesAmbientContext: false)
+        queued.insert(item, at: 0)
+        recordQueueEvent(.queueAdded, item: item)
+        deliveryStatus = "Moved back from its child tab; it runs next in this tab."
+        if !isStreaming { drainQueue() }
+    }
+
     /// While a turn runs, suggest a plan for each queued message (one router call per change).
     private func scheduleQueuePlanning() {
         let live = Set(queued.map(\.id))
@@ -1058,6 +1100,7 @@ final class ChatSession: ObservableObject {
                                                       childTitles: children.map(\.title))
                 let live = Set(self.queued.map(\.id))
                 self.queuePlans = self.queuePlans.merging(plans) { $1 }.filter { live.contains($0.key) }
+                self.onQueuePlansChanged?(self)
             } catch is CancellationError {
                 return
             } catch {
@@ -1472,6 +1515,7 @@ final class ChatSession: ObservableObject {
         let originalWorkdir = workdir
         let originalPrivacy = isPrivate
         routingItemID = item.id
+        autoDeliveredItemIDs.insert(item.id)
         deliveryStatus = "Deciding how to deliver your message..."
         routingTask = Task { [weak self] in
             guard let self else { return }
@@ -1524,6 +1568,8 @@ final class ChatSession: ObservableObject {
             switch resolution.action {
             case .queue:
                 self.scheduleQueueGrouping()
+                // Routing is done; auto-fork can look at it now.
+                self.onQueuePlansChanged?(self)
             case .inject:
                 self.injectQueued(item)
             case .parallel:
