@@ -415,7 +415,7 @@ enum PluginPanelData {
         let dir = repoURL.path
         let branch = (try? run("/usr/bin/git", ["-C", dir, "branch", "--show-current"])) ?? ""
         let describe = (try? run("/usr/bin/git",
-                                 ["-C", dir, "describe", "--always", "--dirty"])) ?? ""
+                                 ["-C", dir, "describe", "--always", "--dirty", "--match", "v[0-9]*"])) ?? ""
         let rawStatus = (try? run("/usr/bin/git",
                                   ["-C", dir, "status", "--porcelain"])) ?? ""
         let changes = rawStatus.split(separator: "\n").map(String.init)
