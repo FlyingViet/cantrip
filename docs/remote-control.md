@@ -925,6 +925,32 @@ during refreshes. Reordering requires the updated host's
 `supportsTabReordering` capability; unsaved Private mode tabs remain hidden
 from Remote.
 
+### Group tabs into sections
+
+Like Slack's sidebar sections, tabs can be filed under named sections. The Mac
+keeps the sections, so every client shows the same ones; tabs not in a section
+show under **Tabs**. Each device remembers which sections it has collapsed. A
+collapsed section still shows the open tab and any tab that is working or
+waiting for an answer.
+
+- **File a tab:** **Move to Section** in its menu (the Mac panel's tab
+  right-click, Cantrip Agent, Gateway, Windows), the **Section** picker in the
+  browser's tab settings, or drag a tab onto a section's header (Gateway Mac,
+  Windows, browser). Dropping a tab beside another tab files it in that tab's
+  section. A filed tab moves after the section's last tab.
+- **Manage a section:** its header's menu (**…**, right-click, or touch and
+  hold) has Rename, New Tab Here, Move Up/Down and Delete. Deleting a section
+  moves its tabs back to Tabs. **New Section** is in the Tabs header's menu and
+  in Move to Section.
+- Names are 1 to 40 characters and unique (ignoring case); up to 50 sections.
+
+API (`supportsTabSections`): `GET /api/v1/sessions` adds `sections` (`[{id,
+name}]`, in order) and each tab's `sectionID`; `GET|POST /api/v1/sections`
+(`{"name"}`), `PATCH /api/v1/sections/{id}` (`{"name"?, "position"?}`) and
+`DELETE /api/v1/sections/{id}`; `POST /api/v1/sessions/{id}/metadata` takes
+`{"sectionID": "<id>" | null}`; `POST /api/v1/sessions` takes an optional
+`{"sectionID"}`; `…/move` files the moved tab in its target tab's section.
+
 ## Add access away from home
 
 Use **Tailscale Serve**, not Funnel and not a router port-forward.
