@@ -205,6 +205,7 @@ struct LauncherView: View {
             let count = tabCount(section)
             Text("Its \(count == 1 ? "tab moves" : "\(count) tabs move") back to Tabs. No tabs are closed.")
         }
+        .keepingLauncherPanelOpen(while: presentingPanelModal)
         .alert("Tab Protected", isPresented: Binding(
             get: { manager.tabActionError != nil || session.tabActionError != nil },
             set: { if !$0 { manager.tabActionError = nil; session.tabActionError = nil } }
@@ -919,6 +920,13 @@ struct LauncherView: View {
             Button("Close Tab", role: .destructive) { manager.close(chat.id) }
                 .disabled(chat.isLocked)
         }
+    }
+
+    /// An alert, sheet or dialog is up on the panel (it takes key focus; the panel must stay).
+    private var presentingPanelModal: Bool {
+        modelSettingsSession != nil || editingSections || showingInputRequests || renamingSession != nil
+            || sectioningSession != nil || creatingSection || renamingSection != nil || deletingSection != nil
+            || manager.tabActionError != nil || session.tabActionError != nil
     }
 
     // MARK: Tab sections in the strip
