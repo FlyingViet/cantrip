@@ -512,6 +512,12 @@ struct CantripHomeTasksView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+                    if let model = task.modelSummary {
+                        Label(model, systemImage: "cpu")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Model \(model)")
+                    }
                 }
                 Spacer(minLength: 8)
                 if task.isScheduled {
@@ -624,7 +630,8 @@ private struct CantripHomeTaskEditView: View {
                     Section("Schedule") {
                         LabeledContent("Runs", value: task.schedule.summary)
                         LabeledContent("Time zone", value: task.schedule.timeZone)
-                        Text("To change the schedule, ask Cantrip Home in Chat.")
+                        LabeledContent("Model", value: task.modelSummary ?? "Home's model")
+                        Text("To change the schedule or model, ask Cantrip Home in Chat.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Button("Change schedule in Chat") {
@@ -649,6 +656,9 @@ private struct CantripHomeTaskEditView: View {
                 if let run = task.runs.first {
                     Section("Latest run") {
                         LabeledContent("Status", value: run.status.capitalized)
+                        if let model = run.model {
+                            LabeledContent("Model", value: model)
+                        }
                         CantripHomeRunSummaryText(summary: run.summary)
                     }
                 }

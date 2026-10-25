@@ -430,6 +430,22 @@ final class CantripHomeTests: XCTestCase {
         })
     }
 
+    func testTaskModelsDecodeAndSummarize() throws {
+        let decoder = JSONDecoder()
+        let plain = try decoder.decode(CantripHomeTask.self, from: taskPayload(enabled: true))
+        XCTAssertNil(plain.model)
+        XCTAssertNil(plain.modelSummary)
+        var json = String(decoding: taskPayload(enabled: true), as: UTF8.self)
+        json = json.replacingOccurrences(
+            of: #""runs":[]"#,
+            with: #""runs":[{"id":"30000000-0000-0000-0000-000000000001","startedAt":0,"finishedAt":60,"status":"succeeded","summary":"Done.","model":"claude-sonnet-5.5"}],"model":"claude-sonnet-5.5","effort":"high""#
+        )
+        let cheap = try decoder.decode(CantripHomeTask.self, from: Data(json.utf8))
+        XCTAssertEqual(cheap.model, "claude-sonnet-5.5")
+        XCTAssertEqual(cheap.modelSummary, "claude-sonnet-5.5 · high effort")
+        XCTAssertEqual(cheap.runs.first?.model, "claude-sonnet-5.5")
+    }
+
     func testTaskRunSummaryShowsEverySummaryLine() async throws {
         let summary = "Upcoming interviews: Fri Oct 16, 10 AM · Headway (recruiter call); "
             + "Tue Oct 20, 1 PM · Google (onsite); Fri Oct 30, 11 AM · Rippling (technical)\n"

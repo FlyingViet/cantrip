@@ -532,6 +532,8 @@ struct CantripHomeTaskRun: Decodable, Equatable, Identifiable {
     let finishedAt: Date
     let status: String
     let summary: String
+    /// The model the run used; older Macs and runs omit it.
+    var model: String? = nil
 }
 
 /// A scheduled-task or incident run on the Mac: in its own hidden session, or handed to the
@@ -556,6 +558,8 @@ struct CantripHomeBackgroundRun: Decodable, Equatable, Identifiable {
     var canStop: Bool? = nil
     /// Approvals and questions the live run waits on, answered through its `sessionID`.
     var inputs: [CantripInputRequest]? = nil
+    /// The model a hidden run used; older Macs omit it.
+    var model: String? = nil
 
     var isIncident: Bool { kind == "incident" }
     var isRunning: Bool { status == "running" }
@@ -661,8 +665,17 @@ struct CantripHomeTask: Decodable, Equatable, Identifiable {
     let state: String
     let activeRunID: UUID?
     let runs: [CantripHomeTaskRun]
+    /// The task's own Copilot model and effort; nil runs on Home's model.
+    var model: String? = nil
+    var effort: String? = nil
 
     var isScheduled: Bool { hasSchedule != false }
+    /// "claude-sonnet-5.5 · high", or nil when the task follows Home's model.
+    var modelSummary: String? {
+        guard model != nil || effort != nil else { return nil }
+        return [model ?? "Home's model", effort.map { "\($0) effort" }].compactMap { $0 }
+            .joined(separator: " · ")
+    }
 }
 
 struct CantripHomeArtifact: Decodable, Equatable, Identifiable {
