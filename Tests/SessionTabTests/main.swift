@@ -176,6 +176,7 @@ struct SessionTabTests {
         try await testCantripHomeBuilds()
         try await testCantripHomeGuardrails()
         try await testCantripHomeHandoffResults()
+        try await testCantripHomeDoneWhen()
         try testCantripHomeRunSummaries()
         try testSubagentPlacement()
         try await testSubagentMonitor()

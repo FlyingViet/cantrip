@@ -1432,7 +1432,8 @@ final class ChatSession: ObservableObject {
         routingItemID = nil
     }
 
-    private var routerProvider: MessageRouter.Provider {
+    /// The tool-free router for this tab's backend (Auto routing, plans, Done when checks).
+    var routerProvider: MessageRouter.Provider {
         let kind = settings.backend == .localModel ? .localModel : runningBackendKind ?? settings.backend
         switch kind {
         case .copilot:

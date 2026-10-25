@@ -32,6 +32,14 @@ remote). Later states, including working again after an answer, update that
 card in place. It never interrupts a Home reply, and its tab text is shown as
 data that Home's model never reads back as its own words.
 
+When a handoff's brief has a "Done when:" line, Cantrip checks the tab's
+finished work against it before posting the result. Work the tab can still do
+goes back to it as a queued message, at most twice; the card is posted only
+once the check passes or the send-backs run out. The card then says whether
+Done when was met, and names what's still missing or what needs the user. If
+the check can't run or isn't confident, the card says "Done when not
+confirmed" instead of claiming the work is finished.
+
 ## Tasks and schedules
 
 Tasks can be one-time, interval or weekday automations, or structured

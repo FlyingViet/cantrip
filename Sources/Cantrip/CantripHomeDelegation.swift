@@ -29,6 +29,12 @@ struct CantripHomeDelegation: Codable, Equatable, Identifiable {
     var outcome: String?
     var error: String?
     var finishedAt: Date?
+    /// The check of the tab's result against the prompt's "Done when:" (CantripHomeDoneWhen).
+    var doneWhenState: CantripHomeDoneWhen.State?
+    /// What's missing, or why it couldn't be checked (plain text).
+    var doneWhenNote: String?
+    /// Messages already sent back to the tab because Done when wasn't met.
+    var doneWhenSendBacks: Int?
 
     var isActive: Bool { status == .queued || status == .running }
 
@@ -45,6 +51,12 @@ struct CantripHomeDelegation: Codable, Equatable, Identifiable {
         item["result"] = result
         item["outcome"] = outcome
         item["error"] = error
+        if let doneWhenState {
+            var check: [String: Any] = ["state": doneWhenState.rawValue]
+            check["note"] = doneWhenNote
+            check["sendBacks"] = doneWhenSendBacks
+            item["doneWhen"] = check
+        }
         return item
     }
 }
@@ -70,6 +82,9 @@ struct CantripHomeHandoffResult: Codable, Equatable {
     let startedAt: Date
     var finishedAt: Date?
     var updatedAt: Date
+    /// The Done when check, once the tab finished (optional: older cards lack it).
+    var doneWhenState: CantripHomeDoneWhen.State?
+    var doneWhenNote: String?
 
     /// The card state for a handoff, or nil while it is queued or simply working.
     static func state(of delegation: CantripHomeDelegation) -> State? {
@@ -112,8 +127,14 @@ struct CantripHomeHandoffResult: Codable, Equatable {
         case .working: detail = ""
         case .needsInput: detail = delegation.question ?? ""
         case .completed:
-            detail = delegation.outcome
+            let outcome = delegation.outcome
                 ?? delegation.result.map { CantripHomeDelegations.briefOutcome($0) } ?? ""
+            doneWhenState = delegation.doneWhenState
+            doneWhenNote = delegation.doneWhenNote
+            // A missed finish line leads the card; a confirmed one follows the outcome.
+            let check = CantripHomeDoneWhen.cardLine(state: delegation.doneWhenState, note: delegation.doneWhenNote)
+            detail = [delegation.doneWhenState == .met ? outcome : check, delegation.doneWhenState == .met ? check : outcome]
+                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
         case .failed: detail = delegation.error ?? ""
         // "Stopped in the tab." only repeats the card's status.
         case .cancelled: detail = delegation.error == "Stopped in the tab." ? "" : delegation.error ?? ""
@@ -145,6 +166,11 @@ struct CantripHomeHandoffResult: Codable, Equatable {
             "updatedAt": updatedAt.timeIntervalSince1970,
         ]
         item["finishedAt"] = finishedAt?.timeIntervalSince1970
+        if let doneWhenState {
+            var check: [String: Any] = ["state": doneWhenState.rawValue]
+            check["note"] = doneWhenNote
+            item["doneWhen"] = check
+        }
         return item
     }
 }
@@ -275,7 +301,7 @@ final class CantripHomeDelegations {
                 let current = home.messages[messageIndex].delegations[index]
                 guard current.isActive else { continue }
                 let target = manager.sessions.first { $0.id == current.tabID }
-                let next = Self.evaluate(current, target: target, now: now)
+                let next = startDoneWhenCheck(Self.evaluate(recovered(current), target: target, now: now), target: target)
                 if next != current {
                     home.messages[messageIndex].delegations[index] = next
                     statusChanged = statusChanged || next.status != current.status
@@ -296,7 +322,9 @@ final class CantripHomeDelegations {
             var changed = false
             for index in handoffs.indices where handoffs[index].isActive {
                 let target = manager.sessions.first { $0.id == handoffs[index].tabID }
-                let next = Self.evaluate(handoffs[index], target: target, now: now, waitsForAnswer: false)
+                let next = startDoneWhenCheck(
+                    Self.evaluate(recovered(handoffs[index]), target: target, now: now, waitsForAnswer: false), target: target
+                )
                 if next != handoffs[index] {
                     changed = true
                     backgroundFinished = backgroundFinished || !next.isActive
@@ -399,6 +427,111 @@ final class CantripHomeDelegations {
         }
     }
 
+    // MARK: - Done when
+
+    /// Handoffs whose Done when check is running.
+    private var doneWhenChecks: Set<UUID> = []
+
+    /// A handoff that just completed in a prompt with "Done when:" stays running while one
+    /// tool-free check reads the tab's replies; `applyDoneWhen` then completes it or sends it back.
+    private func startDoneWhenCheck(_ next: CantripHomeDelegation, target: ChatSession?) -> CantripHomeDelegation {
+        guard next.status == .completed, next.doneWhenState == nil, let target,
+              let input = CantripHomeDoneWhen.input(prompt: next.prompt, replies: Self.handoffReplies(next, in: target))
+        else { return next }
+        var checking = next
+        checking.status = .running
+        checking.finishedAt = nil
+        checking.doneWhenState = .checking
+        checking.latestStatus = "Checking the result against Done when…"
+        guard !doneWhenChecks.contains(next.id) else { return checking }
+        doneWhenChecks.insert(next.id)
+        let provider = manager?.homeSession.routerProvider ?? .unavailable("Cantrip isn't ready.")
+        let id = next.id
+        Task { @MainActor [weak self] in
+            let verdict: Result<CantripHomeDoneWhen.Verdict, Error>
+            do { verdict = .success(try await CantripHomeDoneWhen.check(input, provider)) }
+            catch { verdict = .failure(error) }
+            guard let self else { return }
+            self.doneWhenChecks.remove(id)
+            self.applyDoneWhen(id, input: input, verdict: verdict)
+        }
+        return checking
+    }
+
+    /// A check that isn't running (Cantrip restarted mid-check) starts over.
+    private func recovered(_ handoff: CantripHomeDelegation) -> CantripHomeDelegation {
+        guard handoff.doneWhenState == .checking, !doneWhenChecks.contains(handoff.id) else { return handoff }
+        var next = handoff
+        next.doneWhenState = nil
+        return next
+    }
+
+    /// The assistant replies of a handoff's run(s) in its tab, oldest first.
+    static func handoffReplies(_ handoff: CantripHomeDelegation, in target: ChatSession) -> [String] {
+        let messages = target.messages
+        guard let id = handoff.tabMessageID, let start = messages.firstIndex(where: { $0.id == id }) else { return [] }
+        return messages[(start + 1)...].filter { $0.role == .assistant }.map(\.text)
+    }
+
+    private func applyDoneWhen(_ id: UUID, input: CantripHomeDoneWhen.Input,
+                               verdict: Result<CantripHomeDoneWhen.Verdict, Error>, now: Date = Date()) {
+        guard let manager else { return }
+        func decide(_ handoff: CantripHomeDelegation) -> CantripHomeDelegation {
+            var next = handoff
+            guard next.doneWhenState == .checking else { return next }
+            let target = manager.sessions.first { $0.id == next.tabID }
+            let sendBacks = next.doneWhenSendBacks ?? 0
+            let outcome: CantripHomeDoneWhen.Outcome
+            switch verdict {
+            case .success(let verdict): outcome = CantripHomeDoneWhen.outcome(of: verdict, sendBacks: sendBacks)
+            case .failure(let error): outcome = .unchecked("The check didn't run (\(error.localizedDescription)).")
+            }
+            func complete(_ state: CantripHomeDoneWhen.State, _ note: String?) {
+                next.status = .completed
+                next.finishedAt = now
+                next.latestStatus = nil
+                next.doneWhenState = state
+                next.doneWhenNote = note
+            }
+            switch outcome {
+            case .met: complete(.met, nil)
+            case .notMet(let note): complete(.notMet, note)
+            case .unchecked(let note): complete(.unchecked, note)
+            case .sendBack(let missing):
+                guard let target, !target.isStreaming, target.pendingInputs.isEmpty else {
+                    complete(.notMet, missing)
+                    break
+                }
+                next.doneWhenSendBacks = sendBacks + 1
+                next.doneWhenState = nil
+                next.doneWhenNote = missing
+                next.latestStatus = "Sent back: \(missing)"
+                target.submitRemote(CantripHomeDoneWhen.sendBack(missing: missing, doneWhen: input.doneWhen,
+                                                                 attempt: sendBacks + 1), mode: .queue)
+                Log.write("home: handoff \(next.id) sent back to its tab (Done when not met, \(sendBacks + 1) of \(CantripHomeDoneWhen.maximumSendBacks))")
+            }
+            if next.doneWhenState != nil { Log.write("home: handoff \(next.id) Done when \(next.doneWhenState!.rawValue)") }
+            return next
+        }
+        let home = manager.homeSession
+        for messageIndex in home.messages.indices {
+            guard let index = home.messages[messageIndex].delegations.firstIndex(where: { $0.id == id }) else { continue }
+            let next = decide(home.messages[messageIndex].delegations[index])
+            home.messages[messageIndex].delegations[index] = next
+            Self.noteResult(next, in: home, now: now)
+            home.persistTranscript()
+            return refresh(now: now)
+        }
+        let store = CantripHomeStore.shared
+        for run in store.backgroundRuns {
+            guard var handoffs = run.handoffs, let index = handoffs.firstIndex(where: { $0.id == id }) else { continue }
+            handoffs[index] = decide(handoffs[index])
+            store.updateHandoffs(runID: run.id, handoffs)
+            if !handoffs[index].isActive { DispatchQueue.main.async { CantripHomeStore.shared.checkNow() } }
+            return refresh(now: now)
+        }
+    }
+
     private func observe(_ target: ChatSession) {
         guard observers[target.id] == nil else { return }
         observers[target.id] = target.objectWillChange
@@ -431,6 +564,8 @@ final class CantripHomeDelegations {
                    : "The tab was closed before this finished.")
             return next
         }
+        // The check of the finished result is still running; it decides what happens next.
+        if delegation.doneWhenState == .checking { return delegation }
         next.tabTitle = target.title
         let messages = target.messages
         var start: Int?
@@ -545,7 +680,7 @@ final class CantripHomeDelegations {
         after replies: ArraySlice<ChatMessage>, next: ChatMessage, waitsForAnswer: Bool
     ) -> Bool {
         let text = next.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text == ChatSession.resumePrompt { return true }
+        if text == ChatSession.resumePrompt || text.hasPrefix(CantripHomeDoneWhen.sendBackPrefix) { return true }
         guard !text.isEmpty, !text.hasPrefix("!"), !text.hasPrefix("/"),
               !text.hasPrefix("(Handed off by"),
               !text.hasPrefix(ChatSession.cantripHomeScheduledTaskPrefix),
@@ -607,8 +742,11 @@ final class CantripHomeDelegations {
         let recent = allHandoffs
             .suffix(6)
             .map { handoff in
-                let outcome = handoff.question.map { "waiting for the user's answer to: " + $0 }
+                var outcome = handoff.question.map { "waiting for the user's answer to: " + $0 }
                     ?? handoff.result ?? handoff.error ?? handoff.latestStatus ?? ""
+                if handoff.doneWhenState == .notMet || handoff.doneWhenState == .unchecked {
+                    outcome = "Done when NOT confirmed (\(handoff.doneWhenNote ?? "")). " + outcome
+                }
                 let detail = outcome.isEmpty ? "" : ": "
                     + Self.excerpt(outcome, limit: 240).replacingOccurrences(of: "\n", with: " ")
                 return "- \(handoff.tabTitle.prefix(80)) · \(handoff.summary.prefix(100)) · "
