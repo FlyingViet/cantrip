@@ -467,6 +467,42 @@ export interface RemoteMessage {
   images?: MessageImageRef[];
   /** Legacy: read by the web client; the current server never sets it. */
   isPreview?: boolean;
+  /** The prompt that started this message's thread (a prompt's own ID for prompts). All sessions. */
+  threadID?: UUIDString;
+  /**
+   * Home only: set on a message that needs a thread tag (it belongs to a different thread from the
+   * message just above it). Show the tag when present, except on role `user`.
+   */
+  thread?: RemoteThreadTag;
+}
+
+/** A Home message's thread tag: the prompt that started its thread. */
+export interface RemoteThreadTag {
+  /** The prompt's message ID (= `threadID`). */
+  id: UUIDString;
+  /** The start of the prompt on one line (at most 121 characters; may end with "…"). */
+  prompt: string;
+}
+
+/** One earlier message in a thread. `user` entries are the user's answers to questions in it. */
+export interface RemoteThreadMessage {
+  id: UUIDString;
+  role: 'assistant' | 'user' | 'handoff' | 'error' | string;
+  /** Markdown, at most 1200 characters (may end with "…"). */
+  text: string;
+  /** Council mode: the model that wrote it. */
+  author?: string;
+}
+
+/** A thread a tag opens: its prompt, then the earlier messages in it (unrelated ones skipped). */
+export interface RemoteThread {
+  id: UUIDString;
+  /** The full prompt (at most 4000 characters). */
+  prompt: { id: UUIDString; text: string };
+  /** Before the tagged message, oldest first; the prompt isn't repeated. */
+  messages: RemoteThreadMessage[];
+  /** Older messages in the thread were left out. */
+  hasEarlier: boolean;
 }
 
 /** A queued prompt (session detail only). */
@@ -682,6 +718,11 @@ export interface TabSectionsResponse {
 /** GET /api/v1/sessions/<id>/messages/<messageID>. */
 export interface FullMessageResponse {
   message: RemoteMessage;
+}
+
+/** GET /api/v1/sessions/<id>/threads/<threadID>?before=<taggedMessageID>. 404 when the prompt is gone. */
+export interface ThreadResponse {
+  thread: RemoteThread;
 }
 
 /** GET /api/v1/sessions/<id>/input. */
