@@ -103,7 +103,8 @@ final class UpdateChecker: ObservableObject {
 
     private static func addLatest(to report: inout CantripVersionReport, in dir: String) {
         let latest = "origin/main"
-        guard let identity = git(["describe", "--always", latest], in: dir), !identity.isEmpty else { return }
+        guard let identity = git(["describe", "--always", "--match", "v[0-9]*", latest], in: dir),
+              !identity.isEmpty else { return }
         report.latest = CantripBuildVersion(identity: identity)
         if let log = git(["log", "-1", "--format=%s%x1f%cI", latest], in: dir) {
             let fields = log.components(separatedBy: "\u{1f}")
@@ -133,9 +134,9 @@ final class UpdateChecker: ObservableObject {
     /// CantripBuildIdentity. A bare `git describe --dirty` can't tell two
     /// DIFFERENT dirty states apart (both say "<sha>-dirty"), so when the
     /// tree is dirty a checksum of the diff is appended — the Makefile
-    /// stamps builds the same way.
+    /// stamps builds the same way. Only host tags (`v1.1.1`) count, not `windows-v*`.
     static func sourceIdentity(in dir: String) -> String? {
-        guard var identity = git(["describe", "--always", "--dirty"], in: dir),
+        guard var identity = git(["describe", "--always", "--dirty", "--match", "v[0-9]*"], in: dir),
               !identity.isEmpty else { return nil }
         if identity.hasSuffix("-dirty"),
            let digest = shell("git -C \(dir.shellQuoted) diff HEAD | cksum | cut -d' ' -f1"),
