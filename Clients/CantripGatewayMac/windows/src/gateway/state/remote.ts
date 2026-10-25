@@ -11,6 +11,7 @@ import type {
 } from "../api/types";
 import { bridge, type HostStatus } from "../bridge";
 import { movedSections } from "./sections";
+import { resetThreads } from "./threads";
 
 export type Detail = PagedRemoteSessionDetail;
 
@@ -595,6 +596,7 @@ export function reset(): void {
     listed.value = false;
   });
   expanded.clear();
+  resetThreads();
   tasksRevision = null;
   artifactsRevision = null;
 }

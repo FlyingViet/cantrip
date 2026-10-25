@@ -18,7 +18,9 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 - **Chat.** Replies with Markdown and the Mac's image previews, reasoning steps, MCP App
   views, subagent cards (running ones pinned above the composer), handoff cards with
   **Open tab**, child tab cards (the request, replies and files; merge state; the merge
-  question on a conflict) and a child's banner with **Open parent**, questions answered in the reply panel, approvals and sign-ins inline,
+  question on a conflict) and a child's banner with **Open parent**, thread tags in Home (a
+  reply from a different thread than the message above names its prompt; open the tag to see
+  that thread so far, even before older messages load), questions answered in the reply panel, approvals and sign-ins inline,
   prompt token usage, older history loading as you scroll up, and Start Fresh.
 - **Slash commands.** Type `/` in a tab's or Home's composer to see the tab backend's
   commands, custom commands and skills, as the Mac lists them (needs a Cantrip version that

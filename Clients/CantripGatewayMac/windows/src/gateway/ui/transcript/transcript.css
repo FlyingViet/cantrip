@@ -311,3 +311,21 @@ button.reasoning-step:hover { background: rgba(255, 255, 255, 0.09); }
 }
 .child-glyph { color: var(--child-lane); flex: none; }
 .child-thread .child-link { align-self: flex-start; padding-left: 0; }
+
+/* Thread tags (Home): a capsule beside a reply's lane badge (above a handoff card) naming the prompt
+   that started its thread, opening that thread like the child card's tag and thread above. */
+.lane-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.thread-tag {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; height: 21px; padding: 0 8px;
+  border: 0; border-radius: 999px; background: var(--control); color: var(--secondary); font-size: 11px; font-weight: 600; text-align: left;
+}
+.thread-tag:hover { background: var(--control-hover); color: var(--text); }
+.thread-tag:focus-visible { border-radius: 999px; }
+.thread-tag .icon { flex: none; }
+.thread-tag .truncate { min-width: 0; max-width: 52ch; }
+.thread-chevron { transition: transform 0.15s ease; }
+.thread-chevron.flipped { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .thread-chevron { transition: none; } }
+.thread-panel { align-self: stretch; width: auto; font-size: 13px; }
+.thread-panel[hidden] { display: none; }
+.thread-failed { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }

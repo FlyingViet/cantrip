@@ -1,7 +1,7 @@
 // Calls to the paired Mac's API. The main process adds the pairing token and picks the route
 // (encrypted direct, then HTTPS); this page only proves it is the Gateway window (bridge.key).
 import { bridge } from "../bridge";
-import type { ImageDataResponse } from "./types";
+import type { ImageDataResponse, RemoteThread, ThreadResponse } from "./types";
 
 export class APIError extends Error {
   constructor(message: string, readonly status: number) {
@@ -36,7 +36,7 @@ function defaultTimeout(path: string, method: string, bytes: number): number {
   if (method !== "GET") return bytes > 256 * 1024 ? 60000 : 30000;
   const bare = path.split("?")[0];
   if (/^\/api\/v1\/(maintenance|home|memory)/.test(bare)) return 25000;
-  if (/^\/api\/v1\/sessions\/[^/]+(\/messages\/[^/]+|\/apps\/[^/]+|\/attachments\/.+|\/previews\/.+)?$/.test(bare)) return 25000;
+  if (/^\/api\/v1\/sessions\/[^/]+(\/messages\/[^/]+|\/threads\/[^/]+|\/apps\/[^/]+|\/attachments\/.+|\/previews\/.+)?$/.test(bare)) return 25000;
   return 15000;
 }
 
@@ -93,6 +93,20 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
 
 export function pathComponent(value: string): string {
   return encodeURIComponent(value);
+}
+
+// MARK: Threads (Cantrip Home thread tags)
+
+export function threadPath(sessionID: string, threadID: string, before: string): string {
+  return `/api/v1/sessions/${pathComponent(sessionID)}/threads/${pathComponent(threadID)}?before=${encodeURIComponent(before)}`;
+}
+
+/** The thread a tag opens, up to the tagged message `before`; works while its prompt is in history not loaded yet. */
+export async function thread(sessionID: string, threadID: string, before: string): Promise<RemoteThread> {
+  const data = await api<ThreadResponse>(threadPath(sessionID, threadID, before));
+  const value = data?.thread;
+  if (!value?.prompt || typeof value.prompt.text !== "string") throw new APIError("The Mac sent an incomplete thread.", 200);
+  return { ...value, messages: Array.isArray(value.messages) ? value.messages : [], hasEarlier: value.hasEarlier === true };
 }
 
 // MARK: Images (JSON with base64 JPEG), cached as data URLs so re-renders never refetch.
