@@ -13,7 +13,7 @@ import { confirmDialog, toast } from "../kit";
 import { inline } from "./Markdown";
 
 const VERBS: Record<ChildTabAction, string> = {
-  open: "open it", discard: "discard it", resolve: "start the merge", keepParent: "keep that version",
+  open: "open it", requeue: "move it back to this tab", discard: "discard it", resolve: "start the merge", keepParent: "keep that version",
   keepChild: "keep that version", leave: "leave it unmerged", retry: "try the merge again", merge: "merge it",
 };
 
@@ -28,6 +28,14 @@ async function runAction(parentID: string, child: RemoteChildResult, action: Chi
       title: `Discard “${child.title}”?`,
       message: child.branch ? `Its work on ${child.branch} is deleted. The conversation stays in history.` : "The conversation stays in history.",
       confirm: "Discard", destructive: true,
+    });
+    if (!ok) return;
+  }
+  if (action === "requeue") {
+    const ok = await confirmDialog({
+      title: `Run “${child.title}” in this tab instead?`,
+      message: `The child tab stops${child.branch ? ` and its work on ${child.branch} is deleted` : ""}. The request goes back to the front of this tab's queue.`,
+      confirm: "Run Here Instead",
     });
     if (!ok) return;
   }

@@ -322,10 +322,12 @@ export interface RemoteHandoffResult {
  */
 export type ChildTabState =
   | 'working' | 'needsInput' | 'finished' | 'merging' | 'merged' | 'conflict'
-  | 'unmerged' | 'noChanges' | 'failed' | 'stopped' | 'discarded';
+  | 'unmerged' | 'noChanges' | 'failed' | 'stopped' | 'discarded'
+  /** Run in the parent instead: the request went back to the front of its queue. */
+  | 'requeued';
 
 /** A card action (`POST /sessions/<parentID>/children/<childID>/<action>`). */
-export type ChildTabAction = 'open' | 'discard' | 'resolve' | 'keepParent' | 'keepChild' | 'leave' | 'retry' | 'merge';
+export type ChildTabAction = 'open' | 'requeue' | 'discard' | 'resolve' | 'keepParent' | 'keepChild' | 'leave' | 'retry' | 'merge';
 
 /** A child tab's own listing (`parentID` + `child` on a running or merging child). */
 export interface RemoteChildTab {
@@ -369,6 +371,8 @@ export interface RemoteChildResult {
   note?: string;
   /** What the card offers now. */
   actions: (ChildTabAction | string)[];
+  /** Started by auto-fork (its summary says so while it works). */
+  autoStarted?: boolean;
   createdAt: UnixSeconds;
   updatedAt: UnixSeconds;
   finishedAt?: UnixSeconds;
