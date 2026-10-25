@@ -6,6 +6,8 @@ struct SessionTabDragHandle: NSViewRepresentable {
     let title: String
     /// What the drag carries before the ID: tabs, or sections ("cantrip-section:").
     var payloadPrefix = "cantrip-tab:"
+    /// Child tabs stay with their parent: a click selects, a drag does nothing.
+    var canDrag = true
     let onSelect: () -> Void
 
     func makeNSView(context: Context) -> SessionTabDragView {
@@ -18,6 +20,7 @@ struct SessionTabDragHandle: NSViewRepresentable {
         view.tabID = id
         view.title = title
         view.payloadPrefix = payloadPrefix
+        view.canDrag = canDrag
         view.onSelect = onSelect
     }
 }
@@ -26,6 +29,7 @@ class SessionTabDragView: NSView, NSDraggingSource {
     var tabID = UUID()
     var title = ""
     var payloadPrefix = "cantrip-tab:"
+    var canDrag = true
     var onSelect: () -> Void = {}
     private var mouseDownEvent: NSEvent?
     private var isDraggingTab = false
@@ -42,7 +46,7 @@ class SessionTabDragView: NSView, NSDraggingSource {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let start = mouseDownEvent, !isDraggingTab,
+        guard canDrag, let start = mouseDownEvent, !isDraggingTab,
               hypot(event.locationInWindow.x - start.locationInWindow.x,
                     event.locationInWindow.y - start.locationInWindow.y) >= 4 else { return }
         mouseDownEvent = nil

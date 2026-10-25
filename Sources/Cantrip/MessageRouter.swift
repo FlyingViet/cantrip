@@ -2,6 +2,9 @@ import Foundation
 
 /// Separate, tool-free inference; never reuses or resumes the worker session.
 enum MessageRouter {
+    /// The Copilot CLI model for routing and planning (cheapest available; gpt-5.4-mini was retired).
+    static let copilotModel = "claude-haiku-4.5"
+
     enum Provider {
         case copilot(command: String)
         case claude(command: String)
@@ -33,31 +36,62 @@ enum MessageRouter {
         return try QueueGroupingDecision.parse(response)
     }
 
+    /// `timeout` bounds CLI inference: quick for routing a message as it arrives, longer for
+    /// work that runs while the tab is busy anyway (queue plans).
     static func completion(
-        input: String, instructions: String, provider: Provider
+        input: String, instructions: String, provider: Provider, timeout: TimeInterval = 12,
+        maxTokens: Int = 200
     ) async throws -> String {
         let response: String
         switch provider {
         case .local(let baseURL, let model, let key):
-            response = try await localCompletion(input, instructions: instructions,
-                                                 baseURL: baseURL, model: model, key: key)
+            response = try await localCompletion(input, instructions: instructions, baseURL: baseURL,
+                                                 model: model, key: key, timeout: timeout, maxTokens: maxTokens)
         case .copilot, .claude:
             response = try await RouterProcess().run(provider: provider, input: input,
-                                                     instructions: instructions)
+                                                     instructions: instructions, timeout: timeout)
         case .unavailable(let reason):
             throw MessageRoutingError.unavailable(reason)
         }
-        return response
+        return jsonAnswer(response)
+    }
+
+    /// The answer's JSON object. Some models wrap it in a Markdown fence or add a sentence after it.
+    static func jsonAnswer(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let start = trimmed.firstIndex(of: "{") else { return trimmed }
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var index = start
+        while index < trimmed.endIndex {
+            let character = trimmed[index]
+            if inString {
+                if escaped { escaped = false }
+                else if character == "\\" { escaped = true }
+                else if character == "\"" { inString = false }
+            } else if character == "\"" {
+                inString = true
+            } else if character == "{" {
+                depth += 1
+            } else if character == "}" {
+                depth -= 1
+                if depth == 0 { return String(trimmed[start...index]) }
+            }
+            index = trimmed.index(after: index)
+        }
+        return trimmed
     }
 
     private static func localCompletion(
-        _ input: String, instructions: String, baseURL: String, model: String, key: String
+        _ input: String, instructions: String, baseURL: String, model: String, key: String,
+        timeout: TimeInterval, maxTokens: Int
     ) async throws -> String {
         let request = try localRequest(input, instructions: instructions,
-                                       baseURL: baseURL, model: model, key: key)
+                                       baseURL: baseURL, model: model, key: key, maxTokens: maxTokens)
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 12
-        config.timeoutIntervalForResource = 12
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout
         let session = URLSession(configuration: config, delegate: RouterNoRedirect(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         let (data, response) = try await session.data(for: request)
@@ -72,7 +106,7 @@ enum MessageRouter {
 
     static func localRequest(
         _ input: String, instructions: String = MessageRoutingPolicy.instructions,
-        baseURL: String, model: String, key: String
+        baseURL: String, model: String, key: String, maxTokens: Int = 200
     ) throws -> URLRequest {
         let base = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
         guard let url = URL(string: base + "/chat/completions"),
@@ -84,7 +118,7 @@ enum MessageRouter {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !key.isEmpty { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": model, "stream": false, "max_tokens": 200,
+            "model": model, "stream": false, "max_tokens": maxTokens,
             "messages": [
                 ["role": "system", "content": instructions],
                 ["role": "user", "content": input],
@@ -125,7 +159,8 @@ private final class RouterProcess: @unchecked Sendable {
     private var output = Data()
     private var directory: URL?
 
-    func run(provider: MessageRouter.Provider, input: String, instructions: String) async throws -> String {
+    func run(provider: MessageRouter.Provider, input: String, instructions: String,
+             timeout: TimeInterval = 12) async throws -> String {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 queue.async {
@@ -133,7 +168,7 @@ private final class RouterProcess: @unchecked Sendable {
                     if self.cancelled {
                         self.finish(.failure(CancellationError()))
                     } else {
-                        self.start(provider: provider, input: input, instructions: instructions)
+                        self.start(provider: provider, input: input, instructions: instructions, timeout: timeout)
                     }
                 }
             }
@@ -145,7 +180,7 @@ private final class RouterProcess: @unchecked Sendable {
         }
     }
 
-    private func start(provider: MessageRouter.Provider, input: String, instructions: String) {
+    private func start(provider: MessageRouter.Provider, input: String, instructions: String, timeout: TimeInterval) {
         do {
             let scratch = FileManager.default.temporaryDirectory
                 .appendingPathComponent("cantrip-router-\(UUID().uuidString)", isDirectory: true)
@@ -177,10 +212,11 @@ private final class RouterProcess: @unchecked Sendable {
                 arguments = [
                     "-p", instructions + "\n\n" + input,
                     "-s", "--stream", "on", "--output-format", "json",
-                    "--model", "gpt-5.4-mini", "--reasoning-effort", "low",
+                    // 0.33 premium requests a call; it takes no reasoning-effort setting.
+                    "--model", MessageRouter.copilotModel,
                     "--available-tools=", "--disable-builtin-mcps",
                     "--no-custom-instructions", "--no-ask-user",
-                    "--no-auto-update", "--no-remote-export", "--log-level", "none",
+                    "--no-auto-update", "--sync-session=off", "--log-level", "none",
                 ]
             case .claude(let executable):
                 command = executable
@@ -251,7 +287,7 @@ private final class RouterProcess: @unchecked Sendable {
             }
             process = p
             try p.run()
-            queue.asyncAfter(deadline: .now() + 12) {
+            queue.asyncAfter(deadline: .now() + timeout) {
                 guard self.continuation != nil else { return }
                 self.finish(.failure(MessageRoutingError.timeout))
             }
