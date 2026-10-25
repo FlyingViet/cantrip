@@ -193,7 +193,7 @@ function SidebarList(): JSX.Element {
           <div key={`section-${group.id}`}
             class={`sidebar-section tab-section${overSection === group.id ? " drop-target" : ""}${sectionDrag === group.id ? " dragging" : ""}`}
             role="heading" aria-level={2} data-section-id={group.id}
-            // Sections reorder by dragging their header onto another (onto Tabs: first), or Alt+Up/Down.
+            // Sections reorder by dragging their header onto another (onto Tabs: last), or Alt+Up/Down.
             draggable={group.section !== null && !remote.isMutating.value}
             onDragStart={(event) => {
               if (!group.section) return;

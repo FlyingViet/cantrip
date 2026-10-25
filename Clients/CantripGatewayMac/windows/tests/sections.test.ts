@@ -13,20 +13,20 @@ describe("tab sections", () => {
     expect(tabGroups([tab("a")], [])).toBeNull();
   });
 
-  it("puts unfiled tabs first, then sections in the Mac's order", () => {
+  it("puts sections in the Mac's order, then unfiled tabs last", () => {
     const groups = tabGroups([tab("a"), tab("b", { sectionID: "s2" }), tab("c", { sectionID: "s1" }), tab("d", { sectionID: "gone" })], sections)!;
-    expect(groups.map((group) => group.name)).toEqual(["Tabs", "Work", "Home"]);
-    expect(groups.map((group) => group.sessions.map((item) => item.id))).toEqual([["a", "d"], ["c"], ["b"]]);
-    expect(groups[0].id).toBe(LOOSE_ID);
+    expect(groups.map((group) => group.name)).toEqual(["Work", "Home", "Tabs"]);
+    expect(groups.map((group) => group.sessions.map((item) => item.id))).toEqual([["c"], ["b"], ["a", "d"]]);
+    expect(groups[2].id).toBe(LOOSE_ID);
     expect(sectionOf(tab("x", { sectionID: "gone" }), sections)).toBeNull();
     expect(sectionOf(tab("x", { sectionID: "s2" }), sections)).toBe("s2");
   });
 
-  it("reorders sections like the Mac: a dropped header takes the target's place, Tabs means first", () => {
+  it("reorders sections like the Mac: a dropped header takes the target's place, Tabs means last", () => {
     const three = [...sections, { id: "s3", name: "Games" }];
     expect(sectionDropPosition(three, "s1")).toBe(0);
     expect(sectionDropPosition(three, "s3")).toBe(2);
-    expect(sectionDropPosition(three, LOOSE_ID)).toBe(0);
+    expect(sectionDropPosition(three, LOOSE_ID)).toBe(2);
     expect(movedSections(three, "s3", 0).map((section) => section.id)).toEqual(["s3", "s1", "s2"]);
     expect(movedSections(three, "s1", 2).map((section) => section.id)).toEqual(["s2", "s3", "s1"]);
     expect(movedSections(three, "s1", 1).map((section) => section.id)).toEqual(["s2", "s1", "s3"]);
@@ -37,7 +37,7 @@ describe("tab sections", () => {
 
   it("keeps the open, working and waiting tabs of a collapsed section", () => {
     const group = tabGroups([tab("a", { sectionID: "s1" }), tab("b", { sectionID: "s1", isStreaming: true }),
-      tab("c", { sectionID: "s1", pendingInputCount: 2 }), tab("d", { sectionID: "s1" })], sections)![1];
+      tab("c", { sectionID: "s1", pendingInputCount: 2 }), tab("d", { sectionID: "s1" })], sections)!.find((item) => item.id === "s1")!;
     expect(visibleTabs(group, false, null).map((item) => item.id)).toEqual(["a", "b", "c", "d"]);
     expect(visibleTabs(group, true, null).map((item) => item.id)).toEqual(["b", "c"]);
     expect(visibleTabs(group, true, "d").map((item) => item.id)).toEqual(["b", "c", "d"]);

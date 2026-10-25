@@ -105,7 +105,7 @@ struct MacHomeSidebar: View {
     private static let sectionDragPrefix = "cantrip-section:"
 
     /// A tab dropped on a section's header is filed there (after the section's last tab); a section's
-    /// header dropped on another takes its place (on Tabs: first).
+    /// header dropped on another takes its place (on Tabs, which is always last: last).
     private func drop(_ providers: [NSItemProvider], onto group: CantripTabGrouping.Group) -> Bool {
         guard let provider = providers.first else { return false }
         _ = provider.loadObject(ofClass: NSString.self) { object, _ in
@@ -120,7 +120,7 @@ struct MacHomeSidebar: View {
                     guard id != group.section?.id else { return }
                     let position = group.section.flatMap { target in
                         remote.tabSections.firstIndex { $0.id == target.id }
-                    } ?? 0
+                    } ?? remote.tabSections.count - 1
                     await remote.moveSection(id, to: position)
                 }
             }
@@ -363,7 +363,7 @@ struct MacHomeTabRow: View {
     }
 }
 
-/// Lets a section's header be dragged onto another to reorder (Tabs stays first and doesn't drag).
+/// Lets a section's header be dragged onto another to reorder (Tabs stays last and doesn't drag).
 private struct MacSectionDragSource: ViewModifier {
     let sectionID: String?
     let prefix: String
