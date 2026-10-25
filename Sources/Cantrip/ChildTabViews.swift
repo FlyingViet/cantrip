@@ -31,7 +31,7 @@ struct ChildTabCard: View {
     }
 
     private var summaryText: String {
-        record.summary.isEmpty && record.state == .working ? "Working on it in its own tab." : record.summary
+        record.displaySummary.isEmpty && record.state == .working ? "Working on it in its own tab." : record.displaySummary
     }
 
     var body: some View {
@@ -209,8 +209,12 @@ struct ChildTabCard: View {
             .filter { record.actions.contains($0.0) }
     }
 
+    /// Run in This Tab Instead while it works; Try Again, Merge Its Work and Discard once it stopped.
     private var extraActions: [(String, String)] {
-        guard ![.conflict, .working, .needsInput].contains(record.state) else { return [] }
+        if record.state.isRunning {
+            return record.actions.contains("requeue") ? [("requeue", "Run in This Tab Instead")] : []
+        }
+        guard record.state != .conflict else { return [] }
         let titles = ["retry": "Try Again", "merge": "Merge Its Work", "discard": "Discard"]
         return record.actions.compactMap { name in
             guard let title = titles[name], name != "discard" || record.branch != nil else { return nil }
@@ -228,6 +232,7 @@ struct ChildTabCard: View {
             case .conflict: return ("exclamationmark.triangle.fill", ChildTabColors.work)
             case .failed: return ("exclamationmark.circle.fill", ChildTabColors.bad)
             case .unmerged, .stopped, .discarded: return ("minus.circle", nil)
+            case .requeued: return ("arrow.uturn.backward", nil)
             }
         }()
         return Label(record.statusLine, systemImage: icon)

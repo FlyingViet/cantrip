@@ -7,7 +7,10 @@ import os
 /// another. Persisted per-session; restored on launch.
 @MainActor
 final class SessionManager: ObservableObject {
-    @Published var sessions: [ChatSession] = []
+    @Published var sessions: [ChatSession] = [] {
+        // Auto-fork follows every tab, however it joined the list.
+        didSet { for session in sessions where session.onQueuePlansChanged == nil { wireAutoFork(session) } }
+    }
     let homeSession: ChatSession
     /// Runs Home's scheduled tasks and incidents out of sight of the Home chat.
     let homeBackgroundSession: ChatSession
@@ -137,6 +140,10 @@ final class SessionManager: ObservableObject {
 
     // MARK: - Child tabs
 
+    private func wireAutoFork(_ session: ChatSession) {
+        session.onQueuePlansChanged = { [weak self] session in self?.childTabs?.considerAutoFork(session) }
+    }
+
     /// The parent of an open child tab that is still running or waiting on its merge.
     func parentID(ofChild id: UUID) -> UUID? {
         ChildTabStore.shared.isActiveChild(id) ? ChildTabStore.shared.record(id)?.parentID : nil
@@ -215,6 +222,7 @@ final class SessionManager: ObservableObject {
             if let session { self?.onAnyInputNeeded?(session, input) }
         }
         session.onInputResolved = { [weak self] id in self?.onAnyInputResolved?(id) }
+        wireAutoFork(session)
         // Forward child changes so views observing the manager re-render.
         let subscriptions = [
             session.objectWillChange

@@ -8,10 +8,12 @@ import Combine
 struct ChildTab: Codable, Equatable, Identifiable {
     enum State: String, Codable {
         case working, needsInput, finished, merging, merged, conflict, unmerged, noChanges, failed, stopped, discarded
+        /// Run in the parent instead: the request went back to the front of its queue.
+        case requeued
 
         var isRunning: Bool { self == .working || self == .needsInput }
         /// Done for good: the tab is archived and nothing is left to merge.
-        var isSettled: Bool { self == .merged || self == .noChanges || self == .discarded }
+        var isSettled: Bool { self == .merged || self == .noChanges || self == .discarded || self == .requeued }
         /// How it ended, or a question for the user: the parent's card moves to the end.
         var isOutcome: Bool { !isRunning && self != .finished && self != .merging }
     }
@@ -53,6 +55,8 @@ struct ChildTab: Codable, Equatable, Identifiable {
     var resolveRequested = false
     /// The parent's model has been told how this child ended (one line, once).
     var contextDelivered = false
+    /// Started by auto-fork rather than Run in Child Tab (optional: older records lack it).
+    var autoStarted: Bool?
     let createdAt: Date
     var updatedAt: Date
     var finishedAt: Date?
@@ -64,10 +68,10 @@ struct ChildTab: Codable, Equatable, Identifiable {
     /// What the card offers in this state (`POST …/children/{id}/{action}`).
     var actions: [String] {
         switch state {
-        case .working, .needsInput: return ["open", "discard"]
+        case .working, .needsInput: return ["open", "requeue", "discard"]
         case .finished: return note == nil ? ["open"] : ["retry", "open"]
         case .merging: return ["open"]
-        case .merged, .noChanges, .discarded: return ["open"]
+        case .merged, .noChanges, .discarded, .requeued: return ["open"]
         case .conflict: return ["resolve", "keepParent", "keepChild", "leave", "open"]
         case .unmerged: return ["retry", "discard", "open"]
         case .failed, .stopped: return branch == nil ? ["open", "discard"] : ["merge", "discard", "open"]
@@ -90,7 +94,15 @@ struct ChildTab: Codable, Equatable, Identifiable {
         case .failed: return "Failed"
         case .stopped: return "Stopped"
         case .discarded: return "Discarded"
+        case .requeued: return "Moved back to \(parentTitle)'s queue"
         }
+    }
+
+    static let autoStartedNote = "Started automatically: it doesn't depend on the current task."
+
+    /// What the card says: the child's summary, or while an auto-started child works, why it started.
+    var displaySummary: String {
+        summary.isEmpty && state.isRunning && autoStarted == true ? Self.autoStartedNote : summary
     }
 
     /// The card as text, for transcripts and clients that don't draw it.
@@ -113,7 +125,7 @@ struct ChildTab: Codable, Equatable, Identifiable {
         var result: [String: Any] = [
             "id": id.uuidString, "parentID": parentID.uuidString, "title": title, "prompt": prompt,
             "parentTitle": parentTitle, "state": state.rawValue, "statusLine": statusLine,
-            "summary": summary, "replies": replies,
+            "summary": displaySummary, "replies": replies, "autoStarted": autoStarted == true,
             "files": files.map { ["path": $0.path, "added": $0.added, "removed": $0.removed] },
             "added": added, "removed": removed, "conflictFiles": conflictFiles,
             "cleanFileCount": cleanFileCount, "actions": actions,
@@ -244,14 +256,17 @@ enum ChildTabGit {
         run(repo, ["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"], timeout: 10)?.succeeded == true
     }
 
-    /// Uncommitted paths (`git status --porcelain`), repo-relative.
+    /// Uncommitted paths (staged, unstaged and untracked), repo-relative. Name-only commands:
+    /// `run` trims its output, which would cut `git status --porcelain`'s leading status column.
     static func changedFiles(_ repo: String, limit: Int = 40) -> [String] {
-        guard let result = run(repo, ["status", "--porcelain", "--untracked-files=normal"], timeout: 15),
-              result.succeeded else { return [] }
-        return result.output.split(separator: "\n").prefix(limit).compactMap { line in
-            let path = line.dropFirst(3).trimmingCharacters(in: .whitespaces)
-            return path.split(separator: " -> ").last.map(String.init)
+        var paths: [String] = []
+        for arguments in [["diff", "--name-only", "HEAD"], ["ls-files", "--others", "--exclude-standard"]] {
+            guard let result = run(repo, arguments, timeout: 15), result.succeeded else { continue }
+            for line in result.output.split(separator: "\n") where !paths.contains(String(line)) {
+                paths.append(String(line))
+            }
         }
+        return Array(paths.prefix(limit))
     }
 
     /// A short, safe branch name for `title`.
@@ -449,5 +464,76 @@ enum ChildTabGit {
             run(repo, ["branch", force ? "-D" : "-d", branch], timeout: 30)
         }
         return true
+    }
+}
+
+/// Auto-fork (Phase 3): whether a queued message the planner rated independent starts in a child
+/// tab on its own. The planner's judgment is checked against what is known for sure: the message's
+/// likely files must not be ones the parent has uncommitted or just edited, or that a running child
+/// tab expects to change, and there must be a repository for the child's own branch.
+enum ChildTabAutoFork {
+    enum Verdict: Equatable {
+        case fork
+        /// It stays queued; the reason replaces the plan chip's text.
+        case stay(String)
+    }
+
+    static func verdict(touches: [String], hasRepository: Bool, changedFiles: [String],
+                        activity: [String], childTouches: [String]) -> Verdict {
+        guard hasRepository else { return .stay("Independent; outside a repository it waits for Run in Child Tab") }
+        let wanted = touches.compactMap { touch -> (shown: String, key: String)? in
+            let key = normalized(touch)
+            return key.isEmpty ? nil : (touch, key)
+        }
+        guard !wanted.isEmpty else { return .stay("Independent; its files are unclear, so it waits for Run in Child Tab") }
+        let changed = changedFiles.map(normalized)
+        if let hit = wanted.first(where: { touch in
+            changed.contains { overlaps(touch.key, $0) } || activity.contains { mentions($0, touch.key) }
+        }) {
+            return .stay("Runs after the current task: it also changes \(display(hit.shown))")
+        }
+        let children = childTouches.map(normalized).filter { !$0.isEmpty }
+        if let hit = wanted.first(where: { touch in children.contains { overlaps(touch.key, $0) } }) {
+            return .stay("Runs after the current task: a child tab is changing \(display(hit.shown))")
+        }
+        return .fork
+    }
+
+    static func normalized(_ path: String) -> String {
+        var path = path.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        while path.hasPrefix("./") { path.removeFirst(2) }
+        while path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
+
+    /// The same file or folder: equal, one a path suffix of the other, one inside the other, or the
+    /// same file name.
+    static func overlaps(_ a: String, _ b: String) -> Bool {
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        if a == b || a.hasSuffix("/" + b) || b.hasSuffix("/" + a) || a.hasPrefix(b + "/") || b.hasPrefix(a + "/") {
+            return true
+        }
+        let nameA = (a as NSString).lastPathComponent, nameB = (b as NSString).lastPathComponent
+        return isFileName(nameA) && nameA == nameB
+    }
+
+    /// An edited path or a command from the parent's current work names the file.
+    static func mentions(_ text: String, _ touch: String) -> Bool {
+        let text = normalized(text)
+        if !text.contains(" ") { return overlaps(text, touch) }
+        let name = (touch as NSString).lastPathComponent
+        return isFileName(name) && name.count >= 5 && text.contains(name)
+    }
+
+    private static func isFileName(_ name: String) -> Bool {
+        let ext = (name as NSString).pathExtension
+        return !ext.isEmpty && ext.count <= 6
+    }
+
+    private static func display(_ touch: String) -> String {
+        var touch = touch.trimmingCharacters(in: .whitespacesAndNewlines)
+        while touch.hasSuffix("/") { touch.removeLast() }
+        let name = (touch as NSString).lastPathComponent
+        return name.isEmpty ? touch : name
     }
 }

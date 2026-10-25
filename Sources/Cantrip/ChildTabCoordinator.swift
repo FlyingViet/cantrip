@@ -65,6 +65,7 @@ final class ChildTabCoordinator {
         record.state = .stopped
         record.finishedAt = Date()
         save(record)
+        considerAutoForkEverywhere()
     }
 
     // MARK: - Forking
@@ -91,7 +92,7 @@ final class ChildTabCoordinator {
     /// Moves queued item `itemID` out of `parent`'s queue into a new child tab and starts it. The
     /// worktree is created off the main actor; the message stays queued until the tab is ready.
     @discardableResult
-    func fork(parentID: UUID, itemID: UUID) async throws -> ChatSession {
+    func fork(parentID: UUID, itemID: UUID, automatically: Bool = false) async throws -> ChatSession {
         guard let manager, let parent = manager.sessions.first(where: { $0.id == parentID }) else {
             throw ChildTabError.unavailable
         }
@@ -106,6 +107,7 @@ final class ChildTabCoordinator {
         var record = ChildTab(id: childID, parentID: parent.id, queueItemID: item.id, title: title, prompt: item.text,
                               parentTitle: parent.title, touches: plan?.touches ?? [], createdAt: Date(),
                               updatedAt: Date())
+        if automatically { record.autoStarted = true }
         let parentWorkdir = parent.workdir
         let planRepo = plan?.repo
         let activity = ChildTabRepositories.recentActivityTexts(in: parent)
@@ -148,7 +150,7 @@ final class ChildTabCoordinator {
         observeParent(parent)
         observeChild(child, record: record)
         updateCard(record, in: parent)
-        Log.write("child-tabs: forked \"\(title)\" from \(parent.id.uuidString.prefix(8))"
+        Log.write("child-tabs: \(automatically ? "auto-forked" : "forked") \"\(title)\" from \(parent.id.uuidString.prefix(8))"
                   + (record.branch.map { " on \($0)" } ?? " (no repository)"))
         child.startChildTask(item.text, preamble: brief(for: record, parent: parent))
         return child
@@ -252,6 +254,7 @@ final class ChildTabCoordinator {
         save(record)
         if record.state == .finished, previous != .finished { queueMerge(record.id) }
         if record.state == .noChanges { archive(record) }
+        if previous.isRunning, !record.state.isRunning { considerAutoForkEverywhere() }
     }
 
     /// The child's closing summary and a few of its reply paragraphs.
@@ -413,11 +416,13 @@ final class ChildTabCoordinator {
                     ChildTabGit.cleanup(repo: repo, worktree: worktree, branch: branch, force: true)
                 }
             }
+            let wasRunning = record.state.isRunning
             record.state = .discarded
             record.note = nil
             record.finishedAt = record.finishedAt ?? Date()
             save(record)
             archive(record)
+            if wasRunning { considerAutoForkEverywhere() }
         case "resolve":
             guard let parent = parent(of: record), let repo = record.repoRoot, let branch = record.branch else {
                 throw ChildTabError.notAllowed("Open the parent tab to resolve this merge.")
@@ -433,6 +438,27 @@ final class ChildTabCoordinator {
             record.resolveRequested = true
             record.note = nil
             save(record)
+        case "requeue":
+            // Run in This Tab Instead: stop the child, drop its branch, and give the request back.
+            guard let parent = parent(of: record) else {
+                throw ChildTabError.notAllowed("Open the parent tab first; it's no longer open.")
+            }
+            if let child = manager.sessions.first(where: { $0.id == childID }) { child.cancel() }
+            if let repo = record.repoRoot {
+                let worktree = record.worktree, branch = record.branch
+                Task.detached(priority: .utility) {
+                    ChildTabGit.cleanup(repo: repo, worktree: worktree, branch: branch, force: true)
+                }
+            }
+            record.state = .requeued
+            record.note = nil
+            record.contextDelivered = true
+            record.finishedAt = record.finishedAt ?? Date()
+            save(record)
+            archive(record)
+            Log.write("child-tabs: \"\(record.title)\" moved back to its parent's queue")
+            parent.returnFromChildTab(record.prompt)
+            considerAutoForkEverywhere()
         case "keepParent", "keepChild":
             record.state = .finished
             save(record)
@@ -448,6 +474,78 @@ final class ChildTabCoordinator {
             queueMerge(childID)
         default:
             throw ChildTabError.notAllowed("Unknown child tab action.")
+        }
+    }
+
+    // MARK: - Auto-fork
+
+    /// Parents whose next auto-fork is being checked (git runs off the main actor meanwhile).
+    private var autoForkChecks: Set<UUID> = []
+
+    /// Starts `parent`'s next queued message in a child tab on its own when auto-fork is on, the
+    /// message came through Auto delivery, its plan says it's independent, and its likely files
+    /// don't overlap the parent's work or a running child's (`ChildTabAutoFork`). Caps and the
+    /// usual fork rules apply. One at a time per parent; called when plans or routing change and
+    /// when a child frees a slot.
+    func considerAutoFork(_ parent: ChatSession) {
+        guard AppSettings.shared.childTabsAutoFork, parent.isStreaming, parent.supportsChildTabs,
+              !autoForkChecks.contains(parent.id), forkUnavailableReason(parent) == nil,
+              let manager, manager.sessions.contains(where: { $0 === parent }) else { return }
+        guard let item = parent.queued.first(where: { item in
+            parent.autoDeliveredItemIDs.contains(item.id) && parent.queuePlans[item.id]?.kind == .fork
+                && !parent.isDeliveringQueued(item.id) && forking[item.id] == nil
+        }), let plan = parent.queuePlans[item.id] else { return }
+        let parentID = parent.id
+        autoForkChecks.insert(parentID)
+        let workdir = parent.workdir
+        let activity = ChildTabRepositories.recentActivityTexts(in: parent)
+        let childTouches = store.running.flatMap(\.touches)
+        let worktreesRoot = self.worktreesRoot
+        Task { [weak self, weak parent] in
+            let context = await Task.detached(priority: .utility) { () -> (hasRepo: Bool, changed: [String]) in
+                guard let repo = Self.repository(workdir: workdir, planRepo: plan.repo, activity: activity,
+                                                 worktreesRoot: worktreesRoot) else { return (false, []) }
+                return (true, ChildTabGit.changedFiles(repo.root, limit: 200))
+            }.value
+            guard let self else { return }
+            guard let parent else {
+                self.autoForkChecks.remove(parentID)
+                return
+            }
+            let verdict = ChildTabAutoFork.verdict(touches: plan.touches, hasRepository: context.hasRepo,
+                                                   changedFiles: context.changed, activity: activity,
+                                                   childTouches: childTouches)
+            let stillEligible = AppSettings.shared.childTabsAutoFork && parent.isStreaming
+                && parent.queuePlans[item.id] == plan && parent.autoDeliveredItemIDs.contains(item.id)
+                && !parent.isDeliveringQueued(item.id)
+            switch verdict {
+            case .fork where stillEligible:
+                do {
+                    try await self.fork(parentID: parent.id, itemID: item.id, automatically: true)
+                } catch ChildTabError.limit {
+                    // Another fork took the last slot meanwhile; it starts when one frees up.
+                } catch {
+                    Log.write("child-tabs: auto-fork of \"\(plan.title)\" skipped: \(error.localizedDescription)")
+                    parent.adjustQueuePlan(item.id, QueuePlan(kind: .queue, reason: "Runs after the current task",
+                                                              title: plan.title, repo: plan.repo, touches: plan.touches))
+                }
+            case .stay(let reason) where stillEligible:
+                Log.write("child-tabs: \"\(plan.title)\" stays queued: \(reason)")
+                parent.adjustQueuePlan(item.id, QueuePlan(kind: .queue, reason: reason, title: plan.title,
+                                                          repo: plan.repo, touches: plan.touches))
+            default:
+                break
+            }
+            self.autoForkChecks.remove(parentID)
+            self.considerAutoFork(parent)
+        }
+    }
+
+    /// A child stopped running, so a slot may be free: every working tab checks again.
+    private func considerAutoForkEverywhere() {
+        guard AppSettings.shared.childTabsAutoFork, let manager else { return }
+        for session in manager.sessions where session.isStreaming && !session.queued.isEmpty {
+            considerAutoFork(session)
         }
     }
 

@@ -1000,9 +1000,13 @@ API (`supportsChildTabs`, `supportsQueuePlans` on each session):
   mergeCommit?, conflictFiles, conflictExcerpt?, cleanFileCount, note?,
   actions}`); its `text` is a plain fallback.
 - `POST /api/v1/sessions/{parentID}/children/{childID}/{action}` runs one of
-  the card's `actions`: `open`, `discard`, `resolve`, `keepParent`,
-  `keepChild`, `leave`, `retry`, `merge`. It returns the parent session; `409`
-  when the action no longer applies.
+  the card's `actions`: `open`, `requeue` (while it works: stop the child, drop
+  its branch, put the request at the front of the parent's queue), `discard`,
+  `resolve`, `keepParent`, `keepChild`, `leave`, `retry`, `merge`. It returns
+  the parent session; `409` when the action no longer applies.
+- Auto-fork: a child started on its own has `autoStarted: true` on its card and,
+  while it works, the summary *Started automatically: …*; a requeued child's
+  state is `requeued`. Unknown states read as their `statusLine`.
 
 ## Add access away from home
 

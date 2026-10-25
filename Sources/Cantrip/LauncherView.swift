@@ -45,6 +45,8 @@ struct LauncherView: View {
     @ObservedObject private var childTabStore = ChildTabStore.shared
     /// A child tab whose Discard is waiting for confirmation.
     @State private var discardingChild: ChildTab?
+    /// A child tab whose Run in This Tab Instead is waiting for confirmation.
+    @State private var requeueingChild: ChildTab?
     @State private var childTabError: String?
     /// The section header a dragged tab or section is over.
     @State private var sectionDropTarget: String?
@@ -209,24 +211,8 @@ struct LauncherView: View {
             let count = tabCount(section)
             Text("Its \(count == 1 ? "tab moves" : "\(count) tabs move") back to Tabs. No tabs are closed.")
         }
-        .alert(discardingChild.map { "Discard \u{201C}\($0.title)\u{201D}?" } ?? "Discard Child Tab?", isPresented: Binding(
-            get: { discardingChild != nil },
-            set: { if !$0 { discardingChild = nil } }
-        ), presenting: discardingChild) { child in
-            Button("Discard", role: .destructive) { performChildAction("discard", child) }
-            Button("Cancel", role: .cancel) {}
-        } message: { child in
-            Text(child.branch.map { "Its work on \($0) is deleted. The conversation stays in history." }
-                 ?? "The conversation stays in history.")
-        }
-        .alert("Child Tab", isPresented: Binding(
-            get: { childTabError != nil },
-            set: { if !$0 { childTabError = nil } }
-        )) {
-            Button("OK") { childTabError = nil }
-        } message: {
-            Text(childTabError ?? "")
-        }
+        .modifier(ChildTabAlerts(discarding: $discardingChild, requeueing: $requeueingChild,
+                                 error: $childTabError, perform: performChildAction))
         .keepingLauncherPanelOpen(while: presentingPanelModal)
         .alert("Tab Protected", isPresented: Binding(
             get: { manager.tabActionError != nil || session.tabActionError != nil },
@@ -960,7 +946,7 @@ struct LauncherView: View {
         modelSettingsSession != nil || editingSections || showingInputRequests || renamingSession != nil
             || sectioningSession != nil || creatingSection || renamingSection != nil || deletingSection != nil
             || manager.tabActionError != nil || session.tabActionError != nil
-            || discardingChild != nil || childTabError != nil
+            || discardingChild != nil || requeueingChild != nil || childTabError != nil
     }
 
     // MARK: Tab sections in the strip
@@ -2782,6 +2768,10 @@ struct LauncherView: View {
             discardingChild = child
             return
         }
+        if action == "requeue" {
+            requeueingChild = child
+            return
+        }
         performChildAction(action, child)
     }
 
@@ -3842,6 +3832,13 @@ struct SettingsView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Toggle("Start independent queued messages in child tabs automatically (Auto delivery only)", isOn: $settings.childTabsAutoFork)
+                .font(.caption)
+                .toggleStyle(.checkbox)
+            Text("Each runs in its own tab and git branch and merges back when done. Its card's Run in This Tab Instead puts it back in the queue.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Toggle("Memory vault — remember procedures that worked (markdown notes, Obsidian-compatible)", isOn: $settings.memoryEnabled)
                 .font(.caption)
                 .toggleStyle(.checkbox)
@@ -4080,5 +4077,44 @@ struct SettingsView: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 12, design: .monospaced))
         }
+    }
+}
+
+/// The panel's child-tab alerts: confirm Discard and Run in This Tab Instead, and show errors.
+private struct ChildTabAlerts: ViewModifier {
+    @Binding var discarding: ChildTab?
+    @Binding var requeueing: ChildTab?
+    @Binding var error: String?
+    let perform: (String, ChildTab) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert(discarding.map { "Discard \u{201C}\($0.title)\u{201D}?" } ?? "Discard Child Tab?", isPresented: Binding(
+                get: { discarding != nil },
+                set: { if !$0 { discarding = nil } }
+            ), presenting: discarding) { child in
+                Button("Discard", role: .destructive) { perform("discard", child) }
+                Button("Cancel", role: .cancel) {}
+            } message: { child in
+                Text(child.branch.map { "Its work on \($0) is deleted. The conversation stays in history." }
+                     ?? "The conversation stays in history.")
+            }
+            .alert(requeueing.map { "Run \u{201C}\($0.title)\u{201D} in This Tab Instead?" } ?? "Run in This Tab Instead?", isPresented: Binding(
+                get: { requeueing != nil },
+                set: { if !$0 { requeueing = nil } }
+            ), presenting: requeueing) { child in
+                Button("Run Here Instead") { perform("requeue", child) }
+                Button("Cancel", role: .cancel) {}
+            } message: { child in
+                Text("The child tab stops\(child.branch.map { " and its work on \($0) is deleted" } ?? ""). The request goes back to the front of this tab's queue.")
+            }
+            .alert("Child Tab", isPresented: Binding(
+                get: { error != nil },
+                set: { if !$0 { error = nil } }
+            )) {
+                Button("OK") { error = nil }
+            } message: {
+                Text(error ?? "")
+            }
     }
 }

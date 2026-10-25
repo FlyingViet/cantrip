@@ -247,6 +247,11 @@ final class AppSettings: ObservableObject {
     }
     /// Let Copilot delegate to subagents, guided toward token-saving uses.
     /// Off removes the subagent tools from the session entirely.
+    /// Auto-fork: a queued message sent with Auto delivery that the planner rates independent
+    /// starts in a child tab on its own (ChildTabCoordinator.considerAutoFork).
+    @Published var childTabsAutoFork: Bool {
+        didSet { d.set(childTabsAutoFork, forKey: "childTabsAutoFork") }
+    }
     @Published var copilotAllowSubagents: Bool {
         didSet { d.set(copilotAllowSubagents, forKey: "copilotAllowSubagents") }
     }
@@ -507,6 +512,7 @@ final class AppSettings: ObservableObject {
             "cantripHomeEnabled": cantripHomeEnabled,
             "cantripHomeParallelRuns": cantripHomeParallelRuns,
             "copilotAllowSubagents": copilotAllowSubagents,
+            "childTabsAutoFork": childTabsAutoFork,
             "copilotIdleReleaseMinutes": copilotIdleReleaseMinutes,
             "storageUpkeepEnabled": storageUpkeepEnabled,
             "storageSessionRetentionDays": storageSessionRetentionDays,
@@ -583,6 +589,7 @@ final class AppSettings: ObservableObject {
         bool("remoteControlEnabled") { self.remoteControlEnabled = $0 }
         bool("cantripHomeEnabled") { self.cantripHomeEnabled = $0 }
         bool("copilotAllowSubagents") { self.copilotAllowSubagents = $0 }
+        bool("childTabsAutoFork") { self.childTabsAutoFork = $0 }
         int("cantripHomeParallelRuns", 1...CantripHomeBackgroundRunner.maximumParallelLimit) {
             self.cantripHomeParallelRuns = $0
         }
@@ -690,6 +697,8 @@ final class AppSettings: ObservableObject {
         // Replaces the old prompt-only "discourage" preference, whose default was on.
         copilotAllowSubagents = d.object(forKey: "copilotAllowSubagents") == nil
             ? true : d.bool(forKey: "copilotAllowSubagents")
+        childTabsAutoFork = d.object(forKey: "childTabsAutoFork") == nil
+            ? true : d.bool(forKey: "childTabsAutoFork")
         copilotMCPApps = d.object(forKey: "copilotMCPApps") == nil
             ? true : d.bool(forKey: "copilotMCPApps")
         copilotIdleReleaseMinutes = d.object(forKey: "copilotIdleReleaseMinutes") as? Int ?? 30

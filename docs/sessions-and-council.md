@@ -196,7 +196,23 @@ worktree and branch, merged back when it's done.
   each queued message, shown as a chip on its row: *Independent: can run in a
   child tab*, *Batched: same tab-list code* (it overlaps the current task or
   another queued message, so it runs with it), *Waits: releases run one at a
-  time*, or *Runs after the current task*. Nothing forks on its own yet.
+  time*, or *Runs after the current task*.
+- **Auto-fork:** a message sent with **Auto** delivery that the plan rates
+  independent starts in a child tab on its own, as soon as routing has left it
+  in the queue. Cantrip first checks what it knows for sure: the message's
+  likely files (from the plan) must not be ones the parent has uncommitted or
+  edited in its recent replies, or that a running child tab expects to change,
+  and the parent must work in a git repository. Otherwise it stays queued and
+  its chip says why (*Runs after the current task: it also changes
+  CantripHome.swift*). An explicit **Queue** still means "after this"; the
+  caps and the rules below apply, and a request the router sends to a
+  background agent (*parallel*) still goes there. Its card says *Started
+  automatically*. Turn it off in Settings (**Start independent queued messages
+  in child tabs automatically**).
+- **Run in this tab instead:** while a child works, its card can send the
+  request back: the child stops, its branch and worktree are deleted, and the
+  request goes to the front of the parent's queue (it won't be auto-forked
+  again). The card then reads *Moved back to … 's queue*.
 - **Start one:** **Run in Child Tab** on a queued row (the branch button on the
   Mac, in Cantrip Agent's and the Gateways' queue sheets, the button in the
   browser). The message leaves the queue and starts at
