@@ -256,6 +256,14 @@ final class CantripChildTabsTests: XCTestCase {
         child = CantripRemoteChildResult(id: childID, title: "x", state: .working, actions: ["open", "discard"])
         XCTAssertTrue(CantripChildTabText.extraActions(child).isEmpty, "Discard waits until it stops working")
         XCTAssertEqual(CantripChildTabText.summary(child), "Working on it in its own tab.")
+
+        child = CantripRemoteChildResult(id: childID, title: "x", state: .needsInput, branch: "cantrip/child/x",
+                                         actions: ["open", "requeue", "discard"])
+        XCTAssertEqual(CantripChildTabText.extraActions(child).map(\.title), ["Run in this tab instead"],
+                       "A running child can go back to its parent's queue")
+        child = CantripRemoteChildResult(id: childID, title: "x", state: .requeued, actions: ["open"])
+        XCTAssertTrue(CantripChildTabText.extraActions(child).isEmpty)
+        XCTAssertEqual(CantripChildTabText.statusIcon(.requeued).symbol, "arrow.uturn.backward")
     }
 
     func testConflictAndBannerWording() {

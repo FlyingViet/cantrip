@@ -107,7 +107,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `GET /api/v1/sessions`, `GET /api/v1/sessions/{id}` | Tab list; a tab's transcript, status, queue and capability flags |
 | `POST /api/v1/sessions/{id}/messages` | Send; `mode` is `auto` (default), `queue`, `interrupt` (Redirect) or `inject` |
 | `DELETE /api/v1/sessions/{id}/queue/{promptID}`, `POST …/queue/{promptID}/send` | Remove a queued prompt, or Send now |
-| `POST /api/v1/sessions/{id}/queue/{promptID}/fork`, `POST …/children/{childID}/{action}` | Child tabs (`supportsChildTabs`): run a queued prompt in a child tab (`{session, childID}`; `409` with the reason when it can't), and a child card's actions (`open`, `discard`, `resolve`, `keepParent`, `keepChild`, `leave`, `retry`, `merge`); queued prompts carry `plan` (`supportsQueuePlans`), children `parentID` and `child`, the parent's card message `childResult` |
+| `POST /api/v1/sessions/{id}/queue/{promptID}/fork`, `POST …/children/{childID}/{action}` | Child tabs (`supportsChildTabs`): run a queued prompt in a child tab (`{session, childID}`; `409` with the reason when it can't), and a child card's actions (`open`, `requeue`, `discard`, `resolve`, `keepParent`, `keepChild`, `leave`, `retry`, `merge`); queued prompts carry `plan` (`supportsQueuePlans`), children `parentID` and `child`, the parent's card message `childResult` |
 | `/api/v1/sessions/{id}/input` | Answer approvals, questions and secure input |
 | `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename, lock and file in a section (`sectionID`), reorder, per-tab model settings |
 | `/api/v1/sections`, `/api/v1/sections/{id}` | Tab sections: list, add (`name`), rename or reorder (`PATCH name/position`), delete; only when the list has `supportsTabSections` |
@@ -306,7 +306,11 @@ Mac's reason is shown and nothing else changes.
 plan (*Independent: can run in a child tab*, *Batched: same tab-list code*,
 *Waits: releases run one at a time*, …). The branch button on a prompt, or a
 right swipe, runs it now in a **child tab**: its own tab under this one, on its
-own git branch, that merges back into this tab's branch when it's done. Child
+own git branch, that merges back into this tab's branch when it's done. With
+Auto delivery, the Mac starts independent ones on its own when their files
+don't overlap this tab's work; their card says *Started automatically*, and
+**Run in this tab instead** (while the child works) stops it and puts the
+request back at the front of this tab's queue. Child
 tabs are indented under their parent with a branch mark and can't be dragged
 away; open one to watch or steer it (its banner names the parent and branch,
 with **Open Parent**). The parent shows one card per child: tap its tag for the
