@@ -1,6 +1,6 @@
 import Foundation
 
-/// Answers `cantrip status|pair|config` over the CLI socket. The socket only accepts this user
+/// Answers `cantrip status|pair|config|tab` over the CLI socket. The socket only accepts this user
 /// (0600), and the pairing token is only ever sent to it.
 @MainActor
 final class HostControl {
@@ -15,6 +15,8 @@ final class HostControl {
         switch request["command"] as? String {
         case "status":
             return status()
+        case "tab":
+            return TabInsight.handle(request, manager: manager)
         case "pair":
             guard settings.remoteControlEnabled || HostMode.isHeadless else {
                 return ["error": "Remote control is off. Turn it on with `cantrip config set remoteControlEnabled true`."]
