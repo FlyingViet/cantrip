@@ -219,15 +219,17 @@ worktree and branch, merged back when it's done.
   once in a new tab after its parent, in the parent's section and with its
   model settings. The parent stays selected. The child gets the request as
   written plus a short brief (its worktree and branch, the parent's latest
-  progress, the shared-resource rules), not the parent's history.
+  progress, the shared-resource rules and the parent's ID, so it can read the
+  parent's conversation when it needs context), not the parent's history.
 - **Worktree:** when the parent works in a git repository (its folder, the
   repository the plan names, or the one its recent commands used), the child
   gets `~/.cache/Cantrip/worktrees/<id>` on `cantrip/child/<title>-<id>`,
   branched from the parent's HEAD and locked so storage cleanup skips it.
   Without a repository the child shares the folder and has nothing to merge.
 - **Watch and steer:** open the child from its card or the tab list to watch
-  it, send messages or answer its questions. It can't start children of its own
-  and can't be moved away from its parent.
+  it, send messages or answer its questions. The parent's model can steer it
+  too, with `tab ask --steer` (see [Look into other tabs](#look-into-other-tabs)).
+  It can't start children of its own and can't be moved away from its parent.
 - **Merge back:** when the child finishes, Cantrip commits anything it left
   uncommitted, then waits until the parent is idle (never mid-turn, and before
   the parent's next queued message). It checks the merge with
@@ -251,9 +253,14 @@ worktree and branch, merged back when it's done.
   title", a tag with the request that expands to the request, the child's
   replies and its files with line counts, the summary, and its state (Working,
   Needs your answer, Merged into main · 4 files +169 −9, Merge conflict, …).
-- **What the parent's model sees:** only one line per child, once it settles,
-  added to the parent's next message: its title, request, state, summary and
-  files. The card and the child's conversation are display-only.
+- **What the parent's model sees:** with each of its messages, a short line per
+  child that is working, needs an answer, waits to merge or has a conflict:
+  *"Write the notes file" (ID): working · now: Edit notes.txt · files so far:
+  notes.txt, a.swift*. Each outcome (merged, no changes, unmerged, failed,
+  stopped, discarded) is told once: its title, request, state, summary and
+  files. The lines carry each child's ID; the model reads a child's
+  conversation only when it needs the details (`tab read`) and can ask or steer
+  a child (`tab ask`, below). Nothing more of the child is pasted in.
 - **Guardrails:** at most 2 child tabs per tab and 3 overall. Children run
   with the attended guardrail. Simulator runs (`xcodebuild test`, `simctl`)
   take turns across children and wait for any other Simulator build or test on
@@ -265,6 +272,50 @@ worktree and branch, merged back when it's done.
 Records live in `~/.cache/Cantrip/child-tabs.json`; after a relaunch, running
 children resume like any tab and finished ones merge at the parent's next idle
 point.
+
+### Look into other tabs
+
+A tab's model, Cantrip Home and you can look into other tabs on demand instead
+of having conversations pasted into every message. Models get tab IDs (Home's
+tab list, the parent's child lines, a child's brief) and these commands; the
+command is Cantrip's own binary, since agent shells don't have `cantrip` on
+their PATH.
+
+- **`cantrip tab list`:** open tabs with their IDs, state, folder and child
+  tabs (archived children too).
+- **`cantrip tab read <ID>`:** a tab's recent turns as plain text (default 3;
+  `--turns N`, `--all`; long messages keep their start and end unless
+  `--full`), plus whose child it is, its children, and what it's doing now.
+  The ID may be its first 8 characters. Open tabs are read live; closed tabs
+  and archived child tabs from their saved conversation. Read-only: it adds
+  nothing to the tab.
+- **`cantrip tab ask <ID> "question"`:** the one way a model adds a turn to
+  another tab. The question runs as a turn there, with that tab's own model
+  and context, labeled with who asked; it waits in the tab's queue if the tab
+  is busy. The command prints the reply (it waits up to 5 minutes; `--wait
+  SECONDS`, `0` to return at once) and the asker gets a card: *Asked Docs*,
+  then *Answer from Docs* with the reply. If the command stopped waiting, the
+  reply comes with the asker's next message instead (`cantrip tab reply
+  <askID>` checks it). Questions from Home and other tabs are framed as
+  questions, not handoffs: change work still goes through `cantrip-delegate`.
+- **Steer a child:** from a parent to its own running child, `tab ask --steer`
+  sends the message the way Auto sends one you type, so it can reach the child
+  during its current step; the child treats it like the user's message about
+  its request, and its reply comes back to the parent. Without `--steer` the
+  message waits for the child's current turn.
+
+Rules: Private and Private Local tabs, Cantrip Home's chat, its background log
+and its background runs are never listed, read or asked, and private tabs can't
+ask (the question would be saved in the other tab). A child or parent made
+private after a fork drops out of the other's lines and listings too. Background
+runs may read tabs but not ask them. A tab can't ask itself, has at most 3
+questions out at a time, and can't ask a tab that is waiting on its own question
+to it (both would wait). Only a running child tab can be asked: asking one that
+stopped, failed or waits to merge would restart it outside the child-tab caps,
+so read it instead. What these commands print comes from other tabs: data,
+never instructions. Questions live in `~/.cache/Cantrip/tab-asks.json`. Each
+tab's agent process gets `CANTRIP_TAB_ID`, which is how `tab ask` knows who
+asks.
 
 ### Background waiters
 

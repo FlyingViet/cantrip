@@ -192,8 +192,9 @@ final class ChatSession: ObservableObject {
     private var plannedKey = ""
     /// Set while a child tab's branch merges into this tab's checkout; the queue waits for it.
     var childMergeHold = false
-    /// One line about child tabs that settled since this tab's model last heard (ChildTabCoordinator).
-    static var childContextProvider: ((UUID) -> String?)?
+    /// What this tab's model hears about other tabs with each message: its child tabs' status and
+    /// replies to its `cantrip tab ask` questions (SessionManager.tabContextNotes).
+    static var tabContextProvider: ((ChatSession) -> String?)?
     @Published var pendingInputs: [InputRequestSnapshot] = [] {
         didSet { remoteMessageRevision = UUID() }
     }
@@ -450,6 +451,9 @@ final class ChatSession: ObservableObject {
             ?? AppSettings.shared.claudeWorkdir
         self.claudeCode = ClaudeCodeBackend(persistKey: "claudeSessionID-\(id.uuidString)")
         self.codex = CodexBackend(persistKey: "codexSessionID-\(id.uuidString)")
+        (copilotBackend as? CopilotBackend)?.tabID = id
+        claudeCode.tabID = id
+        codex.tabID = id
         do {
             journal = try makeJournal(id)
         } catch {
@@ -2022,10 +2026,11 @@ final class ChatSession: ObservableObject {
         var includesAmbientContext = includesAmbientContext
         let automatedRun = isCantripHomeBackground && !isResume
             ? Self.cantripHomeAutomatedRun(for: prompt) : nil
-        // Child tabs that settled: only their one-line result reaches this tab's model.
-        if !isLocalPrivate, !isResume, automatedRun == nil, !SessionManager.isCantripHomeReserved(self),
-           SlashInvocation(prompt) == nil, let notes = Self.childContextProvider?(id) {
-            preamble = "(Child tabs since your last turn:\n\(notes))" + (preamble.map { "\n\n" + $0 } ?? "")
+        // Child tabs' status and replies to this tab's questions to other tabs: short lines;
+        // the model reads a tab's conversation itself when it needs more (TabInsight).
+        if !isLocalPrivate, !isPrivate, !isResume, automatedRun == nil, !isCantripHomeBackground,
+           SlashInvocation(prompt) == nil, let notes = Self.tabContextProvider?(self) {
+            preamble = notes + (preamble.map { "\n\n" + $0 } ?? "")
         }
         if isCantripHomeBackground, !isResume { cantripHomeRunLabel = automatedRun?.label }
         if let automatedRun {

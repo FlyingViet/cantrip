@@ -8,6 +8,8 @@ import Foundation
 /// the user's terminal.
 final class CodexBackend: Backend {
     private var process: Process?
+    /// The tab this backend serves: its shell commands see `CANTRIP_TAB_ID` (`cantrip tab ask`).
+    var tabID: UUID?
     private var askpass: RemoteAskpass?
     /// Per-instance model override (council members run models different
     /// from the session's setting). Nil = use the configured model.
@@ -85,6 +87,7 @@ final class CodexBackend: Backend {
         p.currentDirectoryURL = URL(fileURLWithPath: workdir)
         var env = ProcessInfo.processInfo.environment
         env["NO_COLOR"] = "1"
+        if let tabID { env[TabInsight.tabIDVariable] = tabID.uuidString }
         if !readOnly {
             do {
                 let broker = try RemoteAskpass(process: p) { [weak self] request in

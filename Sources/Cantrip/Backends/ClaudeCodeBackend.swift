@@ -5,6 +5,8 @@ import Foundation
 /// Follow-ups resume the same session via --resume <session_id>.
 final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     private var process: Process?
+    /// The tab this backend serves: its shell commands see `CANTRIP_TAB_ID` (`cantrip tab ask`).
+    var tabID: UUID?
     /// Persisted so conversations resume across app restarts.
     private let persistKey: String
     private var sessionID: String? {
@@ -440,6 +442,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         var env = ProcessInfo.processInfo.environment
         // Ensure node/claude find their usual PATH entries.
         env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+        if let tabID { env[TabInsight.tabIDVariable] = tabID.uuidString }
         if !readOnly {
             do {
                 let broker = try RemoteAskpass(process: p) { [weak self] request in

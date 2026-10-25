@@ -105,6 +105,9 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         set { guardrailLock.withLock { storedGuardrailLabel = newValue } }
     }
 
+    /// The tab this runtime serves: its shell commands see `CANTRIP_TAB_ID` (`cantrip tab ask`).
+    var tabID: UUID?
+
     struct Configuration: Equatable {
         let command: String
         let workdir: String
@@ -453,6 +456,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         var environment = ProcessInfo.processInfo.environment
         environment["NO_COLOR"] = "1"
         environment["TERM"] = "dumb"
+        if let tabID { environment[TabInsight.tabIDVariable] = tabID.uuidString }
         // The runtime only honours `enableMcpApps` while its MCP_APPS gate is on.
         if config.mcpApps { environment["COPILOT_MCP_APPS"] = "true" }
         if !config.readOnly {

@@ -6,6 +6,7 @@ Usage:
   cat build.log | cantrip "why did this fail?"
   cantrip --backend claude "review this diff" < changes.diff
   cantrip runs [session-or-run-id]
+  cantrip tab list | read ID | ask ID "question" | reply ASK_ID   (look into other tabs)
   cantrip daemon start|stop|restart|run|logs   (headless background service)
   cantrip pair | status | config | doctor | cleanup  (see `cantrip help`)
 
@@ -229,6 +230,17 @@ def inspect_runs(identifier=None):
 
 
 HOST_COMMANDS = {"daemon", "pair", "config", "status", "doctor", "cleanup", "help"}
+TAB_ACTIONS = {"list", "read", "ask", "reply"}
+
+
+def is_host_command(args):
+    """`tab`/`tabs` only with an action, so `cantrip tab completion in zsh?` is still a question."""
+    if not args:
+        return False
+    if args[0] in HOST_COMMANDS:
+        return True
+    return args[0] in ("tab", "tabs") and (
+        len(args) == 1 or args[1] in TAB_ACTIONS or args[1].startswith("--"))
 
 
 def run_host_command(args):
@@ -242,7 +254,7 @@ def run_host_command(args):
 
 def main() -> int:
     args = sys.argv[1:]
-    if args and args[0] in HOST_COMMANDS:
+    if is_host_command(args):
         return run_host_command(args)
     if args and args[0] == "runs":
         if len(args) > 2:
