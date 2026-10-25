@@ -398,6 +398,8 @@ struct CantripRemoteHandoffResult: Decodable, Equatable {
 /// merge back into the parent's branch.
 enum CantripChildTabState: String, Decodable, Equatable {
     case working, needsInput, finished, merging, merged, conflict, unmerged, noChanges, failed, stopped, discarded
+    /// Run in the parent instead: the request went back to the front of its queue.
+    case requeued
     /// A state from a newer Mac.
     case other
 
@@ -491,8 +493,8 @@ struct CantripRemoteChildResult: Decodable, Equatable, Identifiable {
     var cleanFileCount: Int = 0
     /// Why a merge is waiting or stopped, in plain words.
     var note: String? = nil
-    /// What the card offers now (`POST …/children/{id}/{action}`): open, discard, resolve,
-    /// keepParent, keepChild, leave, retry, merge.
+    /// What the card offers now (`POST …/children/{id}/{action}`): open, requeue, discard,
+    /// resolve, keepParent, keepChild, leave, retry, merge.
     var actions: [String] = []
 
     private enum CodingKeys: String, CodingKey {

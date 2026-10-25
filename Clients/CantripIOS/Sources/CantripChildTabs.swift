@@ -33,10 +33,13 @@ enum CantripChildTabText {
             .filter { child.actions.contains($0.0) }
     }
 
-    /// Try Again, Merge Its Work and Discard once the child has stopped working; Discard only when
-    /// there is a branch to throw away.
+    /// Run in this tab instead while the child works; Try Again, Merge Its Work and Discard once it
+    /// stopped (Discard only when there is a branch to throw away).
     static func extraActions(_ child: CantripRemoteChildResult) -> [(action: String, title: String)] {
-        guard ![.conflict, .working, .needsInput].contains(child.state) else { return [] }
+        if child.state.isRunning {
+            return child.actions.contains("requeue") ? [("requeue", "Run in this tab instead")] : []
+        }
+        guard child.state != .conflict else { return [] }
         let titles = ["retry": "Try Again", "merge": "Merge Its Work", "discard": "Discard"]
         return child.actions.compactMap { name in
             guard let title = titles[name], name != "discard" || child.branch != nil else { return nil }
@@ -80,6 +83,7 @@ enum CantripChildTabText {
         case .conflict: return ("exclamationmark.triangle.fill", CantripChildTabStyle.work)
         case .failed: return ("exclamationmark.circle.fill", CantripChildTabStyle.bad)
         case .unmerged, .stopped, .discarded, .other: return ("minus.circle", nil)
+        case .requeued: return ("arrow.uturn.backward", nil)
         }
     }
 }
@@ -94,6 +98,7 @@ struct CantripChildTabCard: View {
     var onOpenTab: ((String) -> Void)?
     @State private var expanded = false
     @State private var confirmingDiscard = false
+    @State private var confirmingRequeue = false
 
     private var isListed: Bool { remote.sessions.contains { $0.id == child.id } }
     private var isBusy: Bool { remote.isMutating || remote.childActionInFlight != nil || !remote.isConnected }
@@ -143,13 +148,19 @@ struct CantripChildTabCard: View {
             Text(child.branch.map { "Its work on \($0) is deleted. The conversation stays in history." }
                  ?? "The conversation stays in history.")
         }
+        .alert("Run “\(child.title)” in this tab instead?", isPresented: $confirmingRequeue) {
+            Button("Run Here Instead") { perform("requeue") }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The child tab stops\(child.branch.map { " and its work on \($0) is deleted" } ?? ""). The request goes back to the front of this tab's queue.")
+        }
     }
 
     private func run(_ action: String) {
-        if action == "discard" {
-            confirmingDiscard = true
-        } else {
-            perform(action)
+        switch action {
+        case "discard": confirmingDiscard = true
+        case "requeue": confirmingRequeue = true
+        default: perform(action)
         }
     }
 
