@@ -1324,6 +1324,7 @@ struct ChatView: View {
             .sheet(item: $renamingRemoteSession) { session in
                 CantripTabRenameSheet(model: remote, session: session)
             }
+            .cantripSectionPrompt(model: remote)
             .sheet(item: $remote.modelSettingsSession) { session in
                 CantripSessionSettingsView(model: remote, session: session, identity: remote.usageIdentity)
             }

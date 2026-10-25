@@ -14,6 +14,10 @@ struct CantripTabActionState: Equatable {
     let isFirst: Bool
     let isLast: Bool
     let isMutating: Bool
+    /// Sections it can be filed under; empty when the Mac has none or can't file this tab.
+    let sections: [CantripTabSection]
+    let canFileInSection: Bool
+    let sectionID: String?
 
     @MainActor
     init(session: CantripRemoteSession, model: CantripRemoteModel) {
@@ -28,6 +32,9 @@ struct CantripTabActionState: Equatable {
         isFirst = model.sessions.first?.id == session.id
         isLast = model.sessions.last?.id == session.id
         isMutating = model.isMutating
+        canFileInSection = model.supportsTabSections && session.supportsTabSections == true
+        sections = canFileInSection ? model.tabSections : []
+        sectionID = CantripTabGrouping.sectionID(of: session, sections: model.tabSections)
     }
 }
 
@@ -93,6 +100,30 @@ struct CantripTabActions: View {
                   systemImage: state.isLocked ? "lock.open" : "lock")
         }
         .disabled(state.isMutating || !state.supportsTabMetadata || state.isLocalPrivate)
+        if state.canFileInSection {
+            Menu {
+                Picker("Section", selection: Binding(
+                    get: { state.sectionID ?? CantripTabGrouping.looseID },
+                    set: { picked in
+                        Task { await model.fileTab(state.id, in: picked == CantripTabGrouping.looseID ? nil : picked) }
+                    }
+                )) {
+                    Text("Tabs").tag(CantripTabGrouping.looseID)
+                    ForEach(state.sections) { section in
+                        Text(section.name).tag(section.id)
+                    }
+                }
+                .pickerStyle(.inline)
+                Button {
+                    model.sectionPrompt = .create(fileTabID: state.id)
+                } label: {
+                    Label("New Section", systemImage: "folder.badge.plus")
+                }
+            } label: {
+                Label("Move to Section", systemImage: "folder")
+            }
+            .disabled(state.isMutating)
+        }
         if state.isLocalPrivate {
             Text("Permanent tab. History saved; self-hosted models only.")
         }

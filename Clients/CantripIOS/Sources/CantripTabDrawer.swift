@@ -142,6 +142,14 @@ struct CantripSessionDrawer: View {
                     },
                     onMove: { id, targetID, after in
                         Task { await model.moveTab(id, relativeTo: targetID, after: after) }
+                    },
+                    sectionModel: model,
+                    onNewTabInSection: { sectionID in
+                        Task {
+                            guard let id = await model.createTab(inSection: sectionID) else { return }
+                            if isModal { onDismiss() }
+                            onSelect(id)
+                        }
                     }
                 ) { session in
                     CantripTabActions(
@@ -193,7 +201,12 @@ struct CantripTabList<Actions: View>: View {
     var onMove: ((String, String, Bool) -> Void)? = nil
     /// Rows above the tabs that scroll with them (Home's pinned rows), never reorderable.
     var header: (() -> AnyView)? = nil
+    /// With sections, tabs show under collapsible headers whose menus act through this model.
+    var sectionModel: CantripRemoteModel? = nil
+    /// Opens a new tab filed in a section.
+    var onNewTabInSection: ((String) -> Void)? = nil
     @ViewBuilder var actions: (CantripRemoteSession) -> Actions
+    @ObservedObject private var collapse = CantripTabSectionCollapse.shared
 
     var selectedSession: CantripRemoteSession? {
         sessions.first { $0.id == selectedSessionID }
@@ -212,16 +225,26 @@ struct CantripTabList<Actions: View>: View {
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                 }
-                ForEach(sessions) { session in
-                    row(session)
-                        .id(session.id)
-                        .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                        .moveDisabled(!canMove(session))
-                }
-                .onMove { source, destination in
-                    move(fromOffsets: source, toOffset: destination)
+                if let sectionModel, let groups = CantripTabGrouping.groups(sessions, sections: sectionModel.tabSections) {
+                    ForEach(groups) { group in
+                        let collapsed = collapse.isCollapsed(group.id, scope: sectionModel.tabSectionScope)
+                        sectionHeader(group, collapsed: collapsed, model: sectionModel)
+                        let visible = CantripTabGrouping.visible(group, collapsed: collapsed, selectedID: selectedSessionID)
+                        ForEach(visible) { session in
+                            tabRow(session)
+                        }
+                        // Reordering stays inside a section; Move to Section files a tab elsewhere.
+                        .onMove { source, destination in
+                            move(visible, fromOffsets: source, toOffset: destination)
+                        }
+                    }
+                } else {
+                    ForEach(sessions) { session in
+                        tabRow(session)
+                    }
+                    .onMove { source, destination in
+                        move(fromOffsets: source, toOffset: destination)
+                    }
                 }
             }
             .listStyle(.plain)
@@ -237,6 +260,42 @@ struct CantripTabList<Actions: View>: View {
             }
         }
         .accessibilityIdentifier("cantrip-tab-list")
+    }
+
+    private func tabRow(_ session: CantripRemoteSession) -> some View {
+        row(session)
+            .id(session.id)
+            .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .moveDisabled(!canMove(session))
+    }
+
+    private func sectionHeader(_ group: CantripTabGrouping.Group, collapsed: Bool,
+                               model: CantripRemoteModel) -> some View {
+        Button {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) {
+                collapse.toggle(group.id, scope: model.tabSectionScope)
+            }
+        } label: {
+            CantripTabSectionTitle(group: group, collapsed: collapsed, uppercase: true)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                .padding(.horizontal, 12)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            CantripTabSectionMenu(model: model, group: group, onNewTab: group.section.flatMap { section in
+                onNewTabInSection.map { open in { open(section.id) } }
+            })
+        }
+        .accessibilityIdentifier("cantrip-tab-section-\(group.id)")
+        .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .moveDisabled(true)
     }
 
     private func row(_ session: CantripRemoteSession) -> some View {
@@ -288,9 +347,9 @@ struct CantripTabList<Actions: View>: View {
     }
 
     @discardableResult
-    func move(fromOffsets offsets: IndexSet, toOffset destination: Int) -> Bool {
+    func move(_ list: [CantripRemoteSession]? = nil, fromOffsets offsets: IndexSet, toOffset destination: Int) -> Bool {
         guard let onMove,
-              let move = CantripTabReorder.move(sessions, fromOffsets: offsets, toOffset: destination)
+              let move = CantripTabReorder.move(list ?? sessions, fromOffsets: offsets, toOffset: destination)
         else { return false }
         onMove(move.id, move.targetID, move.after)
         return true
