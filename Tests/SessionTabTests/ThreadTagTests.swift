@@ -1,4 +1,5 @@
 import Foundation
+import JavaScriptCore
 
 extension SessionTabTests {
     /// Thread tags: every message records the prompt that started its thread; Home tags a reply
@@ -209,7 +210,44 @@ extension SessionTabTests {
                      && (openedThread["messages"] as? [[String: Any]])?.count == 2, "\(opened)")
         let missing = try await call("/api/v1/sessions/\(home.uuidString)/threads/\(UUID().uuidString)")
         precondition(missing.0 == 404, "an unknown thread is a 404")
+        try testThreadLinesWeb()
         print("Thread tag checks passed")
+    }
+
+    /// The browser Remote: rows after a quoted reply that stay in its thread share its line.
+    @MainActor
+    private static func testThreadLinesWeb() throws {
+        let source = try String(contentsOfFile: "Sources/Cantrip/RemoteControlServer.swift", encoding: .utf8)
+        guard let from = source.range(of: "    function drawsRow(message,answered)"),
+              let to = source.range(of: "    function openThread(state)", range: from.upperBound..<source.endIndex)
+        else { preconditionFailure("the web thread line functions moved") }
+        let context = JSContext()!
+        context.exceptionHandler = { _, error in fatalError("Thread line JavaScript failed: \(error!.toString()!)") }
+        context.evaluateScript("function subagentActive(agent){return agent.state==='running'}\n" + source[from.lowerBound..<to.lowerBound])
+        func lines(_ rows: String) -> String {
+            context.evaluateScript("JSON.stringify(Object.fromEntries(threadLines(\(rows))))")!.toString()
+        }
+        let quote = "thread:{id:'A',prompt:'Process the book'}"
+        precondition(lines("""
+            [{id:'q',role:'assistant',text:'Chapters 3 and 4',threadID:'A',\(quote)},{id:'r',role:'assistant',text:'5 and 6',threadID:'A'},
+             {id:'s',role:'handoff',text:'Card',threadID:'A'},{id:'p',role:'user',text:'New',threadID:'p'},{id:'t',role:'assistant',text:'Hi',threadID:'p'}]
+            """) == #"{"q":"start","r":"through","s":"end"}"#, "a run's line runs past its replies into the last")
+        precondition(lines("[{id:'q',role:'assistant',text:'Done',threadID:'A',\(quote)},{id:'p',role:'user',text:'New',threadID:'p'}]") == "{}",
+                     "a quoted reply alone keeps its own curve")
+        precondition(lines("""
+            [{id:'q',role:'assistant',text:'Which?',threadID:'A',\(quote)},{id:'u',role:'user',text:'This one',threadID:'A'},
+             {id:'e',role:'assistant',text:' ',threadID:'B'},{id:'r',role:'assistant',text:'On it',threadID:'A'},{id:'v',role:'user',text:'Thanks',threadID:'A'}]
+            """) == #"{"q":"start","u":"through","e":"through","r":"end"}"#,
+                     "answers and empty replies stay in a run, but it ends on a reply")
+        precondition(lines("""
+            [{id:'q',role:'assistant',text:'One',threadID:'A',\(quote)},{id:'f',role:'freshStart',text:'Started fresh'},{id:'r',role:'assistant',text:'Two',threadID:'A'},
+             {id:'x',role:'assistant',text:'Three',threadID:'A',\(quote)},{id:'y',role:'assistant',text:'Four',threadID:'A'},
+             {id:'z',role:'assistant',text:'Other',threadID:'C',thread:{id:'C',prompt:'Other'}},{id:'w',role:'error',text:'Failed',threadID:'C'}]
+            """) == #"{"x":"start","y":"end","z":"start","w":"end"}"#, "a divider ends a run and a new quote starts one")
+        precondition(context.evaluateScript("""
+            drawsRow({text:'Hi'},new Set)&&drawsRow({text:'',delegations:[{id:'d'}]},new Set)
+              &&!drawsRow({text:'',delegations:[{id:'d'}]},new Set(['d']))&&!drawsRow({text:'',activities:[{id:'a'}],subagents:[{id:'a',state:'running'}]},new Set)
+            """)!.toBool(), "rows are drawn as before")
     }
 
     private static func requireThread<T>(_ value: T?, line: UInt = #line) throws -> T {
