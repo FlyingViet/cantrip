@@ -11,6 +11,7 @@ import type {
 } from "../api/types";
 import { bridge, type HostStatus } from "../bridge";
 import { movedSections } from "./sections";
+import { plainMentions, plainMentionsDeep, plainSession } from "./tabMentions";
 import { resetThreads } from "./threads";
 
 export type Detail = PagedRemoteSessionDetail;
@@ -79,7 +80,7 @@ export const visibleHomeInputs = computed(() =>
 export function tabTitle(session: Pick<RemoteSessionSummary, "title" | "customTitle"> | null | undefined): string {
   if (!session) return "Tab";
   const custom = session.customTitle?.trim();
-  return custom || session.title || "Tab";
+  return plainMentions(custom || session.title || "Tab");
 }
 
 // MARK: Polling
@@ -158,7 +159,7 @@ async function refreshOnce(): Promise<void> {
   let list: SessionsListResponse;
   const requestedAt = Date.now();
   try {
-    list = await api<SessionsListResponse>("/api/v1/sessions");
+    list = plainList(await api<SessionsListResponse>("/api/v1/sessions"));
   } catch (error) {
     failed(error);
     return;
@@ -189,6 +190,16 @@ async function refreshOnce(): Promise<void> {
     if (!cached || !summary || cached.historyRevision !== summary.historyRevision) await fetchDetail(id, cached?.historyRevision);
   }
   if (homeDataWanted && list.home) await refreshHomeData();
+}
+
+/** Titles (a tab's can come from its first message), previews and labels read tab mentions as "@Label". */
+function plainList(list: SessionsListResponse): SessionsListResponse {
+  return {
+    ...list,
+    sessions: list.sessions.map(plainSession),
+    home: list.home ? plainSession(list.home) : list.home,
+    homeInputs: list.homeInputs ? plainMentionsDeep(list.homeInputs) : list.homeInputs,
+  };
 }
 
 function failed(error: unknown): void {
@@ -227,7 +238,8 @@ function historySuffix(messages: RemoteMessage[], groups: number): RemoteMessage
 }
 
 /** Merges a session from the Mac into the cache (CantripRemoteModel.apply, CantripRemote.swift:4146). */
-export function apply(session: Detail, options: { keepOlder?: boolean } = {}): void {
+export function apply(received: Detail, options: { keepOlder?: boolean } = {}): void {
+  const session = plainSession(received);
   const cached = details.value.get(session.id);
   let next: Detail = session;
   if (cached && session.historyStartID && cached.historyStartID === session.historyStartID) {
@@ -355,7 +367,7 @@ export async function refreshArtifacts(): Promise<void> {
 
 export async function refreshBackground(): Promise<void> {
   try {
-    homeBackground.value = await api<HomeBackgroundSnapshot>("/api/v1/home/background");
+    homeBackground.value = plainMentionsDeep(await api<HomeBackgroundSnapshot>("/api/v1/home/background"));
     homeBackgroundError.value = null;
   } catch (error) {
     homeBackgroundError.value = `Couldn't load background runs: ${(error as Error).message}`;
@@ -420,7 +432,7 @@ export async function closeTab(id: string): Promise<Detail> {
 export async function createTab(): Promise<Detail> {
   const data = await mutate(() => api<SessionResponse>("/api/v1/sessions", { method: "POST", recent: true }));
   apply(data.session);
-  if (!sessions.value.some((item) => item.id === data.session.id)) sessions.value = [...sessions.value, data.session];
+  if (!sessions.value.some((item) => item.id === data.session.id)) sessions.value = [...sessions.value, plainSession(data.session)];
   void refresh();
   return data.session;
 }
@@ -443,7 +455,7 @@ export async function moveTab(id: string, targetID: string, after: boolean): Pro
     const data = await mutate(() => api<MoveTabResponse>(sessionPath(id, "move"), {
       method: "POST", body: { targetID, placement: after ? "after" : "before" },
     }));
-    sessions.value = data.sessions;
+    sessions.value = data.sessions.map(plainSession);
     if (data.sections) tabSections.value = data.sections;
   } catch (error) {
     sessions.value = before;
@@ -516,7 +528,7 @@ export async function createTabInSection(sectionID: string): Promise<Detail> {
   requireSections();
   const data = await mutate(() => api<SessionResponse>("/api/v1/sessions", { method: "POST", body: { sectionID }, recent: true }));
   apply(data.session);
-  if (!sessions.value.some((item) => item.id === data.session.id)) sessions.value = [...sessions.value, data.session];
+  if (!sessions.value.some((item) => item.id === data.session.id)) sessions.value = [...sessions.value, plainSession(data.session)];
   void refresh();
   return data.session;
 }
@@ -576,7 +588,7 @@ export async function childAction(parentID: string, childID: string, action: Chi
 }
 
 export async function stopBackgroundRun(runID: string): Promise<void> {
-  homeBackground.value = await api<HomeBackgroundSnapshot>(`/api/v1/home/background/${pathComponent(runID)}/stop`, { method: "POST" });
+  homeBackground.value = plainMentionsDeep(await api<HomeBackgroundSnapshot>(`/api/v1/home/background/${pathComponent(runID)}/stop`, { method: "POST" }));
   void refresh();
 }
 

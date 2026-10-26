@@ -9,7 +9,7 @@ import { formatBytes, liveBackgroundSubagents, liveForegroundSubagents } from ".
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
 import {
-  addMention, encodeMentions, insertMention, remainingMentions, removeMentionText, supportsMentions, type TabMention,
+  addMention, encodeMentions, insertMention, remainingMentions, removeMentionText, supportsMentions, uniqueMentionLabel, type TabMention,
 } from "../../state/tabMentions";
 import { threadLines } from "../../state/threads";
 import { BackgroundTaskButton, PinnedSubagents } from "../activity/Subagents";
@@ -566,10 +566,11 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
   });
 
   const mentions = useTabMentions({
-    session, text: draft.text, caret, focused, enabled: ready && acceptsText && !busy,
+    session, text: draft.text, picks: draft.mentions, caret, focused, enabled: ready && acceptsText && !busy,
     onPick: (candidate, at, end) => {
       const current = drafts.get(key) ?? emptyDraft();
-      const picked = insertMention(candidate.title, at, end, current.text);
+      // A label stands for one ID: a second tab with the same title gets its project or a number.
+      const picked = insertMention(candidate.title, at, end, current.text, uniqueMentionLabel(candidate, current.mentions));
       update({ text: picked.text, mentions: addMention(remainingMentions(current.mentions, picked.text), { id: candidate.id, label: picked.label }) });
       pendingCaret.current = picked.caret;
       setCaret(picked.caret);
