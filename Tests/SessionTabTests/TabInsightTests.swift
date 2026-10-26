@@ -27,6 +27,7 @@ extension SessionTabTests {
         try testTabCommandParsing()
         testTabCommandGuardrails()
         try await testTabInsightFlow()
+        try await testTabMentions()
         print("Tab insight: child status lines, reading, privacy, Home tab data and tab ask passed")
     }
 

@@ -2113,6 +2113,11 @@ final class RemoteControlServer {
             "supportsStartFresh": session.supportsStartFresh,
             // GET /api/v1/sessions/{id}/commands: the backend's slash commands and skills.
             "supportsBackendCommands": true,
+            // "@" in this tab's composer suggests tabs; a picked one is sent as
+            // @[Label](cantrip-tab:<ID>) in the text (TabMentions).
+            "supportsTabMentions": TabMentions.supportsMentions(session),
+            // Other tabs' and Home's composers may suggest this tab.
+            "mentionable": TabInsight.isReadable(session),
         ]
         if let status = session.statusText { result["status"] = status }
         if let section = manager?.sectionID(of: session) { result["sectionID"] = section.uuidString }
@@ -2164,8 +2169,10 @@ final class RemoteControlServer {
                 ]
                 object["plan"] = session.queuePlans[prompt.id]?.snapshot
                 if presentation.replacesText {
-                    object["displayText"] = presentation.text
+                    object["displayText"] = TabMentions.plain(presentation.text)
                     object["images"] = presentation.imageIDs.map { ["id": $0] }
+                } else if TabMentions.plain(prompt.text) != prompt.text {
+                    object["displayText"] = TabMentions.plain(prompt.text)
                 }
                 return object
             }
@@ -2333,7 +2340,7 @@ final class RemoteControlServer {
                 var object: [String: Any] = [
                     "id": prompt.id.uuidString,
                     "text": prompt.text,
-                    "displayText": presentation.text,
+                    "displayText": TabMentions.plain(presentation.text),
                     "images": presentation.imageIDs.map { ["id": $0] },
                 ]
                 object["plan"] = plans[prompt.id]
@@ -2756,11 +2763,15 @@ private extension RemoteControlServer {
     .slash-cmd{grid-area:cmd;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.slash-name{font-weight:650}.slash-hint{margin-left:6px;color:var(--secondary)}.slash-desc{grid-area:desc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--secondary);font-size:13px;line-height:1.4}.slash-source{grid-area:source;padding:0 6px;border-radius:4px;background:var(--surface-2);color:var(--secondary);font-size:10px;font-weight:600;line-height:1.6;white-space:nowrap}.slash-note{grid-area:note;color:var(--secondary);font-size:12px;line-height:1.35;overflow-wrap:anywhere}
     .slash-info{display:flex;align-items:center;gap:7px;padding:7px 10px;color:var(--secondary);font-size:12px;line-height:1.35;overflow-wrap:anywhere}#slashList:not(:empty)~.slash-info{border-top:1px solid var(--line)}.slash-info .spinner{flex:none}
     @media(max-width:620px){.slash-popover{left:8px;right:8px}.slash-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"cmd source" "desc desc" "note note";padding:8px 10px}.slash-desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow-wrap:anywhere}}@media(pointer:coarse){.slash-row,.slash-info{min-height:44px}}
+    .mention-row{grid-template-columns:minmax(0,1fr);grid-template-areas:"cmd" "desc"}.mention-row .slash-cmd{font:inherit;font-size:13.5px}.mention-row .slash-desc{white-space:normal;overflow-wrap:anywhere}
+    .mention{color:var(--accent);font-weight:650}button.mention{display:inline;padding:0;border:0;background:none;font:inherit;font-weight:650;color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}button.mention:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+    .mention-chips{display:flex;flex-wrap:wrap;gap:6px;padding:6px 10px 0}.mention-chips:empty{display:none}.mention-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:1px 2px 1px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface-2);color:var(--accent);font-size:12.5px;font-weight:650}.mention-chip>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mention-chip>button{flex:none;width:24px;height:24px;border:0;border-radius:50%;background:transparent;color:var(--secondary);font-size:15px;line-height:1}.mention-chip>button:hover{background:var(--surface)}.mention-chip>button:focus-visible{outline:2px solid var(--accent)}@media(pointer:coarse){.mention-chip>button{width:36px;height:36px}}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
     <main id="app" class="hidden"><aside id="sessionSidebar" class="hidden" aria-labelledby="sessionSidebarTitle"><div id="sessionSidebarHeader"><strong id="sessionSidebarTitle">Tabs</strong></div></aside><header class="workspace">
-    <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="slashList"><div id="slashPopover" class="slash-popover hidden"><div id="slashList" role="listbox" aria-label="Commands"></div><div id="slashLoading" class="slash-info hidden"><span class="spinner" aria-hidden="true"></span>Loading commands…</div><div id="slashInfo" class="slash-info hidden"></div></div><div id="slashStatus" class="sr-only" role="status" aria-live="polite"></div><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
+    <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="slashList"><div id="slashPopover" class="slash-popover hidden"><div id="slashList" role="listbox" aria-label="Commands"></div><div id="slashLoading" class="slash-info hidden"><span class="spinner" aria-hidden="true"></span>Loading commands…</div><div id="slashInfo" class="slash-info hidden"></div></div><div id="slashStatus" class="sr-only" role="status" aria-live="polite"></div><div id="mentionPopover" class="slash-popover hidden"><div id="mentionList" role="listbox" aria-label="Tab suggestions"></div><div id="mentionInfo" class="slash-info hidden"></div></div><div id="mentionStatus" class="sr-only" role="status" aria-live="polite"></div><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
+    <div id="mentionChips" class="mention-chips" role="list" aria-label="Mentioned tabs"></div>
     <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSection" class="round hidden" title="New section" aria-label="New section"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M1.5 4.5v8a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3.5h-4a1 1 0 0 0-1 1z"/><path d="M8 7.5v4M6 9.5h4"/></svg></button><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><button id="homeArtifacts" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home artifacts">Artifacts</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
@@ -2855,7 +2866,7 @@ private extension RemoteControlServer {
       return Array.from(new Uint8Array(bytes),byte=>byte.toString(16).padStart(2,"0")).join("")}
     function captureUIState(owner,revision){const drafts=new Map(tabDrafts);if(selected)drafts.set(selected,$("draft").value);
       const reply=chatInputReply?.sessionID===selected&&chatInputReply.token===token?{id:chatInputReply.id,sessionID:selected}:null;
-      return {schema:1,owner,revision,selected,drafts:[...drafts],mode:$("mode").value,reply,
+      return {schema:1,owner,revision,selected,drafts:[...drafts],mentions:typeof tabMentionLists==="undefined"?[]:[...tabMentionLists],mode:$("mode").value,reply,
         error:uiMutationWarning||$("actionError").textContent,focus:document.activeElement===$("draft"),
         selectionStart:$("draft").selectionStart,selectionEnd:$("draft").selectionEnd};
     }
@@ -2897,6 +2908,8 @@ private extension RemoteControlServer {
           ||(state.reply!==null&&(!state.reply||typeof state.reply.id!=="string"||state.reply.sessionID!==state.selected)))
           throw Error("Saved Remote draft state is invalid");
         tabDrafts.clear();for(const [id,text] of state.drafts)tabDrafts.set(id,text);
+        if(typeof renderMentionChips==="function")setTimeout(renderMentionChips,0);
+        if(Array.isArray(state.mentions)&&typeof tabMentionLists!=="undefined"){tabMentionLists.clear();for(const entry of state.mentions)if(Array.isArray(entry)&&typeof entry[0]==="string"&&Array.isArray(entry[1])){const list=entry[1].filter(item=>typeof item?.id==="string"&&typeof item?.label==="string").map(item=>({id:item.id,label:item.label}));if(list.length)tabMentionLists.set(entry[0],list)}}
         selected=state.selected;$("draft").value=tabDrafts.get(selected)||"";$("mode").value=state.mode;
         chatInputReply=state.reply?{...state.reply,token}:null;$("actionError").textContent=state.error;
         sessionStorage.removeItem(uiReloadStorageKey);
@@ -2968,8 +2981,8 @@ private extension RemoteControlServer {
     // Sections come from the Mac; which ones are collapsed is this browser's choice.
     const collapsedSectionsKey="cantrip.collapsedSections",looseSectionID="tabs";let tabSections=[],sectionsSupported=false,collapsedSections=new Set();
     try{collapsedSections=new Set(JSON.parse(localStorage.getItem(collapsedSectionsKey)||"[]"))}catch{}
-    const tabDrafts=new Map();
-    function selectTab(id){if(selected)tabDrafts.set(selected,$("draft").value);selected=id;$("draft").value=tabDrafts.get(id)||"";if(typeof syncSlashCommands==="function")syncSlashCommands()}
+    const tabDrafts=new Map(),tabMentionLists=new Map();
+    function selectTab(id){if(selected)tabDrafts.set(selected,$("draft").value);selected=id;$("draft").value=tabDrafts.get(id)||"";if(typeof syncSlashCommands==="function")syncSlashCommands();if(typeof renderMentionChips==="function"){renderMentionChips();syncMentions()}}
     // historyPaused: tabs whose last older page failed; automatic loading waits for Retry.
     const historyCache=new Map(),expandedHistory=new Set(),historyPaused=new Map(),initialHistoryGroups=sidebarLayout?3:11;
     function historySuffix(messages,groups){if(groups<=0)return [];const prompts=messages.flatMap((m,i)=>m.role==="user"?[i]:[]);return prompts.length>groups?messages.slice(prompts[prompts.length-groups]):messages}
@@ -3454,6 +3467,7 @@ private extension RemoteControlServer {
       const paired=(marker,tag)=>{const end=source.indexOf(marker,cursor+marker.length);if(end<0)return false;flush();const node=document.createElement(tag);appendInline(node,source.slice(cursor+marker.length,end));parent.append(node);cursor=end+marker.length;return true};
       while(cursor<source.length){if(source[cursor]==="\\\\"&&cursor+1<source.length){plain+=source[cursor+1];cursor+=2;continue}
         if(source[cursor]==="`"){const end=source.indexOf("`",cursor+1);if(end>=0){flush();const code=document.createElement("code");code.textContent=source.slice(cursor+1,end);parent.append(code);cursor=end+1;continue}}
+        if(source[cursor]==="@"&&source[cursor+1]==="["){const mention=source.slice(cursor).match(/^@\\[([^\\[\\]\\n]{1,120})\\]\\(cantrip-tab:([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\\)/);if(mention){flush();parent.append(mentionNode(mention[1],mention[2]));cursor+=mention[0].length;continue}}
         const image=source.slice(cursor).match(/^!\\[([^\\]]*)\\]\\(([^)\\s]+)(?:\\s+["'][^"']*["'])?\\)/);
         if(image){const preview=inlineImages&&image[2].startsWith("cantrip-preview://image/")?inlineImages.images.get(image[2].slice(24)):null,imageURL=/^https?:\\/\\//i.test(image[2])&&safeURL(image[2],true);flush();
           if(preview)parent.append(macImage(inlineImages.sessionID,preview,"preview",image[1]||preview.altText||"Generated image"));
@@ -3631,6 +3645,48 @@ private extension RemoteControlServer {
       const label=document.createElement("span");const noun=activities.length===1?"step":"steps";label.textContent=state==="running"?`Working · ${activities.length} ${noun}`:`${activities.length} ${noun}`;summary.append(label);disclosure.append(summary);
       const body=document.createElement("div");body.className="disclosure-body";for(const activity of activities)appendActivity(body,activity,messageID);disclosure.append(body);parent.append(disclosure)}
     function appendThinking(parent,text,messageID){if(!text)return;const details=remember(document.createElement("details"),`thinking:${messageID}`);details.className="disclosure";const summary=document.createElement("summary");const label=document.createElement("span");label.textContent="Reasoning";summary.append(label);const body=document.createElement("div");body.className="disclosure-body prose";body.textContent=text;details.append(summary,body);parent.append(details)}
+    // @-mention a tab: "@" at the start of a word suggests the open tabs this one may look into; a picked tab is sent as @[Label](cantrip-tab:<ID>) so the model acts on exactly that tab (TabMentions on the Mac).
+    const mentionTokenPattern=/@\\[([^\\[\\]\\n]{1,120})\\]\\(cantrip-tab:([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\\)/g,mentionOpeners="([{\\"'“‘";
+    function mentionLabel(title){const label=String(title??"").replace(/[\\[\\]]/g,"").split(/\\s+/).filter(Boolean).join(" ");return [...label].slice(0,60).join("").trim()||"tab"}
+    function plainMentions(text){return String(text??"").replace(mentionTokenPattern,(_,label)=>"@"+label)}
+    function mentionQuery(text,caret){text=String(text??"");if(caret==null)caret=text.length;if(caret<=0||caret>text.length)return null;const at=text.lastIndexOf("@",caret-1);if(at<0||at<caret-49)return null;
+      if(at>0){const previous=text[at-1];if(!/\\s/.test(previous)&&!mentionOpeners.includes(previous))return null}
+      const query=text.slice(at+1,caret);if(/[\\n\\r]/.test(query)||/^\\s/.test(query)||query.startsWith("["))return null;return {at,query}}
+    function mentionFold(text){return String(text??"").normalize("NFD").replace(/\\p{M}/gu,"").toLowerCase().split(/\\s+/).filter(Boolean).join(" ")}
+    function mentionProject(workdir){const path=String(workdir??"").replace(/\\/+$/,"");if(!path||path==="~"||/^\\/(Users|home)\\/[^/]+$/.test(path))return null;return path.split("/").pop()||null}
+    // The "@" at `at` starts a picked mention's "@Label": the list stays closed there.
+    function mentionPickedAt(text,at,picks){return picks.some(pick=>{const needle="@"+pick.label;if(!text.startsWith(needle,at))return false;const after=text[at+needle.length]??"";return !after||!/[\\p{L}\\p{N}_]/u.test(after)})}
+    // A label stands for one ID: a second picked tab with the same title gets its project, then a number.
+    function uniqueMentionLabel(row,picks){const base=mentionLabel(row.title),taken=new Set(picks.filter(pick=>pick.id!==row.id).map(pick=>pick.label));if(!taken.has(base))return base;
+      // The title is shortened so the suffix always fits in the label.
+      const suffixed=suffix=>mentionLabel([...base].slice(0,Math.max(1,60-[...suffix].length)).join("").trim()+suffix);
+      if(row.project&&[...row.project].length<30){const withProject=suffixed(` (${row.project})`);if(!taken.has(withProject))return withProject}
+      let number=2;while(taken.has(suffixed(` ${number}`)))number++;return suffixed(` ${number}`)}
+    function mentionCandidates(session){if(!session?.supportsTabMentions)return [];const titles=new Map(sessionItems.map(item=>[item.id,item.title]));
+      return sessionItems.filter(item=>item.mentionable===true&&item.id!==session.id).map(item=>({id:item.id,title:item.title||"Untitled",project:mentionProject(item.workdir),
+        parentTitle:item.parentID?titles.get(item.parentID)||null:null,isStreaming:Boolean(item.isStreaming),needsAnswer:(item.pendingInputCount||0)>0}))}
+    function mentionDetail(row,spoken=false){const parts=[],same=row.project&&row.project.toLowerCase()===String(row.title).toLowerCase();
+      if(row.parentTitle)parts.push(`${spoken?"child":"Child"} of ${row.parentTitle}`);if(row.project&&!same)parts.push(spoken?`project ${row.project}`:row.project);
+      if(row.needsAnswer)parts.push(spoken?"needs your answer":"Needs your answer");else if(row.isStreaming)parts.push(spoken?"working":"Working");return parts.join(spoken?", ":" · ")}
+    function matchMentions(query,candidates){const q=mentionFold(query),words=q.split(" ").filter(Boolean),rows=[];
+      candidates.forEach((row,index)=>{const title=mentionFold(row.title),titleWords=title.split(/[ \\-_/.]+/).filter(Boolean);let score=null;
+        if(!q||title.startsWith(q))score=0;else if(words.length&&words.every(word=>titleWords.some(part=>part.startsWith(word))))score=1;
+        else if(title.includes(q))score=2;else if(row.project&&mentionFold(row.project).startsWith(q))score=3;if(score!==null)rows.push({row,score,index})});
+      return rows.sort((a,b)=>a.score-b.score||a.index-b.index).slice(0,8).map(entry=>entry.row)}
+    // Longest labels first, so "@TV" can't take the start of "@TV Remote".
+    function encodeMentions(text,mentions){let result=String(text??"");
+      for(const mention of [...mentions].sort((a,b)=>[...b.label].length-[...a.label].length)){const needle="@"+mention.label,token=`@[${mentionLabel(mention.label)}](cantrip-tab:${mention.id})`;let from=0;
+        for(;;){const index=result.indexOf(needle,from);if(index<0)break;const before=index>0?result[index-1]:"",after=result[index+needle.length]??"";
+          if((before&&!/\\s/.test(before)&&!mentionOpeners.includes(before))||(after&&/[\\p{L}\\p{N}_\\[]/u.test(after))){from=index+needle.length;continue}
+          result=result.slice(0,index)+token+result.slice(index+needle.length);from=index+token.length}}
+      return result}
+    function mentionNode(label,id){const target=sessionItems.find(item=>item.mentionable===true&&String(item.id).toUpperCase()===String(id).toUpperCase()),node=document.createElement(target?"button":"span");
+      node.className="mention";node.textContent="@"+label;
+      if(target){node.type="button";node.title=`Open the tab “${target.title||label}”`;node.setAttribute("aria-label",`@${label}, mentioned tab. Opens it`);node.onclick=()=>openHandoffTab(target.id)}
+      else node.title="Mentioned tab";return node}
+    function appendMentionText(parent,text){const source=String(text??"");let last=0;
+      source.replace(mentionTokenPattern,(match,label,id,offset)=>{if(offset>last)parent.append(source.slice(last,offset));parent.append(mentionNode(label,id));last=offset+match.length;return match});
+      if(last<source.length)parent.append(source.slice(last))}
     function promptSlice(text,start,limit){let end=Math.min(text.length,start+limit);if(end<text.length&&text.charCodeAt(end-1)>=0xD800&&text.charCodeAt(end-1)<=0xDBFF)end--;return {text:text.slice(start,end),end}}
     function compactTokens(n){return n<1000?String(n):n<1e6?(n<1e5?(n/1000).toFixed(1):String(Math.round(n/1000)))+"k":(n/1e6).toFixed(1)+"M"}
     function tokenPercent(part,whole){if(!(whole>0))return "0%";const value=part/whole*100;return value>0&&value<1?"<1%":`${Math.round(value)}%`}
@@ -3640,8 +3696,8 @@ private extension RemoteControlServer {
       if(u.modelCalls>0)run.push(["Model calls",n(u.modelCalls)],["Input tokens",n(u.inputTokens)+(u.inputTokens>0&&u.cachedInputTokens>0?` (${tokenPercent(u.cachedInputTokens,u.inputTokens)} cached)`:"")],["Output tokens",n(u.outputTokens)]);if(u.latestContextTokens!=null&&u.latestContextTokens!==u.contextTokens)run.push(["Latest context",n(u.latestContextTokens)]);body.className="usage-table";
       for(const [title,rows] of [["When sent",sent],["This run",run]]){if(!rows.length)continue;const heading=document.createElement("div"),list=document.createElement("dl");heading.className="usage-title";heading.textContent=title;for(const [label,value] of rows){const term=document.createElement("dt"),detail=document.createElement("dd");term.textContent=label;detail.textContent=value;list.append(term,detail)}body.append(heading,list)}
       const note=document.createElement("p");note.className="muted";note.textContent="Token counts come from the model provider. “This message” includes memory and context Cantrip added, estimated at about 4 characters per token. Run totals include subagents and every step’s model call.";body.append(note);details.append(summary,body);parent.append(details)}
-    function appendPrompt(parent,text){const preview=document.createElement("div"),page=promptSlice(text,0,1200),long=page.end<text.length;preview.className=`prompt-preview${long?" clipped":""}`;preview.textContent=page.text;parent.append(preview);
-      if(long){const button=document.createElement("button");button.className="control quiet";button.textContent="Read full prompt";button.onclick=()=>readPrompt(text);parent.append(button)}}
+    function appendPrompt(parent,text){const preview=document.createElement("div"),page=promptSlice(text,0,1200),long=page.end<text.length;preview.className=`prompt-preview${long?" clipped":""}`;if(page.text.includes("](cantrip-tab:"))appendMentionText(preview,page.text);else preview.textContent=page.text;parent.append(preview);
+      if(long){const button=document.createElement("button");button.className="control quiet";button.textContent="Read full prompt";button.onclick=()=>readPrompt(text.includes("](cantrip-tab:")?plainMentions(text):text);parent.append(button)}}
     let readingPrompt="",promptStarts=[0],promptEnd=0;
     function renderPromptPage(){const page=promptSlice(readingPrompt,promptStarts[promptStarts.length-1],4000);promptEnd=page.end;$("promptPage").textContent=page.text;$("promptPage").scrollTop=0;$("promptNumber").textContent=`Page ${promptStarts.length}`;$("promptPrevious").disabled=promptStarts.length===1;$("promptNext").disabled=promptEnd===readingPrompt.length}
     function readPrompt(text){readingPrompt=text;promptStarts=[0];$("promptTitle").textContent="Full prompt";renderPromptPage();$("promptReader").showModal()}
@@ -3809,9 +3865,9 @@ private extension RemoteControlServer {
       catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
     $("pairButton").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();historyCache.clear();clearMacImages();expandedHistory.clear();historyPaused.clear();tabDrafts.clear();selected=null;$("draft").value="";token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
       catch(error){$("pairError").textContent=error.message}};
-    $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;const sessionID=selected,requestToken=token,mode=$("mode").value,body={text,mode};
+    $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;const sessionID=selected,requestToken=token,mode=$("mode").value,body={text:encodeMentions(text,currentMentions()),mode};
       if(mode==="auto"&&chatInputReply?.sessionID===sessionID&&chatInputReply.token===requestToken)body.inputRequestID=chatInputReply.id;
-      $("send").disabled=true;try{await action("messages",body);if(selected===sessionID&&token===requestToken){if($("draft").value.trim()===text)$("draft").value="";$("mode").value="auto"}}
+      $("send").disabled=true;try{await action("messages",body);if(selected===sessionID&&token===requestToken){if($("draft").value.trim()===text){$("draft").value="";tabMentionLists.delete(sessionID);renderMentionChips();syncMentions()}$("mode").value="auto"}}
       catch(error){$("actionError").textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false;scheduleUIReload()}};
     // Backend slash commands: the tab agent's commands, custom commands and skills, suggested while the composer holds a lone "/token".
     function slashToken(text){if(typeof text!=="string"||!text.startsWith("/")||/\\s/.test(text))return null;const query=text.slice(1);return query.includes("/")?null:query.toLowerCase()}
@@ -3901,6 +3957,61 @@ private extension RemoteControlServer {
         slashState.dismissed=$("draft").value;syncSlashCommands();return false}
       if(event.key==="Escape"){event.preventDefault();slashState.dismissed=$("draft").value;syncSlashCommands();return true}
       return false}
+    const mentionState={open:false,key:null,signature:"",dismissed:null,rows:[],highlighted:-1};let mentionPointer=false;
+    function currentMentions(){return selected?tabMentionLists.get(selected)||[]:[]}
+    function setMentions(list){if(!selected)return;if(list.length)tabMentionLists.set(selected,list);else tabMentionLists.delete(selected)}
+    function renderMentionChips(){const box=$("mentionChips"),list=currentMentions(),signature=list.map(mention=>`${mention.id} ${mention.label}`).join("\\n");if(box.dataset.signature===signature)return;box.dataset.signature=signature;
+      box.replaceChildren(...list.map(mention=>{const chip=document.createElement("span"),label=document.createElement("span"),remove=document.createElement("button");chip.className="mention-chip";chip.setAttribute("role","listitem");
+        label.textContent="@"+mention.label;label.title=`Sent with the ID of the tab “${mention.label}”`;remove.type="button";remove.textContent="×";remove.title="Remove mention";remove.setAttribute("aria-label",`Remove mention ${mention.label}`);
+        remove.onclick=()=>removeMention(mention);chip.append(label,remove);return chip}))}
+    // Deleting a mention's "@Label" text drops its chip.
+    function mentionToken(mention){return `@[${mentionLabel(mention.label)}](cantrip-tab:${mention.id})`}
+    // All picks are matched together, so "@TV" doesn't count where the text says "@TV Remote" and that is picked too.
+    function pruneMentions(){const list=currentMentions(),encoded=encodeMentions($("draft").value,list),kept=list.filter(mention=>encoded.includes(mentionToken(mention)));if(kept.length!==list.length)setMentions(kept);renderMentionChips()}
+    function removeMention(mention){const draft=$("draft"),token=mentionToken(mention);
+      draft.value=plainMentions(encodeMentions(draft.value,currentMentions()).split(token+" ").join("").split(token).join(""));
+      setMentions(currentMentions().filter(item=>!(item.id===mention.id&&item.label===mention.label)));renderMentionChips();draft.focus();syncMentions();setText($("mentionStatus"),`Removed mention ${mention.label}`)}
+    function mentionOption(row,index){const option=document.createElement("div"),cmd=document.createElement("span"),name=document.createElement("span"),detail=mentionDetail(row);
+      option.id=`mentionOption${index}`;option.className="slash-row mention-row";option.dataset.index=String(index);option.setAttribute("role","option");option.setAttribute("aria-selected","false");
+      option.setAttribute("aria-label",[row.title,mentionDetail(row,true)].filter(Boolean).join(", "));cmd.className="slash-cmd";name.className="slash-name";name.textContent=row.title;cmd.append(name);option.append(cmd);
+      if(detail){const node=document.createElement("span");node.className="slash-desc";node.textContent=detail;option.append(node)}
+      option.onclick=()=>chooseMention(index);return option}
+    function highlightMention(index){const draft=$("draft"),list=$("mentionList"),popover=$("mentionPopover");if(!mentionState.rows[index])index=-1;mentionState.highlighted=index;
+      for(const option of list.children)option.setAttribute("aria-selected",String(option.dataset.index===String(index)));
+      const active=index>=0?list.children[index]:null;if(!active){draft.removeAttribute("aria-activedescendant");return}
+      draft.setAttribute("aria-activedescendant",active.id);const top=active.offsetTop,bottom=top+active.offsetHeight;
+      if(top<popover.scrollTop)popover.scrollTop=top;else if(bottom>popover.scrollTop+popover.clientHeight)popover.scrollTop=bottom-popover.clientHeight}
+    function placeMentionPopover(){const popover=$("mentionPopover");if(popover.classList.contains("hidden"))return;const rect=$("draft").getBoundingClientRect(),view=window.visualViewport;
+      const top=view?view.offsetTop:0,bottom=view?view.offsetTop+view.height:innerHeight,below=bottom-rect.bottom-12,above=rect.top-top-12,upward=above>below&&below<200;
+      const limit=matchMedia("(max-width:620px)").matches?(bottom-top)*0.4:320;popover.classList.toggle("above",upward);
+      popover.style.maxHeight=`${Math.round(Math.max(88,Math.min(limit,upward?above:below)))}px`}
+    function syncMentions(){const draft=$("draft"),popover=$("mentionPopover"),list=$("mentionList"),session=slashSession(),text=draft.value;
+      const caret=draft.selectionStart===draft.selectionEnd?draft.selectionStart:null;
+      let found=session?.supportsTabMentions&&token&&document.activeElement===draft&&caret!==null?mentionQuery(text,caret):null;if(found&&mentionPickedAt(text,found.at,currentMentions()))found=null;const place=found?`${session.id} ${found.at}`:null;
+      if(mentionState.dismissed!==null&&mentionState.dismissed!==place)mentionState.dismissed=null;
+      const candidates=found?mentionCandidates(session):[],rows=found?matchMentions(found.query,candidates):[];
+      // A space with no match means the "@" was ordinary text.
+      const visible=Boolean(found)&&candidates.length>0&&mentionState.dismissed!==place&&(rows.length>0||!/\\s/.test(found.query));
+      popover.classList.toggle("hidden",!visible);mentionState.open=visible;
+      draft.setAttribute("aria-controls",visible?"mentionList":"slashList");draft.setAttribute("aria-expanded",String(visible||slashState.open));
+      if(!visible){if(mentionState.key!==null){Object.assign(mentionState,{key:null,signature:"",rows:[],highlighted:-1});list.replaceChildren();if(!slashState.open)draft.removeAttribute("aria-activedescendant");setText($("mentionStatus"),"")}return}
+      const key=`${place} ${found.query}`,signature=key+"\\n"+rows.map(row=>`${row.id} ${row.title} ${mentionDetail(row)}`).join("\\n");
+      if(mentionState.signature!==signature){const kept=mentionState.key===key&&mentionState.highlighted>=0?mentionState.rows[mentionState.highlighted]?.id:null;
+        mentionState.rows=rows;mentionState.signature=signature;list.replaceChildren(...rows.map(mentionOption));popover.scrollTop=0;
+        const index=kept?rows.findIndex(row=>row.id===kept):-1;mentionState.key=key;highlightMention(index>=0?index:rows.length?0:-1)}
+      setText($("mentionInfo"),rows.length?"":`No open tab matches “${found.query}”`);$("mentionInfo").classList.toggle("hidden",rows.length>0);placeMentionPopover();
+      setText($("mentionStatus"),rows.length?`${rows.length} tab${rows.length===1?"":"s"}`:"No matching tabs")}
+    function chooseMention(index){const row=mentionState.rows[index],draft=$("draft");if(!row)return;const text=draft.value,caret=draft.selectionStart??text.length,found=mentionQuery(text,caret);if(!found)return;
+      const label=uniqueMentionLabel(row,currentMentions()),rest=text.slice(caret),insert="@"+label+(rest.startsWith(" ")?"":" "),position=found.at+insert.length+(rest.startsWith(" ")?1:0);
+      draft.value=text.slice(0,found.at)+insert+rest;draft.focus();draft.setSelectionRange(position,position);
+      setMentions([...currentMentions().filter(item=>!(item.id===row.id&&item.label===label)),{id:row.id,label}]);renderMentionChips();syncMentions();setText($("mentionStatus"),`Mentioned ${row.title}`)}
+    // Returns true when the open tab list consumed the key; Return and Tab pick, Escape closes it for this "@".
+    function mentionKeydown(event){if(!mentionState.open||event.isComposing||event.altKey||event.ctrlKey||event.metaKey)return false;const rows=mentionState.rows;
+      if(event.key==="ArrowDown"||event.key==="ArrowUp"){if(!rows.length)return false;event.preventDefault();const step=event.key==="ArrowDown"?1:-1,current=mentionState.highlighted;
+        highlightMention(current<0?(step>0?0:rows.length-1):(current+step+rows.length)%rows.length);return true}
+      if((event.key==="Tab"||event.key==="Enter")&&!event.shiftKey){if(mentionState.highlighted<0)return false;event.preventDefault();chooseMention(mentionState.highlighted);return true}
+      if(event.key==="Escape"){event.preventDefault();const found=mentionQuery($("draft").value,$("draft").selectionStart);if(found&&selected)mentionState.dismissed=`${selected} ${found.at}`;syncMentions();return true}
+      return false}
     $("draft").addEventListener("input",syncSlashCommands);
     $("draft").addEventListener("focus",()=>{const session=slashSession();if(session?.supportsBackendCommands&&token&&!slashCache.has(session.id))loadSlashCommands(session);syncSlashCommands()});
     $("draft").addEventListener("blur",()=>setTimeout(()=>{if(!slashPointer&&document.activeElement!==$("draft"))syncSlashCommands()},0));
@@ -3908,9 +4019,16 @@ private extension RemoteControlServer {
     $("slashPopover").addEventListener("mousedown",event=>event.preventDefault());$("slashPopover").addEventListener("pointerdown",()=>{slashPointer=true});
     for(const name of ["pointerup","pointercancel"])$("slashPopover").addEventListener(name,()=>setTimeout(()=>{slashPointer=false;if(document.activeElement!==$("draft"))syncSlashCommands()},300));
     addEventListener("resize",placeSlashPopover);window.visualViewport?.addEventListener("resize",placeSlashPopover);
-    $("draft").onkeydown=event=>{if(slashKeydown(event))return;if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
+    $("draft").addEventListener("input",()=>{pruneMentions();syncMentions()});
+    $("draft").addEventListener("keyup",event=>{if(!["ArrowUp","ArrowDown","Enter","Tab","Escape","Shift"].includes(event.key))syncMentions()});
+    $("draft").addEventListener("click",syncMentions);$("draft").addEventListener("focus",syncMentions);
+    $("draft").addEventListener("blur",()=>setTimeout(()=>{if(!mentionPointer&&document.activeElement!==$("draft"))syncMentions()},0));
+    $("mentionPopover").addEventListener("mousedown",event=>event.preventDefault());$("mentionPopover").addEventListener("pointerdown",()=>{mentionPointer=true});
+    for(const name of ["pointerup","pointercancel"])$("mentionPopover").addEventListener(name,()=>setTimeout(()=>{mentionPointer=false;if(document.activeElement!==$("draft"))syncMentions()},300));
+    addEventListener("resize",placeMentionPopover);window.visualViewport?.addEventListener("resize",placeMentionPopover);
+    $("draft").onkeydown=event=>{if(mentionKeydown(event))return;if(slashKeydown(event))return;if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selectTab(data.session.id);refresh()};
-    $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");artifactThumbs.clear();if($("artifactsPanel").open)$("artifactsPanel").close();historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();selected=null;$("draft").value="";token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null);window.cantripGateway?.unpair?.()};
+    $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");artifactThumbs.clear();if($("artifactsPanel").open)$("artifactsPanel").close();historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();tabMentionLists.clear();renderMentionChips();selected=null;$("draft").value="";token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null);window.cantripGateway?.unpair?.()};
     // Home Tasks: the task list, each workspace's records (grouped when its list declares a groupField) and record details.
     const appleEpochSeconds=978307200,workspaceGroupsKey="cantrip.workspaceGroups.",otherGroupID=String.fromCharCode(1)+"other";
     let tasksState=null;

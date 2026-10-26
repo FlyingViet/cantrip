@@ -337,6 +337,15 @@ final class CantripHomeDelegations {
         }) else {
             throw CantripHomeError(404, "That project tab is no longer open.")
         }
+        // A child tab that stopped, failed or waits to merge would restart outside the child-tab
+        // caps, and its finished run would merge on its own.
+        if ChildTabStore.shared.isActiveChild(target.id), let child = ChildTabStore.shared.record(target.id),
+           !child.state.isRunning {
+            throw CantripHomeError(
+                409, "“\(target.title)” is a child tab that isn't running (\(child.statusLine.lowercased())), "
+                    + "so it can't take a handoff. Hand the work to its parent tab instead."
+            )
+        }
         let label = (proposal.summary ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let firstLine = prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt

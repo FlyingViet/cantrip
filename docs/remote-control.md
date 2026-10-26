@@ -674,6 +674,26 @@ still returned. The response is computed off the main thread and kept in
 memory for 10 minutes. `Cantrip.log` records only counts and timings
 (`voice-vocabulary:` lines).
 
+### Tab mentions
+
+Session snapshots carry two flags for `@` mentions
+([Mention a tab](sessions-and-council.md#mention-a-tab)):
+
+- `supportsTabMentions` on the session you're writing in: `true` for normal
+  tabs and Cantrip Home (the `home` snapshot), `false` for Private Local and
+  Home's background sessions. Clients show no mention list without it (older
+  hosts don't send it).
+- `mentionable` on each listed session: whether a composer may suggest it.
+  Private Local and Home are `false`; private tabs aren't listed at all.
+
+Clients send a picked mention inside the message `text` of the usual send
+request as `@[Label](cantrip-tab:<tab UUID>)` (Label is the tab title on one
+line, without `[` or `]`, at most 60 characters). The Mac checks every ID and
+tells the model which tab it means; an ID that isn't mentionable is reported
+as unavailable. User messages keep the token, so clients render it as
+*@Label*; queued items' `displayText`, thread quotes and tab previews already
+read *@Label*.
+
 ### Slash command suggestions
 
 Session snapshots (normal tabs and Cantrip Home) include

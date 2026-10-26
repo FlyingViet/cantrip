@@ -76,7 +76,7 @@ enum ThreadTags {
     /// A prompt as the user sees it (attached images become their captions).
     static func promptText(_ text: String, sessionID: UUID) -> String {
         let presentation = RemoteImageAttachments.presentation(text, sessionID: sessionID)
-        return presentation.replacesText ? presentation.text : text
+        return TabMentions.plain(presentation.replacesText ? presentation.text : text)
     }
 
     /// The start of a prompt on one line.

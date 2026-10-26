@@ -192,9 +192,10 @@ final class ChatSession: ObservableObject {
     private var plannedKey = ""
     /// Set while a child tab's branch merges into this tab's checkout; the queue waits for it.
     var childMergeHold = false
-    /// What this tab's model hears about other tabs with each message: its child tabs' status and
-    /// replies to its `cantrip tab ask` questions (SessionManager.tabContextNotes).
-    static var tabContextProvider: ((ChatSession) -> String?)?
+    /// What this tab's model hears about other tabs with each message: its child tabs' status,
+    /// replies to its `cantrip tab ask` questions and the tabs the message @mentions
+    /// (SessionManager.tabContextNotes; the String is the message).
+    static var tabContextProvider: ((ChatSession, String) -> String?)?
     @Published var pendingInputs: [InputRequestSnapshot] = [] {
         didSet { remoteMessageRevision = UUID() }
     }
@@ -508,7 +509,7 @@ final class ChatSession: ObservableObject {
         }
         let key = "\(reply.id.uuidString):\(reply.text.utf8.count)"
         if let cached = tabPreviewCache, cached.key == key { return cached.value }
-        let line = CantripHomeDelegations.briefOutcome(reply.text, limit: 140)
+        let line = CantripHomeDelegations.briefOutcome(TabMentions.plain(reply.text), limit: 140)
             .split(whereSeparator: \.isNewline).joined(separator: " ")
         let value = line.isEmpty ? nil : line
         tabPreviewCache = (key, value)
@@ -604,7 +605,7 @@ final class ChatSession: ObservableObject {
               !restored.isEmpty else { return }
         messages = Array(restored.suffix(30))
         if let first = messages.first(where: { $0.role == .user }) {
-            automaticTitle = String(first.text.prefix(34))
+            automaticTitle = String(TabMentions.plain(first.text).prefix(34))
         }
         Log.write("transcript: restored \(messages.count) messages (\(id.uuidString.prefix(8)))")
     }
@@ -2026,10 +2027,11 @@ final class ChatSession: ObservableObject {
         var includesAmbientContext = includesAmbientContext
         let automatedRun = isCantripHomeBackground && !isResume
             ? Self.cantripHomeAutomatedRun(for: prompt) : nil
-        // Child tabs' status and replies to this tab's questions to other tabs: short lines;
-        // the model reads a tab's conversation itself when it needs more (TabInsight).
+        // Child tabs' status, replies to this tab's questions to other tabs and the tabs this
+        // message @mentions: short lines; the model reads a tab's conversation itself when it
+        // needs more (TabInsight, TabMentions).
         if !isLocalPrivate, !isPrivate, !isResume, automatedRun == nil, !isCantripHomeBackground,
-           SlashInvocation(prompt) == nil, let notes = Self.tabContextProvider?(self) {
+           SlashInvocation(prompt) == nil, let notes = Self.tabContextProvider?(self, prompt) {
             preamble = notes + (preamble.map { "\n\n" + $0 } ?? "")
         }
         if isCantripHomeBackground, !isResume { cantripHomeRunLabel = automatedRun?.label }
@@ -2072,7 +2074,7 @@ final class ChatSession: ObservableObject {
         runningBackendKind = backendKind
         let isFirstOfConversation = messages.isEmpty && automatedRun == nil
         let previousTurns = automatedRun == nil ? completedConversationTurns() : []
-        if automaticTitle == "New chat" { automaticTitle = String(prompt.prefix(34)) }
+        if automaticTitle == "New chat" { automaticTitle = String(TabMentions.plain(prompt).prefix(34)) }
         // A combined turn shows each queued message as the user wrote it, in one run.
         var shownTexts = [displayText ?? prompt]
         if let queuedItem, !combinedItems.isEmpty {
@@ -2432,7 +2434,7 @@ final class ChatSession: ObservableObject {
         )
         let isFirstOfConversation = messages.isEmpty
         let previousTurns = completedConversationTurns()
-        if automaticTitle == "New chat" { automaticTitle = String(prompt.prefix(34)) }
+        if automaticTitle == "New chat" { automaticTitle = String(TabMentions.plain(prompt).prefix(34)) }
         appendRunMessage(ChatMessage(role: .user, text: prompt))
         isStreaming = true
         councilRunning = true
