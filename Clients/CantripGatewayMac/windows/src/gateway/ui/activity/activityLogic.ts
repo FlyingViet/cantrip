@@ -7,6 +7,7 @@ import type {
   HomeBackgroundHandoff, HomeBackgroundQueuedRun, HomeBackgroundRun, HomeBackgroundSnapshot, InputDecision, InputRequest,
   RemoteMessage, RemoteSubagent,
 } from "../../api/types";
+import { plainMentions } from "../../state/tabMentions";
 
 export const APPLE_EPOCH = 978307200;
 
@@ -438,7 +439,7 @@ export function handoffTabTitle(handoff: HandoffLike): string {
 }
 
 export function handoffSummary(handoff: HandoffLike): string {
-  return trimmed(handoff.summary) || trimmed(handoff.prompt);
+  return plainMentions(trimmed(handoff.summary) || trimmed(handoff.prompt));
 }
 
 // MARK: Queue (CantripQueueView / PromptText)
@@ -467,6 +468,7 @@ export function queuePositionLabel(index: number): string {
   return index === 0 ? "Next in queue" : `Queue position ${index + 1}`;
 }
 
+/** A queued message as people read it (mention tokens as "@Label"). */
 export function queuedText(prompt: { text: string; displayText?: string }): string {
-  return prompt.displayText ?? prompt.text;
+  return plainMentions(prompt.displayText ?? prompt.text);
 }

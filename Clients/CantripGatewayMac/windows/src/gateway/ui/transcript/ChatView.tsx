@@ -8,6 +8,9 @@ import { bridge, shortcut } from "../../bridge";
 import { formatBytes, liveBackgroundSubagents, liveForegroundSubagents } from "../../state/format";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
+import {
+  addMention, encodeMentions, insertMention, remainingMentions, removeMentionText, supportsMentions, type TabMention,
+} from "../../state/tabMentions";
 import { threadLines } from "../../state/threads";
 import { BackgroundTaskButton, PinnedSubagents } from "../activity/Subagents";
 import { QueueButton } from "../activity/Queue";
@@ -25,10 +28,13 @@ import { chatQuestion, composerAcceptsText, composerPlaceholder, InputTranscript
 import { ChildBanner } from "./ChildTabs";
 import { MessageRow, ThinkingIndicator } from "./Message";
 import { useSlashSuggestions } from "./SlashSuggestions";
+import { MentionChips, useTabMentions } from "./TabMentions";
 import "./transcript.css";
 
 interface Draft {
   text: string;
+  /** Tabs picked from the "@" list whose "@Label" is in `text`; sent as tokens. */
+  mentions: TabMention[];
   images: ImageDraft[];
   files: FileDraft[];
   video: VideoDraft | null;
@@ -36,7 +42,7 @@ interface Draft {
 
 /** Drafts per session (like the Mac's per-tab @State drafts); they never follow a switch. */
 const drafts = new Map<string, Draft>();
-const emptyDraft = (): Draft => ({ text: "", images: [], files: [], video: null });
+const emptyDraft = (): Draft => ({ text: "", mentions: [], images: [], files: [], video: null });
 
 export function ChatView(props: { isTab: boolean }): JSX.Element {
   const session = remote.selectedSession.value;
@@ -361,11 +367,22 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [focused, setFocused] = useState(false);
+  /** The text field's caret, or null while a range is selected (mention suggestions follow it). */
+  const [caret, setCaret] = useState<number | null>(null);
+  /** Where the caret goes once the text a pick inserted is on screen. */
+  const pendingCaret = useRef<number | null>(null);
   const abort = useRef<AbortController | null>(null);
   const draft = drafts.get(key) ?? emptyDraft();
   const update = (change: Partial<Draft>) => {
-    drafts.set(key, { ...(drafts.get(key) ?? emptyDraft()), ...change });
+    const next = { ...(drafts.get(key) ?? emptyDraft()), ...change };
+    // Deleting a mention's "@Label" text drops it.
+    if (change.text !== undefined && change.mentions === undefined && next.mentions.length) next.mentions = remainingMentions(next.mentions, next.text);
+    drafts.set(key, next);
     setVersion((value) => value + 1);
+  };
+  const syncCaret = () => {
+    const node = textRef.current;
+    setCaret(node && node.selectionStart === node.selectionEnd ? node.selectionStart : null);
   };
 
   const question = chatQuestion(session);
@@ -397,7 +414,21 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
     if (!node) return;
     node.style.height = "auto";
     node.style.height = `${Math.min(node.scrollHeight, 12 * 20 + 24)}px`;
+    const position = pendingCaret.current;
+    if (position !== null && node.value === (drafts.get(key) ?? emptyDraft()).text) {
+      pendingCaret.current = null;
+      node.focus();
+      node.setSelectionRange(position, position);
+    }
   });
+
+  // Caret moves without input (arrow keys, clicks, selection) move the mention query too.
+  useEffect(() => {
+    const node = textRef.current;
+    if (!node) return;
+    node.addEventListener("selectionchange", syncCaret);
+    return () => node.removeEventListener("selectionchange", syncCaret);
+  }, []);
 
   const addFiles = async (files: File[]) => {
     if (!sessionID || pickerDisabled) return;
@@ -453,14 +484,16 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
       void alertDialog("Attachment", "Commands starting with / or ! can't include a video or files.");
       return;
     }
-    const body: SendMessageRequest = { text, mode };
+    // Picked mentions travel inside the text as @[Label](cantrip-tab:<ID>); the draft keeps the plain text.
+    const wireText = supportsMentions(session) && current.mentions.length ? encodeMentions(text, current.mentions) : text;
+    const body: SendMessageRequest = { text: wireText, mode };
     if (mode === "auto" && question) {
       if (!session.supportsChatInputReplies) {
         if (attachments) { void alertDialog("Attachment", "Update Cantrip on your Mac to attach files to a reply."); return; }
         setSubmitting(true);
         try {
-          await remote.answerInput(session.id, question.id, { decision: "submit", text });
-          update({ text: "" });
+          await remote.answerInput(session.id, question.id, { decision: "submit", text: wireText });
+          update({ text: "", mentions: [] });
         } catch (error) {
           void alertDialog("Message not confirmed", `${(error as Error).message}\n\nYour draft has been kept.`);
         } finally {
@@ -483,8 +516,10 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
       const sentImages = new Set(current.images.map((image) => image.id));
       const sentFiles = new Set(current.files.map((file) => file.id));
       for (const image of current.images) URL.revokeObjectURL(image.preview);
+      const keptText = after.text === originalText ? "" : after.text;
       drafts.set(key, {
-        text: after.text === originalText ? "" : after.text,
+        text: keptText,
+        mentions: keptText ? remainingMentions(after.mentions, keptText) : [],
         images: after.images.filter((image) => !sentImages.has(image.id)),
         files: after.files.filter((file) => !sentFiles.has(file.id)),
         video: after.video?.id === current.video?.id ? null : after.video,
@@ -530,10 +565,30 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
     },
   });
 
+  const mentions = useTabMentions({
+    session, text: draft.text, caret, focused, enabled: ready && acceptsText && !busy,
+    onPick: (candidate, at, end) => {
+      const current = drafts.get(key) ?? emptyDraft();
+      const picked = insertMention(candidate.title, at, end, current.text);
+      update({ text: picked.text, mentions: addMention(remainingMentions(current.mentions, picked.text), { id: candidate.id, label: picked.label }) });
+      pendingCaret.current = picked.caret;
+      setCaret(picked.caret);
+    },
+  });
+  const removeMention = (mention: TabMention) => {
+    const current = drafts.get(key) ?? emptyDraft();
+    const text = removeMentionText(current.text, mention, current.mentions);
+    const rest = current.mentions.filter((item) => !(item.id === mention.id && item.label === mention.label));
+    update({ text, mentions: remainingMentions(rest, text) });
+    pendingCaret.current = text.length;
+  };
+  const mentionsOn = supportsMentions(session);
+
   const sendLabel = nav.deliveryMode.value === "auto" && question ? "Send reply" : "Send prompt";
   return (
     <>
       <Attachments draft={draft} disabled={busy} update={update} importing={importing} />
+      <MentionChips mentions={draft.mentions} disabled={busy} onRemove={removeMention} />
       {progress ? (
         <div class="upload-progress" role="status">
           <div class="progress"><div style={{ width: `${Math.round(progress.fraction * 100)}%` }} /></div>
@@ -543,6 +598,8 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
       <div class="composer" data-id="chat.composer">
         {slash.popover}
         {slash.announcer}
+        {mentions.popover}
+        {mentions.announcer}
         {session && question ? <QuestionPanel session={session} question={question} busy={busy || remote.isMutating.value} maxHeight={Math.min(360, Math.max(72, props.height * 0.45))} /> : null}
         <div class="composer-row">
           <button type="button" class="composer-attach" aria-label="Attach" title="Attach photos, a video or files" disabled={pickerDisabled}
@@ -558,17 +615,21 @@ function Composer(props: { session: RemoteSessionSummary | null; isTab: boolean;
           <textarea ref={textRef} class="composer-text" rows={1} value={draft.text} data-id="chat.message"
             placeholder={composerPlaceholder(question, recipient)} aria-label={`Message ${recipient}`}
             disabled={!ready || !acceptsText || submitting}
-            title="Enter sends. Shift+Enter adds a new line."
-            {...slash.fieldProps}
-            onFocus={() => setFocused(true)}
+            title={`Enter sends. Shift+Enter adds a new line.${mentionsOn ? " Type @ to mention a tab." : ""}`}
+            {...(mentions.open ? mentions.fieldProps : slash.fieldProps)}
+            onFocus={() => { setFocused(true); syncCaret(); }}
             onBlur={() => setFocused(false)}
-            onInput={(event) => update({ text: (event.target as HTMLTextAreaElement).value })}
+            onInput={(event) => { update({ text: (event.target as HTMLTextAreaElement).value }); syncCaret(); }}
+            onSelect={syncCaret}
+            onKeyUp={syncCaret}
+            onClick={syncCaret}
             onPaste={(event) => {
               const files = pastedFiles(event.clipboardData);
               if (files.length) { event.preventDefault(); void addFiles(files); }
             }}
             onKeyDown={(event) => {
               if (slash.onKeyDown(event)) return;
+              if (mentions.onKeyDown(event)) return;
               if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.isComposing) {
                 event.preventDefault();
                 void send();

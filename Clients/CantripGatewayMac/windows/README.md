@@ -28,6 +28,12 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 - **Slash commands.** Type `/` in a tab's or Home's composer to see the tab backend's
   commands, custom commands and skills, as the Mac lists them (needs a Cantrip version that
   offers them; older ones keep the composer as it was).
+- **Mention a tab.** Type `@` at the start of a word in Home's or a tab's composer to pick
+  one of the Mac's open tabs (filtered as you type; ↑/↓, Return or Tab picks, Esc closes).
+  The pick shows as "@Tab name" with a chip, and the message carries that tab's ID so Cantrip
+  reads, asks or hands work to exactly that tab. Mentions in the conversation show as
+  "@Tab name" and open the tab when clicked. Private tabs are never offered (needs a Cantrip
+  version that supports mentions; older ones show no list).
 - **Attachments.** Up to 4 images, a video and up to 5 files per message (pasted into the
   message box, dropped or picked), uploaded resumably the way the Mac app sends them. Copied
   text still pastes as text, even when Excel or Word put a picture of it on the clipboard too.

@@ -12,7 +12,9 @@ import {
 } from "../../state/threads";
 import { Icon } from "../icons";
 import { mascotDisplayName } from "../pip/prefs";
+import { plainMentions } from "../../state/tabMentions";
 import { Markdown } from "./Markdown";
+import { MentionText } from "./TabMentions";
 
 export interface ThreadQuoteProps {
   sessionID: string;
@@ -33,7 +35,7 @@ export function ThreadQuote(props: ThreadQuoteProps): JSX.Element {
       <div class="thread-quote-row">
         <span class="thread-arm" aria-hidden="true" />
         <button type="button" class="thread-quote" aria-label={`${tagLabel(props.tag)}. Opens the thread`} title="Open the thread" onClick={open}>
-          <span class="thread-quote-text">{props.tag.prompt}</span>
+          <span class="thread-quote-text">{plainMentions(props.tag.prompt)}</span>
         </button>
       </div>
       <ThreadLaneRow continues={props.continues}>{props.children}</ThreadLaneRow>
@@ -129,7 +131,7 @@ export function ThreadBody(props: { focus: ThreadFocus; load: ThreadLoad | undef
   if (load?.state === "loaded") return <ThreadMessages thread={load.thread} assistantName={props.assistantName} />;
   return (
     <>
-      <p class="thread-mine selectable">{focus.prompt}</p>
+      <p class="thread-mine selectable"><MentionText text={focus.prompt} /></p>
       {load?.state === "failed" ? (
         <div class="thread-failed">
           <p class="child-note selectable" role="alert">Couldn't load this thread: {load.error}</p>
@@ -145,10 +147,10 @@ export function ThreadMessages(props: { thread: RemoteThread; assistantName: str
   const { thread } = props;
   return (
     <>
-      <p class="thread-mine selectable" data-message-id={thread.prompt.id}>{thread.prompt.text}</p>
+      <p class="thread-mine selectable" data-message-id={thread.prompt.id}><MentionText text={thread.prompt.text} /></p>
       {thread.hasEarlier ? <p class="child-note thread-note">Earlier messages in this thread aren't shown.</p> : null}
       {thread.messages.map((message, index) => message.role === "user" ? (
-        <p key={message.id || index} class="thread-mine selectable" data-message-id={message.id}>{message.text}</p>
+        <p key={message.id || index} class="thread-mine selectable" data-message-id={message.id}><MentionText text={message.text} /></p>
       ) : (
         <div key={message.id || index} class="thread-theirs" data-message-id={message.id}>
           <span class="child-who">{speaker(message, props.assistantName)}</span>

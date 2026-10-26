@@ -5,6 +5,7 @@ import { computed, effect, signal, untracked } from "@preact/signals";
 import type { RemoteMessage } from "../../api/types";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
+import { plainMentions } from "../../state/tabMentions";
 import * as voice from "./controller";
 import { SpeechChunker } from "./speech";
 import { voiceState } from "./state";
@@ -28,9 +29,9 @@ export function isReply(message: RemoteMessage): boolean {
   return message.role !== "user" && message.role !== "error" && message.role !== "handoff" && message.role !== "freshStart";
 }
 
-/** `presentedText`: the display text when the Mac sent one. */
+/** `presentedText`: the display text when the Mac sent one; tab mentions read (and are spoken) as "@Label". */
 export function presentedText(message: RemoteMessage): string {
-  return message.displayText ?? message.text ?? "";
+  return plainMentions(message.displayText ?? message.text ?? "");
 }
 
 /**

@@ -11,6 +11,7 @@ import { now } from "../../state/clock";
 import { clockTime, compactTokens, elapsed, isBusy, subagentLive } from "../../state/format";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
+import { mentionSafeCut, plainMentions } from "../../state/tabMentions";
 import { threadReplies, threadTag, type ThreadLine } from "../../state/threads";
 import { SubagentStack } from "../activity/Subagents";
 import { Icon, StatusIcon } from "../icons";
@@ -18,6 +19,7 @@ import { Spinner, toast } from "../kit";
 import { openViewer } from "../viewer";
 import { ChildResultCard } from "./ChildTabs";
 import { MCPAppStack } from "./MCPApp";
+import { MentionText } from "./TabMentions";
 import { Markdown, type InlineImages } from "./Markdown";
 import { ThreadLaneRow, ThreadQuote, ThreadRepliesButton } from "./ThreadTags";
 
@@ -97,13 +99,13 @@ const PREVIEW_LIMIT = 1200;
 
 function PromptText(props: { text: string }): JSX.Element {
   const long = props.text.length > PREVIEW_LIMIT;
-  const preview = long ? props.text.slice(0, PREVIEW_LIMIT) : props.text;
+  const preview = long ? props.text.slice(0, mentionSafeCut(props.text, PREVIEW_LIMIT)) : props.text;
   return (
     <div class="prompt-text">
-      <div class={`selectable${long ? " clipped" : ""}`}>{preview}</div>
+      <div class={`selectable${long ? " clipped" : ""}`}><MentionText text={preview} /></div>
       {long ? (
         <button type="button" class="read-full" title="Only the preview is shortened. The complete prompt is sent."
-          onClick={() => { nav.sheet.value = { kind: "promptReader", title: "Full prompt", text: props.text }; }}>
+          onClick={() => { nav.sheet.value = { kind: "promptReader", title: "Full prompt", text: plainMentions(props.text) }; }}>
           Read full prompt
         </button>
       ) : null}
@@ -349,7 +351,7 @@ function HandoffCard(props: { handoff: RemoteDelegation }): JSX.Element {
     queued: "Queued in tab", running: "Working in tab", completed: "Done in tab", failed: "Failed in tab", cancelled: "Stopped",
   } as Record<string, string>)[handoff.status] ?? "Handed off";
   const tab = trimmed(handoff.tabTitle) || "Project tab";
-  const summary = trimmed(handoff.summary) || trimmed(handoff.prompt);
+  const summary = plainMentions(trimmed(handoff.summary) || trimmed(handoff.prompt));
   const active = handoff.status === "queued" || handoff.status === "running";
   const time = elapsed(handoff.startedAt, handoff.finishedAt, active ? now.value / 1000 : undefined);
   return (
@@ -374,8 +376,8 @@ function HandoffResultCard(props: { result: RemoteHandoffResult }): JSX.Element 
   const { result } = props;
   const statusText = RESULT_TEXT[result.state] ?? "Handoff update";
   const tab = trimmed(result.tabTitle) || "Project tab";
-  const summary = trimmed(result.summary);
-  const detail = trimmed(result.detail);
+  const summary = plainMentions(trimmed(result.summary));
+  const detail = plainMentions(trimmed(result.detail));
   let time = "";
   if (result.state === "working" && !result.finishedAt && result.startedAt) time = elapsed(result.startedAt, undefined, now.value / 1000);
   else if (result.finishedAt) {

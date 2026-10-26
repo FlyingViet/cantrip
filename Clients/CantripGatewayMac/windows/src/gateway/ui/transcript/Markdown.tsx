@@ -2,6 +2,8 @@
 // cantrip-preview:// image handling), so Windows shows exactly what the Mac's clients show.
 import type { ComponentChildren, JSX } from "preact";
 import { bridge } from "../../bridge";
+import { MENTION_TOKEN_AT_START, plainMentions } from "../../state/tabMentions";
+import { MentionPill } from "./TabMentions";
 
 export interface PreviewImage {
   id: string;
@@ -71,12 +73,20 @@ export function inline(source: string, images: InlineImages | null, key = "i"): 
       const end = source.indexOf("`", cursor + 1);
       if (end >= 0) {
         flush();
-        out.push(<code key={id()}>{source.slice(cursor + 1, end)}</code>);
+        out.push(<code key={id()}>{plainMentions(source.slice(cursor + 1, end))}</code>);
         cursor = end + 1;
         continue;
       }
     }
     const rest = source.slice(cursor);
+    // A tab mention token (@[Label](cantrip-tab:<ID>)) reads as "@Label".
+    const mention = char === "@" ? rest.match(MENTION_TOKEN_AT_START) : null;
+    if (mention) {
+      flush();
+      out.push(<MentionPill key={id()} label={mention[1]} id={mention[2]} />);
+      cursor += mention[0].length;
+      continue;
+    }
     const image = char === "!" ? rest.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/) : null;
     if (image) {
       flush();
@@ -213,7 +223,7 @@ function blocks(source: string, images: InlineImages | null, key: string): Compo
       const code: string[] = [];
       while (index < lines.length && !lines[index].trim().startsWith(fence[1])) code.push(lines[index++]);
       if (index < lines.length) index++;
-      out.push(<CodeBlock key={id()} code={code.join("\n")} language={fence[2] ?? ""} />);
+      out.push(<CodeBlock key={id()} code={plainMentions(code.join("\n"))} language={fence[2] ?? ""} />);
       continue;
     }
     const heading = trimmed.match(/^(#{1,6})\s+(.+?)\s*#*$/);
