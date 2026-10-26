@@ -2168,6 +2168,7 @@ final class RemoteControlServer {
             result["messages"] = session.messages.map {
                 messageSnapshot($0, sessionID: session.id, home: home, thread: tags[$0.id])
             }
+            result["threadReplies"] = ThreadTags.replyCountsObject(in: session.messages, sessionID: session.id)
         }
         return result
     }
@@ -2289,9 +2290,12 @@ final class RemoteControlServer {
         let plans = session.queuePlans.mapValues(\.snapshot)
         let home = HomeReplyView(session)
         let tags = ThreadTags.tags(in: session.messages, range: candidateStart..<end, sessionID: sessionID)
+        // For every loaded page: a client updates prompts it cached from older pages too.
+        let replyCounts = ThreadTags.replyCountsObject(in: session.messages, sessionID: sessionID)
         // Full-message sizing and encoding belong off the main actor and tab-list queue.
         sendEncoded(status: status, on: connection, queue: detailEncodingQueue) {
             var result = summary
+            result["threadReplies"] = replyCounts
             var messages: [[String: Any]] = []
             if includesCompleteExchanges {
                 messages = candidates.map { self.messageSnapshot($0, sessionID: sessionID, home: home, thread: tags[$0.id]) }
@@ -2587,8 +2591,8 @@ private extension RemoteControlServer {
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="dark light"><title>Cantrip Remote</title>
     <style>
-    :root{color-scheme:light dark;--chrome:rgba(240,240,242,.72);--surface:rgba(0,0,0,.045);--surface-2:rgba(0,0,0,.075);--line:rgba(0,0,0,.12);--text:rgba(20,20,24,.92);--secondary:rgba(20,20,24,.62);--tertiary:rgba(20,20,24,.42);--accent:#4169d8;--green:#28a745;--orange:#d97900;--red:#dc3545}
-    @media(prefers-color-scheme:dark){:root{--chrome:rgba(44,45,50,.72);--surface:rgba(255,255,255,.045);--surface-2:rgba(255,255,255,.09);--line:rgba(255,255,255,.11);--text:rgba(255,255,255,.92);--secondary:rgba(255,255,255,.62);--tertiary:rgba(255,255,255,.38);--accent:#6b8cff;--green:#35c759;--orange:#ff9f0a;--red:#ff453a}}
+    :root{color-scheme:light dark;--chrome:rgba(240,240,242,.72);--surface:rgba(0,0,0,.045);--surface-2:rgba(0,0,0,.075);--line:rgba(0,0,0,.12);--text:rgba(20,20,24,.92);--secondary:rgba(20,20,24,.62);--tertiary:rgba(20,20,24,.42);--accent:#4169d8;--green:#28a745;--orange:#d97900;--red:#dc3545;--thread-line:rgba(20,20,24,.32);--thread-gray:#e9e9eb;--thread-scrim:rgba(255,255,255,.42)}
+    @media(prefers-color-scheme:dark){:root{--chrome:rgba(44,45,50,.72);--surface:rgba(255,255,255,.045);--surface-2:rgba(255,255,255,.09);--line:rgba(255,255,255,.11);--text:rgba(255,255,255,.92);--secondary:rgba(255,255,255,.62);--tertiary:rgba(255,255,255,.38);--accent:#6b8cff;--green:#35c759;--orange:#ff9f0a;--red:#ff453a;--thread-line:rgba(255,255,255,.36);--thread-gray:#2c2c30;--thread-scrim:rgba(0,0,0,.42)}}
     *{box-sizing:border-box}html,body{min-height:100%;background:transparent}body{margin:0;color:var(--text);font:14px -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
     button,select,input,textarea{font:inherit;color:inherit}button{cursor:pointer}.hidden{display:none!important}.grow{flex:1;min-width:0}.muted{color:var(--secondary);font-size:12px}
     #app{min-height:100vh}.workspace{position:sticky;top:0;z-index:4;background:var(--chrome);border-bottom:1px solid var(--line);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
@@ -2634,7 +2638,15 @@ private extension RemoteControlServer {
     .child-lane,.child-tag{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600}
     .child-lane{color:var(--child-lane);background:color-mix(in srgb,var(--child-lane) 13%,transparent)}.child-tag{color:var(--secondary);background:var(--surface-2)}.child-tag>span{min-width:0;max-width:52ch;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
     .child-tag:before{content:"↩";content:"↩"/""}.child-tag:after{content:"⌄";content:"⌄"/"";transition:transform .12s}.child-thread[open] .child-tag:after{transform:rotate(180deg)}
-    .child-thread-body{display:grid;gap:8px;margin:8px 0 2px 4px;padding-left:12px;border-left:2px solid var(--line)}.thread-tag{margin-bottom:6px}.thread-tag>summary{width:fit-content;max-width:100%;min-height:24px}.thread-reply{display:grid;justify-items:start;gap:2px;max-width:86%}.thread-reply .child-who{padding-left:11px}.thread-bubble{padding:6px 11px;border-radius:14px;background:var(--surface-2)}
+    .child-thread-body{display:grid;gap:8px;margin:8px 0 2px 4px;padding-left:12px;border-left:2px solid var(--line)}
+    .thread-link{position:relative;width:fit-content;max-width:min(78%,440px);padding-bottom:6px}.thread-bracket{position:absolute;left:-12px;top:calc(50% - 3px);width:9px;height:calc(50% + 15px);border:2px solid var(--thread-line);border-right:0;border-radius:9px 0 0 9px;pointer-events:none}
+    .thread-quote{display:block;max-width:100%;margin:0;padding:4px 10px;border:0;border-radius:13px;background:#3a5fcd;color:#fff;font:inherit;font-size:12px;font-weight:500;line-height:1.4;text-align:left;cursor:pointer}.thread-quote>span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}.thread-quote:hover{background:#3358c4}
+    .thread-replies{display:inline-flex;align-items:center;min-height:24px;margin-top:3px;padding:0;border:0;background:none;color:var(--secondary);font:inherit;font-size:12px;font-weight:600;cursor:pointer}.thread-replies:hover{color:var(--text)}
+    #threadView{width:min(calc(100% - 24px),720px);max-width:none;height:min(calc(100% - 32px),920px);max-height:none;padding:0;border:0;background:transparent;color:var(--text);overflow:hidden}#threadView[open]{display:flex;flex-direction:column}#threadView::backdrop{background:var(--thread-scrim);-webkit-backdrop-filter:blur(22px) saturate(1.4);backdrop-filter:blur(22px) saturate(1.4)}
+    .thread-bar{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;padding:6px 4px}.thread-heading{grid-column:2;display:grid;justify-items:center;gap:1px}#threadTitle{font-size:15px}#threadCount{color:var(--secondary);font-size:12px}
+    #threadClose{grid-column:3;width:40px;height:40px;padding:0;border:0;border-radius:50%;background:var(--chrome);color:var(--text);font-size:15px;font-weight:700;cursor:pointer;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+    #threadBody{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:6px 14px 28px}.thread-bubble{max-width:82%;margin:0;padding:8px 13px;border-radius:18px;line-height:1.45;overflow-wrap:anywhere}.thread-bubble.mine{align-self:flex-end;background:#3a5fcd;color:#fff;white-space:pre-wrap}
+    .thread-bubble.pip{align-self:flex-start;background:var(--thread-gray)}.thread-bubble.pip>:first-child{margin-top:0}.thread-bubble.pip>:last-child{margin-bottom:0}.thread-who{align-self:flex-start;margin:6px 0 -4px 13px;color:var(--secondary);font-size:11px;font-weight:600}.thread-note{align-self:center;text-align:center}.thread-retry{align-self:center}
     .child-prompt{justify-self:end;max-width:86%;margin:0;padding:6px 11px;border-radius:14px;background:#3a5fcd;color:#fff;font-size:13px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
     .child-reply p{margin:0;line-height:1.45;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.child-who{display:block;color:var(--secondary);font-size:11px;font-weight:600}
     .child-files{margin:0;color:var(--secondary);font-size:12px;line-height:1.7;font-variant-numeric:tabular-nums}.child-files code{padding:0 4px;border-radius:4px;background:var(--surface-2);font-size:11.5px}
@@ -2807,6 +2819,7 @@ private extension RemoteControlServer {
     </div></form></dialog>
     <dialog id="promptReader" aria-labelledby="promptTitle"><strong id="promptTitle">Full prompt</strong>
     <pre id="promptPage"></pre><div class="tab-actions"><button id="promptPrevious" class="control">Previous</button><span id="promptNumber"></span><button id="promptNext" class="control">Next</button><button id="promptDownload" class="control">Download all</button><button id="promptDone" class="control">Done</button></div></dialog>
+    <dialog id="threadView" aria-labelledby="threadTitle"><div class="thread-bar"><div class="thread-heading"><strong id="threadTitle">Thread</strong><span id="threadCount"></span></div><button id="threadClose" type="button" aria-label="Close thread">✕</button></div><div id="threadBody"></div></dialog>
     <dialog id="tasksPanel" aria-labelledby="tasksTitle"><div class="tasks-bar"><button id="tasksBack" type="button" class="control hidden" aria-label="Back to tasks">‹ Tasks</button><strong id="tasksTitle" class="grow" tabindex="-1">Tasks</strong><button id="tasksDone" type="button" class="control">Done</button></div>
     <div id="tasksError" role="alert"></div><input id="tasksSearch" class="hidden" type="search" autocomplete="off" aria-label="Search records"><div id="tasksBody"></div><div id="tasksStatus" class="sr-only" role="status" aria-live="polite"></div></dialog>
     <dialog id="artifactsPanel" aria-labelledby="artifactsTitle"><div class="tasks-bar"><strong id="artifactsTitle" class="grow" tabindex="-1">Artifacts</strong><button id="artifactsCreate" type="button" class="control">Create in Chat</button><button id="artifactsDone" type="button" class="control">Done</button></div><div id="artifactsError" role="alert"></div><div id="artifactsBody"></div><div id="artifactsStatus" class="sr-only" role="status" aria-live="polite"></div></dialog>
@@ -3683,22 +3696,37 @@ private extension RemoteControlServer {
       for(const [action,label] of [["resolve","Keep both, then run the tests (Recommended)"],["keepParent",`Keep ${child.baseBranch?`${child.baseBranch}'s`:"the parent's"} version`],["keepChild","Keep the child's version"],["leave","Leave it unmerged; I'll look"]]){
         if(!(child.actions||[]).includes(action))continue;const button=document.createElement("button");button.type="button";button.className=`control${action==="resolve"?" primary":""}`;button.textContent=label;button.onclick=()=>childAction(sessionID,child,action,button);options.append(button)}
       box.append(options);return box}
-    // Thread tags (Home): a reply from a different thread than the message above names the prompt that
-    // started its thread. It opens that thread inline, fetched from the Mac so it works before older
-    // messages load: the prompt, then the earlier messages in the thread (unrelated ones skipped).
-    const threadPages=new Map();
-    function threadTag(sessionID,message){const thread=message.thread,details=remember(document.createElement("details"),`thread:${message.id}`),summary=document.createElement("summary"),tag=document.createElement("span"),label=document.createElement("span"),body=document.createElement("div");
-      details.className="child-thread thread-tag";summary.setAttribute("aria-label",`Reply to: ${thread.prompt}`);tag.className="child-tag";label.textContent=thread.prompt;tag.append(label);summary.append(tag);body.className="child-thread-body";details.append(summary,body);
-      const note=text=>{const line=document.createElement("p");line.className="child-note";line.textContent=text;body.append(line)};
-      const fill=page=>{body.replaceChildren();if(!page){note("Loading the thread…");return}if(page.error){note(page.error);return}
-        const prompt=document.createElement("p");prompt.className="child-prompt";prompt.textContent=page.prompt.text;body.append(prompt);if(page.hasEarlier)note("Earlier messages in this thread aren't shown.");
-        for(const item of page.messages||[]){if(item.role==="user"){const answer=document.createElement("p");answer.className="child-prompt";answer.textContent=item.text;body.append(answer);continue}
-          const reply=document.createElement("div"),who=document.createElement("span"),bubble=document.createElement("div"),text=document.createElement("p");reply.className="child-reply thread-reply";who.className="child-who";who.textContent=item.role==="handoff"?"Handoff":item.role==="error"?"Error":"Home";bubble.className="thread-bubble";appendInline(text,item.text.replace(/\\s*\\n\\s*/g," "));bubble.append(text);reply.append(who,bubble);body.append(reply)}};
-      const load=retry=>{let page=threadPages.get(message.id);if(retry&&page?.error){threadPages.delete(message.id);page=null}
-        if(page&&!(page instanceof Promise)){fill(page);return}
-        if(!page){page=api(`/api/v1/sessions/${sessionID}/threads/${thread.id}?before=${message.id}`).then(data=>data.thread,error=>({error:`Couldn't load this thread: ${error.message}`}));threadPages.set(message.id,page)}
-        fill(null);page.then(result=>{threadPages.set(message.id,result);fill(result)})};
-      details.addEventListener("toggle",()=>{if(details.open)load(true)});if(details.open)load(false);return details}
+    // Thread tags (Home), drawn like inline replies in Messages: a reply from a different thread than the message above
+    // shows a small copy of the prompt that started its thread, joined to it by a curved line in the margin, and a prompt
+    // whose replies other messages split up says "N Replies" (the Mac's threadReplies). Either opens the whole thread
+    // over the blurred conversation, fetched from the Mac so it works before older messages load.
+    let threadOpen=null;
+    function threadQuote(sessionID,message){const wrap=document.createElement("div"),line=document.createElement("span"),quote=document.createElement("button"),text=document.createElement("span"),thread=message.thread;
+      wrap.className="thread-link";line.className="thread-bracket";line.setAttribute("aria-hidden","true");quote.type="button";quote.className="thread-quote";quote.setAttribute("aria-label",`Reply to: ${thread.prompt}. Opens the thread`);quote.title="Open the thread";text.textContent=thread.prompt;quote.append(text);
+      quote.onclick=()=>openThread({sessionID,threadID:thread.id,prompt:thread.prompt,messageID:message.id,opener:quote});wrap.append(line,quote);return wrap}
+    function threadRepliesButton(sessionID,message,count){const button=document.createElement("button"),label=count===1?"1 Reply":`${count} Replies`;button.type="button";button.className="thread-replies";button.textContent=`${label} ›`;button.setAttribute("aria-label",`${label}. Opens the thread`);
+      button.onclick=()=>openThread({sessionID,threadID:message.id,prompt:message.displayText??message.text,messageID:null,opener:button});return button}
+    function openThread(state){threadOpen={...state,token,page:null,error:null,scrolled:false,loading:false,again:false};fillThread();if(!$("threadView").open)$("threadView").showModal();$("threadClose").focus();loadThread()}
+    // The whole thread, fetched again whenever the conversation changes while it's open; a failed refresh keeps what's shown.
+    async function loadThread(){const state=threadOpen;if(!state)return;if(state.loading){state.again=true;return}state.loading=true;let changed=true;
+      try{const data=await api(`/api/v1/sessions/${state.sessionID}/threads/${state.threadID}`);if(threadOpen!==state||token!==state.token)return;changed=JSON.stringify(data.thread)!==JSON.stringify(state.page);state.page=data.thread;state.error=null}
+      catch(error){changed=!state.page;if(threadOpen===state&&!state.page)state.error=`Couldn't load this thread: ${error.message}`}
+      finally{state.loading=false;if(threadOpen===state){if(changed)fillThread();if(state.again){state.again=false;loadThread()}}}}
+    function fillThread(){const state=threadOpen,body=$("threadBody");if(!state)return;const top=body.scrollTop,page=state.page,count=page?.messages?.length||0;body.replaceChildren();$("threadCount").textContent=page?(count===1?"1 Reply":`${count} Replies`):"";
+      const bubble=(text,id)=>{const item=document.createElement("p");item.className="thread-bubble mine";item.textContent=text;if(id)item.dataset.messageId=id;body.append(item)};
+      const note=text=>{const item=document.createElement("p");item.className="child-note thread-note";item.textContent=text;body.append(item)};
+      bubble(page?page.prompt.text:state.prompt);
+      if(!page){if(!state.error){note("Loading the thread…");return}note(state.error);const retry=document.createElement("button");retry.type="button";retry.className="control thread-retry";retry.textContent="Try Again";retry.onclick=()=>{state.error=null;fillThread();loadThread()};body.append(retry);return}
+      if(page.hasEarlier)note("Earlier messages in this thread aren't shown.");
+      for(const item of page.messages||[]){if(item.role==="user"){bubble(item.text,item.id);continue}
+        const who=document.createElement("span"),reply=document.createElement("div");who.className="thread-who";who.textContent=item.role==="handoff"?"Handoff":item.role==="error"?"Error":"Home";reply.className="thread-bubble pip";reply.dataset.messageId=item.id;appendProse(reply,item.text);body.append(who,reply)}
+      if(!state.scrolled&&state.messageID){const target=[...body.querySelectorAll("[data-message-id]")].find(node=>node.dataset.messageId===state.messageID);if(target){state.scrolled=true;target.scrollIntoView({block:"nearest"});return}}
+      body.scrollTop=top}
+    // Called after every transcript change: the open thread follows its conversation and closes with it.
+    function followThread(sessionID){if(!threadOpen)return;if(threadOpen.sessionID!==sessionID||threadOpen.token!==token){$("threadView").close();return}loadThread()}
+    $("threadClose").onclick=()=>$("threadView").close();
+    $("threadView").addEventListener("click",event=>{if(event.target===$("threadView"))$("threadView").close()});
+    $("threadView").addEventListener("close",()=>{const opener=threadOpen?.opener;threadOpen=null;$("threadBody").replaceChildren();if(opener?.isConnected)opener.focus()});
     function childResultCard(sessionID,child){const card=document.createElement("section"),open=sessionItems.some(s=>s.id===child.id);card.className=`child-card ${child.state}`;card.setAttribute("role","group");card.setAttribute("aria-label",`Child tab ${child.title}`);
       const thread=remember(document.createElement("details"),`child:${child.id}`),summary=document.createElement("summary"),lane=document.createElement("span"),tag=document.createElement("span"),tagText=document.createElement("span");thread.className="child-thread";
       lane.className="child-lane";lane.append(branchGlyph(),`Child tab · ${child.title}`);tag.className="child-tag";tagText.textContent=(child.prompt||"").split("\\n")[0];tag.append(tagText);summary.append(lane,tag);summary.title="Show the request and the child tab's replies";thread.append(summary);
@@ -3740,8 +3768,8 @@ private extension RemoteControlServer {
         for(const message of session.messages){const handoffs=(message.delegations||[]).filter(handoff=>!answered.has(handoff.id)),subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id)),activities=(message.activities||[]).filter(activity=>!subagentIDs.has(activity.id)),apps=message.apps||[],settled=subagents.filter(agent=>!subagentActive(agent));for(const agent of subagents)if(subagentActive(agent))pinned.push([agent,message.id]);for(const app of apps)box.append(mcpAppSlot(session.id,app));
           if(!message.text&&!message.thinking&&!activities.length&&!settled.length&&!handoffs.length)continue;if(message.role==="freshStart"){box.append(freshStartDivider(message));continue}const row=document.createElement("article");row.className=`message ${message.role}`;row.dataset.messageId=message.id;
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
-          if(message.thread&&message.role!=="user")row.append(threadTag(session.id,message));
-          appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
+          if(message.thread&&message.role!=="user"){row.classList.add("threaded");row.append(threadQuote(session.id,message))}
+          appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);const replies=session.threadReplies?.[message.id];if(replies>0)row.append(threadRepliesButton(session.id,message,replies));if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
           if(message.role==="error"&&session.supportsStartFresh&&message.id===session.repeatedErrorMessageID)appendErrorRecovery(row,session);
           if(handoffs.length){const stack=document.createElement("div");stack.className="handoffs";for(const handoff of handoffs)stack.append(handoffCard(handoff));row.append(stack)}appendActivities(row,activities,message.id);
           if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
@@ -3752,7 +3780,7 @@ private extension RemoteControlServer {
         const queue=queueList(session);if(queue)box.append(queue);
         if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}
         if(!sidebarLayout&&(session.isStreaming||session.queuedCount)){const status=document.createElement("div");status.className="run-status";if(session.isStreaming){const spinner=document.createElement("span");spinner.className="spinner";status.append(spinner)}const label=document.createElement("span");label.textContent=session.isStreaming?(session.status||"Working…"):`${session.queuedCount} queued`;status.append(label);box.append(status)}}
-      mcpReconcile(liveBox,box);pruneMacImages();renderPinnedSubagents(sessionID,pinned);
+      mcpReconcile(liveBox,box);pruneMacImages();renderPinnedSubagents(sessionID,pinned);followThread(sessionID);
       settleConversationPosition(anchor,shouldFollow?root.scrollHeight:Math.min(previousTop+(prepend?root.scrollHeight-previousHeight:0),Math.max(0,root.scrollHeight-root.clientHeight)),shouldFollow,scrollRevision)}
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
     async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selectTab(data.session.id);renderedPayload="";await refresh()}
