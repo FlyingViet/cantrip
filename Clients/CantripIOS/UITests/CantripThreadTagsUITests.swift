@@ -1,11 +1,12 @@
 import XCTest
 
 /// Thread tags against the thread-tags QA host (Cantrip Home seeded with real messages; a handoff
-/// card in the latest page and two DDIA replies in older history carry tags). Opens the card's
-/// thread with a tap just outside the visible capsule (the 44 pt target), checks the expanded value
-/// VoiceOver reads, then loads older history and opens a DDIA thread. Also runs on iPhone Duo
-/// (its default pose; the unfolded sidebar layout shows the same transcript rows). Run with `TEST_RUNNER_CANTRIP_UITEST_REMOTE_URL`,
-/// `TEST_RUNNER_CANTRIP_UITEST_REMOTE_TOKEN` and optionally `TEST_RUNNER_CANTRIP_UITEST_SHOTS`.
+/// card in the latest page and two DDIA replies in older history carry tags, and their prompts say
+/// "N Replies"). Drawn like inline replies in Messages: the reply quotes its prompt, and the quote or
+/// "N Replies" opens the whole thread over the blurred chat. Also runs on iPhone Duo (its default
+/// pose; the unfolded sidebar layout shows the same transcript rows). Run with
+/// `TEST_RUNNER_CANTRIP_UITEST_REMOTE_URL`, `TEST_RUNNER_CANTRIP_UITEST_REMOTE_TOKEN` and optionally
+/// `TEST_RUNNER_CANTRIP_UITEST_SHOTS`.
 final class CantripThreadTagsUITests: XCTestCase {
     func testThreadTagsOpenTheirThread() throws {
         let environment = ProcessInfo.processInfo.environment
@@ -26,34 +27,44 @@ final class CantripThreadTagsUITests: XCTestCase {
         XCTAssertTrue(lane.waitForExistence(timeout: 30), "Home's chat loads")
         for _ in 0..<20 where !card.exists { app.swipeDown(velocity: .slow) }
         if !card.exists { attach(app, "\(device)-0-missing") }
-        XCTAssertTrue(card.exists, "The handoff card from another thread is tagged")
+        XCTAssertTrue(card.exists, "The handoff card from another thread quotes its prompt")
         reveal(card, in: app)
-        XCTAssertEqual(card.value as? String, "Collapsed")
-        attach(app, "\(device)-1-card-tag")
-        // 8 pt below the capsule's edge is still inside its 44 pt target.
-        card.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .withOffset(CGVector(dx: 0, dy: card.frame.height / 2 + 8)).tap()
-        XCTAssertTrue(waitUntil(timeout: 10) { (card.value as? String) == "Expanded" }, "The tap target reaches 44 pt")
-        let thread = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'cantrip-thread-'"))
-            .matching(NSPredicate(format: "NOT identifier BEGINSWITH 'cantrip-thread-tag-'")).firstMatch
-        XCTAssertTrue(thread.waitForExistence(timeout: 10))
+        attach(app, "\(device)-1-card-quote")
+        card.tap()
+        let view = app.descendants(matching: .any)["cantrip-thread-view"]
+        XCTAssertTrue(view.waitForExistence(timeout: 10), "The quote opens the thread")
         let prompt = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'does it make sense to be able to tag a tab'")).firstMatch
         XCTAssertTrue(prompt.waitForExistence(timeout: 15), "The thread opens with its prompt, fetched from the Mac")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS '7 Replies'")).firstMatch
+            .waitForExistence(timeout: 5), "The header counts the thread's replies")
         Thread.sleep(forTimeInterval: 1)
         attach(app, "\(device)-2-card-thread")
-        card.tap()
-        XCTAssertTrue(waitUntil(timeout: 5) { (card.value as? String) == "Collapsed" })
+        app.buttons["cantrip-thread-close"].tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { !view.exists }, "Close returns to the chat")
 
-        // The DDIA replies are in older history; scrolling up loads them.
+        // The DDIA replies are in older history; scrolling up loads them and their prompt's count.
         let ddia = tag(app, "Reply to: we have a book called")
         for _ in 0..<40 where !(ddia.exists && ddia.isHittable) { app.swipeDown() }
-        XCTAssertTrue(ddia.exists, "Older replies carry their tags")
+        XCTAssertTrue(ddia.exists, "Older replies quote their prompts")
         reveal(ddia, in: app)
+        attach(app, "\(device)-3-ddia-quote")
         ddia.tap()
         let book = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'we have a book called Designing Data Intensive Applications on our network storage. Can you'")).firstMatch
         XCTAssertTrue(book.waitForExistence(timeout: 15))
         Thread.sleep(forTimeInterval: 1)
-        attach(app, "\(device)-3-ddia-thread")
+        attach(app, "\(device)-4-ddia-thread")
+        app.buttons["cantrip-thread-close"].tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { !view.exists })
+
+        let replies = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'cantrip-thread-replies-' AND label == '4 Replies'")).firstMatch
+        for _ in 0..<40 where !(replies.exists && replies.isHittable) { app.swipeDown() }
+        XCTAssertTrue(replies.exists, "The book prompt counts the replies that other messages split up")
+        reveal(replies, in: app)
+        attach(app, "\(device)-5-replies")
+        replies.tap()
+        XCTAssertTrue(book.waitForExistence(timeout: 15), "N Replies opens the same thread")
+        app.buttons["cantrip-thread-close"].tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { !view.exists })
     }
 
     private func tag(_ app: XCUIApplication, _ label: String) -> XCUIElement {

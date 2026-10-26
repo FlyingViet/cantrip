@@ -676,6 +676,9 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var historyRevision: String? = nil
     var historyStartID: String? = nil
     var hasOlderMessages: Bool? = nil
+    /// Cantrip Home: "N Replies" for each prompt whose thread other messages split up, by prompt
+    /// ID, for the whole conversation. Nil from older Macs.
+    var threadReplies: [String: Int]? = nil
     var supportsModelSettings: Bool? = nil
     var modelSettingsRevision: String? = nil
     var isLocalPrivate: Bool? = nil
@@ -1951,15 +1954,15 @@ struct CantripRemoteAPI {
         return response.session
     }
 
-    /// A thread tag's thread: its prompt and the earlier messages in it, before `messageID`.
-    func thread(sessionID: String, threadID: String, before messageID: String) async throws -> CantripRemoteThread {
+    /// A thread: its prompt and the messages in it, only those before `messageID` when given.
+    func thread(sessionID: String, threadID: String, before messageID: String? = nil) async throws -> CantripRemoteThread {
         guard UUID(uuidString: sessionID) != nil, UUID(uuidString: threadID) != nil,
-              UUID(uuidString: messageID) != nil else {
+              messageID.map({ UUID(uuidString: $0) != nil }) ?? true else {
             throw CantripRemoteError.invalidResponse
         }
         struct Response: Decodable { let thread: CantripRemoteThread }
         let response: Response = try await request(
-            path: "/api/v1/sessions/\(sessionID)/threads/\(threadID)?before=\(messageID)"
+            path: "/api/v1/sessions/\(sessionID)/threads/\(threadID)" + (messageID.map { "?before=\($0)" } ?? "")
         )
         return response.thread
     }
@@ -3735,7 +3738,7 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
-    func thread(sessionID: String, threadID: String, before messageID: String) async throws -> CantripRemoteThread {
+    func thread(sessionID: String, threadID: String, before messageID: String? = nil) async throws -> CantripRemoteThread {
         try await performHistoryRead { api in
             try await api.thread(sessionID: sessionID, threadID: threadID, before: messageID)
         }

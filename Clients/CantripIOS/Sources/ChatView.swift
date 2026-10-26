@@ -1365,6 +1365,7 @@ struct ChatView: View {
                     onClose: { showVoiceMode = false }
                 )
             }
+            .modifier(CantripThreadPresenter(remote: remote))
             .alert("Message not confirmed", isPresented: Binding(
                 get: { imageSendError != nil },
                 set: { if !$0 { imageSendError = nil } }
@@ -3486,6 +3487,12 @@ struct TurnView: View {
                         .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
                         .foregroundStyle(.white)
                 }
+                if let message = remoteMessage, let sessionID = cantripSessionID,
+                   let count = threadReplies(of: message.id) {
+                    CantripThreadRepliesButton(count: count, promptID: message.id, prompt: message.presentedText,
+                                               sessionID: sessionID, remote: remote)
+                        .padding(.trailing, 6)
+                }
                 if let usage = remoteMessage?.promptUsage {
                     CantripPromptUsageLine(usage: usage)
                         .padding(.trailing, 6)
@@ -3597,6 +3604,14 @@ struct TurnView: View {
 
     private var hasIntermediateSteps: Bool {
         !(turn.thinking?.isEmpty ?? true) || !turn.tools.isEmpty
+    }
+
+    /// "N Replies" under a Home prompt whose thread other messages split up. The count comes with
+    /// the conversation, so prompts in older pages stay current too.
+    private func threadReplies(of messageID: String) -> Int? {
+        guard let session = remote.selectedSession, session.id == cantripSessionID,
+              let count = session.threadReplies?[messageID], count > 0 else { return nil }
+        return count
     }
 
     /// Cantrip replies show reasoning steps; tool calls stay on the Mac.
