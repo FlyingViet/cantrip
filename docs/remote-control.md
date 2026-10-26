@@ -1010,17 +1010,22 @@ API (`supportsChildTabs`, `supportsQueuePlans` on each session):
 
 ### Thread tags in Cantrip Home
 
-When several threads are running in Home, a reply that belongs to a different
-thread from the message just above it shows a tag: a reply arrow, the start
-of the prompt that started its thread and a chevron. A reply right under its
-own prompt has no tag, and a run of replies from the same thread shares one.
-Tapping or clicking the tag (or Enter or Space) opens the thread inline: the
-original prompt and the earlier messages in it, with Home's messages cut to
-three lines. The Mac supplies the thread, so it opens even when the prompt is
-in older messages that haven't loaded. The browser Remote, Cantrip Agent
-(iPhone, Duo), Cantrip Gateway Mac and Cantrip Gateway for Windows show the
-tags; VoiceOver reads each as a button, "Reply to: …", that's collapsed or
-expanded.
+When several threads are running in Home, they're drawn like inline replies
+in Messages. A reply that belongs to a different thread from the message just
+above it quotes the prompt that started its thread: a small copy of the
+prompt, joined to the reply by a curved line in the left margin. A reply right
+under its own prompt has no quote, and a run of replies from the same thread
+shares one. A prompt whose replies other messages split up says **N Replies ›**
+under it, counting every later message in its thread. Tapping or clicking the
+quote or **N Replies** (or Enter or Space) opens the whole thread over the
+blurred conversation: the prompt and every message in it, whole, with **✕** (or
+Escape) to close. Opened from a quote, it scrolls to that reply. The thread
+refreshes while open as replies arrive. The Mac supplies the thread, so it
+opens even when the prompt is in older messages that haven't loaded. The
+browser Remote, Cantrip Agent (iPhone, Duo), Cantrip Gateway Mac and Cantrip
+Gateway for Windows show them; VoiceOver reads the quote as a button, "Reply
+to: …", and the open thread as a modal with a **Close thread** button. There's
+no reply box in the thread: a new message goes to Home as usual.
 
 Every message records the prompt that started its thread, in every tab:
 a prompt starts its own, a reply joins its prompt's, an answer to a question
@@ -1032,12 +1037,17 @@ this change have no thread and never get a tag.
 
 API:
 - Messages carry `threadID` (the prompt's message ID) when known. Home's
-  messages that need a tag also carry `thread` (`{id, prompt}`, the prompt's
+  messages that need a quote also carry `thread` (`{id, prompt}`, the prompt's
   start on one line).
-- `GET /api/v1/sessions/{id}/threads/{threadID}?before={messageID}` returns
+- Home's session details (every response with messages, each page included)
+  carry `threadReplies`: `{promptID: count}` for every prompt in the
+  conversation whose thread other messages split up, so clients can update
+  prompts in pages they cached.
+- `GET /api/v1/sessions/{id}/threads/{threadID}[?before={messageID}]` returns
   `{thread: {id, prompt: {id, text}, messages: [{id, role, text, author?}],
-  hasEarlier}}`: the thread's messages before `messageID`, up to 30, with
-  `hasEarlier` when more were left out. `404` when the prompt is gone.
+  hasEarlier}}`: the thread's messages (only those before `messageID` when
+  given), the latest 30, each up to 4,000 characters, with `hasEarlier` when
+  more were left out. `404` when the prompt is gone.
 
 ### Questions between tabs
 
