@@ -204,7 +204,7 @@ extension SessionTabTests {
             id: contextTab, title: "Cantrip", workdir: NSHomeDirectory(), state: "busy",
             projects: CantripHomeDelegations.projects(in: [
                 "Edited ~/Coding/Hermes/Sources/ChatView.swift",
-                "Pushed FlyingViet/Hermes and rebuilt /Users/me/Coding/Hermes",
+                "Pushed FlyingViet/CantripIOS and rebuilt /Users/me/Coding/Hermes",
                 "Mentioned ~/Coding/Alter once",
             ], workdir: NSHomeDirectory()),
             messages: [
