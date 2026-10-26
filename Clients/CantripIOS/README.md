@@ -1,5 +1,9 @@
 # Hermes — iOS client (Cantrip Agent, formerly AgentGateway)
 
+This repository is [FlyingViet/CantripIOS](https://github.com/FlyingViet/CantripIOS),
+renamed from `Hermes` on 2026-10-25 (GitHub redirects the old URL). The Xcode
+project, scheme and Swift module are still named Hermes.
+
 <img src="Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png" width="128" alt="Cantrip: a pearl-violet C casting a golden spark" />
 
 The app icon shares Cantrip's **C and golden spark** mark. Its opaque 1024px
