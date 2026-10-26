@@ -130,6 +130,13 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   without arguments, or inserts one that takes an argument), Tab inserts, Escape hides the list
   for the current text; with nothing highlighted Return sends the text as typed. **/model** opens
   Model Settings. Needs a Cantrip host with `supportsBackendCommands`.
+- **Mention a tab:** type `@` at the start of a word in Home's or a tab's composer to list the
+  open tabs (filtered as you type; never private tabs, Home or the tab itself). Up/Down move the
+  highlight, Return or Tab picks (Return doesn't send while the list shows), Escape hides it;
+  a click picks too. The pick shows as `@Title` plus a removable chip, and goes to the Mac as
+  that tab's ID, so Cantrip acts on exactly that tab. Sent mentions read **@Title** and open
+  the tab when clicked. Needs a Cantrip host with `supportsTabMentions`. Shared with iOS (see
+  Hermes' README, *Mention a tab with @*).
 - **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS),
   delivery mode, Refresh (⌘R) and More (model settings, Copilot usage, voice mode,
   pause, memory (formatted Markdown or its source), builds, mascot, Cantrip maintenance).

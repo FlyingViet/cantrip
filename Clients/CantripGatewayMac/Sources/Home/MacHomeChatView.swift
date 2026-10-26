@@ -21,6 +21,17 @@ struct MacHomeChatView: View {
     @State private var imageDrafts: [String: [ChatImageAttachment]] = [:]
     @State private var videoDrafts: [String: ChatVideoAttachment] = [:]
     @State private var fileDrafts: [String: [ChatFileAttachment]] = [:]
+    /// Tabs picked from the "@" suggestions, per draft (`remoteDraftKey`).
+    @State private var mentionDrafts: [String: [CantripTabMention]] = [:]
+    /// The composer's caret (UTF-16 offset; -1 while a range is selected), read from its text
+    /// view for "@" suggestions. Nil: the end of the text. Only read, never pushed back: a
+    /// `TextField(selection:)` binding on the Mac lags while typing and restores a stale caret.
+    @State private var composerCaret: Int?
+    /// The text as the field last reported it (typed), to tell the app's own edits apart.
+    @State private var fieldText = ""
+    /// Escape hid the "@" suggestions for the "@" at this UTF-16 offset.
+    @State private var mentionDismissedAt: Int?
+    @State private var mentionHighlight: CantripMentionHighlight?
     @State private var imageImportID: UUID?
     @State private var composerPaste: ComposerPasteRequest?
     @State private var submittingRemote = false
@@ -137,6 +148,8 @@ struct MacHomeChatView: View {
             }
             CantripInputTranscript(model: remote)
         }
+        // Mentions of open tabs open them in the sidebar's Tabs section.
+        .cantripMentionLinks(remote: remote, onOpenTab: { navigation.openTab($0) })
         .contentMargins(.horizontal, sideMargin, for: .scrollContent)
         .textSelection(.enabled)
     }
@@ -300,6 +313,8 @@ struct MacHomeChatView: View {
                     }
                     FileAttachmentPreviews(files: fileDraft(for: sessionID),
                                            disabled: imagePickerDisabled || importingImages)
+                    CantripMentionChips(mentions: mentionDrafts[remoteDraftKey(sessionID)] ?? [],
+                                        disabled: vm.sending || submittingRemote, onRemove: removeMention)
                     if importingImages {
                         Button("Cancel attachment preparation") { imageImportID = nil }
                     }
@@ -322,6 +337,15 @@ struct MacHomeChatView: View {
                         onChoose: { chooseSlashCommand($0, via: .activate) }
                     )
                 }
+                if let popup = mentionPopup {
+                    CantripMentionSuggestionList(
+                        popup: popup,
+                        sessions: Dictionary(remote.sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
+                        highlighted: CantripMentionHighlight.index(mentionHighlight, popup: popup),
+                        maxHeight: min(360, max(120, size.height * 0.4)),
+                        onPick: pickMention
+                    )
+                }
                 composer
             }
         }
@@ -332,6 +356,27 @@ struct MacHomeChatView: View {
         .background(.bar)
         .background {
             MacSlashKeyMonitor(isActive: slashPresentation != nil, onKey: handleSlashKey)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+        .background {
+            // Return picks the highlighted tab instead of sending while "@" suggestions show.
+            MacSlashKeyMonitor(isActive: mentionPopup != nil, onKey: handleMentionKey)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+        .onChange(of: input) { _, text in
+            // Text the app put in (a draft, dictation, a command) puts the caret at its end, as
+            // without a selection binding; typing keeps the field's own caret.
+            if text != fieldText {
+                fieldText = text
+                composerCaret = nil
+            }
+            refreshMentions()
+        }
+        .onChange(of: composerCaret) { _, _ in refreshMentions() }
+        .background {
+            MacComposerCaretObserver(isActive: composerFocused) { composerCaret = $0 }
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
         }
@@ -424,6 +469,84 @@ struct MacHomeChatView: View {
         }
     }
 
+    // MARK: Tab mentions
+
+    /// "@" suggestions for the composer's caret, while this tab (or Home) takes mentions.
+    private var mentionPopup: CantripTabMentions.Popup? {
+        guard !paused, composerFocused, composerAcceptsText, slashToken == nil,
+              // A reply to the agent's question goes to the question, not to the model.
+              !(vm.remoteDeliveryMode == .auto && remote.chatInputRequest != nil),
+              let session = remote.selectedSession, session.id == remote.selectedSessionID,
+              CantripTabMentions.supportsMentions(session),
+              let caret = CantripMentionCaret.position(in: input, utf16Offset: composerCaret) else { return nil }
+        let candidates = CantripTabMentions.candidates(
+            sessions: remote.sessions, sections: remote.tabSections, composingID: session.id
+        )
+        return CantripTabMentions.popup(text: input, caret: caret, candidates: candidates,
+                                        dismissedAt: mentionDismissedAt,
+                                        picks: mentionDrafts[remoteDraftKey(session.id)] ?? [])
+    }
+
+    private func handleMentionKey(_ key: BackendSlashKey) -> Bool {
+        guard let popup = mentionPopup else { return false }
+        switch CantripTabMentions.handle(key, popup: popup,
+                                         highlighted: CantripMentionHighlight.index(mentionHighlight, popup: popup)) {
+        case .ignore:
+            return false
+        case .highlight(let index):
+            mentionHighlight = CantripMentionHighlight(at: popup.at, query: popup.query, index: index)
+        case .pick(let candidate):
+            pickMention(candidate)
+        case .dismiss:
+            mentionDismissedAt = popup.at
+        }
+        return true
+    }
+
+    /// "@Label " replaces the typed "@query"; the tab is kept with the draft until it's sent.
+    private func pickMention(_ candidate: CantripTabMentions.Candidate) {
+        guard let popup = mentionPopup, let sessionID = remote.selectedSessionID else { return }
+        let caret = CantripMentionCaret.position(in: input, utf16Offset: composerCaret) ?? input.endIndex
+        let key = remoteDraftKey(sessionID)
+        let picks = mentionDrafts[key] ?? []
+        // A label stands for one tab: a second tab with the same title gets its own label.
+        let picked = CantripTabMentions.insert(candidate, at: String.Index(utf16Offset: popup.at, in: input),
+                                               caret: caret, in: input,
+                                               label: CantripTabMentions.uniqueLabel(for: candidate, among: picks))
+        mentionDrafts[key] = CantripTabMentions.adding(CantripTabMention(id: candidate.id, label: picked.label),
+                                                       to: picks)
+        input = picked.text
+        fieldText = picked.text
+        let caretOffset = picked.text.utf16.distance(from: picked.text.startIndex, to: picked.caret)
+        composerCaret = caretOffset
+        MacComposerCaretObserver.moveInsertionPoint(to: caretOffset)
+        mentionHighlight = nil
+        composerFocused = true
+    }
+
+    /// A chip's remove button: the mention and its "@Label" text go.
+    private func removeMention(_ mention: CantripTabMention) {
+        guard let sessionID = remote.selectedSessionID else { return }
+        let key = remoteDraftKey(sessionID)
+        let picks = mentionDrafts[key] ?? []
+        mentionDrafts[key] = picks.filter { $0 != mention }
+        input = CantripTabMentions.removing(mention, from: input, among: picks)
+        composerFocused = true
+        MacSlashKeyMonitor.moveInsertionPointToEnd()
+    }
+
+    /// Deleting a mention's "@Label" text drops its chip; Escape's dismissal lasts while its "@" does.
+    private func refreshMentions() {
+        mentionDismissedAt = CantripTabMentions.keepsDismissal(
+            mentionDismissedAt, text: input, caret: CantripMentionCaret.position(in: input, utf16Offset: composerCaret)
+        )
+        guard let sessionID = remote.selectedSessionID else { return }
+        let key = remoteDraftKey(sessionID)
+        guard let mentions = mentionDrafts[key], !mentions.isEmpty else { return }
+        let kept = CantripTabMentions.remaining(mentions, in: input)
+        if kept != mentions { mentionDrafts[key] = kept.isEmpty ? nil : kept }
+    }
+
     private var composer: some View {
         ChatComposer {
             if let sessionID = remote.selectedSessionID {
@@ -452,7 +575,7 @@ struct MacHomeChatView: View {
                     recipient: isTab ? remote.selectedSession?.title ?? "Cantrip"
                         : CantripMascotName.display(mascotName)
                 ),
-                text: $input,
+                text: Binding(get: { input }, set: { input = $0; fieldText = $0 }),
                 axis: .vertical
             )
             .id(composerRevision)
@@ -464,7 +587,7 @@ struct MacHomeChatView: View {
             .frame(maxWidth: .infinity, minHeight: 44)
             .disabled(!destinationReady || !composerAcceptsText || vm.sending || submittingRemote)
             .onSubmit(sendText)
-            .help("Return sends. Option-Return adds a new line. Type / for this tab's commands and skills. Paste attaches copied photos, videos and files.")
+            .help("Return sends. Option-Return adds a new line. Type / for this tab's commands and skills, @ to mention another tab. Paste attaches copied photos, videos and files.")
             .composerPaste(isEnabled: !imagePickerDisabled && !importingImages) {
                 composerPaste = ComposerPasteRequest(providers: $0)
             }
@@ -596,10 +719,14 @@ struct MacHomeChatView: View {
         let video = videoDrafts[draftKey]
         let files = fileDrafts[draftKey] ?? []
         let originalInput = input
+        // Picked tabs go out as tokens with their IDs; the draft keeps the plain text.
+        let mentions = CantripTabMentions.remaining(mentionDrafts[draftKey] ?? [], in: text)
+        let wireText = CantripTabMentions.supportsMentions(remote.selectedSession) && !mentions.isEmpty
+            ? CantripTabMentions.encode(text, mentions: mentions) : text
         submittingRemote = true
         Task { @MainActor in
             defer { submittingRemote = false }
-            let sent = await vm.sendRemote(text, images: images, video: video, files: files, sessionID: sessionID)
+            let sent = await vm.sendRemote(wireText, images: images, video: video, files: files, sessionID: sessionID)
             if sent {
                 let sentIDs = Set(images.map(\.id))
                 imageDrafts[draftKey]?.removeAll { sentIDs.contains($0.id) }
@@ -608,6 +735,8 @@ struct MacHomeChatView: View {
                 fileDrafts[draftKey]?.removeAll { sentFiles.contains($0.id) }
                 if remoteDraftKey(remote.selectedSessionID ?? "") == draftKey, input == originalInput {
                     input = ""
+                    mentionDrafts.removeValue(forKey: draftKey)
+                    composerCaret = nil
                     composerRevision = UUID()
                 }
             } else {
