@@ -1022,9 +1022,15 @@ always ends on a reply. A prompt whose replies other messages split up says
 **N Replies ›** under it, counting every later message in its thread. Tapping
 or clicking the quote or **N Replies** (or Enter or Space) opens the whole
 thread over the blurred conversation: the prompt and every message in it,
-whole, with **✕** (or Escape) to close. Opened from a quote, it scrolls to that
-reply. The thread refreshes while open as replies arrive. The Mac supplies the thread, so it
-opens even when the prompt is in older messages that haven't loaded. The
+whole, with **✕** (or Escape) to close. A handoff made in the thread brings the
+tab's side of the work: the tab's replies, its questions and your answers
+there (in the child tab, when the request moved into one), named after the tab
+and placed just before the handoff's result card, or last while the tab still
+works. Cantrip's own resume and Done when messages to the tab aren't shown.
+**N Replies** counts Home's replies only. Opened from a quote, it scrolls to
+that reply. The thread refreshes while open as replies arrive. The Mac supplies
+the thread, so it opens even when the prompt is in older messages that haven't
+loaded, and a tab's side even after the tab closed (private tabs never show). The
 browser Remote, Cantrip Agent (iPhone, Duo), Cantrip Gateway Mac and Cantrip
 Gateway for Windows show them; VoiceOver reads the quote as a button, "Reply
 to: …", and the open thread as a modal with a **Close thread** button. There's
@@ -1050,10 +1056,14 @@ API:
   conversation whose thread other messages split up, so clients can update
   prompts in pages they cached.
 - `GET /api/v1/sessions/{id}/threads/{threadID}[?before={messageID}]` returns
-  `{thread: {id, prompt: {id, text}, messages: [{id, role, text, author?}],
-  hasEarlier}}`: the thread's messages (only those before `messageID` when
-  given), the latest 30, each up to 4,000 characters, with `hasEarlier` when
-  more were left out. `404` when the prompt is gone.
+  `{thread: {id, prompt: {id, text}, messages: [{id, role, text, author?,
+  tabID?, tabTitle?}], hasEarlier, replyCount}}`: the thread's messages (only
+  those before `messageID` when given), the latest 50, each up to 4,000
+  characters, with `hasEarlier` when more were left out. Messages with `tabID`
+  and `tabTitle` are a handoff's work in that tab (`role` `user` for your
+  answers there); a tab's reply over the limit keeps its ending, where it says
+  how the work went. `replyCount` counts Home's own messages, as `threadReplies`
+  does. `404` when the prompt is gone.
 
 ### Questions between tabs
 
