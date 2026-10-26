@@ -264,7 +264,7 @@ export function apply(session: Detail, options: { keepOlder?: boolean } = {}): v
 }
 
 function summaryOf(session: Detail, previous: RemoteSessionSummary): RemoteSessionSummary {
-  const { messages: _messages, queued: _queued, historyStartID: _start, hasOlderMessages: _older, ...summary } = session;
+  const { messages: _messages, queued: _queued, historyStartID: _start, hasOlderMessages: _older, threadReplies: _replies, ...summary } = session;
   return { ...previous, ...summary };
 }
 

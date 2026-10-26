@@ -97,12 +97,13 @@ export function pathComponent(value: string): string {
 
 // MARK: Threads (Cantrip Home thread tags)
 
-export function threadPath(sessionID: string, threadID: string, before: string): string {
-  return `/api/v1/sessions/${pathComponent(sessionID)}/threads/${pathComponent(threadID)}?before=${encodeURIComponent(before)}`;
+export function threadPath(sessionID: string, threadID: string, before?: string): string {
+  const path = `/api/v1/sessions/${pathComponent(sessionID)}/threads/${pathComponent(threadID)}`;
+  return before ? `${path}?before=${encodeURIComponent(before)}` : path;
 }
 
-/** The thread a tag opens, up to the tagged message `before`; works while its prompt is in history not loaded yet. */
-export async function thread(sessionID: string, threadID: string, before: string): Promise<RemoteThread> {
+/** A thread: its prompt and the messages in it (only those before `before` when given); works while its prompt is in history not loaded yet. */
+export async function thread(sessionID: string, threadID: string, before?: string): Promise<RemoteThread> {
   const data = await api<ThreadResponse>(threadPath(sessionID, threadID, before));
   const value = data?.thread;
   if (!value?.prompt || typeof value.prompt.text !== "string") throw new APIError("The Mac sent an incomplete thread.", 200);

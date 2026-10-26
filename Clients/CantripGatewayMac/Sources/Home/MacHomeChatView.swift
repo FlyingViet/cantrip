@@ -96,6 +96,7 @@ struct MacHomeChatView: View {
             if !submitting { composerFocused = true }
         }
         .onAppear(perform: applyPrefillAndFocus)
+        .modifier(CantripThreadPresenter(remote: remote))
     }
 
     // MARK: Transcript

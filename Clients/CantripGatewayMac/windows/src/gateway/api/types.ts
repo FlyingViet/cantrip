@@ -484,22 +484,22 @@ export interface RemoteThreadTag {
   prompt: string;
 }
 
-/** One earlier message in a thread. `user` entries are the user's answers to questions in it. */
+/** One message in a thread. `user` entries are the user's answers to questions in it. */
 export interface RemoteThreadMessage {
   id: UUIDString;
   role: 'assistant' | 'user' | 'handoff' | 'error' | string;
-  /** Markdown, at most 1200 characters (may end with "…"). */
+  /** Markdown, at most 4000 characters (may end with "…"). */
   text: string;
   /** Council mode: the model that wrote it. */
   author?: string;
 }
 
-/** A thread a tag opens: its prompt, then the earlier messages in it (unrelated ones skipped). */
+/** A thread: its prompt, then the messages in it (unrelated ones skipped). */
 export interface RemoteThread {
   id: UUIDString;
   /** The full prompt (at most 4000 characters). */
   prompt: { id: UUIDString; text: string };
-  /** Before the tagged message, oldest first; the prompt isn't repeated. */
+  /** Oldest first, up to 30 (before `before` when given); the prompt isn't repeated. */
   messages: RemoteThreadMessage[];
   /** Older messages in the thread were left out. */
   hasEarlier: boolean;
@@ -649,6 +649,11 @@ export interface RemoteSessionDetail extends RemoteSessionSummary {
   historyStartID?: string;
   /** Paged responses only: older messages exist before `messages[0]`. */
   hasOlderMessages?: boolean;
+  /**
+   * Home only: "N Replies" for each prompt whose thread other messages split up, by prompt ID, for the whole
+   * conversation (so prompts in older pages stay current). Absent on older hosts.
+   */
+  threadReplies?: Record<UUIDString, Int>;
 }
 
 /** Detail as returned with `history=recent` (what Cantrip Gateway should always request). */

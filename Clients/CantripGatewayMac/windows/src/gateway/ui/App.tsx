@@ -24,6 +24,7 @@ import { UsageSheet } from "./sheets/UsageSheet";
 import { Sidebar } from "./Sidebar";
 import { Toolbar } from "./Toolbar";
 import { ChatView } from "./transcript/ChatView";
+import { ThreadView } from "./transcript/ThreadTags";
 import { ImageViewer } from "./viewer";
 import { VoiceModeSheet } from "./voice/VoiceControls";
 
@@ -93,6 +94,7 @@ export function App(): JSX.Element {
       </main>
       <SheetHost />
       <ImageViewer />
+      <ThreadView />
       <MenuLayer />
       <ConfirmLayer />
       <ToastLayer />
