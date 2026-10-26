@@ -24,7 +24,7 @@ live sessions.
 |---|---|---|
 | **Cantrip** (host) | macOS 14+, Universal | [`Sources/Cantrip/`](Sources/Cantrip/) |
 | **Cantrip for Windows** | Windows 10/11 x64 | [`windows/`](windows/) |
-| **Cantrip Agent** | iPhone, iPad (iOS 26+) | [FlyingViet/Hermes](https://github.com/FlyingViet/Hermes) |
+| **Cantrip Agent** | iPhone, iPad (iOS 26+) | [FlyingViet/CantripIOS](https://github.com/FlyingViet/CantripIOS) |
 | **Cantrip Gateway Mac** | macOS 26+ | [FlyingViet/CantripGatewayMac](https://github.com/FlyingViet/CantripGatewayMac) |
 | **Cantrip Gateway for Windows** | Windows 10/11 x64 | [CantripGatewayMac/windows](https://github.com/FlyingViet/CantripGatewayMac/tree/main/windows) |
 | Browser remote | Any modern browser | Served by the Mac host |
@@ -145,7 +145,7 @@ the phone apps, [approvals and secure input](docs/remote-control.md#remote-appro
 |---|---|
 | Mac host ([`Sources/Cantrip/`](Sources/Cantrip/)) | From the repo root: `make build`, `make test` |
 | Windows ([`windows/`](windows/)) | From `windows/`: `npm ci`, then `npm run build` / `npm test` |
-| [Cantrip Agent](https://github.com/FlyingViet/Hermes) | XcodeGen iOS project; see its README |
+| [Cantrip Agent](https://github.com/FlyingViet/CantripIOS) | XcodeGen iOS project; see its README |
 | [Cantrip Gateway Mac](https://github.com/FlyingViet/CantripGatewayMac) | XcodeGen Mac project with Hermes as a submodule; see its README |
 
 See the [plugin reference](PLUGINS.md), [Windows parity checklist](windows/PARITY.md)
