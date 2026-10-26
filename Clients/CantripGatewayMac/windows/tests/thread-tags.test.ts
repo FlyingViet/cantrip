@@ -28,11 +28,12 @@ vi.mock("../src/gateway/bridge", () => ({
 import { threadPath } from "../src/gateway/api/client";
 import type { RemoteMessage, RemoteSessionSummary, RemoteThread, RemoteThreadTag } from "../src/gateway/api/types";
 import {
-  closeThread, loadThread, openThread, repliesLabel, resetThreads, showThread, speaker, tagLabel, threadLoad, threadReplies, threadTag,
+  closeThread, loadThread, openThread, repliesLabel, resetThreads, showThread, speaker, tagLabel, threadLines, threadLoad, threadReplies, threadTag,
+  type ThreadLine,
 } from "../src/gateway/state/threads";
 import { mascotName } from "../src/gateway/ui/pip/prefs";
 import { MessageRow } from "../src/gateway/ui/transcript/Message";
-import { ThreadBody, ThreadQuote, ThreadRepliesButton } from "../src/gateway/ui/transcript/ThreadTags";
+import { ThreadBody, ThreadLaneRow, ThreadQuote, ThreadRepliesButton } from "../src/gateway/ui/transcript/ThreadTags";
 
 // MARK: A small VNode walker (no DOM): components are called with their props, like a shallow render.
 
@@ -100,6 +101,8 @@ function message(overrides: Partial<RemoteMessage>): RemoteMessage {
 
 const session = { id: SESSION, title: "Cantrip Home", threadReplies: { [PROMPT_ID]: 4, other: 0 } } as unknown as RemoteSessionSummary;
 const row = (value: RemoteMessage, inSession = session) => MessageRow({ message: value, session: inSession, lane: "home", streaming: false, reported: new Set() });
+const lined = (value: RemoteMessage, threadLine: ThreadLine) =>
+  MessageRow({ message: value, session, lane: "home", streaming: false, reported: new Set(), threadLine }) as unknown as VNode;
 
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
@@ -163,6 +166,56 @@ describe("thread tags", () => {
     expect(head).toBeGreaterThan(0);
     expect(result).toBeGreaterThan(head);
     expect(nodes.some((node) => named(node, "LaneBadge"))).toBe(false);
+  });
+
+  it("lets the rows after a quote that stay in its thread share its line, turning into the last reply", () => {
+    const book: RemoteThreadTag = { id: "A", prompt: "Process the book" };
+    const run = [
+      message({ id: "q", text: "Chapters 3 and 4", threadID: "A", thread: book }),
+      message({ id: "r", threadID: "A" }),
+      message({ id: "s", role: "handoff", threadID: "A" }),
+      message({ id: "p", role: "user", threadID: "p" }),
+      message({ id: "t", threadID: "p" }),
+    ];
+    expect(Object.fromEntries(threadLines(run))).toEqual({ q: "start", r: "through", s: "end" });
+    expect(threadLines([run[0], run[3], run[4]]).size).toBe(0);
+    const answered = [
+      message({ id: "q", text: "Which?", threadID: "A", thread: book }),
+      message({ id: "u", role: "user", text: "This one", threadID: "A" }),
+      message({ id: "e", text: " ", threadID: "B" }),
+      message({ id: "r", text: "On it", threadID: "A" }),
+      message({ id: "v", role: "user", text: "Thanks", threadID: "A" }),
+    ];
+    // Answers and empty replies stay in a run, but it ends on a reply.
+    expect(Object.fromEntries(threadLines(answered))).toEqual({ q: "start", u: "through", e: "through", r: "end" });
+    const broken = [
+      message({ id: "q", threadID: "A", thread: book }),
+      message({ id: "f", role: "freshStart", text: "Started fresh" }),
+      message({ id: "r", threadID: "A" }),
+      message({ id: "x", threadID: "A", thread: book }),
+      message({ id: "y", threadID: "A" }),
+      message({ id: "z", threadID: "C", thread: { id: "C", prompt: "Other" } }),
+      message({ id: "w", role: "error", text: "Failed", threadID: "C" }),
+    ];
+    expect(Object.fromEntries(threadLines(broken))).toEqual({ x: "start", y: "end", z: "start", w: "end" });
+
+    // The first row's line runs on past the badge, beside the rest of the reply.
+    const first = lined(message({ threadID: PROMPT_ID, thread: TAG }), "start");
+    expect(first.props.class).toBe("turn assistant thread-start");
+    const firstNodes = vnodes(first);
+    expect(firstNodes.find((node) => node.type === ThreadQuote)!.props.continues).toBe(true);
+    const rest = firstNodes.find((node) => node.props.class === "thread-rest")!;
+    expect(vnodes(rest.props.children).some((node) => named(node, "ReplyText"))).toBe(true);
+    expect(byClass(render(ThreadLaneRow({ continues: true, children: "badge" })), "continues")).toHaveLength(1);
+    // Rows it passes carry it; the last reply's badge row turns it in, with no quote.
+    expect(lined(message({ id: "u", role: "user", threadID: PROMPT_ID }), "through").props.class).toBe("turn user thread-through");
+    const last = lined(message({ threadID: PROMPT_ID }), "end");
+    expect(last.props.class).toBe("turn assistant thread-end");
+    const lastNodes = vnodes(last);
+    const laneRow = lastNodes.find((node) => node.type === ThreadLaneRow)!;
+    expect(laneRow.props.continues).toBeUndefined();
+    expect(named(laneRow.props.children as VNode, "LaneBadge")).toBe(true);
+    expect(lastNodes.some((node) => node.type === ThreadQuote || node.props.class === "thread-rest")).toBe(false);
   });
 
   it("draws the quote as a button named after the prompt, with the thread line around it", () => {

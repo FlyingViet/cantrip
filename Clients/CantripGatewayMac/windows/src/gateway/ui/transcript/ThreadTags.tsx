@@ -1,7 +1,7 @@
 // Thread tags in Cantrip Home (state/threads.ts), drawn like inline replies in Messages (CantripThreadTags.swift):
 // above a reply from another thread, a small copy of the prompt that started it, joined to the reply's lane badge
-// by a curved line through the margin; "N Replies" under a prompt whose replies got split up; and the open thread
-// over the blurred window.
+// by a curved line through the margin, which the rows after it in that thread share (`threadLines`); "N Replies"
+// under a prompt whose replies got split up; and the open thread over the blurred window.
 import type { ComponentChildren, JSX } from "preact";
 import { useEffect, useRef } from "preact/hooks";
 import type { RemoteThread, RemoteThreadTag } from "../../api/types";
@@ -21,6 +21,8 @@ export interface ThreadQuoteProps {
   tag: RemoteThreadTag;
   /** The reply's lane badge, which the line turns into; cards have none. */
   children?: ComponentChildren;
+  /** Later rows share this quote's line, so it runs on past the badge instead of turning into it. */
+  continues?: boolean;
 }
 
 /** A reply's head: the quoted prompt on the right, the line running from it through the margin into the lane row. */
@@ -34,9 +36,14 @@ export function ThreadQuote(props: ThreadQuoteProps): JSX.Element {
           <span class="thread-quote-text">{props.tag.prompt}</span>
         </button>
       </div>
-      <div class="thread-lane-row">{props.children ?? <span class="thread-spacer" />}</div>
+      <ThreadLaneRow continues={props.continues}>{props.children}</ThreadLaneRow>
     </div>
   );
+}
+
+/** The row a thread line turns into (or, continuing, runs past): a reply's lane badge, or a short space above a card. */
+export function ThreadLaneRow(props: { children?: ComponentChildren; continues?: boolean }): JSX.Element {
+  return <div class={`thread-lane-row${props.continues ? " continues" : ""}`}>{props.children ?? <span class="thread-spacer" />}</div>;
 }
 
 /** "N Replies ›" under a prompt whose replies other messages split up. */

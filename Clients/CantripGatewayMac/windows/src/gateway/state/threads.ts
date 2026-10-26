@@ -39,6 +39,49 @@ export function threadTag(message: Pick<RemoteMessage, "role" | "thread">): Remo
   return tag?.id && message.role !== "user" ? tag : null;
 }
 
+/** Where a row sits on a quote's thread line: the quoted reply, a row it passes, or the reply it turns into. */
+export type ThreadLine = "start" | "through" | "end";
+
+/**
+ * Rows after a quoted reply that stay in its thread share its line, as in Messages: it runs from the quote down the
+ * margin past them and turns into the last reply, instead of each reply quoting the prompt again. Answers in the
+ * thread and empty replies (which the Mac skips when placing quotes) stay in a run, but the line never ends on one.
+ * Same rule as Hermes' `CantripThreadLine` and the browser Remote.
+ */
+export function threadLines(
+  messages: readonly Pick<RemoteMessage, "id" | "role" | "text" | "threadID" | "thread" | "delegations" | "activities">[],
+): Map<string, ThreadLine> {
+  const lines = new Map<string, ThreadLine>();
+  let thread: string | null = null;
+  let run: { id: string; anchor: boolean }[] = [];
+  const close = () => {
+    let end = -1;
+    run.forEach((item, index) => { if (item.anchor) end = index; });
+    if (end > 0) {
+      lines.set(run[0].id, "start");
+      for (let index = 1; index < end; index++) lines.set(run[index].id, "through");
+      lines.set(run[end].id, "end");
+    }
+    run = [];
+    thread = null;
+  };
+  for (const message of messages) {
+    const quiet = message.role === "assistant" && !(message.text ?? "").trim() && !message.delegations?.length && !message.activities?.length;
+    const tag = threadTag(message);
+    if (tag) {
+      close();
+      thread = tag.id;
+      run = [{ id: message.id, anchor: true }];
+    } else if (thread && message.role !== "freshStart" && (quiet || message.threadID === thread)) {
+      run.push({ id: message.id, anchor: message.role !== "user" && !quiet });
+    } else {
+      close();
+    }
+  }
+  close();
+  return lines;
+}
+
 /** The quote's accessible name. */
 export function tagLabel(tag: RemoteThreadTag): string {
   return `Reply to: ${tag.prompt}`;

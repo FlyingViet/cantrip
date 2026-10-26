@@ -11,7 +11,7 @@ import { now } from "../../state/clock";
 import { clockTime, compactTokens, elapsed, isBusy, subagentLive } from "../../state/format";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
-import { threadReplies, threadTag } from "../../state/threads";
+import { threadReplies, threadTag, type ThreadLine } from "../../state/threads";
 import { SubagentStack } from "../activity/Subagents";
 import { Icon, StatusIcon } from "../icons";
 import { Spinner, toast } from "../kit";
@@ -19,7 +19,7 @@ import { openViewer } from "../viewer";
 import { ChildResultCard } from "./ChildTabs";
 import { MCPAppStack } from "./MCPApp";
 import { Markdown, type InlineImages } from "./Markdown";
-import { ThreadQuote, ThreadRepliesButton } from "./ThreadTags";
+import { ThreadLaneRow, ThreadQuote, ThreadRepliesButton } from "./ThreadTags";
 
 export type Lane = "home" | "tab";
 
@@ -435,16 +435,24 @@ export function MessageRow(props: {
   lane: Lane;
   streaming: boolean;
   reported: Set<string>;
+  /** Home: this row's place on a quoted reply's thread line (`threadLines`). */
+  threadLine?: ThreadLine;
 }): JSX.Element | null {
-  const { message, session } = props;
+  const { message, session, threadLine } = props;
   const tag = threadTag(message);
-  // A reply from another thread quotes its prompt above the lane badge (cards: above the card).
-  const head = (lane?: JSX.Element) => tag ? <ThreadQuote sessionID={session.id} messageID={message.id} tag={tag}>{lane}</ThreadQuote> : lane ?? null;
+  const line = threadLine ? ` thread-${threadLine}` : "";
+  // A reply from another thread quotes its prompt above the lane badge (cards: above the card); the last row of a
+  // run the line turns into the same way.
+  const head = (lane?: JSX.Element) => tag
+    ? <ThreadQuote sessionID={session.id} messageID={message.id} tag={tag} continues={threadLine === "start"}>{lane}</ThreadQuote>
+    : threadLine === "end" ? <ThreadLaneRow>{lane}</ThreadLaneRow> : lane ?? null;
+  // The run's first row: the line carries on beside the rest of the reply.
+  const rest = (children: ComponentChildren) => tag && threadLine === "start" ? <div class="thread-rest">{children}</div> : children;
   if (message.childResult) {
-    return <div class="turn" data-message-id={message.id}>{head()}<ChildResultCard parentID={session.id} child={message.childResult} /></div>;
+    return <div class={`turn${line}`} data-message-id={message.id}>{head()}{rest(<ChildResultCard parentID={session.id} child={message.childResult} />)}</div>;
   }
   if (message.role === "handoff" && message.handoffResult) {
-    return <div class="turn" data-message-id={message.id}>{head()}<HandoffResultCard result={message.handoffResult} /></div>;
+    return <div class={`turn${line}`} data-message-id={message.id}>{head()}{rest(<HandoffResultCard result={message.handoffResult} />)}</div>;
   }
   if (message.role === "freshStart") {
     const caption = message.text?.trim() || "Started fresh — earlier messages aren't sent to the model";
@@ -454,7 +462,7 @@ export function MessageRow(props: {
     const text = message.displayText ?? message.text;
     const replies = threadReplies(session, message.id);
     return (
-      <div class="turn user" data-message-id={message.id}>
+      <div class={`turn user${line}`} data-message-id={message.id}>
         <div class="bubble">
           {text ? <PromptText text={text} /> : null}
           <ImageGallery sessionID={session.id} images={message.images ?? []} />
@@ -473,20 +481,24 @@ export function MessageRow(props: {
   const text = isError ? "" : (message.displayText ?? message.text ?? "");
   const thinking = props.streaming && !text && !steps.length && !apps.length && !subagents.length;
   return (
-    <div class="turn assistant" data-message-id={message.id}>
+    <div class={`turn assistant${line}`} data-message-id={message.id}>
       {head(<LaneBadge lane={props.lane} />)}
-      {message.author ? <div class="author">{message.author}</div> : null}
-      {steps.length ? <ReasoningSteps steps={steps} streaming={props.streaming} /> : null}
-      {apps.length ? <MCPAppStack sessionID={session.id} apps={apps} /> : null}
-      {!isError ? <ReplyText message={message} session={session} settled={settled} /> : null}
-      {handoffs.length ? <div class="handoff-stack">{handoffs.map((handoff) => <HandoffCard key={handoff.id} handoff={handoff} />)}</div> : null}
-      {thinking ? <ThinkingIndicator class="muted" /> : null}
-      {isError ? (
+      {rest(
         <>
-          <div class="error-line selectable" role="alert"><Icon name="exclamationmark.triangle" size={14} />{message.text}</div>
-          {message.id === session.repeatedErrorMessageID ? <RepeatedErrorActions session={session} /> : null}
-        </>
-      ) : null}
+          {message.author ? <div class="author">{message.author}</div> : null}
+          {steps.length ? <ReasoningSteps steps={steps} streaming={props.streaming} /> : null}
+          {apps.length ? <MCPAppStack sessionID={session.id} apps={apps} /> : null}
+          {!isError ? <ReplyText message={message} session={session} settled={settled} /> : null}
+          {handoffs.length ? <div class="handoff-stack">{handoffs.map((handoff) => <HandoffCard key={handoff.id} handoff={handoff} />)}</div> : null}
+          {thinking ? <ThinkingIndicator class="muted" /> : null}
+          {isError ? (
+            <>
+              <div class="error-line selectable" role="alert"><Icon name="exclamationmark.triangle" size={14} />{message.text}</div>
+              {message.id === session.repeatedErrorMessageID ? <RepeatedErrorActions session={session} /> : null}
+            </>
+          ) : null}
+        </>,
+      )}
     </div>
   );
 }

@@ -314,8 +314,10 @@ button.reasoning-step:hover { background: rgba(255, 255, 255, 0.09); }
 
 /* Thread tags (Home), drawn like inline replies in Messages (CantripThreadTags.swift): above a reply from another
    thread, a small copy of its prompt on the right, joined to the reply's lane badge by a curved line through the
-   16px margin; "N Replies" under a prompt whose replies got split up; the open thread over the blurred window. */
-.thread-head { --thread-line: rgba(255, 255, 255, 0.3); align-self: stretch; display: flex; flex-direction: column; }
+   16px margin, which later rows in that thread share; "N Replies" under a prompt whose replies got split up; the
+   open thread over the blurred window. */
+.turn { --thread-line: rgba(255, 255, 255, 0.3); }
+.thread-head { align-self: stretch; display: flex; flex-direction: column; }
 .thread-quote-row { position: relative; display: flex; align-items: center; gap: 6px; padding-bottom: 6px; }
 .thread-quote-row::before {
   content: ""; position: absolute; left: -12px; top: calc(50% - 3px); bottom: 0; width: 12px;
@@ -335,6 +337,15 @@ button.reasoning-step:hover { background: rgba(255, 255, 255, 0.09); }
   border-left: 1.5px solid var(--thread-line); border-bottom: 1.5px solid var(--thread-line); border-bottom-left-radius: 8px;
 }
 .thread-spacer { display: block; height: 10px; }
+/* Rows after a quoted reply that stay in its thread share its line (threadLines): it runs on past the badge, beside
+   the rest of the reply and the rows it passes, across the 8px gaps inside a row and the 14px between rows, and turns
+   into the last reply's lane row. */
+.thread-lane-row.continues::before { height: auto; bottom: -8px; width: 0; border-bottom: 0; border-radius: 0; }
+.thread-rest { position: relative; align-self: stretch; display: flex; flex-direction: column; align-items: inherit; gap: 8px; min-width: 0; }
+.turn.thread-through { position: relative; }
+.thread-rest::before, .turn.thread-through::after {
+  content: ""; position: absolute; left: -12px; top: 0; bottom: -14px; border-left: 1.5px solid var(--thread-line); pointer-events: none;
+}
 .thread-replies {
   display: inline-flex; align-items: center; gap: 2px; min-height: 24px; padding: 0 6px; border: 0; background: none;
   color: var(--secondary); font-size: 11.5px; font-weight: 600;
