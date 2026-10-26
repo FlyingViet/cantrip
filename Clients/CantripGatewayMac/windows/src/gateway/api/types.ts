@@ -628,6 +628,14 @@ export interface RemoteSessionSummary {
   supportsQueuePlans?: boolean;
   /** Why this tab can't start a child tab now (caps full, a child itself, …). */
   childTabsUnavailableReason?: string;
+  /**
+   * "@" in this session's composer suggests tabs; a picked one is sent inside `text` as
+   * `@[Label](cantrip-tab:<UUID>)` (state/tabMentions). False for Private Local and Home background
+   * sessions; absent on older hosts (no mention UI).
+   */
+  supportsTabMentions?: boolean;
+  /** Other tabs' and Home's composers may suggest this tab. Absent: never suggested. */
+  mentionable?: boolean;
   /** A running or merging child tab: its parent (listed right before it). */
   parentID?: UUIDString;
   child?: RemoteChildTab;

@@ -7,6 +7,7 @@
 import { signal } from "@preact/signals";
 import { thread as fetchThread } from "../api/client";
 import type { RemoteMessage, RemoteSessionSummary, RemoteThread, RemoteThreadMessage, RemoteThreadTag } from "../api/types";
+import { plainMentions } from "./tabMentions";
 
 export type ThreadLoad =
   | { state: "loading" }
@@ -84,7 +85,7 @@ export function threadLines(
 
 /** The quote's accessible name. */
 export function tagLabel(tag: RemoteThreadTag): string {
-  return `Reply to: ${tag.prompt}`;
+  return `Reply to: ${plainMentions(tag.prompt)}`;
 }
 
 export function repliesLabel(count: number): string {

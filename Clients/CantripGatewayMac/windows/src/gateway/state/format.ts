@@ -1,5 +1,6 @@
 // Derived text and counts, ported from the Mac app's shared Hermes rules (see files/ref/API.md §8).
 import type { HomeTask, RemoteMessage, RemoteSessionSummary, RemoteSubagent } from "../api/types";
+import { plainMentions } from "./tabMentions";
 
 export const APPLE_EPOCH = 978307200;
 
@@ -59,7 +60,7 @@ export function tabRowDetail(session: RemoteSessionSummary): { text: string; act
   if (session.isStreaming) return { text: nonEmpty(session.status) ?? "Working…", active: true };
   const parts: string[] = [];
   if (session.queuedCount > 0) parts.push(`${session.queuedCount} queued`);
-  const preview = nonEmpty(session.preview);
+  const preview = nonEmpty(plainMentions(session.preview));
   if (preview) parts.push(preview);
   else if (session.isLocalPrivate) parts.push("Self-hosted, saved");
   else {

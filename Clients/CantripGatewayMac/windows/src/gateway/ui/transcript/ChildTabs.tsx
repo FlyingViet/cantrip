@@ -8,9 +8,11 @@ import {
 } from "../../state/childTabs";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
+import { plainMentions } from "../../state/tabMentions";
 import { Icon } from "../icons";
 import { confirmDialog, toast } from "../kit";
 import { inline } from "./Markdown";
+import { MentionText } from "./TabMentions";
 
 const VERBS: Record<ChildTabAction, string> = {
   open: "open it", requeue: "move it back to this tab", discard: "discard it", resolve: "start the merge", keepParent: "keep that version",
@@ -96,7 +98,7 @@ export function ChildResultCard(props: { parentID: string; child: RemoteChildRes
   const listed = remote.sessions.value.some((session) => session.id === child.id);
   const busy = remote.isMutating.value || !remote.isConnected.value;
   const summary = summaryText(child);
-  const tag = firstLine(child.prompt);
+  const tag = firstLine(plainMentions(child.prompt));
   return (
     <section class={`child-card ${child.state}`} role="group" aria-label={`Child tab ${child.title}`}>
       <button type="button" class="child-thread-toggle" aria-expanded={open ? "true" : "false"}
@@ -107,7 +109,7 @@ export function ChildResultCard(props: { parentID: string; child: RemoteChildRes
       </button>
       {open ? (
         <div class="child-thread">
-          <p class="child-prompt selectable">{child.prompt}</p>
+          <p class="child-prompt selectable"><MentionText text={child.prompt} /></p>
           {(child.replies ?? []).map((reply, index) => (
             <div key={index} class="child-reply">
               <span class="child-who">{child.title}</span>
