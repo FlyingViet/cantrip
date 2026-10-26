@@ -24,7 +24,7 @@ Tasks and Artifacts over the same encrypted connection).
 
 ## How it shares the iOS app's logic
 
-The iOS app lives in [FlyingViet/Hermes](https://github.com/FlyingViet/Hermes). This repo
+The iOS app lives in [FlyingViet/CantripIOS](https://github.com/FlyingViet/CantripIOS). This repo
 includes it as the `Hermes` git submodule and compiles its `Sources/` and `Shared/`
 directly, so pairing, LAN/Tailscale routing, history paging, sending, input requests,
 tasks, artifacts, background runs, MCP Apps and voice all run the exact same code.
@@ -97,7 +97,7 @@ you click **Pair**.
 
 Every route is end-to-end encrypted with the pairing token. The connection code, host API
 and capability checks are shared with the iPhone app; see
-[Host API](https://github.com/FlyingViet/Hermes#host-api) in the Hermes README and
+[Host API](https://github.com/FlyingViet/CantripIOS#host-api) in the CantripIOS README and
 Cantrip's [remote-control guide](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md).
 If a control shows an update notice, update and relaunch Cantrip on the host Mac.
 
