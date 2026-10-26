@@ -98,8 +98,11 @@ export function threadReplies(session: RemoteSessionSummary, messageID: string):
   return typeof count === "number" && count > 0 ? count : null;
 }
 
-/** Who wrote a message in a thread; prompts and answers (`user`) show as bubbles instead. */
+/** Who wrote a message in a thread; prompts and answers (`user`) show as bubbles instead. The tab's
+ * side of a handoff is named after the tab. */
 export function speaker(message: RemoteThreadMessage, assistantName: string): string {
+  const tab = message.tabTitle?.trim();
+  if (tab) return message.role === "error" ? `${tab} · Error` : tab;
   if (message.role === "handoff") return "Handoff";
   if (message.role === "error") return "Error";
   const author = message.author?.trim();

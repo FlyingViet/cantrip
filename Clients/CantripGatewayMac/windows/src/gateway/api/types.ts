@@ -492,6 +492,9 @@ export interface RemoteThreadMessage {
   text: string;
   /** Council mode: the model that wrote it. */
   author?: string;
+  /** The tab's side of a handoff made in this thread: the tab (or child tab) that did the work. */
+  tabID?: UUIDString;
+  tabTitle?: string;
 }
 
 /** A thread: its prompt, then the messages in it (unrelated ones skipped). */
@@ -499,10 +502,13 @@ export interface RemoteThread {
   id: UUIDString;
   /** The full prompt (at most 4000 characters). */
   prompt: { id: UUIDString; text: string };
-  /** Oldest first, up to 30 (before `before` when given); the prompt isn't repeated. */
+  /** Oldest first, up to 50 (before `before` when given), each handoff's work in its tab
+   * included; the prompt isn't repeated. */
   messages: RemoteThreadMessage[];
   /** Older messages in the thread were left out. */
   hasEarlier: boolean;
+  /** Home's own replies, as the prompt's "N Replies" counts them; absent from older Macs. */
+  replyCount?: number;
 }
 
 /** A queued prompt (session detail only). */
