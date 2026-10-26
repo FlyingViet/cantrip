@@ -25,14 +25,14 @@ struct VoiceModeView: View {
 
     /// Latest assistant reply — rendered as markdown in the middle.
     private var replyText: String {
-        vm.turns.last(where: { $0.role == .assistant })?.text ?? ""
+        CantripTabMentions.markdown(vm.turns.last(where: { $0.role == .assistant })?.text ?? "")
     }
 
     /// What YOU said — live partial while dictating, then the sent question
     /// while Hermes thinks/speaks, so your ask stays visible the whole turn.
     private var transcriptText: String {
         if voice.isListening { return voice.partial }
-        return vm.turns.last(where: { $0.role == .user })?.text ?? ""
+        return CantripTabMentions.plain(vm.turns.last(where: { $0.role == .user })?.text ?? "")
     }
 
     var body: some View {

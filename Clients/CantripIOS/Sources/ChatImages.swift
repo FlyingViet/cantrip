@@ -168,9 +168,13 @@ struct ChatAssistantText: View {
     let images: [ChatMessageImage]
     @ObservedObject var remote: CantripRemoteModel
     @Environment(\.openURL) private var openURL
+    @Environment(\.cantripMentionLinks) private var mentionLinks
 
     var body: some View {
-        Markdown(ChatMarkdownImages.separatingBlocks(text))
+        // Tab mentions read as a bold "@Label", linked when the tab can open from here.
+        Markdown(ChatMarkdownImages.separatingBlocks(
+            CantripTabMentions.markdown(text) { mentionLinks?.canOpen($0) == true }
+        ))
             .markdownImageProvider(ChatPreviewImageProvider(images: images, remote: remote))
             .textSelection(.enabled)
             .environment(\.openURL, OpenURLAction { url in

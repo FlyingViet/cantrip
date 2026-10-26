@@ -51,7 +51,7 @@ enum CantripTabRowText {
         var parts: [String] = []
         if session.queuedCount > 0 { parts.append("\(session.queuedCount) queued") }
         if let preview = nonEmpty(session.preview) {
-            parts.append(preview)
+            parts.append(CantripTabMentions.plain(preview))
         } else if session.isLocalPrivate == true {
             parts.append("Self-hosted, saved")
         } else if let status = nonEmpty(session.status) {

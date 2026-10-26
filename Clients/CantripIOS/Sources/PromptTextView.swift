@@ -11,7 +11,16 @@ struct PromptText {
         self.text = text
         let prefix = text.prefix(Self.previewLimit + 1)
         isLong = prefix.count > Self.previewLimit
-        preview = isLong ? String(prefix.prefix(Self.previewLimit)) : text
+        guard isLong else {
+            preview = text
+            return
+        }
+        var cut = text.index(text.startIndex, offsetBy: Self.previewLimit)
+        // Never through the middle of a tab mention's token: the preview would show its raw text.
+        if let token = CantripTabMentions.parse(text).first(where: { $0.range.contains(cut) && $0.range.lowerBound != cut }) {
+            cut = token.range.lowerBound
+        }
+        preview = String(text[..<cut])
     }
 
     func page(from start: String.Index) -> (text: String, end: String.Index) {
@@ -23,13 +32,17 @@ struct PromptText {
 /// Bound text layout, not the stored or transmitted prompt.
 struct PromptTextView: View {
     private let prompt: PromptText
+    private let mentionStyle: CantripMentionStyle
     @State private var reading = false
 
-    init(text: String) { prompt = PromptText(text) }
+    init(text: String, mentionStyle: CantripMentionStyle = .standard) {
+        prompt = PromptText(text)
+        self.mentionStyle = mentionStyle
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(verbatim: prompt.preview)
+            CantripMentionText(text: prompt.preview, style: mentionStyle)
                 .lineLimit(prompt.isLong ? 8 : nil)
             if prompt.isLong {
                 Button("Read full prompt") { reading = true }
@@ -53,7 +66,7 @@ private struct PromptReader: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
                 ScrollView {
-                    Text(verbatim: page.text)
+                    Text(verbatim: CantripTabMentions.plain(page.text))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding()
@@ -75,7 +88,7 @@ private struct PromptReader: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Copy all") { UIPasteboard.general.string = prompt.text }
+                    Button("Copy all") { UIPasteboard.general.string = CantripTabMentions.plain(prompt.text) }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }

@@ -310,7 +310,7 @@ struct CantripThreadQuote: View {
 
     var body: some View {
         Button(action: action) {
-            Text(verbatim: text)
+            Text(verbatim: CantripTabMentions.plain(text))
                 .font(.footnote)
                 .lineLimit(3)
                 .multilineTextAlignment(.leading)
@@ -321,7 +321,7 @@ struct CantripThreadQuote: View {
                 .contentShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Reply to: \(text)")
+        .accessibilityLabel("Reply to: \(CantripTabMentions.plain(text))")
         .accessibilityHint("Opens the thread")
     }
 }
@@ -491,7 +491,7 @@ struct CantripThreadView: View {
 
     /// The user's side: a blue bubble on the right.
     private func bubble(_ text: String) -> some View {
-        Text(verbatim: text)
+        CantripMentionText(text: text, style: .onAccent)
             .foregroundStyle(.white)
             .textSelection(.enabled)
             .padding(.horizontal, 14)

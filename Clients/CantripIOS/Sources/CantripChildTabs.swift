@@ -59,7 +59,8 @@ enum CantripChildTabText {
 
     /// The first line of the request, for the card's tag.
     static func firstLine(_ prompt: String) -> String {
-        prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt
+        let prompt = CantripTabMentions.plain(prompt)
+        return prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt
     }
 
     static func summary(_ child: CantripRemoteChildResult) -> String {
@@ -210,7 +211,7 @@ struct CantripChildTabCard: View {
 
     private var thread: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(verbatim: child.prompt)
+            CantripMentionText(text: child.prompt, style: .onAccent)
                 .font(.callout)
                 .foregroundStyle(.white)
                 .textSelection(.enabled)
