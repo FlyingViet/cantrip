@@ -2900,6 +2900,7 @@ private extension RemoteControlServer {
           ||(state.reply!==null&&(!state.reply||typeof state.reply.id!=="string"||state.reply.sessionID!==state.selected)))
           throw Error("Saved Remote draft state is invalid");
         tabDrafts.clear();for(const [id,text] of state.drafts)tabDrafts.set(id,text);
+        if(typeof renderMentionChips==="function")setTimeout(renderMentionChips,0);
         if(Array.isArray(state.mentions)&&typeof tabMentionLists!=="undefined"){tabMentionLists.clear();for(const entry of state.mentions)if(Array.isArray(entry)&&typeof entry[0]==="string"&&Array.isArray(entry[1])){const list=entry[1].filter(item=>typeof item?.id==="string"&&typeof item?.label==="string").map(item=>({id:item.id,label:item.label}));if(list.length)tabMentionLists.set(entry[0],list)}}
         selected=state.selected;$("draft").value=tabDrafts.get(selected)||"";$("mode").value=state.mode;
         chatInputReply=state.reply?{...state.reply,token}:null;$("actionError").textContent=state.error;
@@ -3636,15 +3637,6 @@ private extension RemoteControlServer {
       const label=document.createElement("span");const noun=activities.length===1?"step":"steps";label.textContent=state==="running"?`Working · ${activities.length} ${noun}`:`${activities.length} ${noun}`;summary.append(label);disclosure.append(summary);
       const body=document.createElement("div");body.className="disclosure-body";for(const activity of activities)appendActivity(body,activity,messageID);disclosure.append(body);parent.append(disclosure)}
     function appendThinking(parent,text,messageID){if(!text)return;const details=remember(document.createElement("details"),`thinking:${messageID}`);details.className="disclosure";const summary=document.createElement("summary");const label=document.createElement("span");label.textContent="Reasoning";summary.append(label);const body=document.createElement("div");body.className="disclosure-body prose";body.textContent=text;details.append(summary,body);parent.append(details)}
-    function promptSlice(text,start,limit){let end=Math.min(text.length,start+limit);if(end<text.length&&text.charCodeAt(end-1)>=0xD800&&text.charCodeAt(end-1)<=0xDBFF)end--;return {text:text.slice(start,end),end}}
-    function compactTokens(n){return n<1000?String(n):n<1e6?(n<1e5?(n/1000).toFixed(1):String(Math.round(n/1000)))+"k":(n/1e6).toFixed(1)+"M"}
-    function tokenPercent(part,whole){if(!(whole>0))return "0%";const value=part/whole*100;return value>0&&value<1?"<1%":`${Math.round(value)}%`}
-    function promptUsageSummary(u){if(u.contextTokens!=null)return `${compactTokens(u.contextTokens)} tokens of context${u.contextLimit>0?` · ${tokenPercent(u.contextTokens,u.contextLimit)} of ${compactTokens(u.contextLimit)}`:""}`;if(u.messageTokens!=null)return `About ${compactTokens(u.messageTokens)} tokens sent`;return `${compactTokens(u.inputTokens||0)} input tokens`}
-    function appendPromptUsage(parent,u,messageID){const details=remember(document.createElement("details"),`usage:${messageID}`),summary=document.createElement("summary"),body=document.createElement("div"),n=value=>Number(value).toLocaleString();details.className="disclosure prompt-usage";summary.textContent=promptUsageSummary(u);summary.setAttribute("aria-label",`Prompt context: ${summary.textContent}`);
-      const sent=[u.contextTokens!=null&&["Total",n(u.contextTokens)+(u.contextLimit>0?` of ${n(u.contextLimit)}`:"")],u.systemTokens!=null&&["System instructions",n(u.systemTokens)],u.toolTokens!=null&&["Tool definitions",n(u.toolTokens)],u.conversationTokens!=null&&["Conversation",n(u.conversationTokens)],u.messageTokens!=null&&["This message",`≈ ${n(u.messageTokens)}`],u.messageTokens!=null&&u.addedTokens>0&&["Added by Cantrip",`≈ ${n(u.addedTokens)}`]].filter(Boolean),run=[];
-      if(u.modelCalls>0)run.push(["Model calls",n(u.modelCalls)],["Input tokens",n(u.inputTokens)+(u.inputTokens>0&&u.cachedInputTokens>0?` (${tokenPercent(u.cachedInputTokens,u.inputTokens)} cached)`:"")],["Output tokens",n(u.outputTokens)]);if(u.latestContextTokens!=null&&u.latestContextTokens!==u.contextTokens)run.push(["Latest context",n(u.latestContextTokens)]);body.className="usage-table";
-      for(const [title,rows] of [["When sent",sent],["This run",run]]){if(!rows.length)continue;const heading=document.createElement("div"),list=document.createElement("dl");heading.className="usage-title";heading.textContent=title;for(const [label,value] of rows){const term=document.createElement("dt"),detail=document.createElement("dd");term.textContent=label;detail.textContent=value;list.append(term,detail)}body.append(heading,list)}
-      const note=document.createElement("p");note.className="muted";note.textContent="Token counts come from the model provider. “This message” includes memory and context Cantrip added, estimated at about 4 characters per token. Run totals include subagents and every step’s model call.";body.append(note);details.append(summary,body);parent.append(details)}
     // @-mention a tab: "@" at the start of a word suggests the open tabs this one may look into; a picked tab is sent as @[Label](cantrip-tab:<ID>) so the model acts on exactly that tab (TabMentions on the Mac).
     const mentionTokenPattern=/@\\[([^\\[\\]\\n]{1,120})\\]\\(cantrip-tab:([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\\)/g,mentionOpeners="([{\\"'“‘";
     function mentionLabel(title){const label=String(title??"").replace(/[\\[\\]]/g,"").split(/\\s+/).filter(Boolean).join(" ");return [...label].slice(0,60).join("").trim()||"tab"}
@@ -3654,6 +3646,12 @@ private extension RemoteControlServer {
       const query=text.slice(at+1,caret);if(/[\\n\\r]/.test(query)||/^\\s/.test(query)||query.startsWith("["))return null;return {at,query}}
     function mentionFold(text){return String(text??"").normalize("NFD").replace(/\\p{M}/gu,"").toLowerCase().split(/\\s+/).filter(Boolean).join(" ")}
     function mentionProject(workdir){const path=String(workdir??"").replace(/\\/+$/,"");if(!path||path==="~"||/^\\/(Users|home)\\/[^/]+$/.test(path))return null;return path.split("/").pop()||null}
+    // The "@" at `at` starts a picked mention's "@Label": the list stays closed there.
+    function mentionPickedAt(text,at,picks){return picks.some(pick=>{const needle="@"+pick.label;if(!text.startsWith(needle,at))return false;const after=text[at+needle.length]??"";return !after||!/[\\p{L}\\p{N}_]/u.test(after)})}
+    // A label stands for one ID: a second picked tab with the same title gets its project, then a number.
+    function uniqueMentionLabel(row,picks){const base=mentionLabel(row.title),taken=new Set(picks.filter(pick=>pick.id!==row.id).map(pick=>pick.label));if(!taken.has(base))return base;
+      if(row.project){const withProject=mentionLabel(`${base} (${row.project})`);if(!taken.has(withProject))return withProject}
+      let number=2;while(taken.has(mentionLabel(`${base} ${number}`)))number++;return mentionLabel(`${base} ${number}`)}
     function mentionCandidates(session){if(!session?.supportsTabMentions)return [];const titles=new Map(sessionItems.map(item=>[item.id,item.title]));
       return sessionItems.filter(item=>item.mentionable===true&&item.id!==session.id).map(item=>({id:item.id,title:item.title||"Untitled",project:mentionProject(item.workdir),
         parentTitle:item.parentID?titles.get(item.parentID)||null:null,isStreaming:Boolean(item.isStreaming),needsAnswer:(item.pendingInputCount||0)>0}))}
@@ -3679,8 +3677,17 @@ private extension RemoteControlServer {
     function appendMentionText(parent,text){const source=String(text??"");let last=0;
       source.replace(mentionTokenPattern,(match,label,id,offset)=>{if(offset>last)parent.append(source.slice(last,offset));parent.append(mentionNode(label,id));last=offset+match.length;return match});
       if(last<source.length)parent.append(source.slice(last))}
+    function promptSlice(text,start,limit){let end=Math.min(text.length,start+limit);if(end<text.length&&text.charCodeAt(end-1)>=0xD800&&text.charCodeAt(end-1)<=0xDBFF)end--;return {text:text.slice(start,end),end}}
+    function compactTokens(n){return n<1000?String(n):n<1e6?(n<1e5?(n/1000).toFixed(1):String(Math.round(n/1000)))+"k":(n/1e6).toFixed(1)+"M"}
+    function tokenPercent(part,whole){if(!(whole>0))return "0%";const value=part/whole*100;return value>0&&value<1?"<1%":`${Math.round(value)}%`}
+    function promptUsageSummary(u){if(u.contextTokens!=null)return `${compactTokens(u.contextTokens)} tokens of context${u.contextLimit>0?` · ${tokenPercent(u.contextTokens,u.contextLimit)} of ${compactTokens(u.contextLimit)}`:""}`;if(u.messageTokens!=null)return `About ${compactTokens(u.messageTokens)} tokens sent`;return `${compactTokens(u.inputTokens||0)} input tokens`}
+    function appendPromptUsage(parent,u,messageID){const details=remember(document.createElement("details"),`usage:${messageID}`),summary=document.createElement("summary"),body=document.createElement("div"),n=value=>Number(value).toLocaleString();details.className="disclosure prompt-usage";summary.textContent=promptUsageSummary(u);summary.setAttribute("aria-label",`Prompt context: ${summary.textContent}`);
+      const sent=[u.contextTokens!=null&&["Total",n(u.contextTokens)+(u.contextLimit>0?` of ${n(u.contextLimit)}`:"")],u.systemTokens!=null&&["System instructions",n(u.systemTokens)],u.toolTokens!=null&&["Tool definitions",n(u.toolTokens)],u.conversationTokens!=null&&["Conversation",n(u.conversationTokens)],u.messageTokens!=null&&["This message",`≈ ${n(u.messageTokens)}`],u.messageTokens!=null&&u.addedTokens>0&&["Added by Cantrip",`≈ ${n(u.addedTokens)}`]].filter(Boolean),run=[];
+      if(u.modelCalls>0)run.push(["Model calls",n(u.modelCalls)],["Input tokens",n(u.inputTokens)+(u.inputTokens>0&&u.cachedInputTokens>0?` (${tokenPercent(u.cachedInputTokens,u.inputTokens)} cached)`:"")],["Output tokens",n(u.outputTokens)]);if(u.latestContextTokens!=null&&u.latestContextTokens!==u.contextTokens)run.push(["Latest context",n(u.latestContextTokens)]);body.className="usage-table";
+      for(const [title,rows] of [["When sent",sent],["This run",run]]){if(!rows.length)continue;const heading=document.createElement("div"),list=document.createElement("dl");heading.className="usage-title";heading.textContent=title;for(const [label,value] of rows){const term=document.createElement("dt"),detail=document.createElement("dd");term.textContent=label;detail.textContent=value;list.append(term,detail)}body.append(heading,list)}
+      const note=document.createElement("p");note.className="muted";note.textContent="Token counts come from the model provider. “This message” includes memory and context Cantrip added, estimated at about 4 characters per token. Run totals include subagents and every step’s model call.";body.append(note);details.append(summary,body);parent.append(details)}
     function appendPrompt(parent,text){const preview=document.createElement("div"),page=promptSlice(text,0,1200),long=page.end<text.length;preview.className=`prompt-preview${long?" clipped":""}`;if(page.text.includes("](cantrip-tab:"))appendMentionText(preview,page.text);else preview.textContent=page.text;parent.append(preview);
-      if(long){const button=document.createElement("button");button.className="control quiet";button.textContent="Read full prompt";button.onclick=()=>readPrompt(plainMentions(text));parent.append(button)}}
+      if(long){const button=document.createElement("button");button.className="control quiet";button.textContent="Read full prompt";button.onclick=()=>readPrompt(text.includes("](cantrip-tab:")?plainMentions(text):text);parent.append(button)}}
     let readingPrompt="",promptStarts=[0],promptEnd=0;
     function renderPromptPage(){const page=promptSlice(readingPrompt,promptStarts[promptStarts.length-1],4000);promptEnd=page.end;$("promptPage").textContent=page.text;$("promptPage").scrollTop=0;$("promptNumber").textContent=`Page ${promptStarts.length}`;$("promptPrevious").disabled=promptStarts.length===1;$("promptNext").disabled=promptEnd===readingPrompt.length}
     function readPrompt(text){readingPrompt=text;promptStarts=[0];$("promptTitle").textContent="Full prompt";renderPromptPage();$("promptReader").showModal()}
@@ -3956,7 +3963,7 @@ private extension RemoteControlServer {
       popover.style.maxHeight=`${Math.round(Math.max(88,Math.min(limit,upward?above:below)))}px`}
     function syncMentions(){const draft=$("draft"),popover=$("mentionPopover"),list=$("mentionList"),session=slashSession(),text=draft.value;
       const caret=draft.selectionStart===draft.selectionEnd?draft.selectionStart:null;
-      const found=session?.supportsTabMentions&&token&&document.activeElement===draft&&caret!==null?mentionQuery(text,caret):null,place=found?`${session.id} ${found.at}`:null;
+      let found=session?.supportsTabMentions&&token&&document.activeElement===draft&&caret!==null?mentionQuery(text,caret):null;if(found&&mentionPickedAt(text,found.at,currentMentions()))found=null;const place=found?`${session.id} ${found.at}`:null;
       if(mentionState.dismissed!==null&&mentionState.dismissed!==place)mentionState.dismissed=null;
       const candidates=found?mentionCandidates(session):[],rows=found?matchMentions(found.query,candidates):[];
       // A space with no match means the "@" was ordinary text.
@@ -3971,7 +3978,7 @@ private extension RemoteControlServer {
       setText($("mentionInfo"),rows.length?"":`No open tab matches “${found.query}”`);$("mentionInfo").classList.toggle("hidden",rows.length>0);placeMentionPopover();
       setText($("mentionStatus"),rows.length?`${rows.length} tab${rows.length===1?"":"s"}`:"No matching tabs")}
     function chooseMention(index){const row=mentionState.rows[index],draft=$("draft");if(!row)return;const text=draft.value,caret=draft.selectionStart??text.length,found=mentionQuery(text,caret);if(!found)return;
-      const label=mentionLabel(row.title),rest=text.slice(caret),insert="@"+label+(rest.startsWith(" ")?"":" "),position=found.at+insert.length+(rest.startsWith(" ")?1:0);
+      const label=uniqueMentionLabel(row,currentMentions()),rest=text.slice(caret),insert="@"+label+(rest.startsWith(" ")?"":" "),position=found.at+insert.length+(rest.startsWith(" ")?1:0);
       draft.value=text.slice(0,found.at)+insert+rest;draft.focus();draft.setSelectionRange(position,position);
       setMentions([...currentMentions().filter(item=>!(item.id===row.id&&item.label===label)),{id:row.id,label}]);renderMentionChips();syncMentions();setText($("mentionStatus"),`Mentioned ${row.title}`)}
     // Returns true when the open tab list consumed the key; Return and Tab pick, Escape closes it for this "@".

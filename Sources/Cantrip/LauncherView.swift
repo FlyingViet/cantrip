@@ -2177,7 +2177,8 @@ struct LauncherView: View {
     private var mentionToken: (at: String.Index, query: String)? {
         guard !manager.showingRemote, !showHistory, TabMentions.supportsMentions(session),
               let found = TabMentions.query(in: query, caret: composerCaret),
-              dismissedMention != mentionPlace(found.at, in: query) else { return nil }
+              dismissedMention != mentionPlace(found.at, in: query),
+              !TabMentions.isPicked(at: found.at, in: query, picks: currentMentions) else { return nil }
         return found
     }
 
@@ -2341,7 +2342,8 @@ struct LauncherView: View {
 
     private func chooseMention(_ candidate: TabMentions.Candidate) {
         guard let token = mentionToken else { return }
-        let result = TabMentions.insert(candidate, at: token.at, caret: composerCaret, in: query)
+        let result = TabMentions.insert(candidate, at: token.at, caret: composerCaret, in: query,
+                                        label: TabMentions.uniqueLabel(for: candidate, among: currentMentions))
         let caret = NSRange(result.caret..<result.caret, in: result.text).location
         query = result.text
         tabMentions[session.id] = currentMentions.filter { !($0.id == candidate.id && $0.label == result.label) }

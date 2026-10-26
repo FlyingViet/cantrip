@@ -182,7 +182,7 @@ same(fetching.cache.get("a").data, null, "an invalid response is treated as a fa
 
 // @-mentions: the same rules as TabMentions on the Mac (query, matching, encoding, display).
 const mentions = vm.createContext({ sessionItems: [], selected: null, token: "t", slashState: { open: false }, tabMentionLists: new Map() });
-vm.runInContext(templateSlice("    const mentionTokenPattern=", "    function appendPrompt("), mentions);
+vm.runInContext(templateSlice("    const mentionTokenPattern=", "    function promptSlice"), mentions);
 vm.runInContext(templateSlice("    function currentMentions(", "    function removeMention("), mentions);
 const tv = "11111111-2222-3333-4444-555555555555", remote = "AAAAAAAA-2222-3333-4444-555555555555";
 same(mentions.mentionQuery("mail a@b.com"), null, "an email address never opens the tab list");
@@ -209,6 +209,12 @@ same(encoded, `ask @[TV](cantrip-tab:${tv}) and @[TV Remote](cantrip-tab:${remot
 same(mentions.plainMentions(encoded), "ask @TV and @TV Remote, mail a@TV (@TV) @TVs", "tokens read as @Label");
 same(mentions.mentionProject("/Users/me"), null, "the home folder isn't a project");
 same(mentions.mentionProject("/Users/me/Coding/Cantrip/"), "Cantrip", "the project is the folder name");
+same(mentions.mentionPickedAt("Ask @Sony TV so", 4, [{ id: tv, label: "Sony TV" }]), true, "the list stays closed at a picked mention");
+same(mentions.mentionPickedAt("@Sony TVs", 0, [{ id: tv, label: "Sony TV" }]), false, "a longer word isn't the pick");
+same(mentions.uniqueMentionLabel({ id: remote, title: "Sony TV", project: "tv-two" }, [{ id: tv, label: "Sony TV" }]), "Sony TV (tv-two)",
+    "a second tab with the same title gets its project");
+same(mentions.uniqueMentionLabel({ id: remote, title: "Sony TV", project: null }, [{ id: tv, label: "Sony TV" }]), "Sony TV 2", "or a number");
+same(mentions.uniqueMentionLabel({ id: tv, title: "Sony TV", project: null }, [{ id: tv, label: "Sony TV" }]), "Sony TV", "re-picking keeps the label");
 vm.runInContext(`selected = "tab"; tabMentionLists.set("tab", ${JSON.stringify(picks)}); var draftValue = "only @TV Remote here", rendered = 0;
   globalThis.$ = id => id === "draft" ? { get value() { return draftValue } } : null; globalThis.renderMentionChips = () => rendered++;`, mentions);
 mentions.pruneMentions();
