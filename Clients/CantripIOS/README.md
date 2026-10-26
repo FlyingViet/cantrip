@@ -612,7 +612,9 @@ When replies from different threads interleave (a background agent finishing
 after you've moved on, or a handoff's result card), Home draws them like inline
 replies in Messages: a reply from another thread quotes the prompt that started
 it in a small blue bubble, joined to the reply by a curved line in the left
-margin, and that prompt says **N Replies ›** under it. Tap either to open the
+margin. Replies right after it in the same thread don't quote it again: the line
+runs on past them and curves into the last one. That prompt says **N Replies ›**
+under it. Tap either to open the
 whole thread over the blurred chat (the prompt and every message in it, whole);
 **✕** closes it. The thread comes from the Mac, so it opens even when the
 prompt is in older history that hasn't loaded, and it refreshes while open.

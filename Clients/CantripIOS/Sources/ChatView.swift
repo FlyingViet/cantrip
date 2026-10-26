@@ -2170,6 +2170,8 @@ struct ChatView: View {
                 }
             }
             if vm.turns.isEmpty { emptyState }
+            let threadLines = vm.activeLane.usesCantripRemote
+                ? CantripThreadLine.lines(in: remote.selectedSession?.transcript ?? []) : [:]
             ForEach(vm.turns) { turn in
                 let remoteMessage = vm.activeLane.usesCantripRemote ? vm.remoteMessage(for: turn.id) : nil
                 TurnView(
@@ -2180,7 +2182,8 @@ struct ChatView: View {
                     onAction: { vm.send($0.command) },
                     onApproval: { vm.approveRun($0, for: turn.id) },
                     // Home's handoff cards and a parent tab's child-tab cards open tabs.
-                    onOpenTab: vm.activeLane.usesCantripRemote ? { openTab($0) } : nil
+                    onOpenTab: vm.activeLane.usesCantripRemote ? { openTab($0) } : nil,
+                    threadLine: remoteMessage.flatMap { threadLines[$0.id] }
                 )
                 .id(turn.id)
                 if vm.activeLane.usesCantripRemote, let message = remoteMessage,
@@ -3448,6 +3451,8 @@ struct TurnView: View {
     var onAction: (ChatAction) -> Void = { _ in }
     var onApproval: (String) -> Void = { _ in }
     var onOpenTab: ((String) -> Void)? = nil
+    /// Cantrip Home: this row's place on a quoted reply's thread line.
+    var threadLine: CantripThreadLine? = nil
 
     /// Parse inline markdown (bold/italic/code/links) while preserving the
     /// newlines streamed from the agent; falls back to plain text on a partial
@@ -3463,13 +3468,19 @@ struct TurnView: View {
     }
 
     var body: some View {
+        row.modifier(CantripThreadRail(line: threadLine))
+    }
+
+    @ViewBuilder private var row: some View {
         if let child = remoteMessage?.childResult, let parentID = cantripSessionID {
             CantripChildTabCard(child: child, parentID: parentID, remote: remote, onOpenTab: onOpenTab)
         } else if let result = remoteMessage?.handoffResult, remoteMessage?.isHandoffResult == true {
             VStack(alignment: .leading, spacing: 8) {
                 if let message = remoteMessage, message.thread != nil {
                     CantripThreadHeader(tag: message.thread, messageID: message.id,
-                                        sessionID: cantripSessionID, remote: remote)
+                                        sessionID: cantripSessionID, remote: remote, continues: threadLine == .start)
+                } else if threadLine == .end {
+                    CantripThreadLaneRow()
                 }
                 CantripHandoffResultCard(result: result, onOpenTab: onOpenTab)
             }
@@ -3502,7 +3513,9 @@ struct TurnView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if let message = remoteMessage, message.thread != nil {
                     CantripThreadHeader(lane: turn.executionLane, tag: message.thread, messageID: message.id,
-                                        sessionID: cantripSessionID, remote: remote)
+                                        sessionID: cantripSessionID, remote: remote, continues: threadLine == .start)
+                } else if threadLine == .end {
+                    CantripThreadLaneRow(lane: turn.executionLane)
                 } else if let lane = turn.executionLane {
                     ExecutionLaneBadge(lane: lane)
                 }

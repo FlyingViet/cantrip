@@ -1,5 +1,10 @@
 import SwiftUI
 
+enum ChatTranscriptLayout {
+    /// Space between transcript rows; a thread line drawn beside a row crosses it to the next.
+    static let rowSpacing: CGFloat = 14
+}
+
 struct ChatTranscriptScrollView<Content: View>: View {
     var scrollRequest = 0
     var prependRevision = 0
@@ -19,7 +24,7 @@ struct ChatTranscriptScrollView<Content: View>: View {
         ScrollView {
             // Lazy height estimates drift with long Markdown replies and replaced
             // optimistic messages. Measure the transcript before anchoring its end.
-            VStack(alignment: .leading, spacing: 14, content: content)
+            VStack(alignment: .leading, spacing: ChatTranscriptLayout.rowSpacing, content: content)
                 .scrollTargetLayout()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
