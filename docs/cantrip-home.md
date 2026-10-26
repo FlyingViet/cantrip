@@ -4,7 +4,7 @@
 
 Cantrip Home is an optional, permanent session that runs your Mac from one
 conversation. It powers the focused **Chat / Tasks / Artifacts** mode in
-[Cantrip Agent](https://github.com/FlyingViet/Hermes) (iPhone/iPad) and
+[Cantrip Agent](https://github.com/FlyingViet/CantripIOS) (iPhone/iPad) and
 [Cantrip Gateway Mac](https://github.com/FlyingViet/CantripGatewayMac), and is
 the pinned first tab in the browser remote. It stays hidden from the ordinary
 Mac and Remote tab lists.

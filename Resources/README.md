@@ -2,7 +2,7 @@
 
 The Cantrip mark is a pearl-violet **C** casting a warm golden spark: a small,
 useful spell on a midnight-amethyst background. The same mark is used by the
-Mac and Windows apps, [Cantrip Agent](https://github.com/FlyingViet/Hermes) and
+Mac and Windows apps, [Cantrip Agent](https://github.com/FlyingViet/CantripIOS) and
 [Cantrip Gateway Mac](https://github.com/FlyingViet/CantripGatewayMac).
 
 Run `make artwork` on macOS to regenerate the artwork using native CoreGraphics
