@@ -2640,6 +2640,8 @@ private extension RemoteControlServer {
     .child-tag:before{content:"↩";content:"↩"/""}.child-tag:after{content:"⌄";content:"⌄"/"";transition:transform .12s}.child-thread[open] .child-tag:after{transform:rotate(180deg)}
     .child-thread-body{display:grid;gap:8px;margin:8px 0 2px 4px;padding-left:12px;border-left:2px solid var(--line)}
     .thread-link{position:relative;width:fit-content;max-width:min(78%,440px);padding-bottom:6px}.thread-bracket{position:absolute;left:-12px;top:calc(50% - 3px);width:9px;height:calc(50% + 15px);border:2px solid var(--thread-line);border-right:0;border-radius:9px 0 0 9px;pointer-events:none}
+    .thread-start .thread-bracket{height:calc(50% + 3px);border-bottom:0;border-radius:9px 0 0 0}.thread-rest{position:relative;display:flow-root}.thread-rest:before{content:"";position:absolute;left:-12px;top:0;bottom:0;border-left:2px solid var(--thread-line);pointer-events:none}
+    .message.thread-through,.message.thread-end{position:relative}.message.thread-through:after,.message.thread-end:after{content:"";position:absolute;left:-12px;top:-12px;pointer-events:none}.message.thread-through:after{bottom:0;border-left:2px solid var(--thread-line)}.message.thread-end:after{width:9px;height:24px;border:solid var(--thread-line);border-width:0 0 2px 2px;border-radius:0 0 0 9px}
     .thread-quote{display:block;max-width:100%;margin:0;padding:4px 10px;border:0;border-radius:13px;background:#3a5fcd;color:#fff;font:inherit;font-size:12px;font-weight:500;line-height:1.4;text-align:left;cursor:pointer}.thread-quote>span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}.thread-quote:hover{background:#3358c4}
     .thread-replies{display:inline-flex;align-items:center;min-height:24px;margin-top:3px;padding:0;border:0;background:none;color:var(--secondary);font:inherit;font-size:12px;font-weight:600;cursor:pointer}.thread-replies:hover{color:var(--text)}
     #threadView{width:min(calc(100% - 24px),720px);max-width:none;height:min(calc(100% - 32px),920px);max-height:none;padding:0;border:0;background:transparent;color:var(--text);overflow:hidden}#threadView[open]{display:flex;flex-direction:column}#threadView::backdrop{background:var(--thread-scrim);-webkit-backdrop-filter:blur(22px) saturate(1.4);backdrop-filter:blur(22px) saturate(1.4)}
@@ -3706,6 +3708,19 @@ private extension RemoteControlServer {
       quote.onclick=()=>openThread({sessionID,threadID:thread.id,prompt:thread.prompt,messageID:message.id,opener:quote});wrap.append(line,quote);return wrap}
     function threadRepliesButton(sessionID,message,count){const button=document.createElement("button"),label=count===1?"1 Reply":`${count} Replies`;button.type="button";button.className="thread-replies";button.textContent=`${label} ›`;button.setAttribute("aria-label",`${label}. Opens the thread`);
       button.onclick=()=>openThread({sessionID,threadID:message.id,prompt:message.displayText??message.text,messageID:null,opener:button});return button}
+    // Whether render() draws a row for a message.
+    function drawsRow(message,answered){const subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id));
+      return Boolean(message.text||message.thinking||(message.activities||[]).some(activity=>!subagentIDs.has(activity.id))||subagents.some(agent=>!subagentActive(agent))||(message.delegations||[]).some(handoff=>!answered.has(handoff.id)))}
+    // Rows after a quoted reply that stay in its thread share its line, as in Messages: it runs from the quote down the
+    // margin past them ("start", "through") and turns into the last reply ("end"). Answers in the thread and empty replies
+    // (which the Mac skips when placing quotes) stay in a run, but the line never ends on one.
+    function threadLines(rows){const lines=new Map;let thread=null,run=[];
+      const close=()=>{let end=-1;run.forEach((item,index)=>{if(item.anchor)end=index});if(end>0){lines.set(run[0].id,"start");for(let index=1;index<end;index++)lines.set(run[index].id,"through");lines.set(run[end].id,"end")}run=[];thread=null};
+      for(const message of rows){const quiet=message.role==="assistant"&&!(message.text||"").trim()&&!message.delegations?.length&&!message.activities?.length;
+        if(message.thread?.id&&message.role!=="user"){close();thread=message.thread.id;run=[{id:message.id,anchor:true}]}
+        else if(thread&&message.role!=="freshStart"&&(quiet||message.threadID===thread))run.push({id:message.id,anchor:message.role!=="user"&&!quiet});
+        else close()}
+      close();return lines}
     function openThread(state){threadOpen={...state,token,page:null,error:null,scrolled:false,loading:false,again:false};fillThread();if(!$("threadView").open)$("threadView").showModal();$("threadClose").focus();loadThread()}
     // The whole thread, fetched again whenever the conversation changes while it's open; a failed refresh keeps what's shown.
     async function loadThread(){const state=threadOpen;if(!state)return;if(state.loading){state.again=true;return}state.loading=true;let changed=true;
@@ -3764,18 +3779,19 @@ private extension RemoteControlServer {
       const pinned=[];if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{if(session.isLocalPrivate){const notice=document.createElement("p");notice.className="muted";notice.textContent="Private Local - saved on the Mac and available remotely. Self-hosted models; no cloud fallback. Configure the server in the tab menu.";box.append(notice)}
         if(session.child)box.append(childBanner(session));
-        const answered=new Set(session.messages.filter(m=>m.role==="handoff"&&m.handoffResult).map(m=>m.handoffResult.delegationID));
+        const answered=new Set(session.messages.filter(m=>m.role==="handoff"&&m.handoffResult).map(m=>m.handoffResult.delegationID)),lines=threadLines(session.messages.filter(message=>drawsRow(message,answered)));
         for(const message of session.messages){const handoffs=(message.delegations||[]).filter(handoff=>!answered.has(handoff.id)),subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id)),activities=(message.activities||[]).filter(activity=>!subagentIDs.has(activity.id)),apps=message.apps||[],settled=subagents.filter(agent=>!subagentActive(agent));for(const agent of subagents)if(subagentActive(agent))pinned.push([agent,message.id]);for(const app of apps)box.append(mcpAppSlot(session.id,app));
-          if(!message.text&&!message.thinking&&!activities.length&&!settled.length&&!handoffs.length)continue;if(message.role==="freshStart"){box.append(freshStartDivider(message));continue}const row=document.createElement("article");row.className=`message ${message.role}`;row.dataset.messageId=message.id;
+          if(!drawsRow(message,answered))continue;if(message.role==="freshStart"){box.append(freshStartDivider(message));continue}const row=document.createElement("article"),line=lines.get(message.id);let link=null;row.className=`message ${message.role}`;row.dataset.messageId=message.id;if(line)row.classList.add(`thread-${line}`);
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
-          if(message.thread&&message.role!=="user"){row.classList.add("threaded");row.append(threadQuote(session.id,message))}
+          if(message.thread&&message.role!=="user"){row.classList.add("threaded");link=threadQuote(session.id,message);row.append(link)}
           appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);const replies=session.threadReplies?.[message.id];if(replies>0)row.append(threadRepliesButton(session.id,message,replies));if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
           if(message.role==="error"&&session.supportsStartFresh&&message.id===session.repeatedErrorMessageID)appendErrorRecovery(row,session);
           if(handoffs.length){const stack=document.createElement("div");stack.className="handoffs";for(const handoff of handoffs)stack.append(handoffCard(handoff));row.append(stack)}appendActivities(row,activities,message.id);
           if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
             const requestToken=token;button.disabled=true;try{const data=await api(`/api/v1/sessions/${session.id}/messages/${message.id}`);if(token!==requestToken||selected!==session.id)return;
               const full=data.message,parts=[full.text];if(full.thinking)parts.push("Reasoning\\n"+full.thinking);for(const step of full.activities||[])parts.push([step.title,step.input,step.output].filter(Boolean).join("\\n"));readPrompt(parts.join("\\n\\n"));$("promptTitle").textContent="Message details"}
-            catch(error){if(token===requestToken)$("historyError").textContent=`Could not load message details: ${error.message}`}finally{button.disabled=false}};row.append(button)}box.append(row)}
+            catch(error){if(token===requestToken)$("historyError").textContent=`Could not load message details: ${error.message}`}finally{button.disabled=false}};row.append(button)}
+          if(line==="start"&&link){const rest=document.createElement("div");rest.className="thread-rest";while(link.nextSibling)rest.append(link.nextSibling);row.append(rest)}box.append(row)}
         appendChatInputs(box,session);
         const queue=queueList(session);if(queue)box.append(queue);
         if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}

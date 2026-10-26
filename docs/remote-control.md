@@ -1014,13 +1014,16 @@ When several threads are running in Home, they're drawn like inline replies
 in Messages. A reply that belongs to a different thread from the message just
 above it quotes the prompt that started its thread: a small copy of the
 prompt, joined to the reply by a curved line in the left margin. A reply right
-under its own prompt has no quote, and a run of replies from the same thread
-shares one. A prompt whose replies other messages split up says **N Replies ›**
-under it, counting every later message in its thread. Tapping or clicking the
-quote or **N Replies** (or Enter or Space) opens the whole thread over the
-blurred conversation: the prompt and every message in it, whole, with **✕** (or
-Escape) to close. Opened from a quote, it scrolls to that reply. The thread
-refreshes while open as replies arrive. The Mac supplies the thread, so it
+under its own prompt has no quote. The messages right after a quoted reply that
+stay in its thread share its quote: the line runs on from the quote down the
+margin past them and curves into the last reply, as a run of replies does in
+Messages. Answers in the thread and empty replies stay in the run, but the line
+always ends on a reply. A prompt whose replies other messages split up says
+**N Replies ›** under it, counting every later message in its thread. Tapping
+or clicking the quote or **N Replies** (or Enter or Space) opens the whole
+thread over the blurred conversation: the prompt and every message in it,
+whole, with **✕** (or Escape) to close. Opened from a quote, it scrolls to that
+reply. The thread refreshes while open as replies arrive. The Mac supplies the thread, so it
 opens even when the prompt is in older messages that haven't loaded. The
 browser Remote, Cantrip Agent (iPhone, Duo), Cantrip Gateway Mac and Cantrip
 Gateway for Windows show them; VoiceOver reads the quote as a button, "Reply
@@ -1038,7 +1041,10 @@ this change have no thread and never get a tag.
 API:
 - Messages carry `threadID` (the prompt's message ID) when known. Home's
   messages that need a quote also carry `thread` (`{id, prompt}`, the prompt's
-  start on one line).
+  start on one line). Clients draw a quote's shared line from these: after a
+  message with `thread`, every following message whose `threadID` matches, or
+  that's an empty reply, is in its run; the line curves into the run's last
+  message that isn't a prompt or an empty reply.
 - Home's session details (every response with messages, each page included)
   carry `threadReplies`: `{promptID: count}` for every prompt in the
   conversation whose thread other messages split up, so clients can update

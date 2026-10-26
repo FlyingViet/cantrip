@@ -43,7 +43,8 @@ confirmed" instead of claiming the work is finished.
 When replies from different threads interleave (a background agent finishing
 while you've moved on, or a handoff's result card), Home draws them like inline
 replies in Messages: each reply from another thread quotes the prompt it
-belongs to, joined to it by a curved line, and that prompt says "N Replies".
+belongs to, joined to it by a curved line that runs on past the replies right
+after it in the same thread, and that prompt says "N Replies".
 Either opens the whole thread over the blurred chat. See
 [Thread tags in Cantrip Home](remote-control.md#thread-tags-in-cantrip-home).
 
