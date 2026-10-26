@@ -30,10 +30,10 @@ import { tabRowDetail } from "../src/gateway/state/format";
 import * as nav from "../src/gateway/state/nav";
 import * as remote from "../src/gateway/state/remote";
 import {
-  addMention, encodeMentions, insertMention, matchMentions, mentionAccessibilityLabel, mentionCandidates, mentionCountAnnouncement,
+  addMention, encodeMentions, insertMention, isPickedAt, matchMentions, mentionAccessibilityLabel, mentionCandidates, mentionCountAnnouncement,
   mentionDetail, mentionLabel, mentionListState, mentionProject, mentionQuery, mentionSafeCut, mentionSegments, mentionToken,
-  moveMentionHighlight, noMentionMatchText, normalizeMention, parseMentions, plainMentions, remainingMentions, removeMentionText,
-  supportsMentions, type MentionCandidate,
+  moveMentionHighlight, noMentionMatchText, normalizeMention, parseMentions, plainMentions, plainMentionsDeep, plainSession,
+  remainingMentions, removeMentionText, supportsMentions, uniqueMentionLabel, type MentionCandidate,
 } from "../src/gateway/state/tabMentions";
 import { tagLabel } from "../src/gateway/state/threads";
 import { queuedText } from "../src/gateway/ui/activity/activityLogic";
@@ -270,6 +270,48 @@ describe("picking", () => {
     expect(insertMention("[x]", 0, 1, "@")).toEqual({ text: "@x ", label: "x", caret: 3 });
   });
 
+  it("keeps the list closed at an @ that starts a picked @Label", () => {
+    const sony = { id: SONY, label: "Sony TV" };
+    // Right after a pick the caret follows "@Sony TV ", itself a query matching the pick.
+    const picked = insertMention("Sony TV", 4, 7, "ask @so");
+    expect(mentionQuery(picked.text, picked.caret)).toEqual({ at: 4, query: "Sony TV " });
+    expect(isPickedAt(4, picked.text, [sony])).toBe(true);
+    expect(isPickedAt(4, "ask @Sony TV", [sony])).toBe(true);
+    expect(isPickedAt(4, "ask @Sony TV, then", [sony])).toBe(true);
+    expect(isPickedAt(4, "ask @Sony TVs", [sony])).toBe(false);
+    expect(isPickedAt(4, "ask @Sony TV_2", [sony])).toBe(false);
+    expect(isPickedAt(4, "ask @Sony T", [sony])).toBe(false);
+    expect(isPickedAt(4, picked.text, [])).toBe(false);
+    // A new "@" after the pick is a new query.
+    const next = `${picked.text}and @ba`;
+    expect(mentionQuery(next)).toEqual({ at: next.length - 3, query: "ba" });
+    expect(isPickedAt(next.length - 3, next, [sony])).toBe(false);
+  });
+
+  it("gives a second tab with the same title its project, else a number", () => {
+    const first = { id: SONY, title: "Sony TV", workdir: "/Users/alex/Projects/den" };
+    const second = { id: TV, title: "Sony TV", workdir: "/Users/alex/Projects/bedroom" };
+    const third = { id: TV_REMOTE, title: "Sony TV", workdir: "/Users/alex/Projects/bedroom" };
+    expect(uniqueMentionLabel(first, [])).toBe("Sony TV");
+    const picks = [{ id: SONY, label: "Sony TV" }];
+    expect(uniqueMentionLabel(first, picks)).toBe("Sony TV");
+    expect(uniqueMentionLabel(second, picks)).toBe("Sony TV (bedroom)");
+    expect(uniqueMentionLabel(third, [...picks, { id: TV, label: "Sony TV (bedroom)" }])).toBe("Sony TV 2");
+    expect(uniqueMentionLabel({ ...third, workdir: "/Users/alex" }, [...picks, { id: TV, label: "Sony TV 2" }])).toBe("Sony TV 3");
+    // Re-picking keeps the tab's own label.
+    expect(uniqueMentionLabel(second, [...picks, { id: TV, label: "Sony TV (bedroom)" }])).toBe("Sony TV (bedroom)");
+    // A 60-character label makes room for its suffix (it never loops on a cut-off number).
+    expect(uniqueMentionLabel({ id: TV, title: "x".repeat(70), workdir: "" }, [{ id: SONY, label: "x".repeat(60) }])).toBe(`${"x".repeat(58)} 2`);
+    expect(uniqueMentionLabel({ id: TV, title: "x".repeat(70), workdir: "/Users/b/den" }, [{ id: SONY, label: "x".repeat(60) }])).toBe(`${"x".repeat(54)} (den)`);
+  });
+
+  it("sends each same-titled pick with its own ID", () => {
+    const picks = [{ id: SONY, label: "Sony TV" }, { id: TV, label: "Sony TV (bedroom)" }];
+    expect(encodeMentions("@Sony TV and @Sony TV (bedroom)", picks))
+      .toBe(`@[Sony TV](cantrip-tab:${SONY}) and @[Sony TV (bedroom)](cantrip-tab:${TV})`);
+    expect(remainingMentions(picks, "@Sony TV (bedroom) only")).toEqual([picks[1]]);
+  });
+
   it("keeps one pick per label", () => {
     expect(addMention([{ id: TV, label: "TV" }, { id: SONY, label: "Sony TV" }], { id: TV_REMOTE, label: "TV" }))
       .toEqual([{ id: SONY, label: "Sony TV" }, { id: TV_REMOTE, label: "TV" }]);
@@ -317,6 +359,36 @@ describe("rendering", () => {
     expect(queuedText({ text: `ask ${token}` })).toBe("ask @Sony TV");
     expect(tagLabel({ id: "T", prompt: `about ${token}` })).toBe("Reply to: about @Sony TV");
     expect(tabRowDetail(tab(TV, "TV", { preview: `Checked ${token}` }))?.text).toBe("Checked @Sony TV");
+  });
+
+  it("reads tokens as @Label in titles, previews, status lines and labels from the Mac", () => {
+    const raw = {
+      ...tab(TV, `Ask ${token}`), preview: `Checked ${token}`, status: `Asking ${token}`,
+      child: { state: "working", title: `Fix ${token}`, parentTitle: `About ${token}`, statusLine: "Working" },
+      messages: [{ id: "U1", role: "user", text: `ask ${token}` }], queued: [{ id: "Q1", text: `then ${token}` }],
+    };
+    const plain = plainSession(raw);
+    expect(plain).toMatchObject({ title: "Ask @Sony TV", preview: "Checked @Sony TV", status: "Asking @Sony TV",
+      child: { title: "Fix @Sony TV", parentTitle: "About @Sony TV" } });
+    // Conversation text keeps its tokens (drawn as mentions); nothing else is copied needlessly.
+    expect(plain.messages).toBe(raw.messages);
+    expect(plain.queued).toBe(raw.queued);
+    const clean = tab(SONY, "Sony TV");
+    expect(plainSession(clean)).toBe(clean);
+    expect(plainMentionsDeep({ runs: [{ label: `Run ${token}`, n: 1 }] })).toEqual({ runs: [{ label: "Run @Sony TV", n: 1 }] });
+    expect(remote.tabTitle({ title: `Ask ${token}`, customTitle: "" })).toBe("Ask @Sony TV");
+  });
+
+  it("draws handoff cards' tab titles as @Label", () => {
+    const message = {
+      id: "H1", role: "handoff", text: "", thinking: "", activities: [], isLocalPrivate: false,
+      handoffResult: { delegationID: "D1", tabID: SONY, tabTitle: `Ask ${token}`, summary: `Asked ${token}`, state: "completed", detail: "", startedAt: 1, finishedAt: 2, updatedAt: 2 },
+    } as unknown as RemoteMessage;
+    const nodes = render(MessageRow({ message, session: tab(HOME, "Cantrip Home"), lane: "home", streaming: false, reported: new Set() }));
+    expect(text(nodes)).toContain("Ask @Sony TV");
+    expect(text(nodes)).toContain("Asked @Sony TV");
+    expect(JSON.stringify(elements(nodes).map((node) => node.props["aria-label"] ?? ""))).not.toContain("cantrip-tab:");
+    expect(text(nodes)).not.toContain("cantrip-tab:");
   });
 
   it("draws mentions in user bubbles, never the raw token", () => {

@@ -11,7 +11,7 @@ import { now } from "../../state/clock";
 import { clockTime, compactTokens, elapsed, isBusy, subagentLive } from "../../state/format";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
-import { mentionSafeCut, plainMentions } from "../../state/tabMentions";
+import { mentionSafeCut, plainMentions, plainMentionsDeep } from "../../state/tabMentions";
 import { threadReplies, threadTag, type ThreadLine } from "../../state/threads";
 import { SubagentStack } from "../activity/Subagents";
 import { Icon, StatusIcon } from "../icons";
@@ -431,6 +431,9 @@ export function ThinkingIndicator(props: { size?: number; class?: string }): JSX
   return <span class={`thinking${props.class ? ` ${props.class}` : ""}`} role="img" aria-label="Thinking"><Icon name="brain" size={(props.size ?? 22) as 22} /></span>;
 }
 
+/** A child card's request and replies keep their mentions (drawn as such); its titles and status read as "@Label". */
+const CHILD_CONTENT = new Set(["prompt", "replies"]);
+
 export function MessageRow(props: {
   message: RemoteMessage;
   session: RemoteSessionSummary;
@@ -451,10 +454,10 @@ export function MessageRow(props: {
   // The run's first row: the line carries on beside the rest of the reply.
   const rest = (children: ComponentChildren) => tag && threadLine === "start" ? <div class="thread-rest">{children}</div> : children;
   if (message.childResult) {
-    return <div class={`turn${line}`} data-message-id={message.id}>{head()}{rest(<ChildResultCard parentID={session.id} child={message.childResult} />)}</div>;
+    return <div class={`turn${line}`} data-message-id={message.id}>{head()}{rest(<ChildResultCard parentID={session.id} child={plainMentionsDeep(message.childResult, CHILD_CONTENT)} />)}</div>;
   }
   if (message.role === "handoff" && message.handoffResult) {
-    return <div class={`turn${line}`} data-message-id={message.id}>{head()}{rest(<HandoffResultCard result={message.handoffResult} />)}</div>;
+    return <div class={`turn${line}`} data-message-id={message.id}>{head()}{rest(<HandoffResultCard result={plainMentionsDeep(message.handoffResult)} />)}</div>;
   }
   if (message.role === "freshStart") {
     const caption = message.text?.trim() || "Started fresh — earlier messages aren't sent to the model";
@@ -491,7 +494,7 @@ export function MessageRow(props: {
           {steps.length ? <ReasoningSteps steps={steps} streaming={props.streaming} /> : null}
           {apps.length ? <MCPAppStack sessionID={session.id} apps={apps} /> : null}
           {!isError ? <ReplyText message={message} session={session} settled={settled} /> : null}
-          {handoffs.length ? <div class="handoff-stack">{handoffs.map((handoff) => <HandoffCard key={handoff.id} handoff={handoff} />)}</div> : null}
+          {handoffs.length ? <div class="handoff-stack">{handoffs.map((handoff) => <HandoffCard key={handoff.id} handoff={plainMentionsDeep(handoff)} />)}</div> : null}
           {thinking ? <ThinkingIndicator class="muted" /> : null}
           {isError ? (
             <>

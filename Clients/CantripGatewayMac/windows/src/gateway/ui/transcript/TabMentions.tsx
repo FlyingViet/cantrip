@@ -7,7 +7,7 @@ import type { RemoteSessionSummary } from "../../api/types";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
 import {
-  matchMentions, mentionAccessibilityLabel, mentionCandidates, mentionCountAnnouncement, mentionDetail, mentionListState, mentionQuery,
+  isPickedAt, matchMentions, mentionAccessibilityLabel, mentionCandidates, mentionCountAnnouncement, mentionDetail, mentionListState, mentionQuery,
   mentionSegments, moveMentionHighlight, noMentionMatchText, supportsMentions, type MentionCandidate, type TabMention,
 } from "../../state/tabMentions";
 import { Icon } from "../icons";
@@ -28,6 +28,8 @@ export interface TabMentionSuggestions {
 export function useTabMentions(options: {
   session: RemoteSessionSummary | null;
   text: string;
+  /** The draft's recorded picks: the list stays closed at an "@" that starts one's "@Label". */
+  picks: readonly TabMention[];
   /** The text field's caret (UTF-16 offset), or null while a range is selected. */
   caret: number | null;
   /** The composer is focused. */
@@ -40,12 +42,14 @@ export function useTabMentions(options: {
   const { session, text, caret } = options;
   const sessionID = session?.id ?? null;
   const listID = `mention-list-${useId()}`;
-  /** Escape or a pick closes the list for one "@" (session and position) until the caret leaves it. */
+  /** Escape closes the list for one "@" (session and position) until the caret leaves it. */
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [moved, setMoved] = useState<{ key: string; id: string } | null>(null);
   const [picked, setPicked] = useState("");
 
-  const query = supportsMentions(session) && caret !== null ? mentionQuery(text, caret) : null;
+  const typed = supportsMentions(session) && caret !== null ? mentionQuery(text, caret) : null;
+  // After a pick, "@Sony TV " is itself a query matching the pick: never reopen there (Return must send).
+  const query = typed && !isPickedAt(typed.at, text, options.picks) ? typed : null;
   const place = query ? `${sessionID}:${query.at}` : null;
   const found = query && options.focused && options.enabled ? query : null;
   // Functional: an Escape handled before this effect runs must not be undone by its older `place`.
@@ -84,8 +88,6 @@ export function useTabMentions(options: {
     const candidate = matches[index];
     if (!candidate || !found || caret === null) return;
     setMoved(null);
-    // "@Label " is itself a query that matches the pick: keep the list closed for this "@".
-    setDismissed(place);
     setPicked(`Mentioned ${candidate.title}`);
     options.onPick(candidate, found.at, caret);
   };

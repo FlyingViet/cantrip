@@ -207,13 +207,51 @@ export function matchMentions<T extends Pick<MentionCandidate, "title" | "workdi
 
 /**
  * Picks `title` for the query at `at`: "@Label " replaces text[at..<caret] (no second space when one already
- * follows); the caret goes after the space.
+ * follows); the caret goes after the space. `label` overrides the title's label (see uniqueMentionLabel).
  */
-export function insertMention(title: string, at: number, caret: number, text: string): { text: string; label: string; caret: number } {
-  const label = mentionLabel(title);
+export function insertMention(title: string, at: number, caret: number, text: string, label = mentionLabel(title)): { text: string; label: string; caret: number } {
   const spaced = text[caret] === " ";
   const inserted = `@${label}${spaced ? "" : " "}`;
   return { text: text.slice(0, at) + inserted + text.slice(caret), label, caret: at + inserted.length + (spaced ? 1 : 0) };
+}
+
+/**
+ * Whether the "@" at `at` starts a picked mention's "@Label" (followed by the end or a character that isn't a
+ * letter, number or underscore). The list stays closed there: "@Sony TV " is itself a query that matches the pick.
+ */
+export function isPickedAt(at: number, text: string, picks: readonly TabMention[]): boolean {
+  return picks.some((pick) => {
+    const needle = `@${pick.label}`;
+    if (!text.startsWith(needle, at)) return false;
+    const end = at + needle.length;
+    return end >= text.length || !/[\p{L}\p{N}_]/u.test(String.fromCodePoint(text.codePointAt(end)!));
+  });
+}
+
+/**
+ * The label for picking `candidate`: its title's label, made unique when another picked tab (a different ID)
+ * already has it, since a label stands for one ID: "<label> (<project>)", else "<label> 2", "3"…
+ * Re-picking the same tab keeps its label.
+ */
+export function uniqueMentionLabel(candidate: Pick<MentionCandidate, "id" | "title" | "workdir">, picks: readonly TabMention[]): string {
+  const base = mentionLabel(candidate.title);
+  const id = candidate.id.toUpperCase();
+  const taken = new Set(picks.filter((pick) => pick.id.toUpperCase() !== id).map((pick) => pick.label));
+  if (!taken.has(base)) return base;
+  const project = mentionProject(candidate.workdir);
+  if (project) {
+    const withProject = suffixedLabel(base, ` (${project})`);
+    if (!taken.has(withProject)) return withProject;
+  }
+  let number = 2;
+  while (taken.has(suffixedLabel(base, ` ${number}`))) number += 1;
+  return suffixedLabel(base, ` ${number}`);
+}
+
+/** `base` + `suffix` within the 60-character limit: the base is shortened, so the suffix always shows. */
+function suffixedLabel(base: string, suffix: string): string {
+  const room = Math.max(1, MENTION_LABEL_LIMIT - characters(suffix).length);
+  return mentionLabel(characters(base).slice(0, room).join("").trim() + suffix);
 }
 
 /** The text to send: each picked mention whose "@Label" is still in the text (starting a word, ending at a word boundary) becomes a token. */
@@ -267,6 +305,44 @@ export function addMention(mentions: readonly TabMention[], mention: TabMention)
   return [...mentions.filter((item) => item.label !== mention.label), mention];
 }
 
+// MARK: Text from the Mac
+
+/**
+ * `value` with every string's tokens read as "@Label" (objects and arrays copied only where something changed),
+ * for text the app shows but never sends back: titles derived from messages, previews, status lines, labels.
+ * Keys in `skip` keep their values (transcripts keep tokens so they can be drawn as mentions).
+ */
+export function plainMentionsDeep<T>(value: T, skip: ReadonlySet<string> = new Set()): T {
+  if (typeof value === "string") return plainMentions(value) as T;
+  if (Array.isArray(value)) {
+    let changed = false;
+    const items = value.map((item) => {
+      const next = plainMentionsDeep(item, skip);
+      changed ||= next !== item;
+      return next;
+    });
+    return (changed ? items : value) as T;
+  }
+  if (value && typeof value === "object") {
+    let copy: Record<string, unknown> | null = null;
+    for (const [key, item] of Object.entries(value)) {
+      if (skip.has(key)) continue;
+      const next = plainMentionsDeep(item, skip);
+      if (next !== item) (copy ??= { ...(value as Record<string, unknown>) })[key] = next;
+    }
+    return (copy ?? value) as T;
+  }
+  return value;
+}
+
+/** Fields of a session that hold its conversation (drawn with mentions) or text sent back to it. */
+const SESSION_CONTENT = new Set(["messages", "queued", "pendingInputs", "threadReplies"]);
+
+/** A session from the Mac with its titles, preview, status lines and child/parent titles read as "@Label". */
+export function plainSession<T extends object>(session: T): T {
+  return plainMentionsDeep(session, SESSION_CONTENT);
+}
+
 // MARK: Sessions
 
 type MentionSession = Pick<RemoteSessionSummary, "id" | "title" | "customTitle" | "workdir" | "isStreaming" | "pendingInputCount" | "parentID" | "child"> & {
@@ -279,7 +355,7 @@ export function supportsMentions(session: { supportsTabMentions?: boolean } | nu
 }
 
 function sessionTitle(session: Pick<RemoteSessionSummary, "title" | "customTitle">): string {
-  return session.customTitle?.trim() || session.title || "Tab";
+  return plainMentions(session.customTitle?.trim() || session.title || "Tab");
 }
 
 /** The tabs a composer may suggest: `mentionable` ones in list order, except the one being written in. */
