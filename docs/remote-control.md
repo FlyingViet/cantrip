@@ -530,7 +530,7 @@ Remote prompts use the host's configured backend and action permissions.
 
 **Before you start:** install a current Cantrip Agent build (iOS/iPadOS 26+).
 Cantrip Agent is a separate app; installing Cantrip does not install it.
-See the [Cantrip Agent repository](https://github.com/FlyingViet/Hermes) for its
+See the [Cantrip Agent repository](https://github.com/FlyingViet/CantripIOS) for its
 installation information.
 
 1. Put the phone/tablet and host Mac on the same local network.
