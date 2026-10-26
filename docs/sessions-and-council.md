@@ -221,6 +221,13 @@ worktree and branch, merged back when it's done.
   written plus a short brief (its worktree and branch, the parent's latest
   progress, the shared-resource rules and the parent's ID, so it can read the
   parent's conversation when it needs context), not the parent's history.
+- **Home handoffs:** when the queued message is a Cantrip Home handoff, Home
+  follows it into the child tab, whether it started there with Run in Child
+  Tab or by auto-fork. Home's card shows it working in the child, reports the
+  child's reply when it finishes, then adds the merge outcome. If you discard
+  the child or close it before it finishes, the card says so, and Run in this
+  tab instead puts the handoff back in the parent's queue. See
+  [Cantrip Home](cantrip-home.md).
 - **Worktree:** when the parent works in a git repository (its folder, the
   repository the plan names, or the one its recent commands used), the child
   gets `~/.cache/Cantrip/worktrees/<id>` on `cantrip/child/<title>-<id>`,

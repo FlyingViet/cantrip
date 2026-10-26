@@ -43,6 +43,7 @@ extension SessionTabTests {
         try await testChildTabLifecycle()
         try await testChildTabAPI()
         try await testChildTabAutoFork()
+        try await testHomeHandoffChildTabs()
         try await testTabInsight()
         print("Child tab plan, resource, merge, conflict, API and auto-fork tests passed")
     }

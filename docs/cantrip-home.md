@@ -32,6 +32,19 @@ remote). Later states, including working again after an answer, update that
 card in place. It never interrupts a Home reply, and its tab text is shown as
 data that Home's model never reads back as its own words.
 
+A queued handoff you start in a child tab (**Run in Child Tab**, or auto-fork)
+keeps being tracked there: its card shows it working in the child tab, and
+the result card reports the child's reply, checked against Done when like any
+handoff. The result card's last line then follows the child's branch: waiting
+to merge, merged, a merge conflict or no code changes. A missed Done when in a
+child tab is reported rather than sent back, because its branch may already be
+merging. A child that's discarded or closed before it finishes says so on the
+card, and **Run in this tab instead** puts the handoff back in the parent's
+queue with its request. Only removing the queued message itself reads as
+stopped. Home queues its handoffs with an explicit Queue, so auto-fork leaves
+them alone; start one in a child tab yourself. See
+[Child tabs](sessions-and-council.md#child-tabs).
+
 When a handoff's brief has a "Done when:" line, Cantrip checks the tab's
 finished work against it before posting the result. Work the tab can still do
 goes back to it as a queued message, at most twice; the card is posted only
