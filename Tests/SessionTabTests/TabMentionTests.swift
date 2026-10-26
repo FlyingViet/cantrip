@@ -107,6 +107,11 @@ extension SessionTabTests {
         let twin = TabMentions.Candidate(id: UUID(), title: "Sony TV", workdir: "/tmp/tv-two")
         precondition(TabMentions.uniqueLabel(for: tabs[0], among: sonyPick) == "Sony TV", "re-picking the same tab keeps it")
         precondition(TabMentions.uniqueLabel(for: twin, among: sonyPick) == "Sony TV (tv-two)")
+        let long = String(repeating: "x", count: 70)
+        let longPicks = [TabMentions.Pick(label: TabMentions.label(for: long), id: UUID()),
+                         TabMentions.Pick(label: String(repeating: "x", count: 58) + " 2", id: UUID())]
+        let longLabel = TabMentions.uniqueLabel(for: .init(id: UUID(), title: long), among: longPicks)
+        precondition(longLabel == String(repeating: "x", count: 58) + " 3" && longLabel.count <= TabMentions.labelLimit, longLabel)
         let bare = TabMentions.Candidate(id: UUID(), title: "Sony TV")
         precondition(TabMentions.uniqueLabel(for: bare, among: sonyPick) == "Sony TV 2")
         let both = sonyPick + [TabMentions.Pick(label: "Sony TV (tv-two)", id: twin.id)]

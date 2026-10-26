@@ -3650,8 +3650,10 @@ private extension RemoteControlServer {
     function mentionPickedAt(text,at,picks){return picks.some(pick=>{const needle="@"+pick.label;if(!text.startsWith(needle,at))return false;const after=text[at+needle.length]??"";return !after||!/[\\p{L}\\p{N}_]/u.test(after)})}
     // A label stands for one ID: a second picked tab with the same title gets its project, then a number.
     function uniqueMentionLabel(row,picks){const base=mentionLabel(row.title),taken=new Set(picks.filter(pick=>pick.id!==row.id).map(pick=>pick.label));if(!taken.has(base))return base;
-      if(row.project){const withProject=mentionLabel(`${base} (${row.project})`);if(!taken.has(withProject))return withProject}
-      let number=2;while(taken.has(mentionLabel(`${base} ${number}`)))number++;return mentionLabel(`${base} ${number}`)}
+      // The title is shortened so the suffix always fits in the label.
+      const suffixed=suffix=>mentionLabel([...base].slice(0,Math.max(1,60-[...suffix].length)).join("").trim()+suffix);
+      if(row.project&&[...row.project].length<30){const withProject=suffixed(` (${row.project})`);if(!taken.has(withProject))return withProject}
+      let number=2;while(taken.has(suffixed(` ${number}`)))number++;return suffixed(` ${number}`)}
     function mentionCandidates(session){if(!session?.supportsTabMentions)return [];const titles=new Map(sessionItems.map(item=>[item.id,item.title]));
       return sessionItems.filter(item=>item.mentionable===true&&item.id!==session.id).map(item=>({id:item.id,title:item.title||"Untitled",project:mentionProject(item.workdir),
         parentTitle:item.parentID?titles.get(item.parentID)||null:null,isStreaming:Boolean(item.isStreaming),needsAnswer:(item.pendingInputCount||0)>0}))}
