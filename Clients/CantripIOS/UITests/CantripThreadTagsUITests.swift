@@ -2,8 +2,9 @@ import XCTest
 
 /// Thread tags against the thread-tags QA host (Cantrip Home seeded with real messages; a handoff
 /// card in the latest page and two DDIA replies in older history carry tags, and their prompts say
-/// "N Replies"). Drawn like inline replies in Messages: the reply quotes its prompt, and the quote or
-/// "N Replies" opens the whole thread over the blurred chat. Also runs on iPhone Duo (its default
+/// "N Replies"). Drawn like inline replies in Messages: the reply quotes its prompt, the replies
+/// right after it in that thread share its line, and the quote or "N Replies" opens the whole thread
+/// over the blurred chat. Also runs on iPhone Duo (its default
 /// pose; the unfolded sidebar layout shows the same transcript rows). Run with
 /// `TEST_RUNNER_CANTRIP_UITEST_REMOTE_URL`, `TEST_RUNNER_CANTRIP_UITEST_REMOTE_TOKEN` and optionally
 /// `TEST_RUNNER_CANTRIP_UITEST_SHOTS`.
@@ -56,7 +57,14 @@ final class CantripThreadTagsUITests: XCTestCase {
         app.buttons["cantrip-thread-close"].tap()
         XCTAssertTrue(waitUntil(timeout: 5) { !view.exists })
 
-        let replies = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'cantrip-thread-replies-' AND label == '4 Replies'")).firstMatch
+        // "Chapters 3 and 4" quotes the book again; the two replies after it in that thread don't, and
+        // its line runs past "Chapters 5 and 6" into "The test build works".
+        let run = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Chapters 5 and 6 are done'")).firstMatch
+        XCTAssertTrue(run.waitForExistence(timeout: 10), "The replies after a quote are in the chat")
+        reveal(run, in: app)
+        attach(app, "\(device)-3b-ddia-run")
+
+        let replies = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'cantrip-thread-replies-' AND label == '5 Replies'")).firstMatch
         for _ in 0..<40 where !(replies.exists && replies.isHittable) { app.swipeDown() }
         XCTAssertTrue(replies.exists, "The book prompt counts the replies that other messages split up")
         reveal(replies, in: app)

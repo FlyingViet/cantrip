@@ -3,7 +3,8 @@ import SwiftUI
 /// Thread tags (Cantrip Home), drawn like inline replies in Messages. A reply from a different
 /// thread than the message above it carries `thread` from the Mac: the prompt that started its
 /// thread. The reply shows a small copy of that prompt, joined to it by a curved line in the left
-/// margin. A prompt whose replies other messages split up says "N Replies" under it (the Mac's
+/// margin; the rows after it that stay in its thread share that line (`CantripThreadLine`). A
+/// prompt whose replies other messages split up says "N Replies" under it (the Mac's
 /// `threadReplies`). Either opens the whole thread over the blurred conversation, fetched from the
 /// Mac so it works before older messages have loaded. Shared by iPhone, Duo and Gateway Mac; the
 /// browser Remote and Windows draw the same.
@@ -46,6 +47,52 @@ struct CantripThreadFocus: Identifiable, Equatable {
 
 enum CantripThreadText {
     static func replies(_ count: Int) -> String { count == 1 ? "1 Reply" : "\(count) Replies" }
+}
+
+/// Where a row sits on a quote's thread line. Rows after a quoted reply that stay in its thread
+/// share its line, as in Messages: it runs from the quote down the margin past them and turns into
+/// the last reply, instead of each reply quoting the prompt again.
+enum CantripThreadLine: Equatable {
+    /// The quoted reply; the line runs on below it.
+    case start
+    /// A row the line passes.
+    case through
+    /// The last reply; the line turns into it.
+    case end
+
+    /// Each row's place, by message ID. Answers in the thread and empty replies (which the Mac
+    /// skips when placing quotes) stay in a run, but the line never ends on one. The browser Remote
+    /// and Windows use the same rule.
+    static func lines(in messages: [CantripRemoteMessage]) -> [String: CantripThreadLine] {
+        var lines: [String: CantripThreadLine] = [:]
+        var thread: String?
+        var run: [(id: String, anchor: Bool)] = []
+        func close() {
+            if let end = run.lastIndex(where: { $0.anchor }), end > 0 {
+                lines[run[0].id] = .start
+                for item in run[1..<end] { lines[item.id] = .through }
+                lines[run[end].id] = .end
+            }
+            run = []
+            thread = nil
+        }
+        for message in messages {
+            let quiet = message.role == "assistant"
+                && message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && (message.delegations ?? []).isEmpty && message.activities.isEmpty
+            if let tag = message.thread, message.role != "user" {
+                close()
+                thread = tag.id
+                run = [(message.id, true)]
+            } else if let thread, !message.isFreshStart, quiet || message.threadID == thread {
+                run.append((message.id, message.role != "user" && !quiet))
+            } else {
+                close()
+            }
+        }
+        close()
+        return lines
+    }
 }
 
 /// The open thread and the threads already fetched, by thread ID. Kept outside the views so the
@@ -108,6 +155,8 @@ enum CantripThreadStyle {
     /// Messages' thread line.
     static let line = Color.secondary.opacity(0.45)
     static let lineWidth: CGFloat = 1.5
+    /// Square ends, so the pieces of a line drawn row by row meet without darker overlaps.
+    static var stroke: StrokeStyle { StrokeStyle(lineWidth: lineWidth, lineCap: .butt) }
     /// The bracket sits in the transcript's 16 pt side margin.
     static let gutter: CGFloat = 12
     /// Pip's bubbles in the open thread (Messages' gray).
@@ -155,6 +204,8 @@ struct CantripThreadHeader: View {
     let messageID: String
     let sessionID: String?
     let remote: CantripRemoteModel
+    /// Later rows share this quote's line, so it runs on past the badge (`CantripThreadRail`).
+    var continues = false
 
     private static let gap: CGFloat = 6
 
@@ -181,28 +232,73 @@ struct CantripThreadHeader: View {
                 .padding(.bottom, Self.gap)
                 .background(alignment: .leading) {
                     CantripThreadBracket(part: .top, bottomInset: Self.gap)
-                        .stroke(CantripThreadStyle.line, style: StrokeStyle(lineWidth: CantripThreadStyle.lineWidth, lineCap: .round))
+                        .stroke(CantripThreadStyle.line, style: CantripThreadStyle.stroke)
                         .frame(width: CantripThreadStyle.gutter)
                         .offset(x: -CantripThreadStyle.gutter)
                         .accessibilityHidden(true)
                 }
-                Group {
-                    if let lane {
-                        ExecutionLaneBadge(lane: lane)
-                    } else {
-                        Color.clear.frame(width: 1, height: 8)
-                    }
-                }
-                .background(alignment: .leading) {
-                    CantripThreadBracket(part: .bottom)
-                        .stroke(CantripThreadStyle.line, style: StrokeStyle(lineWidth: CantripThreadStyle.lineWidth, lineCap: .round))
-                        .frame(width: CantripThreadStyle.gutter)
-                        .offset(x: -CantripThreadStyle.gutter)
-                        .accessibilityHidden(true)
-                }
+                .anchorPreference(key: CantripThreadQuoteBounds.self, value: .bounds) { $0 }
+                CantripThreadLaneRow(lane: lane, turnsIn: !continues)
             }
         } else if let lane {
             ExecutionLaneBadge(lane: lane)
+        }
+    }
+}
+
+/// The row the thread line turns into: a reply's lane badge, or a short space above a card.
+struct CantripThreadLaneRow: View {
+    var lane: ExecutionLane?
+    var turnsIn = true
+
+    var body: some View {
+        Group {
+            if let lane {
+                ExecutionLaneBadge(lane: lane)
+            } else {
+                Color.clear.frame(width: 1, height: 8)
+            }
+        }
+        .background(alignment: .leading) {
+            if turnsIn {
+                CantripThreadBracket(part: .bottom)
+                    .stroke(CantripThreadStyle.line, style: CantripThreadStyle.stroke)
+                    .frame(width: CantripThreadStyle.gutter)
+                    .offset(x: -CantripThreadStyle.gutter)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+/// The bounds of a quote's row (with the gap under it), where a continuing line picks up.
+struct CantripThreadQuoteBounds: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
+    }
+}
+
+/// The straight stretch of a thread line beside a row, on across the gap to the next row: below
+/// the quote on the run's first row, the whole height on rows it passes. The last row's turn is
+/// drawn by its `CantripThreadLaneRow`.
+struct CantripThreadRail: ViewModifier {
+    let line: CantripThreadLine?
+
+    func body(content: Content) -> some View {
+        content.backgroundPreferenceValue(CantripThreadQuoteBounds.self, alignment: .topLeading) { quote in
+            if line == .start || line == .through {
+                GeometryReader { proxy in
+                    let top = line == .start ? quote.map { proxy[$0].maxY } ?? 0 : 0
+                    Path { path in
+                        let x = CantripThreadStyle.lineWidth / 2 - CantripThreadStyle.gutter
+                        path.move(to: CGPoint(x: x, y: top))
+                        path.addLine(to: CGPoint(x: x, y: proxy.size.height + ChatTranscriptLayout.rowSpacing))
+                    }
+                    .stroke(CantripThreadStyle.line, style: CantripThreadStyle.stroke)
+                }
+                .accessibilityHidden(true)
+            }
         }
     }
 }
