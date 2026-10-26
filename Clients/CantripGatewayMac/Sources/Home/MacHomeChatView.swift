@@ -114,6 +114,7 @@ struct MacHomeChatView: View {
                 CantripChildTabBanner(child: child, onOpenParent: { navigation.openTab(parentID) })
             }
             if vm.turns.isEmpty { emptyState }
+            let threadLines = CantripThreadLine.lines(in: remote.selectedSession?.transcript ?? [])
             ForEach(vm.turns) { turn in
                 let message = vm.remoteMessage(for: turn.id)
                 TurnView(
@@ -124,7 +125,8 @@ struct MacHomeChatView: View {
                     onAction: { vm.send($0.command) },
                     onApproval: { vm.approveRun($0, for: turn.id) },
                     // Handoff cards open the tab right here, in the sidebar's Tabs section.
-                    onOpenTab: { navigation.openTab($0) }
+                    onOpenTab: { navigation.openTab($0) },
+                    threadLine: message.flatMap { threadLines[$0.id] }
                 )
                 .id(turn.id)
                 if let message, message.isPreview == true {

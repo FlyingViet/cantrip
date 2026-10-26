@@ -8,6 +8,7 @@ import { bridge, shortcut } from "../../bridge";
 import { formatBytes, liveBackgroundSubagents, liveForegroundSubagents } from "../../state/format";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
+import { threadLines } from "../../state/threads";
 import { BackgroundTaskButton, PinnedSubagents } from "../activity/Subagents";
 import { QueueButton } from "../activity/Queue";
 import { Icon } from "../icons";
@@ -116,6 +117,7 @@ function Transcript(props: { session: RemoteSessionSummary | null; messages: Rem
   const hasOlder = Boolean((session as { hasOlderMessages?: boolean } | null)?.hasOlderMessages);
 
   const reported = useMemo(() => new Set(messages.flatMap((message) => (message.role === "handoff" && message.handoffResult ? [message.handoffResult.delegationID] : []))), [messages]);
+  const lines = useMemo(() => threadLines(messages), [messages]);
   const lastAssistantID = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index];
@@ -209,7 +211,7 @@ function Transcript(props: { session: RemoteSessionSummary | null; messages: Rem
           {!messages.length ? <EmptyState isTab={props.isTab} loaded={props.detailLoaded} /> : null}
           {session ? messages.map((message) => (
             <MessageRow key={message.id} message={message} session={session} lane={lane}
-              streaming={Boolean(session.isStreaming && message.id === lastAssistantID)} reported={reported} />
+              streaming={Boolean(session.isStreaming && message.id === lastAssistantID)} reported={reported} threadLine={lines.get(message.id)} />
           )) : null}
           {session ? <InputTranscript session={session} /> : null}
         </div>

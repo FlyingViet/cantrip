@@ -20,7 +20,8 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   **Open tab**, child tab cards (the request, replies and files; merge state; the merge
   question on a conflict) and a child's banner with **Open parent**, thread tags in Home, drawn
   like inline replies in Messages (a reply from a different thread than the message above
-  quotes its prompt, joined to it by a curved line; a prompt whose replies got split up says
+  quotes its prompt, joined to it by a curved line that runs on past the replies right after it
+  in that thread; a prompt whose replies got split up says
   "N Replies"; either opens the whole thread over the blurred window, even before older
   messages load), questions answered in the reply panel, approvals and sign-ins inline,
   prompt token usage, older history loading as you scroll up, and Start Fresh.
