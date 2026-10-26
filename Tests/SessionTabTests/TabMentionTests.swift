@@ -93,6 +93,27 @@ extension SessionTabTests {
         precondition(picked.text[picked.caret...] == "later", "the caret skips the space that was already there")
         let atEnd = TabMentions.insert(tabs[1], at: "@ba".startIndex, in: "@ba")
         precondition(atEnd.text == "@Bass Compass " && atEnd.caret == atEnd.text.endIndex)
+
+        // After a pick the list stays closed at that "@", so Return sends and typing isn't replaced.
+        let sonyPick = [TabMentions.Pick(label: "Sony TV", id: tabs[0].id)]
+        for text in ["@Sony TV ", "Ask @Sony TV so", "@Sony TV"] {
+            let found = TabMentions.query(in: text)
+            precondition(found != nil && TabMentions.isPicked(at: found!.at, in: text, picks: sonyPick), text)
+        }
+        precondition(!TabMentions.isPicked(at: "@Sony TVs".startIndex, in: "@Sony TVs", picks: sonyPick))
+        precondition(!TabMentions.isPicked(at: "@So".startIndex, in: "@So", picks: sonyPick))
+
+        // Same-titled tabs get distinct labels, since a label stands for one ID.
+        let twin = TabMentions.Candidate(id: UUID(), title: "Sony TV", workdir: "/tmp/tv-two")
+        precondition(TabMentions.uniqueLabel(for: tabs[0], among: sonyPick) == "Sony TV", "re-picking the same tab keeps it")
+        precondition(TabMentions.uniqueLabel(for: twin, among: sonyPick) == "Sony TV (tv-two)")
+        let bare = TabMentions.Candidate(id: UUID(), title: "Sony TV")
+        precondition(TabMentions.uniqueLabel(for: bare, among: sonyPick) == "Sony TV 2")
+        let both = sonyPick + [TabMentions.Pick(label: "Sony TV (tv-two)", id: twin.id)]
+        let sent = TabMentions.encode("compare @Sony TV with @Sony TV (tv-two)", mentions: both)
+        precondition(TabMentions.parse(sent).map(\.id) == [tabs[0].id, twin.id], sent)
+        precondition(ChildTabCoordinator.title(from: "Ask \(TabMentions.token(label: "Sony TV", id: tabs[0].id)) what port")
+                     == "Ask @Sony TV what port")
     }
 
     @MainActor

@@ -101,6 +101,32 @@ enum TabMentions {
         return (at, query)
     }
 
+    /// Whether the "@" at `at` starts a picked mention's "@Label" (the list stays closed there).
+    nonisolated static func isPicked(at: String.Index, in text: String, picks: [Pick]) -> Bool {
+        let rest = text[at...]
+        return picks.contains { pick in
+            let needle = "@" + pick.label
+            guard rest.hasPrefix(needle) else { return false }
+            let end = text.index(at, offsetBy: needle.count)
+            return end == text.endIndex || !(text[end].isLetter || text[end].isNumber || text[end] == "_")
+        }
+    }
+
+    /// The label for picking `candidate`: its title, made unique when another picked tab has the
+    /// same label (with its project, then a number), since a label stands for one ID.
+    nonisolated static func uniqueLabel(for candidate: Candidate, among picks: [Pick]) -> String {
+        let base = label(for: candidate.title)
+        let taken = Set(picks.filter { $0.id != candidate.id }.map(\.label))
+        guard taken.contains(base) else { return base }
+        if let project = candidate.project {
+            let withProject = label(for: "\(base) (\(project))")
+            if !taken.contains(withProject) { return withProject }
+        }
+        var number = 2
+        while taken.contains(label(for: "\(base) \(number)")) { number += 1 }
+        return label(for: "\(base) \(number)")
+    }
+
     struct Candidate: Equatable {
         let id: UUID
         let title: String
@@ -168,8 +194,8 @@ enum TabMentions {
     /// Picks `candidate` for the query at `at`: "@Label " replaces it (no second space when one
     /// follows). `caret` is where typing continues.
     nonisolated static func insert(_ candidate: Candidate, at: String.Index, caret: String.Index? = nil,
-                                   in text: String) -> (text: String, label: String, caret: String.Index) {
-        let label = label(for: candidate.title)
+                                   in text: String, label: String? = nil) -> (text: String, label: String, caret: String.Index) {
+        let label = label ?? Self.label(for: candidate.title)
         let end = caret ?? text.endIndex
         let spaced = text[end...].first == " "
         let inserted = "@\(label)" + (spaced ? "" : " ")
