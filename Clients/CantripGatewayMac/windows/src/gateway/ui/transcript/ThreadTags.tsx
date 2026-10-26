@@ -105,7 +105,7 @@ export function ThreadView(): JSX.Element | null {
     closeThread();
     restore.current?.focus?.();
   };
-  const count = load?.state === "loaded" ? load.thread.messages.length : null;
+  const count = load?.state === "loaded" ? load.thread.replyCount ?? load.thread.messages.length : null;
   return (
     <div class="thread-view" role="dialog" aria-modal="true" aria-labelledby="thread-view-title"
       onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); close(); } }}

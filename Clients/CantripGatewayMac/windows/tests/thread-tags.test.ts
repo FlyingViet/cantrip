@@ -324,6 +324,9 @@ describe("thread tags", () => {
     expect(speaker({ id: "a", role: "assistant", text: "", author: "GPT-5" }, "Pip")).toBe("Pip · GPT-5");
     expect(speaker({ id: "h", role: "handoff", text: "" }, "Pip")).toBe("Handoff");
     expect(speaker({ id: "e", role: "error", text: "" }, "Pip")).toBe("Error");
+    // The tab's side of a handoff made in the thread is named after the tab.
+    expect(speaker({ id: "t", role: "assistant", text: "", tabID: "T", tabTitle: "NetLib" }, "Pip")).toBe("NetLib");
+    expect(speaker({ id: "t", role: "error", text: "", tabID: "T", tabTitle: "NetLib" }, "Pip")).toBe("NetLib · Error");
   });
 
   it("encodes the thread path and drops replies that arrive after a reset", async () => {
