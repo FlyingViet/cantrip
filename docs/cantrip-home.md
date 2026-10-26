@@ -57,6 +57,12 @@ card. Change work still goes through handoffs. Private, Private Local and
 Home's own background conversations are never readable. See
 [Look into other tabs](sessions-and-council.md#look-into-other-tabs).
 
+To point Home at one tab yourself, type `@` and pick it from the list
+([Mention a tab](sessions-and-council.md#mention-a-tab)). The tab's ID goes with
+the message, so Home answers a question by reading or asking exactly that tab
+and hands a change request to exactly that tab, instead of matching names.
+Home never hands work to a child tab that isn't running.
+
 ## Tasks and schedules
 
 Tasks can be one-time, interval or weekday automations, or structured

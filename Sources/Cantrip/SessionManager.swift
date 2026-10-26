@@ -140,15 +140,17 @@ final class SessionManager: ObservableObject {
         childTabs.attach()
         tabAsks = TabAskCoordinator(manager: self)
         tabAsks.attach()
-        ChatSession.tabContextProvider = { [weak self] session in self?.tabContextNotes(for: session) }
+        ChatSession.tabContextProvider = { [weak self] session, prompt in self?.tabContextNotes(for: session, prompt: prompt) }
     }
 
-    /// What `session`'s model hears about other tabs with its next message: its child tabs'
-    /// status and replies to its `tab ask` questions. Short lines; it reads more on demand.
-    func tabContextNotes(for session: ChatSession) -> String? {
+    /// What `session`'s model hears about other tabs with its next message `prompt`: its child
+    /// tabs' status, replies to its `tab ask` questions and the tabs the message @mentions.
+    /// Short lines; it reads more on demand.
+    func tabContextNotes(for session: ChatSession, prompt: String = "") -> String? {
         let parts = [
             session.isCantripHome ? nil : childTabs.contextNotes(for: session),
             tabAsks.notes(for: session.id),
+            TabMentions.notes(for: session, prompt: prompt, manager: self),
         ].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
