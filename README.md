@@ -58,7 +58,7 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   parent is idle and asks on a conflict. [Child tabs](docs/sessions-and-council.md#child-tabs)
 - **Tabs look into each other:** parents see live child status, and models and
   Home read any non-private tab's conversation on demand or ask it a question.
-  [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs)
+  Type `@` to point a message at one tab. [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs)
 - **Remote control:** the Mac's sessions from Cantrip Agent, Cantrip Gateway
   Mac, another Mac or a browser, over LAN or Tailscale, with push alerts,
   approvals, attachments and View Mac. [Remote control](docs/remote-control.md);

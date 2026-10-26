@@ -118,13 +118,14 @@ struct MarkdownContent: View {
         pattern: "<br\\s*/?>",
         options: .caseInsensitive)
 
-    static func inline(_ text: String) -> AttributedString {
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+    static func inline(_ source: String) -> AttributedString {
+        let source = TabMentions.markdown(source)
+        let range = NSRange(source.startIndex..<source.endIndex, in: source)
         let text = htmlBreakRegex?.stringByReplacingMatches(
-            in: text,
+            in: source,
             range: range,
             withTemplate: "\n"
-        ) ?? text
+        ) ?? source
         return (try? AttributedString(
             markdown: text,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))

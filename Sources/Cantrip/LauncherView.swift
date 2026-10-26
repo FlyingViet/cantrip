@@ -86,6 +86,12 @@ struct LauncherView: View {
     @State private var commandHighlight: Int?
     /// Escape hides the suggestions for exactly this text.
     @State private var dismissedSlashText: String?
+    /// Tabs picked from the "@" list, per tab; sent as mention tokens (TabMentions).
+    @State private var tabMentions: [UUID: [TabMentions.Pick]] = [:]
+    /// Keyboard-highlighted row of the "@" list (index into `mentionMatches`).
+    @State private var mentionHighlight: Int?
+    /// Escape hides the "@" list for the "@" at this place ("<tab ID> <offset>").
+    @State private var dismissedMention: String?
     /// The text field's current and smallest (one-line) heights; the
     /// difference is what extra lines added.
     @State private var composerHeight: CGFloat = 0
@@ -260,6 +266,8 @@ struct LauncherView: View {
             commandList = nil
             commandListSession = nil
             commandHighlight = nil
+            mentionHighlight = nil
+            dismissedMention = nil
             BackendCommandCatalog.shared.prefetch(session)
             if slashToken != nil { loadCommands() }
         }
@@ -283,10 +291,12 @@ struct LauncherView: View {
         }
         .onChange(of: query) { oldValue, newValue in
             if !session.isLocalPrivate {
-                fileSearch.search(newValue.contains(where: \.isNewline) ? "" : newValue)
+                // An "@tab" being typed isn't a file search.
+                fileSearch.search(newValue.contains(where: \.isNewline) || TabMentions.query(in: newValue) != nil ? "" : newValue)
                 FileRAG.shared.prepare(for: newValue)
             }
             commandQueryChanged(from: oldValue, to: newValue)
+            mentionQueryChanged(from: oldValue, to: newValue)
         }
         // Any file dropped on the panel becomes an attachment.
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
@@ -393,6 +403,9 @@ struct LauncherView: View {
             if !session.attachments.isEmpty {
                 attachmentChips
             }
+            if !currentMentions.isEmpty {
+                mentionChips
+            }
             if let selection = session.selectionContext {
                 selectionChip(selection)
             }
@@ -443,7 +456,9 @@ struct LauncherView: View {
                                 action: handleModifiedReturn)
                     .onKeyPress(keys: [.upArrow, .downArrow, .tab, .escape], phases: [.down, .repeat],
                                 action: handleCommandKey)
-                    .accessibilityHint(slashToken != nil && !commandMatches.isEmpty
+                    .accessibilityHint(showsMentionSuggestions && !mentionMatches.isEmpty
+                        ? "\(mentionMatches.count) tab suggestions. Up and Down arrows choose, Return or Tab mentions the tab, Escape hides them."
+                        : slashToken != nil && !commandMatches.isEmpty
                         ? "\(commandMatches.count) command suggestions. Up and Down arrows choose, Tab inserts, Return runs, Escape hides them."
                         : "")
                     .onSubmit { submit() }
@@ -1849,20 +1864,25 @@ struct LauncherView: View {
     private var hasSuggestions: Bool {
         !session.isLocalPrivate && (appSuggestion != nil
             || slashToken != nil
+            || showsMentionSuggestions
             || (!fileSearch.results.isEmpty && !showHistory))
     }
 
     /// The suggestion rows themselves, shared between the inline layout
     /// (empty panel) and the floating overlay.
     @ViewBuilder private var suggestionRows: some View {
-        if let suggestion = appSuggestion {
-            appSuggestionRow(suggestion)
-        }
-        if slashToken != nil {
-            commandSuggestionRows
-        }
-        if !fileSearch.results.isEmpty && !showHistory {
-            fileResultsRows
+        if showsMentionSuggestions {
+            mentionSuggestionRows
+        } else {
+            if let suggestion = appSuggestion {
+                appSuggestionRow(suggestion)
+            }
+            if slashToken != nil {
+                commandSuggestionRows
+            }
+            if !fileSearch.results.isEmpty && !showHistory {
+                fileResultsRows
+            }
         }
     }
 
@@ -1882,9 +1902,12 @@ struct LauncherView: View {
                                            value: geo.size.height)
                 })
             }
-            // Keyboard selection keeps the highlighted command in view.
+            // Keyboard selection keeps the highlighted command or tab in view.
             .onChange(of: commandHighlight) { _, index in
                 if let index { proxy.scrollTo("command-\(index)") }
+            }
+            .onChange(of: mentionHighlight) { _, index in
+                if let index { proxy.scrollTo("mention-\(index)") }
             }
         }
         .frame(height: min(max(suggestionListHeight, 1), 320))
@@ -2085,6 +2108,9 @@ struct LauncherView: View {
 
     /// Up/Down move through the suggestions, Tab inserts, Escape hides them for this text.
     private func handleCommandKey(_ press: KeyPress) -> KeyPress.Result {
+        if showsMentionSuggestions, press.modifiers.intersection([.command, .option, .control]).isEmpty {
+            return handleMentionKey(press)
+        }
         guard slashToken != nil, press.modifiers.intersection([.command, .option, .control]).isEmpty else {
             return .ignored
         }
@@ -2135,12 +2161,225 @@ struct LauncherView: View {
         }
     }
 
+    // MARK: - Tab mentions
+
+    private var currentMentions: [TabMentions.Pick] { tabMentions[session.id] ?? [] }
+
+    /// The caret in the composer, when its field editor shows this text (end of text otherwise).
+    private var composerCaret: String.Index? {
+        guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.string == query else { return nil }
+        let range = editor.selectedRange()
+        guard range.length == 0 else { return nil }
+        return Range(NSRange(location: range.location, length: 0), in: query)?.lowerBound
+    }
+
+    /// The "@query" being typed, unless its list was dismissed.
+    private var mentionToken: (at: String.Index, query: String)? {
+        guard !manager.showingRemote, !showHistory, TabMentions.supportsMentions(session),
+              let found = TabMentions.query(in: query, caret: composerCaret),
+              dismissedMention != mentionPlace(found.at, in: query),
+              !TabMentions.isPicked(at: found.at, in: query, picks: currentMentions) else { return nil }
+        return found
+    }
+
+    private func mentionPlace(_ at: String.Index, in text: String) -> String {
+        "\(session.id) \(text.distance(from: text.startIndex, to: at))"
+    }
+
+    private var mentionCandidates: [TabMentions.Candidate] {
+        TabMentions.candidates(for: session, in: manager)
+    }
+
+    private var mentionMatches: [TabMentions.Candidate] {
+        guard let token = mentionToken else { return [] }
+        return TabMentions.matches(token.query, in: mentionCandidates)
+    }
+
+    /// Shown while an "@query" is typed and there are tabs to mention. A space with no match
+    /// means the "@" was ordinary text.
+    private var showsMentionSuggestions: Bool {
+        guard let token = mentionToken else { return false }
+        let candidates = mentionCandidates
+        guard !candidates.isEmpty else { return false }
+        return !TabMentions.matches(token.query, in: candidates).isEmpty || !token.query.contains(where: \.isWhitespace)
+    }
+
+    private var mentionSuggestionRows: some View {
+        let matches = mentionMatches
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(matches.enumerated()), id: \.element.id) { index, candidate in
+                mentionRow(candidate, highlighted: index == mentionHighlight)
+                    .id("mention-\(index)")
+            }
+            if matches.isEmpty, let token = mentionToken {
+                commandInfoRow("No open tab matches “\(token.query)”. Return sends your text as typed.")
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Tab suggestions")
+    }
+
+    private func mentionRow(_ candidate: TabMentions.Candidate, highlighted: Bool) -> some View {
+        let isChild = candidate.parentTitle != nil
+        return Button(action: { chooseMention(candidate) }) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: isChild ? "arrow.triangle.branch" : "macwindow")
+                    .font(.system(size: 12))
+                    .foregroundStyle(isChild ? AnyShapeStyle(ChildTabColors.lane) : AnyShapeStyle(Color.accentColor))
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
+                Text(candidate.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .layoutPriority(2)
+                if !candidate.detail.isEmpty {
+                    Text(candidate.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
+                }
+                Spacer(minLength: 6)
+                if highlighted {
+                    keycap("↩", "mention")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+            .background(highlighted ? Color.accentColor.opacity(0.18) : Color.clear)
+        }
+        .buttonStyle(.plain)
+        .help(candidate.detail.isEmpty ? "Mention “\(candidate.title)”" : "Mention “\(candidate.title)” · \(candidate.detail)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(candidate.accessibilityLabel)
+        .accessibilityHint("Mentions this tab, so the model looks into exactly this tab")
+        .accessibilityAddTraits(highlighted ? .isSelected : [])
+    }
+
+    /// Picked tabs, each sent with its ID; removing one removes its "@Label" from the text.
+    private var mentionChips: some View {
+        HStack(spacing: 6) {
+            ForEach(currentMentions, id: \.self) { mention in
+                HStack(spacing: 3) {
+                    Text("@" + mention.label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button(action: { removeMention(mention) }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove mention")
+                    .accessibilityLabel("Remove mention \(mention.label)")
+                }
+                .padding(.leading, 8)
+                .padding(.trailing, 4)
+                .padding(.vertical, 2)
+                .background(Color.accentColor.opacity(0.13), in: Capsule())
+                .help("Sent with this tab's ID: the model looks into exactly “\(mention.label)”.")
+            }
+            Text("mentioned — the model looks into exactly these tabs")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Mentioned tabs")
+    }
+
+    private func mentionQueryChanged(from oldValue: String, to newValue: String) {
+        let kept = TabMentions.remaining(currentMentions, in: newValue)
+        if kept != currentMentions { tabMentions[session.id] = kept.isEmpty ? nil : kept }
+        let found = TabMentions.query(in: newValue, caret: composerCaret)
+        if let dismissed = dismissedMention, found.map({ mentionPlace($0.at, in: newValue) }) != dismissed {
+            dismissedMention = nil
+        }
+        guard showsMentionSuggestions else { mentionHighlight = nil; return }
+        let matches = mentionMatches
+        let wasOpen = TabMentions.query(in: oldValue) != nil && mentionHighlight != nil
+        mentionHighlight = matches.isEmpty ? nil : 0
+        if !wasOpen {
+            AccessibilityNotification.Announcement(matches.count == 1 ? "1 tab" : "\(matches.count) tabs").post()
+        }
+    }
+
+    /// Up/Down move through the tabs, Tab mentions one, Escape hides the list for this "@".
+    private func handleMentionKey(_ press: KeyPress) -> KeyPress.Result {
+        let matches = mentionMatches
+        switch press.key {
+        case .escape:
+            if let token = mentionToken { dismissedMention = mentionPlace(token.at, in: query) }
+            mentionHighlight = nil
+            return .handled
+        case .tab:
+            guard !press.modifiers.contains(.shift) else { return .ignored }
+            guard let index = mentionHighlight.flatMap({ matches.indices.contains($0) ? $0 : nil }) ?? matches.indices.first
+            else { return .handled }
+            chooseMention(matches[index])
+            return .handled
+        case .downArrow, .upArrow:
+            guard !matches.isEmpty else { return .handled }
+            let down = press.key == .downArrow
+            if let current = mentionHighlight, matches.indices.contains(current) {
+                mentionHighlight = (current + (down ? 1 : matches.count - 1)) % matches.count
+            } else {
+                mentionHighlight = down ? 0 : matches.count - 1
+            }
+            return .handled
+        default:
+            return .ignored
+        }
+    }
+
+    private func chooseMention(_ candidate: TabMentions.Candidate) {
+        guard let token = mentionToken else { return }
+        let result = TabMentions.insert(candidate, at: token.at, caret: composerCaret, in: query,
+                                        label: TabMentions.uniqueLabel(for: candidate, among: currentMentions))
+        let caret = NSRange(result.caret..<result.caret, in: result.text).location
+        query = result.text
+        tabMentions[session.id] = currentMentions.filter { !($0.id == candidate.id && $0.label == result.label) }
+            + [TabMentions.Pick(label: result.label, id: candidate.id)]
+        mentionHighlight = nil
+        inputFocused = true
+        placeComposerCaret(at: caret, in: result.text)
+        AccessibilityNotification.Announcement("Mentioned \(candidate.title)").post()
+    }
+
+    /// Puts the caret after a picked mention. Return ends the field's editing and refocusing
+    /// selects all of its text, so this waits for the field editor to show `text`.
+    private func placeComposerCaret(at location: Int, in text: String, attempt: Int = 0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0 : 0.05)) {
+            guard query == text else { return }
+            if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.string == text {
+                editor.setSelectedRange(NSRange(location: location, length: 0))
+            } else if attempt < 6 {
+                placeComposerCaret(at: location, in: text, attempt: attempt + 1)
+            }
+        }
+    }
+
+    private func removeMention(_ mention: TabMentions.Pick) {
+        query = TabMentions.removing(mention, from: query, among: currentMentions)
+        let kept = currentMentions.filter { $0 != mention }
+        tabMentions[session.id] = kept.isEmpty ? nil : kept
+        inputFocused = true
+    }
+
     // MARK: - App typeahead
 
     /// Top app hit for the current query (Spotlight-style).
     private var appSuggestion: AppMatch? {
         guard !session.isLocalPrivate, !showHistory, !session.isStreaming,
-              !query.contains(where: \.isNewline) else { return nil }
+              !query.contains(where: \.isNewline), mentionToken == nil else { return nil }
         return AppCatalog.shared.match(query: query)
     }
 
@@ -2670,6 +2909,11 @@ struct LauncherView: View {
     }
 
     private func submit(interrupt: Bool = false, inject: Bool = false) {
+        // Return with a tab highlighted in the "@" list mentions it.
+        if !interrupt, !inject, showsMentionSuggestions, let index = mentionHighlight, mentionMatches.indices.contains(index) {
+            chooseMention(mentionMatches[index])
+            return
+        }
         // Return with a command suggestion highlighted chooses it (runs it, or inserts it when it
         // needs input); with nothing highlighted the text is sent as typed.
         if !interrupt, !inject, slashToken != nil, let index = commandHighlight, commandMatches.indices.contains(index) {
@@ -2683,14 +2927,17 @@ struct LauncherView: View {
             return
         }
         if speech.isRecording { speech.stop() }
-        let text = query
+        // Picked tabs travel as mention tokens carrying their IDs.
+        let text = TabMentions.encode(query, mentions: currentMentions)
         if !interrupt, !inject, deliveryMode == .auto, let request = session.chatInputRequest {
             do { try session.submitInputReply(text, id: request.id) }
             catch { session.deliveryStatusForInput(error.localizedDescription); return }
             query = ""
+            tabMentions[session.id] = nil
             return
         }
         query = ""
+        tabMentions[session.id] = nil
         session.submit(text, mode: interrupt ? .interrupt : inject ? .inject : deliveryMode)
         deliveryMode = .auto
     }
