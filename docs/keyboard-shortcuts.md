@@ -21,6 +21,7 @@
 | **Command+Left/Right** | With input text: move to start/end; with an empty editor: switch tabs |
 | **Command+Shift+Left/Right** | Extend selection to the start/end of the input |
 | **Command+V** | Paste text, or attach a supported clipboard image/file |
+| **@** at the start of a word | Suggest tabs to mention; **Up/Down** choose, **Return** or **Tab** picks, **Escape** closes the list |
 | **Escape** | Hide panel and overlays; does not cancel a run |
 | Terminal **Up/Down** | Browse command history |
 | Terminal **Control+C** | Interrupt the active manual command or agent run |

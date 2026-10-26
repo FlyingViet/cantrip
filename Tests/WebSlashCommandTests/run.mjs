@@ -180,5 +180,42 @@ pending.shift().resolve({ error: "nope" });
 await settle();
 same(fetching.cache.get("a").data, null, "an invalid response is treated as a failure");
 
+// @-mentions: the same rules as TabMentions on the Mac (query, matching, encoding, display).
+const mentions = vm.createContext({ sessionItems: [], selected: null, token: "t", slashState: { open: false }, tabMentionLists: new Map() });
+vm.runInContext(templateSlice("    const mentionTokenPattern=", "    function appendPrompt("), mentions);
+vm.runInContext(templateSlice("    function currentMentions(", "    function removeMention("), mentions);
+const tv = "11111111-2222-3333-4444-555555555555", remote = "AAAAAAAA-2222-3333-4444-555555555555";
+same(mentions.mentionQuery("mail a@b.com"), null, "an email address never opens the tab list");
+same(mentions.mentionQuery("x@handle"), null, "an @ inside a word never opens the tab list");
+same(mentions.mentionQuery("hi @ba"), { at: 3, query: "ba" }, "@ at a word start opens it");
+same(mentions.mentionQuery("(@tv"), { at: 1, query: "tv" }, "@ after a bracket opens it");
+same(mentions.mentionQuery("@ab cd", 3), { at: 0, query: "ab" }, "the query ends at the caret");
+same(mentions.mentionQuery("hi @ "), null, "@ followed by a space is plain text");
+same(mentions.mentionQuery("@[TV](x"), null, "a token is never a query");
+same(mentions.mentionQuery("@" + "a".repeat(49)), null, "an @ far back is ignored");
+same(mentions.mentionLabel("  Fix [the]\n TV  "), "Fix the TV", "labels are one line without brackets");
+const candidates = [{ id: "1", title: "Sony TV", project: null }, { id: "2", title: "Bass Compass", project: "bass-compass" },
+    { id: "3", title: "Café Ops", project: null }, { id: "4", title: "Cantrip", project: "Cantrip" }];
+const titles = query => mentions.matchMentions(query, candidates).map(row => row.title);
+same(titles("ba"), ["Bass Compass"], "@ba finds Bass Compass");
+same(titles("bass c"), ["Bass Compass"], "words match word starts");
+same(titles("cafe"), ["Café Ops"], "matching ignores diacritics");
+same(titles("CA"), ["Café Ops", "Cantrip"], "title prefixes keep list order");
+same(titles("bass x"), [], "no match");
+const picks = [{ id: tv, label: "TV" }, { id: remote, label: "TV Remote" }];
+const encoded = mentions.encodeMentions("ask @TV and @TV Remote, mail a@TV (@TV) @TVs", picks);
+same(encoded, `ask @[TV](cantrip-tab:${tv}) and @[TV Remote](cantrip-tab:${remote}), mail a@TV (@[TV](cantrip-tab:${tv})) @TVs`,
+    "picked mentions become tokens; longer labels first; never inside words");
+same(mentions.plainMentions(encoded), "ask @TV and @TV Remote, mail a@TV (@TV) @TVs", "tokens read as @Label");
+same(mentions.mentionProject("/Users/me"), null, "the home folder isn't a project");
+same(mentions.mentionProject("/Users/me/Coding/Cantrip/"), "Cantrip", "the project is the folder name");
+vm.runInContext(`selected = "tab"; tabMentionLists.set("tab", ${JSON.stringify(picks)}); var draftValue = "only @TV Remote here", rendered = 0;
+  globalThis.$ = id => id === "draft" ? { get value() { return draftValue } } : null; globalThis.renderMentionChips = () => rendered++;`, mentions);
+mentions.pruneMentions();
+same(mentions.currentMentions().map(pick => pick.label), ["TV Remote"], "@TV Remote doesn't keep the @TV pick");
+vm.runInContext(`draftValue = "x"`, mentions);
+mentions.pruneMentions();
+same(mentions.currentMentions(), [], "deleting a mention's text drops its chip");
+
 console.log(failures === 0 ? `Web slash command tests passed (${passes})` : `${failures} web slash command tests failed`);
 process.exit(failures === 0 ? 0 : 1);
