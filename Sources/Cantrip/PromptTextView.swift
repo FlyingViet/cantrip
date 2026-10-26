@@ -20,16 +20,21 @@ struct PromptText {
     }
 }
 
-/// Bound text layout, not the stored or transmitted prompt.
+/// Bound text layout, not the stored or transmitted prompt. Tab mentions show as "@Label" in
+/// the accent color (TabMentions).
 struct PromptTextView: View {
     private let prompt: PromptText
+    private let mentions: [String]
     @State private var reading = false
 
-    init(text: String) { prompt = PromptText(text) }
+    init(text: String) {
+        prompt = PromptText(TabMentions.plain(text))
+        mentions = TabMentions.parse(text).map { "@" + $0.label }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(verbatim: prompt.preview)
+            Text(Self.styled(prompt.preview, mentions: mentions))
                 .lineLimit(prompt.isLong ? 8 : nil)
             if prompt.isLong {
                 Button("Read full prompt") { reading = true }
@@ -40,6 +45,19 @@ struct PromptTextView: View {
             }
         }
         .sheet(isPresented: $reading) { PromptReader(prompt: prompt) }
+    }
+
+    static func styled(_ text: String, mentions: [String]) -> AttributedString {
+        var result = AttributedString(text)
+        for needle in Set(mentions) {
+            var start = result.startIndex
+            while start < result.endIndex, let range = result[start...].range(of: needle) {
+                result[range].foregroundColor = .accentColor
+                result[range].inlinePresentationIntent = .stronglyEmphasized
+                start = range.upperBound
+            }
+        }
+        return result
     }
 }
 
