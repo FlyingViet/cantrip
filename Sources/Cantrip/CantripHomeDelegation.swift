@@ -829,21 +829,7 @@ final class CantripHomeDelegations {
         if delegation.doneWhenState == .checking { return delegation }
         next.tabTitle = target.title
         let messages = target.messages
-        var start: Int?
-        if let id = next.tabMessageID {
-            start = messages.firstIndex { $0.id == id }
-        } else {
-            let from = next.anchorMessageID
-                .flatMap { id in messages.firstIndex { $0.id == id } }
-                .map { $0 + 1 } ?? 0
-            start = messages.indices.dropFirst(from).first {
-                messages[$0].role == .user
-                    && messages[$0].text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        == next.prompt
-            }
-            if let start { next.tabMessageID = messages[start].id }
-        }
-        guard let start else {
+        guard let span = span(of: next, in: messages, waitsForAnswer: waitsForAnswer) else {
             if next.tabMessageID == nil,
                target.queued.contains(where: { $0.text == next.prompt }) {
                 next.status = .queued
@@ -856,22 +842,8 @@ final class CantripHomeDelegations {
             }
             return next
         }
-        // A handoff's run lasts until a user message from another run: answers to the tab's
-        // input requests join the same run. An automatic resume, or the user's reply to a
-        // question the tab ended on, carries the handoff into the next run.
-        var segment = start
-        var end = messages.endIndex
-        while true {
-            let runID = messages[segment].runID
-            end = messages.indices.dropFirst(segment + 1).first {
-                messages[$0].role == .user && (runID == nil || messages[$0].runID != runID)
-            } ?? messages.endIndex
-            guard end < messages.endIndex,
-                  continuesHandoff(after: messages[(segment + 1)..<end], next: messages[end],
-                                   waitsForAnswer: waitsForAnswer)
-            else { break }
-            segment = end
-        }
+        if next.tabMessageID == nil { next.tabMessageID = messages[span.start].id }
+        let segment = span.segment, end = span.end
         let replies = messages[(segment + 1)..<end]
         next.question = nil
         if target.isStreaming, end == messages.endIndex {
@@ -927,6 +899,58 @@ final class CantripHomeDelegations {
             next.outcome = reply.map { briefOutcome($0) }
         }
         return next
+    }
+
+    /// Where a handoff sits in its tab's messages: its prompt (`tabMessageID`, or the first match
+    /// after `anchorMessageID`), the start of its latest run and that run's end. A handoff's run
+    /// lasts until a user message from another run: answers to the tab's input requests join the
+    /// same run, and an automatic resume, a Done when send-back or the user's reply to a question
+    /// the tab ended on carries it into the next. Nil before the prompt reaches the tab.
+    static func span(of handoff: CantripHomeDelegation, in messages: [ChatMessage],
+                     waitsForAnswer: Bool = true) -> (start: Int, segment: Int, end: Int)? {
+        var found: Int?
+        if let id = handoff.tabMessageID {
+            found = messages.firstIndex { $0.id == id }
+        } else {
+            let from = handoff.anchorMessageID
+                .flatMap { id in messages.firstIndex { $0.id == id } }
+                .map { $0 + 1 } ?? 0
+            found = messages.indices.dropFirst(from).first {
+                messages[$0].role == .user
+                    && messages[$0].text.trimmingCharacters(in: .whitespacesAndNewlines) == handoff.prompt
+            }
+        }
+        guard let start = found else { return nil }
+        var segment = start
+        var end = messages.endIndex
+        while true {
+            let runID = messages[segment].runID
+            end = messages.indices.dropFirst(segment + 1).first {
+                messages[$0].role == .user && (runID == nil || messages[$0].runID != runID)
+            } ?? messages.endIndex
+            guard end < messages.endIndex,
+                  continuesHandoff(after: messages[(segment + 1)..<end], next: messages[end],
+                                   waitsForAnswer: waitsForAnswer)
+            else { break }
+            segment = end
+        }
+        return (start, segment, end)
+    }
+
+    /// A handoff's conversation in its tab after the handed-off prompt: the tab's replies,
+    /// questions and the user's answers, without Cantrip's own resume and send-back messages.
+    static func conversation(of handoff: CantripHomeDelegation, in messages: [ChatMessage]) -> [ChatMessage] {
+        guard let span = span(of: handoff, in: messages) else { return [] }
+        return messages[(span.start + 1)..<span.end].filter { message in
+            let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            switch message.role {
+            case .user:
+                return !text.isEmpty && text != ChatSession.resumePrompt
+                    && !text.hasPrefix(CantripHomeDoneWhen.sendBackPrefix)
+            case .assistant, .error: return !text.isEmpty
+            default: return false
+            }
+        }
     }
 
     private static func lastReply(in messages: ArraySlice<ChatMessage>) -> String? {

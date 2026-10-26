@@ -210,8 +210,98 @@ extension SessionTabTests {
                      && (openedThread["messages"] as? [[String: Any]])?.count == 2, "\(opened)")
         let missing = try await call("/api/v1/sessions/\(home.uuidString)/threads/\(UUID().uuidString)")
         precondition(missing.0 == 404, "an unknown thread is a 404")
+
+        // A handoff made in a thread brings the tab's side of the work, just before its result card.
+        let tab = ChatSession(copilotBackend: CantripHomeBackendFixture())
+        try tab.updateTab(name: "Cantrip")
+        let handoffPrompt = "(Handed off by Cantrip Home.)\n\nGoal: Show a minimal tag"
+        var handedPrompt = ChatMessage(role: .user, text: handoffPrompt)
+        handedPrompt.runID = UUID()
+        var handedReply = ChatMessage(role: .assistant, text: "Copilot needs your answer\n\nShould the tag expand inline?")
+        handedReply.runID = handedPrompt.runID
+        var answerInTab = ChatMessage(role: .user, text: "Yes, inline")
+        answerInTab.runID = UUID()
+        var doneInTab = ChatMessage(role: .assistant, text: "Tags expand inline now.")
+        doneInTab.runID = answerInTab.runID
+        var unrelated = ChatMessage(role: .user, text: "Something else")
+        unrelated.runID = UUID()
+        tab.messages = [handedPrompt, handedReply, answerInTab, doneInTab, unrelated]
+        manager.sessions.append(tab)
+        defer { manager.sessions.removeAll { $0.id == tab.id } }
+        let handed = CantripHomeDelegation(tabID: tab.id, tabTitle: "Cantrip", summary: "Minimal tag", prompt: handoffPrompt,
+                                           createdAt: Date(), status: .completed, tabMessageID: handedPrompt.id)
+        let replyIndex = try requireThread(homeChat.messages.firstIndex { $0.id == tagsReply.id })
+        let cardIndex = try requireThread(homeChat.messages.firstIndex { $0.id == card.id })
+        homeChat.messages[replyIndex].delegations = [handed]
+        homeChat.messages[cardIndex].handoffResult = CantripHomeHandoffResult(handed, now: Date())
+        let withTab = try await call("/api/v1/sessions/\(home.uuidString)/threads/\(tags.id.uuidString)")
+        let tabThread = try requireThread((withTab.1["thread"] as? [String: Any])?["messages"] as? [[String: Any]])
+        let order = tabThread.map { "\($0["tabTitle"] as? String ?? "Home"):\($0["text"] as? String ?? "")" }
+        precondition(withTab.0 == 200 && order == [
+            "Home:I'm handing this Home feature to the Cantrip tab.",
+            "Cantrip:Should the tag expand inline?", "Cantrip:Yes, inline", "Cantrip:Tags expand inline now.",
+            "Home:Cantrip · Done",
+        ], "\(order)")
+        precondition(tabThread[2]["role"] as? String == "user" && tabThread[1]["tabID"] as? String == tab.id.uuidString
+                     && (withTab.1["thread"] as? [String: Any])?["replyCount"] as? Int == 2,
+                     "the tab's items say which tab, and Home's count stays its own: \(withTab.1)")
+        testHandoffThreadConversation()
         try testThreadLinesWeb()
         print("Thread tag checks passed")
+    }
+
+    /// The tab's side of a handoff: its run(s) after the handed-off prompt, without Cantrip's own
+    /// resume and send-back messages; in a thread, before the handoff's card or last while it runs.
+    @MainActor
+    private static func testHandoffThreadConversation() {
+        let prompt = "(Handed off by Cantrip Home.)\n\nGoal: Fix duplicates"
+        func message(_ role: ChatMessage.Role, _ text: String, _ run: UUID) -> ChatMessage {
+            var message = ChatMessage(role: role, text: text)
+            message.runID = run
+            return message
+        }
+        let (r0, r1, r2, r3, r4) = (UUID(), UUID(), UUID(), UUID(), UUID())
+        let older = message(.assistant, "Earlier work.", r0)
+        let handed = message(.user, prompt, r1)
+        let asked = message(.assistant, "Copilot needs your answer\n\nWhich library has the duplicate?", r1)
+        let answer = message(.user, "Komga", r2)
+        let fixed = message(.assistant, "Removed the duplicate.", r2)
+        let sentBack = message(.user, CantripHomeDoneWhen.sendBack(missing: "Not pushed.", doneWhen: "Pushed.", attempt: 1), r3)
+        let pushed = message(.assistant, "Pushed a1b2c3d.", r3)
+        let next = message(.user, "Now update the README", r4)
+        let messages = [older, handed, asked, answer, fixed, sentBack, pushed, next, message(.assistant, "Updated.", r4)]
+        let handoff = CantripHomeDelegation(tabID: UUID(), tabTitle: "NetLib", summary: "Fix duplicates", prompt: prompt,
+                                            createdAt: Date(), anchorMessageID: older.id)
+        precondition(CantripHomeDelegations.conversation(of: handoff, in: messages).map(\.id)
+                     == [asked.id, answer.id, fixed.id, pushed.id],
+                     "answers and send-backs carry it on; the send-back itself and later work aren't shown")
+        precondition(CantripHomeDelegations.conversation(of: handoff, in: [older]).isEmpty, "nothing before it reaches the tab")
+
+        // Still running: the tab's latest work ends the thread.
+        let home = ChatSession.cantripHomeID
+        var start = ChatMessage(role: .user, text: "Fix the duplicates")
+        start.threadID = start.id
+        var reply = ChatMessage(role: .assistant, text: "NetLib is taking it.")
+        reply.threadID = start.id
+        reply.delegations = [handoff]
+        var followUp = ChatMessage(role: .user, text: "Any news?")
+        followUp.threadID = start.id
+        let thread = ThreadTags.thread(start.id, in: [start, reply, followUp], before: nil, sessionID: home,
+                                       visibleText: \.text, tabConversation: { handoff in
+            .init(tabID: handoff.tabID, tabTitle: "NetLib", messages: [asked, answer])
+        })
+        let items = (thread?["messages"] as? [[String: Any]]) ?? []
+        precondition(items.map { $0["text"] as? String ?? "" }
+                     == ["NetLib is taking it.", "Any news?", "Which library has the duplicate?", "Komga"]
+                     && items[2]["tabTitle"] as? String == "NetLib" && items[0]["tabTitle"] == nil
+                     && thread?["replyCount"] as? Int == 2, "\(items)")
+        // A tab's long reply (its whole run, progress notes first) keeps its ending.
+        let workLog = message(.assistant, String(repeating: "Checking the next step. ", count: 300) + "Outcome: duplicates removed.", r2)
+        let long = ThreadTags.thread(start.id, in: [start, reply], before: nil, sessionID: home, visibleText: \.text,
+                                     tabConversation: { handoff in .init(tabID: handoff.tabID, tabTitle: "NetLib", messages: [workLog]) })
+        let longText = ((long?["messages"] as? [[String: Any]])?.last?["text"] as? String) ?? ""
+        precondition(longText.hasPrefix("…") && !longText.hasPrefix("… ") && longText.hasSuffix("Outcome: duplicates removed.")
+                     && longText.count <= ThreadTags.textLimit + 1, String(longText.prefix(40)))
     }
 
     /// The browser Remote: rows after a quoted reply that stay in its thread share its line.

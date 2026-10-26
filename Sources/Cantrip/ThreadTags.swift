@@ -5,7 +5,8 @@ import Foundation
 /// above it shows a tag naming that prompt, and the tag expands to the thread so far.
 enum ThreadTags {
     static let excerptLimit = 120
-    static let messageLimit = 30
+    /// The thread's latest messages, the tabs' side of its handoffs included.
+    static let messageLimit = 50
     /// Each message in a thread; the thread view shows them whole, as Messages does.
     static let textLimit = 4000
     static let promptLimit = 4000
@@ -92,29 +93,68 @@ enum ThreadTags {
         return String(text[range.upperBound...])
     }
 
+    /// A handoff's conversation in its tab (or the child tab it moved into), shown in the Home
+    /// thread that made the handoff.
+    struct TabConversation {
+        let tabID: UUID
+        let tabTitle: String
+        let messages: [ChatMessage]
+    }
+
     /// The thread a tag opens: its prompt and every earlier message in it, before `before`
-    /// (the tagged message). Unrelated messages are skipped. Nil when the prompt is gone.
+    /// (the tagged message). Unrelated messages are skipped. Each handoff made in the thread brings
+    /// its tab's side of the work (`tabConversation`): the tab's replies, questions and the user's
+    /// answers there, just before the handoff's result card, or last while it still runs. Nil when
+    /// the prompt is gone.
     static func thread(_ thread: UUID, in messages: [ChatMessage], before: UUID?, sessionID: UUID,
-                       visibleText: (ChatMessage) -> String) -> [String: Any]? {
+                       visibleText: (ChatMessage) -> String,
+                       tabConversation: (CantripHomeDelegation) -> TabConversation? = { _ in nil }) -> [String: Any]? {
         guard let prompt = messages.first(where: { $0.id == thread && $0.role == .user }) else { return nil }
         let end = before.flatMap { id in messages.firstIndex { $0.id == id } } ?? messages.endIndex
         let related = messages[..<end].filter { message in
             message.threadID == thread && message.id != thread && message.role != .freshStart
         }
-        var items: [[String: Any]] = []
-        for message in related {
-            let text = message.role == .user ? promptText(message.text, sessionID: sessionID)
-                : withoutQuestionTitle(visibleText(message))
+        func item(_ message: ChatMessage, text: String, tab: TabConversation? = nil) -> [String: Any]? {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
+            guard !trimmed.isEmpty else { return nil }
+            // A tab's reply carries its whole run, progress notes first; its ending says how it went.
+            let shortened = tab != nil && message.role == .assistant
+                ? "…" + String(trimmed.suffix(textLimit)).drop { !$0.isWhitespace }.trimmingCharacters(in: .whitespacesAndNewlines)
+                : String(trimmed.prefix(textLimit)) + "…"
             var item: [String: Any] = [
                 "id": message.id.uuidString,
                 "role": message.role.rawValue,
-                "text": trimmed.count > textLimit ? String(trimmed.prefix(textLimit)) + "…" : trimmed,
+                "text": trimmed.count > textLimit ? shortened : trimmed,
             ]
             item["author"] = message.author
-            items.append(item)
+            if let tab {
+                item["tabID"] = tab.tabID.uuidString
+                item["tabTitle"] = tab.tabTitle
+            }
+            return item
         }
+        var pending: [(handoff: UUID, items: [[String: Any]])] = related.flatMap(\.delegations).compactMap { handoff in
+            guard let tab = tabConversation(handoff) else { return nil }
+            let items = tab.messages.compactMap { message in
+                item(message, text: message.role == .user ? promptText(message.text, sessionID: tab.tabID)
+                     : withoutQuestionTitle(message.text), tab: tab)
+            }
+            return items.isEmpty ? nil : (handoff.id, items)
+        }
+        var items: [[String: Any]] = []
+        var replies = 0
+        for message in related {
+            if let card = message.handoffResult?.delegationID, let index = pending.firstIndex(where: { $0.handoff == card }) {
+                items += pending.remove(at: index).items
+            }
+            let text = message.role == .user ? promptText(message.text, sessionID: sessionID)
+                : withoutQuestionTitle(visibleText(message))
+            guard let item = item(message, text: text) else { continue }
+            items.append(item)
+            replies += 1
+        }
+        // Still running (no card yet): its tab's latest work is the thread's newest.
+        if before == nil { items += pending.flatMap(\.items) }
         let promptText = promptText(prompt.text, sessionID: sessionID)
         return [
             "id": thread.uuidString,
@@ -124,6 +164,8 @@ enum ThreadTags {
             ],
             "messages": Array(items.suffix(messageLimit)),
             "hasEarlier": items.count > messageLimit,
+            // Home's own replies, as the prompt's "N Replies" counts them.
+            "replyCount": replies,
         ]
     }
 }

@@ -1139,6 +1139,12 @@ final class RemoteControlServer {
                     threadID, in: session.messages, before: request.query("before").flatMap(UUID.init(uuidString:)),
                     sessionID: id, visibleText: { message in
                         message.role == .assistant ? home?.text(of: message) ?? message.text : message.text
+                    },
+                    tabConversation: { [manager] handoff in
+                        // The tab's side of a handoff: an open or archived tab other tabs may read.
+                        guard let tab = try? TabInsight.resolve(handoff.tabID.uuidString, in: manager) else { return nil }
+                        return .init(tabID: tab.id, tabTitle: tab.title,
+                                     messages: CantripHomeDelegations.conversation(of: handoff, in: tab.messages))
                     }
                   ) else {
                 sendError(404, "This thread's first message is no longer available.", on: connection)
@@ -3727,14 +3733,14 @@ private extension RemoteControlServer {
       try{const data=await api(`/api/v1/sessions/${state.sessionID}/threads/${state.threadID}`);if(threadOpen!==state||token!==state.token)return;changed=JSON.stringify(data.thread)!==JSON.stringify(state.page);state.page=data.thread;state.error=null}
       catch(error){changed=!state.page;if(threadOpen===state&&!state.page)state.error=`Couldn't load this thread: ${error.message}`}
       finally{state.loading=false;if(threadOpen===state){if(changed)fillThread();if(state.again){state.again=false;loadThread()}}}}
-    function fillThread(){const state=threadOpen,body=$("threadBody");if(!state)return;const top=body.scrollTop,page=state.page,count=page?.messages?.length||0;body.replaceChildren();$("threadCount").textContent=page?(count===1?"1 Reply":`${count} Replies`):"";
+    function fillThread(){const state=threadOpen,body=$("threadBody");if(!state)return;const top=body.scrollTop,page=state.page,count=page?.replyCount??page?.messages?.length??0;body.replaceChildren();$("threadCount").textContent=page?(count===1?"1 Reply":`${count} Replies`):"";
       const bubble=(text,id)=>{const item=document.createElement("p");item.className="thread-bubble mine";item.textContent=text;if(id)item.dataset.messageId=id;body.append(item)};
       const note=text=>{const item=document.createElement("p");item.className="child-note thread-note";item.textContent=text;body.append(item)};
       bubble(page?page.prompt.text:state.prompt);
       if(!page){if(!state.error){note("Loading the thread…");return}note(state.error);const retry=document.createElement("button");retry.type="button";retry.className="control thread-retry";retry.textContent="Try Again";retry.onclick=()=>{state.error=null;fillThread();loadThread()};body.append(retry);return}
       if(page.hasEarlier)note("Earlier messages in this thread aren't shown.");
       for(const item of page.messages||[]){if(item.role==="user"){bubble(item.text,item.id);continue}
-        const who=document.createElement("span"),reply=document.createElement("div");who.className="thread-who";who.textContent=item.role==="handoff"?"Handoff":item.role==="error"?"Error":"Home";reply.className="thread-bubble pip";reply.dataset.messageId=item.id;appendProse(reply,item.text);body.append(who,reply)}
+        const who=document.createElement("span"),reply=document.createElement("div");who.className="thread-who";who.textContent=item.tabTitle?(item.role==="error"?`${item.tabTitle} · Error`:item.tabTitle):item.role==="handoff"?"Handoff":item.role==="error"?"Error":"Home";reply.className="thread-bubble pip";reply.dataset.messageId=item.id;appendProse(reply,item.text);body.append(who,reply)}
       if(!state.scrolled&&state.messageID){const target=[...body.querySelectorAll("[data-message-id]")].find(node=>node.dataset.messageId===state.messageID);if(target){state.scrolled=true;target.scrollIntoView({block:"nearest"});return}}
       body.scrollTop=top}
     // Called after every transcript change: the open thread follows its conversation and closes with it.

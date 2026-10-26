@@ -58,7 +58,9 @@ while you've moved on, or a handoff's result card), Home draws them like inline
 replies in Messages: each reply from another thread quotes the prompt it
 belongs to, joined to it by a curved line that runs on past the replies right
 after it in the same thread, and that prompt says "N Replies".
-Either opens the whole thread over the blurred chat. See
+Either opens the whole thread over the blurred chat, including each handoff's
+work in its tab (its replies, questions and your answers there), named after
+the tab. See
 [Thread tags in Cantrip Home](remote-control.md#thread-tags-in-cantrip-home).
 
 To answer what a tab or child tab is doing, or why it did something, Home reads
