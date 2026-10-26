@@ -438,8 +438,9 @@ struct CantripRemoteChildTab: Decodable, Equatable {
         let raw = container.decodeLenient(String.self, forKey: .state, default: "")
         self.init(
             state: CantripChildTabState(rawValue: raw) ?? .other,
-            title: container.decodeLenient(String.self, forKey: .title, default: ""),
-            parentTitle: container.decodeLenient(String.self, forKey: .parentTitle, default: ""),
+            // Titles come from the message: a tab mention reads "@Label".
+            title: CantripTabMentions.plain(container.decodeLenient(String.self, forKey: .title, default: "")),
+            parentTitle: CantripTabMentions.plain(container.decodeLenient(String.self, forKey: .parentTitle, default: "")),
             statusLine: container.decodeLenient(String.self, forKey: .statusLine, default: ""),
             branch: container.decodeLenient(String.self, forKey: .branch),
             baseBranch: container.decodeLenient(String.self, forKey: .baseBranch),
@@ -531,7 +532,8 @@ struct CantripRemoteChildResult: Decodable, Equatable, Identifiable {
         let raw = container.decodeLenient(String.self, forKey: .state, default: "")
         self.init(
             id: container.decodeLenient(String.self, forKey: .id, default: ""),
-            title: container.decodeLenient(String.self, forKey: .title, default: ""),
+            // Titles come from the message: a tab mention reads "@Label".
+            title: CantripTabMentions.plain(container.decodeLenient(String.self, forKey: .title, default: "")),
             prompt: container.decodeLenient(String.self, forKey: .prompt, default: ""),
             state: CantripChildTabState(rawValue: raw) ?? .other,
             statusLine: container.decodeLenient(String.self, forKey: .statusLine, default: ""),
@@ -716,6 +718,11 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     /// A child tab: the tab whose queued message it runs. The Mac lists it right after its parent.
     var parentID: String? = nil
     var child: CantripRemoteChildTab? = nil
+    /// "@" in this tab's (or Home's) composer suggests tabs, sent as `@[Label](cantrip-tab:<ID>)`
+    /// (`CantripTabMentions`). Nil from older Macs and false for private tabs: no mention UI.
+    var supportsTabMentions: Bool? = nil
+    /// Other composers may suggest this tab. Nil (older Macs) counts as false.
+    var mentionable: Bool? = nil
 
     var transcript: [CantripRemoteMessage] { messages ?? [] }
     /// Runs a parent's queued message in its own tab (and branch) until its work merges back.

@@ -47,7 +47,7 @@ struct CantripQueueButton: View {
                         .font(.caption)
                 }
                 if let next {
-                    Text(verbatim: PromptText(next.presentedText).preview)
+                    Text(verbatim: PromptText(CantripTabMentions.plain(next.presentedText)).preview)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -84,7 +84,7 @@ struct CantripQueueButton: View {
             .buttonStyle(.bordered)
             .disabled(!canSendNow || isSendingNow)
             .accessibilityLabel(isSendingNow ? "Sending next queued message now" : "Send next queued message now")
-            .accessibilityHint(PromptText(next.presentedText).preview)
+            .accessibilityHint(PromptText(CantripTabMentions.plain(next.presentedText)).preview)
         }
     }
 }
@@ -267,7 +267,7 @@ struct CantripQueueView: View {
                         .help(childTabsUnavailableReason
                               ?? "Run in a child tab: its own tab and branch, merged back when it's done.")
                         .accessibilityLabel("Run in child tab")
-                        .accessibilityHint(childTabsUnavailableReason ?? PromptText(prompt.presentedText).preview)
+                        .accessibilityHint(childTabsUnavailableReason ?? PromptText(CantripTabMentions.plain(prompt.presentedText)).preview)
                         .accessibilityIdentifier("cantrip-queue-fork-\(index)")
                     }
                     if session?.supportsQueueSendNow == true {
@@ -279,7 +279,7 @@ struct CantripQueueView: View {
                         .buttonStyle(.borderless)
                         .disabled(!canSendNow)
                         .accessibilityLabel("Send queued message now")
-                        .accessibilityHint(PromptText(prompt.presentedText).preview)
+                        .accessibilityHint(PromptText(CantripTabMentions.plain(prompt.presentedText)).preview)
                     }
                     if session?.supportsQueueRemoval == true {
                         Button(role: .destructive) { remove(prompt) } label: {
@@ -290,7 +290,7 @@ struct CantripQueueView: View {
                         .buttonStyle(.borderless)
                         .disabled(!canRemove)
                         .accessibilityLabel("Remove queued message")
-                        .accessibilityHint(PromptText(prompt.presentedText).preview)
+                        .accessibilityHint(PromptText(CantripTabMentions.plain(prompt.presentedText)).preview)
                     }
                 }
             }

@@ -24,6 +24,7 @@ A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.c
 - 🔑 **Your gateway, your key** — points at *your* Hermes server, nothing hardcoded
 - 📡 **Cantrip tabs** — every project tab on your Mac lives in Cantrip Home's drawer and
   uses the same chat, dictation, hands-free voice, and TTS interface
+- 🔗 **`@` mention a tab** — suggestions as you type; the message points at exactly that tab
 
 > The app is a thin, secure client. All the intelligence (skills, memory, tools) lives in **your** Hermes gateway. You bring the gateway + an API key; the app does the rest.
 
@@ -117,6 +118,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `/api/v1/sections`, `/api/v1/sections/{id}` | Tab sections: list, add (`name`), rename or reorder (`PATCH name/position`), delete; only when the list has `supportsTabSections` |
 | `POST /api/v1/sessions/{id}/start-fresh` | Start Fresh (no body): the next prompt starts a new model session, history stays; `409` while the tab is busy or for Cantrip Home |
 | `GET /api/v1/sessions/{id}/commands` | The tab's (or Home's) backend slash commands, custom commands and skills for `/` suggestions; called only when the snapshot has `supportsBackendCommands` |
+| (fields) `supportsTabMentions`, `mentionable` | `@` suggestions in that composer; which tabs may be suggested. Picked tabs travel in the message text as `@[Title](cantrip-tab:<UUID>)` |
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, Copilot usage, View Mac |
@@ -883,6 +885,31 @@ launched with `-CantripUITestBackendCommands` serve a generic fixture list, and
 `-CantripUITestComposerText /pl` types into the composer for screenshots
 (`-CantripUITestSlashScrollToEnd`, `-CantripUITestHardwareKeyboard` and
 `-CantripUITestChooseSlashCommand usage` scroll, highlight and choose a row).
+
+### Mention a tab with @
+
+Type `@` at the start of a word in Home's or a tab's composer to list the open tabs you can
+point the message at (child tabs too, never private or Private Local tabs, Home itself or the
+tab you're writing in), in the tab list's order and filtered as you type (case and accents
+ignored; title, then word starts, then anywhere in the title, then the project folder; at
+most 8 rows). Each row shows the tab's status glyph, its title and what tells it apart:
+*Child of …*, the project folder, *Working* or *Needs your answer*. Picking one inserts
+`@Title ` and a chip above the composer; the chip's ✕ removes the mention and its text, and
+deleting the text drops the chip. Two picked tabs with the same title get distinct labels
+(`@Sony TV (tv-two)`, else `@Sony TV 2`). An `@` inside a word (`a@b.com`) never opens the
+list, and a space with no match closes it. With a hardware keyboard, Up/Down move the
+highlight, Return or Tab picks (Return doesn't send while a row is highlighted) and Escape
+hides the list for that `@`. The list shows above the composer in every layout, iPhone Duo's
+sidebar layout included.
+
+Sending turns each picked mention into `@[Title](cantrip-tab:<UUID>)` inside the normal
+message text (same endpoint), so Cantrip on the Mac acts on exactly that tab. Transcripts,
+queue rows and thread quotes show it as a bold **@Title** (a link that opens the tab while
+it's open); copies and previews read `@Title`. Text typed by hand without picking stays
+plain. Needs a Mac whose sessions report `supportsTabMentions` (and `mentionable` on the
+tabs); older Macs show no list. Logic in
+[`Sources/CantripTabMentions.swift`](Sources/CantripTabMentions.swift), views in
+[`Sources/CantripTabMentionViews.swift`](Sources/CantripTabMentionViews.swift).
 
 ### Start fresh in a tab
 

@@ -60,8 +60,8 @@ struct CantripHandoffCard: View {
     }
 
     private var summary: String {
-        let summary = CantripSubagentFormat.trimmed(handoff.summary)
-        return summary.isEmpty ? CantripSubagentFormat.trimmed(handoff.prompt) : summary
+        let summary = CantripSubagentFormat.trimmed(CantripTabMentions.plain(handoff.summary))
+        return summary.isEmpty ? CantripSubagentFormat.trimmed(CantripTabMentions.plain(handoff.prompt)) : summary
     }
 
     private var canOpenTab: Bool {
