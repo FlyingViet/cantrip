@@ -1,73 +1,151 @@
-// Thread tags in Cantrip Home (state/threads.ts): the capsule beside a reply's lane badge (above a
-// handoff result card) naming the prompt that started its thread, and the thread it opens below,
-// drawn like the child-tab card's tag and thread (ChildTabs.tsx).
-import type { JSX } from "preact";
+// Thread tags in Cantrip Home (state/threads.ts), drawn like inline replies in Messages (CantripThreadTags.swift):
+// above a reply from another thread, a small copy of the prompt that started it, joined to the reply's lane badge
+// by a curved line through the margin; "N Replies" under a prompt whose replies got split up; and the open thread
+// over the blurred window.
+import type { ComponentChildren, JSX } from "preact";
+import { useEffect, useRef } from "preact/hooks";
 import type { RemoteThread, RemoteThreadTag } from "../../api/types";
-import { loadThread, panelID, speaker, tagLabel, threadView, toggleThread, type ThreadView } from "../../state/threads";
+import * as remote from "../../state/remote";
+import {
+  closeThread, loadThread, openThread, repliesLabel, showThread, speaker, tagLabel, threadLoad,
+  type ThreadFocus, type ThreadLoad,
+} from "../../state/threads";
 import { Icon } from "../icons";
 import { mascotDisplayName } from "../pip/prefs";
-import { inline } from "./Markdown";
+import { Markdown } from "./Markdown";
 
-export interface ThreadTagProps {
+export interface ThreadQuoteProps {
   sessionID: string;
-  /** The tagged message. */
+  /** The tagged reply. */
   messageID: string;
   tag: RemoteThreadTag;
+  /** The reply's lane badge, which the line turns into; cards have none. */
+  children?: ComponentChildren;
 }
 
-/** The capsule: reply arrow, the start of the prompt, and a chevron that flips while open. */
-export function ThreadTagButton(props: ThreadTagProps): JSX.Element {
-  const open = threadView(props.messageID).open;
+/** A reply's head: the quoted prompt on the right, the line running from it through the margin into the lane row. */
+export function ThreadQuote(props: ThreadQuoteProps): JSX.Element {
+  const open = () => showThread({ sessionID: props.sessionID, threadID: props.tag.id, prompt: props.tag.prompt, messageID: props.messageID });
   return (
-    <button type="button" class="thread-tag" aria-expanded={open ? "true" : "false"} aria-controls={panelID(props.messageID)}
-      aria-label={tagLabel(props.tag)} onClick={() => toggleThread(props.sessionID, props.messageID, props.tag)}>
-      <Icon name="arrow.uturn.backward" size={12} />
-      <span class="truncate">{props.tag.prompt}</span>
-      <Icon name="chevron.down" size={12} class={`thread-chevron${open ? " flipped" : ""}`} />
-    </button>
-  );
-}
-
-/** The thread below the tag row (hidden while closed, so `aria-controls` always resolves). */
-export function ThreadPanel(props: ThreadTagProps): JSX.Element {
-  const view = threadView(props.messageID);
-  return (
-    <div id={panelID(props.messageID)} class="child-thread thread-panel" role="group" aria-label={`Thread: ${props.tag.prompt}`} hidden={!view.open}>
-      {view.open ? <ThreadBody {...props} view={view} /> : null}
+    <div class="thread-head">
+      <div class="thread-quote-row">
+        <span class="thread-arm" aria-hidden="true" />
+        <button type="button" class="thread-quote" aria-label={`${tagLabel(props.tag)}. Opens the thread`} title="Open the thread" onClick={open}>
+          <span class="thread-quote-text">{props.tag.prompt}</span>
+        </button>
+      </div>
+      <div class="thread-lane-row">{props.children ?? <span class="thread-spacer" />}</div>
     </div>
   );
 }
 
-function ThreadBody(props: ThreadTagProps & { view: ThreadView }): JSX.Element {
-  const load = props.view.load;
-  if (load?.state === "failed") {
-    return (
-      <div class="thread-failed">
-        <p class="child-note selectable" role="alert">Couldn't load this thread: {load.error}</p>
-        <button type="button" class="btn small" onClick={() => void loadThread(props.sessionID, props.messageID, props.tag.id)}>Try again</button>
-      </div>
-    );
-  }
-  if (load?.state !== "loaded") return <p class="child-note" role="status">Loading the thread…</p>;
-  return <ThreadMessages thread={load.thread} assistantName={mascotDisplayName.value} />;
+/** "N Replies ›" under a prompt whose replies other messages split up. */
+export function ThreadRepliesButton(props: { sessionID: string; promptID: string; prompt: string; count: number }): JSX.Element {
+  const label = repliesLabel(props.count);
+  return (
+    <button type="button" class="thread-replies" aria-label={`${label}. Opens the thread`}
+      onClick={() => showThread({ sessionID: props.sessionID, threadID: props.promptID, prompt: props.prompt, messageID: null })}>
+      {label}<Icon name="chevron.right" size={12} />
+    </button>
+  );
 }
 
-/** The prompt as a bubble, then each earlier message: answers on the right, Pip's (and cards') on the left, named and clamped to 3 lines. */
+/** The open thread over the blurred window: the prompt, then every message in it, whole. */
+export function ThreadView(): JSX.Element | null {
+  const focus = openThread.value;
+  const selected = remote.selectedSession.value;
+  const load = focus ? threadLoad(focus.threadID) : undefined;
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const restore = useRef<HTMLElement | null>(null);
+  const revision = useRef<string | undefined>(undefined);
+  const scrolled = useRef<string | null>(null);
+  const key = focus ? `${focus.sessionID}/${focus.threadID}/${focus.messageID ?? ""}` : null;
+
+  useEffect(() => {
+    if (!key) return;
+    restore.current = document.activeElement as HTMLElement | null;
+    revision.current = selected?.historyRevision;
+    scrolled.current = null;
+    requestAnimationFrame(() => closeRef.current?.focus());
+  }, [key]);
+
+  // The open thread follows its conversation; opening another tab closes it.
+  useEffect(() => {
+    if (!focus) return;
+    if (selected?.id !== focus.sessionID) {
+      closeThread();
+      return;
+    }
+    if (selected.historyRevision === revision.current) return;
+    revision.current = selected.historyRevision;
+    void loadThread(focus.sessionID, focus.threadID);
+  }, [focus, selected?.id, selected?.historyRevision]);
+
+  // Opened from a reply: just far enough to show it, so the prompt stays in view when it fits.
+  useEffect(() => {
+    if (!focus?.messageID || load?.state !== "loaded" || scrolled.current === focus.messageID) return;
+    const node = bodyRef.current?.querySelector(`[data-message-id="${focus.messageID}"]`);
+    if (!node) return;
+    scrolled.current = focus.messageID;
+    node.scrollIntoView({ block: "nearest" });
+  }, [load, focus?.messageID]);
+
+  if (!focus) return null;
+  const close = () => {
+    closeThread();
+    restore.current?.focus?.();
+  };
+  const count = load?.state === "loaded" ? load.thread.messages.length : null;
+  return (
+    <div class="thread-view" role="dialog" aria-modal="true" aria-labelledby="thread-view-title"
+      onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); close(); } }}
+      onClick={(event) => { if (event.target === event.currentTarget) close(); }}>
+      <div class="thread-view-column">
+        <div class="thread-view-bar">
+          <div class="thread-view-heading">
+            <h2 id="thread-view-title">Thread</h2>
+            {count != null ? <span>{repliesLabel(count)}</span> : null}
+          </div>
+          <button ref={closeRef} type="button" class="thread-view-close" aria-label="Close thread" title="Close (Esc)" onClick={close}>✕</button>
+        </div>
+        <div ref={bodyRef} class="thread-view-body">
+          <ThreadBody focus={focus} load={load} assistantName={mascotDisplayName.value} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ThreadBody(props: { focus: ThreadFocus; load: ThreadLoad | undefined; assistantName: string }): JSX.Element {
+  const { focus, load } = props;
+  if (load?.state === "loaded") return <ThreadMessages thread={load.thread} assistantName={props.assistantName} />;
+  return (
+    <>
+      <p class="thread-mine selectable">{focus.prompt}</p>
+      {load?.state === "failed" ? (
+        <div class="thread-failed">
+          <p class="child-note selectable" role="alert">Couldn't load this thread: {load.error}</p>
+          <button type="button" class="btn small" onClick={() => void loadThread(focus.sessionID, focus.threadID)}>Try again</button>
+        </div>
+      ) : <p class="child-note thread-note" role="status">Loading the thread…</p>}
+    </>
+  );
+}
+
+/** The prompt and the user's answers as blue bubbles on the right; Pip's (and cards') as gray bubbles on the left, named. */
 export function ThreadMessages(props: { thread: RemoteThread; assistantName: string }): JSX.Element {
   const { thread } = props;
   return (
     <>
-      <p class="child-prompt selectable">{thread.prompt.text}</p>
-      {thread.hasEarlier ? <p class="child-note">Earlier messages in this thread aren't shown.</p> : null}
+      <p class="thread-mine selectable" data-message-id={thread.prompt.id}>{thread.prompt.text}</p>
+      {thread.hasEarlier ? <p class="child-note thread-note">Earlier messages in this thread aren't shown.</p> : null}
       {thread.messages.map((message, index) => message.role === "user" ? (
-        <p key={message.id || index} class="child-prompt selectable">{message.text}</p>
+        <p key={message.id || index} class="thread-mine selectable" data-message-id={message.id}>{message.text}</p>
       ) : (
-        <div key={message.id || index} class="child-reply thread-reply">
+        <div key={message.id || index} class="thread-theirs" data-message-id={message.id}>
           <span class="child-who">{speaker(message, props.assistantName)}</span>
-          {/* Paragraph breaks become line breaks, so the 3 lines show text rather than a blank line. */}
-          <div class="thread-bubble">
-            <p class="selectable">{inline(message.text.replace(/\n\s*\n/g, "\n"), null, `m${index}`)}</p>
-          </div>
+          <div class="thread-bubble"><Markdown text={message.text} remoteImages={false} /></div>
         </div>
       ))}
     </>

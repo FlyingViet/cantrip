@@ -11,7 +11,7 @@ import { now } from "../../state/clock";
 import { clockTime, compactTokens, elapsed, isBusy, subagentLive } from "../../state/format";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
-import { threadTag } from "../../state/threads";
+import { threadReplies, threadTag } from "../../state/threads";
 import { SubagentStack } from "../activity/Subagents";
 import { Icon, StatusIcon } from "../icons";
 import { Spinner, toast } from "../kit";
@@ -19,7 +19,7 @@ import { openViewer } from "../viewer";
 import { ChildResultCard } from "./ChildTabs";
 import { MCPAppStack } from "./MCPApp";
 import { Markdown, type InlineImages } from "./Markdown";
-import { ThreadPanel, ThreadTagButton } from "./ThreadTags";
+import { ThreadQuote, ThreadRepliesButton } from "./ThreadTags";
 
 export type Lane = "home" | "tab";
 
@@ -438,19 +438,13 @@ export function MessageRow(props: {
 }): JSX.Element | null {
   const { message, session } = props;
   const tag = threadTag(message);
-  const tagProps = tag ? { sessionID: session.id, messageID: message.id, tag } : null;
-  // Cards carry the tag above them.
-  const above = () => tagProps ? (
-    <>
-      <div class="lane-row"><ThreadTagButton {...tagProps} /></div>
-      <ThreadPanel {...tagProps} />
-    </>
-  ) : null;
+  // A reply from another thread quotes its prompt above the lane badge (cards: above the card).
+  const head = (lane?: JSX.Element) => tag ? <ThreadQuote sessionID={session.id} messageID={message.id} tag={tag}>{lane}</ThreadQuote> : lane ?? null;
   if (message.childResult) {
-    return <div class="turn" data-message-id={message.id}>{above()}<ChildResultCard parentID={session.id} child={message.childResult} /></div>;
+    return <div class="turn" data-message-id={message.id}>{head()}<ChildResultCard parentID={session.id} child={message.childResult} /></div>;
   }
   if (message.role === "handoff" && message.handoffResult) {
-    return <div class="turn" data-message-id={message.id}>{above()}<HandoffResultCard result={message.handoffResult} /></div>;
+    return <div class="turn" data-message-id={message.id}>{head()}<HandoffResultCard result={message.handoffResult} /></div>;
   }
   if (message.role === "freshStart") {
     const caption = message.text?.trim() || "Started fresh — earlier messages aren't sent to the model";
@@ -458,12 +452,14 @@ export function MessageRow(props: {
   }
   if (message.role === "user") {
     const text = message.displayText ?? message.text;
+    const replies = threadReplies(session, message.id);
     return (
       <div class="turn user" data-message-id={message.id}>
         <div class="bubble">
           {text ? <PromptText text={text} /> : null}
           <ImageGallery sessionID={session.id} images={message.images ?? []} />
         </div>
+        {replies ? <ThreadRepliesButton sessionID={session.id} promptID={message.id} prompt={text ?? ""} count={replies} /> : null}
         {message.promptUsage ? <PromptUsageLine usage={message.promptUsage} /> : null}
       </div>
     );
@@ -478,12 +474,7 @@ export function MessageRow(props: {
   const thinking = props.streaming && !text && !steps.length && !apps.length && !subagents.length;
   return (
     <div class="turn assistant" data-message-id={message.id}>
-      {tagProps ? (
-        <>
-          <div class="lane-row"><LaneBadge lane={props.lane} /><ThreadTagButton {...tagProps} /></div>
-          <ThreadPanel {...tagProps} />
-        </>
-      ) : <LaneBadge lane={props.lane} />}
+      {head(<LaneBadge lane={props.lane} />)}
       {message.author ? <div class="author">{message.author}</div> : null}
       {steps.length ? <ReasoningSteps steps={steps} streaming={props.streaming} /> : null}
       {apps.length ? <MCPAppStack sessionID={session.id} apps={apps} /> : null}

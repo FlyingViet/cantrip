@@ -312,23 +312,57 @@ button.reasoning-step:hover { background: rgba(255, 255, 255, 0.09); }
 .child-glyph { color: var(--child-lane); flex: none; }
 .child-thread .child-link { align-self: flex-start; padding-left: 0; }
 
-/* Thread tags (Home): a capsule beside a reply's lane badge (above a handoff card) naming the prompt
-   that started its thread, opening that thread like the child card's tag and thread above. */
-.lane-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
-.thread-tag {
-  display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; height: 21px; padding: 0 8px;
-  border: 0; border-radius: 999px; background: var(--control); color: var(--secondary); font-size: 11px; font-weight: 600; text-align: left;
+/* Thread tags (Home), drawn like inline replies in Messages (CantripThreadTags.swift): above a reply from another
+   thread, a small copy of its prompt on the right, joined to the reply's lane badge by a curved line through the
+   16px margin; "N Replies" under a prompt whose replies got split up; the open thread over the blurred window. */
+.thread-head { --thread-line: rgba(255, 255, 255, 0.3); align-self: stretch; display: flex; flex-direction: column; }
+.thread-quote-row { position: relative; display: flex; align-items: center; gap: 6px; padding-bottom: 6px; }
+.thread-quote-row::before {
+  content: ""; position: absolute; left: -12px; top: calc(50% - 3px); bottom: 0; width: 12px;
+  border-left: 1.5px solid var(--thread-line); border-top: 1.5px solid var(--thread-line); border-top-left-radius: 8px;
 }
-.thread-tag:hover { background: var(--control-hover); color: var(--text); }
-.thread-tag:focus-visible { border-radius: 999px; }
-.thread-tag .icon { flex: none; }
-.thread-tag .truncate { min-width: 0; max-width: 52ch; }
-.thread-chevron { transition: transform 0.15s ease; }
-.thread-chevron.flipped { transform: rotate(180deg); }
-@media (prefers-reduced-motion: reduce) { .thread-chevron { transition: none; } }
-.thread-panel { align-self: stretch; width: auto; font-size: 13px; }
-.thread-panel[hidden] { display: none; }
-.thread-reply { align-self: flex-start; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 86%; }
-.thread-reply .child-who { padding-left: 11px; }
-.thread-bubble { padding: 6px 11px; border-radius: 14px; background: var(--card-2); color: var(--text); }
-.thread-failed { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.thread-arm { flex: 1 1 28px; min-width: 28px; border-top: 1.5px solid var(--thread-line); }
+.thread-quote {
+  flex: 0 1 auto; max-width: min(78%, 440px); padding: 5px 11px; border: 0; border-radius: 14px; background: var(--bubble);
+  color: #fff; font-size: 12px; line-height: 1.4; text-align: left;
+}
+.thread-quote:hover { filter: brightness(1.08); }
+.thread-quote:focus-visible { border-radius: 14px; }
+.thread-quote-text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.thread-lane-row { position: relative; display: flex; align-items: center; }
+.thread-lane-row::before {
+  content: ""; position: absolute; left: -12px; top: 0; height: 50%; width: 10px;
+  border-left: 1.5px solid var(--thread-line); border-bottom: 1.5px solid var(--thread-line); border-bottom-left-radius: 8px;
+}
+.thread-spacer { display: block; height: 10px; }
+.thread-replies {
+  display: inline-flex; align-items: center; gap: 2px; min-height: 24px; padding: 0 6px; border: 0; background: none;
+  color: var(--secondary); font-size: 11.5px; font-weight: 600;
+}
+.thread-replies:hover { color: var(--text); }
+.thread-view {
+  position: fixed; inset: 0; z-index: 40; display: flex; justify-content: center; background: rgba(18, 18, 20, 0.45);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4); backdrop-filter: blur(22px) saturate(1.4); animation: thread-in 0.15s ease-out;
+}
+@keyframes thread-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .thread-view { animation: none; } }
+.thread-view-column { display: flex; flex-direction: column; width: min(100%, 760px); min-height: 0; }
+.thread-view-bar { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; padding: 10px 12px 6px; }
+.thread-view-heading { grid-column: 2; display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.thread-view-heading h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.thread-view-heading span { color: var(--secondary); font-size: 11.5px; }
+.thread-view-close {
+  grid-column: 3; width: 36px; height: 36px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%;
+  background: var(--control); color: var(--text); font-size: 14px; font-weight: 700;
+}
+.thread-view-close:hover { background: var(--control-hover); }
+.thread-view-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 6px 18px 28px; font-size: 14px; line-height: 1.45; }
+.thread-mine {
+  align-self: flex-end; max-width: 82%; margin: 0; padding: 8px 13px; border-radius: 18px; background: var(--bubble); color: #fff;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.thread-theirs { align-self: flex-start; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; max-width: 82%; }
+.thread-theirs .child-who { padding-left: 13px; }
+.thread-bubble { padding: 8px 13px; border-radius: 18px; background: var(--card-2); color: var(--text); }
+.thread-note { align-self: center; text-align: center; }
+.thread-failed { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 10px; }
