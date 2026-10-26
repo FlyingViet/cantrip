@@ -317,6 +317,43 @@ never instructions. Questions live in `~/.cache/Cantrip/tab-asks.json`. Each
 tab's agent process gets `CANTRIP_TAB_ID`, which is how `tab ask` knows who
 asks.
 
+### Mention a tab
+
+Type `@` at the start of a word in any message box, in a tab or in Cantrip
+Home, to point the message at one tab. A list of the open tabs this one may
+look into appears (child tabs too, with their parent, project and whether
+they're working or waiting on you) and narrows as you type: `@bas` finds *Bass
+Compass*, and `@bass c` matches word starts. Pick one with the arrow keys and
+Return or Tab, or click or tap it; Escape closes the list. The message box
+shows *@Bass Compass* and a chip for it; removing the chip removes the
+mention, and deleting its text removes the chip.
+
+A picked tab is sent with its ID, so the model acts on exactly that tab
+instead of guessing from the name. Typing `@Name` without picking it stays
+plain text, as before.
+
+- **In a tab:** the model is told which tab each mention means and reads it
+  (`tab read`) or asks it (`tab ask`). Your own running child tab can be
+  steered (`tab ask --steer`). Changes to another tab's work stay with that tab
+  or Cantrip Home.
+- **In Cantrip Home:** a question about the mentioned tab is answered by reading
+  or asking exactly that tab; a change request is handed off to exactly that
+  tab.
+
+Rules: Private and Private Local tabs, Cantrip Home and its background
+conversations are never suggested, and a mention of one (typed by hand) is
+reported as unavailable without naming it. A tab never suggests itself. `@`
+inside a word, as in an email address or `name@host`, never opens the list,
+and a space after a query with no match closes it. A mention adds context
+only: the [rules above](#look-into-other-tabs) still apply, and a child tab
+that isn't running can't take a question or a handoff, so a mention never
+restarts it outside the child-tab caps or starts a merge. At most 5 mentions
+per message are acted on.
+
+In the message text a mention is `@[Label](cantrip-tab:<tab ID>)`; clients show
+it as *@Label*. See [Tab mentions](remote-control.md#tab-mentions) for the
+Remote fields.
+
 ### Background waiters
 
 After starting a long external build, TestFlight upload, download, or similar
