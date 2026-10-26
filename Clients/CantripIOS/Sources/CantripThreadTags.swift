@@ -25,12 +25,19 @@ struct CantripRemoteThread: Decodable, Equatable {
         let role: String
         let text: String
         var author: String? = nil
+        /// Set on the tab's side of a handoff made in this thread: the tab (or child tab) that
+        /// did the work. Absent from older Macs.
+        var tabID: String? = nil
+        var tabTitle: String? = nil
     }
 
     let id: String
     let prompt: Prompt
     let messages: [Message]
     var hasEarlier: Bool = false
+    /// Home's own replies, as the prompt's "N Replies" counts them (the tabs' messages aren't
+    /// counted). Absent from older Macs.
+    var replyCount: Int? = nil
 }
 
 /// The thread on screen.
@@ -389,7 +396,8 @@ struct CantripThreadPresenter: ViewModifier {
     }
 }
 
-/// The open thread: the prompt, then every message in it, whole, as Messages shows a thread.
+/// The open thread: the prompt, then every message in it, whole, as Messages shows a thread,
+/// including each handoff's work in its tab (named after the tab).
 struct CantripThreadView: View {
     let focus: CantripThreadFocus
     @ObservedObject var remote: CantripRemoteModel
@@ -428,7 +436,7 @@ struct CantripThreadView: View {
             VStack(spacing: 1) {
                 Text("Thread").font(.headline)
                 if let thread {
-                    Text(CantripThreadText.replies(thread.messages.count))
+                    Text(CantripThreadText.replies(thread.replyCount ?? thread.messages.count))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -519,7 +527,11 @@ struct CantripThreadView: View {
     }
 
     private func name(of message: CantripRemoteThread.Message) -> String {
-        switch message.role {
+        // The tab's side of a handoff is named after the tab.
+        if let tab = message.tabTitle, !tab.isEmpty {
+            return message.role == "error" ? "\(tab) · Error" : tab
+        }
+        return switch message.role {
         case "handoff": "Handoff"
         case "error": "Error"
         default: CantripMascotName.display(mascotName)

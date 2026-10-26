@@ -54,6 +54,27 @@ final class CantripThreadTagsTests: XCTestCase {
         XCTAssertNil(older.threadID)
     }
 
+    /// A thread carries each handoff's work in its tab, named after the tab, and Home's own reply
+    /// count; older Macs send neither.
+    func testThreadMessagesFromATabSayWhichTab() throws {
+        let thread = try JSONDecoder().decode(CantripRemoteThread.self, from: Data("""
+        {"id":"\(threadID)","prompt":{"id":"\(threadID)","text":"Fix the duplicates"},"replyCount":2,"hasEarlier":false,
+         "messages":[{"id":"a","role":"assistant","text":"NetLib is taking it."},
+                     {"id":"b","role":"assistant","text":"Which library?","tabID":"\(messageID)","tabTitle":"NetLib"},
+                     {"id":"c","role":"user","text":"Komga","tabID":"\(messageID)","tabTitle":"NetLib"},
+                     {"id":"d","role":"handoff","text":"Done in NetLib"}]}
+        """.utf8))
+        XCTAssertEqual(thread.replyCount, 2)
+        XCTAssertEqual(thread.messages.map(\.tabTitle), [nil, "NetLib", "NetLib", nil])
+        XCTAssertEqual(thread.messages[1].tabID, messageID)
+        let older = try JSONDecoder().decode(CantripRemoteThread.self, from: Data("""
+        {"id":"\(threadID)","prompt":{"id":"\(threadID)","text":"Fix it"},"hasEarlier":false,
+         "messages":[{"id":"a","role":"assistant","text":"Done."}]}
+        """.utf8))
+        XCTAssertNil(older.replyCount)
+        XCTAssertNil(older.messages[0].tabTitle)
+    }
+
     /// Rows after a quoted reply that stay in its thread share its line, which turns into the last
     /// reply; the browser Remote and Windows follow the same rule.
     func testRowsAfterAQuoteShareItsLineUntilTheLastReply() throws {
