@@ -45,6 +45,14 @@ extension SessionTabTests {
                      && ThreadTags.withoutQuestionTitle("Ship it?") == "Ship it?", "a question shows without its title")
         let long = ThreadTags.excerpt(of: String(repeating: "word ", count: 60))
         precondition(long.count <= ThreadTags.excerptLimit + 1 && long.hasSuffix("word…"), long)
+        // "N Replies" under a prompt once other messages split its thread: every later shown message counts.
+        precondition(ThreadTags.replyCounts(in: messages, sessionID: home) == [book.id: 3, tags.id: 2],
+                     "\(ThreadTags.replyCounts(in: messages, sessionID: home))")
+        let together = [book, bookReply, late, tags, tagsReply]
+        precondition(ThreadTags.replyCounts(in: together, sessionID: home).isEmpty,
+                     "a thread whose replies sit right under its prompt shows no count")
+        precondition(ThreadTags.replyCounts(in: messages, sessionID: UUID()).isEmpty
+                     && ThreadTags.replyCountsObject(in: messages, sessionID: UUID()) == nil, "only Home counts")
 
         // The thread a tag opens: its prompt and the earlier messages in it, unrelated ones skipped.
         let thread = try requireThread(ThreadTags.thread(book.id, in: messages, before: lateMore.id, sessionID: home,
@@ -189,6 +197,8 @@ extension SessionTabTests {
         precondition(session.0 == 200 && taggedIDs == [late.id.uuidString, card.id.uuidString]
                      && served.first { $0["id"] as? String == bookReply.id.uuidString }?["threadID"] as? String
                         == book.id.uuidString, "\(session.0) \(taggedIDs)")
+        precondition((session.1["session"] as? [String: Any])?["threadReplies"] as? [String: Int]
+                     == [book.id.uuidString: 3, tags.id.uuidString: 2], "Home's details carry reply counts")
         let single = try await call("/api/v1/sessions/\(home.uuidString)/messages/\(late.id.uuidString)")
         precondition(((single.1["message"] as? [String: Any])?["thread"] as? [String: Any])?["id"] as? String
                      == book.id.uuidString, "a single message carries its tag")
