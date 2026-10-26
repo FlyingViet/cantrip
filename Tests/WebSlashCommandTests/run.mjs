@@ -215,6 +215,8 @@ same(mentions.uniqueMentionLabel({ id: remote, title: "Sony TV", project: "tv-tw
     "a second tab with the same title gets its project");
 same(mentions.uniqueMentionLabel({ id: remote, title: "Sony TV", project: null }, [{ id: tv, label: "Sony TV" }]), "Sony TV 2", "or a number");
 same(mentions.uniqueMentionLabel({ id: tv, title: "Sony TV", project: null }, [{ id: tv, label: "Sony TV" }]), "Sony TV", "re-picking keeps the label");
+same(mentions.uniqueMentionLabel({ id: remote, title: "x".repeat(70), project: null }, [{ id: tv, label: "x".repeat(60) }, { id: "c", label: "x".repeat(58) + " 2" }]),
+    "x".repeat(58) + " 3", "a full-length title still gets a number that fits");
 vm.runInContext(`selected = "tab"; tabMentionLists.set("tab", ${JSON.stringify(picks)}); var draftValue = "only @TV Remote here", rendered = 0;
   globalThis.$ = id => id === "draft" ? { get value() { return draftValue } } : null; globalThis.renderMentionChips = () => rendered++;`, mentions);
 mentions.pruneMentions();
