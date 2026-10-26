@@ -311,13 +311,22 @@ extension SessionTabTests {
         render(session(null));const before=read();
         render(session("working"));const working=read();
         render(session("completed"));const done=read();
-        return {before,working,done};
+        // A handoff whose request moved into a child tab says so on both cards.
+        const childTab=(state)=>({id:"s",title:"Home",messages:[{id:"a2",role:"assistant",text:"Handed off.",thinking:"",activities:[],
+          delegations:[{...handoff(other,state),tabTitle:"Add a docs page",childTab:{parentTabID:tab,parentTabTitle:"DropKart",state:"working"}}]},
+          ...(state==="completed"?[{id:"r2",role:"handoff",text:"**Done**",thinking:"",activities:[],handoffResult:{delegationID:other,tabID:tab,tabTitle:"Add a docs page",
+           parentTabTitle:"DropKart",summary:"Docs",state:"completed",detail:"Added.\\n\\nChild tab of DropKart · Merged into main",startedAt:now-120,updatedAt:now,finishedAt:now}}]:[])]});
+        render(childTab("running"));const inChild=read();
+        render(childTab("completed"));const inChildDone=read();
+        return {before,working,done,inChild,inChildDone};
         """, arguments: ["delegation": delegation, "other": other, "tab": tab], contentWorld: .page) as? [String: Any]
         func cards(_ key: String) -> [String] { ((rendered?[key] as? [String: Any])?["cards"] as? [String]) ?? [] }
         precondition(cards("before") == ["D:Working in tab", "D:Working in tab"], "\(String(describing: rendered))")
         precondition(cards("working") == ["D:Working in tab", "R:Working in tab"],
                      "the answered handoff keeps one card, and it never says 'again': \(String(describing: rendered))")
         precondition(cards("done") == ["D:Working in tab", "R:Done in tab"], "\(String(describing: rendered))")
+        precondition(cards("inChild") == ["D:Working in child tab"] && cards("inChildDone") == ["R:Done in child tab"],
+                     "\(String(describing: rendered))")
         let prompts = (rendered?["before"] as? [String: Any])?["prompts"] as? [String] ?? []
         precondition(prompts.contains { $0.contains("📎 Lease.pdf") && !$0.contains("Attached file") },
                      "file prompts show their readable line: \(prompts)")

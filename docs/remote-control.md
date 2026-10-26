@@ -1072,6 +1072,21 @@ with their usual handoff-result labels (*Done in tab*) until they read `kind`.
 There's no Remote endpoint to ask or read a tab: both go through the Mac's
 local `cantrip tab` command.
 
+### Home handoffs in child tabs
+
+A Home handoff whose queued request moved into a child tab (see
+[Child tabs](sessions-and-council.md#child-tabs)) follows it. Its entry in a
+Home message's `delegations` then has `tabID`/`tabTitle` of the child and
+`childTab: {parentTabID, parentTabTitle, state, statusLine}`, where `state` is
+the child's (`working`, `finished`, `merging`, `merged`, `conflict`,
+`unmerged`, `noChanges`, `failed`, `stopped`, `discarded`) and keeps updating
+after the handoff finishes until the merge outcome is final. Its result card's
+`handoffResult` carries `tabID`/`tabTitle` of the child, `parentTabTitle`, and
+`childStatus` once the child's branch has an outcome (it's also the last line
+of `detail`). The browser Remote labels these cards *Working in child tab* /
+*Done in child tab*; Cantrip Agent, Cantrip Gateway Mac and Cantrip Gateway for
+Windows show the child's title and `detail` with their usual labels.
+
 ## Add access away from home
 
 Use **Tailscale Serve**, not Funnel and not a router port-forward.
