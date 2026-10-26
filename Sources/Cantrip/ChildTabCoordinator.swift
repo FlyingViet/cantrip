@@ -156,6 +156,7 @@ final class ChildTabCoordinator {
     }
 
     nonisolated static func title(from text: String) -> String {
+        let text = TabMentions.plain(text)
         let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
         let words = line.split(separator: " ").prefix(7).joined(separator: " ")
         let trimmed = words.trimmingCharacters(in: CharacterSet(charactersIn: " .,:;!?"))
