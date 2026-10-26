@@ -6,7 +6,8 @@ import Foundation
 enum ThreadTags {
     static let excerptLimit = 120
     static let messageLimit = 30
-    static let textLimit = 1200
+    /// Each message in a thread; the thread view shows them whole, as Messages does.
+    static let textLimit = 4000
     static let promptLimit = 4000
 
     /// Only Home shows tags; other tabs record the links without any visual change.
@@ -42,6 +43,33 @@ enum ThreadTags {
             result[message.id] = ["id": thread.uuidString, "prompt": excerpt]
         }
         return result
+    }
+
+    /// "N Replies" under a prompt whose thread other messages split up (at least one of its
+    /// replies carries a tag), by prompt ID: every later message in the thread counts, as in
+    /// Messages. Covers the whole history, so clients can update prompts in pages they cached.
+    static func replyCounts(in messages: [ChatMessage], sessionID: UUID) -> [UUID: Int] {
+        guard showsTags(sessionID: sessionID) else { return [:] }
+        var prompts: Set<UUID> = []
+        var counts: [UUID: Int] = [:]
+        var split: Set<UUID> = []
+        var above: ChatMessage?
+        for message in messages where isShown(message) {
+            defer { above = message }
+            if message.role == .user, message.threadID == message.id { prompts.insert(message.id) }
+            guard let thread = message.threadID, thread != message.id, prompts.contains(thread),
+                  message.role != .freshStart else { continue }
+            counts[thread, default: 0] += 1
+            if message.role != .user, above?.threadID != thread { split.insert(thread) }
+        }
+        return counts.filter { split.contains($0.key) }
+    }
+
+    /// `replyCounts` as JSON (`{promptID: count}`).
+    static func replyCountsObject(in messages: [ChatMessage], sessionID: UUID) -> [String: Int]? {
+        guard showsTags(sessionID: sessionID) else { return nil }
+        return Dictionary(uniqueKeysWithValues: replyCounts(in: messages, sessionID: sessionID)
+            .map { ($0.key.uuidString, $0.value) })
     }
 
     /// A prompt as the user sees it (attached images become their captions).
