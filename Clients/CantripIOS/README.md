@@ -608,6 +608,16 @@ After changing Pip's renderer, regenerate it with
 copy the PNGs into `LaunchPip.imageset`. A pixel test fails if the asset and
 the splash's first frame drift apart.
 
+When replies from different threads interleave (a background agent finishing
+after you've moved on, or a handoff's result card), Home draws them like inline
+replies in Messages: a reply from another thread quotes the prompt that started
+it in a small blue bubble, joined to the reply by a curved line in the left
+margin, and that prompt says **N Replies ›** under it. Tap either to open the
+whole thread over the blurred chat (the prompt and every message in it, whole);
+**✕** closes it. The thread comes from the Mac, so it opens even when the
+prompt is in older history that hasn't loaded, and it refreshes while open.
+Gateway Mac shows the same over its window.
+
 Background work stays out of Home's chat. The top-left **Background** button
 shows a count and pulses while anything runs; tap it for one sheet with the
 chat's own watchers (with **Stop**), queued runs, and recent scheduled-task and
