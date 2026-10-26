@@ -118,13 +118,18 @@ enum TabMentions {
         let base = label(for: candidate.title)
         let taken = Set(picks.filter { $0.id != candidate.id }.map(\.label))
         guard taken.contains(base) else { return base }
-        if let project = candidate.project {
-            let withProject = label(for: "\(base) (\(project))")
+        // The title is shortened so the suffix always fits in the label.
+        func suffixed(_ suffix: String) -> String {
+            let head = String(base.prefix(max(1, labelLimit - suffix.count))).trimmingCharacters(in: .whitespaces)
+            return label(for: head + suffix)
+        }
+        if let project = candidate.project, project.count < labelLimit / 2 {
+            let withProject = suffixed(" (\(project))")
             if !taken.contains(withProject) { return withProject }
         }
         var number = 2
-        while taken.contains(label(for: "\(base) \(number)")) { number += 1 }
-        return label(for: "\(base) \(number)")
+        while taken.contains(suffixed(" \(number)")) { number += 1 }
+        return suffixed(" \(number)")
     }
 
     struct Candidate: Equatable {
