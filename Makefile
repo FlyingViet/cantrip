@@ -24,7 +24,7 @@ test-architectures:
 test-tool-path:
 	@BIN="/tmp/cantrip-tool-path-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/ToolPath.swift Tests/ToolPathTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/ToolPath.swift Sources/Cantrip/ToolLocator.swift Sources/Cantrip/ProcessRunner.swift Tests/ToolPathTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-process-runner:
 	@BIN="/tmp/cantrip-process-runner-tests-$$$$"; \
@@ -34,7 +34,7 @@ test-process-runner:
 test-github-builds:
 	@BIN="/tmp/cantrip-github-build-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library Sources/Cantrip/GitHubBuildMonitor.swift Sources/Cantrip/ProcessRunner.swift Tests/GitHubBuildTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc -parse-as-library Sources/Cantrip/GitHubBuildMonitor.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ToolLocator.swift Sources/Cantrip/ToolPath.swift Tests/GitHubBuildTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-session-tabs:
 	@BIN="/tmp/cantrip-session-tab-tests-$$$$"; \

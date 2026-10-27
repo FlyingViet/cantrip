@@ -108,8 +108,7 @@ struct GitHubActionsAPI {
     private static func tokenFromCLI() async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
-                let paths = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
-                guard let path = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+                guard let path = ToolLocator.shared.gh else {
                     continuation.resume(throwing: GitHubBuildError.message("Install GitHub CLI and run gh auth login on the Cantrip Mac."))
                     return
                 }

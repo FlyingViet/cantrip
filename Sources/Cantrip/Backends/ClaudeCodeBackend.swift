@@ -371,32 +371,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     }
 
     private func resolveClaudePath() -> String? {
-        Self.findClaude(configured: settings.claudePath)
-    }
-
-    static func findClaude(configured raw: String) -> String? {
-        let configured = raw.trimmingCharacters(in: .whitespaces)
-        if !configured.isEmpty { return configured }
-        let candidates = [
-            "\(NSHomeDirectory())/.local/bin/claude",
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-            "\(NSHomeDirectory())/.claude/local/claude",
-        ]
-        if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-            return found
-        }
-        // Last resort: ask the login shell.
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-l", "-c", "command -v claude"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        try? p.run()
-        p.waitUntilExit()
-        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return out.isEmpty ? nil : out
+        ToolLocator.shared.claude(configured: settings.claudePath)
     }
 
     private func startProcess(workdir: String) {

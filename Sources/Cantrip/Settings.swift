@@ -420,7 +420,7 @@ final class AppSettings: ObservableObject {
         copilotRefreshInFlight = true
         copilotModelRefreshError = nil
         let configured = copilotPath.trimmingCharacters(in: .whitespaces)
-        let command = configured.isEmpty ? "copilot" : configured
+        let command = ToolLocator.shared.copilotCommand(configured: configured)
         loader(command) { [weak self] result in
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }

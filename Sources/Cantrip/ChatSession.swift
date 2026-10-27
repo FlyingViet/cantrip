@@ -1482,7 +1482,7 @@ final class ChatSession: ObservableObject {
         let kind = settings.backend == .localModel ? .localModel : runningBackendKind ?? settings.backend
         switch kind {
         case .copilot:
-            return .copilot(command: settings.copilotPath.isEmpty ? "copilot" : settings.copilotPath)
+            return .copilot(command: ToolLocator.shared.copilotCommand(configured: settings.copilotPath))
         case .claudeCode:
             return .claude(command: settings.claudePath.isEmpty ? "claude" : settings.claudePath)
         case .localModel:

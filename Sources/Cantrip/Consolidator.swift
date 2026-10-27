@@ -44,8 +44,8 @@ enum Consolidator {
 
         DispatchQueue.global(qos: .utility).async {
             let candidates = ConsolidationBackend.candidates(
-                claude: ClaudeCodeBackend.findClaude(configured: claudePath),
-                copilot: findCopilot(configured: copilotPath),
+                claude: ToolLocator.shared.claude(configured: claudePath),
+                copilot: ToolLocator.shared.copilot(configured: copilotPath),
                 copilotModels: copilotModels
             )
             let outcome = ConsolidationAttempt.execute(candidates) { backend in
@@ -108,32 +108,5 @@ enum Consolidator {
         let status = result.status
         Log.write("consolidator: \(backend.name) exit \(status) — \(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))")
         return .init(status: result.timedOut && status == 0 ? -1 : status, output: text)
-    }
-
-    /// The `copilot` CLI: the configured path, a usual install location, or the login shell's PATH.
-    static func findCopilot(configured raw: String) -> String? {
-        let configured = raw.trimmingCharacters(in: .whitespaces)
-        if configured.contains("/") { return configured }
-        let name = configured.isEmpty ? "copilot" : configured
-        let candidates = [
-            "/opt/homebrew/bin/\(name)",
-            "/usr/local/bin/\(name)",
-            "\(NSHomeDirectory())/.local/bin/\(name)",
-            "\(NSHomeDirectory())/.npm-global/bin/\(name)",
-        ]
-        if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-            return found
-        }
-        let shell = Process()
-        shell.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        shell.arguments = ["-l", "-c", "command -v \"$1\"", "cantrip", name]
-        let pipe = Pipe()
-        shell.standardOutput = pipe
-        shell.standardError = FileHandle.nullDevice
-        do { try shell.run() } catch { return nil }
-        shell.waitUntilExit()
-        let found = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return found.hasPrefix("/") ? found : nil
     }
 }

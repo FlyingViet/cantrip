@@ -159,12 +159,13 @@ final class BackendCommandCatalog {
             let result: BackendCommandDiscovery.Result
             switch key.backend {
             case .copilot:
-                result = await BackendCommandDiscovery.copilot(command: key.cli, workdir: key.workdir,
-                                                              environment: environment)
+                result = await BackendCommandDiscovery.copilot(
+                    command: ToolLocator.shared.copilotCommand(configured: key.cli), workdir: key.workdir,
+                    environment: environment)
             case .claudeCode:
                 let configured = key.cli
                 let path = await Task.detached(priority: .utility) {
-                    ClaudeCodeBackend.findClaude(configured: configured)
+                    ToolLocator.shared.claude(configured: configured)
                 }.value
                 result = await BackendCommandDiscovery.claude(path: path, workdir: key.workdir,
                                                              environment: environment, home: home)
