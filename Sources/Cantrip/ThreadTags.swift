@@ -2,7 +2,9 @@ import Foundation
 
 /// Thread tags (Cantrip Home). Every message records the prompt that started its thread
 /// (`ChatMessage.threadID`); a reply that belongs to a different thread from the message just
-/// above it shows a tag naming that prompt, and the tag expands to the thread so far.
+/// above it shows a tag naming that prompt, and the tag expands to the thread so far. What a tab
+/// sends back (a handoff's result card, a `tab ask` reply card) is always a reply to the message
+/// that asked for it, so it carries the tag even right under that message.
 enum ThreadTags {
     static let excerptLimit = 120
     /// The thread's latest messages, the tabs' side of its handoffs included.
@@ -21,6 +23,30 @@ enum ThreadTags {
             || !message.delegations.isEmpty || !message.activities.isEmpty
     }
 
+    /// Whether a tab's work is in the message: Home's handoff, or a card a tab sent back.
+    static func carriesTabWork(_ message: ChatMessage) -> Bool {
+        message.role == .handoff || !message.delegations.isEmpty
+    }
+
+    /// Whether the message at `index` shows a tag. A reply from a different thread than the shown
+    /// message above it does. So does a tab's card (handoff result, `tab ask` reply) below its own
+    /// thread's prompt or an answer, unless a reply above it in that run already shows the tag:
+    /// then it shares that tag's line, as consecutive replies do.
+    static func startsTag(at index: Int, in messages: [ChatMessage]) -> Bool {
+        let message = messages[index]
+        guard message.role != .user, message.role != .freshStart, isShown(message),
+              let thread = message.threadID else { return false }
+        var first = index
+        var cardAbove = false
+        while let above = messages[..<first].lastIndex(where: isShown),
+              messages[above].threadID == thread, messages[above].role != .freshStart {
+            first = above
+            cardAbove = cardAbove || messages[above].role == .handoff
+        }
+        if first == index { return true }
+        return message.role == .handoff && messages[first].role == .user && !cardAbove
+    }
+
     /// The tag for each message in `range` that needs one, by message ID:
     /// `["id": thread ID, "prompt": the start of the prompt that started the thread]`.
     static func tags(in messages: [ChatMessage], range: Range<Int>, sessionID: UUID) -> [UUID: [String: Any]] {
@@ -29,11 +55,8 @@ enum ThreadTags {
         var result: [UUID: [String: Any]] = [:]
         var prompts: [UUID: String]?
         for index in range {
+            guard startsTag(at: index, in: messages), let thread = messages[index].threadID else { continue }
             let message = messages[index]
-            guard message.role != .user, message.role != .freshStart, isShown(message),
-                  let thread = message.threadID else { continue }
-            let above = messages[..<index].last(where: isShown)
-            guard above?.threadID != thread else { continue }
             if prompts == nil {
                 prompts = Dictionary(messages.lazy.filter { $0.role == .user }.map { ($0.id, $0.text) },
                                      uniquingKeysWith: { first, _ in first })
@@ -47,7 +70,8 @@ enum ThreadTags {
     }
 
     /// "N Replies" under a prompt whose thread other messages split up (at least one of its
-    /// replies carries a tag), by prompt ID: every later message in the thread counts, as in
+    /// replies carries a tag), or that handed work to a tab or asked one (so the tab's turns can
+    /// be opened while it works), by prompt ID: every later message in the thread counts, as in
     /// Messages. Covers the whole history, so clients can update prompts in pages they cached.
     static func replyCounts(in messages: [ChatMessage], sessionID: UUID) -> [UUID: Int] {
         guard showsTags(sessionID: sessionID) else { return [:] }
@@ -61,7 +85,7 @@ enum ThreadTags {
             guard let thread = message.threadID, thread != message.id, prompts.contains(thread),
                   message.role != .freshStart else { continue }
             counts[thread, default: 0] += 1
-            if message.role != .user, above?.threadID != thread { split.insert(thread) }
+            if message.role != .user, above?.threadID != thread || carriesTabWork(message) { split.insert(thread) }
         }
         return counts.filter { split.contains($0.key) }
     }
@@ -104,8 +128,8 @@ enum ThreadTags {
     /// The thread a tag opens: its prompt and every earlier message in it, before `before`
     /// (the tagged message). Unrelated messages are skipped. Each handoff made in the thread brings
     /// its tab's side of the work (`tabConversation`): the tab's replies, questions and the user's
-    /// answers there, just before the handoff's result card, or last while it still runs. Nil when
-    /// the prompt is gone.
+    /// answers there, just before the handoff's result card, or last while it still runs. A `tab ask`
+    /// card is named after the tab it answered from. Nil when the prompt is gone.
     static func thread(_ thread: UUID, in messages: [ChatMessage], before: UUID?, sessionID: UUID,
                        visibleText: (ChatMessage) -> String,
                        tabConversation: (CantripHomeDelegation) -> TabConversation? = { _ in nil }) -> [String: Any]? {
@@ -147,9 +171,19 @@ enum ThreadTags {
             if let card = message.handoffResult?.delegationID, let index = pending.firstIndex(where: { $0.handoff == card }) {
                 items += pending.remove(at: index).items
             }
-            let text = message.role == .user ? promptText(message.text, sessionID: sessionID)
+            var text = message.role == .user ? promptText(message.text, sessionID: sessionID)
                 : withoutQuestionTitle(visibleText(message))
-            guard let item = item(message, text: text) else { continue }
+            // Home's handoff shows even when its reply was only the handoff block.
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !message.delegations.isEmpty {
+                text = message.delegations.map { handoff in
+                    "Handed off to \(handoff.tabTitle)" + (handoff.summary.isEmpty ? "" : " · \(handoff.summary)")
+                }.joined(separator: "\n")
+            }
+            // A `tab ask` card is the tab's answer: it's named after the tab, like the tab's turns.
+            let asked = message.handoffResult.flatMap { card in
+                card.isAsk ? TabConversation(tabID: card.tabID, tabTitle: card.tabTitle, messages: []) : nil
+            }
+            guard let item = item(message, text: text, tab: asked) else { continue }
             items.append(item)
             replies += 1
         }
