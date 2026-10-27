@@ -3855,17 +3855,10 @@ private struct RevertButton: View {
 
     private func revert() {
         let dir = (path as NSString).deletingLastPathComponent
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        p.arguments = ["-C", dir, "checkout", "--", path]
-        p.standardOutput = Pipe()
-        p.standardError = Pipe()
-        do {
-            try p.run()
-            p.waitUntilExit()
-            state = p.terminationStatus == 0 ? .done : .failed
-            Log.write("revert \(path): exit \(p.terminationStatus)")
-        } catch {
+        if let result = try? ProcessRunner.run("/usr/bin/git", ["-C", dir, "checkout", "--", path]) {
+            state = result.status == 0 ? .done : .failed
+            Log.write("revert \(path): exit \(result.status)")
+        } else {
             state = .failed
         }
     }

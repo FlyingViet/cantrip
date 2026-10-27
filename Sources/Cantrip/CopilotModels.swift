@@ -60,35 +60,20 @@ enum CopilotModelFetcher {
     static func fetch(command: String, completion: @escaping (Result<[CopilotModelInfo], Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.arguments = ["node", "--input-type=module", "-e", script]
                 var environment = ProcessInfo.processInfo.environment
                 environment["PATH"] = ToolPath.value(inherited: environment["PATH"])
                 environment["NO_COLOR"] = "1"
                 environment["CANTRIP_COPILOT_COMMAND"] = command
-                process.environment = environment
-                process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
-                process.standardInput = FileHandle.nullDevice
-                process.standardError = FileHandle.nullDevice
-                let output = Pipe()
-                process.standardOutput = output
-                do { try process.run() } catch { throw CopilotModelError.unavailable }
-                let deadline = DispatchWorkItem {
-                    guard process.isRunning else { return }
-                    process.terminate()
-                    let grace = Date().addingTimeInterval(2)
-                    while process.isRunning && Date() < grace { usleep(50_000) }
-                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-                }
-                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 25, execute: deadline)
-                defer { deadline.cancel() }
-                // Drain while the process runs so larger catalogs cannot fill the pipe.
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                guard process.terminationReason == .exit else { throw CopilotModelError.timeout }
-                guard process.terminationStatus == 0 else { throw CopilotModelError.unavailable }
-                let result = try JSONDecoder().decode(ProbeResult.self, from: data)
+                let run: ProcessRunner.Result
+                do {
+                    run = try ProcessRunner.run(
+                        "/usr/bin/env", ["node", "--input-type=module", "-e", script], environment: environment,
+                        directory: FileManager.default.homeDirectoryForCurrentUser, errorOutput: .discard, timeout: 25
+                    )
+                } catch { throw CopilotModelError.unavailable }
+                guard !run.timedOut else { throw CopilotModelError.timeout }
+                guard run.status == 0 else { throw CopilotModelError.unavailable }
+                let result = try JSONDecoder().decode(ProbeResult.self, from: run.output)
                 if let error = result.error { throw error }
                 guard let models = result.models, !models.isEmpty else { throw CopilotModelError.response }
                 completion(.success(models))

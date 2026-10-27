@@ -37,19 +37,12 @@ final class FileSearch: ObservableObject {
 
     private func run(_ query: String) {
         process?.terminate()
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
-        p.arguments = ["-name", query, "-onlyin", NSHomeDirectory()]
-        p.standardInput = FileHandle.nullDevice
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
-        do { try p.run() } catch { return }
-        process = p
-        p.waitUntilExit()
-        guard p.terminationStatus == 0,
-              let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                                  encoding: .utf8) else { return }
+        // Only the first 400 paths are ranked, so keep the first 256 KB.
+        guard let result = try? ProcessRunner.run(
+            "/usr/bin/mdfind", ["-name", query, "-onlyin", NSHomeDirectory()],
+            errorOutput: .discard, outputLimit: 256_000, launched: { [weak self] in self?.process = $0 }
+        ), result.status == 0 else { return }
+        let output = String(decoding: result.output, as: UTF8.self)
 
         let lowered = query.lowercased()
         let candidates = output.components(separatedBy: "\n")

@@ -88,54 +88,26 @@ enum Consolidator {
     /// Runs one backend to completion (or `timeout`), collecting at most 1 MB of output.
     private static func run(_ backend: ConsolidationBackend, prompt: String, allowActions: Bool,
                             vault: String) -> ConsolidationAttempt.RunResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: backend.executable)
-        process.arguments = backend.arguments(prompt: prompt, allowActions: allowActions)
-        process.currentDirectoryURL = URL(fileURLWithPath: vault)
-        process.standardInput = FileHandle.nullDevice
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = ToolPath.value(inherited: environment["PATH"])
         environment["NO_COLOR"] = "1"
-        process.environment = environment
-
-        let lock = NSLock()
-        var output = Data()
-        pipe.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            // At end of file the handler keeps firing with empty data until it's removed.
-            guard !chunk.isEmpty else { handle.readabilityHandler = nil; return }
-            lock.withLock { if output.count < 1_000_000 { output.append(chunk) } }
-        }
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
+        let result: ProcessRunner.Result
         do {
-            try process.run()
+            result = try ProcessRunner.run(
+                backend.executable, backend.arguments(prompt: prompt, allowActions: allowActions),
+                environment: environment, directory: URL(fileURLWithPath: vault), errorOutput: .merge,
+                timeout: timeout, killAfter: 10, outputLimit: 1_000_000,
+                launched: { Log.write("consolidator: started \(backend.name) (pid \($0.processIdentifier))") }
+            )
         } catch {
-            pipe.fileHandleForReading.readabilityHandler = nil
             return .init(status: -1, output: "",
                          launchError: "couldn't start \(backend.executable): \(error.localizedDescription)")
         }
-        Log.write("consolidator: started \(backend.name) (pid \(process.processIdentifier))")
-        var timedOut = false
-        if exited.wait(timeout: .now() + timeout) == .timedOut {
-            timedOut = true
-            process.terminate()
-            if exited.wait(timeout: .now() + 10) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = exited.wait(timeout: .now() + 5)
-            }
-        }
-        // Let the last chunk land; a lingering child can hold the pipe open, so don't read to EOF.
-        Thread.sleep(forTimeInterval: 0.3)
-        pipe.fileHandleForReading.readabilityHandler = nil
-        var text = lock.withLock { String(decoding: output, as: UTF8.self) }
-        if timedOut { text += "\nTimed out after \(Int(timeout / 60)) minutes." }
-        let status = process.isRunning ? -1 : process.terminationStatus
+        var text = String(decoding: result.output, as: UTF8.self)
+        if result.timedOut { text += "\nTimed out after \(Int(timeout / 60)) minutes." }
+        let status = result.status
         Log.write("consolidator: \(backend.name) exit \(status) — \(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))")
-        return .init(status: timedOut && status == 0 ? -1 : status, output: text)
+        return .init(status: result.timedOut && status == 0 ? -1 : status, output: text)
     }
 
     /// The `copilot` CLI: the configured path, a usual install location, or the login shell's PATH.
