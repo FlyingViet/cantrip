@@ -8,6 +8,7 @@ struct SessionTabTests {
     @MainActor
     static func main() async throws {
         if CommandLine.arguments.dropFirst().first == "--cantrip-askpass" { exit(RemoteAskpass.runHelper()) }
+        if CommandLine.arguments.dropFirst().first == AntigravityHook.helperArgument { exit(AntigravityHook.runHelper()) }
         // Exec a fresh process so Foundation resolves every data path under the
         // temporary home before any app singleton or UserDefaults is created.
         guard ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"] != nil else {
