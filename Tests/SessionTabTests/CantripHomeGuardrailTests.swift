@@ -13,6 +13,8 @@ extension SessionTabTests {
         try await testCantripHomeClaudeHook()
         try await testCantripHomeAntigravityHook()
         try await testAntigravityBackendStream()
+        try await testAntigravityRestartKeepsNextTurn()
+        try await testAntigravityPermissionModes()
         try await testCantripHomeCodexFailsClosed()
         print("Cantrip Home guardrails: action policy, forgiving block parsing, prompt briefs and one-shot corrections passed")
     }
@@ -908,10 +910,12 @@ extension SessionTabTests {
         if '--input-format' not in args or '--output-format' not in args:
             sys.exit(5)
 
-        hooks_path = os.path.join(os.getcwd(), '.agents', 'hooks.json')
+        if os.path.exists(os.path.join(os.getcwd(), '.agents')):
+            sys.exit(8)
+        hooks_path = os.path.expanduser('~/.gemini/config/hooks.json')
         with open(hooks_path, 'r', encoding='utf-8') as f:
             hooks_cfg = json.load(f)
-        entry = hooks_cfg.get('cantrip-home-guardrail', {})
+        entry = hooks_cfg.get('cantrip-guardrail', {})
         pre_hooks = entry.get('PreToolUse', [])
         if not entry.get('enabled') or not pre_hooks:
             sys.exit(6)
@@ -1168,7 +1172,8 @@ extension SessionTabTests {
         settings.agyModel = "gemini-3.1-pro-high"
         settings.agyEffort = "high"
         settings.agyPermissionMode = "default"
-        settings.allowActions = false
+        // Stream parsing only: this fixture runs no hooks (AntigravityPermissionTests covers them).
+        settings.allowActions = true
 
         let backend = AntigravityBackend(persistKey: "test-agy-stream")
         backend.reset()

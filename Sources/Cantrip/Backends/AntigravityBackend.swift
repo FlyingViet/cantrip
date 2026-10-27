@@ -14,11 +14,16 @@ import Foundation
 ///   - `{"event":"result","result":{"status":"SUCCESS"|"ERROR"|"CANCELED"|"INTERRUPTED","usage":{...}}}`
 ///     (`result.usage` is cumulative across the session; per-turn token usage is computed as a delta.)
 /// - Stopping a turn sends `SIGINT`, and subsequent processes resume via `--conversation <id>`.
-/// - For Cantrip Home (`guardrail != nil`), a `PreToolUse` command hook is registered in
-///   `<workdir>/.agents/hooks.json` that calls back into Cantrip over a local Unix domain socket
-///   and returns `auto_approve` or `deny`.
+/// - Unless the session may do anything (`--dangerously-skip-permissions`), every tool call goes
+///   through Cantrip's `PreToolUse` hook (see `AntigravityHook`): read-only sessions may only look,
+///   "Allow actions" off asks the user, and Cantrip Home applies its action policy.
 final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
-    private static let hookEntryKey = "cantrip-home-guardrail"
+    /// Who decides a tool call. `nil` means agy runs with `--dangerously-skip-permissions`.
+    enum HookPolicy: Equatable {
+        case readOnly
+        case ask
+        case guardrail(CantripHomeGuardrail)
+    }
 
     private let settings = AppSettings.shared
     private let persistKey: String
@@ -59,12 +64,11 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     private var stdoutRemainder = Data()
     private var stderrCollected = Data()
 
-    // PreToolUse hook server state for Cantrip Home.
-    private var hookDirectory: String?
-    private var hookSocketFD: Int32 = -1
-    private var hookAcceptSource: DispatchSourceRead?
-    private var installedHooksFile: String?
-    private var createdHooksFile = false
+    // The current process's PreToolUse hook. Tool steps agy reports beyond the hook requests it
+    // made mean the hook isn't reaching Cantrip.
+    private var hookServer: AntigravityHookServer?
+    private var hookRequestCount = 0
+    private var hookedToolSteps = 0
 
     private let ioQueue = DispatchQueue(label: "cantrip.antigravity.io", qos: .userInitiated)
 
@@ -131,6 +135,13 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
 
     static let supportedEfforts: Set<String> = ["low", "medium", "high"]
 
+    var hookPolicy: HookPolicy? {
+        if readOnly { return .readOnly }
+        if let guardrail { return .guardrail(guardrail) }
+        if settings.allowActions || settings.agyPermissionMode == "bypassPermissions" { return nil }
+        return .ask
+    }
+
     func buildArguments(resumingSessionID: String?) -> [String] {
         var args = [
             "--input-format", "stream-json",
@@ -147,26 +158,13 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         if Self.supportedEfforts.contains(effort) {
             args += ["--effort", effort]
         }
-        let mode = settings.agyPermissionMode
-        if guardrail != nil {
-            // Cantrip Home gates every tool call through the PreToolUse command hook.
-            if mode == "sandbox" {
-                args.append("--sandbox")
-            }
-        } else if readOnly || !settings.allowActions {
-            // Headless `agy` soft-denies shell commands by default; honor explicit sandbox mode if set.
-            if mode == "sandbox" {
-                args.append("--sandbox")
-            }
-        } else {
-            switch mode {
-            case "bypassPermissions":
-                args.append("--dangerously-skip-permissions")
-            case "sandbox":
-                args.append("--sandbox")
-            default:
-                break
-            }
+        // Headless agy allows file edits inside the workspace on its own, so anything short of
+        // "may do anything" is decided by Cantrip's PreToolUse hook instead.
+        if hookPolicy == nil {
+            args.append("--dangerously-skip-permissions")
+        }
+        if settings.agyPermissionMode == "sandbox" {
+            args.append("--sandbox")
         }
         return args
     }
@@ -297,17 +295,32 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
 
         stopProcessAndCleanUp()
 
-        if guardrail != nil {
-            try startHookServer(workdir: workdir)
+        var env = ToolPath.environment()
+        env["NO_COLOR"] = "1"
+        env.removeValue(forKey: AntigravityHook.socketVariable)
+        if let policy = hookPolicy {
+            do {
+                try AntigravityHook.install()
+            } catch {
+                throw NSError(domain: "Cantrip", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                    "Cantrip couldn't add its tool check to \(AntigravityHook.configFile.path) "
+                    + "(\(error.localizedDescription)). Fix or move that file, or set Antigravity to Allow everything."])
+            }
+            let server = try AntigravityHookServer { [weak self] request, respond in
+                guard let self else {
+                    respond("deny", "The Cantrip session ended.")
+                    return
+                }
+                self.handleHookRequest(request, policy: policy, respond: respond)
+            }
+            env[AntigravityHook.socketVariable] = server.socketPath
+            stateLock.withLock { hookServer = server }
         }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = buildArguments(resumingSessionID: resumeID)
         process.currentDirectoryURL = URL(fileURLWithPath: workdir)
-
-        var env = ToolPath.environment()
-        env["NO_COLOR"] = "1"
         process.environment = env
 
         let stdinPipe = Pipe()
@@ -325,32 +338,35 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         cumulativeInputTokens = 0
         cumulativeOutputTokens = 0
         cumulativeCachedInputTokens = 0
+        hookRequestCount = 0
+        hookedToolSteps = 0
         stdoutRemainder.removeAll(keepingCapacity: true)
         stateLock.unlock()
 
-        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        // Output and exits are only acted on while this is still the current process: a process
+        // replaced after a settings change must not end (or write into) the next turn.
+        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self, weak process] handle in
             let chunk = handle.availableData
             guard !chunk.isEmpty else {
                 handle.readabilityHandler = nil
                 return
             }
             self?.ioQueue.async {
-                self?.consumeStdout(chunk)
+                guard let process else { return }
+                self?.consumeStdout(chunk, from: process)
             }
         }
 
-        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self, weak process] handle in
             let chunk = handle.availableData
             guard !chunk.isEmpty else {
                 handle.readabilityHandler = nil
                 return
             }
-            guard let self else { return }
-            self.stateLock.lock()
-            if self.stderrCollected.count < 32_768 {
-                self.stderrCollected.append(chunk)
+            self?.ioQueue.async {
+                guard let process else { return }
+                self?.collectStderr(chunk, from: process)
             }
-            self.stateLock.unlock()
         }
 
         process.terminationHandler = { [weak self] proc in
@@ -360,39 +376,50 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                 stderrPipe.fileHandleForReading.readabilityHandler = nil
                 let trailing = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
                 if !trailing.isEmpty {
-                    self.consumeStdout(trailing)
+                    self.consumeStdout(trailing, from: proc)
                 }
                 let trailingErr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
                 if !trailingErr.isEmpty {
-                    self.stateLock.lock()
-                    if self.stderrCollected.count < 32_768 {
-                        self.stderrCollected.append(trailingErr)
-                    }
-                    self.stateLock.unlock()
+                    self.collectStderr(trailingErr, from: proc)
                 }
                 self.handleProcessExit(proc)
             }
         }
 
-        try process.run()
+        do {
+            try process.run()
+        } catch {
+            stopProcessAndCleanUp()
+            throw error
+        }
+    }
+
+    private func isCurrent(_ process: Process) -> Bool {
+        stateLock.withLock { currentProcess === process }
+    }
+
+    private func collectStderr(_ chunk: Data, from process: Process) {
+        stateLock.withLock {
+            guard currentProcess === process, stderrCollected.count < 32_768 else { return }
+            stderrCollected.append(chunk)
+        }
     }
 
     private func handleProcessExit(_ process: Process) {
         stateLock.lock()
-        let isCurrent = (currentProcess === process)
-        if isCurrent {
-            currentProcess = nil
-            stdinHandle = nil
-            activeLaunchSignature = ""
+        guard currentProcess === process else {
+            stateLock.unlock()
+            return
         }
+        currentProcess = nil
+        stdinHandle = nil
+        activeLaunchSignature = ""
         let shouldFinishTurn = turnInFlight && !turnCompleted
         let stderrText = String(data: stderrCollected, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         stateLock.unlock()
 
-        if isCurrent {
-            stopHookServer()
-        }
+        stopHookServer()
 
         guard shouldFinishTurn else { return }
         let status = process.terminationStatus
@@ -467,9 +494,13 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
 
     // MARK: - Stream-JSON Parsing
 
-    private func consumeStdout(_ chunk: Data) {
+    private func consumeStdout(_ chunk: Data, from process: Process) {
         var lines: [Data] = []
         stateLock.lock()
+        guard currentProcess === process else {
+            stateLock.unlock()
+            return
+        }
         stdoutRemainder.append(chunk)
         while let newline = stdoutRemainder.firstIndex(of: 0x0A) {
             let line = stdoutRemainder.subdata(in: stdoutRemainder.startIndex..<newline)
@@ -480,7 +511,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         }
         stateLock.unlock()
 
-        for line in lines {
+        for line in lines where isCurrent(process) {
             handleStreamLine(line)
         }
     }
@@ -584,6 +615,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                     output: output
                 )
                 callback(.activity(completed))
+                if stepType == "tool" { checkToolWasHooked(toolName) }
             }
         }
     }
@@ -759,236 +791,76 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         return rewritten
     }
 
-    // MARK: - Cantrip Home PreToolUse Hook Server
+    // MARK: - PreToolUse Hook
 
-    private func startHookServer(workdir: String) throws {
-        stopHookServer()
-
-        let fm = FileManager.default
-        let dirURL = fm.temporaryDirectory.appendingPathComponent("ct-agy-\(UUID().uuidString.prefix(12))")
-        let dirPath = dirURL.path
-        try fm.createDirectory(at: dirURL, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-
-        let socketPath = dirURL.appendingPathComponent("hook.sock").path
-        let scriptPath = dirURL.appendingPathComponent("hook.py").path
-
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else {
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+    /// A finished tool step agy never asked the hook about means the hook isn't in effect (its
+    /// entry was removed or disabled, say), so the session stops instead of running unchecked.
+    private func checkToolWasHooked(_ toolName: String) {
+        let bypassed = stateLock.withLock { () -> Bool in
+            guard hookServer != nil else { return false }
+            hookedToolSteps += 1
+            return hookedToolSteps > hookRequestCount
         }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(socketPath.utf8) + [0]
-        guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
-            close(fd)
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENAMETOOLONG))
-        }
-        withUnsafeMutableBytes(of: &addr.sun_path) { $0.copyBytes(from: pathBytes) }
-        let addrLen = socklen_t(MemoryLayout<sockaddr_un>.size)
-        addr.sun_len = UInt8(addrLen)
-
-        let bindResult = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                bind(fd, sockPtr, addrLen)
-            }
-        }
-        guard bindResult == 0, listen(fd, 16) == 0 else {
-            let code = Int(errno)
-            close(fd)
-            throw NSError(domain: NSPOSIXErrorDomain, code: code)
-        }
-        let flags = fcntl(fd, F_GETFL, 0)
-        if flags >= 0 {
-            _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
-        }
-
-        let hookScript = """
-        #!/usr/bin/env python3
-        import json, socket, sys
-
-        sock_path = \(Self.jsonStringLiteral(socketPath))
-        try:
-            payload = sys.stdin.read()
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(600.0)
-            s.connect(sock_path)
-            s.sendall(payload.encode("utf-8") + b"\\n")
-            s.shutdown(socket.SHUT_WR)
-            chunks = []
-            while True:
-                data = s.recv(4096)
-                if not data:
-                    break
-                chunks.append(data)
-            s.close()
-            resp = b"".join(chunks).decode("utf-8").strip()
-            if resp:
-                print(resp)
-            else:
-                print(json.dumps({"decision": "deny", "reason": "Empty response from Cantrip Home guardrail hook."}))
-        except Exception as exc:
-            print(json.dumps({"decision": "deny", "reason": f"Cantrip Home guardrail hook failed: {exc}"}))
-        """
-        try hookScript.write(toFile: scriptPath, atomically: true, encoding: .utf8)
-        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptPath)
-
-        let acceptSource = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue.global(qos: .userInitiated))
-        acceptSource.setEventHandler { [weak self] in
-            self?.acceptHookConnection(serverFD: fd)
-        }
-        acceptSource.setCancelHandler {
-            close(fd)
-        }
-        acceptSource.resume()
-
-        try registerWorkspaceHook(workdir: workdir, commandPath: scriptPath)
-
-        stateLock.lock()
-        hookDirectory = dirPath
-        hookSocketFD = fd
-        hookAcceptSource = acceptSource
-        stateLock.unlock()
+        guard bypassed else { return }
+        Log.write("antigravity: \(toolName) ran without a PreToolUse hook request; stopping")
+        stopProcessAndCleanUp()
+        finishTurn(with: .failure(
+            "Antigravity ran \(toolName) without asking Cantrip first, so Cantrip stopped it. Check that "
+                + "\(AntigravityHook.configFile.path) still has an enabled \"\(AntigravityHook.entryName)\" entry."
+        ))
     }
 
     private func stopHookServer() {
-        stateLock.lock()
-        let source = hookAcceptSource
-        let dir = hookDirectory
-        let hooksFile = installedHooksFile
-        let createdFile = createdHooksFile
-        hookAcceptSource = nil
-        hookSocketFD = -1
-        hookDirectory = nil
-        installedHooksFile = nil
-        createdHooksFile = false
-        stateLock.unlock()
-
-        source?.cancel()
-        if let hooksFile {
-            unregisterWorkspaceHook(hooksFile: hooksFile, createdFile: createdFile)
+        let server = stateLock.withLock { () -> AntigravityHookServer? in
+            defer { hookServer = nil }
+            return hookServer
         }
-        if let dir {
-            try? FileManager.default.removeItem(atPath: dir)
-        }
+        server?.stop()
     }
 
-    private func registerWorkspaceHook(workdir: String, commandPath: String) throws {
-        let fm = FileManager.default
-        let agentsDir = "\(workdir)/.agents"
-        let hooksFile = "\(agentsDir)/hooks.json"
-        let existed = fm.fileExists(atPath: hooksFile)
-        try fm.createDirectory(atPath: agentsDir, withIntermediateDirectories: true)
-
-        var root: [String: Any] = [:]
-        if existed,
-           let data = try? Data(contentsOf: URL(fileURLWithPath: hooksFile)),
-           let existing = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-            root = existing
-        }
-
-        root[Self.hookEntryKey] = [
-            "enabled": true,
-            "PreToolUse": [
-                [
-                    "matcher": "*",
-                    "hooks": [
-                        [
-                            "type": "command",
-                            "command": commandPath,
-                            "timeout": 600,
-                        ] as [String: Any],
-                    ],
-                ] as [String: Any],
-            ],
-        ] as [String: Any]
-
-        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: URL(fileURLWithPath: hooksFile), options: .atomic)
-
-        stateLock.lock()
-        installedHooksFile = hooksFile
-        createdHooksFile = !existed
-        stateLock.unlock()
-    }
-
-    private func unregisterWorkspaceHook(hooksFile: String, createdFile: Bool) {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: hooksFile) else { return }
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: hooksFile)),
-           var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-            root.removeValue(forKey: Self.hookEntryKey)
-            if root.isEmpty && createdFile {
-                try? fm.removeItem(atPath: hooksFile)
-            } else if let updated = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) {
-                try? updated.write(to: URL(fileURLWithPath: hooksFile), options: .atomic)
-            }
-        } else if createdFile {
-            try? fm.removeItem(atPath: hooksFile)
-        }
-    }
-
-    private func acceptHookConnection(serverFD: Int32) {
-        while true {
-            var clientAddr = sockaddr_un()
-            var len = socklen_t(MemoryLayout<sockaddr_un>.size)
-            let clientFD = withUnsafeMutablePointer(to: &clientAddr) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                    accept(serverFD, sockPtr, &len)
-                }
-            }
-            guard clientFD >= 0 else { break }
-            let clientFlags = fcntl(clientFD, F_GETFL, 0)
-            if clientFlags >= 0 {
-                _ = fcntl(clientFD, F_SETFL, clientFlags & ~O_NONBLOCK)
-            }
-            var noSignal: Int32 = 1
-            setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
-
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                var buffer = Data()
-                var chunk = [UInt8](repeating: 0, count: 4096)
-                while true {
-                    let n = read(clientFD, &chunk, chunk.count)
-                    if n <= 0 { break }
-                    buffer.append(chunk, count: n)
-                }
-                guard let self else {
-                    Self.writeHookResponse(fd: clientFD, decision: "deny", reason: "Cantrip session ended.")
-                    return
-                }
-                self.handleHookPayload(buffer, clientFD: clientFD)
-            }
-        }
-    }
-
-    private func handleHookPayload(_ data: Data, clientFD: Int32) {
-        guard let text = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              let trimmed = text.data(using: .utf8),
-              let json = (try? JSONSerialization.jsonObject(with: trimmed)) as? [String: Any] else {
-            Self.writeHookResponse(fd: clientFD, decision: "deny", reason: "Malformed PreToolUse hook payload.")
+    private func handleHookRequest(
+        _ request: [String: Any],
+        policy: HookPolicy,
+        respond: @escaping AntigravityHookServer.Respond
+    ) {
+        let toolCall = request["toolCall"] as? [String: Any]
+        guard let toolName = toolCall?["name"] as? String, !toolName.isEmpty else {
+            respond("deny", "Cantrip couldn't read this tool call.")
             return
         }
-        let toolCall = json["toolCall"] as? [String: Any]
-        guard let toolName = (toolCall?["name"] as? String) ?? (json["tool_name"] as? String) else {
-            Self.writeHookResponse(fd: clientFD, decision: "deny", reason: "Malformed PreToolUse hook payload.")
-            return
-        }
-        let args = (toolCall?["args"] as? [String: Any])
-            ?? (toolCall?["parameters"] as? [String: Any])
-            ?? (json["tool_input"] as? [String: Any])
-            ?? [:]
+        let args = (toolCall?["args"] as? [String: Any]) ?? [:]
 
         stateLock.lock()
-        let activeGuardrail = guardrail
+        hookRequestCount += 1
         let workdir = activeWorkdir
         let callback = turnEventCallback
         stateLock.unlock()
 
-        guard let activeGuardrail else {
-            Self.writeHookResponse(fd: clientFD, decision: "auto_approve", reason: nil)
+        let activeGuardrail: CantripHomeGuardrail
+        switch policy {
+        case .readOnly:
+            if AntigravityHook.isReadOnly(tool: toolName, arguments: args) {
+                respond("allow", nil)
+            } else {
+                respond("deny", "Read-only session: look and report, but don't change anything.")
+            }
             return
+        case .ask:
+            if AntigravityHook.isReadOnly(tool: toolName, arguments: args) {
+                respond("allow", nil)
+            } else {
+                promptUserForHookTool(
+                    toolName: toolName,
+                    title: "Allow Antigravity to run \(toolName)?",
+                    detail: ToolActivityFactory.detailText(args) ?? toolName,
+                    scope: nil,
+                    callback: callback,
+                    respond: respond
+                )
+            }
+            return
+        case .guardrail(let mode):
+            activeGuardrail = mode
         }
 
         let action = CantripHomeActionRequest(antigravityTool: toolName, input: args)
@@ -1008,7 +880,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                 decision: "denied",
                 decidedBy: "Cantrip Home policy"
             )))
-            Self.writeHookResponse(fd: clientFD, decision: "deny", reason: decision.reason)
+            respond("deny", decision.reason)
 
         case .allow:
             if decision.automatic || homeApproval.runsWithoutAsking(action) {
@@ -1017,7 +889,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                     decision: "approved",
                     decidedBy: decision.automatic ? "Act on my behalf" : "Cantrip Home policy"
                 )))
-                Self.writeHookResponse(fd: clientFD, decision: "auto_approve", reason: nil)
+                respond("auto_approve", nil)
             } else {
                 promptUserForHookTool(
                     toolName: toolName,
@@ -1025,7 +897,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                     detail: ToolActivityFactory.detailText(args) ?? toolName,
                     scope: nil,
                     callback: callback,
-                    clientFD: clientFD
+                    respond: respond
                 )
             }
 
@@ -1039,7 +911,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                     decision: "approved",
                     decidedBy: "Earlier approval"
                 )))
-                Self.writeHookResponse(fd: clientFD, decision: "auto_approve", reason: nil)
+                respond("auto_approve", nil)
             } else {
                 promptUserForHookTool(
                     toolName: toolName,
@@ -1047,7 +919,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                     detail: decision.detail,
                     scope: decision.scope,
                     callback: callback,
-                    clientFD: clientFD
+                    respond: respond
                 )
             }
         }
@@ -1059,10 +931,10 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         detail: String,
         scope: String?,
         callback: ((BackendEvent) -> Void)?,
-        clientFD: Int32
+        respond: @escaping AntigravityHookServer.Respond
     ) {
         guard let callback else {
-            Self.writeHookResponse(fd: clientFD, decision: "deny", reason: "No active session to prompt for approval.")
+            respond("deny", "No one is here to approve this right now.")
             return
         }
         let request = BackendInputRequest(
@@ -1082,47 +954,18 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                     decision: "approved",
                     decidedBy: "User"
                 )))
-                Self.writeHookResponse(fd: clientFD, decision: "auto_approve", reason: nil)
+                respond("auto_approve", nil)
             } else {
                 callback(.approval(BackendApproval(
                     tool: toolName,
                     decision: "denied",
                     decidedBy: "User"
                 )))
-                Self.writeHookResponse(
-                    fd: clientFD,
-                    decision: "deny",
-                    reason: "The user denied this action in Cantrip. Skip it and continue if possible."
-                )
+                respond("deny", "The user denied this action in Cantrip. Skip it and continue if possible.")
             }
         }
         registerInputRequest(request)
         callback(.inputRequired(request))
-    }
-
-    private static func writeHookResponse(fd: Int32, decision: String, reason: String?) {
-        var payload: [String: Any] = ["decision": decision]
-        if let reason, !reason.isEmpty {
-            payload["reason"] = reason
-        }
-        if let data = try? JSONSerialization.data(withJSONObject: payload) {
-            var line = data
-            line.append(0x0A)
-            line.withUnsafeBytes { rawBuf in
-                guard let base = rawBuf.baseAddress else { return }
-                _ = write(fd, base, rawBuf.count)
-            }
-        }
-        close(fd)
-    }
-
-    private static func jsonStringLiteral(_ value: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: [value], options: [.withoutEscapingSlashes]),
-              let str = String(data: data, encoding: .utf8),
-              str.count >= 2 else {
-            return "\"\(value)\""
-        }
-        return String(str.dropFirst().dropLast())
     }
 
     // MARK: - Pending Input Requests
