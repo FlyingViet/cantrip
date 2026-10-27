@@ -440,8 +440,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         p.arguments = args
         p.currentDirectoryURL = URL(fileURLWithPath: workdir)
         var env = ProcessInfo.processInfo.environment
-        // Ensure node/claude find their usual PATH entries.
-        env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+        env["PATH"] = ToolPath.value(inherited: env["PATH"])
         if let tabID { env[TabInsight.tabIDVariable] = tabID.uuidString }
         if !readOnly {
             do {

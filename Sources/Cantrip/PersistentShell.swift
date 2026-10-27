@@ -80,7 +80,7 @@ final class PersistentShell: ObservableObject {
         var env = ProcessInfo.processInfo.environment
         env["NO_COLOR"] = "1"
         env["TERM"] = "dumb"
-        env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+        env["PATH"] = ToolPath.value(inherited: env["PATH"])
         p.environment = env
 
         let stdinPipe = Pipe()

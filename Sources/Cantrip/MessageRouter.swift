@@ -190,8 +190,7 @@ private final class RouterProcess: @unchecked Sendable {
             )
             directory = scratch
             var env = ProcessInfo.processInfo.environment
-            env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:"
-                + (env["PATH"] ?? "/usr/bin:/bin")
+            env["PATH"] = ToolPath.value(inherited: env["PATH"])
             env["NO_COLOR"] = "1"
             env["TERM"] = "dumb"
             let command: String
