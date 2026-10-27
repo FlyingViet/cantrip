@@ -16,10 +16,15 @@ all: app
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep
+test: test-prune test-architectures test-tool-path test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep
 
 test-architectures:
 	@bash Tests/ArchitectureTests/run.sh
+
+test-tool-path:
+	@BIN="/tmp/cantrip-tool-path-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/ToolPath.swift Tests/ToolPathTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-github-builds:
 	@BIN="/tmp/cantrip-github-build-tests-$$$$"; \
@@ -34,7 +39,7 @@ test-session-tabs:
 test-message-routing:
 	@BIN="/tmp/cantrip-message-routing-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/QueueGrouping.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/Log.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/QueueGrouping.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/Log.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-remote-routing:
 	@BIN="/tmp/cantrip-remote-routing-tests-$$$$"; \
@@ -91,7 +96,7 @@ test-voice-vocabulary:
 test-backend-commands:
 	@BIN="/tmp/cantrip-backend-command-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/BackendCommands.swift Sources/Cantrip/BackendCommandDiscovery.swift Sources/Cantrip/CopilotRuntime.swift Tests/BackendCommandTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/BackendCommands.swift Sources/Cantrip/BackendCommandDiscovery.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/CopilotRuntime.swift Tests/BackendCommandTests/main.swift -o "$$BIN" && "$$BIN"
 
 # Temp git repositories and session folders under $$TMPDIR, removed afterwards.
 test-storage-upkeep:

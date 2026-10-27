@@ -104,7 +104,7 @@ enum BackendCommandDiscovery {
             return Result(commands: [], status: "Claude Code isn't installed on this Mac.")
         }
         var environment = environment
-        environment["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin")
+        environment["PATH"] = ToolPath.value(inherited: environment["PATH"], home: home)
         let requestID = "cantrip-commands-\(UUID().uuidString)"
         let outcome = await JSONLineProcess.run(
             path,
