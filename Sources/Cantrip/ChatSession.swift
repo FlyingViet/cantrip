@@ -2869,7 +2869,7 @@ final class ChatSession: ObservableObject {
         p.currentDirectoryURL = URL(fileURLWithPath: workdir)
         p.standardInput = FileHandle.nullDevice
         var env = ProcessInfo.processInfo.environment
-        env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+        env["PATH"] = ToolPath.value(inherited: env["PATH"])
         env["CANTRIP_WORKDIR"] = workdir
         p.environment = env
         let pipe = Pipe()

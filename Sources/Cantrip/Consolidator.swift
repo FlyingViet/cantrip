@@ -97,8 +97,7 @@ enum Consolidator {
         process.standardOutput = pipe
         process.standardError = pipe
         var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:"
-            + (environment["PATH"] ?? "/usr/bin:/bin")
+        environment["PATH"] = ToolPath.value(inherited: environment["PATH"])
         environment["NO_COLOR"] = "1"
         process.environment = environment
 

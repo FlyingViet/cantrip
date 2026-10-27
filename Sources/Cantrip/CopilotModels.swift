@@ -64,8 +64,7 @@ enum CopilotModelFetcher {
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
                 process.arguments = ["node", "--input-type=module", "-e", script]
                 var environment = ProcessInfo.processInfo.environment
-                environment["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:"
-                    + (environment["PATH"] ?? "/usr/bin:/bin")
+                environment["PATH"] = ToolPath.value(inherited: environment["PATH"])
                 environment["NO_COLOR"] = "1"
                 environment["CANTRIP_COPILOT_COMMAND"] = command
                 process.environment = environment

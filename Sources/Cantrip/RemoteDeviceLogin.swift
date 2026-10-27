@@ -26,8 +26,7 @@ final class RemoteDeviceLogin {
                              "--git-protocol", "https", "--skip-ssh-key"]
         process.currentDirectoryURL = URL(fileURLWithPath: workdir)
         var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:"
-            + (environment["PATH"] ?? "/usr/bin:/bin")
+        environment["PATH"] = ToolPath.value(inherited: environment["PATH"])
         environment["BROWSER"] = "/usr/bin/true"
         environment["GH_BROWSER"] = "/usr/bin/true"
         // An ambient token would bypass device login or cause gh to print token-based diagnostics.

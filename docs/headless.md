@@ -21,7 +21,9 @@ token, but only one can run at a time.
    `codex`, `local`).
 4. Start the host: `cantrip daemon start`. It runs now and at every login, and
    launchd restarts it after a crash. In tmux, screen or a container, use
-   `cantrip daemon run` instead.
+   `cantrip daemon run` instead. Agent CLIs and shells the host starts keep
+   that terminal's PATH order; Cantrip adds `~/.local/bin`, `/opt/homebrew/bin`
+   and `/usr/local/bin` only when they're missing, ahead of the system folders.
 5. Check everything with `cantrip doctor`.
 
 ## Pair a device
