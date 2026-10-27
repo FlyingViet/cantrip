@@ -597,36 +597,15 @@ enum Daemon {
 
     @discardableResult
     private static func launchctl(_ arguments: [String]) -> Int32 {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = arguments
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return -1 }
-        process.waitUntilExit()
-        return process.terminationStatus
+        (try? ProcessRunner.run("/bin/launchctl", arguments, errorOutput: .discard))?.status ?? -1
     }
 }
 
 enum Shell {
     /// A tool's path on the user's login-shell PATH (launchd and the app start with a minimal PATH).
     static func which(_ tool: String) -> String? {
-        let output = run("/bin/zsh", ["-lc", "command -v \(tool)"])
+        let output = ProcessRunner.output("/bin/zsh", ["-lc", "command -v \(tool)"])
         return output?.hasPrefix("/") == true ? output : nil
-    }
-
-    static func run(_ executable: String, _ arguments: [String]) -> String? {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -640,7 +619,7 @@ enum Tailscale {
     /// The HTTPS address Tailscale Serve uses for a local port, e.g. https://host.tailnet.ts.net.
     static func serveURL(forPort port: Int) -> String? {
         guard let executable,
-              let output = Shell.run(executable, ["serve", "status", "--json"]),
+              let output = ProcessRunner.output(executable, ["serve", "status", "--json"]),
               let json = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
               let web = json["Web"] as? [String: Any] else { return nil }
         return serveURL(web: web, port: port)

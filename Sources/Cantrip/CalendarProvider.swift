@@ -37,26 +37,16 @@ final class CalendarProvider: ObservableObject {
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             defer { self?.fetching = false }
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            p.arguments = ["-e", Self.script]
-            p.standardInput = FileHandle.nullDevice
-            let out = Pipe()
-            let err = Pipe()
-            p.standardOutput = out
-            p.standardError = err
-            do { try p.run() } catch {
+            let result: ProcessRunner.Result
+            do {
+                result = try ProcessRunner.run("/usr/bin/osascript", ["-e", Self.script])
+            } catch {
                 Log.write("calendar: osascript launch failed: \(error.localizedDescription)")
                 return
             }
-            p.waitUntilExit()
-            let text = String(data: out.fileHandleForReading.readDataToEndOfFile(),
-                              encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if p.terminationStatus != 0 {
-                let errText = String(data: err.fileHandleForReading.readDataToEndOfFile(),
-                                     encoding: .utf8) ?? ""
-                Log.write("calendar: fetch failed (\(p.terminationStatus)) \(errText.prefix(120))")
+            let text = result.text
+            if result.status != 0 {
+                Log.write("calendar: fetch failed (\(result.status)) \(result.errorText.prefix(120))")
                 return
             }
             DispatchQueue.main.async {

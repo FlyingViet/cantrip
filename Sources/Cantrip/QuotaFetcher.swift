@@ -18,30 +18,16 @@ enum QuotaFetcher {
     static func fetchCopilotQuota(completion: @escaping (Result<CopilotAccountUsage, Error>) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             do {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.arguments = ["node", "--input-type=module", "-e", script]
                 var environment = ProcessInfo.processInfo.environment
                 environment["PATH"] = ToolPath.value(inherited: environment["PATH"])
                 environment["NO_COLOR"] = "1"
-                process.environment = environment
-                process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
-                process.standardInput = FileHandle.nullDevice
-                process.standardError = FileHandle.nullDevice
-                let output = Pipe()
-                process.standardOutput = output
-                try process.run()
-                let deadline = Date().addingTimeInterval(25)
-                while process.isRunning && Date() < deadline { usleep(50_000) }
-                if process.isRunning {
-                    process.terminate()
-                    let grace = Date().addingTimeInterval(2)
-                    while process.isRunning && Date() < grace { usleep(50_000) }
-                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-                    throw CopilotQuotaError.timeout
-                }
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                guard process.terminationStatus == 0 else { throw CopilotQuotaError.unavailable }
+                let run = try ProcessRunner.run(
+                    "/usr/bin/env", ["node", "--input-type=module", "-e", script], environment: environment,
+                    directory: FileManager.default.homeDirectoryForCurrentUser, errorOutput: .discard, timeout: 25
+                )
+                if run.timedOut { throw CopilotQuotaError.timeout }
+                let data = run.output
+                guard run.status == 0 else { throw CopilotQuotaError.unavailable }
                 let result = try JSONDecoder().decode(ProbeResult.self, from: data)
                 if let error = result.error { throw error }
                 guard let account = result.account, !account.buckets.isEmpty else {

@@ -38,21 +38,12 @@ final class FileRAG {
     // MARK: - Internals
 
     private func run(terms: [String]) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
-        p.arguments = ["-onlyin", NSHomeDirectory(), "-interpret",
-                       terms.joined(separator: " ")]
-        p.standardInput = FileHandle.nullDevice
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
-        do { try p.run() } catch { return }
-        // Hard 3s budget on the search.
-        let deadline = Date().addingTimeInterval(3)
-        while p.isRunning && Date() < deadline { usleep(50_000) }
-        if p.isRunning { p.terminate(); return }
-        guard let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                                  encoding: .utf8) else { return }
+        // Hard 3s budget on the search. Only the first 300 paths are used, so keep the first 256 KB.
+        guard let result = try? ProcessRunner.run(
+            "/usr/bin/mdfind", ["-onlyin", NSHomeDirectory(), "-interpret", terms.joined(separator: " ")],
+            errorOutput: .discard, timeout: 3, outputLimit: 256_000
+        ), !result.timedOut else { return }
+        let output = String(decoding: result.output, as: UTF8.self)
 
         let vault = AppSettings.shared.memoryPath
         let candidates = output.components(separatedBy: "\n")

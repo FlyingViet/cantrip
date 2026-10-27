@@ -317,30 +317,16 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
 
     private static func runShell(_ command: String, cwd: String) -> (String, Bool) {
         Log.write("hermes tool: \(command.prefix(120))")
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-l", "-c", command]
-        p.currentDirectoryURL = URL(fileURLWithPath: cwd)
-        p.standardInput = FileHandle.nullDevice
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = pipe
-        do { try p.run() } catch {
+        let result: ProcessRunner.Result
+        do {
+            // 120s cap so a hung command can't wedge the loop; the model sees the first 4,000 characters.
+            result = try ProcessRunner.run("/bin/zsh", ["-l", "-c", command], directory: URL(fileURLWithPath: cwd),
+                                           errorOutput: .merge, timeout: 120, outputLimit: 1_000_000)
+        } catch {
             return ("Failed to launch: \(error.localizedDescription)", false)
         }
-        // 120s cap so a hung command can't wedge the loop.
-        let deadline = Date().addingTimeInterval(120)
-        while p.isRunning && Date() < deadline {
-            usleep(100_000)
-        }
-        if p.isRunning {
-            p.terminate()
-            return ("Command timed out after 120s", false)
-        }
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                            encoding: .utf8) ?? ""
-        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (trimmed.isEmpty ? "(no output, exit \(p.terminationStatus))" : trimmed,
-                p.terminationStatus == 0)
+        if result.timedOut { return ("Command timed out after 120s", false) }
+        let trimmed = result.text
+        return (trimmed.isEmpty ? "(no output, exit \(result.status))" : trimmed, result.status == 0)
     }
 }
