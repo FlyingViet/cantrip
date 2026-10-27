@@ -141,6 +141,14 @@ export function backendArgs(
   }
 }
 
+export const antigravityReadOnlyError =
+  "Antigravity can't be kept read-only on Windows yet: its --sandbox limits the terminal, not file edits. Turn on actions to use it, or choose another backend.";
+
+/** Headless agy edits files in the workspace without asking, and Windows has no hook to stop it. */
+export function needsActionsForReadOnly(request: Pick<RunRequest, "backend" | "mode" | "allowActions">): boolean {
+  return request.mode === "ai" && request.backend === "agy" && !request.allowActions;
+}
+
 function tomlString(value: string): string {
   return JSON.stringify(value);
 }
@@ -315,6 +323,7 @@ export class RunManager {
     }
     if (!["ai", "shell"].includes(request.mode)) return "Invalid run mode.";
     if (!["claude", "copilot", "codex", "agy"].includes(request.backend)) return "Invalid backend.";
+    if (needsActionsForReadOnly(request)) return antigravityReadOnlyError;
     if (
       request.model.length > 100 ||
       (request.model && !/^[a-zA-Z0-9._:/[\]-]+$/.test(request.model))
