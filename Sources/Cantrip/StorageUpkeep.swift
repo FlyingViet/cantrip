@@ -740,33 +740,13 @@ enum StorageUpkeep {
 
         /// Runs git without prompts or optional locks; nil when it can't start or exceeds `timeout`.
         static func run(_ git: String, _ arguments: [String], timeout: TimeInterval = 120) -> Result? {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: git)
-            process.arguments = arguments
             var environment = ProcessInfo.processInfo.environment
             environment["GIT_OPTIONAL_LOCKS"] = "0"
             environment["GIT_TERMINAL_PROMPT"] = "0"
             environment["LC_ALL"] = "C"
-            process.environment = environment
-            let output = Pipe(), error = Pipe()
-            process.standardOutput = output
-            process.standardError = error
-            process.standardInput = FileHandle.nullDevice
-            do { try process.run() } catch { return nil }
-            var out = Data(), err = Data()
-            let group = DispatchGroup()
-            group.enter()
-            DispatchQueue.global().async { out = output.fileHandleForReading.readDataToEndOfFile(); group.leave() }
-            group.enter()
-            DispatchQueue.global().async { err = error.fileHandleForReading.readDataToEndOfFile(); group.leave() }
-            if group.wait(timeout: .now() + timeout) == .timedOut {
-                process.terminate()
-                return nil
-            }
-            process.waitUntilExit()
-            return Result(status: process.terminationStatus,
-                          output: String(decoding: out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines),
-                          error: String(decoding: err, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+            guard let result = try? ProcessRunner.run(git, arguments, environment: environment, timeout: timeout),
+                  !result.timedOut else { return nil }
+            return Result(status: result.status, output: result.text, error: result.errorText)
         }
     }
 

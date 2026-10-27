@@ -113,24 +113,14 @@ struct GitHubActionsAPI {
                     continuation.resume(throwing: GitHubBuildError.message("Install GitHub CLI and run gh auth login on the Cantrip Mac."))
                     return
                 }
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: path)
-                process.arguments = ["auth", "token", "--hostname", "github.com"]
-                process.standardInput = FileHandle.nullDevice
-                process.standardError = FileHandle.nullDevice
-                let output = Pipe()
-                process.standardOutput = output
                 do {
-                    try process.run()
-                    let deadline = Date().addingTimeInterval(5)
-                    while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
-                    guard !process.isRunning else {
-                        process.terminate()
+                    let result = try ProcessRunner.run(path, ["auth", "token", "--hostname", "github.com"],
+                                                       errorOutput: .discard, timeout: 5)
+                    guard !result.timedOut else {
                         throw GitHubBuildError.message("GitHub login lookup timed out on the Mac.")
                     }
-                    let token = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard process.terminationStatus == 0, !token.isEmpty else {
+                    let token = result.text
+                    guard result.status == 0, !token.isEmpty else {
                         throw GitHubBuildError.message("Run gh auth login on the Cantrip Mac to read GitHub builds.")
                     }
                     continuation.resume(returning: token)

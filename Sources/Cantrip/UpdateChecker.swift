@@ -147,44 +147,10 @@ final class UpdateChecker: ObservableObject {
     }
 
     private static func shell(_ command: String) -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-c", command]
-        p.standardInput = FileHandle.nullDevice
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(20)
-        while p.isRunning && Date() < deadline { usleep(100_000) }
-        if p.isRunning { p.terminate(); return nil }
-        guard p.terminationStatus == 0 else { return nil }
-        return String(data: out.fileHandleForReading.readDataToEndOfFile(),
-                      encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        ProcessRunner.output("/bin/zsh", ["-c", command], timeout: 20)
     }
 
     private static func git(_ args: [String], in dir: String) -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        p.arguments = ["-C", dir] + args
-        p.standardInput = FileHandle.nullDevice
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(20)
-        while p.isRunning && Date() < deadline { usleep(100_000) }
-        if p.isRunning { p.terminate(); return nil }
-        guard p.terminationStatus == 0 else { return nil }
-        return String(data: out.fileHandleForReading.readDataToEndOfFile(),
-                      encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
-
-private extension String {
-    var shellQuoted: String {
-        "'" + replacingOccurrences(of: "'", with: "'\\''") + "'"
+        ProcessRunner.output("/usr/bin/git", ["-C", dir] + args, timeout: 20)
     }
 }

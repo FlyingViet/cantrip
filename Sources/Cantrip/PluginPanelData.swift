@@ -1182,74 +1182,23 @@ enum PluginPanelData {
         currentDirectory: URL? = nil,
         input: Data? = nil
     ) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.currentDirectoryURL = currentDirectory
-        let inputPipe: Pipe?
-        if input != nil {
-            let pipe = Pipe()
-            process.standardInput = pipe
-            inputPipe = pipe
-        } else {
-            process.standardInput = FileHandle.nullDevice
-            inputPipe = nil
-        }
-        let output = Pipe()
-        let errors = Pipe()
-        process.standardOutput = output
-        process.standardError = errors
-        do {
-            try process.run()
-        } catch {
-            throw PanelDataError("Could not launch \(URL(fileURLWithPath: executable).lastPathComponent): \(error.localizedDescription)")
-        }
-        if let input, let inputPipe {
-            try? inputPipe.fileHandleForWriting.write(contentsOf: input)
-            try? inputPipe.fileHandleForWriting.close()
-        }
-        try? output.fileHandleForWriting.close()
-        try? errors.fileHandleForWriting.close()
-
-        let outputData = LockedData()
-        let errorData = LockedData()
-        let readers = DispatchGroup()
-        readers.enter()
-        DispatchQueue.global(qos: .utility).async {
-            outputData.store(output.fileHandleForReading.readDataToEndOfFile())
-            readers.leave()
-        }
-        readers.enter()
-        DispatchQueue.global(qos: .utility).async {
-            errorData.store(errors.fileHandleForReading.readDataToEndOfFile())
-            readers.leave()
-        }
-
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning && Date() < deadline { usleep(50_000) }
-        let timedOut = process.isRunning
-        if process.isRunning {
-            process.terminate()
-            let terminationDeadline = Date().addingTimeInterval(1)
-            while process.isRunning && Date() < terminationDeadline { usleep(20_000) }
-            if process.isRunning {
-                Darwin.kill(process.processIdentifier, SIGKILL)
-            }
-        }
-        process.waitUntilExit()
-        readers.wait()
         let command = URL(fileURLWithPath: executable).lastPathComponent
-        if timedOut {
+        let result: ProcessRunner.Result
+        do {
+            result = try ProcessRunner.run(executable, arguments, directory: currentDirectory, input: input,
+                                           timeout: timeout, killAfter: 1)
+        } catch {
+            throw PanelDataError("Could not launch \(command): \(error.localizedDescription)")
+        }
+        if result.timedOut {
             throw PanelDataError("\(command) timed out", retryable: true)
         }
-        guard process.terminationStatus == 0 else {
-            let detail = String(data: errorData.value, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let message = detail?.isEmpty == false ? detail! : "Command failed"
+        guard result.status == 0 else {
+            let detail = result.errorText
+            let message = detail.isEmpty ? "Command failed" : detail
             throw PanelDataError(message, retryable: isTransientCommandFailure(message))
         }
-        return String(data: outputData.value, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return result.text
     }
 
     private static func pluginExecutable(_ command: String, root: URL) throws -> URL {
@@ -1435,23 +1384,6 @@ private final class PackageMailScanAccumulator {
             partial: partial,
             lastError: lastError
         )
-    }
-}
-
-private final class LockedData {
-    private let lock = NSLock()
-    private var data = Data()
-
-    func store(_ value: Data) {
-        lock.lock()
-        data = value
-        lock.unlock()
-    }
-
-    var value: Data {
-        lock.lock()
-        defer { lock.unlock() }
-        return data
     }
 }
 
