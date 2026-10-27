@@ -441,8 +441,9 @@ enum CantripCLI {
             if let lan = remote["lanPort"] { print("✓ Encrypted LAN/direct listener on port \(lan)") }
         }
         if let tool = status?["backendCommand"] as? String, !tool.isEmpty {
-            let path = Shell.which(tool)
-            check(path != nil, path.map { "\(tool) CLI found at \($0)" } ?? "\(tool) CLI not found on your login shell's PATH",
+            let locator = ToolLocator.shared
+            let path = tool == "copilot" ? locator.copilot : tool == "claude" ? locator.claude : locator.path(for: tool)
+            check(path != nil, path.map { "\(tool) CLI found at \($0)" } ?? "\(tool) CLI not found in ~/.local/bin, Homebrew or your login shell's PATH",
                   fix: tool == "copilot" ? "npm install -g @github/copilot, then run `copilot` once to sign in."
                       : "Install the \(tool) CLI and sign in.")
         }
@@ -601,20 +602,8 @@ enum Daemon {
     }
 }
 
-enum Shell {
-    /// A tool's path on the user's login-shell PATH (launchd and the app start with a minimal PATH).
-    static func which(_ tool: String) -> String? {
-        let output = ProcessRunner.output("/bin/zsh", ["-lc", "command -v \(tool)"])
-        return output?.hasPrefix("/") == true ? output : nil
-    }
-}
-
 enum Tailscale {
-    static var executable: String? {
-        let app = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-        if FileManager.default.isExecutableFile(atPath: app) { return app }
-        return Shell.which("tailscale")
-    }
+    static var executable: String? { ToolLocator.shared.tailscale }
 
     /// The HTTPS address Tailscale Serve uses for a local port, e.g. https://host.tailnet.ts.net.
     static func serveURL(forPort port: Int) -> String? {

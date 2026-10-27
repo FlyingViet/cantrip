@@ -206,8 +206,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     /// The runtime configuration the next turn uses in `workdir`.
     func configuration(workdir: String) -> Configuration {
         Configuration(
-            command: settings.copilotPath.trimmingCharacters(in: .whitespaces).isEmpty
-                ? "copilot" : settings.copilotPath,
+            command: ToolLocator.shared.copilotCommand(configured: settings.copilotPath),
             workdir: workdir,
             model: modelOverride ?? settings.copilotModel,
             effort: effortOverride ?? settings.copilotEffort,

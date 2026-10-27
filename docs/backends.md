@@ -38,6 +38,12 @@ return to the default or choose one your CLI/account supports. An option
 visible in a picker may still require provider entitlement.
 
 On Mac, the backend's **path (blank = auto)** field normally stays blank.
+Automatic detection uses the same PATH Cantrip gives the tools it starts
+(`~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin` ahead of the system
+folders), then the CLI's own install folder (`~/.npm-global/bin` for Copilot,
+`~/.claude/local` for Claude), then your login shell's PATH. Copilot tabs,
+slash commands, the model list, Auto routing and memory upkeep all run the CLI
+it finds. The path field also accepts a different command name.
 If automatic detection fails, run `command -v claude`, `command -v copilot`,
 or `command -v codex` in Terminal and paste the returned executable path into
 the matching field.
