@@ -1233,7 +1233,7 @@ enum PluginPanelData {
     }
 
     private static func isoDate(_ date: Date) -> String {
-        ISO8601DateFormatter().string(from: date)
+        ISODate.string(from: date)
     }
 
     private struct PanelDataError: LocalizedError {

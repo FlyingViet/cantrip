@@ -9,14 +9,14 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-prune prune-builds test-architectures test-tool-path test-process-runner test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep cert artwork icon app run clean
+.PHONY: all build test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-tool-path test-process-runner test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep
+test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep
 
 test-architectures:
 	@bash Tests/ArchitectureTests/run.sh
@@ -31,10 +31,15 @@ test-process-runner:
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc Sources/Cantrip/ProcessRunner.swift Tests/ProcessRunnerTests/main.swift -o "$$BIN" && "$$BIN"
 
+test-iso-date:
+	@BIN="/tmp/cantrip-iso-date-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/ISODate.swift Tests/ISODateTests/main.swift -o "$$BIN" && "$$BIN"
+
 test-github-builds:
 	@BIN="/tmp/cantrip-github-build-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library Sources/Cantrip/GitHubBuildMonitor.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ToolLocator.swift Sources/Cantrip/ToolPath.swift Tests/GitHubBuildTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc -parse-as-library Sources/Cantrip/GitHubBuildMonitor.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ToolLocator.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/ISODate.swift Tests/GitHubBuildTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-session-tabs:
 	@BIN="/tmp/cantrip-session-tab-tests-$$$$"; \
@@ -44,7 +49,7 @@ test-session-tabs:
 test-message-routing:
 	@BIN="/tmp/cantrip-message-routing-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/QueueGrouping.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/Log.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/QueueGrouping.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/Log.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-remote-routing:
 	@BIN="/tmp/cantrip-remote-routing-tests-$$$$"; \
@@ -71,19 +76,19 @@ test-features:
 test-copilot-parser:
 	@BIN="/tmp/cantrip-copilot-parser-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/PromptUsage.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Tests/CopilotJSONStreamParserTests/*.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/PromptUsage.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/ISODate.swift Tests/CopilotJSONStreamParserTests/*.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-package-tracking:
 	@BIN="/tmp/cantrip-package-tracking-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/PackageTracking.swift Tests/PackageTrackingTests/main.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/PackageTracking.swift Sources/Cantrip/ISODate.swift Tests/PackageTrackingTests/main.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-recovery:
 	@BIN="/tmp/cantrip-recovery-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/HostLock.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-consolidation:
@@ -107,7 +112,7 @@ test-backend-commands:
 test-storage-upkeep:
 	@BIN="/tmp/cantrip-storage-upkeep-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/StorageUpkeep.swift Sources/Cantrip/ProcessRunner.swift Tests/StorageUpkeepTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/StorageUpkeep.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ISODate.swift Tests/StorageUpkeepTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-run-journal:
 	@BIN="/tmp/cantrip-run-journal-tests-$$$$"; \

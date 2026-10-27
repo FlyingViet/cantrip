@@ -712,7 +712,7 @@ enum StorageUpkeep {
     }
 
     static func appendLog(_ line: String, to file: URL) {
-        let stamp = ISO8601DateFormatter().string(from: Date())
+        let stamp = ISODate.string(from: Date())
         let data = Data("[\(stamp)] \(line)\n".utf8)
         if let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 4 << 20 {
             let previous = file.appendingPathExtension("1")
