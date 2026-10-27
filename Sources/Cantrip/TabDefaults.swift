@@ -19,8 +19,13 @@ enum TabDefaults {
         "\(councilCodexPrefix(id))-\(seat)-\(model)"
     }
 
+    static func councilAntigravity(_ id: UUID, seat: Int, model: String) -> String {
+        "\(councilAntigravityPrefix(id))-\(seat)-\(model)"
+    }
+
     private static func councilClaudePrefix(_ id: UUID) -> String { "councilClaude-\(id.uuidString)" }
     private static func councilCodexPrefix(_ id: UUID) -> String { "councilCodex-\(id.uuidString)" }
+    private static func councilAntigravityPrefix(_ id: UUID) -> String { "councilAgy-\(id.uuidString)" }
 
     /// Every key above for `id`. Council seats are found by prefix, whatever their count or models.
     static func removeAll(for id: UUID, in defaults: UserDefaults = .standard) {
@@ -32,7 +37,7 @@ enum TabDefaults {
 
     /// Council seats' saved sessions for `id`, so a new conversation doesn't resume them.
     static func removeCouncilSeats(for id: UUID, in defaults: UserDefaults = .standard) {
-        let council = [councilClaudePrefix(id), councilCodexPrefix(id)]
+        let council = [councilClaudePrefix(id), councilCodexPrefix(id), councilAntigravityPrefix(id)]
         for key in defaults.dictionaryRepresentation().keys where council.contains(where: key.hasPrefix) {
             defaults.removeObject(forKey: key)
         }
