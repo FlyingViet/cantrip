@@ -2339,6 +2339,7 @@ final class ChatSession: ObservableObject {
             fresh = b
         case .antigravity:
             fresh = AntigravityBackend(
+                persistKey: TabDefaults.councilAntigravity(id, seat: index, model: member.model),
                 readOnly: true,
                 modelOverride: member.model.isEmpty ? nil : member.model
             )
