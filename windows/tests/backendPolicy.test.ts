@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { backendArgs } from "../src/main/backends";
-import { codexMcpArguments } from "../src/main/backends";
+import { codexMcpArguments, needsActionsForReadOnly } from "../src/main/backends";
 import type { BackendId, RunRequest } from "../src/shared/types";
 
 function request(backend: BackendId, allowActions: boolean): RunRequest {
@@ -57,6 +57,13 @@ describe("backend action policy", () => {
     expect(backendArgs(request("agy", true))).toContain(
       "--dangerously-skip-permissions",
     );
+  });
+
+  it("refuses read-only Antigravity runs, which agy can't enforce on Windows", () => {
+    expect(needsActionsForReadOnly(request("agy", false))).toBe(true);
+    expect(needsActionsForReadOnly(request("agy", true))).toBe(false);
+    expect(needsActionsForReadOnly({ ...request("agy", false), mode: "shell" })).toBe(false);
+    expect(needsActionsForReadOnly(request("codex", false))).toBe(false);
   });
 
   it("passes model, effort, and context flags supported by each backend", () => {
