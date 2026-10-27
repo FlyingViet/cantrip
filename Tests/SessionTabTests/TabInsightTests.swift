@@ -358,14 +358,38 @@ extension SessionTabTests {
         try await waitForJournalTest { !parent.isStreaming }
 
         // 6. Home asks; refusals.
+        // Asked while Home answers a request: the card is that request's reply, under it and above
+        // Home's reply still being written; the prompt shows "N Replies" and the card its quote.
+        let home = manager.homeSession
+        let savedHome = home.messages
+        var request = ChatMessage(role: .user, text: "@[Docs](cantrip-tab:\(docs.id.uuidString)) what changed today?")
+        request.threadID = request.id
+        var writing = ChatMessage(role: .assistant, text: "Asking Docs.")
+        writing.threadID = request.id
+        home.messages = [request, writing]
+        home.isStreaming = true
         let homeAsk = try manager.tabAsks.ask(docs.id.uuidString, question: "What changed today?",
                                               from: ChatSession.cantripHomeID, steer: false)
+        home.isStreaming = false
+        precondition(home.messages.map(\.id) == [request.id, home.messages[1].id, writing.id]
+                     && home.messages[1].handoffResult?.delegationID == homeAsk.id
+                     && home.messages[1].threadID == request.id, "\(home.messages.map(\.role))")
+        precondition(ThreadTags.tags(in: home.messages, range: home.messages.indices, sessionID: home.id).keys.first
+                     == home.messages[1].id
+                     && ThreadTags.replyCounts(in: home.messages, sessionID: home.id) == [request.id: 2],
+                     "the ask's card quotes the request it answers")
+        let askThread = ThreadTags.thread(request.id, in: home.messages, before: nil, sessionID: home.id, visibleText: \.text)
+        let askItems = (askThread?["messages"] as? [[String: Any]]) ?? []
+        precondition(askItems.map { $0["tabTitle"] as? String ?? "Home" } == ["Docs", "Home"]
+                     && askItems.first?["tabID"] as? String == docs.id.uuidString,
+                     "in the thread, the ask's card is the tab's answer: \(askItems)")
         try await waitForJournalTest { docsBackend.prompts.count == 4 }
         precondition(docsBackend.prompts[3].contains("(Question from Cantrip Home"), docsBackend.prompts[3])
         docsBackend.finish("The README.")
         try await waitForJournalTest { manager.tabAsks.lookup(homeAsk.id, markDelivered: false)?.status == "answered" }
         precondition(manager.homeSession.messages.contains { $0.handoffResult?.delegationID == homeAsk.id && $0.handoffResult?.isAsk == true },
                      "Home gets the card")
+        home.messages = savedHome
         let refusals: [(String, UUID?, Bool, String)] = [
             (docs.id.uuidString, docs.id, false, "can't ask itself"),
             (secret.id.uuidString, parent.id, false, "No readable tab"),

@@ -246,8 +246,83 @@ extension SessionTabTests {
                      && (withTab.1["thread"] as? [String: Any])?["replyCount"] as? Int == 2,
                      "the tab's items say which tab, and Home's count stays its own: \(withTab.1)")
         testHandoffThreadConversation()
+        testTabRepliesAreReplies()
         try testThreadLinesWeb()
         print("Thread tag checks passed")
+    }
+
+    /// What a tab sends back is a reply to the message that asked for it, even right under it: its
+    /// card quotes that message, the message says "N Replies" from the handoff on, and the thread
+    /// shows the message, Home's handoff, the tab's turns and the result in order.
+    @MainActor
+    private static func testTabRepliesAreReplies() {
+        let home = ChatSession.cantripHomeID
+        func message(_ role: ChatMessage.Role, _ text: String, thread: UUID) -> ChatMessage {
+            var message = ChatMessage(role: role, text: text)
+            message.threadID = thread
+            return message
+        }
+        func prompt(_ text: String) -> ChatMessage {
+            var message = ChatMessage(role: .user, text: text)
+            message.threadID = message.id
+            return message
+        }
+        let tabID = UUID()
+        let earlier = prompt("What's on the calendar?")
+        let earlierReply = message(.assistant, "Nothing today.", thread: earlier.id)
+        let ask = prompt("@[Media Server](cantrip-tab:\(tabID.uuidString)) looks like the update failed")
+        let handoff = CantripHomeDelegation(tabID: tabID, tabTitle: "Media Server", summary: "Update failed",
+                                            prompt: "(Handed off by Cantrip Home.)\n\nGoal: Fix the update",
+                                            createdAt: Date(), status: .completed)
+        var handing = message(.assistant, "The Media Server tab is taking it.", thread: ask.id)
+        handing.delegations = [handoff]
+        var card = message(.handoff, "**Done in Media Server** · Update failed", thread: ask.id)
+        card.handoffResult = CantripHomeHandoffResult(handoff, now: Date())
+
+        // Right under the request: the card quotes it; the request counts Home's handoff and the card.
+        let together = [earlier, earlierReply, ask, handing, card]
+        precondition(Set(ThreadTags.tags(in: together, range: together.indices, sessionID: home).keys) == [card.id]
+                     && ThreadTags.tags(in: together, range: 4..<5, sessionID: home)[card.id]?["prompt"] as? String
+                        == "@Media Server looks like the update failed"
+                     && ThreadTags.replyCounts(in: together, sessionID: home) == [ask.id: 2],
+                     "\(ThreadTags.replyCounts(in: together, sessionID: home))")
+        // While the tab works, the request already opens its thread.
+        let working = [earlier, earlierReply, ask, handing]
+        precondition(ThreadTags.tags(in: working, range: working.indices, sessionID: home).isEmpty
+                     && ThreadTags.replyCounts(in: working, sessionID: home) == [ask.id: 1])
+        // Without a mention too (every handoff and ask), and several cards share one quote's line.
+        let plain = prompt("Is the media server healthy?")
+        let first = message(.handoff, "**Answer from Media Server** · Healthy?", thread: plain.id)
+        let second = message(.handoff, "**Answer from Downloads** · Healthy?", thread: plain.id)
+        let answer = message(.assistant, "Both say it's healthy.", thread: plain.id)
+        let asked = [plain, first, second, answer]
+        precondition(Set(ThreadTags.tags(in: asked, range: asked.indices, sessionID: home).keys) == [first.id]
+                     && ThreadTags.replyCounts(in: asked, sessionID: home) == [plain.id: 3])
+        // A card after a late reply that already quotes the request joins that reply's line.
+        let late = message(.assistant, "Still on it.", thread: ask.id)
+        let split = [ask, handing, earlier, earlierReply, late, card]
+        precondition(Set(ThreadTags.tags(in: split, range: split.indices, sessionID: home).keys) == [late.id]
+                     && ThreadTags.replyCounts(in: split, sessionID: home) == [ask.id: 3])
+        // Other tabs never tag or count.
+        precondition(ThreadTags.tags(in: together, range: together.indices, sessionID: UUID()).isEmpty
+                     && ThreadTags.replyCounts(in: together, sessionID: UUID()).isEmpty)
+
+        // The thread: the request, Home's handoff (named even when the reply was only the handoff
+        // block), the tab's turns, then the result.
+        var silent = handing
+        silent.text = ""
+        let tabReply = ChatMessage(role: .assistant, text: "Checked the logs. Outcome: it's running the new version.")
+        let thread = ThreadTags.thread(ask.id, in: [earlier, ask, silent, card], before: nil, sessionID: home,
+                                       visibleText: \.text, tabConversation: { handoff in
+            .init(tabID: handoff.tabID, tabTitle: handoff.tabTitle, messages: [tabReply])
+        })
+        let items = (thread?["messages"] as? [[String: Any]]) ?? []
+        precondition((thread?["prompt"] as? [String: Any])?["text"] as? String == "@Media Server looks like the update failed"
+                     && items.map { "\($0["tabTitle"] as? String ?? "Home"):\($0["text"] as? String ?? "")" } == [
+                        "Home:Handed off to Media Server · Update failed",
+                        "Media Server:Checked the logs. Outcome: it's running the new version.",
+                        "Home:**Done in Media Server** · Update failed",
+                     ] && thread?["replyCount"] as? Int == 2, "\(items)")
     }
 
     /// The tab's side of a handoff: its run(s) after the handed-off prompt, without Cantrip's own

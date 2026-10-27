@@ -3761,9 +3761,10 @@ private extension RemoteControlServer {
         if(!(child.actions||[]).includes(action))continue;const button=document.createElement("button");button.type="button";button.className=`control${action==="resolve"?" primary":""}`;button.textContent=label;button.onclick=()=>childAction(sessionID,child,action,button);options.append(button)}
       box.append(options);return box}
     // Thread tags (Home), drawn like inline replies in Messages: a reply from a different thread than the message above
-    // shows a small copy of the prompt that started its thread, joined to it by a curved line in the margin, and a prompt
-    // whose replies other messages split up says "N Replies" (the Mac's threadReplies). Either opens the whole thread
-    // over the blurred conversation, fetched from the Mac so it works before older messages load.
+    // shows a small copy of the prompt that started its thread, joined to it by a curved line in the margin (a tab's
+    // handoff result or ask card always does: it's a reply to the message that asked), and a prompt whose replies other
+    // messages split up, or that handed work to a tab, says "N Replies" (the Mac's threadReplies). Either opens the
+    // whole thread over the blurred conversation, fetched from the Mac so it works before older messages load.
     let threadOpen=null;
     function threadQuote(sessionID,message){const wrap=document.createElement("div"),line=document.createElement("span"),quote=document.createElement("button"),text=document.createElement("span"),thread=message.thread;
       wrap.className="thread-link";line.className="thread-bracket";line.setAttribute("aria-hidden","true");quote.type="button";quote.className="thread-quote";quote.setAttribute("aria-label",`Reply to: ${thread.prompt}. Opens the thread`);quote.title="Open the thread";text.textContent=thread.prompt;quote.append(text);

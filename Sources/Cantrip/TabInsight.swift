@@ -541,7 +541,7 @@ final class TabAskCoordinator {
     }
 
     /// The asker's card, posted once and updated in place: at the end of a tab (like a child tab's
-    /// card), or in Home above the request it's answering, like a handoff result.
+    /// card), or in Home under the request it's answering, as one of its replies.
     private func postCard(_ ask: TabAsk, now: Date) {
         guard let askerID = ask.askerID, let asker = manager?.managedSession(id: askerID),
               !asker.isPrivate, !asker.isLocalPrivate else { return }
@@ -556,15 +556,11 @@ final class TabAskCoordinator {
         } else {
             var message = ChatMessage(role: .handoff, text: card.fallbackText)
             message.handoffResult = card
-            // The card belongs to the thread that asked, so it doesn't tag the reply after it.
+            // The card belongs to the thread that asked: a reply to the request Home is answering,
+            // under it and before Home's reply that's still being written (thread tags).
             message.threadID = asker.currentThreadID
-            if asker.isCantripHome, asker.isStreaming, var request = asker.messages.lastIndex(where: { $0.role == .user }) {
-                let runID = asker.messages[request].runID
-                while runID != nil, request > 0, asker.messages[request - 1].role == .user,
-                      asker.messages[request - 1].runID == runID {
-                    request -= 1
-                }
-                asker.messages.insert(message, at: request)
+            if asker.isCantripHome, asker.isStreaming, asker.messages.last?.role == .assistant {
+                asker.messages.insert(message, at: asker.messages.count - 1)
             } else {
                 asker.messages.append(message)
             }
