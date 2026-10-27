@@ -13,8 +13,7 @@ final class ChildTabCoordinator {
     let resources = ChildTabResourceLocks()
     /// New tabs, by ID (tests substitute scripted backends).
     var makeSession: (UUID) -> ChatSession = { ChatSession(id: $0) }
-    var worktreesRoot: URL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".cache/Cantrip/worktrees", isDirectory: true)
+    var worktreesRoot: URL = CantripPaths.cache("worktrees", isDirectory: true)
 
     private var childSubscriptions: [UUID: [AnyCancellable]] = [:]
     private var parentSubscriptions: [UUID: AnyCancellable] = [:]

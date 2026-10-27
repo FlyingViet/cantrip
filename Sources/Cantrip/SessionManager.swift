@@ -224,8 +224,7 @@ final class SessionManager: ObservableObject {
     }
 
     static var chatsDir: URL {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip/chats")
+        let dir = CantripPaths.cache("chats")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

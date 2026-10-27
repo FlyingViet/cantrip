@@ -70,8 +70,7 @@ final class RemoteMaintenance {
     private var worker: Task<Void, Never>?
 
     init(manager: SessionManager, app: URL = Bundle.main.bundleURL,
-         stateFile: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip/maintenance/state.json"),
+         stateFile: URL = CantripPaths.cache("maintenance/state.json"),
          runningBuild: String = CrashRecovery.buildIdentity,
          run: @escaping Runner = RemoteMaintenance.runCommand,
          restart: @escaping @MainActor (URL) throws -> Void = RemoteMaintenance.relaunch) {

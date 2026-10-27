@@ -168,8 +168,7 @@ final class RunJournal {
     static let launchResumeReason = "launch-resume"
 
     static var defaultDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip/runs")
+        CantripPaths.cache("runs")
     }
 
     /// Long-lived tabs otherwise accumulate every streamed delta and tool

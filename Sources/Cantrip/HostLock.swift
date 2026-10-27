@@ -11,7 +11,7 @@ enum HostLock {
     nonisolated(unsafe) private static var descriptor: Int32 = -1
 
     static var url: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cache/Cantrip/host.lock")
+        CantripPaths.cache("host.lock")
     }
 
     /// False when another Cantrip host still holds the lock after `wait` seconds (a quitting

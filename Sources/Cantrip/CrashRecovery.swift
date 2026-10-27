@@ -29,8 +29,7 @@ enum CrashRecovery {
     private static var currentMarkerURL: URL?
 
     private static var stateDirectory: URL {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip/recovery")
+        let url = CantripPaths.cache("recovery")
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }

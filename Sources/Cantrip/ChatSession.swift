@@ -363,7 +363,7 @@ final class ChatSession: ObservableObject {
     /// Per-session working directory: backends, ! commands, and git
     /// actions all run here. A session becomes "the agent in this repo".
     @Published var workdir: String {
-        didSet { UserDefaults.standard.set(workdir, forKey: "workdir-\(id.uuidString)") }
+        didSet { UserDefaults.standard.set(workdir, forKey: TabDefaults.workdir(id)) }
     }
     /// Private mode: nothing this session touches disk on our side — no
     /// transcript, no session log, no continuity digest, and the memory
@@ -448,10 +448,10 @@ final class ChatSession: ObservableObject {
         self.copilot = copilotBackend
         self.makeJournal = makeJournal
         self.lastRunOutcome = Self.loadLastRunOutcome(id: id)
-        self.workdir = UserDefaults.standard.string(forKey: "workdir-\(id.uuidString)")
+        self.workdir = UserDefaults.standard.string(forKey: TabDefaults.workdir(id))
             ?? AppSettings.shared.claudeWorkdir
-        self.claudeCode = ClaudeCodeBackend(persistKey: "claudeSessionID-\(id.uuidString)")
-        self.codex = CodexBackend(persistKey: "codexSessionID-\(id.uuidString)")
+        self.claudeCode = ClaudeCodeBackend(persistKey: TabDefaults.claudeSession(id))
+        self.codex = CodexBackend(persistKey: TabDefaults.codexSession(id))
         (copilotBackend as? CopilotBackend)?.tabID = id
         claudeCode.tabID = id
         codex.tabID = id
@@ -546,21 +546,8 @@ final class ChatSession: ObservableObject {
             Log.write("run-journal: could not delete \(id.uuidString.prefix(8)): \(error.localizedDescription)")
         }
         journal = nil
-        UserDefaults.standard.removeObject(forKey: "claudeSessionID-\(id.uuidString)")
-        UserDefaults.standard.removeObject(forKey: "codexSessionID-\(id.uuidString)")
-        UserDefaults.standard.removeObject(forKey: "workdir-\(id.uuidString)")
-        clearLastRunOutcome()
-        forgetCouncilSeatSessions()
-    }
-
-    /// Council seats (Claude/Codex) save their native session IDs and resume them when recreated
-    /// after a relaunch. Scan for this session's keys so no seat count or key scheme strands them.
-    private func forgetCouncilSeatSessions() {
-        for key in UserDefaults.standard.dictionaryRepresentation().keys
-        where key.hasPrefix("councilClaude-\(id.uuidString)")
-            || key.hasPrefix("councilCodex-\(id.uuidString)") {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
+        lastRunOutcome = nil
+        TabDefaults.removeAll(for: id)
     }
 
     func persistTranscript() {
@@ -981,25 +968,21 @@ final class ChatSession: ObservableObject {
         canResume = false
     }
 
-    private static func lastRunOutcomeKey(_ id: UUID) -> String {
-        "lastRunOutcome-\(id.uuidString)"
-    }
-
     private static func loadLastRunOutcome(id: UUID) -> LiveStatusRunOutcome? {
-        guard let data = UserDefaults.standard.data(forKey: lastRunOutcomeKey(id)) else { return nil }
+        guard let data = UserDefaults.standard.data(forKey: TabDefaults.lastRunOutcome(id)) else { return nil }
         return try? JSONDecoder().decode(LiveStatusRunOutcome.self, from: data)
     }
 
     private func recordLastRunOutcome(_ outcome: LiveStatusRunOutcome) {
         lastRunOutcome = outcome
         if let data = try? JSONEncoder().encode(outcome) {
-            UserDefaults.standard.set(data, forKey: Self.lastRunOutcomeKey(id))
+            UserDefaults.standard.set(data, forKey: TabDefaults.lastRunOutcome(id))
         }
     }
 
     private func clearLastRunOutcome() {
         lastRunOutcome = nil
-        UserDefaults.standard.removeObject(forKey: Self.lastRunOutcomeKey(id))
+        UserDefaults.standard.removeObject(forKey: TabDefaults.lastRunOutcome(id))
     }
 
     @discardableResult
@@ -2331,9 +2314,7 @@ final class ChatSession: ObservableObject {
         let fresh: Backend
         switch member.kind ?? .claudeCode {
         case .claudeCode:
-            // Key by seat AND model so replacing a seat never resumes a
-            // different model's scratch session.
-            let b = ClaudeCodeBackend(persistKey: "councilClaude-\(id.uuidString)-\(index)-\(member.model)")
+            let b = ClaudeCodeBackend(persistKey: TabDefaults.councilClaude(id, seat: index, model: member.model))
             b.modelOverride = member.model.isEmpty ? nil : member.model
             b.readOnly = true   // advisors deliberate; only the worker executes
             fresh = b
@@ -2349,7 +2330,7 @@ final class ChatSession: ObservableObject {
             b.readOnly = true
             fresh = b
         case .codex:
-            let b = CodexBackend(persistKey: "councilCodex-\(id.uuidString)-\(index)-\(member.model)")
+            let b = CodexBackend(persistKey: TabDefaults.councilCodex(id, seat: index, model: member.model))
             b.modelOverride = member.model.isEmpty ? nil : member.model
             b.readOnly = true
             fresh = b
@@ -3698,7 +3679,7 @@ final class ChatSession: ObservableObject {
         resetBackendConversations()
         for backend in councilInstances.values { backend.reset() }
         councilInstances = [:]
-        forgetCouncilSeatSessions()
+        TabDefaults.removeCouncilSeats(for: id)
         messages.removeAll()
         isStreaming = false
         statusText = nil
@@ -3804,7 +3785,7 @@ final class ChatSession: ObservableObject {
         resetBackendConversations()
         for backend in councilInstances.values { backend.reset() }
         councilInstances = [:]
-        forgetCouncilSeatSessions()
+        TabDefaults.removeCouncilSeats(for: id)
         autoResumeSpent = false
         restoredRun = nil
         networkRetries = 0

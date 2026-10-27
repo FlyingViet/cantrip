@@ -10,8 +10,7 @@ enum RemoteGeneratedImages {
     static let maximumImageBytes = 4 << 20
     static let maximumDimension = 4096
     static let thumbnailDimension = 960
-    static let sourceRoot = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".cache/Cantrip", isDirectory: true)
+    static let sourceRoot = CantripPaths.cache
     static let homeArtifactRoot = sourceRoot
         .appendingPathComponent("home/artifacts", isDirectory: true)
     static let storageRoot = sourceRoot.appendingPathComponent("remote-previews", isDirectory: true)
