@@ -3,7 +3,7 @@
 # Choose and configure an AI backend
 
 Use one backend you already have access to. Cantrip launches the CLI for
-Claude Code, Copilot, or Codex; **signing in to a provider's website alone does
+Claude Code, Copilot, Codex, or Google Antigravity (`agy`); **signing in to a provider's website alone does
 not sign in its CLI**.
 
 | Choice | What you need |
@@ -11,6 +11,7 @@ not sign in its CLI**.
 | Claude Code | Installed `claude` CLI and an authorized account |
 | Copilot | Installed `copilot` CLI and an account with Copilot CLI access; macOS also needs Node.js and the CLI's bundled SDK/runtime |
 | Codex | Installed `codex` CLI and an authorized account |
+| Antigravity | Installed Google Antigravity `agy` CLI and an authorized account |
 | Local Model (Mac only) | A running OpenAI-compatible server and its exact model ID |
 
 ## Install and sign in to a cloud backend
@@ -25,6 +26,7 @@ Windows:
 | Claude Code | `npm install -g @anthropic-ai/claude-code` | `claude` |
 | Copilot | `npm install -g @github/copilot` | `copilot` |
 | Codex | `npm install -g @openai/codex` | `codex` |
+| Antigravity | Install Google Antigravity (`agy` CLI) | `agy` |
 
 1. Complete that CLI's sign-in prompts.
 2. Ask it a short question to confirm your account works.

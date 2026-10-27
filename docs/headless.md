@@ -18,7 +18,7 @@ token, but only one can run at a time.
 2. Install and sign in to the agent CLI the host will use, for example
    `npm install -g @github/copilot`, then run `copilot` once and sign in.
 3. Pick the backend: `cantrip config set backend copilot` (or `claude`,
-   `codex`, `local`).
+   `codex`, `agy`, `local`).
 4. Start the host: `cantrip daemon start`. It runs now and at every login, and
    launchd restarts it after a crash. In tmux, screen or a container, use
    `cantrip daemon run` instead. Agent CLIs and shells the host starts keep

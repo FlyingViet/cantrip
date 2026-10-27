@@ -242,7 +242,7 @@ struct SlashInvocation: Equatable {
 // MARK: - Cantrip's policy for commands that would bypass it or break remotely
 
 enum BackendCommandFamily: String {
-    case copilot, copilotRemote, claudeCode, codex
+    case copilot, copilotRemote, claudeCode, codex, antigravity
 }
 
 enum BackendCommandPolicy {
@@ -275,7 +275,8 @@ enum BackendCommandPolicy {
             return (.unavailable, cwdNote, nil)
         case (.copilot, "model"), (.copilot, "models"):
             return (.cantrip, modelNote, "modelSettings")
-        case (.claudeCode, "clear"), (.claudeCode, "reset"), (.claudeCode, "new"):
+        case (.claudeCode, "clear"), (.claudeCode, "reset"), (.claudeCode, "new"),
+             (.antigravity, "clear"), (.antigravity, "reset"), (.antigravity, "new"):
             return (.cantrip, clearNote, "startFresh")
         case (.claudeCode, "color"):
             return (.unavailable, colorNote, nil)
@@ -496,6 +497,45 @@ enum BackendCommandParsers {
         scripts.map {
             BackendCommand(name: $0.name, description: oneLine($0.description), kind: .cantrip, source: "Cantrip")
         }
+    }
+
+    static func antigravity(
+        projectSkills: [(name: String, description: String)],
+        personalSkills: [(name: String, description: String)]
+    ) -> [BackendCommand] {
+        let builtins: [(name: String, description: String, hint: String?)] = [
+            ("plan", "Create a step-by-step implementation plan before execution", "what to plan"),
+            ("goal", "Run a thorough long-running task until the goal is fully achieved", "goal"),
+            ("boost", "Deep thinking, strategic planning, multiple perspectives, and rigorous verification", "task"),
+            ("grill-me", "Interactive interview to align on a plan and resolve design decisions", "topic"),
+            ("teamwork-preview", "Coordinate a team of autonomous agents working together", "project"),
+            ("browser", "Web browsing, searching, or interacting with web applications", "task"),
+            ("schedule", "Run an instruction on a recurring schedule or one-time timer", "when and what"),
+            ("compact", "Compact or summarize the conversation context", nil),
+            ("learn", "Persist a correction or setup behavior for future tasks", "lesson"),
+            ("clear", "Start a fresh conversation", nil),
+        ]
+        var commands: [BackendCommand] = []
+        var seen = Set<String>()
+        for b in builtins where seen.insert(b.name.lowercased()).inserted {
+            commands.append(BackendCommandPolicy.apply(BackendCommand(
+                name: b.name, description: b.description, kind: .builtin, source: "Antigravity",
+                inputHint: b.hint
+            ), family: .antigravity))
+        }
+        for skill in projectSkills where seen.insert(skill.name.lowercased()).inserted {
+            commands.append(BackendCommandPolicy.apply(BackendCommand(
+                name: skill.name, description: oneLine(skill.description), kind: .skill, source: "Project",
+                inputHint: "what to do"
+            ), family: .antigravity))
+        }
+        for skill in personalSkills where seen.insert(skill.name.lowercased()).inserted {
+            commands.append(BackendCommandPolicy.apply(BackendCommand(
+                name: skill.name, description: oneLine(skill.description), kind: .skill, source: "Personal",
+                inputHint: "what to do"
+            ), family: .antigravity))
+        }
+        return commands
     }
 
     static func clean(_ name: String) -> String {

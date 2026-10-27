@@ -50,6 +50,10 @@ enum PluginPanelData {
             model = settings.codexModel.isEmpty ? "CLI default" : settings.codexModel
             effort = "CLI default"
             context = "CLI default"
+        case .antigravity:
+            model = settings.agyModel.isEmpty ? "CLI default" : settings.agyModel
+            effort = settings.agyEffort.isEmpty ? "Default" : settings.agyEffort
+            context = "CLI default"
         case .localModel:
             model = settings.localModel
             effort = "Model default"

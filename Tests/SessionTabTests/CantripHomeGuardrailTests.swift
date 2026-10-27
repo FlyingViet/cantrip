@@ -11,6 +11,8 @@ extension SessionTabTests {
         try await testCantripHomeCorrection()
         try await testCantripHomeBridgePolicy()
         try await testCantripHomeClaudeHook()
+        try await testCantripHomeAntigravityHook()
+        try await testAntigravityBackendStream()
         try await testCantripHomeCodexFailsClosed()
         print("Cantrip Home guardrails: action policy, forgiving block parsing, prompt briefs and one-shot corrections passed")
     }
@@ -146,6 +148,52 @@ extension SessionTabTests {
         precondition(decide(claude).verdict == .ask && decide(claudeEdit).verdict == .deny
                      && CantripHomeActionRequest(claudeTool: "mcp__github__merge_pull_request", input: [:]).server == "github",
                      "Claude Code tool calls map onto the same policy")
+        let agyShell = CantripHomeActionRequest(
+            antigravityTool: "run_command",
+            input: ["CommandLine": "rm tasks.json", "Cwd": home + "/.cache/Cantrip/home"]
+        )
+        let agyWrite = CantripHomeActionRequest(
+            antigravityTool: "write_to_file",
+            input: ["TargetFile": home + "/.cache/Cantrip/home/tasks.json", "CodeContent": "[]"]
+        )
+        let agyReplace = CantripHomeActionRequest(
+            antigravityTool: "replace_file_content",
+            input: ["TargetFile": home + "/.cache/Cantrip/home/tasks.json", "ReplacementContent": "[]"]
+        )
+        let agyMultiReplace = CantripHomeActionRequest(
+            antigravityTool: "multi_replace_file_content",
+            input: ["TargetFile": home + "/Coding/x/main.swift",
+                    "ReplacementChunks": [["TargetContent": "let a = 1", "ReplacementContent": "let a = 2"]]]
+        )
+        let agyView = CantripHomeActionRequest(
+            antigravityTool: "view_file", input: ["AbsolutePath": home + "/Coding/x/main.swift"]
+        )
+        let agyMCP = CantripHomeActionRequest(
+            antigravityTool: "call_mcp_tool",
+            input: ["ServerName": "slack", "ToolName": "send_message"]
+        )
+        precondition(decide(agyShell).verdict == .deny
+                     && decide(agyWrite).verdict == .deny
+                     && decide(agyReplace).verdict == .deny
+                     && decide(agyMultiReplace).verdict == .allow
+                     && decide(agyView).verdict == .allow
+                     && decide(agyMCP).verdict == .ask && agyMCP.server == "slack" && agyMCP.tool == "send_message",
+                     "Antigravity tool names and parameters map onto the same policy")
+        let agyWriteActivity = ToolActivityFactory.start(
+            id: "w1", toolName: "write_to_file",
+            arguments: ["TargetFile": "/tmp/hello.swift", "CodeContent": "print(1)\n"]
+        )
+        let agyMultiActivity = ToolActivityFactory.start(
+            id: "m1", toolName: "multi_replace_file_content",
+            arguments: ["TargetFile": "/tmp/hello.swift",
+                        "ReplacementChunks": [["TargetContent": "print(1)", "ReplacementContent": "print(2)"]]]
+        )
+        precondition(agyWriteActivity.toolName == "Edit" && agyWriteActivity.fileChanges.first?.path == "/tmp/hello.swift"
+                     && agyWriteActivity.fileChanges.first?.diff.contains("+print(1)") == true
+                     && agyMultiActivity.toolName == "Edit" && agyMultiActivity.fileChanges.first?.path == "/tmp/hello.swift"
+                     && agyMultiActivity.fileChanges.first?.diff.contains("-print(1)") == true
+                     && agyMultiActivity.fileChanges.first?.diff.contains("+print(2)") == true,
+                     "ToolActivityFactory builds diffs for Antigravity file tools")
         let execute = CopilotACPBackend.homeAction(["kind": "execute", "rawInput": ["command": "git push"]])
         let acpDelete = CopilotACPBackend.homeAction(["kind": "delete", "locations": [["path": home + "/Documents/a.txt"]]])
         let acpEdit = CopilotACPBackend.homeAction(["kind": "edit", "locations": [["path": home + "/.cache/Cantrip/home/tasks.json"]]])
@@ -646,12 +694,14 @@ extension SessionTabTests {
         func mode(_ backend: BackendKind) -> CantripHomeApproval { .chosen(for: backend, settings: settings) }
         settings.allowActions = true
         settings.claudePermissionMode = "default"
-        precondition(mode(.copilot) == .automatic && mode(.claudeCode) == .automatic,
-                     "Act on my behalf makes Copilot and Claude Code approve automatically")
+        precondition(mode(.copilot) == .automatic && mode(.claudeCode) == .automatic
+                     && mode(.antigravity) == .automatic,
+                     "Act on my behalf makes Copilot, Claude Code and Antigravity approve automatically")
         precondition(mode(.localModel) == .ask && mode(.codex) == .ask && mode(.copilotRemote) == .ask,
                      "Local models and backends Cantrip can't check keep Cantrip's pauses")
         settings.allowActions = false
-        precondition(mode(.copilot) == .ask && mode(.claudeCode) == .ask, "Stricter modes still ask")
+        precondition(mode(.copilot) == .ask && mode(.claudeCode) == .ask && mode(.antigravity) == .ask,
+                     "Stricter modes still ask")
         settings.claudePermissionMode = "acceptEdits"
         precondition(mode(.claudeCode) == .fileEdits, "Claude's Allow file edits is honored")
         settings.claudePermissionMode = "bypassPermissions"
@@ -820,6 +870,358 @@ extension SessionTabTests {
                      "Claude's PreToolUse hook asks before an unattended push: \(strict.prompts)")
         precondition(strict.text == "deny,allow,continue,continue,tool:allow",
                      "The hook runs before Claude's own allow rules and leaves other tools alone: \(strict.text)")
+    }
+
+    @MainActor
+    static func testCantripHomeAntigravityHook() async throws {
+        let settings = AppSettings.shared
+        let saved = (settings.agyPath, settings.allowActions, settings.agyPermissionMode,
+                     settings.backend, settings.memoryEnabled)
+        defer {
+            (settings.agyPath, settings.allowActions, settings.agyPermissionMode,
+             settings.backend, settings.memoryEnabled) = saved
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agy-hook-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sideEffects = directory.appendingPathComponent("executed-commands.txt")
+        let script = directory.appendingPathComponent("agy-fixture")
+        try Data(#"""
+        #!/usr/bin/env python3
+        import json, os, subprocess, sys
+
+        args = sys.argv[1:]
+        forbidden = ['--mode', '--permission-mode', '--permission-prompt-tool', '--add-dir',
+                     '--mcp-config', '--verbose', '--include-partial-messages']
+        if any(f in args for f in forbidden) or '--dangerously-skip-permissions' in args:
+            sys.exit(4)
+        if '--input-format' not in args or '--output-format' not in args:
+            sys.exit(5)
+
+        hooks_path = os.path.join(os.getcwd(), '.agents', 'hooks.json')
+        with open(hooks_path, 'r', encoding='utf-8') as f:
+            hooks_cfg = json.load(f)
+        entry = hooks_cfg.get('cantrip-home-guardrail', {})
+        pre_hooks = entry.get('PreToolUse', [])
+        if not entry.get('enabled') or not pre_hooks:
+            sys.exit(6)
+        hook_cmd = pre_hooks[0]['hooks'][0]['command']
+
+        def emit(obj):
+            sys.stdout.write(json.dumps(obj) + '\n')
+            sys.stdout.flush()
+
+        def run_hook(tool_name, tool_args):
+            proc = subprocess.run(
+                hook_cmd, shell=True,
+                input=json.dumps({'toolCall': {'name': tool_name, 'args': tool_args}}),
+                text=True, capture_output=True
+            )
+            if proc.returncode != 0 or not proc.stdout.strip():
+                return {'decision': 'error'}
+            return json.loads(proc.stdout.strip())
+
+        side_effects = os.environ['AGY_TEST_SIDE_EFFECTS']
+
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            frame = json.loads(line)
+            if frame.get('event') != 'user':
+                sys.exit(7)
+            emit({'event': 'init', 'conversation_id': 'agy-home-conv', 'init': {'model': 'gemini-3.8-flash-high'}})
+            calls = [
+                ('run_command', {'CommandLine': 'sudo ls', 'Cwd': os.getcwd()}),
+                ('write_to_file', {'TargetFile': os.path.expanduser('~/.cache/Cantrip/home/tasks.json'), 'CodeContent': '[]'}),
+                ('run_command', {'CommandLine': 'git push origin main', 'Cwd': os.getcwd()}),
+                ('view_file', {'AbsolutePath': '/tmp/x'}),
+                ('run_command', {'CommandLine': 'echo allowed-cmd', 'Cwd': os.getcwd()}),
+            ]
+            decisions = []
+            for idx, (tool_name, tool_args) in enumerate(calls):
+                res = run_hook(tool_name, tool_args)
+                dec = res.get('decision', 'none')
+                decisions.append(dec)
+                if dec == 'deny':
+                    continue
+                if tool_name == 'run_command':
+                    with open(side_effects, 'a', encoding='utf-8') as sf:
+                        sf.write(tool_args['CommandLine'] + '\n')
+                emit({
+                    'event': 'step_update',
+                    'step_update': {
+                        'step_index': idx + 1, 'state': 'DONE', 'step_type': 'tool',
+                        'tool_info': {'name': tool_name, 'parameters': tool_args, 'output': 'ok'}
+                    }
+                })
+            reply = ','.join(decisions)
+            emit({
+                'event': 'step_update',
+                'step_update': {'step_index': 99, 'state': 'DONE', 'step_type': 'agent_response', 'text_delta': reply}
+            })
+            emit({
+                'event': 'result', 'conversation_id': 'agy-home-conv',
+                'result': {'status': 'SUCCESS', 'response': reply, 'usage': {'input_tokens': 10, 'output_tokens': 5}}
+            })
+        """#.utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        setenv("AGY_TEST_SIDE_EFFECTS", sideEffects.path, 1)
+        defer { unsetenv("AGY_TEST_SIDE_EFFECTS") }
+        settings.agyPath = script.path
+        settings.backend = .antigravity
+        settings.memoryEnabled = false
+
+        func probe() async throws -> (text: String, prompts: [String], executed: [String]) {
+            try? FileManager.default.removeItem(at: sideEffects)
+            let run = ChatSession(cantripHomeRun: true, makeJournal: {
+                try RunJournal(sessionID: $0, directory: CantripHomeStore.runsDirectory)
+            })
+            defer { run.cancel() }
+            run.submitCantripHomeTask(id: UUID(), title: "Antigravity probe", scheduleSummary: "Daily",
+                                      prompt: "Probe the Antigravity PreToolUse hook.")
+            var prompts: [String] = []
+            while true {
+                try await waitForJournalTest { !run.pendingInputs.isEmpty || !run.isStreaming }
+                guard let prompt = run.pendingInputs.first else { break }
+                prompts.append(prompt.title)
+                try run.respondToInput(id: prompt.id, answer: .init(decision: .approve))
+            }
+            let executedText = (try? String(contentsOf: sideEffects, encoding: .utf8)) ?? ""
+            let executed = executedText.split(separator: "\n").map(String.init)
+            return (run.messages.last { $0.role == .assistant }?.text ?? "", prompts, executed)
+        }
+
+        // Act on my behalf and Antigravity's "Allow everything": no prompts, catastrophic commands
+        // and writes to Home's state are still denied and never execute, while allowed commands run.
+        for (allowActions, permissionMode) in [(true, "default"), (false, "bypassPermissions")] {
+            settings.allowActions = allowActions
+            settings.agyPermissionMode = permissionMode
+            let automatic = try await probe()
+            precondition(automatic.prompts.isEmpty
+                         && automatic.text == "deny,deny,auto_approve,auto_approve,auto_approve"
+                         && automatic.executed == ["git push origin main", "echo allowed-cmd"],
+                         "Antigravity set to act on its own blocks denied commands and runs allowed ones (\(permissionMode)): \(automatic)")
+        }
+
+        // Safe mode prompts before the unattended git push and per-command shell execution;
+        // denied sudo ls never runs.
+        settings.allowActions = false
+        settings.agyPermissionMode = "default"
+        let strict = try await probe()
+        precondition(strict.prompts == ["Antigravity probe wants to push to a git remote", "Allow Antigravity to run run_command?"],
+                     "Antigravity's PreToolUse hook asks before an unattended push and shell command: \(strict.prompts)")
+        precondition(strict.text == "deny,deny,auto_approve,auto_approve,auto_approve"
+                     && strict.executed == ["git push origin main", "echo allowed-cmd"],
+                     "Denied run_command never runs while approved commands execute: \(strict)")
+    }
+
+    @MainActor
+    static func testAntigravityBackendStream() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agy-stream-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let stateFile = directory.appendingPathComponent("state.json")
+        let script = directory.appendingPathComponent("agy-stream-fixture")
+        try Data(#"""
+        #!/usr/bin/env python3
+        import json, os, signal, sys
+
+        args = sys.argv[1:]
+        forbidden = ['--mode', '--permission-mode', '--permission-prompt-tool', '--add-dir',
+                     '--mcp-config', '--verbose', '--include-partial-messages']
+        if any(f in args for f in forbidden):
+            sys.exit(4)
+        if '--input-format' not in args or 'stream-json' not in args:
+            sys.exit(5)
+
+        state_path = os.environ['AGY_STREAM_STATE']
+        state = {'starts': 0, 'turns': [], 'args': [], 'sigint': False}
+        if os.path.exists(state_path):
+            with open(state_path, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+        state['starts'] += 1
+        state['args'].append(args)
+        with open(state_path, 'w', encoding='utf-8') as f:
+            json.dump(state, f)
+
+        def save_state():
+            with open(state_path, 'w', encoding='utf-8') as f:
+                json.dump(state, f)
+
+        def emit(obj):
+            sys.stdout.write(json.dumps(obj) + '\n')
+            sys.stdout.flush()
+
+        def on_sigint(signum, frame):
+            state['sigint'] = True
+            save_state()
+            emit({
+                'event': 'result', 'conversation_id': 'conv-stream-1',
+                'result': {'status': 'INTERRUPTED', 'usage': {'input_tokens': 100, 'output_tokens': 40}}
+            })
+
+        signal.signal(signal.SIGINT, on_sigint)
+
+        turn = 0
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            frame = json.loads(line)
+            if frame.get('event') != 'user':
+                sys.exit(6)
+            turn += 1
+            content = frame.get('message', {}).get('content', '')
+            state['turns'].append({'turn': turn, 'pid': os.getpid(), 'cwd': os.getcwd(), 'content': content})
+            save_state()
+
+            if turn == 1:
+                emit({'event': 'init', 'conversation_id': 'conv-stream-1', 'init': {'model': 'gemini-3.1-pro-high'}})
+                emit({
+                    'event': 'step_update',
+                    'step_update': {'step_index': 1, 'state': 'ACTIVE', 'step_type': 'agent_response', 'thinking_delta': 'Planning step 1'}
+                })
+                emit({
+                    'event': 'step_update',
+                    'step_update': {
+                        'step_index': 2, 'state': 'ACTIVE', 'step_type': 'tool',
+                        'tool_info': {'name': 'run_command', 'parameters': {'CommandLine': 'echo hi'}}
+                    }
+                })
+                emit({
+                    'event': 'step_update',
+                    'step_update': {
+                        'step_index': 2, 'state': 'DONE', 'step_type': 'tool',
+                        'tool_info': {'name': 'run_command', 'parameters': {'CommandLine': 'echo hi'}, 'output': 'hi\n'}
+                    }
+                })
+                emit({
+                    'event': 'step_update',
+                    'step_update': {
+                        'step_index': 3, 'state': 'DONE', 'step_type': 'tool',
+                        'tool_info': {
+                            'name': 'write_to_file',
+                            'parameters': {'TargetFile': os.path.join(os.getcwd(), 'out.txt'), 'CodeContent': 'hello\n'},
+                            'output': 'Created'
+                        }
+                    }
+                })
+                emit({
+                    'event': 'step_update',
+                    'step_update': {
+                        'step_index': 4, 'state': 'DONE',
+                        'subagent_info': {'subagents': [{'conversation_id': 'sub-1', 'type_name': 'research', 'role': 'Explorer'}]},
+                        'tool_info': {'parameters': {'Subagents': [{'Role': 'Explorer', 'TypeName': 'research', 'Prompt': 'Check files'}]}, 'output': 'Done'}
+                    }
+                })
+                emit({
+                    'event': 'step_update',
+                    'step_update': {'step_index': 5, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'First '}
+                })
+                emit({
+                    'event': 'step_update',
+                    'step_update': {'step_index': 5, 'state': 'DONE', 'step_type': 'agent_response', 'text_delta': 'turn done.'}
+                })
+                emit({
+                    'event': 'result', 'conversation_id': 'conv-stream-1',
+                    'result': {
+                        'status': 'SUCCESS', 'response': 'First turn done.',
+                        'usage': {'input_tokens': 100, 'output_tokens': 40, 'cache_read_tokens': 10}
+                    }
+                })
+            elif turn == 2:
+                emit({
+                    'event': 'step_update',
+                    'step_update': {'step_index': 6, 'state': 'DONE', 'step_type': 'agent_response', 'text_delta': 'Second turn done.'}
+                })
+                emit({
+                    'event': 'result', 'conversation_id': 'conv-stream-1',
+                    'result': {
+                        'status': 'SUCCESS', 'response': 'Second turn done.',
+                        'usage': {'input_tokens': 250, 'output_tokens': 90, 'cache_read_tokens': 35}
+                    }
+                })
+        """#.utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        setenv("AGY_STREAM_STATE", stateFile.path, 1)
+        defer { unsetenv("AGY_STREAM_STATE") }
+
+        let settings = AppSettings.shared
+        let saved = (settings.agyPath, settings.agyModel, settings.agyEffort,
+                     settings.agyPermissionMode, settings.allowActions)
+        defer {
+            (settings.agyPath, settings.agyModel, settings.agyEffort,
+             settings.agyPermissionMode, settings.allowActions) = saved
+        }
+        settings.agyPath = script.path
+        settings.agyModel = "gemini-3.1-pro-high"
+        settings.agyEffort = "high"
+        settings.agyPermissionMode = "default"
+        settings.allowActions = false
+
+        let backend = AntigravityBackend(persistKey: "test-agy-stream")
+        backend.reset()
+        precondition(!backend.supportsMidTurnInjection && !backend.canSteerTurns,
+                     "Antigravity CLI does not support mid-turn injection")
+        let workdir = directory.appendingPathComponent("workspace")
+        try FileManager.default.createDirectory(at: workdir, withIntermediateDirectories: true)
+        let imageFile = directory.appendingPathComponent("photo.png")
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: imageFile)
+
+        // Turn 1: streams init, thinking, tool_info, subagent_info, incremental text_delta, and cumulative usage.
+        var turn1Events: [BackendEvent] = []
+        var turn1Done = false
+        let prompt1 = "Inspect [Attached image — read this file with your Read/view tool: \(imageFile.path)]"
+        backend.send(BackendRequest(prompt: prompt1, userMessage: prompt1, previousTurns: []), workdir: workdir.path) { event in
+            DispatchQueue.main.async {
+                turn1Events.append(event)
+                if case .done = event { turn1Done = true }
+            }
+        }
+        try await waitForJournalTest { turn1Done }
+
+        let turn1Text = turn1Events.compactMap { if case .textDelta(let t) = $0 { return t } else { return nil } }.joined()
+        let turn1Usages = turn1Events.compactMap { if case .usage(let u) = $0 { return u } else { return nil } }
+        let turn1Tools = turn1Events.compactMap { if case .activity(let a) = $0 { return a } else { return nil } }
+        precondition(turn1Text == "First turn done.", "Incremental text deltas assemble into the reply: \(turn1Text)")
+        precondition(turn1Usages.last?.inputTokens == 100 && turn1Usages.last?.outputTokens == 40
+                     && turn1Usages.last?.cachedInputTokens == 10,
+                     "Turn 1 reports initial token usage: \(turn1Usages)")
+        precondition(turn1Tools.contains { $0.toolName == "Shell" && $0.terminalCommand == "echo hi" && $0.state == .succeeded }
+                     && turn1Tools.contains { $0.toolName == "Edit" && $0.fileChanges.first?.path.hasSuffix("/out.txt") == true }
+                     && turn1Tools.contains { $0.subagent?.name == "Explorer" && $0.subagent?.status == .completed },
+                     "Antigravity tool_info and subagent_info map to Cantrip activities: \(turn1Tools)")
+        precondition(backend.conversationID == "conv-stream-1", "init/result conversation_id is recorded for --conversation")
+
+        // Turn 2: reuses the same persistent agy process and diffs cumulative session usage.
+        var turn2Events: [BackendEvent] = []
+        var turn2Done = false
+        backend.send(BackendRequest(prompt: "Follow up", userMessage: "Follow up", previousTurns: []), workdir: workdir.path) { event in
+            DispatchQueue.main.async {
+                turn2Events.append(event)
+                if case .done = event { turn2Done = true }
+            }
+        }
+        try await waitForJournalTest { turn2Done }
+
+        let turn2Text = turn2Events.compactMap { if case .textDelta(let t) = $0 { return t } else { return nil } }.joined()
+        let turn2Usages = turn2Events.compactMap { if case .usage(let u) = $0 { return u } else { return nil } }
+        precondition(turn2Text == "Second turn done.", "Second turn streams on the same session: \(turn2Text)")
+        precondition(turn2Usages.last?.inputTokens == 150 && turn2Usages.last?.outputTokens == 50
+                     && turn2Usages.last?.cachedInputTokens == 25,
+                     "Cumulative usage is diffed per turn (250-100=150, 90-40=50, 35-10=25): \(turn2Usages)")
+
+        let stateData = try Data(contentsOf: stateFile)
+        let state = try JSONSerialization.jsonObject(with: stateData) as! [String: Any]
+        let turns = state["turns"] as! [[String: Any]]
+        precondition(state["starts"] as? Int == 1 && turns.count == 2
+                     && turns[0]["pid"] as? Int == turns[1]["pid"] as? Int,
+                     "Both turns run over a single persistent agy process: \(state)")
+        let firstContent = turns[0]["content"] as? String ?? ""
+        precondition(!firstContent.contains(imageFile.path) && firstContent.contains("photo.png"),
+                     "Attached images are staged into the session output folder: \(firstContent)")
+        backend.cancel()
     }
 
     @MainActor
