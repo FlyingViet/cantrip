@@ -97,7 +97,7 @@ extension SessionTabTests {
 
         let sdkURL = "data:text/javascript;base64,"
             + Data(backgroundWatcherFakeSDK.utf8).base64EncodedString()
-        let discovery = "function resolveCopilotRuntime(){return {sdk:'\(sdkURL)',runtime:'fixture',sessionRuntime:'fixture'}}"
+        let discovery = "function resolveCopilotRuntime(){return {sdk:'\(sdkURL)',runtime:'fixture'}}"
         let script = CopilotSessionBridge.script.replacingOccurrences(
             of: CopilotRuntime.discoveryScript, with: discovery
         )
@@ -212,7 +212,7 @@ extension SessionTabTests {
         settings.shareCalendar = false
         settings.fileRAGEnabled = false
         let sdkURL = "data:text/javascript;base64," + Data(runtimeWakeFakeSDK.utf8).base64EncodedString()
-        let discovery = "function resolveCopilotRuntime(){return {sdk:'\(sdkURL)',runtime:'fixture',sessionRuntime:'fixture'}}"
+        let discovery = "function resolveCopilotRuntime(){return {sdk:'\(sdkURL)',runtime:'fixture'}}"
         let script = CopilotSessionBridge.script.replacingOccurrences(of: CopilotRuntime.discoveryScript, with: discovery)
         let chat = ChatSession(id: ChatSession.cantripHomeID, copilotBackend: CopilotBackend(bridgeScript: script),
                                makeJournal: { _ in try RunJournal(sessionID: UUID()) })
