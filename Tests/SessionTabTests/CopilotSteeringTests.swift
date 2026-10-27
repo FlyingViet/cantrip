@@ -277,8 +277,8 @@ extension SessionTabTests {
         export const RuntimeConnection = { forStdio: options => options };
         export class CopilotClient {
           constructor(options) {
-            if (options.connection.path !== 'session-fixture')
-              throw Error('Sessions must run the signed CLI runtime');
+            if (options.connection.path !== 'fixture')
+              throw Error('Sessions must run the runtime discovery chose');
           }
           async start() {}
           async forceStop() {}
@@ -317,7 +317,7 @@ extension SessionTabTests {
         }
         """#
         let sdkURL = "data:text/javascript;base64," + Data(fakeSDK.utf8).base64EncodedString()
-        let discovery = "function resolveCopilotRuntime() { return {sdk: '\(sdkURL)', runtime: 'fixture', sessionRuntime: 'session-fixture'}; }"
+        let discovery = "function resolveCopilotRuntime() { return {sdk: '\(sdkURL)', runtime: 'fixture'}; }"
         let script = CopilotSessionBridge.script.replacingOccurrences(
             of: CopilotRuntime.discoveryScript, with: discovery
         )

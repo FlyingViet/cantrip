@@ -35,8 +35,67 @@ extension SessionTabTests {
         return result.models!
     }
 
+    /// Every Copilot process runs the signed CLI binary, whose path survives Copilot's
+    /// self-updates; the per-version prebuilt runtime is only a fallback.
+    static func testCopilotRuntimeDiscovery() throws {
+        let fm = FileManager.default
+        #if arch(arm64)
+        let arch = "arm64"
+        #else
+        let arch = "x64"
+        #endif
+        let base = fm.temporaryDirectory.appendingPathComponent("copilot-discovery-\(UUID())")
+        defer { try? fm.removeItem(at: base) }
+        let root = base.appendingPathComponent("lib/node_modules/@github/copilot")
+        let prebuilt = root.appendingPathComponent("prebuilds/darwin-\(arch)/copilot-runtime")
+        let cli = root.appendingPathComponent("node_modules/@github/copilot-darwin-\(arch)/copilot")
+        let command = base.appendingPathComponent("bin/copilot")
+        for directory in [prebuilt, cli, command, root.appendingPathComponent("copilot-sdk/index.js")] {
+            try fm.createDirectory(at: directory.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        try Data("export {};\n".utf8).write(to: root.appendingPathComponent("copilot-sdk/index.js"))
+        try Data("versioned runtime".utf8).write(to: prebuilt)
+        try Data([0xCF, 0xFA, 0xED, 0xFE, 0, 0, 0, 0]).write(to: cli)
+        let loader = root.appendingPathComponent("npm-loader.js")
+        try Data("#!/bin/sh\necho 'GitHub Copilot CLI 9.9.9'\n".utf8).write(to: loader)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: loader.path)
+        try fm.createSymbolicLink(at: command, withDestinationURL: loader)
+
+        func real(_ url: URL) -> String {
+            guard let resolved = realpath(url.path, nil) else { return url.path }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+        let cliPath = real(cli), prebuiltPath = real(prebuilt)
+        func resolve() throws -> [String: String] {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["node", "--input-type=module", "-e", CopilotRuntime.discoveryScript
+                + "\nconsole.log(JSON.stringify(resolveCopilotRuntime(process.env.DISCOVERY_COMMAND)));"]
+            var environment = ProcessInfo.processInfo.environment
+            environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin")
+            environment["DISCOVERY_COMMAND"] = command.path
+            process.environment = environment
+            let output = Pipe()
+            process.standardOutput = output
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            precondition(process.terminationStatus == 0, "discovery failed")
+            return try JSONDecoder().decode([String: String].self, from: data)
+        }
+        let installed = try resolve()
+        precondition(installed["runtime"] == cliPath && installed.count == 2,
+                     "Copilot runs from the signed CLI binary, not the per-version runtime: \(installed)")
+        try fm.removeItem(at: cli)
+        let fallback = try resolve()
+        precondition(fallback["runtime"] == prebuiltPath,
+                     "Without a signed CLI binary, the matching prebuilt runtime is used: \(fallback)")
+    }
+
     @MainActor
     static func testCopilotModels() async throws {
+        try testCopilotRuntimeDiscovery()
         let catalog = try projectModels([
             ["id": "auto", "capabilities": [:], "unrelated": "must-not-leave-process"],
             [

@@ -25,7 +25,7 @@ enum BackendCommandDiscovery {
       const paths = resolveCopilotRuntime(config.command);
       const sdk = await import(paths.sdk);
       client = new sdk.CopilotClient({
-        connection: sdk.RuntimeConnection.forStdio({ path: paths.sessionRuntime }),
+        connection: sdk.RuntimeConnection.forStdio({ path: paths.runtime }),
         workingDirectory: config.workdir, logLevel: 'none', useLoggedInUser: true
       });
       await client.start();
