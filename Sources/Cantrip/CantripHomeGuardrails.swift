@@ -62,6 +62,8 @@ struct CantripHomeActionRequest: Equatable {
     var tool: String?
     var readOnly = false
     var writesFiles = false
+    /// Text typed into a task that's already running, so Cantrip can't tell which program reads it.
+    var taskInput = false
 
     static func shell(_ command: String) -> Self { .init(kind: .shell, command: command) }
     static func write(_ path: String) -> Self { .init(kind: .write, paths: [path]) }
@@ -139,6 +141,10 @@ struct CantripHomeActionRequest: Equatable {
         case "call_mcp_tool":
             self.init(kind: .mcp, server: input["ServerName"] as? String,
                       tool: input["ToolName"] as? String)
+        case "manage_task" where (input["Action"] as? String)?.lowercased() == "send_input":
+            // Input for a background task (a shell started with RunPersistent, say) runs like a command.
+            self.init(kind: .shell, command: input["Input"] as? String ?? "")
+            taskInput = true
         case "invoke_subagent":
             self.init(kind: .other, tool: name)
         case let tool where tool.hasPrefix("mcp__") || tool.hasPrefix("mcp_"):
@@ -235,6 +241,12 @@ enum CantripHomeActionPolicy {
                 return environment.running(in: resolved)
             } ?? environment
             findings = shellFindings(request.command, environment: shellEnvironment, depth: 0)
+            if request.taskInput {
+                findings.append(ask(
+                    "send input to a running task", "Cantrip can't tell which program reads this input.",
+                    scope: "task-input", unverifiable: true
+                ))
+            }
             if request.writesFiles {
                 for path in request.paths {
                     if let resolved = resolve(path, shellEnvironment), isProtected(resolved, shellEnvironment) {
