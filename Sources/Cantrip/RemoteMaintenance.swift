@@ -83,8 +83,8 @@ final class RemoteMaintenance {
         self.run = run
         self.restart = restart
         do {
-            if FileManager.default.fileExists(atPath: stateFile.path) {
-                state = try JSONDecoder().decode(State.self, from: Data(contentsOf: stateFile))
+            if let saved = try PrivateFile.read(State.self, from: stateFile) {
+                state = saved
                 if state.job?.isRunning == true {
                     let restarted = state.job?.phase == "restarting" && state.expectedBuild == runningBuild
                     state.job?.phase = restarted ? "succeeded" : "failed"
@@ -181,10 +181,7 @@ final class RemoteMaintenance {
     }
 
     private func save() throws {
-        try FileManager.default.createDirectory(at: stateFile.deletingLastPathComponent(),
-            withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try JSONEncoder().encode(state).write(to: stateFile, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateFile.path)
+        try PrivateFile.write(state, to: stateFile)
     }
 
     private func phase(_ phase: String, _ message: String, finished: Bool = false) throws {

@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 struct LiveStatusInput: Equatable {
@@ -377,8 +376,8 @@ actor RemoteLiveStatus {
     private var sleeper: Task<Void, Error>?
     private var generation = 0
     private var lastDeliveryError: String?
-    private var cachedAuthorization: (keyID: String, keyDigest: Data, value: String, date: Date)?
     private var currentSnapshot: LiveStatusSnapshot?
+    private let tokens: APNsProviderToken
 
     init(file: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cache/Cantrip/notifications/live-status.json"),
@@ -386,19 +385,15 @@ actor RemoteLiveStatus {
          now: @escaping () -> Date = Date.init,
          sleep: @escaping (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
          configuration: @escaping () throws -> RemotePushConfiguration = RemotePushConfiguration.load,
-         send: @escaping (URLRequest) async throws -> (Data, HTTPURLResponse) = { request in
-             let (data, response) = try await URLSession.shared.data(for: request)
-             guard let response = response as? HTTPURLResponse else {
-                 throw RemotePushError(status: 502, message: "Apple push returned an invalid response.")
-             }
-             return (data, response)
-         }) {
+         send: @escaping (URLRequest) async throws -> (Data, HTTPURLResponse) = APNs.send,
+         tokens: APNsProviderToken = .shared) {
         self.file = file
         self.intervals = intervals
         self.now = now
         self.sleep = sleep
         self.configuration = configuration
         self.send = send
+        self.tokens = tokens
     }
 
     func activate(fingerprint: String?) {
@@ -654,22 +649,14 @@ actor RemoteLiveStatus {
 
     private func load() throws -> State {
         if let state { return state }
-        if !FileManager.default.fileExists(atPath: file.path) {
-            state = State()
-        } else {
-            do { state = try JSONDecoder().decode(State.self, from: Data(contentsOf: file)) }
-            catch { throw RemotePushError(status: 503, message: "Could not read the Mac's saved live status subscriptions.") }
-        }
+        do { state = try PrivateFile.read(State.self, from: file) ?? State() }
+        catch { throw RemotePushError(status: 503, message: "Could not read the Mac's saved live status subscriptions.") }
         return state!
     }
 
     private func save(_ next: State) throws {
         do {
-            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                                    attributes: [.posixPermissions: 0o700])
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.deletingLastPathComponent().path)
-            try JSONEncoder().encode(next).write(to: file, options: [.atomic])
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            try PrivateFile.write(next, to: file)
             state = next
         } catch {
             throw RemotePushError(status: 503, message: "Could not save live status subscriptions on the Mac. Check disk space and permissions.")
@@ -727,7 +714,7 @@ actor RemoteLiveStatus {
                 var invalidToken = false
                 do {
                     let config = try configuration()
-                    let authorization = try authorization(for: config, now: current)
+                    let authorization = try tokens.value(for: config, now: current)
                     let request = try Self.request(delivery: delivery, subscriber: subscriber,
                                                    authorization: authorization, now: current)
                     let (data, response) = try await send(request)
@@ -739,7 +726,7 @@ actor RemoteLiveStatus {
                         let reason = (try? JSONDecoder().decode(Failure.self, from: data))?.reason ?? "HTTP \(response.statusCode)"
                         invalidToken = response.statusCode == 410 || ["BadDeviceToken", "Unregistered", "DeviceTokenNotForTopic"].contains(reason)
                         retry = response.statusCode == 429 || response.statusCode >= 500 || reason == "ExpiredProviderToken"
-                        if reason == "ExpiredProviderToken" { cachedAuthorization = nil }
+                        if reason == "ExpiredProviderToken" { tokens.expire(authorization) }
                         report("Apple push rejected live status (\(response.statusCode), \(String(reason.prefix(100)))).")
                     }
                 } catch is CancellationError { return }
@@ -771,17 +758,6 @@ actor RemoteLiveStatus {
                 return
             }
         }
-    }
-
-    private func authorization(for config: RemotePushConfiguration, now: Date) throws -> String {
-        let digest = Data(SHA256.hash(data: config.key.rawRepresentation))
-        if let cached = cachedAuthorization, cached.keyID == config.keyID, cached.keyDigest == digest,
-           now.timeIntervalSince(cached.date) < 3000 {
-            return cached.value
-        }
-        let value = try config.authorization(now: now)
-        cachedAuthorization = (config.keyID, digest, value, now)
-        return value
     }
 
     private func removeUndeliverable(_ state: inout State) {

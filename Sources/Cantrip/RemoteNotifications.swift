@@ -130,28 +130,24 @@ actor RemoteNotifications {
     private let file: URL
     private let configuration: () throws -> RemotePushConfiguration
     private let send: (URLRequest) async throws -> (Data, HTTPURLResponse)
+    private let tokens: APNsProviderToken
     private var state: State?
     private var fingerprint: String?
     private var worker: Task<Void, Never>?
     private var sleeper: Task<Void, Error>?
     private var generation = 0
     private var lastDeliveryError: String?
-    private var cachedAuthorization: (keyID: String, keyDigest: Data, value: String, date: Date)?
     private var pendingInputs: Set<UUID> = []
 
     init(file: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cache/Cantrip/notifications/state.json"),
          configuration: @escaping () throws -> RemotePushConfiguration = RemotePushConfiguration.load,
-         send: @escaping (URLRequest) async throws -> (Data, HTTPURLResponse) = { request in
-             let (data, response) = try await URLSession.shared.data(for: request)
-             guard let response = response as? HTTPURLResponse else {
-                 throw RemotePushError(status: 502, message: "Apple push returned an invalid response.")
-             }
-             return (data, response)
-         }) {
+         send: @escaping (URLRequest) async throws -> (Data, HTTPURLResponse) = APNs.send,
+         tokens: APNsProviderToken = .shared) {
         self.file = file
         self.configuration = configuration
         self.send = send
+        self.tokens = tokens
     }
 
     func activate(fingerprint: String?) {
@@ -258,22 +254,14 @@ actor RemoteNotifications {
 
     private func load() throws -> State {
         if let state { return state }
-        if !FileManager.default.fileExists(atPath: file.path) {
-            state = State()
-        } else {
-            do { state = try JSONDecoder().decode(State.self, from: Data(contentsOf: file)) }
-            catch { throw RemotePushError(status: 503, message: "Could not read the Mac's saved notification registrations.") }
-        }
+        do { state = try PrivateFile.read(State.self, from: file) ?? State() }
+        catch { throw RemotePushError(status: 503, message: "Could not read the Mac's saved notification registrations.") }
         return state!
     }
 
     private func save(_ next: State) throws {
         do {
-            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                                    attributes: [.posixPermissions: 0o700])
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.deletingLastPathComponent().path)
-            try JSONEncoder().encode(next).write(to: file, options: [.atomic])
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            try PrivateFile.write(next, to: file)
             state = next
         } catch { throw RemotePushError(status: 503, message: "Could not save notifications on the Mac. Check disk space and permissions.") }
     }
@@ -325,15 +313,7 @@ actor RemoteNotifications {
                 var invalidToken = false
                 do {
                     let config = try configuration()
-                    let digest = Data(SHA256.hash(data: config.key.rawRepresentation))
-                    let authorization: String
-                    if let cached = cachedAuthorization, cached.keyID == config.keyID, cached.keyDigest == digest,
-                       now.timeIntervalSince(cached.date) < 3000 {
-                        authorization = cached.value
-                    } else {
-                        authorization = try config.authorization(now: now)
-                        cachedAuthorization = (config.keyID, digest, authorization, now)
-                    }
+                    let authorization = try tokens.value(for: config, now: now)
                     let request = try Self.request(deliveryID: delivery.id, completion: delivery.completion,
                                                    registration: subscriber.registration, fingerprint: fingerprint,
                                                    authorization: authorization)
@@ -345,7 +325,7 @@ actor RemoteNotifications {
                         let reason = (try? JSONDecoder().decode(Failure.self, from: data))?.reason ?? "HTTP \(response.statusCode)"
                         invalidToken = response.statusCode == 410 || ["BadDeviceToken", "DeviceTokenNotForTopic"].contains(reason)
                         retry = response.statusCode == 429 || response.statusCode >= 500 || reason == "ExpiredProviderToken"
-                        if reason == "ExpiredProviderToken" { cachedAuthorization = nil }
+                        if reason == "ExpiredProviderToken" { tokens.expire(authorization) }
                         report("Apple push rejected an alert (\(response.statusCode), \(String(reason.prefix(100)))).")
                     }
                 } catch is CancellationError { return }
