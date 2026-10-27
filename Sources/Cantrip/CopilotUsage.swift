@@ -100,8 +100,5 @@ func copilotAmount(_ amount: Double, compact: Bool = false, locale: Locale = .cu
 }
 
 func copilotDate(_ value: String?) -> Date? {
-    guard let value else { return nil }
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    value.flatMap { ISODate.date(from: $0) }
 }

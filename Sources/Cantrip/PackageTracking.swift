@@ -94,7 +94,7 @@ enum PackageTracking {
                 "status": status.rawValue,
                 "statusLabel": status.label,
                 "group": group,
-                "updatedAt": ISO8601DateFormatter().string(from: updatedAt)
+                "updatedAt": ISODate.string(from: updatedAt)
             ]
             if let trackingNumber {
                 result["trackingNumber"] = trackingNumber

@@ -95,9 +95,7 @@ struct CantripHomeSchedule: Codable, Equatable {
         summary = try container.decode(String.self, forKey: .summary)
         timeZone = try container.decode(String.self, forKey: .timeZone)
         if let text = try? container.decodeIfPresent(String.self, forKey: .startAt) {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            guard let date = formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text) else {
+            guard let date = ISODate.date(from: text) else {
                 throw CantripHomeError(400, "Start times must be ISO-8601 with a time zone offset.")
             }
             startAt = date
@@ -762,7 +760,7 @@ private extension CantripHomeTaskWorkspace {
                     throw CantripHomeError(400, "\(field.label) must use YYYY-MM-DD.")
                 }
             case .dateTime:
-                guard ISO8601DateFormatter().date(from: value) != nil else {
+                guard ISODate.date(from: value, allowFractionalSeconds: false) != nil else {
                     throw CantripHomeError(400, "\(field.label) must be an ISO-8601 date and time.")
                 }
             case .choice:

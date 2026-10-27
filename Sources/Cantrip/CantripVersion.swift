@@ -123,8 +123,6 @@ struct CantripVersionReport: Equatable {
     }
 
     static func parseDate(_ text: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        ISODate.date(from: text.trimmingCharacters(in: .whitespacesAndNewlines), allowFractionalSeconds: false)
     }
 }

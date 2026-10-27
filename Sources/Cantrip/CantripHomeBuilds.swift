@@ -208,10 +208,7 @@ enum CantripHomeOTABuilds {
     }
 
     private static func date(_ text: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        if let date = formatter.date(from: text) { return date }
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: text)
+        ISODate.date(from: text)
     }
 
     /// RFC 3986 unreserved characters: the publisher percent-encodes everything else.

@@ -173,7 +173,7 @@ struct GitHubActionsAPI {
         result.runnerStatus = runner.status
         result.busy = runner.busy
         result.jobs = jobs.sorted { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
-        result.checkedAt = ISO8601DateFormatter().string(from: Date())
+        result.checkedAt = ISODate.string(from: Date())
         return result
     }
 

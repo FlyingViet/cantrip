@@ -73,11 +73,7 @@ struct CantripHomeIncidentFacts: Equatable {
                     .map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(limit)) }
                     .flatMap { $0.isEmpty ? nil : $0 }
             }
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            let seen = text("lastSeenAt").flatMap {
-                formatter.date(from: $0) ?? ISO8601DateFormatter().date(from: $0)
-            }
+            let seen = text("lastSeenAt").flatMap { ISODate.date(from: $0) }
             return Self(
                 status: text("status", 40)?.lowercased(),
                 repository: text("repository", 400),

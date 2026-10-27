@@ -46,7 +46,7 @@ final class UsageTracker: ObservableObject {
                 switch result {
                 case .success(let account):
                     self.copilotUsage.account = account
-                    self.copilotUsage.checkedAt = ISO8601DateFormatter().string(from: self.quotaClock())
+                    self.copilotUsage.checkedAt = ISODate.string(from: self.quotaClock())
                     self.copilotUsage.error = nil
                 case .failure(let error):
                     self.copilotUsage.error = ((error as? CopilotQuotaError) ?? .response).localizedDescription
@@ -129,9 +129,7 @@ final class UsageTracker: ObservableObject {
     // MARK: - Internals
 
     private static func dayKey(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: date)
+        ISODate.localDay(date)
     }
 
     private func mutateToday(_ backend: BackendKind,

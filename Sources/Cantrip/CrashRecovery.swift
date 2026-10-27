@@ -290,7 +290,7 @@ enum CrashRecovery {
     private static func appendLog(_ message: String) {
         let directory = logURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = ISODate.string(from: Date())
         guard let data = "[\(timestamp)] \(message)\n".data(using: .utf8) else { return }
         if let handle = try? FileHandle(forWritingTo: logURL) {
             do {

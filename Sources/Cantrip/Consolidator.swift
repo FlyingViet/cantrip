@@ -60,7 +60,7 @@ enum Consolidator {
                 } else {
                     let error = outcome.error ?? "Memory consolidation failed."
                     state.recordFailure(error, at: Date())
-                    let retry = state.nextRetry.map { ISO8601DateFormatter().string(from: $0) } ?? "-"
+                    let retry = state.nextRetry.map { ISODate.string(from: $0) } ?? "-"
                     Log.write("consolidator: failed (\(state.failures) in a row, next try \(retry)) — \(error)")
                 }
                 state.save(to: defaults)

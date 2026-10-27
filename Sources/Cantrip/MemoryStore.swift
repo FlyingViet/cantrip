@@ -115,15 +115,22 @@ final class MemoryStore {
         return block
     }
 
+    private static let clock: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
+
     /// Session layer: append each completed exchange to a daily log the
     /// agent can grep (poor man's full-text session search).
     func logExchange(user: String, assistant: String, backend: String) {
         try? FileManager.default.createDirectory(at: sessionsURL,
                                                  withIntermediateDirectories: true)
-        let day = DateFormatter(); day.dateFormat = "yyyy-MM-dd"
-        let time = DateFormatter(); time.dateFormat = "HH:mm"
-        let file = sessionsURL.appendingPathComponent("\(day.string(from: Date())).md")
-        let entry = "\n## \(time.string(from: Date())) · \(backend)\n**User:** \(user)\n\n**Assistant:** \(assistant.prefix(3000))\n"
+        let now = Date()
+        let file = sessionsURL.appendingPathComponent("\(ISODate.localDay(now)).md")
+        let entry = "\n## \(Self.clock.string(from: now)) · \(backend)\n**User:** \(user)\n\n**Assistant:** \(assistant.prefix(3000))\n"
         guard let data = entry.data(using: .utf8) else { return }
         if let handle = try? FileHandle(forWritingTo: file) {
             handle.seekToEndOfFile()
