@@ -21,8 +21,7 @@ final class ScreenCapture {
     var lastCapturePath: String? { lastCaptures.first?.path }
 
     private let dir: URL = {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip")
+        let url = CantripPaths.cache
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()

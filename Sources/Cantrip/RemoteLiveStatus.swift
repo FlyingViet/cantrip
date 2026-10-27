@@ -379,8 +379,7 @@ actor RemoteLiveStatus {
     private var currentSnapshot: LiveStatusSnapshot?
     private let tokens: APNsProviderToken
 
-    init(file: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip/notifications/live-status.json"),
+    init(file: URL = CantripPaths.cache("notifications/live-status.json"),
          intervals: RemoteLiveStatusIntervals = RemoteLiveStatusIntervals(),
          now: @escaping () -> Date = Date.init,
          sleep: @escaping (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },

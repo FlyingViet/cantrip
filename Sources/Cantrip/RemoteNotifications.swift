@@ -139,8 +139,7 @@ actor RemoteNotifications {
     private var lastDeliveryError: String?
     private var pendingInputs: Set<UUID> = []
 
-    init(file: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip/notifications/state.json"),
+    init(file: URL = CantripPaths.cache("notifications/state.json"),
          configuration: @escaping () throws -> RemotePushConfiguration = RemotePushConfiguration.load,
          send: @escaping (URLRequest) async throws -> (Data, HTTPURLResponse) = APNs.send,
          tokens: APNsProviderToken = .shared) {

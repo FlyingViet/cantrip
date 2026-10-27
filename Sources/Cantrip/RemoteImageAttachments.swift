@@ -20,8 +20,7 @@ enum RemoteImageAttachments {
     static let maximumCount = 4
     static let maximumImageBytes = 1 << 20
     static let maximumRequestBytes = 7 << 20
-    static let storageRoot = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".cache/Cantrip/remote-attachments", isDirectory: true)
+    static let storageRoot = CantripPaths.cache("remote-attachments", isDirectory: true)
 
     struct Presentation {
         let text: String
