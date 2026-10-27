@@ -257,7 +257,7 @@ enum CopilotSessionBridge {
         throw new Error('Update Copilot CLI to a version with native session steering.');
       }
       client = new sdk.CopilotClient({
-        connection: sdk.RuntimeConnection.forStdio({ path: paths.sessionRuntime }),
+        connection: sdk.RuntimeConnection.forStdio({ path: paths.runtime }),
         workingDirectory: config.workdir, logLevel: 'none', useLoggedInUser: true
       });
       await client.start();

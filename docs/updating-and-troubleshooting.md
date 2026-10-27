@@ -242,6 +242,29 @@ If Copilot still can't start after the automatic restart, check that `copilot`
 runs and is signed in on the Mac. `~/Library/Logs/Cantrip.log` records each
 start (`copilot: prompt accepted in …`) and runtime loss (`copilot: runtime lost …`).
 
+## Keychain asks again and again while Copilot runs
+
+Read the dialog's first line before answering:
+
+- **"… wants to use the "login" keychain"** asks for your password because
+  the login keychain is locked. Every scheduled job and Copilot tab that
+  touches it asks again until it's unlocked. In Keychain Access, choose
+  **Edit > Change Settings for Keychain "login"** and turn off **Lock after …
+  minutes of inactivity** and **Lock when sleeping** if your organization
+  allows it. Check from Terminal with
+  `security show-keychain-info ~/Library/Keychains/login.keychain-db`.
+- **"copilot wants to use your confidential information stored in
+  "copilot-cli"/"copilot-mcp-oauth" …"** is an access prompt. Click
+  **Always Allow**. Cantrip runs every Copilot process (tabs, the model
+  list, usage and slash commands) from the Copilot CLI's signed binary, which
+  keeps its path when Copilot updates itself.
+
+Copilot CLI saves a refreshed MCP OAuth token (for example a `/mcp auth`
+server) as a new `copilot-mcp-oauth` item for each session and doesn't remove
+old ones, so these items pile up over time. They don't cause dialogs. To clear
+old ones, delete `copilot-mcp-oauth` items you haven't used in days; keep the
+`copilot-cli` items, which hold your GitHub sign-in.
+
 ## Remote will not connect
 
 Work through these in order:

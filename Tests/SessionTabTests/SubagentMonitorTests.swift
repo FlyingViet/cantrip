@@ -116,7 +116,7 @@ extension SessionTabTests {
         settings.fileRAGEnabled = false
 
         let sdkURL = "data:text/javascript;base64," + Data(subagentFakeSDK.utf8).base64EncodedString()
-        let discovery = "function resolveCopilotRuntime() { return {sdk: '\(sdkURL)', runtime: 'fixture', sessionRuntime: 'fixture'}; }"
+        let discovery = "function resolveCopilotRuntime() { return {sdk: '\(sdkURL)', runtime: 'fixture'}; }"
         let backend = CopilotBackend(bridgeScript: CopilotSessionBridge.script.replacingOccurrences(
             of: CopilotRuntime.discoveryScript, with: discovery))
         let chat = ChatSession(copilotBackend: backend)

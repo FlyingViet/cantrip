@@ -36,15 +36,16 @@ enum CopilotRuntime {
       const matched = roots.find(directory => existsSync(join(directory, 'copilot-sdk/index.js'))
         && existsSync(join(directory, 'prebuilds', `darwin-${process.arch}`, 'copilot-runtime')));
       if (!matched) throw new Error('Update Copilot CLI: its matching SDK/runtime is unavailable.');
-      const runtime = join(matched, 'prebuilds', `darwin-${process.arch}`, 'copilot-runtime');
-      // `/mcp auth` saves MCP OAuth tokens in Keychain items readable only by the
-      // signed CLI binary, so chat sessions run it (npm or native install) to reuse them.
+      // Every Copilot process Cantrip starts runs the signed CLI binary (npm or native
+      // install), whose path survives Copilot's self-updates. The per-version prebuilt
+      // runtime moves with each update, so Keychain items it saves (sign-in, MCP OAuth)
+      // belong to a path that's gone after the next one. It's only a fallback.
       const cli = [realpathSync(command),
         join(root, 'node_modules', '@github', `copilot-darwin-${process.arch}`, 'copilot')]
         .find(isMachO);
       return {
         sdk: pathToFileURL(join(matched, 'copilot-sdk/index.js')).href,
-        runtime, sessionRuntime: cli ?? runtime
+        runtime: cli ?? join(matched, 'prebuilds', `darwin-${process.arch}`, 'copilot-runtime')
       };
     }
     """#
