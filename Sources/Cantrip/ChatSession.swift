@@ -400,6 +400,7 @@ final class ChatSession: ObservableObject {
     private let copilot: Backend
     private let copilotRemote = CopilotACPBackend()
     private let codex: CodexBackend
+    private let antigravity: AntigravityBackend
     private let localModel = OpenAICompatibleBackend()
     private let privateLocalModel = PrivateLocalBackend()
     private let deviceLogin = RemoteDeviceLogin()
@@ -436,6 +437,7 @@ final class ChatSession: ObservableObject {
         case .copilot: return copilot
         case .copilotRemote: return copilotRemote
         case .codex: return codex
+        case .antigravity: return antigravity
         case .localModel: return localModel
         }
     }
@@ -452,6 +454,7 @@ final class ChatSession: ObservableObject {
             ?? AppSettings.shared.claudeWorkdir
         self.claudeCode = ClaudeCodeBackend(persistKey: TabDefaults.claudeSession(id))
         self.codex = CodexBackend(persistKey: TabDefaults.codexSession(id))
+        self.antigravity = AntigravityBackend(persistKey: TabDefaults.antigravitySession(id))
         (copilotBackend as? CopilotBackend)?.tabID = id
         claudeCode.tabID = id
         codex.tabID = id
@@ -473,7 +476,7 @@ final class ChatSession: ObservableObject {
             // A child tab keeps Cantrip's blocked list too (it must not quit Cantrip, for one).
             : ChildTabStore.shared.isActiveChild(id) ? .attended : nil
         let guarded: [CantripHomeGuardedBackend?] = [
-            copilotBackend as? CantripHomeGuardedBackend, copilotRemote, claudeCode, localModel
+            copilotBackend as? CantripHomeGuardedBackend, copilotRemote, claudeCode, antigravity, localModel
         ]
         for backend in guarded { backend?.guardrail = guardrail }
         // Remember which agent files folders this session used (Home runs hand them to the log).
@@ -1023,7 +1026,7 @@ final class ChatSession: ObservableObject {
     /// Runs this tab's tools under Cantrip's blocked list and the child-tab resource rules.
     func configureAsChildTab(label: String, policy: @escaping CopilotBackend.ChildPolicy) {
         let guarded: [CantripHomeGuardedBackend?] = [
-            copilot as? CantripHomeGuardedBackend, copilotRemote, claudeCode, localModel
+            copilot as? CantripHomeGuardedBackend, copilotRemote, claudeCode, antigravity, localModel
         ]
         for backend in guarded {
             backend?.guardrail = .attended
@@ -1034,7 +1037,7 @@ final class ChatSession: ObservableObject {
 
     func clearChildTabPolicy() {
         let guarded: [CantripHomeGuardedBackend?] = [
-            copilot as? CantripHomeGuardedBackend, copilotRemote, claudeCode, localModel
+            copilot as? CantripHomeGuardedBackend, copilotRemote, claudeCode, antigravity, localModel
         ]
         for backend in guarded { backend?.guardrail = nil }
         (copilot as? CopilotBackend)?.childPolicy = nil
@@ -1471,7 +1474,7 @@ final class ChatSession: ObservableObject {
         case .localModel:
             return .local(baseURL: settings.localBaseURL, model: settings.localModel,
                           apiKey: settings.localAPIKey)
-        case .codex, .copilotRemote:
+        case .codex, .copilotRemote, .antigravity:
             return .unavailable("this backend does not expose isolated tool-free routing; use a manual override.")
         }
     }
@@ -2334,6 +2337,11 @@ final class ChatSession: ObservableObject {
             b.modelOverride = member.model.isEmpty ? nil : member.model
             b.readOnly = true
             fresh = b
+        case .antigravity:
+            fresh = AntigravityBackend(
+                readOnly: true,
+                modelOverride: member.model.isEmpty ? nil : member.model
+            )
         case .localModel:
             let b = OpenAICompatibleBackend()
             b.modelOverride = member.model.isEmpty ? nil : member.model
@@ -3283,7 +3291,7 @@ final class ChatSession: ObservableObject {
     private var backendKeepsSession: Bool {
         if isLocalPrivate { return false }
         switch currentRunBackend ?? settings.backend {
-        case .claudeCode, .codex: return true
+        case .claudeCode, .codex, .antigravity: return true
         // copilotRemote keeps its ACP session while the app runs, but an
         // interrupted turn's context isn't replayable — inject like the
         // other stateless backends.
@@ -3646,6 +3654,7 @@ final class ChatSession: ObservableObject {
         copilot.reset()
         copilotRemote.reset()
         codex.reset()
+        antigravity.reset()
         localModel.reset()
         privateLocalModel.reset()
     }

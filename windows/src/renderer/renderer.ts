@@ -103,6 +103,23 @@ const backendControls: Record<BackendId, BackendControls> = {
     modelHelp: "Passed to codex exec --model; custom model IDs are accepted.",
     contextHelp: "Codex manages context from the selected model and its config.",
   },
+  agy: {
+    models: [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.7-flash-high",
+      "gemini-3.7-flash-medium",
+      "gemini-3.6-flash-high",
+      "gemini-3.6-flash-medium",
+      "gemini-3.1-pro-high",
+      "gemini-4-argon-high",
+      "gemini-4-argon-medium",
+    ],
+    efforts: ["", "low", "medium", "high"],
+    contexts: [],
+    modelHelp: "Passed to agy --model (from `agy models`); custom model IDs are accepted.",
+    contextHelp: "Antigravity manages context from the selected model.",
+  },
 };
 
 const effortLabels: Record<ReasoningEffort, string> = {

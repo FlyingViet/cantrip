@@ -21,7 +21,7 @@ target or certify separately installed backend runtimes on either platform.
 | App search and launch | Partial | Start Menu and WindowsApps discovery with fuzzy matching. Icons and running-window activation remain. |
 | Math and unit conversions | Implemented | Local parser; no model round-trip. |
 | Raw shell | Partial | Explicit `!` PowerShell commands work; persistent per-session ConPTY terminal remains. |
-| Claude / Copilot / Codex | Partial | Detection, safe/action modes, model, effort, context, cancellation, and raw streaming work. Structured events and conversation resume remain. |
+| Claude / Copilot / Codex / Antigravity | Partial | Detection, safe/action modes, model, effort, context, cancellation, and raw streaming work. Structured events and conversation resume remain. |
 | Settings | Implemented for current features | Per-backend configuration, opacity, launch at login, action policy, shortcut status. |
 | In-app updates | Implemented; release bootstrap required | Checks the newest `windows-v*` GitHub release, download progress, restart-to-install, tray controls, and release workflow. A first release (and signing) must be published. |
 | File search | Missing | Use Windows Search API, with optional Everything integration. |

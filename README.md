@@ -5,7 +5,7 @@
 **A keyboard-first launcher with an AI agent built in.**
 
 Open apps, calculate, ask questions, or give an agent a task. Cantrip drives
-Claude Code, GitHub Copilot CLI, OpenAI Codex CLI, or your own
+Claude Code, GitHub Copilot CLI, OpenAI Codex CLI, Google Antigravity (`agy`), or your own
 OpenAI-compatible model server. Bring an authenticated backend; provider
 charges and usage limits still apply.
 
@@ -34,7 +34,7 @@ Cantrip Gateway Mac brings the same Home and project tabs to a Mac window by
 compiling Cantrip Agent's shared Swift code as a submodule. Pair either one
 under **Settings > Remote control**; see [Remote control](docs/remote-control.md).
 
-Windows supports the launcher, math, Claude/Copilot/Codex, screen capture and
+Windows supports the launcher, math, Claude/Copilot/Codex/Antigravity, screen capture and
 plugins, but not yet local models, session tabs, memory, voice, council or
 Remote. See the [feature comparison](docs/windows.md#what-is-and-is-not-available)
 and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27-support).
@@ -107,7 +107,7 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 | Command | What it does | Details |
 |---|---|---|
 | `cantrip "question"` | Ask the active backend (pipe input: `cat log \| cantrip "why?"`) | [Ask from Terminal](docs/everyday-tasks.md#ask-cantrip-from-terminal) |
-| `cantrip --backend NAME "question"` | Ask a specific backend (`claude`, `copilot`, `codex` or `local`), e.g. `< changes.diff` | [Ask from Terminal](docs/everyday-tasks.md#ask-cantrip-from-terminal) |
+| `cantrip --backend NAME "question"` | Ask a specific backend (`claude`, `copilot`, `codex`, `agy` or `local`), e.g. `< changes.diff` | [Ask from Terminal](docs/everyday-tasks.md#ask-cantrip-from-terminal) |
 | `cantrip runs [session-or-run-id]` | List recent runs, or show one session's or run's events | [Recover after a crash](docs/sessions-and-council.md#recover-after-a-crash-or-interruption) |
 | `cantrip tab list` / `read ID` / `ask ID "question"` | List tabs with their child tabs, read a tab's recent turns (read-only), or ask a tab and print its reply | [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs) |
 | `cantrip daemon start` | Run Cantrip in the background now and at every login (no windows) | [Headless](docs/headless.md#commands) |

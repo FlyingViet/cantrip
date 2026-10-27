@@ -486,7 +486,7 @@ enum ToolActivityFactory {
         let args = arguments as? [String: Any]
         let description = string(
             in: args,
-            keys: ["subject", "title", "description", "summary"]
+            keys: ["subject", "title", "description", "Description", "Instruction", "summary"]
         )
         let changes = fileChanges(toolName: toolName, arguments: arguments)
         let terminalCommand = terminalCommand(toolName: toolName, arguments: args)
@@ -555,16 +555,35 @@ enum ToolActivityFactory {
 
         guard let args,
               let path = string(in: args, keys: [
-                  "file_path", "filePath", "path", "notebook_path"
+                  "file_path", "filePath", "path", "notebook_path", "TargetFile"
               ]) else {
             return []
         }
 
-        if lowerName.contains("edit"),
+        if lowerName == "multi_replace_file_content",
+           let chunks = args["ReplacementChunks"] as? [[String: Any]] {
+            var diffs: [String] = []
+            for chunk in chunks {
+                let original = chunk["TargetContent"] as? String ?? ""
+                let replacement = chunk["ReplacementContent"] as? String ?? ""
+                if !original.isEmpty || !replacement.isEmpty {
+                    diffs.append(replacementDiff(path: path, original: original, replacement: replacement))
+                }
+            }
+            if !diffs.isEmpty {
+                return [ToolFileChange(
+                    id: "\(path)#edit",
+                    path: path,
+                    diff: diffs.joined(separator: "\n")
+                )]
+            }
+        }
+
+        if lowerName.contains("edit") || lowerName.contains("replace_file"),
            let replacement = string(in: args, keys: [
-               "new_string", "newString", "new_source"
+               "new_string", "newString", "new_source", "ReplacementContent"
            ]) {
-            let original = string(in: args, keys: ["old_string", "oldString"]) ?? ""
+            let original = string(in: args, keys: ["old_string", "oldString", "TargetContent"]) ?? ""
             return [ToolFileChange(
                 id: "\(path)#edit",
                 path: path,
@@ -573,7 +592,7 @@ enum ToolActivityFactory {
         }
 
         if lowerName.contains("write") || lowerName.contains("create"),
-           let content = string(in: args, keys: ["content", "file_text"]) {
+           let content = string(in: args, keys: ["content", "file_text", "CodeContent"]) {
             let added = content.components(separatedBy: "\n").map { "+\($0)" }
             return [ToolFileChange(
                 id: "\(path)#write",
@@ -645,22 +664,26 @@ enum ToolActivityFactory {
         fileChanges: [ToolFileChange]
     ) -> String {
         let lowerName = toolName.lowercased()
-        if lowerName.contains("bash") || lowerName.contains("shell") {
+        if lowerName.contains("bash") || lowerName.contains("shell")
+            || lowerName == "run_command" {
             return "Running a command"
         }
         if lowerName.contains("edit") || lowerName.contains("patch")
-            || lowerName.contains("write") {
-            if let path = string(in: arguments, keys: ["file_path", "path"])
+            || lowerName.contains("write") || lowerName.contains("replace_file") {
+            if let path = string(in: arguments, keys: ["file_path", "path", "TargetFile"])
                 ?? fileChanges.first?.path {
                 return "Editing \((path as NSString).lastPathComponent)"
             }
             return "Editing files"
         }
+        if lowerName == "read_url_content" {
+            return "Reading URL"
+        }
         if lowerName.contains("read") || lowerName.contains("view") {
             return "Reading a file"
         }
         if lowerName.contains("search") || lowerName.contains("grep")
-            || lowerName.contains("glob") {
+            || lowerName.contains("glob") || lowerName == "find_by_name" {
             return "Searching"
         }
         return "Using \(displayName(toolName))"
@@ -669,12 +692,16 @@ enum ToolActivityFactory {
     private static func displayName(_ toolName: String) -> String {
         let shortName = toolName.split(separator: ".").last.map(String.init) ?? toolName
         switch shortName.lowercased() {
-        case "bash", "shell", "run_shell", "exec_command", "command_execution":
+        case "bash", "shell", "run_shell", "exec_command", "command_execution", "run_command":
             return "Shell"
-        case "apply_patch", "edit", "write":
+        case "apply_patch", "edit", "write", "write_to_file", "replace_file_content", "multi_replace_file_content":
             return "Edit"
-        case "read", "view":
+        case "read", "view", "view_file", "list_dir":
             return "Read"
+        case "read_url_content":
+            return "Fetch"
+        case "search_web", "grep_search", "find_by_name":
+            return "Search"
         default:
             return shortName
         }
@@ -687,10 +714,11 @@ enum ToolActivityFactory {
         let name = toolName.split(separator: ".").last.map(String.init)?
             .lowercased() ?? toolName.lowercased()
         guard name == "bash" || name == "shell" || name == "run_shell"
-                || name == "exec_command" || name == "command_execution" else {
+                || name == "exec_command" || name == "command_execution"
+                || name == "run_command" else {
             return nil
         }
-        return string(in: arguments, keys: ["command", "cmd", "script"])
+        return string(in: arguments, keys: ["command", "cmd", "script", "CommandLine"])
     }
 
     private static func string(

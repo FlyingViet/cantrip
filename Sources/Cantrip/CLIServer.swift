@@ -421,6 +421,7 @@ final class CLIServer {
         case .copilot: fresh = CopilotBackend()
         case .copilotRemote: fresh = CopilotACPBackend()
         case .codex: fresh = CodexBackend(persistKey: "cli-codexSession")
+        case .antigravity: fresh = AntigravityBackend(persistKey: "cli-agySession")
         case .localModel: fresh = OpenAICompatibleBackend()
         }
         backends[kind] = fresh
@@ -433,6 +434,7 @@ final class CLIServer {
         case "copilot", "gh": return .copilot
         case "acp", "copilot-remote", "copilotremote": return .copilotRemote
         case "codex", "openai": return .codex
+        case "agy", "antigravity", "google-antigravity": return .antigravity
         case "local", "hermes": return .localModel
         default: return BackendKind(rawValue: raw)
         }

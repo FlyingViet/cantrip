@@ -737,6 +737,7 @@ struct LauncherView: View {
         case .copilot: return "airplane"
         case .copilotRemote: return "antenna.radiowaves.left.and.right"
         case .codex: return "chevron.left.forwardslash.chevron.right"
+        case .antigravity: return "sparkles"
         case .localModel: return "cpu"
         }
     }
@@ -1676,6 +1677,9 @@ struct LauncherView: View {
         case .codex:
             let model = settings.codexModel.trimmingCharacters(in: .whitespaces)
             return model.isEmpty ? "Codex" : "Codex · \(model)"
+        case .antigravity:
+            let model = settings.agyModel.trimmingCharacters(in: .whitespaces)
+            return model.isEmpty ? "Antigravity" : "Antigravity · \(model)"
         case .localModel:
             return "Local · \(settings.localModel)"
         }
@@ -1698,6 +1702,9 @@ struct LauncherView: View {
         case .codex:
             let model = settings.codexModel.trimmingCharacters(in: .whitespaces)
             return model.isEmpty ? "Codex" : "Codex · \(model)"
+        case .antigravity:
+            let model = settings.agyModel.trimmingCharacters(in: .whitespaces)
+            return model.isEmpty ? "Antigravity" : "Antigravity · \(model)"
         case .localModel: return settings.localModel
         }
     }
@@ -1762,6 +1769,10 @@ struct LauncherView: View {
                 Menu("Codex") {
                     councilModelButtons(backend: .codex,
                                         models: [settings.codexModel].filter { !$0.isEmpty })
+                }
+                Menu("Antigravity") {
+                    councilModelButtons(backend: .antigravity,
+                                        models: settings.agyAvailableModels)
                 }
                 Menu("Local Model") {
                     councilModelButtons(backend: .localModel,
@@ -4061,6 +4072,41 @@ struct SettingsView: View {
                 labeledField("codex path (blank = auto)", text: $settings.codexPath, prompt: "/opt/homebrew/bin/codex")
                 labeledField("Model (blank = default, e.g. gpt-5-codex)", text: $settings.codexModel, prompt: "")
                 Text("Requires the OpenAI Codex CLI: npm install -g @openai/codex, then run `codex` once to sign in. \"Act on my behalf\" maps to --dangerously-bypass-approvals-and-sandbox.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            case .antigravity:
+                labeledField("agy path (blank = auto)", text: $settings.agyPath, prompt: "~/.local/bin/agy")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Model").font(.caption).foregroundStyle(.secondary)
+                    Picker("", selection: $settings.agyModel) {
+                        Text("Default (account setting)").tag("")
+                        ForEach(settings.agyAvailableModels, id: \.self) { model in
+                            Text(model).tag(model)
+                        }
+                    }
+                    .labelsHidden()
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Effort").font(.caption).foregroundStyle(.secondary)
+                    Picker("", selection: $settings.agyEffort) {
+                        Text("Default").tag("")
+                        Text("Low").tag("low")
+                        Text("Medium").tag("medium")
+                        Text("High").tag("high")
+                    }
+                    .labelsHidden()
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Permissions").font(.caption).foregroundStyle(.secondary)
+                    Picker("", selection: $settings.agyPermissionMode) {
+                        Text("Default (headless policy)").tag("default")
+                        Text("Sandbox (--sandbox)").tag("sandbox")
+                        Text("Allow everything (--dangerously-skip-permissions)").tag("bypassPermissions")
+                    }
+                    .labelsHidden()
+                }
+                labeledField("Working directory", text: $settings.claudeWorkdir, prompt: NSHomeDirectory())
+                Text("Requires the Google Antigravity CLI (`agy`). Supports multi-turn streaming sessions, subagents, and Cantrip Home `PreToolUse` guardrails.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             case .localModel:

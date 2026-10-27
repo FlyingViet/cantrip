@@ -1,6 +1,6 @@
 import type { PluginSummary } from "./pluginTypes";
 
-export type BackendId = "claude" | "copilot" | "codex";
+export type BackendId = "claude" | "copilot" | "codex" | "agy";
 export type ReasoningEffort =
   | ""
   | "none"

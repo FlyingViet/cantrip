@@ -357,6 +357,21 @@ do {
 }
 
 do {
+    let agySkillDir = project.appendingPathComponent(".agents/skills/agy-project-skill")
+    try! FileManager.default.createDirectory(at: agySkillDir, withIntermediateDirectories: true)
+    try! "---\nname: agy-project-skill\ndescription: Antigravity project skill fixture.\n---\n"
+        .write(to: agySkillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+    let result = await BackendCommandDiscovery.antigravity(command: "agy", workdir: project.path,
+                                                           home: home.path, environment: environment)
+    expect(result.commands.contains { $0.name == "plan" && $0.kind == .builtin && $0.source == "Antigravity" },
+           "Antigravity built-in /plan command is listed: \(result)")
+    expect(result.commands.contains { $0.name == "agy-project-skill" && $0.kind == .skill && $0.source == "Project" },
+           "Antigravity discovers .agents/skills project skills: \(result)")
+    expect(result.commands.first { $0.name == "clear" }?.availability == .cantrip,
+           "Antigravity /clear routes to Cantrip Start Fresh: \(result)")
+}
+
+do {
     let fakeCopilot = script("copilot", "echo 'not copilot'\n")
     let result = await BackendCommandDiscovery.copilot(command: fakeCopilot, workdir: project.path,
                                                        environment: environment)

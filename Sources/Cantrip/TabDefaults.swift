@@ -6,6 +6,7 @@ enum TabDefaults {
     static func workdir(_ id: UUID) -> String { "workdir-\(id.uuidString)" }
     static func claudeSession(_ id: UUID) -> String { "claudeSessionID-\(id.uuidString)" }
     static func codexSession(_ id: UUID) -> String { "codexSessionID-\(id.uuidString)" }
+    static func antigravitySession(_ id: UUID) -> String { "agySessionID-\(id.uuidString)" }
     static func lastRunOutcome(_ id: UUID) -> String { "lastRunOutcome-\(id.uuidString)" }
 
     /// A council seat's native session, by seat and model so replacing a seat never resumes a
@@ -23,7 +24,7 @@ enum TabDefaults {
 
     /// Every key above for `id`. Council seats are found by prefix, whatever their count or models.
     static func removeAll(for id: UUID, in defaults: UserDefaults = .standard) {
-        for key in [workdir(id), claudeSession(id), codexSession(id), lastRunOutcome(id)] {
+        for key in [workdir(id), claudeSession(id), codexSession(id), antigravitySession(id), lastRunOutcome(id)] {
             defaults.removeObject(forKey: key)
         }
         removeCouncilSeats(for: id, in: defaults)
