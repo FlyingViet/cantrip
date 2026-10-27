@@ -50,6 +50,16 @@ If automatic detection fails, run `command -v claude`, `command -v copilot`,
 or `command -v codex` in Terminal and paste the returned executable path into
 the matching field.
 
+On Mac, Antigravity keeps one `agy` process per tab. Unless **Act on my
+behalf** (or Antigravity's **Allow everything**) is on, Cantrip checks each
+tool call before it runs: read-only council seats may only look, and other tabs
+ask before edits and commands. Cantrip Home and child tabs apply their own
+policy. `agy` reads hooks only from a project's `.agents/hooks.json` or the
+global `~/.gemini/config/hooks.json`, so Cantrip adds one `cantrip-guardrail`
+entry to the global file instead of writing into your projects. The entry does
+nothing for `agy` runs Cantrip didn't start. If `agy` ever runs a tool without
+that check, Cantrip stops the session.
+
 On macOS, local Copilot runs through a persistent native SDK session, not a
 one-shot prompt process. Use a recent CLI with its bundled SDK and runtime
 (exercised with 1.0.83), and ensure `node` is available in your login shell.

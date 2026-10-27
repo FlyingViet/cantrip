@@ -4099,14 +4099,14 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Permissions").font(.caption).foregroundStyle(.secondary)
                     Picker("", selection: $settings.agyPermissionMode) {
-                        Text("Default (headless policy)").tag("default")
+                        Text("Ask before edits and commands").tag("default")
                         Text("Sandbox (--sandbox)").tag("sandbox")
                         Text("Allow everything (--dangerously-skip-permissions)").tag("bypassPermissions")
                     }
                     .labelsHidden()
                 }
                 labeledField("Working directory", text: $settings.claudeWorkdir, prompt: NSHomeDirectory())
-                Text("Requires the Google Antigravity CLI (`agy`). Supports multi-turn streaming sessions, subagents, and Cantrip Home `PreToolUse` guardrails.")
+                Text("Requires the Google Antigravity CLI (`agy`). \"Act on my behalf\" maps to --dangerously-skip-permissions. Otherwise Cantrip checks each tool call through a hook it adds to ~/.gemini/config/hooks.json, which does nothing for agy runs Cantrip didn't start.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             case .localModel:
