@@ -344,7 +344,7 @@ enum BackendCommandFingerprint {
             directory = (directory as NSString).deletingLastPathComponent
         }
         let searchPath = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
-            + ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+            + ToolPath.toolFolders(home: home)
         for name in cliNames {
             guard let path = searchPath.lazy.map({ "\($0)/\(name)" }).first(where: { fm.isExecutableFile(atPath: $0) })
             else { parts.append("\(name)|missing"); continue }
