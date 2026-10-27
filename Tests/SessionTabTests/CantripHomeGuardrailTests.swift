@@ -179,6 +179,16 @@ extension SessionTabTests {
                      && decide(agyView).verdict == .allow
                      && decide(agyMCP).verdict == .ask && agyMCP.server == "slack" && agyMCP.tool == "send_message",
                      "Antigravity tool names and parameters map onto the same policy")
+        let taskInput = { (text: String) in
+            CantripHomeActionRequest(antigravityTool: "manage_task", input: ["Action": "send_input", "TaskId": "t1", "Input": text])
+        }
+        let taskStatus = CantripHomeActionRequest(antigravityTool: "manage_task", input: ["Action": "status", "TaskId": "t1"])
+        precondition(taskInput("sudo ls").kind == .shell && decide(taskInput("sudo ls"), .attended).verdict == .deny
+                     && decide(taskInput("rm -rf ~")).verdict == .deny
+                     && decide(taskInput("echo hi"), approval: .automatic).verdict == .ask
+                     && decide(taskInput("echo hi"), .attended).verdict == .allow
+                     && taskStatus.kind == .other && decide(taskStatus).verdict == .allow,
+                     "Input sent to a running Antigravity task is checked like a command, and Act on my behalf doesn't cover it")
         let agyWriteActivity = ToolActivityFactory.start(
             id: "w1", toolName: "write_to_file",
             arguments: ["TargetFile": "/tmp/hello.swift", "CodeContent": "print(1)\n"]
