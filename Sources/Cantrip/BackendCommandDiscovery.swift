@@ -173,6 +173,57 @@ enum BackendCommandDiscovery {
         return Result(commands: commands, status: commands.isEmpty
             ? "Codex has no skills here. Its built-in commands only work in its terminal app." : nil)
     }
+
+    // MARK: Antigravity
+
+    static func antigravity(command: String, workdir: String, home: String,
+                            environment: [String: String]) async -> Result {
+        let fm = FileManager.default
+        func loadSkills(_ directories: [String]) -> [(name: String, description: String)] {
+            var found: [(name: String, description: String)] = []
+            var seen = Set<String>()
+            for directory in directories {
+                guard let entries = try? fm.contentsOfDirectory(atPath: directory) else { continue }
+                for entry in entries.sorted() where !entry.hasPrefix(".") {
+                    let skillDir = "\(directory)/\(entry)"
+                    var isDir: ObjCBool = false
+                    guard fm.fileExists(atPath: skillDir, isDirectory: &isDir), isDir.boolValue,
+                          seen.insert(entry.lowercased()).inserted else { continue }
+                    let skillMD = "\(skillDir)/SKILL.md"
+                    let desc = skillDescription(atPath: skillMD) ?? "Antigravity skill (\(entry))"
+                    found.append((name: entry, description: desc))
+                }
+            }
+            return found
+        }
+        func skillDescription(atPath path: String) -> String? {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+            for line in content.split(whereSeparator: \.isNewline).prefix(30) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.lowercased().hasPrefix("description:") {
+                    let value = trimmed.dropFirst("description:".count)
+                        .trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
+                    if !value.isEmpty { return value }
+                }
+            }
+            return nil
+        }
+
+        let projectSkills = loadSkills([
+            "\(workdir)/.agents/skills",
+            "\(workdir)/.gemini/skills",
+        ])
+        let personalSkills = loadSkills([
+            "\(home)/.gemini/config/skills",
+            "\(home)/.agents/skills",
+            "\(home)/.gemini/antigravity/builtin/skills",
+        ])
+        let commands = BackendCommandParsers.antigravity(
+            projectSkills: projectSkills,
+            personalSkills: personalSkills
+        )
+        return Result(commands: commands, status: nil)
+    }
 }
 
 /// Runs a CLI that speaks newline-delimited JSON: writes `input`, returns the first stdout object
@@ -313,12 +364,13 @@ enum BackendCommandFingerprint {
         ".copilot/skills", ".copilot/agents", ".copilot/installed-plugins",
         ".agents/skills", ".claude/skills", ".claude/commands", ".claude/plugins", ".claude/settings.json",
         ".codex/skills", ".codex/config.toml", ".config/cantrip/commands",
+        ".gemini/config/skills", ".gemini/antigravity/builtin/skills",
     ]
     static let projectPaths = [
         ".github/skills", ".github/agents", ".claude/skills", ".claude/commands", ".claude/settings.json",
-        ".agents/skills", ".codex/skills",
+        ".agents/skills", ".codex/skills", ".gemini/skills",
     ]
-    static let cliNames = ["copilot", "claude", "codex"]
+    static let cliNames = ["copilot", "claude", "codex", "agy"]
 
     static func compute(workdir: String, home: String, environment: [String: String]) -> String {
         let fm = FileManager.default

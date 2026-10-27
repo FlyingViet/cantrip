@@ -107,7 +107,8 @@ final class HostControl {
     static func backend(named name: String) -> BackendKind? {
         let key = name.lowercased().filter { $0.isLetter }
         let aliases: [String: BackendKind] = ["copilot": .copilot, "claude": .claudeCode, "claudecode": .claudeCode,
-                                              "codex": .codex, "local": .localModel, "localmodel": .localModel,
+                                              "codex": .codex, "agy": .antigravity, "antigravity": .antigravity,
+                                              "local": .localModel, "localmodel": .localModel,
                                               "copilotremote": .copilotRemote]
         return aliases[key] ?? BackendKind.allCases.first { $0.rawValue.lowercased() == name.lowercased() }
     }
@@ -118,6 +119,7 @@ final class HostControl {
         case .copilot, .copilotRemote: return "copilot"
         case .claudeCode: return "claude"
         case .codex: return "codex"
+        case .antigravity: return "agy"
         case .localModel: return nil
         }
     }

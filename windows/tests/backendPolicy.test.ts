@@ -47,6 +47,18 @@ describe("backend action policy", () => {
     );
   });
 
+  it("keeps Antigravity sandboxed unless actions are enabled and avoids undocumented flags", () => {
+    const safeArgs = backendArgs(request("agy", false));
+    expect(safeArgs).toContain("--sandbox");
+    expect(safeArgs).not.toContain("--dangerously-skip-permissions");
+    expect(safeArgs).not.toContain("--mode");
+    expect(safeArgs).not.toContain("--add-dir");
+    expect(safeArgs).not.toContain("--mcp-config");
+    expect(backendArgs(request("agy", true))).toContain(
+      "--dangerously-skip-permissions",
+    );
+  });
+
   it("passes model, effort, and context flags supported by each backend", () => {
     const claude = {
       ...request("claude", false),
@@ -89,6 +101,18 @@ describe("backend action policy", () => {
         'model_reasoning_effort="medium"',
       ]),
     );
+
+    const agy = {
+      ...request("agy", false),
+      model: "gemini-3.8-flash-high",
+      effort: "high" as const,
+    };
+    expect(backendArgs(agy)).toEqual(
+      expect.arrayContaining(["--model", "gemini-3.8-flash-high", "--effort", "high"]),
+    );
+    expect(
+      backendArgs({ ...request("agy", false), effort: "xhigh" }),
+    ).not.toContain("--effort");
   });
 
   it("passes screen captures through each backend's supported mechanism", () => {
@@ -105,6 +129,10 @@ describe("backend action policy", () => {
     expect(backendArgs(request("codex", false), paths)).toEqual(
       expect.arrayContaining(["--image", paths[0]]),
     );
+
+    const agy = backendArgs(request("agy", false), paths);
+    expect(agy).not.toContain("--add-dir");
+    expect(agy.join(" ")).toContain("screen-1.png");
   });
 
   it("passes approved plugin MCP servers to Claude and Codex", () => {

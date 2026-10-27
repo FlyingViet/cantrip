@@ -28,6 +28,7 @@ const labels: Record<BackendId, string> = {
   claude: "Claude Code",
   copilot: "GitHub Copilot",
   codex: "OpenAI Codex",
+  agy: "Google Antigravity",
 };
 
 async function where(command: string): Promise<string[]> {
@@ -125,6 +126,18 @@ export function backendArgs(
           : ["--sandbox", "read-only"]),
         request.prompt,
       ];
+    case "agy": {
+      const agyEffort = ["low", "medium", "high"].includes(effort) ? effort : "";
+      return [
+        "-p",
+        claudePrompt,
+        "--output-format",
+        "text",
+        ...(request.allowActions ? ["--dangerously-skip-permissions"] : ["--sandbox"]),
+        ...(model ? ["--model", model] : []),
+        ...(agyEffort ? ["--effort", agyEffort] : []),
+      ];
+    }
   }
 }
 
@@ -167,7 +180,7 @@ export class RunManager {
   }
 
   async statuses(): Promise<BackendStatus[]> {
-    const ids: BackendId[] = ["claude", "copilot", "codex"];
+    const ids: BackendId[] = ["claude", "copilot", "codex", "agy"];
     return Promise.all(
       ids.map(async (id) => {
         const spec = await this.resolve(id);
@@ -301,7 +314,7 @@ export class RunManager {
       return "Choose an existing working directory.";
     }
     if (!["ai", "shell"].includes(request.mode)) return "Invalid run mode.";
-    if (!["claude", "copilot", "codex"].includes(request.backend)) return "Invalid backend.";
+    if (!["claude", "copilot", "codex", "agy"].includes(request.backend)) return "Invalid backend.";
     if (
       request.model.length > 100 ||
       (request.model && !/^[a-zA-Z0-9._:/[\]-]+$/.test(request.model))

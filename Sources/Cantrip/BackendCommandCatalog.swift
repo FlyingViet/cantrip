@@ -35,6 +35,7 @@ final class BackendCommandCatalog {
         case .copilotRemote: return .copilotRemote
         case .claudeCode: return .claudeCode
         case .codex: return .codex
+        case .antigravity: return .antigravity
         case .localModel: return nil
         }
     }
@@ -51,7 +52,7 @@ final class BackendCommandCatalog {
         }
         let discovered: BackendCommandDiscovery.Result
         switch backend {
-        case .copilot, .claudeCode, .codex:
+        case .copilot, .claudeCode, .codex, .antigravity:
             discovered = await discover(backend: backend, workdir: workdir, refresh: refresh)
         case .copilotRemote:
             discovered = Self.acpResult(session.copilotRemoteCommands)
@@ -68,7 +69,7 @@ final class BackendCommandCatalog {
         let workdir = Self.standardized(session.workdir)
         let discovered: BackendCommandDiscovery.Result
         switch backend {
-        case .copilot, .claudeCode, .codex:
+        case .copilot, .claudeCode, .codex, .antigravity:
             guard let entry = entries[key(backend: backend, workdir: workdir)] else { return nil }
             discovered = entry.result
         case .copilotRemote:
@@ -84,7 +85,7 @@ final class BackendCommandCatalog {
     func prefetch(_ session: ChatSession) {
         guard !session.isLocalPrivate else { return }
         let backend = session.effectiveBackendKind
-        guard [.copilot, .claudeCode, .codex].contains(backend) else { return }
+        guard [.copilot, .claudeCode, .codex, .antigravity].contains(backend) else { return }
         let workdir = Self.standardized(session.workdir)
         Task { _ = await discover(backend: backend, workdir: workdir, refresh: false, wait: .infinity) }
     }
@@ -114,6 +115,7 @@ final class BackendCommandCatalog {
         case .copilot: cli = settings.copilotPath
         case .claudeCode: cli = settings.claudePath
         case .codex: cli = settings.codexPath
+        case .antigravity: cli = settings.agyPath
         default: cli = ""
         }
         return Key(backend: backend, workdir: workdir, cli: cli.trimmingCharacters(in: .whitespaces))
@@ -172,6 +174,9 @@ final class BackendCommandCatalog {
             case .codex:
                 result = await BackendCommandDiscovery.codex(command: key.cli, workdir: key.workdir,
                                                             environment: environment)
+            case .antigravity:
+                result = await BackendCommandDiscovery.antigravity(command: key.cli, workdir: key.workdir,
+                                                                   home: home, environment: environment)
             default:
                 result = .init(commands: [], status: nil)
             }

@@ -26,6 +26,8 @@ enum CantripHomeApproval: String {
         case .claudeCode:
             if settings.allowActions || settings.claudePermissionMode == "bypassPermissions" { return .automatic }
             return settings.claudePermissionMode == "acceptEdits" ? .fileEdits : .ask
+        case .antigravity:
+            return (settings.allowActions || settings.agyPermissionMode == "bypassPermissions") ? .automatic : .ask
         case .copilotRemote, .codex, .localModel:
             return .ask
         }
@@ -53,6 +55,7 @@ struct CantripHomeActionRequest: Equatable {
     enum Kind: String { case shell, write, read, url, mcp, other }
     var kind: Kind
     var command = ""
+    var cwd: String?
     var paths: [String] = []
     var url: String?
     var server: String?
@@ -79,11 +82,12 @@ struct CantripHomeActionRequest: Equatable {
         writesFiles = object["hasWriteFileRedirection"] as? Bool ?? false
     }
 
-    init(kind: Kind, command: String = "", paths: [String] = [], url: String? = nil,
-         server: String? = nil, tool: String? = nil, readOnly: Bool = false,
-         writesFiles: Bool = false) {
+    init(kind: Kind, command: String = "", cwd: String? = nil, paths: [String] = [],
+         url: String? = nil, server: String? = nil, tool: String? = nil,
+         readOnly: Bool = false, writesFiles: Bool = false) {
         self.kind = kind
         self.command = command
+        self.cwd = cwd
         self.paths = paths
         self.url = url
         self.server = server
@@ -106,6 +110,42 @@ struct CantripHomeActionRequest: Equatable {
             let parts = tool.components(separatedBy: "__")
             self.init(kind: .mcp, server: parts.count > 1 ? parts[1] : nil,
                       tool: parts.count > 2 ? parts[2...].joined(separator: "__") : tool)
+        default:
+            self.init(kind: .other, tool: name)
+        }
+    }
+
+    /// An Antigravity `PreToolUse` hook request (`toolCall.name` and `toolCall.args`).
+    init(antigravityTool name: String, input: [String: Any]) {
+        switch name {
+        case "run_command":
+            let cwd = (input["Cwd"] as? String).flatMap {
+                let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            self.init(kind: .shell, command: input["CommandLine"] as? String ?? "", cwd: cwd)
+        case "write_to_file", "replace_file_content", "multi_replace_file_content":
+            let path = input["TargetFile"] as? String ?? ""
+            self.init(kind: .write, paths: path.isEmpty ? [] : [path])
+        case "view_file", "list_dir", "find_by_name", "grep_search":
+            let path = input["AbsolutePath"] as? String
+                ?? input["DirectoryPath"] as? String
+                ?? input["SearchDirectory"] as? String
+                ?? input["SearchPath"] as? String ?? ""
+            self.init(kind: .read, paths: path.isEmpty ? [] : [path], tool: name, readOnly: true)
+        case "read_url_content", "search_web":
+            self.init(kind: .url, url: input["Url"] as? String ?? input["query"] as? String,
+                      tool: name, readOnly: true)
+        case "call_mcp_tool":
+            self.init(kind: .mcp, server: input["ServerName"] as? String,
+                      tool: input["ToolName"] as? String)
+        case "invoke_subagent":
+            self.init(kind: .other, tool: name)
+        case let tool where tool.hasPrefix("mcp__") || tool.hasPrefix("mcp_"):
+            let sep = tool.hasPrefix("mcp__") ? "__" : "_"
+            let parts = tool.components(separatedBy: sep)
+            self.init(kind: .mcp, server: parts.count > 1 ? parts[1] : nil,
+                      tool: parts.count > 2 ? parts[2...].joined(separator: sep) : tool)
         default:
             self.init(kind: .other, tool: name)
         }
@@ -190,10 +230,14 @@ enum CantripHomeActionPolicy {
         var findings: [CantripHomeActionDecision] = []
         switch request.kind {
         case .shell:
-            findings = shellFindings(request.command, environment: environment, depth: 0)
+            let shellEnvironment = request.cwd.map {
+                let resolved = resolve($0, environment) ?? $0
+                return environment.running(in: resolved)
+            } ?? environment
+            findings = shellFindings(request.command, environment: shellEnvironment, depth: 0)
             if request.writesFiles {
                 for path in request.paths {
-                    if let resolved = resolve(path, environment), isProtected(resolved, environment) {
+                    if let resolved = resolve(path, shellEnvironment), isProtected(resolved, shellEnvironment) {
                         findings.append(protectedWrite)
                     }
                 }
