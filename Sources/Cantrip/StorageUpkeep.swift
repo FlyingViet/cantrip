@@ -37,7 +37,7 @@ enum StorageUpkeep {
 
         static func standard(defaults: UserDefaults = .standard, now: Date = Date()) -> Configuration {
             let home = FileManager.default.homeDirectoryForCurrentUser
-            let cache = home.appendingPathComponent(".cache/Cantrip", isDirectory: true)
+            let cache = CantripPaths.cache
             let sessions = home.appendingPathComponent(".copilot/session-state", isDirectory: true)
             let temporary = [URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
                              URL(fileURLWithPath: "/private/tmp", isDirectory: true)]

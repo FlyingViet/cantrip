@@ -72,8 +72,7 @@ final class CLIServer {
     }
 
     static var socketPath: String {
-        let preferred = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip/cantrip.sock").path
+        let preferred = CantripPaths.cache("cantrip.sock").path
         // Unix socket paths are limited to 104 bytes; very long home folders use a short private one.
         return preferred.utf8.count < 104 ? preferred : "/tmp/cantrip-\(getuid())/cantrip.sock"
     }

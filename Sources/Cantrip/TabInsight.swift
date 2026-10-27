@@ -361,8 +361,7 @@ final class TabAskCoordinator {
 
     init(manager: SessionManager, url: URL? = nil) {
         self.manager = manager
-        self.url = url ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip/tab-asks.json")
+        self.url = url ?? CantripPaths.cache("tab-asks.json")
         if let data = try? Data(contentsOf: self.url),
            let list = try? JSONDecoder().decode([TabAsk].self, from: data) {
             asks = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { $1 })

@@ -225,8 +225,7 @@ final class ChildTabStore: ObservableObject {
     let url: URL
 
     init(url: URL? = nil) {
-        self.url = url ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip/child-tabs.json")
+        self.url = url ?? CantripPaths.cache("child-tabs.json")
         if let data = try? Data(contentsOf: self.url),
            let list = try? JSONDecoder().decode([ChildTab].self, from: data) {
             records = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { $1 })

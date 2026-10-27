@@ -9,14 +9,14 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep cert artwork icon app run clean
+.PHONY: all build test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep
+test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep
 
 test-architectures:
 	@bash Tests/ArchitectureTests/run.sh
@@ -35,6 +35,11 @@ test-iso-date:
 	@BIN="/tmp/cantrip-iso-date-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc Sources/Cantrip/ISODate.swift Tests/ISODateTests/main.swift -o "$$BIN" && "$$BIN"
+
+test-cantrip-paths:
+	@BIN="/tmp/cantrip-paths-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/CantripPaths.swift Sources/Cantrip/TabDefaults.swift Tests/CantripPathsTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-github-builds:
 	@BIN="/tmp/cantrip-github-build-tests-$$$$"; \
@@ -59,7 +64,7 @@ test-remote-routing:
 test-remote-images:
 	@BIN="/tmp/cantrip-remote-image-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/Log.swift Sources/Cantrip/RemoteImageAttachments.swift Sources/Cantrip/RemoteGeneratedImages.swift Sources/Cantrip/SessionOutputFolders.swift Tests/RemoteImageTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/Log.swift Sources/Cantrip/RemoteImageAttachments.swift Sources/Cantrip/RemoteGeneratedImages.swift Sources/Cantrip/SessionOutputFolders.swift Sources/Cantrip/CantripPaths.swift Tests/RemoteImageTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-context:
 	@BIN="/tmp/cantrip-context-tests-$$$$"; \
@@ -88,7 +93,7 @@ test-package-tracking:
 test-recovery:
 	@BIN="/tmp/cantrip-recovery-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-consolidation:
@@ -112,12 +117,12 @@ test-backend-commands:
 test-storage-upkeep:
 	@BIN="/tmp/cantrip-storage-upkeep-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/StorageUpkeep.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ISODate.swift Tests/StorageUpkeepTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/StorageUpkeep.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/StorageUpkeepTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-run-journal:
 	@BIN="/tmp/cantrip-run-journal-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/RunJournal.swift Tests/RunJournalTests/main.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/RunJournal.swift Sources/Cantrip/CantripPaths.swift Tests/RunJournalTests/main.swift -o "$$BIN"; \
 	"$$BIN"
 
 # Auto-create the signing certificate if it's missing (first install).

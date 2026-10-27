@@ -819,8 +819,7 @@ final class CantripHomeStore: ObservableObject {
     private var tasksLoaded = false
 
     nonisolated static var rootDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip/home", isDirectory: true)
+        CantripPaths.cache("home", isDirectory: true)
     }
 
     nonisolated static var artifactDirectory: URL {

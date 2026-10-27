@@ -25,8 +25,7 @@ actor RemoteVideoAttachments {
     static let chunkBytes = 1 << 20
     static let maximumDuration = 300.0
     static let maximumPendingBytes = 500 << 20
-    static let storageRoot = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".cache/Cantrip/remote-videos", isDirectory: true)
+    static let storageRoot = CantripPaths.cache("remote-videos", isDirectory: true)
 
     private let root: URL
     private let imageRoot: URL

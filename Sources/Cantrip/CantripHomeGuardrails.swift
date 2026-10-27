@@ -165,7 +165,7 @@ enum CantripHomeActionPolicy {
                 temporaryRoots: ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders", temporary],
                 protectedRoot: CantripHomeStore.rootDirectory.standardizedFileURL.path,
                 artifactRoot: CantripHomeStore.artifactDirectory.standardizedFileURL.path,
-                cacheRoot: home + "/.cache/Cantrip"
+                cacheRoot: CantripPaths.cache.standardizedFileURL.path
             )
             environment.cantripPIDs = [ProcessInfo.processInfo.processIdentifier]
             if let executable = Bundle.main.executablePath { environment.cantripProcess.append(executable) }

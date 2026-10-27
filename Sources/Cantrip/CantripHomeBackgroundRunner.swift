@@ -664,9 +664,7 @@ final class CantripHomeBackgroundRunner {
                 at: directory.appendingPathComponent("\(id.uuidString).jsonl")
             )
             SessionTabMetadata.remove(id: id)
-            for key in ["lastRunOutcome-", "workdir-", "claudeSessionID-", "codexSessionID-"] {
-                UserDefaults.standard.removeObject(forKey: key + id.uuidString)
-            }
+            TabDefaults.removeAll(for: id)
         }
     }
 

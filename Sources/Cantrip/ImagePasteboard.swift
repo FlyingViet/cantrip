@@ -25,8 +25,7 @@ enum ImagePasteboard {
               let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]) else { return nil }
 
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/Cantrip")
+        let dir = CantripPaths.cache
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("pasted-\(Int(Date().timeIntervalSince1970 * 1000)).png")
         do {
