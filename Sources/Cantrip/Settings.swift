@@ -8,6 +8,7 @@ enum BackendKind: String, CaseIterable, Identifiable {
     case copilot = "Copilot"
     case copilotRemote = "Copilot Remote"
     case codex = "Codex"
+    case antigravity = "Antigravity"
     case localModel = "Local Model"
     var id: String { rawValue }
 }
@@ -318,6 +319,37 @@ final class AppSettings: ObservableObject {
     @Published var codexModel: String {
         didSet { d.set(codexModel, forKey: "codexModel") }
     }
+    /// Path to the `agy` binary. Empty = login-shell lookup.
+    @Published var agyPath: String {
+        didSet { d.set(agyPath, forKey: "agyPath") }
+    }
+    /// Optional model override passed as --model (from `agy models`).
+    @Published var agyModel: String {
+        didSet { d.set(agyModel, forKey: "agyModel") }
+    }
+    /// Reasoning effort passed as --effort (low, medium, high).
+    @Published var agyEffort: String {
+        didSet { d.set(agyEffort, forKey: "agyEffort") }
+    }
+    /// Permission mode for `agy` ("default", "sandbox", "bypassPermissions").
+    @Published var agyPermissionMode: String {
+        didSet { d.set(agyPermissionMode, forKey: "agyPermissionMode") }
+    }
+    /// Model slugs advertised by `agy models`.
+    static let agyDefaultModels: [String] = [
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+        "gemini-3.7-flash-high",
+        "gemini-3.7-flash-medium",
+        "gemini-3.6-flash-high",
+        "gemini-3.6-flash-medium",
+        "gemini-3.1-pro-high",
+        "gemini-4-argon-high",
+        "gemini-4-argon-medium",
+    ]
+    @Published var agyAvailableModels: [String] {
+        didSet { d.set(agyAvailableModels, forKey: "agyAvailableModels") }
+    }
     /// OpenAI-compatible base URL, e.g. http://hermes.local:8000/v1
     @Published var localBaseURL: String {
         didSet { d.set(localBaseURL, forKey: "localBaseURL") }
@@ -474,6 +506,9 @@ final class AppSettings: ObservableObject {
         case .codex:
             let model = codexModel.trimmingCharacters(in: .whitespaces)
             return model.isEmpty ? "Codex" : "Codex · \(model)"
+        case .antigravity:
+            let model = agyModel.trimmingCharacters(in: .whitespaces)
+            return model.isEmpty ? "Antigravity" : "Antigravity · \(model)"
         case .localModel:
             return "Local · \(localModel)"
         }
@@ -498,6 +533,8 @@ final class AppSettings: ObservableObject {
             "copilotAllowTools": copilotAllowTools, "copilotEffort": copilotEffort,
             "copilotContextTier": copilotContextTier,
             "codexPath": codexPath, "codexModel": codexModel,
+            "agyPath": agyPath, "agyModel": agyModel,
+            "agyEffort": agyEffort, "agyPermissionMode": agyPermissionMode,
             "localBaseURL": localBaseURL, "localModel": localModel,
             "localSystemPrompt": localSystemPrompt,
             "councilScope": councilScope,
@@ -574,6 +611,10 @@ final class AppSettings: ObservableObject {
         str("copilotContextTier") { self.copilotContextTier = $0 }
         str("codexPath") { self.codexPath = $0 }
         str("codexModel") { self.codexModel = $0 }
+        str("agyPath") { self.agyPath = $0 }
+        str("agyModel") { self.agyModel = $0 }
+        str("agyEffort") { self.agyEffort = $0 }
+        str("agyPermissionMode") { self.agyPermissionMode = $0 }
         str("localBaseURL") { self.localBaseURL = $0 }
         str("localModel") { self.localModel = $0 }
         str("localSystemPrompt") { self.localSystemPrompt = $0 }
@@ -713,6 +754,11 @@ final class AppSettings: ObservableObject {
         councilScope = d.string(forKey: "councilScope") ?? "planReview"
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
+        agyPath = d.string(forKey: "agyPath") ?? ""
+        agyModel = d.string(forKey: "agyModel") ?? ""
+        agyEffort = d.string(forKey: "agyEffort") ?? ""
+        agyPermissionMode = d.string(forKey: "agyPermissionMode") ?? "default"
+        agyAvailableModels = d.stringArray(forKey: "agyAvailableModels") ?? Self.agyDefaultModels
         localBaseURL = d.string(forKey: "localBaseURL") ?? "http://localhost:8000/v1"
         localModel = d.string(forKey: "localModel") ?? "hermes"
         localAPIKey = d.string(forKey: "localAPIKey") ?? ""
