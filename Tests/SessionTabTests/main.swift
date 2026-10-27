@@ -159,6 +159,7 @@ struct SessionTabTests {
         try await testRemoteVoiceVocabulary()
         try await testRemoteMaintenance()
         try await testRemoteNotifications()
+        try await testSharedAPNsToken()
         try await testLiveStatus()
         try await testRemoteVideos()
         try await testRemoteFiles()
