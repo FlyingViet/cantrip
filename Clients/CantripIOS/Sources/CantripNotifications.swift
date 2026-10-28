@@ -153,6 +153,9 @@ final class CantripNotifications: NSObject, ObservableObject, UNUserNotification
 
     func hasSubscription(serverID: UUID?) -> Bool { isEnabled(serverID: serverID) || isPending(serverID: serverID) }
 
+    /// Clears a removed server's alert state on this device only; nothing is sent to its Mac.
+    func forget(serverID: UUID) { save(serverID: serverID, fingerprint: nil) }
+
     func prepareRegistration(serverID: UUID, fingerprint: String) {
         pendingServers[serverID.uuidString] = fingerprint
         defaults.set(pendingServers, forKey: pendingKey)

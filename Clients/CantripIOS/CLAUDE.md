@@ -69,7 +69,8 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
   Settings uses blank add-server drafts, never live bindings to active credentials.
 - The alert `installationID` is bound to the device by a this-device-only Keychain
   marker. A transferred/restored install gets a fresh ID (its alerts become pending
-  until re-paired).
+  until re-paired). Removing a server whose token is missing clears only local
+  alert state; it never unregisters on the Mac.
 - Hermes history, durable runs, and memory keys are scoped by server and lane.
   The migrated server retains its original history and memory namespace.
 - The gateway URL defaults to empty so each user points at their own server.
