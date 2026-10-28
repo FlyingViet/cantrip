@@ -170,6 +170,7 @@ struct SessionTabTests {
         try await testCopilotRuntimeRecovery()
         try testCopilotRuntimeActivity()
         try await testRunContinuity()
+        try await testUsageLimitFallback()
         try await testMCPAppTranscripts()
         try await testMCPAppRemote()
         try testCantripHomeSchedules()
