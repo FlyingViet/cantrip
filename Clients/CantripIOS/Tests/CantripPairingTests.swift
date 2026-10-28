@@ -148,6 +148,25 @@ final class CantripPairingTests: XCTestCase {
         XCTAssertEqual(store.selectedID, saved.id)
     }
 
+    func testPairingRestoresASavedServerWhoseTokenIsMissing() async throws {
+        let (model, store) = try fixture()
+        let studio = try link("name=Studio&token=\(token)&url=https%3A%2F%2Fstudio.example")
+        let saved = try store.add(studio.draft)
+        // As after moving to a new device: the entry is saved, its Keychain token isn't.
+        credentials = credentials.filter { !$0.key.contains(saved.id.uuidString) }
+        XCTAssertNil(model.savedServer(for: studio))
+        XCTAssertEqual(model.serverMissingToken(for: studio), saved)
+        PairingRequestProtocol.handler = { try $0.respond(title: "Paired") }
+
+        let server = try await model.pair(with: studio)
+        XCTAssertEqual(server, saved)
+        XCTAssertEqual(store.servers.count, 2)
+        XCTAssertEqual(try store.credential(for: saved), token)
+        XCTAssertEqual(store.selectedID, saved.id)
+        XCTAssertEqual(model.selectedServerID, saved.id)
+        XCTAssertNil(model.serverMissingToken(for: studio))
+    }
+
     func testPairingWaitsForAnInFlightRequestAndSavesNothing() async throws {
         let (model, store) = try fixture()
         let started = expectation(description: "Request in flight")
