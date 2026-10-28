@@ -119,6 +119,16 @@ final class HermesEnv: ObservableObject {
 
     func selectServer(_ server: SavedServer) throws {
         guard selectedServerID != server.id else { return }
+        try activate(server)
+    }
+
+    /// Saves a saved gateway's re-entered API key and selects it, keeping its entry and history.
+    func reenterCredential(_ credential: String, for server: SavedServer) throws {
+        try servers.replaceCredential(credential, for: server)
+        try activate(server)
+    }
+
+    private func activate(_ server: SavedServer) throws {
         let credential = try servers.credential(for: server)
         try Keychain.saveCredential(credential, for: "hermes.apiKey")
         try servers.select(server)

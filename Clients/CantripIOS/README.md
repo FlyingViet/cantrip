@@ -360,6 +360,16 @@ Swipe or touch and hold a saved server to **Remove Server**, then confirm.
 Removing the active configuration disconnects it; it does not delete chats or
 cancel work on that server. A failed save keeps the form and shows the error.
 
+Tokens and API keys are saved in Keychain for this device only, so they never
+leave it in a backup or device-to-device transfer. A new or restored iPhone
+keeps the saved server list but not the tokens, and those rows show **Pairing
+token missing**. Tap the row (or swipe or touch and hold, then **Re-enter
+Pairing Token**), enter the token, and tap **Save and Connect**; the server keeps
+its place, selection, and history. Adding the same URL again, or opening a
+pairing link for it, also restores the token on the saved entry instead of
+failing. Use **Re-enter Pairing Token** on any saved server after rotating its
+token or fixing a typo.
+
 For Cantrip, enter the pairing token from the corresponding Mac. Without
 a saved URL, Cantrip Agent discovers Cantrip on the same local network with Bonjour and connects
 directly using forward-secret TLS with the pairing token as a pre-shared key.

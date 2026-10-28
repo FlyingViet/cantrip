@@ -2885,6 +2885,29 @@ final class CantripRemoteModel: ObservableObject {
 
     func selectServer(_ server: SavedServer) async throws {
         guard selectedServerID != server.id else { return }
+        try await connect(to: server)
+    }
+
+    /// Saves a saved server's re-entered pairing token (e.g. after moving to a new device, where
+    /// Keychain tokens don't follow) and connects to it, keeping its entry and history.
+    func reenterCredential(_ credential: String, for server: SavedServer) async throws {
+        guard !isMutating, !isUploadingVideo, !isUpdatingNotifications else {
+            throw ServerConfigurationError(message: "Wait for the current request to finish before changing servers.")
+        }
+        try servers.replaceCredential(credential, for: server)
+        try await connect(to: server)
+    }
+
+    /// Why there's no token: for a saved server whose token isn't on this device (e.g. after moving
+    /// to a new one), how to re-enter it rather than a generic prompt.
+    private var missingTokenError: Error {
+        if let server = servers.selected {
+            do { _ = try servers.credential(for: server) } catch { return error }
+        }
+        return CantripRemoteError.missingToken
+    }
+
+    private func connect(to server: SavedServer) async throws {
         let credential = try servers.credential(for: server)
         guard await configure(
             url: server.url, pairingToken: credential, tailscaleOnly: server.tailscaleOnly,
@@ -3211,7 +3234,7 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     func startMaintenance(_ request: CantripMaintenanceRequest) async throws -> CantripMaintenanceSnapshot {
-        guard let token else { throw CantripRemoteError.missingToken }
+        guard let token else { throw missingTokenError }
         let generation = configurationGeneration
         updateRoutes()
         let reader = router.independentReader()
@@ -3802,7 +3825,7 @@ final class CantripRemoteModel: ObservableObject {
     private func performHistoryRead<T>(
         _ operation: (CantripRemoteAPI) async throws -> T
     ) async throws -> T {
-        guard let token else { throw CantripRemoteError.missingToken }
+        guard let token else { throw missingTokenError }
         let generation = configurationGeneration
         updateRoutes()
         // Large history downloads must not hold the polling/mutation request gate.
@@ -4494,7 +4517,7 @@ final class CantripRemoteModel: ObservableObject {
         isMutating = true
         defer { isMutating = false }
         do {
-            guard let token else { throw CantripRemoteError.missingToken }
+            guard let token else { throw missingTokenError }
             let generation = configurationGeneration
             let result = try await requestGate.withLock {
                 guard generation == self.configurationGeneration else { throw CancellationError() }
@@ -4662,7 +4685,7 @@ final class CantripRemoteModel: ObservableObject {
         _ operation: @escaping (CantripRemoteAPI) async throws -> T
     ) async throws -> T {
         guard let token else {
-            throw CantripRemoteError.missingToken
+            throw missingTokenError
         }
         let generation = configurationGeneration
         let result = try await requestGate.withLock {
@@ -5566,7 +5589,8 @@ struct CantripRemoteSettingsSection: View {
             canChangeSelection: !model.isMutating,
             add: { try model.addServer($0) },
             select: { try await model.selectServer($0) },
-            remove: model.removeServer
+            remove: model.removeServer,
+            reenter: { try await model.reenterCredential($1, for: $0) }
         )
         if let error = model.errorMessage {
             Section {

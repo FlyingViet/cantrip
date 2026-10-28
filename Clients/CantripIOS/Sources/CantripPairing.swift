@@ -159,9 +159,8 @@ extension CantripRemoteModel {
 
     /// A saved server with the link's routes whose token isn't on this device; pairing restores it.
     func serverMissingToken(for link: CantripPairingLink) -> SavedServer? {
-        servers.servers.first { server in
-            guard server.url == (link.url ?? ""), server.directAddress == link.directAddress else { return false }
-            do { return try servers.storedCredential(for: server) == nil } catch { return false }
+        servers.servers.first {
+            $0.url == (link.url ?? "") && $0.directAddress == link.directAddress && servers.isMissingCredential($0)
         }
     }
 
