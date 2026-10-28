@@ -402,6 +402,8 @@ final class ChatSession: ObservableObject {
     private let codex: CodexBackend
     private let antigravity: AntigravityBackend
     private let localModel = OpenAICompatibleBackend()
+    /// Tests stand in for backends other than Copilot here.
+    private let backendOverrides: [BackendKind: Backend]
     private let privateLocalModel = PrivateLocalBackend()
     private let deviceLogin = RemoteDeviceLogin()
     let shell = PersistentShell()
@@ -432,6 +434,7 @@ final class ChatSession: ObservableObject {
 
     private func backend(for kind: BackendKind) -> Backend {
         if isLocalPrivate { return privateLocalModel }
+        if let override = backendOverrides[kind] { return override }
         switch kind {
         case .claudeCode: return claudeCode
         case .copilot: return copilot
@@ -443,9 +446,10 @@ final class ChatSession: ObservableObject {
     }
 
     init(id: UUID = UUID(), copilotBackend: Backend = CopilotBackend(),
-         cantripHomeRun: Bool = false,
+         cantripHomeRun: Bool = false, backendOverrides: [BackendKind: Backend] = [:],
          makeJournal: @escaping (UUID) throws -> RunJournal = { try RunJournal(sessionID: $0) }) {
         self.id = id
+        self.backendOverrides = backendOverrides
         self.isCantripHomeRun = cantripHomeRun
         self.copilot = copilotBackend
         self.makeJournal = makeJournal
@@ -2045,8 +2049,17 @@ final class ChatSession: ObservableObject {
             resetBackendConversations()
         }
 
-        let backendKind = isLocalPrivate ? .localModel
+        var backendKind = isLocalPrivate ? .localModel
             : isResume ? (currentRunBackend ?? settings.backend) : settings.backend
+        // The chosen backend is still at its usage limit: start on the fallback instead of failing first.
+        var limitNotice: String?
+        if !isLocalPrivate, !isResume, let until = BackendLimitTracker.shared.limitedUntil(backendKind),
+           let fallback = BackendFallback.target(for: backendKind, configured: settings.limitFallbackBackend,
+                                                 homeRun: isCantripHomeRun) {
+            limitNotice = "\(backendKind.rawValue) is at its usage limit until \(BackendFallback.untilLabel(until))."
+                + " Using \(settings.backendLabel(fallback))."
+            backendKind = fallback
+        }
         if !isLocalPrivate { Log.write("send: \"\(prompt.prefix(80))\" via \(backendKind.rawValue)") }
         canResume = false
         if !isResume {
@@ -2083,6 +2096,7 @@ final class ChatSession: ObservableObject {
         appendRunMessage(ChatMessage(role: .assistant, text: ""))
         isStreaming = true
         statusText = "Thinking…"
+        if let limitNotice { deliveryStatus = limitNotice }
         if let automatedRun, let runID = currentRunID {
             onCantripHomeRunStarted?(runID, automatedRun)
         }
@@ -3112,8 +3126,20 @@ final class ChatSession: ObservableObject {
             return
         }
         let resumable = currentRunPrompt != nil && lastRunHadProgress
+        let fallback = usageLimitFallback(after: errorText)
         recordInterruption(errorText)
-        appendRunMessage(ChatMessage(role: .error, text: errorText))
+        appendRunMessage(ChatMessage(role: .error, text: fallback.map {
+            errorText + "\n\nContinuing this task with \(settings.backendLabel($0)) (Settings ▸ Usage limit fallback)."
+        } ?? errorText))
+        if let fallback {
+            Log.write("resume: \(runningBackendKind?.rawValue ?? "backend") hit its usage limit — continuing on \(fallback.rawValue)")
+            currentRunBackend = fallback
+            interruptionAwaitsResume = false
+            finishStream(dequeue: false, notify: false) { [weak self] in
+                self?.scheduleAutoResume(reason: "usage-limit-fallback")
+            }
+            return
+        }
         if waitForNetworkThenResume(after: errorText) { return }
         guard resumable else {
             completeRun(status: "failed", summary: errorText)
@@ -3159,6 +3185,17 @@ final class ChatSession: ObservableObject {
             message.runID == currentRunID && message.role == .assistant
                 && (!message.activities.isEmpty || !message.text.isEmpty)
         }
+    }
+
+    /// The backend reported its plan's usage limit: remember that for every tab, and return the
+    /// backend this run continues on (Settings' usage limit fallback), or nil to fail as usual.
+    private func usageLimitFallback(after errorText: String) -> BackendKind? {
+        guard !isLocalPrivate, UsageLimit.isLimitError(errorText),
+              let limited = runningBackendKind ?? currentRunBackend, limited != .localModel else { return nil }
+        BackendLimitTracker.shared.markLimited(limited, message: errorText)
+        guard currentRunPrompt != nil, currentRunMode == .single, !councilMode, journalError == nil else { return nil }
+        return BackendFallback.target(for: limited, configured: settings.limitFallbackBackend,
+                                      homeRun: isCantripHomeRun)
     }
 
     /// Error text a dropped or flaky connection produces (Node, URLSession and DNS failures).
@@ -3259,7 +3296,7 @@ final class ChatSession: ObservableObject {
     /// Delay so the killed backend process fully dies before the
     /// replacement launches — must outlast the backends' 3s SIGTERM →
     /// SIGKILL escalation so a hung process can't race the new stream.
-    private func scheduleAutoResume() {
+    private func scheduleAutoResume(reason: String? = nil) {
         let generation = streamGeneration
         // Set only once a resume is really scheduled (a failed journal flush skips this).
         autoResumePending = true
@@ -3271,7 +3308,7 @@ final class ChatSession: ObservableObject {
                 self.objectWillChange.send()
                 return
             }
-            self.performResume(auto: true)
+            self.performResume(auto: true, reason: reason)
         }
     }
 

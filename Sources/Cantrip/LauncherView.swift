@@ -4116,6 +4116,23 @@ struct SettingsView: View {
                 labeledField("System prompt", text: $settings.localSystemPrompt, prompt: "")
             }
             Divider().opacity(0.3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Usage limit fallback").font(.caption).foregroundStyle(.secondary)
+                Picker("", selection: $settings.limitFallbackBackend) {
+                    Text("Off — stop and show the error").tag("")
+                    ForEach(BackendKind.allCases) { kind in
+                        Text(settings.backendLabel(kind)).tag(kind.rawValue)
+                    }
+                }
+                .labelsHidden()
+                Text(settings.limitFallbackBackend == settings.backend.rawValue
+                     ? "Choose a backend other than the one above; a backend can't fall back on itself."
+                     : "When a backend says its plan's usage limit is reached, Cantrip continues the task on this backend and sends new messages from every tab there until the limit resets (an hour when the backend doesn't say). Council seats and Private Local tabs don't switch.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Divider().opacity(0.3)
             Toggle("Act on my behalf — all backends (run commands, edit files, send messages without asking)", isOn: $settings.allowActions)
                 .font(.caption)
                 .toggleStyle(.checkbox)
