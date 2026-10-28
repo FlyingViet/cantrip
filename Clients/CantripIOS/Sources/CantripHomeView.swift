@@ -91,8 +91,6 @@ enum CantripHomeBadgeTone: Equatable {
 }
 
 struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: View, BuildsContent: View>: View {
-    @Environment(\.chatDisplayTraits) private var displayTraits
-    @Environment(\.cantripDuoSidebarShown) private var duoSidebarShown
     @Binding var selection: CantripHomeSection
     let runningTasks: Int
     /// The shared header sits outside the TabView, whose children do not inherit its inset.
@@ -158,33 +156,22 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
         .tabViewStyle(.tabBarOnly)
         .tabBarMinimizeBehavior(.never)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            // The sidebar layout lists Home's sections in its sidebar instead.
-            if !displayTraits.hasVerticalBar, !duoSidebarShown {
-                CantripHomeCompactTabBar(
-                    selection: $selection,
-                    runningTasks: runningTasks
-                )
-                .padding(.horizontal, 12)
-                .padding(.vertical, 3)
-            }
+            // Always at the bottom, folded or not and with the iPhone Duo's sidebar open: Home's
+            // sections never move into the system's vertical bar.
+            CantripHomeCompactTabBar(
+                selection: $selection,
+                runningTasks: runningTasks
+            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 3)
         }
         .accessibilityIdentifier("home.tabView")
     }
 
-    private var systemTabBarVisibility: Visibility {
-        // With the unfolded iPhone Duo's sidebar open, Home's sections are listed there instead.
-        displayTraits.placesActionsInVerticalBar && !duoSidebarShown ? .visible : .hidden
-    }
-
     private func tabContent<Content: View>(_ content: Content) -> some View {
         content
-            .safeAreaPadding(
-                .bottom,
-                displayTraits.hasVerticalBar || duoSidebarShown
-                    ? 0
-                    : CantripHomeLayout.compactContentBottomClearance
-            )
-            .toolbar(systemTabBarVisibility, for: .tabBar)
+            .safeAreaPadding(.bottom, CantripHomeLayout.compactContentBottomClearance)
+            .toolbar(.hidden, for: .tabBar)
     }
 }
 

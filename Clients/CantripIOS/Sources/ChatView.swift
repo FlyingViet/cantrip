@@ -1391,7 +1391,6 @@ struct ChatView: View {
         } persistentRail: {
             duoAppRail
         }
-        .environment(\.cantripDuoSidebarShown, showsDuoSidebar)
         // Inside a tab, the same left-edge swipe that opens the drawer in Home drags the tab away to Home.
         .cantripTabBackSwipe(
             backTransition,

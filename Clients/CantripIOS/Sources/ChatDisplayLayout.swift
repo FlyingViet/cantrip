@@ -31,20 +31,10 @@ private struct ChatDisplayTraitsKey: EnvironmentKey {
     static let defaultValue = ChatDisplayTraits()
 }
 
-private struct CantripDuoSidebarShownKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
 extension EnvironmentValues {
     var chatDisplayTraits: ChatDisplayTraits {
         get { self[ChatDisplayTraitsKey.self] }
         set { self[ChatDisplayTraitsKey.self] = newValue }
-    }
-
-    /// The unfolded iPhone Duo's sidebar is open beside the chat (it lists Home's sections).
-    var cantripDuoSidebarShown: Bool {
-        get { self[CantripDuoSidebarShownKey.self] }
-        set { self[CantripDuoSidebarShownKey.self] = newValue }
     }
 }
 
