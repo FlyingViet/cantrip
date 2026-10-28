@@ -33,6 +33,69 @@ extension SessionTabTests {
         try await testClaudeChildTabPolicy(directory)
         try await testClaudeLaunchAndIdleRelease(directory)
         try await testClaudeTabModels(script)
+        try await testClaudeCarriesEarlierTurns(directory)
+        try testClaudeSharedMCP(directory)
+    }
+
+    /// A Claude session that hasn't seen the tab's earlier turns (a tab that ran on Copilot, or turns
+    /// another backend answered since) gets them in front of the message, once; turns it saw don't repeat.
+    @MainActor
+    private static func testClaudeCarriesEarlierTurns(_ directory: URL) async throws {
+        let backend = ClaudeCodeBackend(persistKey: "test-claude-continuity")
+        backend.reset()
+        defer { backend.reset() }
+        let earlier = [ConversationTurn(user: "Plan the Duo rail", assistant: "Rail on the right with a sidebar toggle."),
+                       ConversationTurn(user: "Ship it to TestFlight", assistant: "Build 100164 is up.")]
+        func send(_ prompt: String, _ turns: [ConversationTurn]) async throws -> String {
+            let turn = ClaudeTurn()
+            backend.send(BackendRequest(prompt: prompt, userMessage: prompt, previousTurns: turns),
+                         workdir: directory.path, onEvent: turn.record)
+            try await waitForJournalTest { turn.finished }
+            precondition(turn.failure == nil, "No failure: \(turn.log)")
+            return turn.text
+        }
+        let first = try await send("ECHO first", earlier)
+        precondition(first.contains("Context - selected earlier turns") && first.contains("Plan the Duo rail")
+                        && first.contains("Build 100164 is up.") && first.contains("ECHO first"),
+                     "A new Claude session gets the tab's earlier turns: \(first)")
+        let firstTurn = ConversationTurn(user: "ECHO first", assistant: "done")
+        let second = try await send("ECHO second", earlier + [firstTurn])
+        precondition(!second.contains("Context -") && second.hasPrefix("ECHO second"),
+                     "Turns the session saw aren't repeated: \(second)")
+        let elsewhere = ConversationTurn(user: "Fix the bottom bar on Copilot", assistant: "Moved to the rail.")
+        let third = try await send("ECHO third", earlier + [firstTurn, ConversationTurn(user: "ECHO second", assistant: "ok"),
+                                                             elsewhere])
+        precondition(third.contains("Fix the bottom bar on Copilot") && !third.contains("Plan the Duo rail"),
+                     "Only turns another backend answered since are carried: \(third)")
+    }
+
+    /// Copilot's local MCP servers reach Claude tabs; remote ones and names Claude has stay out.
+    private static func testClaudeSharedMCP(_ directory: URL) throws {
+        let copilot = directory.appendingPathComponent("copilot-mcp.json")
+        let claude = directory.appendingPathComponent("claude.json")
+        let output = directory.appendingPathComponent("shared.json")
+        try JSONSerialization.data(withJSONObject: ["mcpServers": [
+            "homelab": ["type": "stdio", "command": "/venv/bin/python", "args": ["-m", "homelab_mcp"], "tools": ["*"]],
+            "vault": ["type": "local", "command": "python3", "args": ["vault.py"], "env": ["BW_CLI_PATH": "/bin/bw"]],
+            "mobbin": ["type": "http", "url": "https://api.example.com/mcp", "tools": ["*"]],
+            "notion": ["type": "stdio", "command": "python3", "args": ["copilot-notion.py"]],
+        ]]).write(to: copilot)
+        try JSONSerialization.data(withJSONObject: ["mcpServers": ["notion": ["type": "stdio", "command": "node"]]])
+            .write(to: claude)
+        let path = ClaudeSharedMCP.configPath(copilotConfig: copilot, claudeConfig: claude, output: output, alsoDefined: [])
+        let shared = (try JSONSerialization.jsonObject(with: Data(contentsOf: output)) as? [String: Any])?["mcpServers"]
+            as? [String: [String: Any]] ?? [:]
+        precondition(path == output.path && Set(shared.keys) == ["homelab", "vault"],
+                     "Local servers are shared; remote ones and Claude's own names aren't: \(shared.keys)")
+        precondition(shared["homelab"]?["type"] as? String == "stdio" && shared["homelab"]?["tools"] == nil
+                        && (shared["vault"]?["env"] as? [String: String])?["BW_CLI_PATH"] == "/bin/bw",
+                     "Converted to Claude Code's format: \(shared)")
+        let mode = (try FileManager.default.attributesOfItem(atPath: output.path)[.posixPermissions] as? NSNumber)?.intValue
+        precondition(mode == 0o600, "The config is private: \(String(describing: mode))")
+        try JSONSerialization.data(withJSONObject: ["mcpServers": [:]]).write(to: copilot)
+        precondition(ClaudeSharedMCP.configPath(copilotConfig: copilot, claudeConfig: claude, output: output,
+                                                alsoDefined: []) == nil
+                        && !FileManager.default.fileExists(atPath: output.path), "Nothing to share removes it")
     }
 
     /// Claude Code's own model list (from `initialize`) drives per-tab model settings, saved
@@ -291,5 +354,12 @@ extension SessionTabTests {
             emit({'type': 'stream_event', 'event': {'type': 'content_block_delta', 'delta': {'type': 'text_delta', 'text': text}}})
             emit({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': text, 'num_turns': 1,
                   'modelUsage': {'claude-opus-5-5': {'contextWindow': 1000000}, 'claude-haiku-5-5': {'contextWindow': 200000}}})
+        elif 'ECHO' in prompt:
+            # The whole message, and the MCP configs it was launched with.
+            configs = sys.argv[sys.argv.index('--mcp-config') + 1:] if '--mcp-config' in sys.argv else []
+            text = prompt + '\nMCP=' + ','.join(configs)
+            emit({'type': 'system', 'subtype': 'init', 'session_id': 'session-echo', 'model': 'claude-opus-5-5'})
+            emit({'type': 'stream_event', 'event': {'type': 'content_block_delta', 'delta': {'type': 'text_delta', 'text': text}}})
+            emit({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': text, 'num_turns': 1})
     """#
 }
