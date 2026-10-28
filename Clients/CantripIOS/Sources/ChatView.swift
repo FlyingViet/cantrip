@@ -2483,7 +2483,12 @@ struct ChatView: View {
                 .disabled(vm.sending || importingImages || submittingRemote)
                 chatMenu.frame(width: 44, height: 44)
             } bottom: {
-                if vm.activeLane == .cantrip, !showsDuoSidebar {
+                if vm.activeLane == .home {
+                    CantripDuoRailSections(
+                        selection: $homeSection,
+                        runningTasks: remote.homeTasks.filter { $0.state == "running" }.count
+                    )
+                } else if vm.activeLane == .cantrip, !showsDuoSidebar {
                     CantripHomeBackPill { returnHomeAnimated() }
                         .environment(\.cantripCompactBackPill, true)
                         .disabled(importingImages || submittingRemote)
@@ -3185,6 +3190,40 @@ struct CantripDuoAppRail<Top: View, Bottom: View>: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Navigation")
         .accessibilityIdentifier("duo.rail")
+    }
+}
+
+/// Home's sections at the bottom of the app-drawn rail (unfolded upright), as the system's vertical
+/// bar shows them in the other Duo poses.
+struct CantripDuoRailSections: View {
+    @Binding var selection: CantripHomeSection
+    let runningTasks: Int
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ForEach(CantripHomeSection.allCases) { section in
+                let selected = selection == section
+                Button { selection = section } label: {
+                    Image(systemName: section.systemImage)
+                        .font(.title3)
+                        .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                        .frame(width: 48, height: 44)
+                        .background(selected ? Color.accentColor.opacity(0.2) : Color.clear, in: Capsule())
+                        .overlay(alignment: .topTrailing) {
+                            if section == .tasks, runningTasks > 0 {
+                                CantripTabsBadge(workingCount: runningTasks)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel(section.title)
+                .accessibilityValue(section == .tasks && runningTasks > 0 ? "\(runningTasks) running" : "")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityIdentifier("duo.rail.section.\(section.rawValue)")
+            }
+        }
+        .padding(.vertical, 6)
+        .background(Color(.tertiarySystemFill), in: Capsule())
     }
 }
 

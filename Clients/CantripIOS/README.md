@@ -221,7 +221,7 @@ Tap the **stacked-tabs icon at the top left** or swipe right from the **left edg
 to open the Cantrip **Tabs** drawer. The **hamburger menu is at the top right**,
 with **Settings** inside it. You can also choose **hamburger menu > Tabs**. On Duo's vertical toolbar in Home, **Tabs and the
 white hamburger menu sit at the top**, as in Home's iPhone header (Refresh and Settings are in the menu), and Home's Chat,
-Tasks, Artifacts and Builds stay in Home's own bottom bar, folded or not. In a project tab, the back pill sits near the bottom, with a separate
+Tasks, Artifacts and Builds take the bottom of the vertical toolbar. In a project tab, the back pill sits near the bottom, with a separate
 **Settings gear**, Refresh, and the **white hamburger menu at the top**.
 The hamburger stays white when paused, with a small orange pause badge. Select a
 tab to return to chat; swipe left on the drawer header or backdrop, tap outside,
@@ -1288,12 +1288,12 @@ effort and the Mac's usage limit fallback), **Settings**, Refresh and the menu. 
 and closes Gateway Mac's left sidebar with Pip, Home's sections, the tabs (with **+**), the open
 chat's **Skills** and the connection; the chat header keeps the title and state on the left and
 Stop and delivery on the right. The sidebar stays open or closed as you left it through folding,
-unfolding, rotating and typing. Home's bottom bar (Chat, Tasks, Artifacts, Builds) stays at the
-bottom either way. With the sidebar closed, the toggle shows the working or needs-input count the Tabs button would. Folded Duo (in
+unfolding, rotating and typing. Home's sections (Chat, Tasks, Artifacts, Builds) stay at the
+bottom of the rail either way, never in a bottom bar. With the sidebar closed, the toggle shows the working or needs-input count the Tabs button would. Folded Duo (in
 either orientation, and while the keyboard is up) keeps chat full-width with
 sessions in the drawer: where the system supplies a
-vertical bar, Home keeps its sections in its bottom bar, with Tabs and the hamburger menu at the
-top of Apple's native adaptive toolbar; in a project tab the back pill uses the bottom and a separate
+vertical bar, Home's sections use the bottom of Apple's native adaptive toolbar with Tabs and
+the hamburger menu at the top; in a project tab the back pill uses the bottom and a separate
 Settings gear, Refresh, and the hamburger menu stay at the top, instead of duplicating controls
 above the conversation. The title, connection/usage row,
 and composer remain with the chat. In other display configurations the familiar

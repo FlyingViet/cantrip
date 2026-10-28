@@ -91,6 +91,7 @@ enum CantripHomeBadgeTone: Equatable {
 }
 
 struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: View, BuildsContent: View>: View {
+    @Environment(\.chatDisplayTraits) private var displayTraits
     @Binding var selection: CantripHomeSection
     let runningTasks: Int
     /// The shared header sits outside the TabView, whose children do not inherit its inset.
@@ -156,22 +157,27 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
         .tabViewStyle(.tabBarOnly)
         .tabBarMinimizeBehavior(.never)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            // Always at the bottom, folded or not and with the iPhone Duo's sidebar open: Home's
-            // sections never move into the system's vertical bar.
-            CantripHomeCompactTabBar(
-                selection: $selection,
-                runningTasks: runningTasks
-            )
-            .padding(.horizontal, 12)
-            .padding(.vertical, 3)
+            if !sectionsInRail {
+                CantripHomeCompactTabBar(
+                    selection: $selection,
+                    runningTasks: runningTasks
+                )
+                .padding(.horizontal, 12)
+                .padding(.vertical, 3)
+            }
         }
         .accessibilityIdentifier("home.tabView")
     }
 
+    /// On an iPhone Duo, in every pose and with the sidebar open or closed, Home's sections are at the
+    /// bottom of the right-side rail: the system's vertical bar, or the app's own rail when unfolded
+    /// upright. Other iPhones keep the bottom bar.
+    private var sectionsInRail: Bool { displayTraits.hasVerticalBar || displayTraits.usesAppRail }
+
     private func tabContent<Content: View>(_ content: Content) -> some View {
         content
-            .safeAreaPadding(.bottom, CantripHomeLayout.compactContentBottomClearance)
-            .toolbar(.hidden, for: .tabBar)
+            .safeAreaPadding(.bottom, sectionsInRail ? 0 : CantripHomeLayout.compactContentBottomClearance)
+            .toolbar(displayTraits.hasVerticalBar ? .visible : .hidden, for: .tabBar)
     }
 }
 

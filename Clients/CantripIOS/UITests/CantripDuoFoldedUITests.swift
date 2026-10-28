@@ -1,7 +1,7 @@
 import XCTest
 
 /// iPhone Duo folded (the simulator's default pose): Cantrip Home keeps the iPhone layout while
-/// typing, its sections stay in its bottom bar, and the vertical bar's actions don't cover them.
+/// typing, its sections stay at the bottom of the system's vertical bar, and its actions don't cover them.
 /// Run on an iPhone Duo simulator with `TEST_RUNNER_CANTRIP_UITEST_HOME_URL=http://127.0.0.1:<port>`
 /// (any fixture host that serves Cantrip Home, e.g. `fake_home_host.py`).
 final class CantripDuoFoldedUITests: XCTestCase {
@@ -31,15 +31,14 @@ final class CantripDuoFoldedUITests: XCTestCase {
 
         let tabs = app.buttons["home.tabs"].firstMatch
         XCTAssertTrue(tabs.waitForExistence(timeout: 15), "The tabs button")
-        // Home's sections stay in its bottom bar, not the system's vertical bar.
-        let sections = ["Chat", "Tasks", "Artifacts", "Builds"].map { app.buttons[$0].firstMatch }
+        // Home's sections are at the bottom of the system's vertical bar, not a bottom bar.
+        let sections = ["Chat", "Tasks", "Artifacts", "Builds"].map { app.toolbars.buttons[$0].firstMatch }
         for section in sections {
             XCTAssertTrue(section.waitForExistence(timeout: 5), section.debugDescription)
-            XCTAssertGreaterThan(section.frame.minY, window.frame.midY, "\(section.label) is in the bottom bar")
+            XCTAssertGreaterThan(section.frame.midX, window.frame.width * 0.75, "\(section.label) is on the right edge")
             XCTAssertFalse(section.frame.intersects(tabs.frame), "The tabs button covers \(section.label)")
         }
         XCTAssertTrue(sections[3].isHittable, "Builds is reachable")
-        XCTAssertFalse(app.toolbars.buttons["Builds"].exists, "No second copy in the vertical bar")
         XCTAssertFalse(app.otherElements["duo.sidebar"].exists)
 
         let field = app.textFields["chat.composer"].firstMatch
