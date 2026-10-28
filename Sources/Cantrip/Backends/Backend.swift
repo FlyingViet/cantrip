@@ -127,7 +127,7 @@ struct SubagentInfo: Equatable, Codable {
     var tokens = 0
     var toolCalls: Int?
     var error: String?
-    /// The backend can stop this agent on its own (Copilot SDK sessions).
+    /// The backend can stop this agent on its own (Copilot SDK sessions, Claude background agents).
     var canCancel = false
     /// Complete reasoning blocks, oldest first (Copilot forwards subagent blocks whole).
     var reasoning: [String] = []
@@ -138,7 +138,8 @@ struct SubagentInfo: Equatable, Codable {
 
     var isActive: Bool { status == .queued || status == .running || status == .idle }
     var isBackgroundWatcher: Bool {
-        background && agentType == "task" && name.lowercased().hasPrefix("watch-")
+        // Copilot's `task` agent, or Claude Code's general-purpose one (both can run commands).
+        background && ["task", "general-purpose"].contains(agentType) && name.lowercased().hasPrefix("watch-")
     }
     /// A background agent the root launched for a request Auto ran in parallel.
     var isParallelRequest: Bool {

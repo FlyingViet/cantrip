@@ -142,7 +142,8 @@ final class ChildTabCoordinator {
         store.upsert(record)
         child.workdir = workdir
         try? child.updateTab(name: title)
-        try? child.saveModelSelection(parent.tabMetadata.modelSettings)
+        try? child.saveModelSelection(parent.tabMetadata.modelSettings, for: .copilot)
+        try? child.saveModelSelection(parent.tabMetadata.claudeModelSettings, for: .claudeCode)
         manager.placeChild(child, after: parent)
         parent.removeQueued(id: item.id)
         observeParent(parent)

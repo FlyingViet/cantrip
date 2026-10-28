@@ -81,11 +81,15 @@ be approved by the current action policy are denied rather than left hanging.
 5. Apply the choice to your next request; changing a picker does not rewrite
    an answer already being generated.
 
-On macOS, the backend and its defaults are shared app settings. Copilot tabs
-can override the model, effort and context tier through **Model Settings** in
+On macOS, the backend and its defaults are shared app settings. Copilot and
+Claude Code tabs can override the model and effort (Copilot also the context
+tier) through **Model Settings** in
 the tab's context menu, Mac/browser Remote or Cantrip Agent. Overrides persist
 per tab, require idle work and Council mode off, and can be removed with
-**Use Mac defaults**. Working directories and conversations are also per-session.
+**Use Mac defaults**. Each backend keeps its own override, since their model
+IDs differ. Claude Code's list comes from the CLI's `initialize` reply (no model
+call); a change restarts that tab's `claude` process, which resumes the same
+conversation. Working directories and conversations are also per-session.
 
 On Mac, the refresh button beside the Copilot model picker reads the signed-in
 CLI's live account catalog, including each model's supported efforts and context
@@ -98,6 +102,21 @@ labels separately show the API's **input-token budget**, when available; these
 are not interchangeable with total context or maximum output tokens. Unsupported
 saved effort/tier values remain visible with a warning, without changing active
 sessions or silently resetting your preferences.
+
+## Claude Code background agents
+
+Claude Code tabs follow the same watcher and parallel-request conventions.
+Cantrip adds them to the system prompt in Claude's terms: a background agent
+(Agent/Task tool with `run_in_background`) whose description starts with
+`watch-` waits on a build or upload, and `side-` agents take forwarded
+independent requests. When the root turn ends while background agents or
+shells run, the run stays open ("Background watcher running") and still takes
+new messages. When the work finishes, the CLI starts a turn of its own; Cantrip
+shows it as the run's continuation, in its own bubble when the work came from
+another thread. Stop ends the run and its background work. An idle `claude`
+process is stopped after the **Free an idle tab's memory** delay (Settings >
+Copilot), and the next message resumes its session. Child tabs on Claude Code
+take the same Simulator/build turns as Copilot child tabs.
 
 ## Copilot subagents
 
@@ -128,9 +147,9 @@ running ones first. A card shows:
 - its steps and latest message, under the disclosure, plus any failure reason
 
 **Stop** on a card cancels only that subagent. The rest of the reply keeps
-going, and Copilot is told the subagent was stopped. Stop appears only for
-Copilot sessions; Claude Code Task subagents are shown but can't be stopped
-one at a time. Subagent cards last as long as the conversation is open, like
+going, and Copilot is told the subagent was stopped. Claude Code background
+agents can be stopped the same way (the CLI's `stop_task`); its foreground
+Task subagents are shown but can't be stopped one at a time. Subagent cards last as long as the conversation is open, like
 other tool steps. The browser Remote, another Mac's Remote tab and Cantrip
 Agent show the same cards: running ones pinned at the bottom of the chat with
 Stop, finished ones in their reply; see

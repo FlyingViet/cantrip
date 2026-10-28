@@ -97,8 +97,11 @@ or 30 minutes after its own time at the latest.
 
 A task runs on Home's model unless it has its own `model` (and optionally
 `effort`), set by asking Home, for example to move a simple tracker to a cheaper
-model. The ID must be one the model picker offers; `""` returns the task to
-Home's model. Home's effort and context window carry over when the task's model
+model. The ID must be one the model picker offers for Home's backend (Copilot
+or Claude Code, for example `sonnet`); `""` returns the task to Home's model. A
+model saved under the other backend falls back to Home's model, with a note.
+On Claude Code, attended Home keeps its protocol in the `claude` process's
+system prompt, as on Copilot, so each message carries only that turn's data. Home's effort and context window carry over when the task's model
 supports them. If the model isn't available when a run starts, that run uses
 Home's model and its summary says so. The Tasks screen shows a task's model, and
 each run records the model it used.

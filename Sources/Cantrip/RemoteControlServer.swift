@@ -1210,10 +1210,11 @@ final class RemoteControlServer {
                     throw SessionModelSettingsError(409, "Background runs use Cantrip Home's model. Change it in Home.")
                 }
                 if request.method == "GET" {
+                    let backend = session.modelSettingsBackend
                     if request.query("refresh") == "true" {
-                        session.settings.refreshCopilotModels()
-                    } else if session.settings.copilotModelRefreshError == nil {
-                        session.settings.refreshCopilotModelsIfNeeded()
+                        session.settings.refreshTabModels(for: backend)
+                    } else if session.modelCatalog.refreshError == nil {
+                        session.settings.refreshTabModelsIfNeeded(for: backend)
                     }
                 } else if request.method == "POST" {
                     guard let json, let revision = json["revision"] as? String,
@@ -2802,7 +2803,7 @@ private extension RemoteControlServer {
     <label><input id="modelDefaults" type="checkbox">Use Mac defaults</label>
     <label>Model<select id="modelChoice"></select></label><label>Effort<select id="modelEffort"></select></label>
     <label>Context window<select id="modelContext"></select></label><span id="modelBudget" class="muted"></span>
-    <p class="muted">Only this tab changes. Save while idle; the next prompt uses the new settings. The conversation stays visible, but Copilot rebuilds its runtime with recent history. Long context may cost more.</p>
+    <p class="muted">Only this tab changes. Save while idle; the next prompt uses the new settings and continues the same conversation. Long context may cost more.</p>
     <div id="modelError" role="alert"></div><div class="tab-actions">
     <button id="modelReload" type="button" class="control">Reload settings</button><button id="modelRefresh" type="button" class="control">Refresh models</button>
     <button id="modelCancel" type="button" class="control">Cancel</button><button id="modelSave" type="submit" class="control primary">Save</button>

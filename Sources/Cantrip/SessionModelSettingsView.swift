@@ -12,20 +12,19 @@ struct SessionModelSettingsView: View {
     init(session: ChatSession) {
         self.session = session
         _selection = State(initialValue: session.modelSelection)
-        _usesDefaults = State(initialValue: session.tabMetadata.modelSettings == nil)
+        _usesDefaults = State(initialValue: session.ownModelSelection == nil)
         _revision = State(initialValue: session.modelSettingsRevision)
     }
 
-    private var info: CopilotModelInfo? {
-        settings.copilotModelInfo(selection.model.isEmpty
-                                  ? settings.copilotFileDefaultModel ?? "" : selection.model)
-    }
+    private var catalog: TabModelCatalog { settings.tabModelCatalog(for: session.modelSettingsBackend) }
+    private var isClaude: Bool { session.modelSettingsBackend == .claudeCode }
+
+    private var info: CopilotModelInfo? { catalog.info(selection.model) }
 
     private var validationError: String? {
         guard !usesDefaults else { return nil }
         do {
-            try selection.validate(catalog: settings.copilotModelCatalog,
-                                   fileDefaultModel: settings.copilotFileDefaultModel)
+            try selection.validate(catalog: catalog.models, fileDefaultModel: catalog.fileDefaultModel)
             return nil
         } catch { return error.localizedDescription }
     }
@@ -41,8 +40,8 @@ struct SessionModelSettingsView: View {
                     selection.effort = ""
                     selection.contextTier = info?.contextTiers?.contains("default") == true ? "default" : ""
                 })) {
-                    Text("CLI default (\(settings.copilotFileDefaultModel ?? "Auto"))").tag("")
-                    ForEach(CopilotModelInfo.choices(supported: settings.copilotModelCatalog.map(\.id),
+                    Text("CLI default (\(catalog.fileDefaultModel ?? "Auto"))").tag("")
+                    ForEach(CopilotModelInfo.choices(supported: catalog.models.map(\.id),
                                                    fallback: [], selected: selection.model), id: \.self) {
                         Text($0).tag($0)
                     }
@@ -55,6 +54,7 @@ struct SessionModelSettingsView: View {
                             .disabled(info?.reasoningEfforts?.contains($0) != true)
                     }
                 }
+                if !isClaude {
                 Picker("Context window", selection: $selection.contextTier) {
                     Text("CLI default").tag("")
                     ForEach(CopilotModelInfo.choices(supported: info?.contextTiers,
@@ -63,28 +63,31 @@ struct SessionModelSettingsView: View {
                             .disabled(info?.contextTiers?.contains(tier) != true)
                     }
                 }
+                }
             }
             .disabled(usesDefaults || session.modelSettingsUnavailableReason != nil)
             .onChange(of: usesDefaults) { _, inherited in
                 if inherited { selection = session.defaultModelSelection }
             }
-            if let context = info?.contextLabel {
+            if !isClaude, let context = info?.contextLabel {
                 Text("Advertised maximum: \(context) tokens. Tier values are input budgets, not total context.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Only this tab changes. Save while idle; the next prompt uses the new settings. The conversation stays visible, but Copilot rebuilds its runtime with recent history. Long context may cost more.")
+            Text(isClaude
+                 ? "Only this tab changes. Save while idle; the next prompt restarts Claude Code with the new settings and resumes the same conversation."
+                 : "Only this tab changes. Save while idle; the next prompt uses the new settings. The conversation stays visible, but Copilot rebuilds its runtime with recent history. Long context may cost more.")
                 .font(.caption).foregroundStyle(.secondary)
             if let message = error ?? session.modelSettingsUnavailableReason ?? validationError
-                ?? settings.copilotModelRefreshError {
+                ?? catalog.refreshError {
                 Text(message).font(.callout).foregroundStyle(.orange)
             }
             HStack {
-                Button(settings.copilotRefreshInFlight ? "Refreshing..." : "Refresh models") {
-                    settings.refreshCopilotModels()
-                }.disabled(settings.copilotRefreshInFlight)
+                Button(catalog.isRefreshing ? "Refreshing..." : "Refresh models") {
+                    settings.refreshTabModels(for: session.modelSettingsBackend)
+                }.disabled(catalog.isRefreshing)
                 Button("Reload settings") {
                     selection = session.modelSelection
-                    usesDefaults = session.tabMetadata.modelSettings == nil
+                    usesDefaults = session.ownModelSelection == nil
                     revision = session.modelSettingsRevision
                     error = nil
                 }
@@ -102,7 +105,7 @@ struct SessionModelSettingsView: View {
         }
         .padding(20)
         .frame(width: 540)
-        .onAppear { settings.refreshCopilotModelsIfNeeded() }
+        .onAppear { settings.refreshTabModelsIfNeeded(for: session.modelSettingsBackend) }
     }
 
     private func contextLabel(_ tier: String) -> String {

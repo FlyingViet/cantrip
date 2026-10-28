@@ -273,7 +273,7 @@ enum BackendCommandPolicy {
             return (.unavailable, scheduleNote, nil)
         case (.copilot, "cwd"), (.copilot, "cd"), (.copilotRemote, "cwd"), (.copilotRemote, "cd"):
             return (.unavailable, cwdNote, nil)
-        case (.copilot, "model"), (.copilot, "models"):
+        case (.copilot, "model"), (.copilot, "models"), (.claudeCode, "model"):
             return (.cantrip, modelNote, "modelSettings")
         case (.claudeCode, "clear"), (.claudeCode, "reset"), (.claudeCode, "new"),
              (.antigravity, "clear"), (.antigravity, "reset"), (.antigravity, "new"):

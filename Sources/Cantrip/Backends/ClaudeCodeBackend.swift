@@ -46,12 +46,45 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     private var currentOnEvent: ((BackendEvent) -> Void)?
     private var inputRequests: [String: BackendInputRequest] = [:]
     private var askpass: RemoteAskpass?
-    private var processAllowsActions: Bool?
     private let guardrailLock = NSLock()
     private var storedGuardrail: CantripHomeGuardrail?
     private var storedGuardrailLabel = "Cantrip Home"
     /// Actions the user approved while this process ran (queue-owned).
     private var approvedScopes: Set<String> = []
+    private var storedChildPolicy: CopilotBackend.ChildPolicy?
+    /// Root background work the CLI reports as live (`background_tasks_changed`), by task ID.
+    private var liveBackgroundTasks: [String: (type: String, name: String)] = [:]
+    /// Task ID <-> the tool call that started it (agent stops, finished-work wakes).
+    private var taskCalls: [String: String] = [:]
+    private var callTasks: [String: String] = [:]
+    /// The root turn ended while background work runs: the run stays open until it reports,
+    /// when the CLI starts a turn of its own to deliver the result.
+    private var waitingOnBackground = false
+    /// Background work that finished since the root's last turn started, for the wake's bubble.
+    private var finishedBackground: [String] = []
+    /// One of them was a `side-*` agent (the wake replies to a parallel request).
+    private var finishedParallel = false
+    /// Ends a wait whose wake turn never came (the result reached a turn that was still running).
+    private var wakeFallback: DispatchWorkItem?
+    private var stopRequests: [String: (Result<Bool, Error>) -> Void] = [:]
+    private var rootModel: String?
+    private var contextLimit: Int?
+    private var idleRelease: DispatchWorkItem?
+    /// What the running process was launched with; a change starts a new one (resuming the session).
+    private var processSignature = ""
+    /// Per-tab effort (tab model settings); nil = the configured effort.
+    var effortOverride: String?
+    /// Attended Home's static protocol, kept in the system prompt instead of every message.
+    var homeProtocol: String?
+    /// Seconds an idle process is kept before it's stopped to free memory; nil = the setting.
+    var idleReleaseDelay: TimeInterval?
+    static var wakeGrace: TimeInterval = 5
+
+    /// A child tab's shared-resource rules, consulted before Cantrip's policy for shell commands.
+    var childPolicy: CopilotBackend.ChildPolicy? {
+        get { guardrailLock.withLock { storedChildPolicy } }
+        set { guardrailLock.withLock { storedChildPolicy = newValue } }
+    }
 
     /// Cantrip Home sessions never bypass permissions: every tool call is checked by the host.
     var guardrail: CantripHomeGuardrail? {
@@ -79,34 +112,73 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             self.currentOnEvent = onEvent
             self.hasEmittedText = false
             self.hasEmittedThinking = false
+            self.idleRelease?.cancel()
+            self.endBackgroundWait()
             if self.process?.isRunning != true || self.processWorkdir != workdir
-                || self.processAllowsActions != self.settings.allowActions {
+                || self.processSignature != self.launchSignature(workdir: workdir) {
                 self.cancelInputs()
                 self.askpass?.stop()
                 self.process?.terminate()
+                self.resetBackgroundTracking()
                 self.startProcess(workdir: workdir)
             }
             self.askpass?.beginTurn()
             self.countedRootMessages.removeAll()
             self.writeUserMessage(request.prompt)
-            onEvent(.context(BackendContextUsage(messageCharacters: request.prompt.count)))
+            onEvent(.context(BackendContextUsage(limit: self.contextLimit, messageCharacters: request.prompt.count)))
         }
+    }
+
+    private var model: String { (modelOverride ?? settings.claudeModel).trimmingCharacters(in: .whitespaces) }
+    private var effort: String { (effortOverride ?? settings.claudeEffort).trimmingCharacters(in: .whitespaces) }
+
+    private func launchSignature(workdir: String) -> String {
+        [workdir, String(settings.allowActions), settings.claudePermissionMode, model, effort, guardrail?.rawValue ?? "",
+         String(readOnly), homeProtocol ?? ""].map { "\($0.utf8.count):\($0)" }.joined()
     }
 
     /// Claude-style mid-turn injection: append a user message into the
     /// RUNNING turn's context without interrupting it. Returns false when
-    /// no live process exists (caller should queue instead).
+    /// no live process exists (caller should queue instead). While the run waits on
+    /// background agents, a message starts a root turn alongside them.
     var supportsMidTurnInjection: Bool {
-        process?.isRunning == true && stdinHandle != nil && turnInFlight
+        process?.isRunning == true && stdinHandle != nil && (turnInFlight || waitingOnBackground)
     }
 
     var canSteerTurns: Bool { true }
 
+    /// The root can hand a forwarded request to a background agent (`side-*`) mid-turn.
+    var supportsParallelSubagents: Bool { !readOnly && supportsMidTurnInjection }
+
     func injectMidTurn(_ text: String) -> Bool {
         guard process?.isRunning == true, stdinHandle != nil else { return false }
-        queue.async { [weak self] in self?.writeUserMessage(text) }
+        queue.async { [weak self] in
+            guard let self else { return }
+            // A message into a run waiting on background work starts the next root turn.
+            if self.waitingOnBackground { self.endBackgroundWait() }
+            self.writeUserMessage(text)
+        }
         Log.write("inject: mid-turn message (\(text.count) chars)")
         return true
+    }
+
+    /// Stops one background agent through the CLI's `stop_task` (its result then reports it stopped).
+    func cancelSubagent(agentID: String, completion: @escaping (Result<Bool, Error>) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard let taskID = self.callTasks[agentID] else {
+                return completion(.failure(SubagentCancelError.finished))
+            }
+            guard self.stdinHandle != nil, self.process?.isRunning == true else {
+                return completion(.failure(SubagentCancelError.sessionUnavailable))
+            }
+            let id = "cantrip-stop-\(UUID().uuidString)"
+            self.stopRequests[id] = completion
+            self.writeControlRequest(["subtype": "stop_task", "task_id": taskID], id: id)
+            self.queue.asyncAfter(deadline: .now() + 10) { [weak self] in
+                self?.stopRequests.removeValue(forKey: id)?(.failure(SubagentCancelError.timedOut))
+            }
+        }
     }
 
     /// Graceful in-band interrupt (same mechanism as Esc in Claude Code's
@@ -116,7 +188,9 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     /// Verified against CLI v2.1.221; unknown stdin lines are ignored by
     /// the CLI, so this is safe to send even on older versions.
     func interruptTurn() -> Bool {
-        guard process?.isRunning == true, stdinHandle != nil else { return false }
+        // Background agents would wake the root again after the stop: end everything instead.
+        guard process?.isRunning == true, stdinHandle != nil, liveBackgroundTasks.isEmpty,
+              !waitingOnBackground else { return false }
         let message: [String: Any] = [
             "type": "control_request",
             "request_id": UUID().uuidString,
@@ -179,6 +253,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         countedSubagentMessages.removeAll()
         turnInFlight = false
         suppressUntilResult = false
+        idleRelease?.cancel()
+        resetBackgroundTracking()
         p.terminate()
         // Escalate to SIGKILL if it ignores SIGTERM.
         DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
@@ -195,20 +271,190 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         activities.removeAll()
     }
 
+    // MARK: - Background agents and shells
+
+    private func resetBackgroundTracking() {
+        wakeFallback?.cancel()
+        wakeFallback = nil
+        waitingOnBackground = false
+        liveBackgroundTasks.removeAll()
+        taskCalls.removeAll()
+        callTasks.removeAll()
+        finishedBackground.removeAll()
+        finishedParallel = false
+        let stops = stopRequests.values
+        stopRequests.removeAll()
+        for stop in stops { stop(.failure(SubagentCancelError.sessionUnavailable)) }
+    }
+
+    private func endBackgroundWait() {
+        wakeFallback?.cancel()
+        wakeFallback = nil
+        waitingOnBackground = false
+    }
+
+    /// The run's waiting line, counted like Copilot's (watch-*, side-*, anything else).
+    private var backgroundWaitStatus: String {
+        let names = liveBackgroundTasks.values.map { $0.type == "local_agent" ? $0.name.lowercased() : "" }
+        let watchers = names.filter { $0.hasPrefix("watch-") }.count
+        let parallel = names.filter { $0.hasPrefix("side-") }.count
+        return BackgroundWaitStatus.waiting(watchers: watchers, parallel: parallel,
+                                            other: names.count - watchers - parallel)
+    }
+
+    /// The root turn ended. Background work still running (or a result still on its way) keeps
+    /// the run open: the CLI starts a turn of its own when that work reports.
+    private func finishRootTurn(_ onEvent: (BackendEvent) -> Void) {
+        if !liveBackgroundTasks.isEmpty {
+            waitingOnBackground = true
+            onEvent(.status(backgroundWaitStatus))
+        } else if !finishedBackground.isEmpty {
+            waitingOnBackground = true
+            scheduleWakeFallback()
+        } else {
+            onEvent(.done)
+            scheduleIdleRelease()
+        }
+    }
+
+    /// Background work finished while the root waits for it; its wake turn should follow.
+    private func scheduleWakeFallback() {
+        wakeFallback?.cancel()
+        let owner = process
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.process === owner, self.waitingOnBackground, !self.turnInFlight,
+                  self.liveBackgroundTasks.isEmpty else { return }
+            Log.write("claude: background work finished without a wake turn; ending the run")
+            self.waitingOnBackground = false
+            self.finishedBackground.removeAll()
+            self.currentOnEvent?(.done)
+            self.scheduleIdleRelease()
+        }
+        wakeFallback = work
+        queue.asyncAfter(deadline: .now() + Self.wakeGrace, execute: work)
+    }
+
+    /// Stops a process left idle so its memory is returned; the next message resumes the
+    /// session (`--resume`) in a new one. Uses Copilot's "Free an idle tab's memory" setting.
+    private func scheduleIdleRelease() {
+        idleRelease?.cancel()
+        let delay = idleReleaseDelay ?? TimeInterval(settings.copilotIdleReleaseMinutes * 60)
+        guard delay > 0 else { return }
+        let owner = process
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let owner, self.process === owner, !self.turnInFlight, !self.waitingOnBackground,
+                  self.liveBackgroundTasks.isEmpty, self.inputRequests.isEmpty else { return }
+            Log.write("claude: freeing idle process pid \(owner.processIdentifier); the next message resumes it")
+            self.process = nil
+            self.stdinHandle = nil
+            self.currentOnEvent = nil
+            self.askpass?.stop()
+            self.askpass = nil
+            self.activities.removeAll()
+            self.childIndex.removeAll()
+            self.resetBackgroundTracking()
+            owner.terminate()
+        }
+        idleRelease = work
+        queue.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// `system` events about background tasks (agents and shells the root started).
+    private func handleTaskEvent(_ subtype: String, _ obj: [String: Any], _ onEvent: (BackendEvent) -> Void) {
+        let taskID = obj["task_id"] as? String
+        let callID = obj["tool_use_id"] as? String
+        switch subtype {
+        case "task_started":
+            // Foreground commands and agents report as tasks too; only detached work is tracked.
+            guard let taskID, let callID, obj["is_backgrounded"] as? Bool == true, obj["parent_task_id"] == nil,
+                  obj["owned_by_subagent"] as? Bool != true else { return }
+            taskCalls[taskID] = callID
+            callTasks[callID] = taskID
+            if var activity = activities[callID], activity.subagent != nil, activity.subagent?.canCancel == false {
+                activity.subagent?.canCancel = !readOnly
+                activities[callID] = activity
+                onEvent(.activity(activity))
+            }
+        case "background_tasks_changed":
+            let tasks = obj["tasks"] as? [[String: Any]] ?? []
+            var live: [String: (type: String, name: String)] = [:]
+            for task in tasks {
+                guard let id = task["task_id"] as? String else { continue }
+                live[id] = (task["task_type"] as? String ?? "", task["description"] as? String ?? "")
+            }
+            liveBackgroundTasks = live
+            guard waitingOnBackground, !turnInFlight else { return }
+            if live.isEmpty { scheduleWakeFallback() } else { onEvent(.status(backgroundWaitStatus)) }
+        case "task_progress":
+            guard let callID, var activity = activities[callID], activity.subagent != nil else { return }
+            let usage = obj["usage"] as? [String: Any]
+            if let description = obj["description"] as? String { activity.subagent?.intent = description }
+            if let tokens = usage?["total_tokens"] as? Int, tokens > activity.subagent?.tokens ?? 0 {
+                activity.subagent?.tokens = tokens
+            }
+            if let calls = usage?["tool_uses"] as? Int { activity.subagent?.toolCalls = calls }
+            if activity != activities[callID] {
+                activities[callID] = activity
+                onEvent(.activity(activity))
+            }
+        case "task_notification":
+            guard let taskID, taskCalls[taskID] != nil || callID.map({ callTasks[$0] != nil }) == true else { return }
+            let call = callID ?? taskCalls[taskID] ?? taskID
+            taskCalls.removeValue(forKey: taskID)
+            callTasks.removeValue(forKey: call)
+            finishedBackground.append(call)
+            guard var activity = activities.removeValue(forKey: call) else { return }
+            if activity.subagent?.isParallelRequest == true { finishedParallel = true }
+            for (child, parent) in childIndex where parent == call { childIndex.removeValue(forKey: child) }
+            let status = obj["status"] as? String ?? "completed"
+            let state: ToolActivityState = status == "completed" ? .succeeded
+                : status == "failed" ? .failed : .cancelled
+            activity = activity.finishing(as: state)
+            activity.subagent?.canCancel = false
+            if activity.subagent?.toolCalls == nil { activity.subagent?.toolCalls = activity.children.count }
+            if let summary = SubagentInfo.clipped(obj["summary"] as? String ?? "") {
+                activity.subagent?.latestMessage = summary
+            }
+            if state == .failed { activity.subagent?.error = obj["summary"] as? String }
+            onEvent(.activity(activity))
+        default:
+            break
+        }
+    }
+
     // MARK: - Internals
 
     static let policyHookID = "cantrip_home_policy"
 
-    private func writeControlRequest(_ request: [String: Any]) {
+    /// Copilot's watcher and parallel-request conventions, in Claude Code's terms.
+    static let subagentGuidance = """
+    For passive waiting after you have already started an external build, TestFlight upload, \
+    download, or similar long-running job, launch one background agent (Agent tool, \
+    run_in_background: true) whose description starts with `watch-`. Its only job is to wait \
+    with a bounded timeout, verify the terminal result, and report it; it must not edit files \
+    or start the job again. Continue all independent work immediately, and when your immediate \
+    work is done, briefly tell the user the watcher is continuing and end your turn. Cantrip \
+    keeps the run open and you are woken with the watcher's result, so continue from the exact \
+    point you paused. Never use the `watch-` prefix for implementation, research, or other \
+    delegated work.
+
+    When Cantrip forwards a user message it judged independent of your current task, it asks \
+    you to hand it to a background agent whose description starts with `side-`. Launch it, then \
+    keep working on your current task; reply to that request in the chat when its result \
+    arrives. Use the `side-` prefix only for those forwarded requests.
+    """
+
+    private func writeControlRequest(_ request: [String: Any], id: String = "cantrip-\(UUID().uuidString)") {
         do {
             guard let handle = stdinHandle else { throw CocoaError(.fileWriteUnknown) }
             var data = try JSONSerialization.data(withJSONObject: [
-                "type": "control_request", "request_id": "cantrip-\(UUID().uuidString)", "request": request,
+                "type": "control_request", "request_id": id, "request": request,
             ])
             data.append(10)
             try handle.write(contentsOf: data)
         } catch {
-            Log.write("claude: could not register Cantrip's Home policy hook: \(error.localizedDescription)")
+            Log.write("claude: could not send \(request["subtype"] ?? "a control request"): \(error.localizedDescription)")
+            stopRequests.removeValue(forKey: id)?(.failure(SubagentCancelError.sessionUnavailable))
         }
     }
 
@@ -237,6 +483,36 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         guard [.shell, .write, .mcp].contains(action.kind) else {
             sendControlResponse(id: id, response: undecided)
             return
+        }
+        if action.kind == .shell, let childPolicy {
+            // A child tab's shared-resource turn (Simulator, builds, deploys) comes first.
+            let owner = process
+            childPolicy(action, { [weak self] verdict in
+                self?.queue.async {
+                    guard let self, self.process === owner else { return }
+                    switch verdict {
+                    case .proceed: self.decideWithPolicy(id: id, tool: tool, action: action, mode: mode)
+                    case .deny(let reason): decide("deny", reason)
+                    }
+                }
+            }, { [weak self] status in
+                self?.queue.async {
+                    guard let self, self.process === owner else { return }
+                    self.currentOnEvent?(.status(status))
+                }
+            })
+            return
+        }
+        decideWithPolicy(id: id, tool: tool, action: action, mode: mode)
+    }
+
+    private func decideWithPolicy(id: String, tool: String, action: CantripHomeActionRequest,
+                                  mode: CantripHomeGuardrail) {
+        let undecided: [String: Any] = ["continue": true]
+        func decide(_ permission: String, _ reason: String? = nil) {
+            var output: [String: Any] = ["hookEventName": "PreToolUse", "permissionDecision": permission]
+            if let reason { output["permissionDecisionReason"] = reason }
+            sendControlResponse(id: id, response: ["hookSpecificOutput": output])
         }
         let decision = CantripHomeActionPolicy.evaluate(
             action, mode: mode, approval: homeApproval, environment: .current(workdir: processWorkdir)
@@ -386,9 +662,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
                     "--output-format", "stream-json", "--verbose",
                     "--include-partial-messages"]
         if !readOnly { args += ["--permission-prompt-tool", "stdio"] }
-        let model = (modelOverride ?? settings.claudeModel).trimmingCharacters(in: .whitespaces)
         if !model.isEmpty { args += ["--model", model] }
-        let effort = settings.claudeEffort.trimmingCharacters(in: .whitespaces)
         if !effort.isEmpty { args += ["--effort", effort] }
         if readOnly {
             args += ["--permission-mode", "plan"] // read-only tool set
@@ -403,8 +677,10 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         }
         if let sessionID { args += ["--resume", sessionID] }
         // Claude Code has no per-session files folder, so images go to Cantrip's output folder.
-        args += ["--append-system-prompt",
-                 RemoteGeneratedImages.agentGuidance(sessionFilesFolder: false) + "\n\n" + ReplyVisibility.guidance]
+        var guidance = RemoteGeneratedImages.agentGuidance(sessionFilesFolder: false) + "\n\n" + ReplyVisibility.guidance
+        if !readOnly { guidance += "\n\n" + Self.subagentGuidance }
+        if let homeProtocol { guidance += "\n\n" + homeProtocol }
+        args += ["--append-system-prompt", guidance]
         // MCP servers from enabled+approved plugins (see Plugins.swift).
         if let mcpConfig = PluginManager.claudeMCPConfigPath() {
             args += ["--mcp-config", mcpConfig]
@@ -494,7 +770,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             process = p
             stdinHandle = stdinPipe.fileHandleForWriting
             processWorkdir = workdir
-            processAllowsActions = settings.allowActions
+            processSignature = launchSignature(workdir: workdir)
             if guardrail != nil, !readOnly {
                 writeControlRequest([
                     "subtype": "initialize",
@@ -538,6 +814,17 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         if type == "result" { turnInFlight = false; askpass?.endTurn(); cancelInputs() }
 
         switch type {
+        case "control_response":
+            guard let response = obj["response"] as? [String: Any],
+                  let id = response["request_id"] as? String,
+                  let stop = stopRequests.removeValue(forKey: id) else { return }
+            if response["subtype"] as? String == "success" {
+                Log.write("claude: background task stop confirmed")
+                stop(.success(true))
+            } else {
+                stop(.failure(SubagentCancelError.server(
+                    response["error"] as? String ?? "Claude Code couldn't stop that agent.")))
+            }
         case "control_request":
             guard let id = obj["request_id"] as? String,
                   let request = obj["request"] as? [String: Any] else { return }
@@ -700,13 +987,26 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
                     success: !isError,
                     output: output
                 )
-                if let info = completed.subagent, info.isActive, !info.background {
+                if let info = completed.subagent, info.isActive, !info.background || isError {
+                    callTasks.removeValue(forKey: id).map { _ = taskCalls.removeValue(forKey: $0) }
                     completed = completed.finishing(as: isError ? .failed : .succeeded)
                     completed.subagent?.toolCalls = completed.children.count
+                } else if completed.subagent?.isActive == true {
+                    // Launched in the background: its steps keep nesting here until it reports.
+                    activities[id] = completed
                 }
                 onEvent(.activity(completed))
             }
         case "result":
+            if let usage = obj["modelUsage"] as? [String: Any] {
+                let windows = usage.compactMap { key, value -> (String, Int)? in
+                    ((value as? [String: Any])?["contextWindow"] as? Int).map { (key, $0) }
+                }
+                if let window = windows.first(where: { $0.0 == rootModel })?.1 ?? windows.map(\.1).max() {
+                    contextLimit = window
+                    onEvent(.context(BackendContextUsage(limit: window)))
+                }
+            }
             if let cost = obj["total_cost_usd"] as? Double {
                 let usage = obj["usage"] as? [String: Any]
                 onEvent(.usage(BackendUsage(
@@ -732,7 +1032,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
                 }
                 // Turn complete — the process stays alive for the next
                 // message, so "result" is now the end-of-turn signal.
-                onEvent(.done)
+                finishRootTurn(onEvent)
             }
         case "rate_limit_event":
             if let info = obj["rate_limit_info"] as? [String: Any],
@@ -749,8 +1049,28 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
                     percentUsed: percent)
             }
         case "system":
-            if obj["subtype"] as? String == "init" {
-                onEvent(.status("Thinking…"))
+            let subtype = obj["subtype"] as? String ?? ""
+            if subtype == "init" {
+                if let model = obj["model"] as? String { rootModel = model }
+                if !turnInFlight, waitingOnBackground {
+                    // The CLI started a turn of its own: finished background work reports to the root.
+                    let finished = finishedBackground
+                    let parallel = finishedParallel
+                    endBackgroundWait()
+                    finishedBackground.removeAll()
+                    finishedParallel = false
+                    // hasEmittedText stays set, so the wake's reply starts a new paragraph.
+                    turnInFlight = true
+                    countedRootMessages.removeAll()
+                    Log.write("claude: background work woke the root (\(finished.count) finished)")
+                    onEvent(.status(BackgroundWaitStatus.resuming(parallel: parallel)))
+                    onEvent(.backgroundWake(finished))
+                } else {
+                    if turnInFlight { finishedBackground.removeAll(); finishedParallel = false }
+                    onEvent(.status("Thinking…"))
+                }
+            } else {
+                handleTaskEvent(subtype, obj, onEvent)
             }
         default:
             break
