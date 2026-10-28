@@ -76,6 +76,97 @@ struct CantripModelSettingsChange: Encodable {
     }
 }
 
+/// `GET/POST /api/v1/usage-fallback`: the backend the Mac moves runs to at a usage limit.
+struct CantripUsageFallback: Decodable, Equatable {
+    struct Choice: Decodable, Equatable, Identifiable {
+        let id: String
+        let label: String
+    }
+    struct Limited: Decodable, Equatable {
+        let backend: String
+        let until: String
+        let untilLabel: String
+    }
+    /// "" when off.
+    let backend: String
+    let primary: String
+    let choices: [Choice]
+    let limited: [Limited]
+    let revision: String
+
+    /// The picker's value: "" when off or set to a backend that is now the Mac's own.
+    var selection: String { choices.contains { $0.id == backend } ? backend : "" }
+
+    var status: String {
+        limited.isEmpty
+            ? "New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch."
+            : "At its usage limit: " + limited.map { "\($0.backend) until \($0.untilLabel)" }.joined(separator: ", ") + "."
+    }
+}
+
+struct CantripUsageFallbackChange: Encodable {
+    let revision: String
+    var backend: String?
+    var resetLimits: Bool?
+}
+
+/// Mac-wide, so it saves on change, apart from the tab's Save.
+struct CantripUsageFallbackSection: View {
+    @ObservedObject var model: CantripRemoteModel
+    @State private var fallback: CantripUsageFallback?
+    @State private var saving = false
+    @State private var error: String?
+
+    var body: some View {
+        Group {
+            if let fallback {
+                Section {
+                    Picker("Continue on", selection: Binding(get: { fallback.selection }, set: { value in
+                        Task { await save(CantripUsageFallbackChange(revision: fallback.revision, backend: value)) }
+                    })) {
+                        Text("Off - stop and show the error").tag("")
+                        ForEach(fallback.choices) { Text($0.label).tag($0.id) }
+                    }
+                    .disabled(saving)
+                    .accessibilityIdentifier("usageFallback.picker")
+                    if !fallback.limited.isEmpty {
+                        Button("Try every backend again") {
+                            Task { await save(CantripUsageFallbackChange(revision: fallback.revision, resetLimits: true)) }
+                        }
+                        .disabled(saving)
+                    }
+                    if let error { Text(error).foregroundStyle(.orange) }
+                } header: {
+                    Text("Usage limit fallback (all tabs)")
+                } footer: {
+                    Text("When the Mac's backend says its plan's usage limit is reached. " + fallback.status)
+                }
+            }
+        }
+        .task { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        // Older Macs don't offer it; the section stays hidden.
+        fallback = try? await model.usageFallback()
+    }
+
+    @MainActor
+    private func save(_ change: CantripUsageFallbackChange) async {
+        guard !saving else { return }
+        saving = true
+        defer { saving = false }
+        if let updated = await model.updateUsageFallback(change) {
+            fallback = updated
+            error = nil
+        } else {
+            error = model.errorMessage ?? "The fallback could not be saved."
+            await load()
+        }
+    }
+}
+
 struct CantripModelSettingsView: View {
     @ObservedObject var model: CantripRemoteModel
     let session: CantripRemoteSession
@@ -107,7 +198,7 @@ struct CantripModelSettingsView: View {
                     pickers
                         .disabled(usesDefaults || settings == nil || settings?.unavailableReason != nil)
                 } footer: {
-                    Text("Only this tab changes. Save while idle; the next prompt uses the new settings. The conversation stays visible, but Copilot rebuilds its runtime with recent history. Long context may cost more.")
+                    Text("Only this tab changes. Save while idle; the next prompt uses the new settings and continues the same conversation. Long context may cost more.")
                 }
                 if let tokens = info?.contextWindow {
                     Section {
@@ -118,6 +209,7 @@ struct CantripModelSettingsView: View {
                 if let message = error ?? settings?.unavailableReason ?? validationError ?? settings?.catalogError {
                     Section { Text(message).foregroundStyle(.orange).accessibilityIdentifier("modelSettings.error") }
                 }
+                CantripUsageFallbackSection(model: model)
                 Section {
                     Button("Reload settings") { Task { await load(replaceDraft: true) } }
                     Button("Refresh models") { Task { await load(refreshModels: true) } }
