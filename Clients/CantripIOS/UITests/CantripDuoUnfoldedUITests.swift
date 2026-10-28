@@ -43,15 +43,22 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         let sidebar = app.otherElements["duo.sidebar"]
         if !sidebar.exists { toggle.tap() }
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "Show Sidebar opens it")
+        // The sidebar lists Builds too; the bottom bar's is in the lower half.
+        let window = app.windows.firstMatch
+        let bottomBuilds = {
+            app.buttons.matching(NSPredicate(format: "label == 'Builds'")).allElementsBoundByIndex
+                .contains { $0.frame.minY > window.frame.midY }
+        }
+        XCTAssertTrue(app.buttons["Builds"].firstMatch.waitForExistence(timeout: 5) && bottomBuilds(),
+                      "Home's bottom bar stays with the sidebar open")
         XCTAssertEqual(toggle.label, "Hide Sidebar")
         save(app, "sidebar-open")
 
         toggle.tap()
         XCTAssertTrue(waitForAbsence(sidebar), "Hide Sidebar closes it")
         XCTAssertEqual(toggle.label, "Show Sidebar")
-        // On its side they're in the system's vertical bar; upright, in Home's own tab bar.
-        XCTAssertTrue(app.buttons["Builds"].firstMatch.waitForExistence(timeout: 5),
-                      "With the sidebar closed, Home's sections come back")
+        XCTAssertTrue(bottomBuilds(), "Home's bottom bar stays with the sidebar closed")
+        XCTAssertFalse(app.toolbars.buttons["Builds"].exists, "No second copy in the vertical bar")
         save(app, "sidebar-closed")
 
         let field = app.textFields["chat.composer"].firstMatch
