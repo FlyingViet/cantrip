@@ -17,9 +17,10 @@ enum BackendSlashRowStyle: Equatable {
     case sidebar
 
     /// Compact only where the system puts navigation in a vertical side bar and the window is
-    /// landscape (iPhone Duo unfolded on its side). Portrait Duo and other iPhones keep touch rows.
+    /// landscape (iPhone Duo unfolded on its side). Portrait or folded Duo and other iPhones keep
+    /// touch rows.
     static func resolve(_ traits: ChatDisplayTraits) -> Self {
-        traits.hasVerticalBar && traits.isLandscape ? .compact : .touch
+        traits.hasVerticalBar && traits.isLandscape && !traits.isFolded ? .compact : .touch
     }
 }
 
