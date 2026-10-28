@@ -25,36 +25,54 @@ private final class NotificationTestProtocol: URLProtocol {
 
 @MainActor
 final class CantripNotificationTests: XCTestCase {
+    /// Server credentials kept outside the fixture, so a test can drop them the way a copied
+    /// install arrives: saved servers and alert state, but none of the Keychain items.
+    private final class CredentialVault {
+        var values: [String: String] = [:]
+        var store: ServerCredentialStore {
+            ServerCredentialStore(read: { self.values[$0] }, write: { self.values[$0] = $1 },
+                                  remove: { self.values[$0] = nil })
+        }
+    }
+
     private let ready = Data(#"{"configured":true,"message":"Ready","lastDeliveryError":null}"#.utf8)
     private func fingerprint(_ token: String) -> String {
         SHA256.hash(data: Data(token.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
-    private func fixture(
-        permission: Bool = true, authorize: ((String) async throws -> Void)? = nil
-    ) throws -> (CantripRemoteModel, CantripNotifications, SavedServer, SavedServer, UserDefaults) {
+    private func makeDefaults() throws -> UserDefaults {
         let suite = "CantripNotificationTests.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        var values: [String: String] = [:]
-        let credentials = ServerCredentialStore(read: { values[$0] }, write: { values[$0] = $1 }, remove: { values[$0] = nil })
-        let servers = ServerProfiles(kind: .cantrip, defaults: defaults, credentials: credentials)
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        return defaults
+    }
+
+    private func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NotificationTestProtocol.self]
+        let session = URLSession(configuration: configuration)
+        addTeardownBlock { session.invalidateAndCancel() }
+        return session
+    }
+
+    private func fixture(
+        permission: Bool = true, vault: CredentialVault = CredentialVault(),
+        authorize: ((String) async throws -> Void)? = nil
+    ) throws -> (CantripRemoteModel, CantripNotifications, SavedServer, SavedServer, UserDefaults) {
+        let defaults = try makeDefaults()
+        let servers = ServerProfiles(kind: .cantrip, defaults: defaults, credentials: vault.store)
         let a = try servers.add(ServerDraft(name: "Mac A", url: "https://mac-a.example", credential: "paired-a", tailscaleOnly: true))
         let b = try servers.add(ServerDraft(name: "Mac B", url: "https://mac-b.example", credential: "paired-b", tailscaleOnly: true))
         try servers.select(a)
         let alerts = CantripNotifications(defaults: defaults, authorize: { permission }, requestRegistration: {})
         alerts.registered(Data(repeating: 0xab, count: 32))
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [NotificationTestProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let model = CantripRemoteModel(urlSession: session, servers: servers, completionAlerts: alerts,
+        let model = CantripRemoteModel(urlSession: makeSession(), servers: servers, completionAlerts: alerts,
                                        authorizeSensitiveAction: authorize ?? CantripBiometrics.authorize)
         let keys = ["cantrip.remote.base-url", "cantrip.remote.tailscale-only"]
         let previous = keys.map { UserDefaults.standard.object(forKey: $0) }
         addTeardownBlock { @MainActor in
             model.setAppActive(false)
-            session.invalidateAndCancel()
             NotificationTestProtocol.handler = nil
-            defaults.removePersistentDomain(forName: suite)
             for (key, value) in zip(keys, previous) {
                 if let value { UserDefaults.standard.set(value, forKey: key) }
                 else { UserDefaults.standard.removeObject(forKey: key) }
@@ -170,6 +188,84 @@ final class CantripNotificationTests: XCTestCase {
         NotificationTestProtocol.handler = { _ in (200, self.ready) }
         try await model.setCompletionNotifications(enabled: false)
         XCTAssertFalse(alerts.hasSubscription(serverID: a.id))
+    }
+
+    // MARK: - Settings copied to another device
+
+    func testCopiedSettingsGetAFreshInstallationThatRegistersOnlyAfterRepairing() async throws {
+        let vault = CredentialVault()
+        let (_, original, a, _, defaults) = try fixture(vault: vault)
+        original.save(serverID: a.id, fingerprint: fingerprint("paired-a"))
+        vault.values.removeAll()
+        var marker: String?
+        let binding = CantripInstallationBinding(readMarker: { marker }, writeMarker: { marker = $0 },
+                                                 credentials: vault.store)
+        let alerts = CantripNotifications(defaults: defaults, installation: binding,
+                                          authorize: { true }, requestRegistration: {})
+        XCTAssertNotEqual(alerts.installationID, original.installationID)
+        XCTAssertEqual(marker, alerts.installationID.uuidString)
+        XCTAssertFalse(alerts.isEnabled(serverID: a.id), "Nothing is registered under the new installation yet")
+        XCTAssertTrue(alerts.isPending(serverID: a.id))
+        XCTAssertEqual(CantripNotifications(defaults: defaults, installation: binding).installationID,
+                       alerts.installationID)
+
+        alerts.registered(Data(repeating: 0xcd, count: 32))
+        var methods: [String] = []
+        NotificationTestProtocol.handler = { request in
+            let method = try XCTUnwrap(request.httpMethod)
+            methods.append(method)
+            if method != "GET" {
+                let body = try self.body(request)
+                XCTAssertEqual(body["installationID"] as? String, alerts.installationID.uuidString)
+                XCTAssertEqual(body["serverID"] as? String, a.id.uuidString)
+            }
+            return (200, self.ready)
+        }
+        let servers = ServerProfiles(kind: .cantrip, defaults: defaults, credentials: vault.store)
+        let model = CantripRemoteModel(urlSession: makeSession(), servers: servers, completionAlerts: alerts)
+        let repaired = try servers.add(ServerDraft(url: "https://mac-a.example", credential: "paired-a", tailscaleOnly: true))
+        XCTAssertEqual(repaired.id, a.id)
+        try await model.selectServer(repaired)
+        try await model.setCompletionNotifications(enabled: true)
+        XCTAssertTrue(alerts.isEnabled(serverID: a.id))
+        XCTAssertEqual(methods, ["GET", "POST"])
+    }
+
+    func testOriginalDeviceKeepsItsInstallationWhenTheMarkerIsFirstSaved() throws {
+        let vault = CredentialVault()
+        let (_, original, a, _, defaults) = try fixture(vault: vault)
+        original.save(serverID: a.id, fingerprint: fingerprint("paired-a"))
+        var marker: String?
+        let upgraded = CantripNotifications(defaults: defaults, installation: CantripInstallationBinding(
+            readMarker: { marker }, writeMarker: { marker = $0 }, credentials: vault.store))
+        XCTAssertEqual(upgraded.installationID, original.installationID)
+        XCTAssertTrue(upgraded.isEnabled(serverID: a.id))
+        XCTAssertEqual(marker, original.installationID.uuidString)
+
+        // Settings from a device that saved its marker are copies even while credentials match.
+        let copied = CantripNotifications(defaults: defaults, installation: CantripInstallationBinding(
+            readMarker: { nil }, writeMarker: { _ in }, credentials: vault.store))
+        XCTAssertNotEqual(copied.installationID, original.installationID)
+        XCTAssertTrue(copied.isPending(serverID: a.id))
+    }
+
+    func testUnreadableKeychainKeepsTheInstallationAndAReinstallReusesTheMarker() throws {
+        let defaults = try makeDefaults()
+        let first = CantripNotifications(defaults: defaults)
+        let serverID = UUID()
+        first.save(serverID: serverID, fingerprint: "f")
+        let locked = CantripNotifications(defaults: defaults, installation: CantripInstallationBinding(
+            readMarker: { throw ServerConfigurationError(message: "Locked") },
+            writeMarker: { _ in XCTFail("Nothing is decided before the Keychain can be read") },
+            credentials: CredentialVault().store))
+        XCTAssertEqual(locked.installationID, first.installationID)
+        XCTAssertTrue(locked.isEnabled(serverID: serverID))
+
+        let marker = UUID()
+        let reinstalled = CantripNotifications(defaults: try makeDefaults(), installation: CantripInstallationBinding(
+            readMarker: { marker.uuidString }, writeMarker: { _ in XCTFail("The marker already matches") },
+            credentials: CredentialVault().store))
+        XCTAssertEqual(reinstalled.installationID, marker)
     }
 
     func testTapSelectsCorrectSavedServerAndSessionWithoutSubmitting() async throws {

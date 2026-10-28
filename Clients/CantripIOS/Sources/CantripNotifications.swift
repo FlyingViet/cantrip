@@ -36,9 +36,30 @@ struct CantripNotificationTarget: Equatable {
     }
 }
 
+/// Ties the alert installation ID to the device that created it. A device transfer or backup
+/// restore copies UserDefaults (the ID, alert subscriptions, saved servers) but not
+/// this-device-only Keychain items (the marker, server credentials). Reusing a copied ID would
+/// let this device replace or remove the original device's registrations on the Mac.
+struct CantripInstallationBinding {
+    var readMarker: () throws -> String?
+    var writeMarker: (String) throws -> Void
+    var credentials: ServerCredentialStore
+
+    static var keychain: Self {
+        let account = "cantrip.notifications.installation-marker"
+        return Self(readMarker: { try Keychain.loadCredential(account) },
+                    writeMarker: { try Keychain.saveCredential($0, for: account) },
+                    credentials: .keychain)
+    }
+}
+
 @MainActor
 final class CantripNotifications: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
+    #if os(iOS)
+    static let shared = CantripNotifications(installation: .keychain)
+    #else
     static let shared = CantripNotifications()
+    #endif
     @Published private(set) var deviceToken: String?
     @Published private(set) var registrationError: String?
     @Published private(set) var pendingTarget: CantripNotificationTarget?
@@ -51,8 +72,11 @@ final class CantripNotifications: NSObject, ObservableObject, UNUserNotification
     private let authorize: () async throws -> Bool
     private let requestRegistration: @MainActor () -> Void
     let installationID: UUID
+    private static let installationKey = "cantrip.notifications.installation-id"
+    private static let boundKey = "cantrip.notifications.installation-bound"
 
     init(defaults: UserDefaults = .standard,
+         installation: CantripInstallationBinding? = nil,
          authorize: @escaping () async throws -> Bool = {
              try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
          },
@@ -60,12 +84,58 @@ final class CantripNotifications: NSObject, ObservableObject, UNUserNotification
         self.defaults = defaults
         self.authorize = authorize
         self.requestRegistration = requestRegistration
-        enabledServers = defaults.dictionary(forKey: enabledKey) as? [String: String] ?? [:]
-        pendingServers = defaults.dictionary(forKey: pendingKey) as? [String: String] ?? [:]
-        let id = defaults.string(forKey: "cantrip.notifications.installation-id").flatMap(UUID.init(uuidString:)) ?? UUID()
-        installationID = id
-        defaults.set(id.uuidString, forKey: "cantrip.notifications.installation-id")
+        var enabled = defaults.dictionary(forKey: enabledKey) as? [String: String] ?? [:]
+        var pending = defaults.dictionary(forKey: pendingKey) as? [String: String] ?? [:]
+        let saved = defaults.string(forKey: Self.installationKey).flatMap(UUID.init(uuidString:))
+        let resolved = installation.flatMap { Self.resolveInstallation(saved: saved, defaults: defaults, binding: $0) }
+        installationID = resolved?.id ?? saved ?? UUID()
+        defaults.set(installationID.uuidString, forKey: Self.installationKey)
+        if resolved?.copied == true, !enabled.isEmpty {
+            // Nothing is registered under the new ID yet: keep each alert as a pending
+            // registration, which completes once that server is re-paired on this device.
+            pending.merge(enabled) { current, _ in current }
+            enabled = [:]
+            defaults.set(pending, forKey: pendingKey)
+            defaults.set(enabled, forKey: enabledKey)
+        }
+        enabledServers = enabled
+        pendingServers = pending
         super.init()
+    }
+
+    /// The installation ID to use, and whether this install's settings were copied from another
+    /// device. Nil while the Keychain can't be read (e.g. before first unlock): the saved ID stays
+    /// and the check runs again next launch.
+    private static func resolveInstallation(
+        saved: UUID?, defaults: UserDefaults, binding: CantripInstallationBinding
+    ) -> (id: UUID, copied: Bool)? {
+        do {
+            let marker = try binding.readMarker().flatMap(UUID.init(uuidString:))
+            let copied: Bool
+            switch (saved, marker) {
+            case (nil, _):
+                copied = false
+            case let (saved?, marker?):
+                copied = saved != marker
+            case (.some, nil):
+                // Saved by a build without the marker: the device that saved the server list holds
+                // every server's credential, while a copy arrives without them.
+                let profiles = ServerProfiles(kind: .cantrip, defaults: defaults, credentials: binding.credentials)
+                copied = try defaults.bool(forKey: boundKey)
+                    || profiles.servers.contains { try profiles.storedCredential(for: $0) == nil }
+            }
+            let id = copied ? UUID() : saved ?? marker ?? UUID()
+            if marker != id {
+                do { try binding.writeMarker(id.uuidString) } catch {
+                    defaults.removeObject(forKey: boundKey)
+                    return (id, copied)
+                }
+            }
+            defaults.set(true, forKey: boundKey)
+            return (id, copied)
+        } catch {
+            return nil
+        }
     }
 
     func install() {

@@ -1069,9 +1069,12 @@ production. An App Store Connect upload key is not an APNs key.
 
 The setting is per saved Mac, persists while the phone is locked or another
 Mac is selected, and requires a connection to disable it before removing that
-server. **Check notification setup** shows missing configuration/provider
-errors rather than pretending alerts are ready. Mac and phone need internet;
-opening the tab still requires your paired LAN/Tailscale connection. The Mac
+server. A phone set up from another phone's transfer or backup gets its own
+alert registration; alerts that were on resume after you re-enter that Mac's
+pairing token. **Check notification setup** shows missing
+configuration/provider errors rather than pretending alerts are ready. Mac and
+phone need internet; opening the tab still requires your paired LAN/Tailscale
+connection. The Mac
 must remain running with Remote enabled. Apple delivery and Focus/Lock Screen
 settings determine when the alert appears; delivery is not guaranteed.
 The tab title and preview pass through Apple and can appear on your Lock Screen.

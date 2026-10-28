@@ -67,6 +67,9 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
 - Saved servers live in `ServerProfiles`; each server's credential is stored
   separately in Keychain. Legacy `hermes.apiKey`/Cantrip slots are migrated.
   Settings uses blank add-server drafts, never live bindings to active credentials.
+- The alert `installationID` is bound to the device by a this-device-only Keychain
+  marker. A transferred/restored install gets a fresh ID (its alerts become pending
+  until re-paired).
 - Hermes history, durable runs, and memory keys are scoped by server and lane.
   The migrated server retains its original history and memory namespace.
 - The gateway URL defaults to empty so each user points at their own server.
