@@ -371,15 +371,22 @@ final class CantripModelSettingsTests: XCTestCase {
         let session = CantripRemoteSession(id: id, title: "My remote conversation", workdir: "/tmp",
             isStreaming: false, canResume: false, councilMode: false, queuedCount: 0, status: nil,
             messages: nil, supportsImageAttachments: nil, queued: nil, supportsModelSettings: true)
-        var reads = 0
+        var reads = 0, fallbackReads = 0
         ModelSettingsRequestProtocol.handler = { request in
             XCTAssertEqual(request.httpMethod, "GET", "Opening settings must not modify the Mac")
+            if request.url?.path == "/api/v1/usage-fallback" {
+                fallbackReads += 1
+                return (200, try JSONSerialization.data(withJSONObject: [
+                    "backend": "Copilot", "primary": "Claude Code", "revision": "f1", "limited": [],
+                    "choices": [["id": "Copilot", "label": "Copilot"], ["id": "Codex", "label": "Codex"]],
+                ]))
+            }
             reads += 1
             return (200, try self.snapshot())
         }
         for width: CGFloat in [320, 768] {
             for size: DynamicTypeSize in [.large, .accessibility3] {
-                let previousReads = reads
+                let previousReads = reads, previousFallbackReads = fallbackReads
                 let view = CantripModelSettingsView(model: model, session: session, identity: model.usageIdentity)
                     .environment(\.dynamicTypeSize, size)
                 let controller = UIHostingController(rootView: view)
@@ -391,6 +398,7 @@ final class CantripModelSettingsTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(400))
                 controller.view.layoutIfNeeded()
                 XCTAssertGreaterThan(reads, previousReads, "The form must load the host's options")
+                XCTAssertGreaterThan(fallbackReads, previousFallbackReads, "The sheet loads the Mac's usage limit fallback")
                 func descendants(_ view: UIView) -> [UIView] {
                     [view] + view.subviews.flatMap(descendants)
                 }
