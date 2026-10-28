@@ -173,7 +173,10 @@ final class AppSettings: ObservableObject {
     }
     /// Path to the `claude` binary. Empty = auto-detect via login shell.
     @Published var claudePath: String {
-        didSet { d.set(claudePath, forKey: "claudePath") }
+        didSet {
+            d.set(claudePath, forKey: "claudePath")
+            claudeCatalogUpdatedAt = nil
+        }
     }
     /// Working directory for Claude Code runs (its tool/file context).
     @Published var claudeWorkdir: String {
@@ -285,6 +288,18 @@ final class AppSettings: ObservableObject {
     @Published private(set) var copilotModelRefreshError: String?
     @Published private(set) var copilotCatalogUpdatedAt: Date? {
         didSet { d.set(copilotCatalogUpdatedAt, forKey: "copilotCatalogUpdatedAt") }
+    }
+
+    /// Claude Code's models (from its `initialize` reply) for per-tab model settings.
+    @Published var claudeModelCatalog: [CopilotModelInfo] {
+        didSet {
+            if let data = try? JSONEncoder().encode(claudeModelCatalog) { d.set(data, forKey: "claudeModelCatalog") }
+        }
+    }
+    @Published var claudeRefreshInFlight = false
+    @Published var claudeModelRefreshError: String?
+    @Published var claudeCatalogUpdatedAt: Date? {
+        didSet { d.set(claudeCatalogUpdatedAt, forKey: "claudeCatalogUpdatedAt") }
     }
 
     func copilotModelInfo(_ id: String) -> CopilotModelInfo? {
@@ -747,6 +762,9 @@ final class AppSettings: ObservableObject {
         copilotModelCatalog = (d.data(forKey: "copilotModelCatalog")
             .flatMap { try? JSONDecoder().decode([CopilotModelInfo].self, from: $0) }) ?? []
         copilotCatalogUpdatedAt = d.object(forKey: "copilotCatalogUpdatedAt") as? Date
+        claudeModelCatalog = (d.data(forKey: "claudeModelCatalog"))
+            .flatMap { try? JSONDecoder().decode([CopilotModelInfo].self, from: $0) } ?? []
+        claudeCatalogUpdatedAt = d.object(forKey: "claudeCatalogUpdatedAt") as? Date
         copilotEffortChoices = d.stringArray(forKey: "copilotEffortChoices") ?? []
         copilotContextTierChoices = d.stringArray(forKey: "copilotContextTierChoices") ?? []
         councilMembers = (d.data(forKey: "councilMembers")

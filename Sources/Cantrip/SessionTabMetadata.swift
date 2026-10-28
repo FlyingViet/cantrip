@@ -17,7 +17,10 @@ enum SessionTabError: LocalizedError {
 struct SessionTabMetadata: Equatable {
     private(set) var customTitle: String?
     var isLocked = false
+    /// Copilot's per-tab model settings.
     var modelSettings: SessionModelSelection?
+    /// Claude Code's, kept apart: the two backends' model IDs differ.
+    var claudeModelSettings: SessionModelSelection?
     /// The sidebar section this tab is filed under; nil (or a deleted section) shows it under Tabs.
     var sectionID: UUID?
 
@@ -36,21 +39,32 @@ struct SessionTabMetadata: Equatable {
         var result = Self(customTitle: value["customTitle"] as? String,
                           isLocked: value["isLocked"] as? Bool ?? false,
                           sectionID: (value["sectionID"] as? String).flatMap(UUID.init(uuidString:)))
-        if let selection = value["modelSettings"] as? [String: String],
-           let model = selection["model"], let effort = selection["effort"],
-           let contextTier = selection["contextTier"] {
-            result.modelSettings = SessionModelSelection(model: model, effort: effort, contextTier: contextTier)
+        func selection(_ key: String) -> SessionModelSelection? {
+            guard let selection = value[key] as? [String: String],
+                  let model = selection["model"], let effort = selection["effort"],
+                  let contextTier = selection["contextTier"] else { return nil }
+            return SessionModelSelection(model: model, effort: effort, contextTier: contextTier)
         }
+        result.modelSettings = selection("modelSettings")
+        result.claudeModelSettings = selection("claudeModelSettings")
         return result
+    }
+
+    func modelSettings(for backend: BackendKind) -> SessionModelSelection? {
+        backend == .claudeCode ? claudeModelSettings : modelSettings
+    }
+
+    mutating func setModelSettings(_ selection: SessionModelSelection?, for backend: BackendKind) {
+        if backend == .claudeCode { claudeModelSettings = selection } else { modelSettings = selection }
     }
 
     func save(id: UUID, defaults: UserDefaults = .standard) {
         var value: [String: Any] = ["isLocked": isLocked]
         if let customTitle { value["customTitle"] = customTitle }
         if let sectionID { value["sectionID"] = sectionID.uuidString }
-        if let modelSettings {
-            value["modelSettings"] = ["model": modelSettings.model, "effort": modelSettings.effort,
-                                      "contextTier": modelSettings.contextTier]
+        for (key, selection) in [("modelSettings", modelSettings), ("claudeModelSettings", claudeModelSettings)] {
+            guard let selection else { continue }
+            value[key] = ["model": selection.model, "effort": selection.effort, "contextTier": selection.contextTier]
         }
         defaults.set(value, forKey: Self.key(id))
     }

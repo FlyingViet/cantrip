@@ -165,11 +165,33 @@ extension SessionTabTests {
             precondition(fallback.selection == nil && fallback.model == "claude-opus-5.5"
                          && fallback.note == "Ran on Home's model, claude-opus-5.5: claude-sonnet-4 isn't available on this Mac right now.",
                          "An unavailable model falls back to Home's with a note")
+            // On Claude Code, tasks pick from its own list; a Copilot-only model falls back to Home's.
+            let savedClaude = (settings.claudeModelCatalog, settings.claudeModel, settings.claudeEffort)
+            settings.claudeModelCatalog = [CopilotModelInfo(id: "opus", reasoningEfforts: ["low", "high", "max"], contextTiers: []),
+                                           CopilotModelInfo(id: "sonnet", reasoningEfforts: ["low", "high"], contextTiers: [])]
+            (settings.claudeModel, settings.claudeEffort) = ("opus", "max")
             settings.backend = .claudeCode
-            let otherBackend = CantripHomeTaskModels.resolve(task: sonnet, settings: settings)
+            let copilotOnly = CantripHomeTaskModels.resolve(task: sonnet, settings: settings)
+            var claudeTask = sonnet
+            claudeTask.model = "sonnet"
+            claudeTask.effort = nil
+            let onClaude = CantripHomeTaskModels.resolve(task: claudeTask, settings: settings)
+            let claudeRun = ChatSession(copilotBackend: CopilotBackend(), cantripHomeRun: true, makeJournal: { _ in
+                try RunJournal(sessionID: UUID(), directory: CantripHomeStore.runsDirectory)
+            })
+            claudeRun.cantripHomeModelOverride = onClaude.selection
+            let claudeOverride = (claudeRun.claudeCode.modelOverride, claudeRun.claudeCode.effortOverride)
+            claudeRun.discardCantripHomeRun()
             settings.backend = .copilot
-            precondition(otherBackend.selection == nil && otherBackend.note?.contains("need Copilot") == true,
-                         "Task models apply only on the Copilot backend")
+            (settings.claudeModelCatalog, settings.claudeModel, settings.claudeEffort) = savedClaude
+            precondition(copilotOnly.selection == nil && copilotOnly.model == "opus"
+                         && copilotOnly.note?.contains("claude-sonnet-5.5 isn't available") == true,
+                         "A Copilot model falls back to Home's Claude model: \(copilotOnly)")
+            // Home's max effort isn't offered by sonnet, so it falls back to sonnet's default.
+            precondition(onClaude.selection == .init(model: "sonnet", effort: "", contextTier: "") && onClaude.note == nil,
+                         "A Claude task model resolves against Claude Code's list: \(onClaude)")
+            precondition(claudeOverride.0 == "sonnet" && claudeOverride.1 == "",
+                         "The task model reaches the hidden run's Claude backend: \(claudeOverride)")
 
             // A hidden run's Copilot backend gets the override, and loses it when cleared.
             let backend = CopilotBackend()
