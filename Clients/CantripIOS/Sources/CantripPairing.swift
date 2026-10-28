@@ -157,19 +157,29 @@ extension CantripRemoteModel {
         }
     }
 
+    /// A saved server with the link's routes whose token isn't on this device; pairing restores it.
+    func serverMissingToken(for link: CantripPairingLink) -> SavedServer? {
+        servers.servers.first { server in
+            guard server.url == (link.url ?? ""), server.directAddress == link.directAddress else { return false }
+            do { return try servers.storedCredential(for: server) == nil } catch { return false }
+        }
+    }
+
     /// Pairs from a confirmed link the way Settings does: Add Server (unless the identical server
-    /// is saved), then select it, which configures the connection. A failed switch saves nothing.
+    /// is saved), then select it, which configures the connection. A failed switch saves nothing
+    /// new; a saved server whose missing token the link restored keeps it.
     @discardableResult
     func pair(with link: CantripPairingLink) async throws -> SavedServer {
         guard !isMutating, !isUploadingVideo, !isUpdatingNotifications else {
             throw ServerConfigurationError(message: "Wait for the current request to finish before pairing.")
         }
         let existing = savedServer(for: link)
+        let savedIDs = Set(servers.servers.map(\.id))
         let server = try existing ?? servers.add(link.draft)
         do {
             try await selectServer(server)
         } catch {
-            if existing == nil { try? servers.remove(server) }
+            if existing == nil, !savedIDs.contains(server.id) { try? servers.remove(server) }
             throw error
         }
         return server
@@ -186,6 +196,7 @@ struct CantripPairingView: View {
     @State private var pairing = false
     @State private var failure: String?
     @State private var saved: SavedServer?
+    @State private var missingToken: SavedServer?
 
     var body: some View {
         NavigationStack {
@@ -206,7 +217,10 @@ struct CantripPairingView: View {
         }
         .interactiveDismissDisabled(pairing)
         .task {
-            if let link = prompt.link { saved = model.savedServer(for: link) }
+            if let link = prompt.link {
+                saved = model.savedServer(for: link)
+                missingToken = saved == nil ? model.serverMissingToken(for: link) : nil
+            }
         }
     }
 
@@ -243,6 +257,9 @@ struct CantripPairingView: View {
         }
         if let saved {
             return "Already saved as \(saved.name). Pair switches to it."
+        }
+        if let missingToken {
+            return "\(missingToken.name) is saved without its pairing token on this device. Pair restores the token and connects to it."
         }
         if let current = model.servers.selected {
             return "Pair adds \(link.displayName) to your saved servers and switches to it. \(current.name) stays saved; switch back in Settings."

@@ -84,14 +84,21 @@ final class ServerProfiles: ObservableObject {
     }
 
     func credential(for server: SavedServer) throws -> String {
-        guard servers.contains(where: { $0.id == server.id }) else {
-            throw ServerConfigurationError(message: "This server is no longer saved.")
-        }
-        guard let value = try credentials.read(account(for: server.id)), !value.isEmpty else {
+        guard let value = try storedCredential(for: server) else {
             throw ServerConfigurationError(
                 message: "The credential for \(server.name) is missing. Remove it and add the server again."
             )
         }
+        return value
+    }
+
+    /// Nil when this device has no credential for the server. Credentials are Keychain items that
+    /// stay on the device that saved them, so a new or restored device gets the list without them.
+    func storedCredential(for server: SavedServer) throws -> String? {
+        guard servers.contains(where: { $0.id == server.id }) else {
+            throw ServerConfigurationError(message: "This server is no longer saved.")
+        }
+        guard let value = try credentials.read(account(for: server.id)), !value.isEmpty else { return nil }
         return value
     }
 
@@ -109,8 +116,15 @@ final class ServerProfiles: ObservableObject {
             throw ServerConfigurationError(message: "Enter a Tailscale URL to use Tailscale only.")
         }
         let direct = kind == .cantrip ? try CantripDirectAddress.normalized(draft.directAddress) : nil
+        // A same-route entry without a credential (e.g. after moving to a new device) is repaired
+        // in place rather than duplicated, so it keeps its ID, history and selection.
+        var stale: SavedServer?
         for existing in servers where existing.url == url && existing.directAddress == direct {
-            if try credential(for: existing) == secret {
+            guard let saved = try storedCredential(for: existing) else {
+                stale = stale ?? existing
+                continue
+            }
+            if saved == secret {
                 throw ServerConfigurationError(
                     message: "This server is already saved as \(existing.name). Select it from the list."
                 )
@@ -121,14 +135,20 @@ final class ServerProfiles: ObservableObject {
             throw ServerConfigurationError(message: "Use a server name of 80 characters or fewer.")
         }
         let server = SavedServer(
-            id: UUID(),
-            name: name.isEmpty ? (URL(string: url)?.host ?? direct ?? "Cantrip on LAN") : name,
+            id: stale?.id ?? UUID(),
+            name: name.isEmpty ? (stale?.name ?? URL(string: url)?.host ?? direct ?? "Cantrip on LAN") : name,
             url: url,
             tailscaleOnly: kind == .cantrip && draft.tailscaleOnly,
-            usesLegacyHistory: usesLegacyHistory,
+            usesLegacyHistory: stale?.usesLegacyHistory ?? usesLegacyHistory,
             directAddress: direct
         )
-        let snapshot = Snapshot(servers: servers + [server], selectedID: selectedID)
+        var updated = servers
+        if let index = updated.firstIndex(where: { $0.id == server.id }) {
+            updated[index] = server
+        } else {
+            updated.append(server)
+        }
+        let snapshot = Snapshot(servers: updated, selectedID: selectedID)
         let data = try JSONEncoder().encode(snapshot)
         try credentials.write(account(for: server.id), secret)
         commit(snapshot, data: data)

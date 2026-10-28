@@ -169,6 +169,66 @@ final class ServerProfilesTests: XCTestCase {
         }
     }
 
+    func testReaddingAServerWhoseCredentialIsMissingRepairsItInsteadOfFailing() throws {
+        for kind in [ServerKind.hermes, .cantrip] {
+            let (store, defaults, _) = try fixture(kind)
+            let home = try store.add(ServerDraft(name: "Home", url: "https://home.example",
+                                                 credential: "old-token", tailscaleOnly: kind == .cantrip))
+            let work = try store.add(draft("Work"))
+            try store.select(home)
+            // A new or restored device gets the saved list, but not Keychain items from the old one.
+            let newDevice = ProfileCredentials()
+            let restored = ServerProfiles(kind: kind, defaults: defaults, credentials: newDevice.store)
+            XCTAssertNil(try restored.storedCredential(for: home))
+            XCTAssertThrowsError(try restored.credential(for: home))
+
+            let repaired = try restored.add(ServerDraft(url: "https://HOME.example/", credential: " new-token \n",
+                                                        tailscaleOnly: kind == .cantrip))
+            XCTAssertEqual(repaired, home, "The saved entry keeps its ID, name and routes")
+            XCTAssertEqual(restored.servers, [home, work], "Nothing is duplicated")
+            XCTAssertEqual(restored.selectedID, home.id)
+            XCTAssertEqual(try restored.credential(for: home), "new-token")
+            XCTAssertNil(try restored.storedCredential(for: work), "Only the matching entry is repaired")
+            XCTAssertThrowsError(try restored.add(ServerDraft(url: "https://home.example", credential: "new-token")),
+                                 "Once repaired, the same server and token is a duplicate again")
+
+            let renamed = try restored.add(ServerDraft(name: "Office", url: work.url, credential: "work-token"))
+            XCTAssertEqual(renamed.id, work.id)
+            XCTAssertEqual(renamed.name, "Office")
+            XCTAssertEqual(newDevice.values.count, 2)
+            let reopened = ServerProfiles(kind: kind, defaults: defaults, credentials: newDevice.store)
+            XCTAssertEqual(reopened.servers, [home, renamed])
+            XCTAssertEqual(reopened.selectedID, home.id)
+            XCTAssertEqual(try reopened.credential(for: renamed), "work-token")
+        }
+    }
+
+    func testReaddingTheSelectedMacOnANewDeviceLetsItConnect() async throws {
+        try preserveLegacyConfiguration()
+        let (store, defaults, _) = try fixture(.cantrip)
+        let home = try store.add(draft("Home"))
+        try store.select(home)
+        let restored = ServerProfiles(kind: .cantrip, defaults: defaults, credentials: ProfileCredentials().store)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ProfileRequestProtocol.self]
+        let model = CantripRemoteModel(urlSession: URLSession(configuration: config), servers: restored)
+        defer { model.setAppActive(false) }
+        XCTAssertFalse(model.hasConfiguration)
+        XCTAssertNotNil(model.errorMessage)
+
+        try model.addServer(ServerDraft(name: "Home", url: home.url, credential: "Home-new-token"))
+        XCTAssertEqual(restored.servers, [home])
+        ProfileRequestProtocol.handler = { transport in
+            XCTAssertEqual(transport.request.value(forHTTPHeaderField: "Authorization"), "Bearer Home-new-token")
+            try transport.respond(title: "Home")
+        }
+        try await model.selectServer(home)
+        XCTAssertEqual(model.selectedServerID, home.id)
+        XCTAssertNil(model.errorMessage)
+        await model.selectSession("shared-id")
+        XCTAssertEqual(model.selectedSession?.title, "Home")
+    }
+
     func testLANOnlyProfilesRequireIndependentTokensAndKeepRoutingPreferences() throws {
         let (store, defaults, credentials) = try fixture(.cantrip)
         let a = try store.add(ServerDraft(name: "LAN A", credential: "token-a"))
