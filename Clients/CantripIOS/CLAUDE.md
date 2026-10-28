@@ -64,10 +64,11 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
   orientation: `ChatDisplayTraits.isUnfoldedDuo`) that bar is the app's rail: a sidebar toggle at
   the top, then Model Settings and Settings. The toggle shows `CantripDuoSidebar` beside the same
   stack; its open state is saved (`cantrip.duoSidebar.open`), so folding, rotation and the keyboard
-  never change it. Home's sections always use its own bottom bar (`CantripHomeCompactTabBar`), in
-  every Duo pose and with the sidebar open, never the system's vertical bar; Home puts only Tabs and
-  the menu at the top of the vertical bar when folded (`sharesVerticalBarWithTabBar`); unfolded,
-  the toggle replaces Tabs. Do not infer Duo from dimensions or device
+  never change it. On a Duo, in every pose and with the sidebar open or closed, Home's sections are at
+  the bottom of the right-side rail (the system's tab bar in the vertical bar, or
+  `CantripDuoRailSections` in the app rail upright), never a bottom bar; other iPhones use
+  `CantripHomeCompactTabBar`. Home puts only Tabs and the menu at the top of the vertical bar when
+  folded (`sharesVerticalBarWithTabBar`); unfolded, the toggle replaces Tabs. Do not infer Duo from dimensions or device
   names. `AGENTGATEWAY_DUO_SDK` is selected by SDK in `project.yml`, not by the
   Swift compiler version; keep both SDK and iOS availability guards.
 - Saved servers live in `ServerProfiles`; each server's credential is stored

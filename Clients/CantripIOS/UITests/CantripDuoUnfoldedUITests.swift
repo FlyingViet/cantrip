@@ -43,22 +43,22 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         let sidebar = app.otherElements["duo.sidebar"]
         if !sidebar.exists { toggle.tap() }
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "Show Sidebar opens it")
-        // The sidebar lists Builds too; the bottom bar's is in the lower half.
+        // Home's sections stay in the right-side rail (the sidebar lists Builds too, on the left).
         let window = app.windows.firstMatch
-        let bottomBuilds = {
+        let railBuilds = {
             app.buttons.matching(NSPredicate(format: "label == 'Builds'")).allElementsBoundByIndex
-                .contains { $0.frame.minY > window.frame.midY }
+                .contains { $0.frame.midX > window.frame.width * 0.85 }
         }
-        XCTAssertTrue(app.buttons["Builds"].firstMatch.waitForExistence(timeout: 5) && bottomBuilds(),
-                      "Home's bottom bar stays with the sidebar open")
+        XCTAssertTrue(app.buttons["Builds"].firstMatch.waitForExistence(timeout: 5) && railBuilds(),
+                      "Home's sections stay in the rail with the sidebar open")
+        XCTAssertFalse(app.descendants(matching: .any)["home.compactTabBar"].exists, "No bottom bar on the Duo")
         XCTAssertEqual(toggle.label, "Hide Sidebar")
         save(app, "sidebar-open")
 
         toggle.tap()
         XCTAssertTrue(waitForAbsence(sidebar), "Hide Sidebar closes it")
         XCTAssertEqual(toggle.label, "Show Sidebar")
-        XCTAssertTrue(bottomBuilds(), "Home's bottom bar stays with the sidebar closed")
-        XCTAssertFalse(app.toolbars.buttons["Builds"].exists, "No second copy in the vertical bar")
+        XCTAssertTrue(railBuilds(), "Home's sections stay in the rail with the sidebar closed")
         save(app, "sidebar-closed")
 
         let field = app.textFields["chat.composer"].firstMatch
