@@ -150,6 +150,9 @@ struct ChatAdaptiveToolbar: ViewModifier {
 struct ChatNavigationActions<Leading: View, Refresh: View, Settings: View, Trailing: View>: ViewModifier {
     @Environment(\.chatDisplayTraits) private var displayTraits
     var showsHorizontalBar = false
+    /// Cantrip Home, whose tab bar takes the bottom of the vertical bar: only the leading and
+    /// trailing actions, both at the top, as in its iPhone header (the menu has refresh and settings).
+    var sharesVerticalBarWithTabBar = false
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var refresh: () -> Refresh
     @ViewBuilder var settings: () -> Settings
@@ -160,7 +163,7 @@ struct ChatNavigationActions<Leading: View, Refresh: View, Settings: View, Trail
     func body(content: Content) -> some View {
         content
             .toolbar(usesVerticalBar || showsHorizontalBar ? .visible : .hidden, for: .navigationBar)
-            .toolbar(usesVerticalBar ? .visible : .hidden, for: .bottomBar)
+            .toolbar(usesVerticalBar && !sharesVerticalBarWithTabBar ? .visible : .hidden, for: .bottomBar)
             .toolbar { actions }
             .modifier(ChatAdaptiveToolbar())
     }
@@ -168,14 +171,21 @@ struct ChatNavigationActions<Leading: View, Refresh: View, Settings: View, Trail
     @ToolbarContentBuilder private var actions: some ToolbarContent {
         #if AGENTGATEWAY_DUO_SDK
         if #available(iOS 27.1, *), usesVerticalBar {
-            ToolbarItem(placement: .bottomBar) { leading() }
-                .axisBehavior(.verticalPreferred)
-            ToolbarItem(placement: .topBarTrailing) { settings() }
-                .axisBehavior(.verticalPreferred)
-            ToolbarItem(placement: .topBarTrailing) { refresh() }
-                .axisBehavior(.verticalPreferred)
-            ToolbarItem(placement: .topBarTrailing) { trailing() }
-                .axisBehavior(.verticalPreferred)
+            if sharesVerticalBarWithTabBar {
+                ToolbarItem(placement: .topBarTrailing) { leading() }
+                    .axisBehavior(.verticalPreferred)
+                ToolbarItem(placement: .topBarTrailing) { trailing() }
+                    .axisBehavior(.verticalPreferred)
+            } else {
+                ToolbarItem(placement: .bottomBar) { leading() }
+                    .axisBehavior(.verticalPreferred)
+                ToolbarItem(placement: .topBarTrailing) { settings() }
+                    .axisBehavior(.verticalPreferred)
+                ToolbarItem(placement: .topBarTrailing) { refresh() }
+                    .axisBehavior(.verticalPreferred)
+                ToolbarItem(placement: .topBarTrailing) { trailing() }
+                    .axisBehavior(.verticalPreferred)
+            }
         } else {
             horizontalActions
         }
