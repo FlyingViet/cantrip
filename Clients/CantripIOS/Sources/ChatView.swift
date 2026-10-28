@@ -3200,6 +3200,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         .background { if style == .mascot { CantripMascotHeaderFade() } }
         .accessibilityIdentifier("chat.header")
         .modifier(ChatNavigationActions(
+            sharesVerticalBarWithTabBar: style == .mascot,
             leading: leading, refresh: refresh, settings: settings, trailing: trailing
         ))
     }

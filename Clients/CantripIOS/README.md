@@ -218,8 +218,10 @@ the Remote error banner; it is never automatically retried.
 
 Tap the **stacked-tabs icon at the top left** or swipe right from the **left edge**
 to open the Cantrip **Tabs** drawer. The **hamburger menu is at the top right**,
-with **Settings** inside it. You can also choose **hamburger menu > Tabs**. On Duo's vertical toolbar, **Tabs sits near the bottom**,
-with a separate **Settings gear**, Refresh, and the **white hamburger menu at the top**.
+with **Settings** inside it. You can also choose **hamburger menu > Tabs**. On Duo's vertical toolbar in Home, **Tabs and the
+white hamburger menu sit at the top**, as in Home's iPhone header (Refresh and Settings are in the menu), and Home's Chat,
+Tasks, Artifacts and Builds take the bottom. In a project tab, the back pill sits near the bottom, with a separate
+**Settings gear**, Refresh, and the **white hamburger menu at the top**.
 The hamburger stays white when paused, with a small orange pause badge. Select a
 tab to return to chat; swipe left on the drawer header or backdrop, tap outside,
 or use **Close tabs** to dismiss
@@ -1286,8 +1288,9 @@ a chat header with the title and state on the left and Stop, delivery, Refresh, 
 and the menu on the right; the system status bar stays at the right edge. Folded Duo (in
 either orientation, and while the keyboard is up) and upright Duo keep chat full-width with
 sessions in the drawer: where the system supplies a
-vertical bar, Tabs uses the bottom of Apple's native adaptive toolbar; a separate Settings gear,
-Refresh, and the hamburger menu stay at the top instead of duplicating controls
+vertical bar, Home's sections use the bottom of Apple's native adaptive toolbar with Tabs and
+the hamburger menu at the top; in a project tab the back pill uses the bottom and a separate
+Settings gear, Refresh, and the hamburger menu stay at the top, instead of duplicating controls
 above the conversation. The title, connection/usage row,
 and composer remain with the chat. In other display configurations the familiar
 header returns; regular-width iPad windows retain their session sidebar.
