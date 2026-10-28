@@ -404,6 +404,17 @@ final class BackendSlashCommandsTests: XCTestCase {
             .usesSidebarLayout, "iPad keeps its split navigation")
     }
 
+    func testFoldedDuoKeepsTheIPhoneLayoutOnItsSide() {
+        // The outer display turned sideways (or squeezed by the keyboard) is still a folded phone.
+        let foldedSideways = ChatDisplayTraits(hasVerticalBar: true, isLandscape: true, isFolded: true)
+        XCTAssertFalse(foldedSideways.usesSidebarLayout)
+        XCTAssertTrue(foldedSideways.placesActionsInVerticalBar, "Actions stay in the system's side bar")
+        XCTAssertEqual(BackendSlashRowStyle.resolve(foldedSideways), .touch)
+        XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: true, isLandscape: false, isFolded: true).usesSidebarLayout)
+        XCTAssertTrue(ChatDisplayTraits(hasVerticalBar: true, isLandscape: true, isFolded: false).usesSidebarLayout,
+                      "Unfolded on its side keeps the sidebar")
+    }
+
     func testSkillsGroupYoursBuiltInAndCantRunHere() throws {
         let sections = BackendSkillsSidebar.sections(try Self.fixture().commands)
         XCTAssertEqual(sections.map(\.group), [.yours, .builtIn, .unavailable])

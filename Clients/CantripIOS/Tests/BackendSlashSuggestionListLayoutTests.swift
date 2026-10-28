@@ -49,6 +49,32 @@ final class BackendSlashSuggestionListLayoutTests: XCTestCase {
         }
     }
 
+    /// The window's shape decides, not the chat's: a folded Duo's portrait window stays portrait while
+    /// the keyboard squeezes the chat into a wide strip, and turning the window turns the traits.
+    func testLandscapeFollowsTheWindowNotAKeyboardShortenedChat() throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        var observed = ChatDisplayTraits()
+        let squeezed = VStack(spacing: 0) {
+            TraitsProbe { observed = $0 }
+                .modifier(ChatDisplayObserver())
+                .frame(height: 300)
+            Spacer(minLength: 0)
+        }
+        let controller = UIHostingController(rootView: squeezed)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = controller
+        defer { window.isHidden = true }
+        for (size, landscape) in [(CGSize(width: 466, height: 678), false), (CGSize(width: 678, height: 466), true)] {
+            window.frame = CGRect(origin: .zero, size: size)
+            window.makeKeyAndVisible()
+            for _ in 0..<6 {
+                controller.view.layoutIfNeeded()
+                RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+            }
+            XCTAssertEqual(observed.isLandscape, landscape, "\(size)")
+        }
+    }
+
     /// The chat's display picks the rows: compact (Gateway Mac style) only beside the system's
     /// vertical bar in a landscape window, as on iPhone Duo unfolded on its side.
     func testDisplayShapeAndVerticalBarPickTheRowStyle() throws {
@@ -71,7 +97,9 @@ final class BackendSlashSuggestionListLayoutTests: XCTestCase {
                 XCTAssertEqual(observed.hasVerticalBar, scene.traitCollection.verticalBarEdge != .unspecified)
             }
             #endif
-            let expected: BackendSlashRowStyle = observed.hasVerticalBar && size.width > size.height ? .compact : .touch
+            // A folded Duo (the simulator's default pose) keeps touch rows in any window shape.
+            let expected: BackendSlashRowStyle = observed.hasVerticalBar && size.width > size.height
+                && !observed.isFolded ? .compact : .touch
             XCTAssertEqual(BackendSlashRowStyle.resolve(observed), expected)
             if !observed.hasVerticalBar {
                 XCTAssertEqual(BackendSlashRowStyle.resolve(observed), .touch, "Phones keep the iPhone rows")
