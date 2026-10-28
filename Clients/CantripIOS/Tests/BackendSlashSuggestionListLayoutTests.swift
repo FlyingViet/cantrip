@@ -135,12 +135,13 @@ final class BackendSlashSuggestionListLayoutTests: XCTestCase {
         }
     }
 
-    /// iPhone Duo unfolded on its side puts the sidebar beside the chat; other layouts don't.
+    /// iPhone Duo unfolded puts the sidebar (when open) left of the chat and an app-drawn rail right of it.
     func testPersistentSidebarSitsBesideTheChat() throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         for shows in [true, false] {
             var sidebar = CGRect.zero
             var chat = CGRect.zero
+            var rail = CGRect.zero
             let view = ChatNavigationView(
                 isTabListPresented: .constant(false), hasTabs: true, canSelectTabs: true,
                 allowsSidebar: false, showsPersistentSidebar: shows
@@ -150,6 +151,8 @@ final class BackendSlashSuggestionListLayoutTests: XCTestCase {
                 FrameProbe { chat = $0 }
             } persistentSidebar: {
                 FrameProbe { sidebar = $0 }.frame(width: CantripDuoSidebar.width)
+            } persistentRail: {
+                FrameProbe { rail = $0 }.frame(width: 64)
             }
             let controller = UIHostingController(rootView: view)
             let window = UIWindow(windowScene: scene)
@@ -161,6 +164,8 @@ final class BackendSlashSuggestionListLayoutTests: XCTestCase {
                 controller.view.layoutIfNeeded()
                 RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
             }
+            XCTAssertEqual(rail.width, 64, accuracy: 1)
+            XCTAssertGreaterThanOrEqual(rail.minX, chat.maxX, "The unfolded upright rail sits right of the chat")
             if shows {
                 XCTAssertEqual(sidebar.minX, 0, accuracy: 1, "The sidebar is on the left")
                 XCTAssertEqual(sidebar.width, CantripDuoSidebar.width, accuracy: 1)
@@ -169,8 +174,8 @@ final class BackendSlashSuggestionListLayoutTests: XCTestCase {
             } else {
                 XCTAssertEqual(sidebar, .zero)
                 XCTAssertEqual(chat.minX, controller.view.safeAreaInsets.left, accuracy: 1)
-                XCTAssertEqual(chat.width, 950 - controller.view.safeAreaInsets.left - controller.view.safeAreaInsets.right,
-                               accuracy: 1, "Without the sidebar the chat keeps the whole width")
+                XCTAssertEqual(chat.width, 950 - 64 - controller.view.safeAreaInsets.left - controller.view.safeAreaInsets.right,
+                               accuracy: 1, "Without the sidebar the chat keeps the width the rail leaves")
             }
         }
     }

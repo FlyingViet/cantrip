@@ -240,7 +240,7 @@ Settings keeps connection, notification, voice, and reply preferences.
 
 In regular-width iPad layouts, **Tabs** becomes a native sidebar beside the chat.
 Selecting, creating, or renaming a tab leaves this sidebar open; **Close tabs**
-hides it, and the menu's **Tabs** action brings it back. All iPhone layouts (including expanded Duo) and compact iPad windows retain
+hides it, and the menu's **Tabs** action brings it back. Other iPhone layouts (and an unfolded Duo with its sidebar closed) and compact iPad windows retain
 the left-edge drawer. Resizing uses the same
 detail navigation hierarchy, preserving the composer and conversation rather
 than rebuilding them. Tab switching remains disabled during sends and image
@@ -883,7 +883,7 @@ you can type the argument. **/model** opens the tab's **Model Settings** where t
 them. Commands Cantrip can't run from a phone stay listed but dimmed, with the reason. The
 list closes once you type a space, never shows for paths such as `/Users/...`, and holds
 at most 50 rows in a scrollable area above the composer, about two and a half rows tall.
-On iPhone Duo unfolded in landscape there is no pop-up: the sidebar's **Skills** section
+On iPhone Duo unfolded with the sidebar open there is no pop-up: the sidebar's **Skills** section
 (grouped as *Your skills & commands*, *Built-in* and a collapsed *Can't run here*) filters as
 you type, highlights the best match and opens itself if collapsed; with a hardware keyboard
 Up/Down, Tab, Return and Escape drive the highlight as on Gateway Mac. Tapping a skill there
@@ -1282,12 +1282,15 @@ In Xcode: select the **Hermes** target → **Signing & Capabilities** → set yo
 ### Adaptive layouts and iPhone Duo
 
 The app supports portrait and both landscape orientations on iPhone, plus all
-orientations on iPad. Duo unfolded in landscape (the system's vertical bar beside a
-landscape window, with the hinge open) switches to Gateway Mac's layout: a persistent left sidebar with Pip,
-Home's sections, the tabs (with **+**), the open chat's **Skills** and the connection, and
-a chat header with the title and state on the left and Stop, delivery, Refresh, Settings
-and the menu on the right; the system status bar stays at the right edge. Folded Duo (in
-either orientation, and while the keyboard is up) and upright Duo keep chat full-width with
+orientations on iPad. Duo unfolded (the hinge open, upright or on its side) uses the system's
+vertical bar as a navigation rail: a **sidebar toggle** at the top, then **Model Settings** (model,
+effort and the Mac's usage limit fallback), **Settings**, Refresh and the menu. The toggle opens
+and closes Gateway Mac's left sidebar with Pip, Home's sections, the tabs (with **+**), the open
+chat's **Skills** and the connection; the chat header keeps the title and state on the left and
+Stop and delivery on the right. The sidebar stays open or closed as you left it through folding,
+unfolding, rotating and typing. With it closed, Home's sections return to the bottom of the rail,
+and the toggle shows the working or needs-input count the Tabs button would. Folded Duo (in
+either orientation, and while the keyboard is up) keeps chat full-width with
 sessions in the drawer: where the system supplies a
 vertical bar, Home's sections use the bottom of Apple's native adaptive toolbar with Tabs and
 the hamburger menu at the top; in a project tab the back pill uses the bottom and a separate

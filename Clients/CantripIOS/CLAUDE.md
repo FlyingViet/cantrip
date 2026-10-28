@@ -60,10 +60,13 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
 - `ChatDisplayObserver` reads window-local vertical-bar traits, the hinge (`onHingeChange`) and
   the window's own bounds (never the keyboard-shortened content).
   `ChatHeader` moves actions into the native vertical toolbar
-  only where the system supports it, except in the sidebar layout (vertical bar + landscape
-  window + hinge not closed on iPhone: `ChatDisplayTraits.usesSidebarLayout`), which shows `CantripDuoSidebar`
-  beside the same stack and keeps the actions in the chat header. Home's tab bar takes the bottom
-  of the vertical bar, so Home puts only Tabs and the menu at its top (`sharesVerticalBarWithTabBar`). Do not infer Duo from dimensions or device
+  wherever the system has one. On an unfolded iPhone Duo (vertical bar + hinge not closed, either
+  orientation: `ChatDisplayTraits.isUnfoldedDuo`) that bar is the app's rail: a sidebar toggle at
+  the top, then Model Settings and Settings. The toggle shows `CantripDuoSidebar` beside the same
+  stack; its open state is saved (`cantrip.duoSidebar.open`), so folding, rotation and the keyboard
+  never change it. Home's tab bar takes the bottom of the vertical bar (hidden while the sidebar,
+  which lists Home's sections, is open), so Home puts only Tabs and the menu at its top when folded
+  (`sharesVerticalBarWithTabBar`); unfolded, the toggle replaces Tabs. Do not infer Duo from dimensions or device
   names. `AGENTGATEWAY_DUO_SDK` is selected by SDK in `project.yml`, not by the
   Swift compiler version; keep both SDK and iOS availability guards.
 - Saved servers live in `ServerProfiles`; each server's credential is stored

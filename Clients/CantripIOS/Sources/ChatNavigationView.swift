@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ChatNavigationView<Sidebar: View, Content: View, PersistentSidebar: View>: View {
+struct ChatNavigationView<Sidebar: View, Content: View, PersistentSidebar: View, PersistentRail: View>: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Binding var isTabListPresented: Bool
     let hasTabs: Bool
@@ -13,6 +13,8 @@ struct ChatNavigationView<Sidebar: View, Content: View, PersistentSidebar: View>
     @ViewBuilder var sidebar: (_ isModal: Bool, _ dismiss: @escaping () -> Void) -> Sidebar
     @ViewBuilder var content: () -> Content
     @ViewBuilder var persistentSidebar: () -> PersistentSidebar
+    /// iPhone Duo unfolded upright: the app's navigation rail on the right edge (empty otherwise).
+    @ViewBuilder var persistentRail: () -> PersistentRail
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
@@ -47,6 +49,7 @@ struct ChatNavigationView<Sidebar: View, Content: View, PersistentSidebar: View>
                         Divider().ignoresSafeArea()
                     }
                     NavigationStack { content() }
+                    persistentRail()
                 }
             }
         }
@@ -93,7 +96,7 @@ struct ChatNavigationView<Sidebar: View, Content: View, PersistentSidebar: View>
     }
 }
 
-extension ChatNavigationView where PersistentSidebar == EmptyView {
+extension ChatNavigationView where PersistentSidebar == EmptyView, PersistentRail == EmptyView {
     @MainActor
     init(
         isTabListPresented: Binding<Bool>,
@@ -109,7 +112,8 @@ extension ChatNavigationView where PersistentSidebar == EmptyView {
             isReorderingTabs: isReorderingTabs,
             allowsSidebar: allowsSidebar ?? (UIDevice.current.userInterfaceIdiom == .pad),
             showsPersistentSidebar: false,
-            sidebar: sidebar, content: content, persistentSidebar: { EmptyView() }
+            sidebar: sidebar, content: content, persistentSidebar: { EmptyView() },
+            persistentRail: { EmptyView() }
         )
     }
 }
