@@ -946,3 +946,12 @@ protocol CantripHomeProtocolCarrier: AnyObject {
 }
 
 extension CopilotBackend: CantripHomeProtocolCarrier {}
+extension ClaudeCodeBackend: CantripHomeProtocolCarrier {}
+
+/// Backends that can stop one subagent while the rest of the reply keeps going.
+protocol SubagentCancelling: AnyObject {
+    func cancelSubagent(agentID: String, completion: @escaping (Result<Bool, Error>) -> Void)
+}
+
+extension CopilotBackend: SubagentCancelling {}
+extension ClaudeCodeBackend: SubagentCancelling {}

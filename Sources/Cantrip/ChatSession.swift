@@ -396,7 +396,7 @@ final class ChatSession: ObservableObject {
     /// long downloads/builds under a tool call aren't killed.
     private let inactivityLimit: TimeInterval = 900
     private var watchdog: Timer?
-    private let claudeCode: ClaudeCodeBackend
+    let claudeCode: ClaudeCodeBackend
     private let copilot: Backend
     private let copilotRemote = CopilotACPBackend()
     private let codex: CodexBackend
@@ -617,22 +617,31 @@ final class ChatSession: ObservableObject {
         try saveTabMetadata(updated)
     }
 
-    func saveModelSelection(_ selection: SessionModelSelection?) throws {
+    func saveModelSelection(_ selection: SessionModelSelection?, for backend: BackendKind? = nil) throws {
         var updated = tabMetadata
-        updated.modelSettings = selection
+        updated.setModelSettings(selection, for: backend ?? modelSettingsBackend)
         try saveTabMetadata(updated)
         applyModelSelection()
     }
 
     private func applyModelSelection() {
-        guard let backend = copilot as? CopilotBackend else { return }
         // Background runs use their task's model, or whatever the user picked for Home.
-        let selection = isCantripHomeBackground
-            ? cantripHomeModelOverride ?? SessionTabMetadata.load(id: Self.cantripHomeID).modelSettings
-            : tabMetadata.modelSettings
-        backend.modelOverride = selection?.model
-        backend.effortOverride = selection?.effort
-        backend.contextTierOverride = selection?.contextTier
+        func selection(for kind: BackendKind) -> SessionModelSelection? {
+            isCantripHomeBackground
+                ? (kind == modelSettingsBackend ? cantripHomeModelOverride : nil)
+                    ?? SessionTabMetadata.load(id: Self.cantripHomeID).modelSettings(for: kind)
+                : tabMetadata.modelSettings(for: kind)
+        }
+        if let backend = copilot as? CopilotBackend {
+            let copilotSelection = selection(for: .copilot)
+            backend.modelOverride = copilotSelection?.model
+            backend.effortOverride = copilotSelection?.effort
+            backend.contextTierOverride = copilotSelection?.contextTier
+        }
+        let claudeSelection = selection(for: .claudeCode)
+        // A tab's "CLI default" is Claude Code's own default model, and an empty effort sends none.
+        claudeCode.modelOverride = claudeSelection.map { $0.model.isEmpty ? "default" : $0.model }
+        claudeCode.effortOverride = claudeSelection?.effort
     }
 
     private func saveTabMetadata(_ updated: SessionTabMetadata) throws {
@@ -1033,6 +1042,7 @@ final class ChatSession: ObservableObject {
             backend?.guardrailLabel = label
         }
         (copilot as? CopilotBackend)?.childPolicy = policy
+        claudeCode.childPolicy = policy
     }
 
     func clearChildTabPolicy() {
@@ -1041,6 +1051,7 @@ final class ChatSession: ObservableObject {
         ]
         for backend in guarded { backend?.guardrail = nil }
         (copilot as? CopilotBackend)?.childPolicy = nil
+        claudeCode.childPolicy = nil
     }
 
     /// After a child tab's merge held the queue.
@@ -2085,7 +2096,10 @@ final class ChatSession: ObservableObject {
         // only this turn's data with each message.
         let homeCarrier = isCantripHome && !councilMode
             ? backend(for: backendKind) as? CantripHomeProtocolCarrier : nil
-        if isCantripHome { (copilot as? CantripHomeProtocolCarrier)?.homeProtocol = nil }
+        if isCantripHome {
+            (copilot as? CantripHomeProtocolCarrier)?.homeProtocol = nil
+            claudeCode.homeProtocol = nil
+        }
         homeCarrier?.homeProtocol = cantripHomeChatProtocol
         if !isSlashCommand, automatedRun?.isIncident == false, let run = cantripHomeTask,
            let task = CantripHomeStore.shared.tasks.first(where: { $0.id == run.id }) {
@@ -3728,12 +3742,13 @@ final class ChatSession: ObservableObject {
     /// `/model [id] [effort]` on Copilot: this tab's model settings, same rules as the model menu.
     func modelCommandReply(_ input: String) -> String {
         if let reason = modelSettingsUnavailableReason { return reason }
-        let catalog = settings.copilotModelCatalog
+        let tabCatalog = modelCatalog
+        let catalog = tabCatalog.models
         let current = modelSelection
         let parts = input.split(whereSeparator: \.isWhitespace).map(String.init)
         guard let requested = parts.first else {
             let name = current.model.isEmpty
-                ? (settings.copilotFileDefaultModel.map { "\($0) (the Mac's default)" } ?? "the Mac's default model")
+                ? (tabCatalog.fileDefaultModel.map { "\($0) (the Mac's default)" } ?? "the Mac's default model")
                 : current.model
             var lines = ["This tab uses **\(name)**\(current.effort.isEmpty ? "" : " with \(current.effort) effort"). "
                          + "Change it in this tab's model settings, or send `/model <model> [effort]`."]
@@ -3752,9 +3767,10 @@ final class ChatSession: ObservableObject {
         } else if let match = catalog.first(where: { $0.id.lowercased() == requested.lowercased() }) {
             model = match.id
         } else {
-            return "`\(requested)` isn't in the Mac's Copilot model list. Send `/model` to see the choices."
+            let name = modelSettingsBackend == .claudeCode ? "Claude Code" : "Copilot"
+            return "`\(requested)` isn't in the Mac's \(name) model list. Send `/model` to see the choices."
         }
-        let info = catalog.first { $0.id == (model.isEmpty ? settings.copilotFileDefaultModel : model) }
+        let info = tabCatalog.info(model)
         let effort = parts.count > 1 ? parts[1].lowercased() : ""
         let tier = info?.contextTiers?.contains(current.contextTier) == true ? current.contextTier : ""
         let selection = model.isEmpty && effort.isEmpty
@@ -4002,7 +4018,7 @@ final class ChatSession: ObservableObject {
             completion(.failure(SubagentCancelError.finished))
             return
         }
-        guard info.canCancel, let backend = copilot as? CopilotBackend else {
+        guard info.canCancel, let backend = activeBackend as? SubagentCancelling else {
             completion(.failure(SubagentCancelError.unsupported))
             return
         }

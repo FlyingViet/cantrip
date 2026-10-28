@@ -11,6 +11,7 @@ extension SessionTabTests {
         try await testCantripHomeCorrection()
         try await testCantripHomeBridgePolicy()
         try await testCantripHomeClaudeHook()
+        try await testClaudeBackendParity()
         try await testCantripHomeAntigravityHook()
         try await testAntigravityBackendStream()
         try await testAntigravityRestartKeepsNextTurn()

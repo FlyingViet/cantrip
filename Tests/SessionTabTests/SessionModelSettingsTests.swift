@@ -73,7 +73,11 @@ extension SessionTabTests {
             preconditionFailure("Council configuration is separate")
         } catch let error as SessionModelSettingsError { precondition(error.status == 409) }
         chat.councilMode = false
+        // Claude Code tabs have their own settings; Codex and the others still don't.
         settings.backend = .claudeCode
+        precondition(chat.modelSettingsUnavailableReason == nil && chat.ownModelSelection == nil,
+                     "Claude Code keeps a separate, unset selection")
+        settings.backend = .codex
         precondition(chat.modelSettingsUnavailableReason != nil)
         settings.backend = .copilot
 
