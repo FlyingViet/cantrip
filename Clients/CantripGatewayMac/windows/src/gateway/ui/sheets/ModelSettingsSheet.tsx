@@ -8,7 +8,7 @@ import { useEffect, useId, useState } from "preact/hooks";
 import { api, pathComponent } from "../../api/client";
 import type {
   ModelSelection, ModelSettingsSnapshot, PrivateLocalConfiguration, PrivateLocalModelsResponse, PrivateLocalSettingsSnapshot,
-  RemoteSessionSummary,
+  RemoteSessionSummary, UsageFallbackRequest, UsageFallbackSnapshot,
 } from "../../api/types";
 import * as remote from "../../state/remote";
 import { FormRow, FormSection, Sheet, Spinner } from "../kit";
@@ -16,7 +16,7 @@ import { Loading, StatusLabel, Warning, findSession, sleep, useAlive } from "./c
 import {
   DEFAULT_PRIVATE_CONFIGURATION, MODEL_REFRESH_POLLS, capitalized, contextLabel, errorText, isUnsupported, modelInfo,
   modelSettingsChange, modelValidationError, parseContextTokens, pickerChoices, privateModelChoices, selectModel, tokenLabel,
-  writeFailure,
+  usageFallbackSelection, usageFallbackStatus, writeFailure,
 } from "./sheetLogic";
 
 export function ModelSettingsSheet(props: { sessionID: string; onClose: () => void }): JSX.Element | null {
@@ -157,7 +157,7 @@ function ModelSettings(props: { session: RemoteSessionSummary; onClose: () => vo
         <button type="button" class="btn primary" disabled={!canSave} onClick={() => void save()}>Save</button>
       </>}>
       <fieldset class="sh-fieldset" disabled={busy}>
-        <FormSection footer="Only this tab changes. Save while idle; the next prompt uses the new settings. The conversation stays visible, but Copilot rebuilds its runtime with recent history. Long context may cost more.">
+        <FormSection footer="Only this tab changes. Save while idle; the next prompt uses the new settings and continues the same conversation. Long context may cost more.">
           <FormRow><span class="sh-headline truncate">{session.title}</span></FormRow>
           <FormRow label={<label for={defaultsID}>Use Mac defaults</label>}>
             <input id={defaultsID} type="checkbox" role="switch" class="switch" checked={usesDefaults.value}
@@ -202,6 +202,7 @@ function ModelSettings(props: { session: RemoteSessionSummary; onClose: () => vo
         <div role="alert">
           {message ? <FormSection><FormRow><span class="sh-warning selectable">{message}</span></FormRow></FormSection> : null}
         </div>
+        <UsageFallbackSection />
         <FormSection>
           <FormRow><button type="button" class="btn" onClick={() => void load(true)}>Reload settings</button></FormRow>
           <FormRow><button type="button" class="btn" onClick={() => void load(false, true)}>Refresh models</button></FormRow>
@@ -209,6 +210,65 @@ function ModelSettings(props: { session: RemoteSessionSummary; onClose: () => vo
         </FormSection>
       </fieldset>
     </Sheet>
+  );
+}
+
+// MARK: Usage limit fallback
+
+/** Mac-wide (CantripUsageFallbackSection), so it saves on change, apart from the tab's Save. Hidden on older Macs. */
+function UsageFallbackSection(): JSX.Element | null {
+  const fallback = useSignal<UsageFallbackSnapshot | null>(null);
+  const saving = useSignal(false);
+  const error = useSignal<string | null>(null);
+  const alive = useAlive();
+  const pickerID = useId();
+
+  const load = async () => {
+    try {
+      const value = await api<UsageFallbackSnapshot>("/api/v1/usage-fallback");
+      if (alive.current) fallback.value = value;
+    } catch {
+      if (alive.current) fallback.value = null;
+    }
+  };
+  useEffect(() => { void load(); }, []);
+
+  const save = async (change: UsageFallbackRequest) => {
+    if (saving.value) return;
+    saving.value = true;
+    try {
+      const value = await remote.mutate(() => api<UsageFallbackSnapshot>("/api/v1/usage-fallback", { method: "POST", body: change }));
+      if (alive.current) { fallback.value = value; error.value = null; }
+    } catch (failure) {
+      if (!alive.current) return;
+      error.value = writeFailure(failure) || "The fallback could not be saved.";
+      await load();
+    } finally {
+      saving.value = false;
+    }
+  };
+
+  const value = fallback.value;
+  if (!value) return null;
+  const selected = usageFallbackSelection(value);
+  return (
+    <FormSection header="Usage limit fallback (all tabs)"
+      footer={`When the Mac's backend says its plan's usage limit is reached. ${usageFallbackStatus(value)}`}>
+      <FormRow label={<label for={pickerID}>Continue on</label>}>
+        <select id={pickerID} class="select" value={selected} disabled={saving.value}
+          onChange={(event) => void save({ revision: value.revision, backend: event.currentTarget.value })}>
+          <option value="" selected={selected === ""}>Off - stop and show the error</option>
+          {value.choices.map((choice) => (
+            <option key={choice.id} value={choice.id} selected={choice.id === selected}>{choice.label}</option>
+          ))}
+        </select>
+      </FormRow>
+      {value.limited.length ? (
+        <FormRow><button type="button" class="btn" disabled={saving.value}
+          onClick={() => void save({ revision: value.revision, resetLimits: true })}>Try every backend again</button></FormRow>
+      ) : null}
+      {error.value ? <FormRow><span class="sh-warning selectable" role="alert">{error.value}</span></FormRow> : null}
+    </FormSection>
   );
 }
 

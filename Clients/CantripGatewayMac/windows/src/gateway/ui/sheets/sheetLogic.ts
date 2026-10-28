@@ -7,7 +7,7 @@ import type {
   CopilotQuotaBucket, CopilotUsageSnapshot, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
-  ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary,
+  ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackSnapshot,
 } from "../../api/types";
 
 // MARK: Errors
@@ -789,4 +789,16 @@ export function normalizedPoint(clientX: number, clientY: number, rect: { left: 
   if (!(rect.width > 0) || !(rect.height > 0)) return null;
   const clamp = (value: number) => Math.min(1, Math.max(0, value));
   return { x: clamp((clientX - rect.left) / rect.width), y: clamp((clientY - rect.top) / rect.height) };
+}
+
+/** The fallback picker's value: "" when off or set to a backend that is now the Mac's own. */
+export function usageFallbackSelection(value: UsageFallbackSnapshot): string {
+  return value.choices.some((choice) => choice.id === value.backend) ? value.backend : "";
+}
+
+/** The status line under the fallback picker (CantripUsageFallback.status). */
+export function usageFallbackStatus(value: UsageFallbackSnapshot): string {
+  return value.limited.length
+    ? `At its usage limit: ${value.limited.map((entry) => `${entry.backend} until ${entry.untilLabel}`).join(", ")}.`
+    : "New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch.";
 }

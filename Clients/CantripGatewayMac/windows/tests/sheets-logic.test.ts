@@ -489,3 +489,24 @@ describe("text helpers", () => {
     expect(relativeDuration(new Date(now), now)).toBe("0 seconds");
   });
 });
+
+describe("usage limit fallback", () => {
+  const snapshot = (backend: string, limited = false) => ({
+    backend, primary: "Claude Code", revision: "f1",
+    choices: [{ id: "Copilot", label: "Copilot" }, { id: "Codex", label: "Codex" }],
+    limited: limited ? [{ backend: "Claude Code", until: "2026-10-28T12:00:00Z", untilLabel: "5:00 AM" }] : [],
+  });
+
+  it("shows the saved fallback, or Off when it is the Mac's own backend", async () => {
+    const { usageFallbackSelection } = await import("../src/gateway/ui/sheets/sheetLogic");
+    expect(usageFallbackSelection(snapshot("Copilot"))).toBe("Copilot");
+    expect(usageFallbackSelection(snapshot(""))).toBe("");
+    expect(usageFallbackSelection(snapshot("Claude Code"))).toBe("");
+  });
+
+  it("names backends at their limit and when they reset", async () => {
+    const { usageFallbackStatus } = await import("../src/gateway/ui/sheets/sheetLogic");
+    expect(usageFallbackStatus(snapshot("Copilot", true))).toBe("At its usage limit: Claude Code until 5:00 AM.");
+    expect(usageFallbackStatus(snapshot("Copilot"))).toContain("every tab");
+  });
+});

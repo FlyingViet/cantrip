@@ -929,6 +929,18 @@ export interface ModelOption {
   longContextPromptTokens?: Int;
 }
 
+/** GET/POST /api/v1/usage-fallback (`UsageFallbackSnapshot`): the Mac-wide backend a run moves to at a
+ * usage limit. POST `{revision, backend}` ("" = off) or `{revision, resetLimits: true}`. */
+export interface UsageFallbackSnapshot {
+  backend: string;
+  primary: string;
+  choices: { id: string; label: string }[];
+  limited: { backend: string; until: string; untilLabel: string }[];
+  revision: string;
+}
+
+export type UsageFallbackRequest = { revision: string; backend: string } | { revision: string; resetLimits: true };
+
 /** GET/POST /api/v1/sessions/<id>/model-settings (`SessionModelSettingsSnapshot`). */
 export interface ModelSettingsSnapshot {
   /** Effective selection (override or defaults). */
