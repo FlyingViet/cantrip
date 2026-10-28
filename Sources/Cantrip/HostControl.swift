@@ -47,6 +47,15 @@ final class HostControl {
                         typed[key] = kind.rawValue
                         continue
                     }
+                    if key == "limitFallbackBackend" {
+                        let name = (value as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+                        if ["", "off", "none"].contains(name.lowercased()) { typed[key] = ""; continue }
+                        guard let kind = Self.backend(named: name) else {
+                            return ["error": "limitFallbackBackend must be off or one of: copilot, claude, codex, antigravity, local, copilot-remote."]
+                        }
+                        typed[key] = kind.rawValue
+                        continue
+                    }
                     guard let converted = Self.convert(value, like: existing) else {
                         return ["error": "\(key) expects \(Self.typeName(existing))."]
                     }

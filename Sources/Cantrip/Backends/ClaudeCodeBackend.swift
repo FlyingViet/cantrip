@@ -23,6 +23,9 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     private var hasEmittedText = false
     /// Same, for thinking blocks (separate consecutive reasoning blocks).
     private var hasEmittedThinking = false
+    /// Claude's own text for a turn the plan's usage limit stopped (an assistant message marked
+    /// `rate_limit` or `billing_error`), so the turn ends as a failure Cantrip can fall back on.
+    private var usageLimitText: String?
     /// A turn is running and owes exactly one terminal `result` event.
     private var turnInFlight = false
     /// Set by a graceful interrupt while a turn is in flight: the aborted
@@ -112,6 +115,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             self.currentOnEvent = onEvent
             self.hasEmittedText = false
             self.hasEmittedThinking = false
+            self.usageLimitText = nil
             self.idleRelease?.cancel()
             self.endBackgroundWait()
             if self.process?.isRunning != true || self.processWorkdir != workdir
@@ -899,6 +903,11 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             guard let message = obj["message"] as? [String: Any],
                   let content = message["content"] as? [[String: Any]] else { return }
             let parentID = obj["parent_tool_use_id"] as? String
+            if parentID == nil, let error = obj["error"] as? String, ["rate_limit", "billing_error"].contains(error) {
+                let text = content.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
+                    .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                usageLimitText = text.isEmpty ? "Claude usage limit reached." : text
+            }
             if let parentID, var parent = activities[parentID], parent.subagent != nil {
                 // A subagent's own message: feed the monitor, keep it out of the answer.
                 let messageID = message["id"] as? String
@@ -1022,6 +1031,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             if let isError = obj["is_error"] as? Bool, isError,
                let result = obj["result"] as? String {
                 onEvent(.failure(result))
+            } else if let limit = usageLimitText, !hasEmittedText {
+                onEvent(.failure(UsageLimit.isLimitError(limit) ? limit : "Claude usage limit reached: \(limit)"))
             } else {
                 // Local slash commands (/context, /cost, ...) answer with a synthetic message and
                 // no streamed text; their output is only in the result.
