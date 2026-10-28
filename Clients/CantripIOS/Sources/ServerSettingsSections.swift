@@ -6,10 +6,14 @@ struct ServerSettingsSections: View {
     let add: (ServerDraft) async throws -> Void
     let select: (SavedServer) async throws -> Void
     let remove: (SavedServer) throws -> Void
+    /// Saves a re-entered credential for a saved server and connects to it.
+    let reenter: (SavedServer, String) async throws -> Void
     @StateObject private var form = ServerFormModel()
     @State private var selecting = false
     @State private var actionError: String?
     @State private var removing: SavedServer?
+    @State private var reentering: SavedServer?
+    @State private var reenteredCredential = ""
     @FocusState private var editing: Bool
 
     var body: some View {
@@ -23,10 +27,16 @@ struct ServerSettingsSections: View {
                 Text("No saved servers").foregroundStyle(.secondary)
             }
             ForEach(servers.servers) { server in
+                let missing = servers.missingCredentialIDs.contains(server.id)
                 Button {
                     editing = false
-                    selecting = true
                     actionError = nil
+                    // A saved server without its credential on this device asks for it instead.
+                    if servers.isMissingCredential(server) {
+                        askForCredential(server)
+                        return
+                    }
+                    selecting = true
                     Task {
                         defer { selecting = false }
                         do {
@@ -36,11 +46,17 @@ struct ServerSettingsSections: View {
                         }
                     }
                 } label: {
-                    SavedServerRow(server: server, isSelected: servers.selectedID == server.id)
+                    SavedServerRow(server: server, isSelected: servers.selectedID == server.id,
+                                   missingCredential: missing ? servers.kind.credentialName : nil)
                 }
                 .buttonStyle(.plain)
                 .disabled(!canChangeSelection || selecting || form.saving)
+                .accessibilityHint(missing ? "Re-enter its \(servers.kind.credentialName) to connect" : "")
                 .contextMenu {
+                    Button("Re-enter \(servers.kind.credentialTitle)", systemImage: "key") {
+                        askForCredential(server)
+                    }
+                    .disabled(!canChangeSelection || selecting || form.saving)
                     Button("Remove Server", systemImage: "trash", role: .destructive) {
                         removing = server
                     }
@@ -49,6 +65,11 @@ struct ServerSettingsSections: View {
                 .swipeActions {
                     Button("Remove", role: .destructive) { removing = server }
                         .disabled(!canChangeSelection || selecting || form.saving)
+                    Button("Re-enter \(servers.kind.credentialTitle)", systemImage: "key") {
+                        askForCredential(server)
+                    }
+                    .tint(.orange)
+                    .disabled(!canChangeSelection || selecting || form.saving)
                 }
             }
             if selecting { ProgressView("Selecting server...") }
@@ -59,7 +80,26 @@ struct ServerSettingsSections: View {
         } header: {
             Text("\(servers.kind.title) Servers")
         } footer: {
-            Text("Tap a saved server to connect. One \(servers.kind.title) server is selected at a time. Swipe or touch and hold to remove a configuration; this does not delete work on the server.")
+            Text("Tap a saved server to connect. One \(servers.kind.title) server is selected at a time. Swipe or touch and hold to re-enter its \(servers.kind.credentialName) or remove a configuration; removing does not delete work on the server.")
+        }
+        .task { servers.refreshCredentialStatus() }
+        .alert(
+            "Re-enter \(servers.kind.credentialTitle)",
+            isPresented: Binding(
+                get: { reentering != nil },
+                set: { if !$0 { reentering = nil } }
+            ),
+            presenting: reentering
+        ) { server in
+            SecureField(servers.kind.credentialTitle, text: $reenteredCredential)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Save and Connect") { saveCredential(for: server) }
+            Button("Cancel", role: .cancel) { reenteredCredential = "" }
+        } message: { server in
+            Text(servers.missingCredentialIDs.contains(server.id)
+                 ? "\(server.name) is saved, but its \(servers.kind.credentialName) isn't on this device. Enter it to reconnect. It stays in this device's Keychain."
+                 : "Enter \(server.name)'s new \(servers.kind.credentialName). It replaces the saved one and reconnects.")
         }
         .confirmationDialog("Remove server?", isPresented: Binding(
             get: { removing != nil },
@@ -78,6 +118,27 @@ struct ServerSettingsSections: View {
             }
         } message: {
             Text("Only this saved configuration and its credential will be removed. An active connection to it will disconnect.")
+        }
+    }
+
+    private func askForCredential(_ server: SavedServer) {
+        editing = false
+        reenteredCredential = ""
+        reentering = server
+    }
+
+    private func saveCredential(for server: SavedServer) {
+        let credential = reenteredCredential
+        reenteredCredential = ""
+        selecting = true
+        actionError = nil
+        Task {
+            defer { selecting = false }
+            do {
+                try await reenter(server, credential)
+            } catch {
+                actionError = error.localizedDescription
+            }
         }
     }
 
@@ -141,6 +202,8 @@ struct ServerSettingsSections: View {
 struct SavedServerRow: View {
     let server: SavedServer
     let isSelected: Bool
+    /// The credential's name (e.g. "pairing token") when this device doesn't have it.
+    var missingCredential: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -151,6 +214,14 @@ struct SavedServerRow: View {
                 Text(server.address).font(.caption).foregroundStyle(.secondary)
                 if isSelected {
                     Text("Selected").font(.caption).foregroundStyle(.tint)
+                }
+                if let missingCredential {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Image(systemName: "key.slash").foregroundStyle(.orange)
+                        Text("\(missingCredential.prefix(1).uppercased())\(missingCredential.dropFirst()) missing")
+                            .foregroundStyle(.primary)
+                    }
+                    .font(.caption)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

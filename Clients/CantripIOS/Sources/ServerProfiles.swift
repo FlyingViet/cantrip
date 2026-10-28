@@ -6,6 +6,8 @@ enum ServerKind: String {
     case cantrip
 
     var title: String { self == .hermes ? "Hermes Gateway" : "Cantrip Remote" }
+    var credentialName: String { self == .hermes ? "API key" : "pairing token" }
+    var credentialTitle: String { self == .hermes ? "API Key" : "Pairing Token" }
 }
 
 struct SavedServer: Codable, Identifiable, Equatable {
@@ -52,6 +54,8 @@ final class ServerProfiles: ObservableObject {
     @Published private(set) var servers: [SavedServer] = []
     @Published private(set) var selectedID: UUID?
     @Published private(set) var loadIssue: String?
+    /// Saved servers known to have no credential on this device, e.g. after moving to a new one.
+    @Published private(set) var missingCredentialIDs: Set<UUID> = []
     private let defaults: UserDefaults
     private let credentials: ServerCredentialStore
     private let storageKey: String
@@ -86,7 +90,8 @@ final class ServerProfiles: ObservableObject {
     func credential(for server: SavedServer) throws -> String {
         guard let value = try storedCredential(for: server) else {
             throw ServerConfigurationError(
-                message: "The credential for \(server.name) is missing. Remove it and add the server again."
+                message: "The \(kind.credentialName) for \(server.name) isn't saved on this device "
+                    + "(it doesn't move to a new device). Open Settings and select \(server.name) to re-enter it."
             )
         }
         return value
@@ -98,19 +103,38 @@ final class ServerProfiles: ObservableObject {
         guard servers.contains(where: { $0.id == server.id }) else {
             throw ServerConfigurationError(message: "This server is no longer saved.")
         }
-        guard let value = try credentials.read(account(for: server.id)), !value.isEmpty else { return nil }
+        let value = try credentials.read(account(for: server.id)).flatMap { $0.isEmpty ? nil : $0 }
+        markCredential(missing: value == nil, for: server.id)
         return value
+    }
+
+    /// False when the credential can't be read for another reason (e.g. Keychain locked).
+    func isMissingCredential(_ server: SavedServer) -> Bool {
+        do { return try storedCredential(for: server) == nil } catch { return false }
+    }
+
+    /// Rechecks which saved servers have no credential on this device.
+    func refreshCredentialStatus() {
+        for server in servers { _ = isMissingCredential(server) }
+    }
+
+    /// Saves a re-entered credential for a saved server, keeping the entry, its ID and its history.
+    func replaceCredential(_ credential: String, for server: SavedServer) throws {
+        try ensureLoaded()
+        guard servers.contains(where: { $0.id == server.id }) else {
+            throw ServerConfigurationError(message: "This server is no longer saved.")
+        }
+        let secret = credential.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !secret.isEmpty else { throw ServerConfigurationError(message: missingCredentialPrompt) }
+        try credentials.write(account(for: server.id), secret)
+        markCredential(missing: false, for: server.id)
     }
 
     @discardableResult
     func add(_ draft: ServerDraft, usesLegacyHistory: Bool = false) throws -> SavedServer {
         try ensureLoaded()
         let secret = draft.credential.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !secret.isEmpty else {
-            throw ServerConfigurationError(
-                message: kind == .hermes ? "Enter the gateway API key." : "Enter the pairing token."
-            )
-        }
+        guard !secret.isEmpty else { throw ServerConfigurationError(message: missingCredentialPrompt) }
         let url = try normalizedURL(draft.url)
         guard kind != .cantrip || !draft.tailscaleOnly || !url.isEmpty else {
             throw ServerConfigurationError(message: "Enter a Tailscale URL to use Tailscale only.")
@@ -152,6 +176,7 @@ final class ServerProfiles: ObservableObject {
         let data = try JSONEncoder().encode(snapshot)
         try credentials.write(account(for: server.id), secret)
         commit(snapshot, data: data)
+        markCredential(missing: false, for: server.id)
         return server
     }
 
@@ -171,6 +196,7 @@ final class ServerProfiles: ObservableObject {
         let data = try JSONEncoder().encode(snapshot)
         try credentials.remove(account(for: server.id))
         commit(snapshot, data: data)
+        markCredential(missing: false, for: server.id)
     }
 
     func migrate(url: String, credential: String, tailscaleOnly: Bool = false) throws {
@@ -209,6 +235,15 @@ final class ServerProfiles: ObservableObject {
 
     private func account(for id: UUID) -> String {
         "\(kind.rawValue).server.\(id.uuidString).credential"
+    }
+
+    private var missingCredentialPrompt: String {
+        kind == .hermes ? "Enter the gateway API key." : "Enter the pairing token."
+    }
+
+    private func markCredential(missing: Bool, for id: UUID) {
+        guard missingCredentialIDs.contains(id) != missing else { return }
+        if missing { missingCredentialIDs.insert(id) } else { missingCredentialIDs.remove(id) }
     }
 
     private func ensureLoaded() throws {

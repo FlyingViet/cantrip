@@ -229,6 +229,92 @@ final class ServerProfilesTests: XCTestCase {
         XCTAssertEqual(model.selectedSession?.title, "Home")
     }
 
+    func testReenteringAMissingPairingTokenRestoresTheConnectionInPlace() async throws {
+        try preserveLegacyConfiguration()
+        let (store, defaults, _) = try fixture(.cantrip)
+        let home = try store.add(draft("Home"))
+        let work = try store.add(draft("Work"))
+        try store.select(home)
+        let newDevice = ProfileCredentials()
+        let restored = ServerProfiles(kind: .cantrip, defaults: defaults, credentials: newDevice.store)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ProfileRequestProtocol.self]
+        let model = CantripRemoteModel(urlSession: URLSession(configuration: config), servers: restored)
+        defer { model.setAppActive(false) }
+        XCTAssertFalse(model.hasConfiguration)
+        XCTAssertNil(model.selectedServerID)
+        let reenterMessage = "The pairing token for Home isn't saved on this device "
+            + "(it doesn't move to a new device). Open Settings and select Home to re-enter it."
+        XCTAssertEqual(model.errorMessage, reenterMessage)
+        await model.selectSession("shared-id")
+        XCTAssertEqual(model.errorMessage, reenterMessage, "Later requests keep pointing to re-entry")
+        XCTAssertEqual(restored.missingCredentialIDs, [home.id])
+        restored.refreshCredentialStatus()
+        XCTAssertEqual(restored.missingCredentialIDs, [home.id, work.id])
+
+        do {
+            try await model.reenterCredential(" \n", for: home)
+            XCTFail("An empty token is not saved")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "Enter the pairing token.")
+        }
+        XCTAssertTrue(newDevice.values.isEmpty)
+
+        var authorizations: [String: String] = [:]
+        ProfileRequestProtocol.handler = { transport in
+            authorizations[transport.request.url?.path ?? ""] =
+                transport.request.value(forHTTPHeaderField: "Authorization")
+            try transport.respond(title: "Home")
+        }
+        try await model.reenterCredential(" Home-new-token\n", for: home)
+        XCTAssertEqual(model.selectedServerID, home.id)
+        XCTAssertEqual(model.configuredURL, home.url)
+        XCTAssertTrue(model.hasStoredToken)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(restored.servers, [home, work], "The same entry is restored, not re-added")
+        XCTAssertEqual(restored.selectedID, home.id)
+        XCTAssertEqual(restored.missingCredentialIDs, [work.id])
+        XCTAssertEqual(try restored.credential(for: home), "Home-new-token")
+        await model.selectSession("shared-id")
+        XCTAssertEqual(model.selectedSession?.title, "Home")
+        XCTAssertEqual(authorizations["/api/v1/sessions/shared-id"], "Bearer Home-new-token")
+
+        // A mistyped or rotated token can be replaced on the connected server too.
+        try await model.reenterCredential("Home-rotated-token", for: home)
+        XCTAssertNil(model.selectedSession, "Reconnecting reloads the host's sessions")
+        await model.selectSession("shared-id")
+        XCTAssertEqual(model.selectedSession?.title, "Home")
+        XCTAssertEqual(authorizations["/api/v1/sessions/shared-id"], "Bearer Home-rotated-token")
+        XCTAssertEqual(newDevice.values.count, 1)
+        let reopened = CantripRemoteModel(servers: ServerProfiles(kind: .cantrip, defaults: defaults,
+                                                                 credentials: newDevice.store))
+        XCTAssertEqual(reopened.selectedServerID, home.id)
+        XCTAssertNil(reopened.errorMessage)
+    }
+
+    func testReenteringAMissingGatewayKeySelectsTheSavedGateway() throws {
+        try preserveLegacyConfiguration()
+        let (store, defaults, _) = try fixture(.hermes)
+        let home = try store.add(draft("Home"))
+        try store.select(home)
+        let newDevice = ProfileCredentials()
+        let restored = ServerProfiles(kind: .hermes, defaults: defaults, credentials: newDevice.store)
+        let env = HermesEnv(servers: restored)
+        XCTAssertNil(env.selectedServerID)
+        XCTAssertEqual(env.apiKey, "")
+        XCTAssertEqual(restored.missingCredentialIDs, [home.id])
+        XCTAssertThrowsError(try env.reenterCredential("", for: home))
+        try env.reenterCredential("Home-new-key", for: home)
+        XCTAssertEqual(env.selectedServerID, home.id)
+        XCTAssertEqual(env.baseURL, home.url)
+        XCTAssertEqual(env.apiKey, "Home-new-key")
+        XCTAssertEqual(restored.servers, [home])
+        XCTAssertTrue(restored.missingCredentialIDs.isEmpty)
+        let stranger = SavedServer(id: UUID(), name: "Gone", url: "https://gone.example",
+                                   tailscaleOnly: false, usesLegacyHistory: false)
+        XCTAssertThrowsError(try restored.replaceCredential("key", for: stranger))
+    }
+
     func testLANOnlyProfilesRequireIndependentTokensAndKeepRoutingPreferences() throws {
         let (store, defaults, credentials) = try fixture(.cantrip)
         let a = try store.add(ServerDraft(name: "LAN A", credential: "token-a"))
@@ -509,14 +595,17 @@ final class ServerProfilesTests: XCTestCase {
         )
         for width: CGFloat in [288, 361, 736] {
             for size: DynamicTypeSize in [.large, .accessibility3] {
-                let row = SavedServerRow(server: server, isSelected: true)
-                    .environment(\.dynamicTypeSize, size)
-                let controller = UIHostingController(rootView: row)
-                controller.safeAreaRegions = []
-                let measured = controller.sizeThatFits(in: CGSize(width: width, height: 1000))
-                XCTAssertLessThanOrEqual(measured.width, width + 1)
-                XCTAssertGreaterThanOrEqual(measured.height, 44)
-                XCTAssertLessThan(measured.height, 600)
+                // A missing pairing token adds one short line.
+                for (missing, limit) in [(nil, 600), ("pairing token", 700)] as [(String?, CGFloat)] {
+                    let row = SavedServerRow(server: server, isSelected: true, missingCredential: missing)
+                        .environment(\.dynamicTypeSize, size)
+                    let controller = UIHostingController(rootView: row)
+                    controller.safeAreaRegions = []
+                    let measured = controller.sizeThatFits(in: CGSize(width: width, height: 1000))
+                    XCTAssertLessThanOrEqual(measured.width, width + 1)
+                    XCTAssertGreaterThanOrEqual(measured.height, 44)
+                    XCTAssertLessThan(measured.height, limit)
+                }
             }
         }
     }
@@ -524,10 +613,11 @@ final class ServerProfilesTests: XCTestCase {
 
 #if os(iOS)
     func testSavedServerSettingsRenderWithBlankAddFields() throws {
-        let (store, _, _) = try fixture(.cantrip)
+        let (store, _, credentials) = try fixture(.cantrip)
         let selected = try store.add(draft("Home Mac", url: "https://home.example"))
-        _ = try store.add(draft("Work Mac", url: "https://work.example"))
+        let moved = try store.add(draft("Work Mac", url: "https://work.example"))
         try store.select(selected)
+        credentials.values = credentials.values.filter { !$0.key.contains(moved.id.uuidString) }
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
@@ -538,7 +628,8 @@ final class ServerProfilesTests: XCTestCase {
                         servers: store,
                         add: { try store.add($0) },
                         select: { try store.select($0) },
-                        remove: store.remove
+                        remove: store.remove,
+                        reenter: { try store.replaceCredential($1, for: $0) }
                     )
                 }
                 .navigationTitle("Servers")
@@ -555,6 +646,7 @@ final class ServerProfilesTests: XCTestCase {
             let screenshot = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
                 controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
             }
+            XCTAssertEqual(store.missingCredentialIDs, [moved.id], "Opening the list finds the missing token")
             let attachment = XCTAttachment(image: screenshot)
             attachment.name = "saved-servers-\(size)"
             attachment.lifetime = .keepAlways

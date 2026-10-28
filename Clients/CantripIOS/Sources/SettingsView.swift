@@ -158,7 +158,11 @@ struct SettingsView: View {
                 try env.selectServer($0)
                 await env.refreshGateway()
             },
-            remove: env.removeServer
+            remove: env.removeServer,
+            reenter: {
+                try env.reenterCredential($1, for: $0)
+                await env.refreshGateway()
+            }
         )
     }
 
