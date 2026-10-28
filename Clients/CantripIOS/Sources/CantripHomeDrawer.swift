@@ -148,12 +148,7 @@ struct CantripHomeTabsButton: View {
             ChatHeaderIcon(systemName: "sidebar.left")
                 .frame(width: 44, height: 44)
                 .overlay(alignment: .topTrailing) {
-                    if inputCount > 0 {
-                        badge(Image(systemName: "questionmark").font(.caption2.weight(.heavy)))
-                    } else if workingCount > 0 {
-                        badge(Text(workingCount > 9 ? "9+" : "\(workingCount)")
-                            .font(.caption2.weight(.bold)).monospacedDigit())
-                    }
+                    CantripTabsBadge(workingCount: workingCount, inputCount: inputCount)
                 }
                 .contentShape(Rectangle())
         }
@@ -165,6 +160,25 @@ struct CantripHomeTabsButton: View {
     }
 
     private var accessibilityValue: String {
+        CantripTabsBadge.accessibilityValue(workingCount: workingCount, inputCount: inputCount)
+    }
+}
+
+/// The tabs button's count: "?" while a tab needs input, else how many are working.
+struct CantripTabsBadge: View {
+    let workingCount: Int
+    var inputCount = 0
+
+    var body: some View {
+        if inputCount > 0 {
+            badge(Image(systemName: "questionmark").font(.caption2.weight(.heavy)))
+        } else if workingCount > 0 {
+            badge(Text(workingCount > 9 ? "9+" : "\(workingCount)")
+                .font(.caption2.weight(.bold)).monospacedDigit())
+        }
+    }
+
+    static func accessibilityValue(workingCount: Int, inputCount: Int) -> String {
         let working = workingCount == 0 ? "None working" : "\(workingCount) working"
         guard inputCount > 0 else { return working }
         return "\(inputCount) \(inputCount == 1 ? "needs" : "need") your input, " + working.lowercased()

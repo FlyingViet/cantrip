@@ -92,6 +92,7 @@ enum CantripHomeBadgeTone: Equatable {
 
 struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: View, BuildsContent: View>: View {
     @Environment(\.chatDisplayTraits) private var displayTraits
+    @Environment(\.cantripDuoSidebarShown) private var duoSidebarShown
     @Binding var selection: CantripHomeSection
     let runningTasks: Int
     /// The shared header sits outside the TabView, whose children do not inherit its inset.
@@ -158,7 +159,7 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
         .tabBarMinimizeBehavior(.never)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // The sidebar layout lists Home's sections in its sidebar instead.
-            if !displayTraits.hasVerticalBar, !displayTraits.usesSidebarLayout {
+            if !displayTraits.hasVerticalBar, !duoSidebarShown {
                 CantripHomeCompactTabBar(
                     selection: $selection,
                     runningTasks: runningTasks
@@ -171,14 +172,15 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
     }
 
     private var systemTabBarVisibility: Visibility {
-        displayTraits.placesActionsInVerticalBar ? .visible : .hidden
+        // With the unfolded iPhone Duo's sidebar open, Home's sections are listed there instead.
+        displayTraits.placesActionsInVerticalBar && !duoSidebarShown ? .visible : .hidden
     }
 
     private func tabContent<Content: View>(_ content: Content) -> some View {
         content
             .safeAreaPadding(
                 .bottom,
-                displayTraits.hasVerticalBar || displayTraits.usesSidebarLayout
+                displayTraits.hasVerticalBar || duoSidebarShown
                     ? 0
                     : CantripHomeLayout.compactContentBottomClearance
             )

@@ -1153,6 +1153,9 @@ struct ChatView: View {
     @State private var displayTraits = ChatDisplayTraits()
     @State private var chatHeaderHeight: CGFloat = 0
     @State private var showSettings = false
+    /// The unfolded iPhone Duo's sidebar, opened and closed from its rail. Saved, so folding,
+    /// unfolding, rotating and the keyboard never change it.
+    @AppStorage("cantrip.duoSidebar.open") private var duoSidebarOpen = true
     @State private var showVoiceMode = false
     @State private var dictationInsertion: DictationInsertion?
     @State private var handledDictationID: UUID?
@@ -1385,7 +1388,10 @@ struct ChatView: View {
             }
         } persistentSidebar: {
             duoSidebar
+        } persistentRail: {
+            duoAppRail
         }
+        .environment(\.cantripDuoSidebarShown, showsDuoSidebar)
         // Inside a tab, the same left-edge swipe that opens the drawer in Home drags the tab away to Home.
         .cantripTabBackSwipe(
             backTransition,
@@ -1591,7 +1597,14 @@ struct ChatView: View {
         ChatHeader(
             style: showsDuoSidebar ? .sidebar
                 : vm.activeLane == .home ? .mascot
-                : vm.activeLane == .cantrip ? .tab : .standard
+                : vm.activeLane == .cantrip ? .tab : .standard,
+            sidebarToggle: duoSidebarToggle,
+            modelSettings: duoModelSettingsButton,
+            // The open sidebar lists Home and the tabs; closed, the toggle takes Home's tabs button's
+            // place. A tab's "‹ Home" pill stays while the sidebar is closed.
+            hidesLeadingInRail: showsDuoSidebar
+                || (displayTraits.isUnfoldedDuo && vm.activeLane == .home),
+            actionsInRail: showsDuoAppRail
         ) {
             if vm.activeLane == .cantrip {
                 CantripTabHeaderTitle(
@@ -2445,9 +2458,63 @@ struct ChatView: View {
         #endif
     }
 
-    /// iPhone Duo unfolded on its side, in Cantrip: Gateway Mac's sidebar beside the chat.
+    /// iPhone Duo unfolded, in Cantrip, with its sidebar open: Gateway Mac's sidebar beside the chat.
     private var showsDuoSidebar: Bool {
-        displayTraits.usesSidebarLayout && vm.activeLane.usesCantripRemote
+        displayTraits.isUnfoldedDuo && duoSidebarOpen && vm.activeLane.usesCantripRemote
+    }
+
+    /// Unfolded upright, where the system's bar runs along the top: the app draws the rail.
+    private var showsDuoAppRail: Bool {
+        displayTraits.usesAppRail && vm.activeLane.usesCantripRemote
+    }
+
+    /// The unfolded iPhone Duo's rail when the app draws it: the same items, in the same order, as
+    /// the system's vertical bar holds on its side.
+    @ViewBuilder private var duoAppRail: some View {
+        if showsDuoAppRail {
+            CantripDuoAppRail {
+                duoSidebarToggle
+                duoModelSettingsButton
+                ChatSettingsButton { showSettings = true }
+                    .disabled(vm.sending || importingImages || submittingRemote)
+                ChatRefreshButton(isConfigured: remote.isConfigured, isRefreshing: remote.isRefreshing) {
+                    composerFocused = false
+                    Task { await remote.refreshNow() }
+                }
+                .disabled(vm.sending || importingImages || submittingRemote)
+                chatMenu.frame(width: 44, height: 44)
+            } bottom: {
+                if vm.activeLane == .cantrip, !showsDuoSidebar {
+                    CantripHomeBackPill { returnHomeAnimated() }
+                        .environment(\.cantripCompactBackPill, true)
+                        .disabled(importingImages || submittingRemote)
+                }
+            }
+        }
+    }
+
+    /// The rail's first item on an unfolded iPhone Duo: opens and closes the sidebar.
+    private var duoSidebarToggle: AnyView? {
+        guard vm.activeLane.usesCantripRemote else { return nil }
+        return AnyView(CantripDuoSidebarToggle(
+            isOpen: duoSidebarOpen,
+            workingCount: CantripHomeTabCounts.working(in: remote.sessions),
+            inputCount: CantripHomeTabCounts.needingInput(in: remote.sessions) + homeBackgroundInputCount
+        ) {
+            composerFocused = false
+            withAnimation(.snappy) { duoSidebarOpen.toggle() }
+        })
+    }
+
+    /// The rail's model settings (model, effort and the Mac's usage limit fallback) for this chat.
+    private var duoModelSettingsButton: AnyView? {
+        guard vm.activeLane.usesCantripRemote else { return nil }
+        let session = remote.selectedSession
+        return AnyView(CantripRailModelSettingsButton(isLocalPrivate: session?.isLocalPrivate == true) {
+            composerFocused = false
+            if let session { remote.modelSettingsSession = session }
+        }
+        .disabled(session == nil || remote.isMutating || vm.sending || importingImages || submittingRemote))
     }
 
     private var duoSidebar: some View {
@@ -3097,6 +3164,73 @@ struct ChatMenuIcon: View {
     }
 }
 
+/// The unfolded iPhone Duo's rail when the system's bar runs along the top (upright): its items at
+/// the top, a tab's way back to Home at the bottom, on the bar material, beside the chat.
+struct CantripDuoAppRail<Top: View, Bottom: View>: View {
+    @ViewBuilder var top: () -> Top
+    @ViewBuilder var bottom: () -> Bottom
+
+    var body: some View {
+        VStack(spacing: 8) {
+            top()
+            Spacer(minLength: 8)
+            bottom()
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 12)
+        .frame(width: 64)
+        .frame(maxHeight: .infinity)
+        .background(.bar, ignoresSafeAreaEdges: .all)
+        .overlay(alignment: .leading) { Divider().ignoresSafeArea() }
+        .ignoresSafeArea(.keyboard)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Navigation")
+        .accessibilityIdentifier("duo.rail")
+    }
+}
+
+/// The unfolded iPhone Duo rail's sidebar toggle. Closed, it carries the tabs button's count,
+/// since it takes that button's place.
+struct CantripDuoSidebarToggle: View {
+    let isOpen: Bool
+    var workingCount = 0
+    var inputCount = 0
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            Image(systemName: "sidebar.left")
+                .symbolVariant(isOpen ? .fill : .none)
+                .frame(width: 44, height: 44)
+                .overlay(alignment: .topTrailing) {
+                    if !isOpen { CantripTabsBadge(workingCount: workingCount, inputCount: inputCount) }
+                }
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(isOpen ? "Hide Sidebar" : "Show Sidebar")
+        .accessibilityValue(isOpen ? "" : CantripTabsBadge.accessibilityValue(workingCount: workingCount,
+                                                                             inputCount: inputCount))
+        .accessibilityIdentifier("duo.rail.sidebar")
+    }
+}
+
+/// The unfolded iPhone Duo rail's Model Settings (or Private Local Settings) for the open chat.
+struct CantripRailModelSettingsButton: View {
+    let isLocalPrivate: Bool
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            Image(systemName: "slider.horizontal.3")
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(isLocalPrivate ? "Private Local Settings" : "Model Settings")
+        .accessibilityHint(isLocalPrivate ? "" : "Model, effort and the Mac's usage limit fallback")
+        .accessibilityIdentifier("duo.rail.modelSettings")
+    }
+}
+
 struct ChatSettingsButton: View {
     let onOpen: () -> Void
 
@@ -3131,6 +3265,11 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     @State private var tabLeadingWidth: CGFloat = 96
     @State private var tabHeaderWidth: CGFloat = 393
     var style = ChatHeaderStyle.standard
+    var sidebarToggle: AnyView? = nil
+    var modelSettings: AnyView? = nil
+    var hidesLeadingInRail = false
+    /// The unfolded iPhone Duo's app-drawn rail (upright) holds the actions instead of the header.
+    var actionsInRail = false
     @ViewBuilder var title: () -> Title
     @ViewBuilder var connection: () -> Connection
     @ViewBuilder var lane: () -> Lane
@@ -3140,6 +3279,8 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     @ViewBuilder var settings: () -> Settings
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var trailing: () -> Trailing
+
+    private var actionsElsewhere: Bool { displayTraits.placesActionsInVerticalBar || actionsInRail }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -3155,29 +3296,32 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                 HStack(spacing: 6) {
                     title().frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     delivery()
-                    refresh()
-                    settings()
-                    trailing().frame(width: 44, height: 44)
+                    // On the unfolded iPhone Duo these are in the rail.
+                    if !actionsElsewhere {
+                        refresh()
+                        settings()
+                        trailing().frame(width: 44, height: 44)
+                    }
                 }
                 .frame(minHeight: 48)
             case .compact:
                 HStack(spacing: 8) {
-                    if !displayTraits.placesActionsInVerticalBar {
+                    if !actionsElsewhere {
                         leading().frame(width: 44, height: 44)
                     }
                     title().frame(maxWidth: .infinity, minHeight: 44)
-                    if !displayTraits.placesActionsInVerticalBar {
+                    if !actionsElsewhere {
                         trailing().frame(width: 44, height: 44)
                     }
                 }
                 .frame(minHeight: 44)
             case .standard:
                 HStack(spacing: 8) {
-                    if !displayTraits.placesActionsInVerticalBar {
+                    if !actionsElsewhere {
                         leading().frame(width: 44, height: 44)
                     }
                     title().frame(maxWidth: .infinity, minHeight: 44)
-                    if !displayTraits.placesActionsInVerticalBar {
+                    if !actionsElsewhere {
                         trailing().frame(width: 44, height: 44)
                     }
                 }
@@ -3186,7 +3330,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                     lane()
                     usage()
                     delivery()
-                    if !displayTraits.placesActionsInVerticalBar { refresh() }
+                    if !actionsElsewhere { refresh() }
                 }
             }
         }
@@ -3201,18 +3345,19 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         .accessibilityIdentifier("chat.header")
         .modifier(ChatNavigationActions(
             sharesVerticalBarWithTabBar: style == .mascot,
+            sidebarToggle: sidebarToggle, modelSettings: modelSettings, hidesLeadingInRail: hidesLeadingInRail,
             leading: leading, refresh: refresh, settings: settings, trailing: trailing
         ))
     }
 
     /// The title stays centered on the screen and clear of the wider of the two side controls.
     private var tabRow: some View {
-        let inset = displayTraits.placesActionsInVerticalBar ? 0 : max(tabLeadingWidth, 44) + 8
+        let inset = actionsElsewhere ? 0 : max(tabLeadingWidth, 44) + 8
         return ZStack {
             title()
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .padding(.horizontal, inset)
-            if !displayTraits.placesActionsInVerticalBar {
+            if !actionsElsewhere {
                 HStack(spacing: 8) {
                     leading()
                         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabLeadingWidth = $0 }
@@ -3227,7 +3372,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     }
 
     @ViewBuilder private var floatingActions: some View {
-        if !displayTraits.placesActionsInVerticalBar {
+        if !actionsElsewhere {
             HStack(alignment: .top, spacing: 8) {
                 glassAction(leading())
                 Spacer(minLength: 0)

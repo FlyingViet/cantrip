@@ -390,29 +390,40 @@ final class BackendSlashCommandsTests: XCTestCase {
 
     // MARK: iPhone Duo sidebar layout
 
-    func testSidebarLayoutIsOnlyForAPhoneBesideTheVerticalBarInLandscape() {
-        let duoLandscape = ChatDisplayTraits(hasVerticalBar: true, isLandscape: true)
-        XCTAssertTrue(duoLandscape.usesSidebarLayout)
-        XCTAssertFalse(duoLandscape.placesActionsInVerticalBar, "The sidebar layout's header holds the actions")
-        let duoUpright = ChatDisplayTraits(hasVerticalBar: true, isLandscape: false)
-        XCTAssertFalse(duoUpright.usesSidebarLayout)
-        XCTAssertTrue(duoUpright.placesActionsInVerticalBar, "Folded and upright Duo keep today's side bar")
-        XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: false, isLandscape: true).usesSidebarLayout,
+    func testUnfoldedDuoGetsTheRailUprightAndOnItsSide() {
+        for landscape in [true, false] {
+            let unfolded = ChatDisplayTraits(hasVerticalBar: true, isLandscape: landscape)
+            XCTAssertTrue(unfolded.isUnfoldedDuo, "Unfolded \(landscape ? "on its side" : "upright") has the rail and sidebar")
+            XCTAssertTrue(unfolded.placesActionsInVerticalBar, "The rail (the system's vertical bar) holds the actions")
+        }
+        XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: false, isLandscape: true).isUnfoldedDuo,
                        "Other iPhones on their side keep today's layout")
-        XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: false, isLandscape: false).usesSidebarLayout)
+        XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: false, isLandscape: false).isUnfoldedDuo)
+        XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: false).placesActionsInVerticalBar)
         XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: true, isLandscape: true, allowsSidebarLayout: false)
-            .usesSidebarLayout, "iPad keeps its split navigation")
+            .isUnfoldedDuo, "iPad keeps its split navigation")
+        XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: true, isLandscape: true).usesAppRail,
+                       "On its side the system's vertical bar is the rail")
+    }
+
+    func testUnfoldedUprightDrawsItsOwnRail() {
+        // Unfolded upright the system's bar runs along the top: only the hinge says it's a Duo.
+        let upright = ChatDisplayTraits(hasVerticalBar: false, isLandscape: false, isHingeOpen: true)
+        XCTAssertTrue(upright.isUnfoldedDuo)
+        XCTAssertTrue(upright.usesAppRail, "The app draws the rail")
+        XCTAssertFalse(upright.placesActionsInVerticalBar)
+        XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: false, isFolded: true, isHingeOpen: false).usesAppRail)
+        XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: false, allowsSidebarLayout: false, isHingeOpen: true)
+            .usesAppRail, "iPad keeps its split navigation")
     }
 
     func testFoldedDuoKeepsTheIPhoneLayoutOnItsSide() {
         // The outer display turned sideways (or squeezed by the keyboard) is still a folded phone.
         let foldedSideways = ChatDisplayTraits(hasVerticalBar: true, isLandscape: true, isFolded: true)
-        XCTAssertFalse(foldedSideways.usesSidebarLayout)
+        XCTAssertFalse(foldedSideways.isUnfoldedDuo, "No rail items or sidebar while folded")
         XCTAssertTrue(foldedSideways.placesActionsInVerticalBar, "Actions stay in the system's side bar")
         XCTAssertEqual(BackendSlashRowStyle.resolve(foldedSideways), .touch)
-        XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: true, isLandscape: false, isFolded: true).usesSidebarLayout)
-        XCTAssertTrue(ChatDisplayTraits(hasVerticalBar: true, isLandscape: true, isFolded: false).usesSidebarLayout,
-                      "Unfolded on its side keeps the sidebar")
+        XCTAssertFalse(ChatDisplayTraits(hasVerticalBar: true, isLandscape: false, isFolded: true).isUnfoldedDuo)
     }
 
     func testSkillsGroupYoursBuiltInAndCantRunHere() throws {

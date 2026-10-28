@@ -12,22 +12,39 @@ struct ChatDisplayTraits: Equatable {
     /// False on iPad, which keeps its own split navigation.
     var allowsSidebarLayout = true
 
-    /// iPhone Duo unfolded on its side: a Gateway Mac-style layout with a persistent sidebar and the
-    /// chat's actions in its own header. Upright and folded windows and other iPhones keep today's.
-    var usesSidebarLayout: Bool { allowsSidebarLayout && hasVerticalBar && isLandscape && !isFolded }
+    /// The hinge reported open (an iPhone Duo unfolded); false until it reports and on other devices.
+    var isHingeOpen = false
 
-    /// Header actions go to the system's vertical bar, except in the sidebar layout.
-    var placesActionsInVerticalBar: Bool { hasVerticalBar && !usesSidebarLayout }
+    /// iPhone Duo unfolded, upright or on its side: a navigation rail on the right (sidebar toggle,
+    /// model and app settings, the chat's actions), and a Gateway Mac-style sidebar can show beside
+    /// the chat. Folded windows and other iPhones keep the iPhone layout.
+    var isUnfoldedDuo: Bool { allowsSidebarLayout && !isFolded && (hasVerticalBar || isHingeOpen) }
+
+    /// Header actions go to the system's vertical bar wherever there is one.
+    var placesActionsInVerticalBar: Bool { hasVerticalBar }
+
+    /// Unfolded upright, the system's bar runs along the top, so the app draws the rail itself.
+    var usesAppRail: Bool { isUnfoldedDuo && !hasVerticalBar }
 }
 
 private struct ChatDisplayTraitsKey: EnvironmentKey {
     static let defaultValue = ChatDisplayTraits()
 }
 
+private struct CantripDuoSidebarShownKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     var chatDisplayTraits: ChatDisplayTraits {
         get { self[ChatDisplayTraitsKey.self] }
         set { self[ChatDisplayTraitsKey.self] = newValue }
+    }
+
+    /// The unfolded iPhone Duo's sidebar is open beside the chat (it lists Home's sections).
+    var cantripDuoSidebarShown: Bool {
+        get { self[CantripDuoSidebarShownKey.self] }
+        set { self[CantripDuoSidebarShownKey.self] = newValue }
     }
 }
 
@@ -72,18 +89,24 @@ struct ChatDisplayObserver: ViewModifier {
                 }
                 #endif
             }
-            .modifier(ChatHingeObserver { traits.isFolded = $0 })
+            .modifier(ChatHingeObserver { closed, open in
+                traits.isFolded = closed
+                traits.isHingeOpen = open
+            })
     }
 }
 
-/// Reports whether an iPhone Duo is folded shut; never on other devices.
+/// Reports whether an iPhone Duo is folded shut, and whether it is open; never on other devices.
 private struct ChatHingeObserver: ViewModifier {
-    let onChange: (Bool) -> Void
+    let onChange: (_ closed: Bool, _ open: Bool) -> Void
 
     @ViewBuilder func body(content: Content) -> some View {
         #if AGENTGATEWAY_DUO_SDK
         if #available(iOS 27.1, *) {
-            content.onHingeChange { _, context in onChange(context.hinge?.status == .closed) }
+            content.onHingeChange { _, context in
+                let status = context.hinge?.status
+                onChange(status == .closed, status != nil && status != .closed)
+            }
         } else {
             content
         }
@@ -153,6 +176,11 @@ struct ChatNavigationActions<Leading: View, Refresh: View, Settings: View, Trail
     /// Cantrip Home, whose tab bar takes the bottom of the vertical bar: only the leading and
     /// trailing actions, both at the top, as in its iPhone header (the menu has refresh and settings).
     var sharesVerticalBarWithTabBar = false
+    /// The unfolded iPhone Duo's rail: a sidebar toggle at the top and the tab's model settings.
+    var sidebarToggle: AnyView? = nil
+    var modelSettings: AnyView? = nil
+    /// Leaves the leading action out of the rail (the sidebar it would open is showing).
+    var hidesLeadingInRail = false
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var refresh: () -> Refresh
     @ViewBuilder var settings: () -> Settings
@@ -163,7 +191,8 @@ struct ChatNavigationActions<Leading: View, Refresh: View, Settings: View, Trail
     func body(content: Content) -> some View {
         content
             .toolbar(usesVerticalBar || showsHorizontalBar ? .visible : .hidden, for: .navigationBar)
-            .toolbar(usesVerticalBar && !sharesVerticalBarWithTabBar ? .visible : .hidden, for: .bottomBar)
+            .toolbar(usesVerticalBar && !sharesVerticalBarWithTabBar && !hidesLeadingInRail ? .visible : .hidden,
+                     for: .bottomBar)
             .toolbar { actions }
             .modifier(ChatAdaptiveToolbar())
     }
@@ -171,14 +200,35 @@ struct ChatNavigationActions<Leading: View, Refresh: View, Settings: View, Trail
     @ToolbarContentBuilder private var actions: some ToolbarContent {
         #if AGENTGATEWAY_DUO_SDK
         if #available(iOS 27.1, *), usesVerticalBar {
-            if sharesVerticalBarWithTabBar {
-                ToolbarItem(placement: .topBarTrailing) { leading() }
+            if let sidebarToggle, displayTraits.isUnfoldedDuo {
+                ToolbarItem(placement: .topBarTrailing) { sidebarToggle }
                     .axisBehavior(.verticalPreferred)
+            }
+            if sharesVerticalBarWithTabBar {
+                if !hidesLeadingInRail {
+                    ToolbarItem(placement: .topBarTrailing) { leading() }
+                        .axisBehavior(.verticalPreferred)
+                }
+                if displayTraits.isUnfoldedDuo {
+                    // Home's iPhone header keeps settings in its menu; the unfolded rail has room.
+                    if let modelSettings {
+                        ToolbarItem(placement: .topBarTrailing) { modelSettings }
+                            .axisBehavior(.verticalPreferred)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) { settings() }
+                        .axisBehavior(.verticalPreferred)
+                }
                 ToolbarItem(placement: .topBarTrailing) { trailing() }
                     .axisBehavior(.verticalPreferred)
             } else {
-                ToolbarItem(placement: .bottomBar) { leading() }
-                    .axisBehavior(.verticalPreferred)
+                if !hidesLeadingInRail {
+                    ToolbarItem(placement: .bottomBar) { leading() }
+                        .axisBehavior(.verticalPreferred)
+                }
+                if let modelSettings, displayTraits.isUnfoldedDuo {
+                    ToolbarItem(placement: .topBarTrailing) { modelSettings }
+                        .axisBehavior(.verticalPreferred)
+                }
                 ToolbarItem(placement: .topBarTrailing) { settings() }
                     .axisBehavior(.verticalPreferred)
                 ToolbarItem(placement: .topBarTrailing) { refresh() }
