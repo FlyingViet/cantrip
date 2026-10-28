@@ -210,6 +210,32 @@ again every 5 minutes. MCP servers alone don't keep a tab running. Even with
 **Never**, a runtime idle for 2 hours is restarted before its next message,
 because the Copilot CLI can crash after long idle periods.
 
+## Fall back when a backend hits its usage limit
+
+**Mac only.** In Settings, choose a backend under **Usage limit fallback**
+(Off by default). When the backend you use reports that its plan's usage limit
+is reached (Claude's 5-hour or weekly limit, Copilot's premium requests, a
+Codex or Gemini quota), Cantrip:
+
+1. Shows the error and notes which backend takes over.
+2. Continues the same task on the fallback backend, with the original request
+   and the steps already taken, like an automatic resume.
+3. Sends new messages from every tab to the fallback until the limit resets.
+   Cantrip uses the reset time from the error when the backend gives one, and
+   tries the original backend again after an hour when it doesn't. Quitting
+   Cantrip clears this, so the next message tries the original backend first.
+
+The fallback uses its own model and effort settings. It doesn't share the
+original backend's session, so it works from the conversation Cantrip passes
+along. If the fallback is at its limit too, the run stops with the error.
+Council seats and Private Local tabs never switch. Scheduled Cantrip Home tasks
+don't move to Codex or Copilot Remote, because Cantrip can't check their
+actions one at a time. A full context window ("Context limit reached") isn't a
+usage limit and doesn't switch backends.
+
+From Terminal: `cantrip config set limitFallbackBackend copilot` (or `claude`,
+`codex`, `agy`, `local`, `off`).
+
 ## Connect a local model
 
 **Mac only.** Cantrip does not install or start the model server for you.

@@ -318,6 +318,11 @@ final class AppSettings: ObservableObject {
     @Published var councilScope: String {
         didSet { d.set(councilScope, forKey: "councilScope") }
     }
+    /// Backend (BackendKind rawValue) a run moves to when the chosen backend reports its
+    /// usage limit (`BackendFallback`). Empty = off: the run stops with the error.
+    @Published var limitFallbackBackend: String {
+        didSet { d.set(limitFallbackBackend, forKey: "limitFallbackBackend") }
+    }
     /// Union of the account models' advertised reasoning efforts.
     @Published var copilotEffortChoices: [String] {
         didSet { d.set(copilotEffortChoices, forKey: "copilotEffortChoices") }
@@ -552,7 +557,7 @@ final class AppSettings: ObservableObject {
             "agyEffort": agyEffort, "agyPermissionMode": agyPermissionMode,
             "localBaseURL": localBaseURL, "localModel": localModel,
             "localSystemPrompt": localSystemPrompt,
-            "councilScope": councilScope,
+            "councilScope": councilScope, "limitFallbackBackend": limitFallbackBackend,
             "allowActions": allowActions, "shareLocation": shareLocation,
             "shareCalendar": shareCalendar, "attachScreen": attachScreen,
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
@@ -634,6 +639,10 @@ final class AppSettings: ObservableObject {
         str("localModel") { self.localModel = $0 }
         str("localSystemPrompt") { self.localSystemPrompt = $0 }
         str("councilScope") { self.councilScope = $0 }
+        if let raw = dict["limitFallbackBackend"] as? String, raw.isEmpty || BackendKind(rawValue: raw) != nil {
+            limitFallbackBackend = raw
+            applied.append("limitFallbackBackend")
+        }
         bool("allowActions") { self.allowActions = $0 }
         bool("shareLocation") { self.shareLocation = $0 }
         bool("shareCalendar") { self.shareCalendar = $0 }
@@ -770,6 +779,7 @@ final class AppSettings: ObservableObject {
         councilMembers = (d.data(forKey: "councilMembers")
             .flatMap { try? JSONDecoder().decode([CouncilMember].self, from: $0) }) ?? []
         councilScope = d.string(forKey: "councilScope") ?? "planReview"
+        limitFallbackBackend = d.string(forKey: "limitFallbackBackend") ?? ""
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
         agyPath = d.string(forKey: "agyPath") ?? ""
