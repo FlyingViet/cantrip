@@ -284,15 +284,20 @@ extension SessionTabTests {
         let context = JSContext()!
         context.exceptionHandler = { _, error in fatalError(error!.toString()) }
         context.evaluateScript("""
-        const elements={};const $=id=>elements[id]||(elements[id]={value:"",checked:false,disabled:false,
-          children:[],replaceChildren(){this.children=[]},append(item){this.children.push(item)},
-          addEventListener(){},showModal(){},close(){}});
+        const elements={};const $=id=>elements[id]||(elements[id]={value:"",checked:false,disabled:false,textContent:"",
+          children:[],replaceChildren(...items){this.children=items},append(item){this.children.push(item)},
+          classList:{hidden:true,toggle(name,on){this.hidden=on}},addEventListener(){},showModal(){},close(){}});
+        function Option(label,value){this.label=label;this.value=value}
+        let fallbackCalls=[];const fallback={backend:"",primary:"Claude Code",revision:"fallback-a",
+          choices:[{id:"Copilot",label:"Copilot"}],limited:[{backend:"Claude Code",until:"2026-10-28T12:00:00Z",untilLabel:"5:00 AM"}]};
         const document={createElement(){return {}}};let token="fixture",selected="tab-a",calls=[],sessionItems=[];
         const response={selection:{model:"model-a",effort:"low",contextTier:"default"},
           defaults:{model:"model-a",effort:"low",contextTier:"default"},revision:"revision-a",usesDefaults:true,
           models:[{id:"model-a",reasoningEfforts:["low","high"],contextTiers:["default","long_context"],contextWindow:1050000,longContextPromptTokens:1050000},
                   {id:"model-b",reasoningEfforts:[],contextTiers:["default"]}],isRefreshing:false};
-        function api(path,options){calls.push({path,body:options?JSON.parse(options.body):null});return Promise.resolve(response)}
+        function api(path,options){const body=options?JSON.parse(options.body):null;
+          if(path==="/api/v1/usage-fallback"){fallbackCalls.push(body);return Promise.resolve(body?{...fallback,backend:body.backend??"",limited:[],revision:"fallback-b"}:fallback)}
+          calls.push({path,body});return Promise.resolve(response)}
         function refresh(){return Promise.resolve()}
         \(source[start.lowerBound..<end.lowerBound])
         editModelSettings({id:"tab-a",title:"Fixture"});
@@ -307,6 +312,18 @@ extension SessionTabTests {
         precondition(context.evaluateScript("calls[1].path")!.toString() == "/api/v1/sessions/tab-a/model-settings")
         precondition(context.evaluateScript("calls[1].body.effort==='high' && calls[1].body.contextTier==='long_context'")!.toBool())
         precondition(context.evaluateScript("modelTokens(1050000)")!.toString() == "1.05M")
+        // The Mac-wide fallback loads with the sheet, names the limited backend and saves on change.
+        precondition(context.evaluateScript("""
+        !$("fallbackBox").classList.hidden && $("fallbackChoice").children.length===2
+          && $("fallbackStatus").textContent==="At its usage limit: Claude Code until 5:00 AM." && !$("fallbackReset").classList.hidden
+        """)!.toBool(), "The fallback section shows the choices and the limited backend")
+        context.evaluateScript("""
+        $("fallbackChoice").value="Copilot";$("fallbackChoice").onchange();
+        """)
+        precondition(context.evaluateScript("""
+        fallbackCalls.length===2 && fallbackCalls[1].backend==="Copilot" && fallbackCalls[1].revision==="fallback-a"
+          && fallbackState.revision==="fallback-b" && $("fallbackReset").classList.hidden
+        """)!.toBool(), "Picking a backend posts it with the loaded revision")
         context.evaluateScript("""
         editModelSettings({id:"tab-a",title:"Fixture"});
         """)

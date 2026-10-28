@@ -91,5 +91,63 @@ extension SessionTabTests {
         try await waitForJournalTest { !chat.isStreaming && !chat.autoResumePending }
         try await Task.sleep(nanoseconds: 300_000_000)
         precondition(claude.requests.count == 2 && copilot.requests.count == 2)
+        try await testUsageFallbackAPI()
+    }
+
+    /// Paired clients read and set the fallback, and clear limits, through /api/v1/usage-fallback.
+    @MainActor
+    private static func testUsageFallbackAPI() async throws {
+        let settings = AppSettings.shared
+        let saved = (settings.backend, settings.limitFallbackBackend)
+        defer { (settings.backend, settings.limitFallbackBackend) = saved; BackendLimitTracker.shared.clear() }
+        settings.backend = .claudeCode
+        settings.limitFallbackBackend = ""
+        BackendLimitTracker.shared.clear()
+        BackendLimitTracker.shared.markLimited(.claudeCode, message: "Claude AI usage limit reached|\(Int(Date().timeIntervalSince1970) + 3_600)")
+
+        let manager = SessionManager()
+        let server = RemoteControlServer(manager: manager)
+        defer { withExtendedLifetime(manager) {} }
+        let port = Int.random(in: 49152...65535), token = UUID().uuidString
+        server.start(port: port, token: token)
+        defer { server.stop() }
+        try await Task.sleep(for: .milliseconds(250))
+        let client = URLSession(configuration: .ephemeral)
+        defer { client.invalidateAndCancel() }
+        func call(_ method: String = "GET", _ body: [String: Any]? = nil, authorized: Bool = true) async throws -> (Int, [String: Any]) {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/v1/usage-fallback")!)
+            request.httpMethod = method
+            if authorized { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
+            let (data, response) = try await client.data(for: request)
+            return ((response as! HTTPURLResponse).statusCode,
+                    ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:])
+        }
+
+        let loaded = try await call()
+        let choices = (loaded.1["choices"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+        let limited = loaded.1["limited"] as? [[String: Any]] ?? []
+        precondition(loaded.0 == 200 && loaded.1["backend"] as? String == "" && loaded.1["primary"] as? String == "Claude Code"
+                     && !choices.contains("Claude Code") && choices.contains("Copilot")
+                     && limited.first?["backend"] as? String == "Claude Code",
+                     "GET lists the choices without the Mac's own backend, and who is limited: \(loaded)")
+        let revision = loaded.1["revision"] as? String ?? ""
+        let anonymous = try await call(authorized: false)
+        let itself = try await call("POST", ["revision": revision, "backend": "Claude Code"])
+        let stale = try await call("POST", ["revision": "stale", "backend": "Copilot"])
+        precondition(anonymous.0 == 401, "Pairing is required")
+        precondition(itself.0 == 400, "A backend can't fall back on itself")
+        precondition(stale.0 == 409, "A stale revision is refused")
+        let set = try await call("POST", ["revision": revision, "backend": "Copilot"])
+        precondition(set.0 == 200 && set.1["backend"] as? String == "Copilot" && settings.limitFallbackBackend == "Copilot",
+                     "POST saves the fallback: \(set)")
+        let cleared = try await call("POST", ["revision": set.1["revision"] as? String ?? "", "resetLimits": true])
+        precondition(cleared.0 == 200 && (cleared.1["limited"] as? [Any])?.isEmpty == true
+                     && BackendLimitTracker.shared.limitedUntil(.claudeCode) == nil,
+                     "resetLimits lets every backend be tried again: \(cleared)")
+        let off = try await call("POST", ["revision": cleared.1["revision"] as? String ?? "", "backend": ""])
+        precondition(off.0 == 200 && settings.limitFallbackBackend == "", "\"\" turns it off")
+        let ready = try await call()
+        precondition(ready.1["backend"] as? String == "", "Reads back the saved value")
     }
 }

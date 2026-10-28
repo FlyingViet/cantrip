@@ -134,6 +134,23 @@ resumes the same conversation. No running prompt is stopped or
 replayed. Both apps need updated builds; the Mac must be reopened to activate
 the paired `GET/POST /api/v1/sessions/{id}/model-settings` endpoint.
 
+## Usage limit fallback
+
+The same **Model Settings** screen has a **Usage limit fallback (all tabs)**
+section: the backend the Mac moves runs to when its own backend reports a plan
+usage limit (see [Backends](backends.md#fall-back-when-a-backend-hits-its-usage-limit)).
+It is Mac-wide, so it saves as soon as you pick a backend, separately from the
+tab's Save. When a backend is at its limit the section names it and its reset
+time, and **Try every backend again** clears that.
+
+`GET /api/v1/usage-fallback` returns `backend` (`""` = off), `primary` (the
+Mac's backend), `choices` (`id`, `label`; never the Mac's own backend),
+`limited` (`backend`, ISO `until`, `untilLabel`) and `revision`. `POST` takes
+`{"revision", "backend"}` or `{"revision", "resetLimits": true}`; a stale
+revision gets `409`, and the Mac's own backend `400`. Session lists and
+`/api/v1/ready` include `supportsUsageFallback`; older Macs answer `404`, and
+clients hide the section.
+
 ## Start fresh
 
 **Start Fresh**, next to **Model Settings** in the same menus, keeps a tab and

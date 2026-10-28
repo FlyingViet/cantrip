@@ -626,7 +626,8 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/maintenance"
                 || request.path == "/api/v1/mac-access"
                 || request.path.hasPrefix("/api/v1/desktop/")
-                || request.path == "/api/v1/copilot/usage" else {
+                || request.path == "/api/v1/copilot/usage"
+                || request.path == "/api/v1/usage-fallback" else {
             sendError(404, "not found", on: connection)
             return
         }
@@ -779,6 +780,26 @@ final class RemoteControlServer {
             sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
             return
         }
+        if request.path == "/api/v1/usage-fallback" {
+            do {
+                let snapshot: UsageFallbackSnapshot
+                switch request.method {
+                case "GET": snapshot = UsageFallbackRemote.snapshot()
+                case "POST":
+                    guard request.body.count <= 1024, let json else {
+                        throw UsageFallbackError(status: 400, message: "Send a JSON object.")
+                    }
+                    snapshot = try UsageFallbackRemote.apply(json)
+                default: throw UsageFallbackError(status: 405, message: "method not allowed")
+                }
+                sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
+            } catch let error as UsageFallbackError {
+                sendError(error.status, error.message, on: connection)
+            } catch {
+                sendError(500, "Could not read the usage limit fallback on the Mac.", on: connection)
+            }
+            return
+        }
         if request.path == "/api/v1/github/builds" {
             guard request.method == "GET" else {
                 sendError(405, "method not allowed", on: connection)
@@ -812,7 +833,7 @@ final class RemoteControlServer {
             }
             let sessions = manager.sessions.filter { !$0.isPrivate }
                 .map { snapshot($0, includeMessages: false, on: connection) }
-            sendJSON(["status": "ready", "sessions": sessions], on: connection)
+            sendJSON(["status": "ready", "sessions": sessions, "supportsUsageFallback": true], on: connection)
             return
         }
         let recentExchanges: Int?
@@ -837,7 +858,8 @@ final class RemoteControlServer {
                     .filter { !$0.isPrivate }
                     .map { snapshot($0, includeMessages: false, on: connection) }
                 var listing: [String: Any] = ["sessions": sessions, "uiRevision": Self.webAppRevision,
-                                              "sections": manager.tabSections.map(\.json), "supportsTabSections": true]
+                                              "sections": manager.tabSections.map(\.json), "supportsTabSections": true,
+                                              "supportsUsageFallback": true]
                 if AppSettings.shared.cantripHomeEnabled {
                     // Web clients pin it as their first tab; tab-list clients ignore it.
                     listing["home"] = snapshot(manager.homeSession, includeMessages: false, on: connection)
@@ -2804,7 +2826,11 @@ private extension RemoteControlServer {
     <label>Model<select id="modelChoice"></select></label><label>Effort<select id="modelEffort"></select></label>
     <label>Context window<select id="modelContext"></select></label><span id="modelBudget" class="muted"></span>
     <p class="muted">Only this tab changes. Save while idle; the next prompt uses the new settings and continues the same conversation. Long context may cost more.</p>
-    <div id="modelError" role="alert"></div><div class="tab-actions">
+    <div id="modelError" role="alert"></div>
+    <fieldset id="fallbackBox" class="hidden"><legend>Usage limit fallback (all tabs)</legend>
+    <label>When the Mac's backend hits its usage limit, continue on<select id="fallbackChoice"></select></label>
+    <span id="fallbackStatus" class="muted"></span><button id="fallbackReset" type="button" class="control hidden">Try every backend again</button>
+    <div id="fallbackError" role="alert"></div></fieldset><div class="tab-actions">
     <button id="modelReload" type="button" class="control">Reload settings</button><button id="modelRefresh" type="button" class="control">Refresh models</button>
     <button id="modelCancel" type="button" class="control">Cancel</button><button id="modelSave" type="submit" class="control primary">Save</button>
     </div></form></dialog>
@@ -3221,7 +3247,7 @@ private extension RemoteControlServer {
       $("modelSave").disabled=disabled||!state.data||Boolean(reason)||Boolean(state.data&&modelValidation(state))||state.needsReload;
       $("modelReload").disabled=disabled;$("modelRefresh").disabled=disabled;$("modelCancel").disabled=state.saving}
     function editModelSettings(item){if(!item)return;if(item.isLocalPrivate){editPrivateSettings(item);return}modelEditorState={id:item.id,token,data:null,draft:null,usesDefaults:true,loading:false,saving:false,error:"",needsReload:false};
-      $("modelTabTitle").textContent=item.title;$("modelEditor").showModal();loadModelSettings(true)}
+      $("modelTabTitle").textContent=item.title;$("modelEditor").showModal();loadModelSettings(true);loadFallback()}
     async function loadModelSettings(replaceDraft=false,refreshModels=false){const state=modelEditorState;if(!state||state.loading||state.saving)return;state.loading=true;renderModelSettings();
       const current=()=>modelEditorState===state&&token===state.token;
       try{let data=await api(`/api/v1/sessions/${state.id}/model-settings${refreshModels?"?refresh=true":""}`);if(!current())return;
@@ -3233,6 +3259,20 @@ private extension RemoteControlServer {
         state.data=data;if(replaceDraft){state.draft={...data.selection};state.usesDefaults=data.usesDefaults}state.error="";state.needsReload=false}
       catch(error){if(current()){state.error=`${error.message} Reload settings before saving.`;state.needsReload=true}}
       finally{if(current()){state.loading=false;renderModelSettings()}}}
+    // The Mac-wide fallback saves as soon as it changes, apart from this tab's Save.
+    let fallbackState=null;
+    async function loadFallback(){try{fallbackState=await api("/api/v1/usage-fallback");$("fallbackError").textContent=""}catch{fallbackState=null}renderFallback()}
+    function renderFallback(){const data=fallbackState;$("fallbackBox").classList.toggle("hidden",!data);if(!data)return;const select=$("fallbackChoice");
+      select.replaceChildren(new Option("Off — stop and show the error",""),...data.choices.map(choice=>new Option(choice.label,choice.id)));select.value=data.choices.some(choice=>choice.id===data.backend)?data.backend:"";
+      const limited=data.limited.map(entry=>`${entry.backend} until ${entry.untilLabel}`);
+      $("fallbackStatus").textContent=limited.length?`At its usage limit: ${limited.join(", ")}.`:"New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch.";
+      $("fallbackReset").classList.toggle("hidden",!limited.length)}
+    async function saveFallback(body){if(!fallbackState)return;$("fallbackChoice").disabled=true;
+      try{fallbackState=await api("/api/v1/usage-fallback",{method:"POST",body:JSON.stringify({...body,revision:fallbackState.revision})});$("fallbackError").textContent=""}
+      catch(error){$("fallbackError").textContent=error.message;await loadFallback()}
+      finally{$("fallbackChoice").disabled=false;renderFallback()}}
+    $("fallbackChoice").onchange=()=>saveFallback({backend:$("fallbackChoice").value});
+    $("fallbackReset").onclick=()=>saveFallback({resetLimits:true});
     $("modelCancel").onclick=()=>{if(modelEditorState?.saving)return;$("modelEditor").close();modelEditorState=null};
     $("modelEditor").addEventListener("cancel",event=>{if(modelEditorState?.saving)event.preventDefault();else modelEditorState=null});
     $("modelReload").onclick=()=>loadModelSettings(true);$("modelRefresh").onclick=()=>loadModelSettings(!modelEditorState?.data,true);

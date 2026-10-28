@@ -212,8 +212,12 @@ because the Copilot CLI can crash after long idle periods.
 
 ## Fall back when a backend hits its usage limit
 
-**Mac only.** In Settings, choose a backend under **Usage limit fallback**
-(Off by default). When the backend you use reports that its plan's usage limit
+Choose a backend under **Usage limit fallback** (Off by default): in Mac
+Settings, or in any tab's **Model Settings** on Cantrip Agent (iPhone/iPad),
+Cantrip Gateway (Mac and Windows) or the browser/Mac Remote. It's one setting
+for the whole Mac, so changing it there saves right away and applies to every
+tab. Those screens also show which backend is at its limit and until when, with
+**Try every backend again** to clear that early. When the backend you use reports that its plan's usage limit
 is reached (Claude's 5-hour or weekly limit, Copilot's premium requests, a
 Codex or Gemini quota), Cantrip:
 
@@ -234,7 +238,8 @@ actions one at a time. A full context window ("Context limit reached") isn't a
 usage limit and doesn't switch backends.
 
 From Terminal: `cantrip config set limitFallbackBackend copilot` (or `claude`,
-`codex`, `agy`, `local`, `off`).
+`codex`, `agy`, `local`, `off`). Paired clients use `GET/POST
+/api/v1/usage-fallback`; see [Remote control](remote-control.md#usage-limit-fallback).
 
 ## Connect a local model
 
