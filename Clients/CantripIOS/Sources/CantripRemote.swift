@@ -1056,6 +1056,7 @@ enum CantripRemoteError: LocalizedError {
     case memoryUnsupported
     case maintenanceUnsupported
     case copilotUsageUnsupported
+    case usageFallbackUnsupported
     case modelSettingsUnsupported
     case privateLocalUnsupported
 
@@ -1118,6 +1119,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on the Mac once to enable remote updates and rebuilds."
         case .copilotUsageUnsupported:
             return "Update and reopen Cantrip on your Mac to view Copilot account usage."
+        case .usageFallbackUnsupported:
+            return "Update and reopen Cantrip on your Mac to choose a usage limit fallback."
         case .modelSettingsUnsupported:
             return "Update and reopen Cantrip on your Mac to change a tab's model, effort and context window."
         case .privateLocalUnsupported:
@@ -1677,6 +1680,18 @@ struct CantripRemoteAPI {
         } catch CantripRemoteError.http(404, _) {
             throw CantripRemoteError.maintenanceUnsupported
         }
+    }
+
+    func usageFallback() async throws -> CantripUsageFallback {
+        do {
+            return try await request(path: "/api/v1/usage-fallback")
+        } catch CantripRemoteError.http(let status, _) where status == 404 || status == 405 {
+            throw CantripRemoteError.usageFallbackUnsupported
+        }
+    }
+
+    fileprivate func updateUsageFallback(body: Data) async throws -> CantripUsageFallback {
+        try await request(path: "/api/v1/usage-fallback", method: "POST", body: body)
     }
 
     func copilotUsage() async throws -> CopilotUsageSnapshot {
@@ -3862,6 +3877,18 @@ final class CantripRemoteModel: ObservableObject {
 
     func privateLocalSettings(id: String) async throws -> CantripPrivateLocalSettings {
         try await performHistoryRead { try await $0.privateLocalSettings(id: id) }
+    }
+
+    /// The Mac-wide backend runs move to when the Mac's backend reports its usage limit.
+    func usageFallback() async throws -> CantripUsageFallback {
+        try await performHistoryRead { try await $0.usageFallback() }
+    }
+
+    /// Saves the fallback (or clears every backend's limit); nil when it didn't save.
+    func updateUsageFallback(_ change: CantripUsageFallbackChange) async -> CantripUsageFallback? {
+        await mutate(prepare: { _ in try JSONEncoder().encode(change) }, { api, body in
+            try await api.updateUsageFallback(body: body)
+        })
     }
 
     /// The backend commands for "/" suggestions; never holds the polling/mutation gate.

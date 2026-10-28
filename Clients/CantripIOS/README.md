@@ -122,6 +122,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, Copilot usage, View Mac |
+| `GET/POST /api/v1/usage-fallback` | Usage limit fallback in Model Settings (Mac-wide): `{backend, primary, choices, limited, revision}`; POST `{revision, backend}` (`""` = off) or `{revision, resetLimits: true}`; `supportsUsageFallback` on session lists; older hosts `404` and the section stays hidden |
 | `GET /api/v1/voice/vocabulary` | Dictation names: project, tab, note, task and tracker terms plus the busiest people (handles, optional names); older hosts reply `404` and the app falls back to tab and task titles |
 
 Responses of 4 KB or more come gzip-compressed when the request sends

@@ -86,6 +86,46 @@ final class CantripModelSettingsTests: XCTestCase {
         XCTAssertEqual(body["usesDefaults"] as? Bool, true)
     }
 
+    func testUsageFallbackLoadsSavesAndOldHostsSayUpdate() async throws {
+        let model = try await model()
+        func fallback(_ backend: String, revision: String, limited: Bool = false) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "backend": backend, "primary": "Claude Code", "revision": revision,
+                "choices": [["id": "Copilot", "label": "Copilot · gpt-5.6"], ["id": "Codex", "label": "Codex"]],
+                "limited": limited ? [["backend": "Claude Code", "until": "2026-10-28T12:00:00Z", "untilLabel": "5:00 AM"]] : [],
+            ])
+        }
+        var posts: [[String: Any]] = []
+        ModelSettingsRequestProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/v1/usage-fallback")
+            guard request.httpMethod == "POST" else { return (200, try fallback("", revision: "f1", limited: true)) }
+            let stream = try XCTUnwrap(request.httpBodyStream)
+            stream.open()
+            defer { stream.close() }
+            var bytes = [UInt8](repeating: 0, count: 1024)
+            let count = stream.read(&bytes, maxLength: bytes.count)
+            posts.append(try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bytes.prefix(count))) as? [String: Any]))
+            return (200, try fallback("Copilot", revision: "f2"))
+        }
+        let loaded = try await model.usageFallback()
+        XCTAssertEqual(loaded.selection, "")
+        XCTAssertEqual(loaded.status, "At its usage limit: Claude Code until 5:00 AM.")
+        let saved = await model.updateUsageFallback(CantripUsageFallbackChange(revision: loaded.revision, backend: "Copilot"))
+        XCTAssertEqual(saved?.selection, "Copilot")
+        XCTAssertEqual(posts.first?["backend"] as? String, "Copilot")
+        XCTAssertEqual(posts.first?["revision"] as? String, "f1")
+        XCTAssertNil(posts.first?["resetLimits"], "Only the changed field is sent")
+        _ = await model.updateUsageFallback(CantripUsageFallbackChange(revision: "f2", resetLimits: true))
+        XCTAssertEqual(posts.last?["resetLimits"] as? Bool, true)
+        XCTAssertNil(posts.last?["backend"])
+
+        ModelSettingsRequestProtocol.handler = { _ in (404, Data(#"{"error":"not found"}"#.utf8)) }
+        do {
+            _ = try await model.usageFallback()
+            XCTFail("An older Mac has no fallback endpoint")
+        } catch CantripRemoteError.usageFallbackUnsupported {}
+    }
+
     func testSavePreflightsOnceAndPinsTheOriginalTabAndRevision() async throws {
         let model = try await model()
         var methods: [String] = []
