@@ -110,10 +110,11 @@ struct CantripUsageFallbackChange: Encodable {
     var resetLimits: Bool?
 }
 
-/// Mac-wide, so it saves on change, apart from the tab's Save.
+/// Mac-wide, so it saves on change, apart from the tab's Save. The sheet loads it (`load`): a
+/// hidden section has no view to run a task from.
 struct CantripUsageFallbackSection: View {
     @ObservedObject var model: CantripRemoteModel
-    @State private var fallback: CantripUsageFallback?
+    @Binding var fallback: CantripUsageFallback?
     @State private var saving = false
     @State private var error: String?
 
@@ -143,13 +144,12 @@ struct CantripUsageFallbackSection: View {
                 }
             }
         }
-        .task { await load() }
     }
 
+    /// Older Macs don't offer it; the section stays hidden.
     @MainActor
-    private func load() async {
-        // Older Macs don't offer it; the section stays hidden.
-        fallback = try? await model.usageFallback()
+    static func load(_ model: CantripRemoteModel) async -> CantripUsageFallback? {
+        try? await model.usageFallback()
     }
 
     @MainActor
@@ -162,7 +162,7 @@ struct CantripUsageFallbackSection: View {
             error = nil
         } else {
             error = model.errorMessage ?? "The fallback could not be saved."
-            await load()
+            fallback = await Self.load(model)
         }
     }
 }
@@ -173,6 +173,7 @@ struct CantripModelSettingsView: View {
     @State private var identity: UUID
     @Environment(\.dismiss) private var dismiss
     @State private var settings: CantripModelSettings?
+    @State private var fallback: CantripUsageFallback?
     @State private var selection = CantripModelSelection(model: "", effort: "", contextTier: "")
     @State private var usesDefaults = true
     @State private var loading = false
@@ -209,7 +210,7 @@ struct CantripModelSettingsView: View {
                 if let message = error ?? settings?.unavailableReason ?? validationError ?? settings?.catalogError {
                     Section { Text(message).foregroundStyle(.orange).accessibilityIdentifier("modelSettings.error") }
                 }
-                CantripUsageFallbackSection(model: model)
+                CantripUsageFallbackSection(model: model, fallback: $fallback)
                 Section {
                     Button("Reload settings") { Task { await load(replaceDraft: true) } }
                     Button("Refresh models") { Task { await load(refreshModels: true) } }
@@ -244,6 +245,7 @@ struct CantripModelSettingsView: View {
         }
         .interactiveDismissDisabled(saving)
         .task { await load(replaceDraft: true) }
+        .task { fallback = await CantripUsageFallbackSection.load(model) }
         .onChange(of: model.usageIdentity) { _, _ in dismiss() }
     }
 
