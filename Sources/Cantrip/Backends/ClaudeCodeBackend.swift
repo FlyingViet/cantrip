@@ -128,9 +128,45 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             }
             self.askpass?.beginTurn()
             self.countedRootMessages.removeAll()
-            self.writeUserMessage(request.prompt)
-            onEvent(.context(BackendContextUsage(limit: self.contextLimit, messageCharacters: request.prompt.count)))
+            let prompt = self.promptWithMissedTurns(request)
+            self.writeUserMessage(prompt)
+            onEvent(.context(BackendContextUsage(limit: self.contextLimit, messageCharacters: prompt.count)))
         }
+    }
+
+    /// How many of the tab's completed turns this Claude session has seen (saved with its session).
+    private var seenTurnsKey: String { persistKey + ".seenTurns" }
+    /// The count to save once this turn completes.
+    private var pendingSeenTurns: Int?
+
+    /// Claude Code keeps its own session, so earlier turns usually need no replay. They do when this
+    /// is a new session (a tab that ran on Copilot until now, or a lost session) or when other
+    /// backends answered turns since this session last ran: those turns go in front of the message,
+    /// selected like Copilot's continuity (summary, related and most recent turns).
+    private func promptWithMissedTurns(_ request: BackendRequest) -> String {
+        let turns = request.previousTurns
+        let seen = UserDefaults.standard.object(forKey: seenTurnsKey) as? Int
+        let missed: ArraySlice<ConversationTurn>
+        if sessionID == nil {
+            missed = turns[...]
+        } else if let seen {
+            missed = seen <= turns.count ? turns.dropFirst(seen) : []
+        } else {
+            // A session from before Cantrip counted turns: it may not have seen any of them.
+            missed = turns[...]
+        }
+        pendingSeenTurns = turns.count + 1
+        guard !missed.isEmpty else { return request.prompt }
+        Log.write("claude: carrying \(missed.count) earlier turn(s) into the session")
+        return ConversationContextBuilder.composePrompt(
+            currentPrompt: request.prompt, query: request.userMessage, turns: Array(missed)
+        )
+    }
+
+    private func commitSeenTurns() {
+        guard let pendingSeenTurns else { return }
+        UserDefaults.standard.set(pendingSeenTurns, forKey: seenTurnsKey)
+        self.pendingSeenTurns = nil
     }
 
     private var model: String { (modelOverride ?? settings.claudeModel).trimmingCharacters(in: .whitespaces) }
@@ -272,6 +308,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     func reset() {
         cancel()
         sessionID = nil
+        UserDefaults.standard.removeObject(forKey: seenTurnsKey)
+        pendingSeenTurns = nil
         activities.removeAll()
     }
 
@@ -685,9 +723,11 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         if !readOnly { guidance += "\n\n" + Self.subagentGuidance }
         if let homeProtocol { guidance += "\n\n" + homeProtocol }
         args += ["--append-system-prompt", guidance]
-        // MCP servers from enabled+approved plugins (see Plugins.swift).
-        if let mcpConfig = PluginManager.claudeMCPConfigPath() {
-            args += ["--mcp-config", mcpConfig]
+        // MCP servers from enabled+approved plugins (see Plugins.swift), and the Copilot CLI's own
+        // local servers, so a Claude tab reaches the same tools as a Copilot one.
+        let mcpConfigs = [PluginManager.claudeMCPConfigPath(), ClaudeSharedMCP.configPath()].compactMap { $0 }
+        if !mcpConfigs.isEmpty {
+            args += ["--mcp-config"] + mcpConfigs
         }
 
         let p = Process()
@@ -1043,6 +1083,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
                 }
                 // Turn complete — the process stays alive for the next
                 // message, so "result" is now the end-of-turn signal.
+                commitSeenTurns()
                 finishRootTurn(onEvent)
             }
         case "rate_limit_event":
