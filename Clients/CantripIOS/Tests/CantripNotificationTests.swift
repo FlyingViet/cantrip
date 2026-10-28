@@ -192,6 +192,33 @@ final class CantripNotificationTests: XCTestCase {
 
     // MARK: - Settings copied to another device
 
+    func testServerMissingItsCredentialIsRemovedWithoutContactingTheMac() async throws {
+        let vault = CredentialVault()
+        let (_, alerts, a, b, defaults) = try fixture(vault: vault)
+        alerts.save(serverID: a.id, fingerprint: fingerprint("paired-a"))
+        alerts.prepareRegistration(serverID: b.id, fingerprint: fingerprint("paired-b"))
+        vault.values.removeAll()
+        var requests: [String] = []
+        NotificationTestProtocol.handler = { request in
+            requests.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
+            return (200, self.ready)
+        }
+        let servers = ServerProfiles(kind: .cantrip, defaults: defaults, credentials: vault.store)
+        let model = CantripRemoteModel(urlSession: makeSession(), servers: servers, completionAlerts: alerts)
+        XCTAssertNil(model.selectedServerID)
+
+        try model.removeServer(a)
+        XCTAssertFalse(alerts.hasSubscription(serverID: a.id))
+        XCTAssertTrue(alerts.isPending(serverID: b.id), "Only the removed server's alert state is cleared")
+        try model.removeServer(b)
+        XCTAssertTrue(servers.servers.isEmpty)
+        let reloaded = CantripNotifications(defaults: defaults)
+        XCTAssertFalse(reloaded.hasSubscription(serverID: a.id))
+        XCTAssertFalse(reloaded.hasSubscription(serverID: b.id))
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(requests, [], "An unregister could remove the alerts of the device the settings came from")
+    }
+
     func testCopiedSettingsGetAFreshInstallationThatRegistersOnlyAfterRepairing() async throws {
         let vault = CredentialVault()
         let (_, original, a, _, defaults) = try fixture(vault: vault)

@@ -1069,9 +1069,12 @@ production. An App Store Connect upload key is not an APNs key.
 
 The setting is per saved Mac, persists while the phone is locked or another
 Mac is selected, and requires a connection to disable it before removing that
-server. A phone set up from another phone's transfer or backup gets its own
-alert registration; alerts that were on resume after you re-enter that Mac's
-pairing token. **Check notification setup** shows missing
+server. A saved Mac whose pairing token is missing on this phone (for example
+after moving to a new iPhone) can be removed without that step: removal forgets
+the alert setting on this phone only and never asks the Mac to unregister, which
+could stop another phone's alerts. A phone set up from another phone's transfer
+or backup gets its own alert registration; alerts that were on resume after you
+re-enter that Mac's pairing token. **Check notification setup** shows missing
 configuration/provider errors rather than pretending alerts are ready. Mac and
 phone need internet; opening the tab still requires your paired LAN/Tailscale
 connection. The Mac

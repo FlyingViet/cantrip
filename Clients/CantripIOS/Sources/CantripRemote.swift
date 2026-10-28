@@ -2926,7 +2926,11 @@ final class CantripRemoteModel: ObservableObject {
         guard !isUpdatingNotifications else {
             throw ServerConfigurationError(message: "Wait for notification settings to finish updating.")
         }
-        guard !completionAlerts.hasSubscription(serverID: server.id) else {
+        let subscribed = completionAlerts.hasSubscription(serverID: server.id)
+        // Without its credential this device can't turn the Mac's alerts off, and on a device that
+        // received another's settings an unregister would remove that device's alerts. Removing
+        // such a server forgets its alert state here only.
+        if subscribed, try servers.storedCredential(for: server) != nil {
             throw ServerConfigurationError(message: "Select this Mac and turn off its completion alerts before removing it.")
         }
         guard !isMutating, !isUploadingVideo else {
@@ -2938,6 +2942,7 @@ final class CantripRemoteModel: ObservableObject {
             }
         }
         try servers.remove(server)
+        if subscribed { completionAlerts.forget(serverID: server.id) }
     }
 
     /// Gateway Mac: slows polling while another app is frontmost and catches up on return.
