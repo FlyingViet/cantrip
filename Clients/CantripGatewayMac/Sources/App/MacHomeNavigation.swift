@@ -19,6 +19,10 @@ final class MacHomeNavigation: ObservableObject {
     /// Direct local mode (a model served on this Mac, not through Cantrip) fills the detail pane.
     @Published var showingDirectLocal = false
     @Published var showingDirectLocalSettings = false
+    /// The open tab's terminal pane (`MacTerminalPane`), kept across tabs and launches.
+    @Published var showingTerminal = UserDefaults.standard.bool(forKey: "cantrip.terminal.open") {
+        didSet { UserDefaults.standard.set(showingTerminal, forKey: "cantrip.terminal.open") }
+    }
     private weak var env: HermesEnv?
     private weak var remote: CantripRemoteModel?
 

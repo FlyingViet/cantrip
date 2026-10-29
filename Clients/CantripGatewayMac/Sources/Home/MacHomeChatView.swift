@@ -67,6 +67,10 @@ struct MacHomeChatView: View {
             )
             .frame(maxWidth: Self.readableWidth)
             inputBar
+            if navigation.showingTerminal, let session = remote.selectedSession, session.id == remote.selectedSessionID {
+                MacTerminalPane(remote: remote, session: session) { navigation.showingTerminal = false }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
         .navigationTitle(isTab ? remote.selectedSession?.title ?? "Tab" : "Chat")
