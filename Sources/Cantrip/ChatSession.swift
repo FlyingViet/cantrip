@@ -652,6 +652,10 @@ final class ChatSession: ObservableObject {
         // A tab's "CLI default" is Claude Code's own default model, and an empty effort sends none.
         claudeCode.modelOverride = claudeSelection.map { $0.model.isEmpty ? "default" : $0.model }
         claudeCode.effortOverride = claudeSelection?.effort
+        // Antigravity's "CLI default" (and an empty effort) follow the Mac's Antigravity settings.
+        let antigravitySelection = selection(for: .antigravity)
+        antigravity.modelOverride = antigravitySelection.flatMap { $0.model.isEmpty ? nil : $0.model }
+        antigravity.effortOverride = antigravitySelection.flatMap { $0.effort.isEmpty ? nil : $0.effort }
     }
 
     private func saveTabMetadata(_ updated: SessionTabMetadata) throws {
@@ -3949,7 +3953,12 @@ final class ChatSession: ObservableObject {
         } else if let match = catalog.first(where: { $0.id.lowercased() == requested.lowercased() }) {
             model = match.id
         } else {
-            let name = modelSettingsBackend == .claudeCode ? "Claude Code" : "Copilot"
+            let name: String
+            switch modelSettingsBackend {
+            case .claudeCode: name = "Claude Code"
+            case .antigravity: name = "Antigravity"
+            default: name = "Copilot"
+            }
             return "`\(requested)` isn't in the Mac's \(name) model list. Send `/model` to see the choices."
         }
         let info = tabCatalog.info(model)

@@ -42,8 +42,9 @@ struct SessionModelSettingsSnapshot: Encodable {
 }
 
 extension ChatSession {
-    /// The backend whose model list this tab's settings use (Copilot unless the Mac runs Claude Code).
-    var modelSettingsBackend: BackendKind { settings.backend == .claudeCode ? .claudeCode : .copilot }
+    /// The backend whose model list this tab's settings use (Claude Code or Antigravity when the
+    /// Mac runs one, Copilot otherwise).
+    var modelSettingsBackend: BackendKind { settings.tabModelBackend }
 
     var modelCatalog: TabModelCatalog { settings.tabModelCatalog(for: modelSettingsBackend) }
 
@@ -57,7 +58,7 @@ extension ChatSession {
     var modelSettingsUnavailableReason: String? {
         if isLocalPrivate { return "Use Private Local Settings. This tab cannot use Copilot or Mac model defaults." }
         if !AppSettings.tabModelBackends.contains(settings.backend) || councilMode {
-            return "Per-tab model settings require the Mac's Copilot or Claude Code backend with Council mode off."
+            return "Per-tab model settings require the Mac's Copilot, Claude Code or Antigravity backend with Council mode off."
         }
         if isStreaming || !queued.isEmpty || shell.isRunning {
             return "Wait for this tab and its queued work to finish before changing model settings."
@@ -68,11 +69,17 @@ extension ChatSession {
     var modelSettingsRevision: String {
         let selection = modelSelection
         let catalog = modelCatalog
+        let path: String
+        switch modelSettingsBackend {
+        case .claudeCode: path = settings.claudePath
+        case .antigravity: path = settings.agyPath
+        default: path = settings.copilotPath
+        }
         let fields = [settings.backend.rawValue, String(councilMode),
                       String(ownModelSelection == nil),
                       selection.model, selection.effort, selection.contextTier,
                       catalog.fileDefaultModel ?? "", catalog.fileDefaultContextTier ?? "",
-                      modelSettingsBackend == .claudeCode ? settings.claudePath : settings.copilotPath]
+                      path]
         let value = fields.map { "\($0.utf8.count):\($0)" }.joined()
         return SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
