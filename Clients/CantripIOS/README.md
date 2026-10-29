@@ -117,6 +117,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename, lock and file in a section (`sectionID`), reorder, per-tab model settings |
 | `/api/v1/sections`, `/api/v1/sections/{id}` | Tab sections: list, add (`name`), rename or reorder (`PATCH name/position`), delete; only when the list has `supportsTabSections` |
 | `POST /api/v1/sessions/{id}/start-fresh` | Start Fresh (no body): the next prompt starts a new model session, history stays; `409` while the tab is busy or for Cantrip Home |
+| `POST /api/v1/sessions/{id}/resume` | Without a body, resumes the tab's paused run (`canResume`). With `{"messageID"}` (`supportsContinueFromMessage`), continues the failed run whose error row is in `continuableMessageIDs`; `409` with the reason while the tab works, while the Mac is offline, or when the row no longer offers it |
 | `GET /api/v1/sessions/{id}/commands` | The tab's (or Home's) backend slash commands, custom commands and skills for `/` suggestions; called only when the snapshot has `supportsBackendCommands` |
 | (fields) `supportsTabMentions`, `mentionable` | `@` suggestions in that composer; which tabs may be suggested. Picked tabs travel in the message text as `@[Title](cantrip-tab:<UUID>)` |
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
@@ -135,7 +136,7 @@ New features are gated by capability flags in session snapshots (for example
 `supportsQueueSendNow`, `supportsTabReordering` or `supportsStartFresh`), so an older Mac
 shows an update notice instead of failing. Snapshots may also carry `repeatedErrorMessageID`,
 the latest error when it repeats the one before it; that error row offers **Start Fresh** and
-**Change Model**. A message with role `freshStart` is Cantrip's Start Fresh divider, never a
+**Change Model**. `continuableMessageIDs` lists the error rows that offer **Continue**. A message with role `freshStart` is Cantrip's Start Fresh divider, never a
 model reply. When an app feature needs a newer host, update and relaunch Cantrip on
 the Mac. Sends are never replayed automatically after a connection failure. The full
 reference is Cantrip's
@@ -937,6 +938,19 @@ Private Local tab) buttons.
 Start Fresh is unavailable while the tab is working or has queued messages, and in Cantrip
 Home. It requires the host's `supportsStartFresh` capability; older Macs show an update
 notice. The Mac's reason is shown if it refuses, and nothing is deleted.
+
+### Continue a failed task
+
+When a task fails or times out on the Mac, including after a dropped network, it doesn't retry
+by itself. It stops on its error message, which shows **Continue**, and messages queued behind it
+wait. Tap **Continue** to pick the task up from where it stopped; the queue runs after it. To go
+ahead without it, use **Send now** on a queued message: the failed message keeps **Continue**, so
+you can come back to it later, and it continues as a new run with the original request.
+
+Continue checks with the Mac first, so a row that no longer offers it (the task already continued,
+or the tab is working) is refused with the Mac's reason, and nothing is sent. Macs without
+`supportsContinueFromMessage` keep the tab's **Resume** instead; the tab's Resume is hidden while
+an error row offers Continue.
 
 ### Update and rebuild the Cantrip Mac
 

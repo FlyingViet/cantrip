@@ -709,6 +709,11 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsBackendCommands: Bool? = nil
     /// The latest message, when it is an error repeating the one before it with no reply between.
     var repeatedErrorMessageID: String? = nil
+    /// The Mac continues a failed run from its error message (`POST …/resume` with a messageID).
+    /// Nil from older Macs, which only resume the tab's paused run.
+    var supportsContinueFromMessage: Bool? = nil
+    /// Error rows that offer Continue: each failed run's latest error; empty while the tab works.
+    var continuableMessageIDs: [String]? = nil
     /// Queued messages can run in child tabs (`POST …/queue/{id}/fork`). Nil from older Macs.
     var supportsChildTabs: Bool? = nil
     /// Queued messages carry the Mac's suggested `plan`. Nil from older Macs.
@@ -2488,6 +2493,32 @@ struct CantripRemoteAPI {
 
     fileprivate func postStartFresh(sessionID: String) async throws -> CantripRemoteSession {
         try await action("start-fresh", sessionID: try Self.pathComponent(sessionID))
+    }
+
+    /// Picks a failed run up from its error message: the same run when it's the tab's latest,
+    /// otherwise a new run with the original request.
+    func continueFailedRun(messageID: String, sessionID: String) async throws -> CantripRemoteSession {
+        try await prepareContinue(messageID: messageID, sessionID: sessionID)
+        return try await postContinue(messageID: messageID, sessionID: sessionID)
+    }
+
+    fileprivate func prepareContinue(messageID: String, sessionID: String) async throws {
+        let host = try await session(id: sessionID)
+        guard host.supportsContinueFromMessage == true else {
+            throw CantripRemoteError.http(409, CantripContinue.unsupported)
+        }
+        guard host.continuableMessageIDs?.contains(messageID) == true else {
+            throw CantripRemoteError.http(409, host.isStreaming ? CantripContinue.busy : CantripContinue.gone)
+        }
+    }
+
+    fileprivate func postContinue(messageID: String, sessionID: String) async throws -> CantripRemoteSession {
+        let response: CantripSessionResponse = try await request(
+            path: "/api/v1/sessions/\(try Self.pathComponent(sessionID))/resume",
+            method: "POST", body: try JSONSerialization.data(withJSONObject: ["messageID": messageID]),
+            includeRecentExchanges: true
+        )
+        return response.session
     }
 
     private func request<Response: Decodable>(
@@ -4313,6 +4344,26 @@ final class CantripRemoteModel: ObservableObject {
         await sessionAction("resume")
     }
 
+    /// Continue on a failed run's error row. The Mac re-checks the row, so a stale tap is refused.
+    @discardableResult
+    func continueFailedRun(messageID: String, sessionID: String) async -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish, then tap Continue again."
+            return false
+        }
+        guard let session = await mutate(prepare: { api in
+            try await api.prepareContinue(messageID: messageID, sessionID: sessionID)
+        }, { api, _ in
+            try await api.postContinue(messageID: messageID, sessionID: sessionID)
+        }) else { return false }
+        if selectedSessionID == sessionID {
+            apply(session)
+        } else if let index = sessions.firstIndex(where: { $0.id == sessionID }) {
+            sessions[index] = session
+        }
+        return true
+    }
+
     @discardableResult
     func newConversation() async -> Bool {
         await sessionAction("new-conversation")
@@ -5188,7 +5239,7 @@ struct CantripRemoteView: View {
                     }
                 }
                 Spacer()
-                if session.canResume {
+                if CantripContinue.showsTabResume(session) {
                     Button("Resume") {
                         Task { await model.resume() }
                     }
