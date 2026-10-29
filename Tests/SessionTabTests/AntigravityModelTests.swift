@@ -51,7 +51,56 @@ extension SessionTabTests {
         try await waitForJournalTest { !settings.agyRefreshInFlight && settings.agyModelRefreshError != nil }
         precondition(settings.agyAvailableModels == parsed.map(\.id))
         try await testAntigravityTabModelSettings(models: parsed.map(\.id))
+        testAntigravityTaskTiering()
         print("Antigravity models: agy models discovery, display names, Claude Opus 5.5 and --model passed")
+    }
+
+    /// Complex tasks and heavy model fallbacks route to Antigravity Argon; small tasks route to Gemini 3.8 Flash.
+    @MainActor
+    static func testAntigravityTaskTiering() {
+        let catalog = AppSettings.agyDefaultModels
+        precondition(AntigravityTaskTier.usesExternalCredits("claude-opus-5-5-medium"))
+        precondition(AntigravityTaskTier.usesExternalCredits("gpt-5-codex"))
+        precondition(!AntigravityTaskTier.usesExternalCredits("gemini-4-argon-high"))
+        precondition(!AntigravityTaskTier.usesExternalCredits("gemini-3.8-flash-medium"))
+
+        let small = AntigravityTaskTier.chooseModel(for: "What time is it?", available: catalog)
+        precondition(small == "gemini-3.8-flash-medium", "Short lookup routes to Gemini 3.8 Flash: \(small)")
+
+        let complex = AntigravityTaskTier.chooseModel(
+            for: "Design and implement a distributed system architecture and scrape https://www.hellointerview.com with subagents",
+            available: catalog,
+            effort: "high"
+        )
+        precondition(complex == "gemini-4-argon-high", "Complex system design task routes to Argon High: \(complex)")
+
+        let incident = AntigravityTaskTier.chooseModel(
+            for: "Check system status and implement a fix if needed",
+            available: catalog,
+            isIncident: true
+        )
+        precondition(incident == "gemini-3.8-flash-medium", "Background incident check routes to Gemini 3.8 Flash: \(incident)")
+
+        let backend = AntigravityBackend(persistKey: "agy-tier-test-\(UUID())")
+        backend.modelOverride = "claude-opus-5-5-medium"
+        backend.effortOverride = "high"
+        backend.resolveTurnModel(for: BackendRequest(
+            prompt: "Architect and refactor the authentication pipeline across all modules",
+            userMessage: "Architect and refactor the authentication pipeline across all modules",
+            previousTurns: []
+        ))
+        let complexArgs = backend.buildArguments(resumingSessionID: nil)
+        precondition(complexArgs.firstIndex(of: "--model").map { complexArgs[$0 + 1] } == "gemini-4-argon-high",
+                     "Credit-consuming Claude model remaps complex turn to Argon: \(complexArgs)")
+
+        backend.resolveTurnModel(for: BackendRequest(
+            prompt: "hello!",
+            userMessage: "hello!",
+            previousTurns: []
+        ))
+        let smallArgs = backend.buildArguments(resumingSessionID: nil)
+        precondition(smallArgs.firstIndex(of: "--model").map { smallArgs[$0 + 1] } == "gemini-3.8-flash-high",
+                     "Credit-consuming Claude model remaps small turn to Gemini 3.8 Flash: \(smallArgs)")
     }
 
     /// Per-tab model settings (what Gateway's Model Settings and Home use) work on Antigravity.

@@ -4075,7 +4075,7 @@ struct SettingsView: View {
                     Text("Model").font(.caption).foregroundStyle(.secondary)
                     HStack(spacing: 6) {
                         Picker("", selection: $settings.agyModel) {
-                            Text("Default (account setting)").tag("")
+                            Text("Default (Auto: Argon / Gemini 3.8 Flash)").tag("")
                             ForEach(settings.agyModelOptions, id: \.self) { model in
                                 Text(settings.agyModelLabel(model)).tag(model)
                             }
