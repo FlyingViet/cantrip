@@ -343,7 +343,8 @@ final class ChatViewModel: ObservableObject {
                 thinking: message.thinking.isEmpty ? nil : message.thinking,
                 author: message.author,
                 images: message.images?.map { $0.inSession(session?.id ?? "") },
-                isRepeatedError: isError && message.id == session?.repeatedErrorMessageID ? true : nil
+                isRepeatedError: isError && message.id == session?.repeatedErrorMessageID ? true : nil,
+                isContinuable: isError && session?.continuableMessageIDs?.contains(message.id) == true ? true : nil
             )
         }
         // Publish prepends with the mapped turns, not a frame before their layout.
@@ -1756,7 +1757,7 @@ struct ChatView: View {
             isLocalPrivate: remote.selectedSession?.isLocalPrivate == true,
             supportsStartFresh: remote.selectedSession.flatMap(CantripStartFresh.support(for:)),
             isSessionBusy: remote.selectedSession.map(CantripStartFresh.isBusy) ?? false,
-            canResume: remote.selectedSession?.canResume == true,
+            canResume: remote.selectedSession.map(CantripContinue.showsTabResume) ?? false,
             isRemoteMutating: remote.isMutating,
             remoteTabsEnabled: remoteTabsEnabled,
             paused: paused,
@@ -3907,6 +3908,10 @@ struct TurnView: View {
                 if let err = turn.error {
                     Label(err, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.red)
+                    if turn.isContinuable == true, let session = remote.selectedSession,
+                       session.id == cantripSessionID, let messageID = remoteMessage?.id {
+                        CantripContinueButton(model: remote, session: session, messageID: messageID)
+                    }
                     if turn.isRepeatedError == true, let session = remote.selectedSession,
                        session.id == cantripSessionID {
                         CantripRepeatedErrorActions(model: remote, session: session)

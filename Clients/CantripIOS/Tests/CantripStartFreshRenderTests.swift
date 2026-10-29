@@ -54,7 +54,7 @@ final class CantripStartFreshRenderTests: XCTestCase {
         ]
     }
 
-    private func transcript(_ messages: [[String: Any]], repeatedError: String? = nil,
+    private func transcript(_ messages: [[String: Any]], repeatedError: String? = nil, continuable: [String]? = nil,
                             privateLocal: Bool = false) async throws -> (CantripRemoteModel, ChatViewModel) {
         let model = try StartFreshFixture.model(for: self)
         var session: [String: Any] = [
@@ -64,6 +64,11 @@ final class CantripStartFreshRenderTests: XCTestCase {
         ]
         if privateLocal { session["isLocalPrivate"] = true }
         if let repeatedError { session["repeatedErrorMessageID"] = repeatedError }
+        if let continuable {
+            session["supportsContinueFromMessage"] = true
+            session["continuableMessageIDs"] = continuable
+            session["canResume"] = true
+        }
         let detail = try JSONSerialization.data(withJSONObject: ["session": session])
         session.removeValue(forKey: "messages")
         let list = try JSONSerialization.data(withJSONObject: ["sessions": [session]])
@@ -147,5 +152,14 @@ final class CantripStartFreshRenderTests: XCTestCase {
         try await capture(error, "error-actions-ax-light", style: .light, width: 320, height: 1100, size: .accessibility3)
         try await capture(StartFreshTranscript(remote: privateModel, vm: privateVM),
                           "error-actions-private-local-dark", style: .dark)
+        // Continue on a failed run's row, alone and above the repeated-error actions.
+        let (continueModel, continueVM) = try await transcript(errorMessages, continuable: ["e2"])
+        let (bothModel, bothVM) = try await transcript(errorMessages, repeatedError: "e2", continuable: ["e2"])
+        for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
+            try await capture(StartFreshTranscript(remote: continueModel, vm: continueVM), "continue-\(name)", style: style)
+            try await capture(StartFreshTranscript(remote: bothModel, vm: bothVM), "continue-repeated-\(name)", style: style)
+        }
+        try await capture(StartFreshTranscript(remote: bothModel, vm: bothVM), "continue-repeated-ax-dark",
+                          style: .dark, width: 320, height: 1100, size: .accessibility3)
     }
 }

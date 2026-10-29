@@ -159,6 +159,8 @@ struct ChatTurn: Identifiable, Codable {
     var images: [ChatMessageImage]?
     /// A Cantrip error that repeats the one before it; offers Start Fresh and Change Model.
     var isRepeatedError: Bool? = nil
+    /// A Cantrip failed run's latest error; offers Continue (`CantripContinue`).
+    var isContinuable: Bool? = nil
 
     /// `freshStart` is Cantrip's divider where a tab started fresh, never a reply.
     enum Role: String, Codable { case user, assistant, freshStart }
