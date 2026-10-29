@@ -1,14 +1,14 @@
-// Copilot Usage (CopilotUsageView + CopilotUsageModel, CopilotUsageView.swift): the Copilot account
-// signed in on the Mac. Re-read every 2 s while the Mac refreshes the quota, else every 60 s.
+// Usage Limits (CopilotUsageView + ClaudeUsageSection, CopilotUsageView.swift): Claude Code's limits
+// and the Copilot account signed in on the Mac. Re-read every 2 s while the Mac refreshes, else every 60 s.
 import type { JSX } from "preact";
 import { useSignal } from "@preact/signals";
 import { api } from "../../api/client";
-import type { CopilotQuotaBucket, CopilotUsageSnapshot } from "../../api/types";
+import type { ClaudeUsageState, CopilotQuotaBucket, CopilotUsageSnapshot } from "../../api/types";
 import { FormRow, FormSection, Sheet } from "../kit";
 import { Caption, Loading, RefreshButton, StatusLabel, Warning, useAlive, usePolling, useTick } from "./common";
 import {
-  billingText, bucketSummary, bucketTitle, copilotDate, errorText, formatDateTime, isUnsupported, isUsageStale, overageAllowedText,
-  overageText, percentageSummary, usagePollDelay,
+  billingText, bucketSummary, bucketTitle, claudeWindowTitle, claudeWindowTone, copilotDate, errorText, formatDateTime,
+  isClaudeUsageStale, isUnsupported, isUsageStale, overageAllowedText, overageText, percentageSummary, usagePollDelay,
 } from "./sheetLogic";
 
 export function UsageSheet(props: { onClose: () => void }): JSX.Element | null {
@@ -29,7 +29,7 @@ export function UsageSheet(props: { onClose: () => void }): JSX.Element | null {
     } catch (failure) {
       if (!alive.current) return;
       error.value = isUnsupported(failure)
-        ? "Update and reopen Cantrip on your Mac to view Copilot account usage."
+        ? "Update and reopen Cantrip on your Mac to view usage limits."
         : errorText(failure);
     } finally {
       loading.value = false;
@@ -48,8 +48,8 @@ export function UsageSheet(props: { onClose: () => void }): JSX.Element | null {
   const checked = copilotDate(value?.checkedAt);
 
   return (
-    <Sheet title="Copilot Usage" onClose={props.onClose}
-      leading={<RefreshButton label="Refresh Copilot usage" disabled={refreshing} onClick={() => void refresh()} />}
+    <Sheet title="Usage Limits" onClose={props.onClose}
+      leading={<RefreshButton label="Refresh usage limits" disabled={refreshing} onClick={() => void refresh()} />}
       footer={<button type="button" class="btn primary" onClick={props.onClose}>Done</button>}>
       <FormSection>
         <div class="form-row">
@@ -64,10 +64,11 @@ export function UsageSheet(props: { onClose: () => void }): JSX.Element | null {
           </div>
         </div>
       </FormSection>
+      {value?.claude ? <ClaudeSection state={value.claude} now={now} /> : null}
       {account ? (
         <>
           {account.login !== undefined || account.plan !== undefined || checked ? (
-            <FormSection header="Mac account">
+            <FormSection header="Copilot account">
               {account.login !== undefined ? <FormRow label="Account"><span class="sh-value selectable">{account.login}</span></FormRow> : null}
               {account.plan !== undefined ? <FormRow label="Plan"><span class="sh-value">{account.plan}</span></FormRow> : null}
               {checked ? <FormRow label="Checked"><span class="sh-value">{formatDateTime(checked)}</span></FormRow> : null}
@@ -83,12 +84,49 @@ export function UsageSheet(props: { onClose: () => void }): JSX.Element | null {
       <FormSection>
         <div class="form-row">
           <div class="sh-stack grow">
-            <Caption>The Mac refreshes at most once a minute. No prompts are sent and no model is invoked. Credentials stay on the Mac.</Caption>
+            <Caption>The Mac refreshes every five minutes, and at most once a minute when you ask. No prompts are sent and no model is invoked. Credentials stay on the Mac.</Caption>
             <Caption>Remaining account allowance does not rule out model-specific or short-term rate limits.</Caption>
           </div>
         </div>
       </FormSection>
     </Sheet>
+  );
+}
+
+/** ClaudeUsageSection: Claude Code's 5-hour and weekly limits, as the Mac reads them from Claude. */
+function ClaudeSection(props: { state: ClaudeUsageState; now: number }): JSX.Element {
+  const { state, now } = props;
+  const account = state.account;
+  const checked = copilotDate(state.checkedAt);
+  const plan = account?.plan;
+  return (
+    <FormSection header={plan ? `Claude Code · ${plan.charAt(0).toUpperCase()}${plan.slice(1)}` : "Claude Code"}>
+      <div class="form-row">
+        <div class="sh-stack wide grow selectable">
+          {state.error ? <Warning>{state.error}</Warning> : null}
+          {account && isClaudeUsageStale(state, now)
+            ? <StatusLabel icon="clock" tone="warning">Last known limits - data is stale</StatusLabel> : null}
+          {!account && !state.error ? <span class="muted">Claude's limits unavailable</span> : null}
+          {(account?.windows ?? []).map((window) => {
+            const used = Math.min(100, Math.max(0, window.percentUsed));
+            const tone = claudeWindowTone(window);
+            const reset = copilotDate(window.resetsAt);
+            return (
+              <div key={window.id} class="sh-stack">
+                <div class="headline">{claudeWindowTitle(window)} · {used.toFixed(0)}% used</div>
+                <div class={`sh-meter${tone === "normal" ? "" : " low"}`} role="progressbar"
+                  aria-label={claudeWindowTitle(window)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={used}
+                  aria-valuetext={`${used.toFixed(0)}%`}>
+                  <div style={{ width: `${used}%` }} />
+                </div>
+                {reset ? <Caption>Resets {formatDateTime(reset)}</Caption> : null}
+              </div>
+            );
+          })}
+          {checked ? <Caption>Checked {formatDateTime(checked)}</Caption> : null}
+        </div>
+      </div>
+    </FormSection>
   );
 }
 

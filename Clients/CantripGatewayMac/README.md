@@ -138,7 +138,7 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   the tab when clicked. Needs a Cantrip host with `supportsTabMentions`. Shared with iOS (see
   Hermes' README, *Mention a tab with @*).
 - **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS),
-  delivery mode, Refresh (⌘R) and More (model settings, Copilot usage, voice mode,
+  delivery mode, Refresh (⌘R) and More (model settings, usage limits, voice mode,
   pause, memory (formatted Markdown or its source), builds, mascot, Cantrip maintenance).
 - **Keyboard:** ⌘1–⌘3 switch sections, ⌘4 opens Local Model, ⌘T opens a new tab and ⌘N
   focuses a new message. ⇧⌘V opens voice mode and ⇧⌘P pauses the agent.

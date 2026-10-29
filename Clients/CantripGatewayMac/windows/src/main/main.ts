@@ -556,7 +556,7 @@ function buildMenu(): void {
         command("Pause Agent", "togglePause", "Shift+Cmd+P"),
         { type: "separator" },
         command("Model Settings…", "modelSettings", "Cmd+;"), command("Start Fresh", "startFresh"),
-        command("Copilot Usage", "usage"), command("Cantrip Memory", "memory"), command("GitHub Builds", "builds"),
+        command("Usage Limits", "usage"), command("Cantrip Memory", "memory"), command("GitHub Builds", "builds"),
         command("Customize Mascot…", "mascot"),
       ],
     },

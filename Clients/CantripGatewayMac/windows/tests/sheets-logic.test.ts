@@ -510,3 +510,34 @@ describe("usage limit fallback", () => {
     expect(usageFallbackStatus(snapshot("Copilot"))).toContain("every tab");
   });
 });
+
+describe("Claude usage limits", () => {
+  const now = Date.parse("2026-10-29T15:00:00Z");
+  const window = (id: string, percentUsed: number, extra: Record<string, unknown> = {}) =>
+    ({ id, percentUsed, resetsAt: "2026-10-29T16:00:00Z", ...extra });
+
+  it("names each window", async () => {
+    const { claudeWindowTitle } = await import("../src/gateway/ui/sheets/sheetLogic");
+    expect(["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "other"].map((id) => claudeWindowTitle(window(id, 0))))
+      .toEqual(["5-hour session", "Weekly limit", "Weekly Opus limit", "Weekly Sonnet limit", "Claude limit"]);
+  });
+
+  it("warns at the API's warning or 80%, and is critical when full or locked", async () => {
+    const { claudeWindowTone } = await import("../src/gateway/ui/sheets/sheetLogic");
+    expect(claudeWindowTone(window("five_hour", 30))).toBe("normal");
+    expect(claudeWindowTone(window("five_hour", 30, { severity: "warning" }))).toBe("warning");
+    expect(claudeWindowTone(window("five_hour", 85))).toBe("warning");
+    expect(claudeWindowTone(window("five_hour", 100))).toBe("critical");
+    expect(claudeWindowTone(window("five_hour", 40, { lockedReason: "rate_limited" }))).toBe("critical");
+  });
+
+  it("is stale after ten minutes or once a window resets", async () => {
+    const { isClaudeUsageStale } = await import("../src/gateway/ui/sheets/sheetLogic");
+    const state = (checked: string, resets = "2026-10-29T16:00:00Z") =>
+      ({ checkedAt: checked, account: { windows: [window("five_hour", 10, { resetsAt: resets })] } });
+    expect(isClaudeUsageStale(state("2026-10-29T14:58:00Z"), now)).toBe(false);
+    expect(isClaudeUsageStale(state("2026-10-29T14:49:00Z"), now)).toBe(true);
+    expect(isClaudeUsageStale(state("2026-10-29T14:58:00Z", "2026-10-29T14:59:00Z"), now)).toBe(true);
+    expect(isClaudeUsageStale({ error: "signed out" }, now)).toBe(true);
+  });
+});

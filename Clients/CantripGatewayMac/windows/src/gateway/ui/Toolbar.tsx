@@ -167,7 +167,7 @@ function TabToolbar(): JSX.Element {
 function commonEntries(): MenuEntry[] {
   const configured = remote.listed.value;
   return [
-    { label: "Copilot Usage", icon: "gauge.with.dots.needle.33percent", disabled: !configured, onSelect: () => { nav.sheet.value = { kind: "usage" }; } },
+    { label: "Usage Limits", icon: "gauge.with.dots.needle.33percent", disabled: !configured, onSelect: () => { nav.sheet.value = { kind: "usage" }; } },
     {
       label: nav.paused.value ? "Resume Agent" : "Pause Agent", icon: nav.paused.value ? "play.circle" : "pause.circle", shortcut: shortcut("Ctrl+Shift+P"),
       onSelect: () => { nav.paused.value = !nav.paused.value; },

@@ -1520,6 +1520,25 @@ export interface CopilotUsageSnapshot {
   checkedAt?: ISO8601String;
   isRefreshing: boolean;
   error?: string;
+  /** Claude Code's 5-hour and weekly limits (Cantrip 1.1.4+). */
+  claude?: ClaudeUsageState;
+  /** The Mac's backend ("Claude Code", "Copilot", ...) when the snapshot was served. */
+  activeBackend?: string;
+}
+
+export interface ClaudeUsageState {
+  account?: { plan?: string; windows: ClaudeLimitWindow[] };
+  checkedAt?: ISO8601String;
+  error?: string;
+}
+
+/** `five_hour`, `seven_day`, `seven_day_opus` or `seven_day_sonnet`. */
+export interface ClaudeLimitWindow {
+  id: string;
+  percentUsed: number;
+  resetsAt?: ISO8601String;
+  severity?: string;
+  lockedReason?: string;
 }
 
 // MARK: - GitHub builds

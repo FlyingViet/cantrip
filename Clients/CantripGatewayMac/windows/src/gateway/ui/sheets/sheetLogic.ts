@@ -8,6 +8,7 @@ import type {
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
   ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackSnapshot,
+  ClaudeLimitWindow, ClaudeUsageState,
 } from "../../api/types";
 
 // MARK: Errors
@@ -801,4 +802,36 @@ export function usageFallbackStatus(value: UsageFallbackSnapshot): string {
   return value.limited.length
     ? `At its usage limit: ${value.limited.map((entry) => `${entry.backend} until ${entry.untilLabel}`).join(", ")}.`
     : "New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch.";
+}
+
+/** ClaudeLimitWindow.title. */
+export function claudeWindowTitle(window: ClaudeLimitWindow): string {
+  switch (window.id) {
+    case "five_hour": return "5-hour session";
+    case "seven_day": return "Weekly limit";
+    case "seven_day_opus": return "Weekly Opus limit";
+    case "seven_day_sonnet": return "Weekly Sonnet limit";
+    default: return "Claude limit";
+  }
+}
+
+export function claudeWindowExhausted(window: ClaudeLimitWindow): boolean {
+  return window.lockedReason !== undefined || window.percentUsed >= 100;
+}
+
+/** "warning" at the API's warning or 80%, "critical" when it's full or the API says so. */
+export function claudeWindowTone(window: ClaudeLimitWindow): "normal" | "warning" | "critical" {
+  if (claudeWindowExhausted(window) || window.severity === "critical") return "critical";
+  if (window.severity === "warning" || window.percentUsed >= 80) return "warning";
+  return "normal";
+}
+
+/** ClaudeUsageState.isStale: older than ten minutes, or a window reset since it was read. */
+export function isClaudeUsageStale(state: ClaudeUsageState, now: number): boolean {
+  const checked = state.checkedAt ? Date.parse(state.checkedAt) : NaN;
+  if (!state.account || Number.isNaN(checked) || now - checked >= 600_000) return true;
+  return state.account.windows.some((window) => {
+    const reset = window.resetsAt ? Date.parse(window.resetsAt) : NaN;
+    return !Number.isNaN(reset) && now >= reset;
+  });
 }
