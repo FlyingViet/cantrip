@@ -215,7 +215,8 @@ export function tabMoreMenu(): MenuEntry[] {
   if (session && remote.sessions.value.some((item) => item.id === session.id)) {
     entries.push(...tabActions(session), { kind: "separator" });
   }
-  if (session?.canResume) {
+  // A failed run's Continue sits under its error message instead.
+  if (session?.canResume && !session.continuableMessageIDs?.length) {
     entries.push({
       label: "Resume", icon: "play", disabled: remote.isMutating.value || isBusy(session),
       onSelect: () => void remote.resume(session.id).catch((error) => toast(`Resume failed: ${error.message}`)),

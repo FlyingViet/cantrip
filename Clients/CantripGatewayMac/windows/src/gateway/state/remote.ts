@@ -418,6 +418,11 @@ export async function resume(id: string): Promise<void> {
   await mutate(() => sessionAction(id, "resume"));
 }
 
+/** Continues a failed run from its error message, with the work it had done (ContinueFailedRun). */
+export async function continueFromMessage(id: string, messageID: string): Promise<void> {
+  await mutate(() => sessionAction(id, "resume", { messageID }));
+}
+
 export async function startFresh(id: string): Promise<void> {
   await mutate(() => sessionAction(id, "start-fresh", {}));
 }
