@@ -160,6 +160,17 @@ struct ChatAdaptiveToolbar: ViewModifier {
     }
 }
 
+/// Which set of bar items the chat header shows; the header's toolbar is rebuilt when it changes.
+struct ChatToolbarLayout: Hashable {
+    let verticalBar: Bool
+    let unfoldedDuo: Bool
+
+    init(traits: ChatDisplayTraits) {
+        verticalBar = traits.placesActionsInVerticalBar
+        unfoldedDuo = traits.isUnfoldedDuo
+    }
+}
+
 struct ChatNavigationActions<Leading: View, Refresh: View, Settings: View, Trailing: View>: ViewModifier {
     @Environment(\.chatDisplayTraits) private var displayTraits
     var showsHorizontalBar = false
