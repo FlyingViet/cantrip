@@ -4,10 +4,13 @@ import Foundation
 enum MessageRouter {
     /// The Copilot CLI model for routing and planning (cheapest available; gpt-5.4-mini was retired).
     static let copilotModel = "claude-haiku-4.5"
+    /// The Antigravity CLI model for lightweight routing, queue planning, and Done-when checks.
+    static let antigravityModel = "gemini-3.8-flash-medium"
 
     enum Provider {
         case copilot(command: String)
         case claude(command: String)
+        case antigravity(command: String, model: String = MessageRouter.antigravityModel)
         case local(baseURL: String, model: String, apiKey: String)
         case unavailable(String)
     }
@@ -47,7 +50,7 @@ enum MessageRouter {
         case .local(let baseURL, let model, let key):
             response = try await localCompletion(input, instructions: instructions, baseURL: baseURL,
                                                  model: model, key: key, timeout: timeout, maxTokens: maxTokens)
-        case .copilot, .claude:
+        case .copilot, .claude, .antigravity:
             response = try await RouterProcess().run(provider: provider, input: input,
                                                      instructions: instructions, timeout: timeout)
         case .unavailable(let reason):
@@ -224,6 +227,14 @@ private final class RouterProcess: @unchecked Sendable {
                     "--system-prompt", instructions,
                     "--tools", "", "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}",
                     "--safe-mode", "--disable-slash-commands", "--no-session-persistence",
+                ]
+            case .antigravity(let executable, let model):
+                command = executable
+                arguments = [
+                    "-p", instructions + "\n\n" + input,
+                    "--model", model,
+                    "--output-format", "text",
+                    "--disable-slash-commands",
                 ]
             default:
                 throw MessageRoutingError.unavailable("no tool-free router is configured for this backend.")
