@@ -27,7 +27,7 @@ enum AntigravityHook {
     static func isReadOnly(tool: String, arguments: [String: Any]) -> Bool {
         let action = (arguments["Action"] as? String)?.lowercased()
         switch tool {
-        case "view_file", "list_dir", "find_by_name", "grep_search", "search_web", "read_url_content",
+        case "read_file", "view_file", "list_dir", "find_by_name", "grep_search", "search_web", "read_url_content",
              "list_permissions":
             return true
         case "manage_task":

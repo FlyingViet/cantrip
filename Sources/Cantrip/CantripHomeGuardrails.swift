@@ -126,11 +126,12 @@ struct CantripHomeActionRequest: Equatable {
                 return trimmed.isEmpty ? nil : trimmed
             }
             self.init(kind: .shell, command: input["CommandLine"] as? String ?? "", cwd: cwd)
-        case "write_to_file", "replace_file_content", "multi_replace_file_content":
-            let path = input["TargetFile"] as? String ?? ""
+        case "write_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content":
+            let path = input["Path"] as? String ?? input["TargetFile"] as? String ?? ""
             self.init(kind: .write, paths: path.isEmpty ? [] : [path])
-        case "view_file", "list_dir", "find_by_name", "grep_search":
-            let path = input["AbsolutePath"] as? String
+        case "read_file", "view_file", "list_dir", "find_by_name", "grep_search":
+            let path = input["Path"] as? String
+                ?? input["AbsolutePath"] as? String
                 ?? input["DirectoryPath"] as? String
                 ?? input["SearchDirectory"] as? String
                 ?? input["SearchPath"] as? String ?? ""
