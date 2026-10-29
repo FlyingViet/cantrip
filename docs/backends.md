@@ -237,8 +237,18 @@ Codex or Gemini quota), Cantrip:
    and the steps already taken, like an automatic resume.
 3. Sends new messages from every tab to the fallback until the limit resets.
    Cantrip uses the reset time from the error when the backend gives one, and
-   tries the original backend again after an hour when it doesn't. Quitting
-   Cantrip clears this, so the next message tries the original backend first.
+   tries the original backend again after an hour when it doesn't. Copilot's
+   monthly premium-request allowance is skipped until it resets on the 1st
+   (00:00 UTC). Quitting Cantrip clears this, so the next message tries the
+   original backend first.
+
+Cantrip decides from each backend's own error fields, not the error's wording:
+Copilot's `session.error` category (`quota` or `rate_limit`, with codes such as
+`quota_exceeded` or `user_weekly_rate_limited`), and Claude Code's `rate_limit`
+or `billing_error` message error and `rejected` rate-limit event, which also
+gives the reset time. Matching known phrases in the message is only the last
+resort, for CLIs that don't send a code (Codex and Gemini today); the host log
+notes when a switch relied on it.
 
 The fallback uses its own model and effort settings. It doesn't share the
 original backend's session, so it works from the conversation Cantrip passes
