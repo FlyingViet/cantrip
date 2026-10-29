@@ -34,6 +34,8 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     /// The ID of the prompt that started this message's thread (a prompt's own ID for itself).
     /// Nil for history from before threads were recorded: it gets no tag rather than a guess.
     var threadID: UUID?
+    /// A Continue prompt: the earlier failed run it picks up (Continue on that run's message).
+    var continuesRunID: UUID?
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
     /// `freshStart`: the Start Fresh divider; turns above it are never sent to the model.
     enum Role: String, Codable { case user, assistant, error, handoff, freshStart }
@@ -44,7 +46,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
-        case threadID
+        case threadID, continuesRunID
     }
 }
 
@@ -110,6 +112,7 @@ extension ChatMessage {
         )
         childResult = try? container.decodeIfPresent(ChildTab.self, forKey: .childResult)
         threadID = try? container.decodeIfPresent(UUID.self, forKey: .threadID)
+        continuesRunID = try? container.decodeIfPresent(UUID.self, forKey: .continuesRunID)
         if (try? container.decodeIfPresent(Bool.self, forKey: .freshStart)) == true {
             role = .freshStart
         } else {
@@ -138,6 +141,7 @@ extension ChatMessage {
         try container.encodeIfPresent(handoffResult, forKey: .handoffResult)
         try container.encodeIfPresent(childResult, forKey: .childResult)
         try container.encodeIfPresent(threadID, forKey: .threadID)
+        try container.encodeIfPresent(continuesRunID, forKey: .continuesRunID)
     }
 }
 
@@ -982,6 +986,7 @@ final class ChatSession: ObservableObject {
         recordedArtifacts.removeAll()
         currentRunPrompt = nil
         canResume = false
+        interruptionAwaitsResume = false
     }
 
     private static func loadLastRunOutcome(id: UUID) -> LiveStatusRunOutcome? {
@@ -1320,7 +1325,7 @@ final class ChatSession: ObservableObject {
                 recordActivity(activity, messageID: message.id)
             }
         }
-        recordInterruption("Cantrip exited before the run reached a terminal state.")
+        recordInterruption(RunJournal.exitInterruptionReason)
         if !messages.contains(where: { $0.runID == run.id && $0.text == interruptionMessage }) {
             appendRunMessage(ChatMessage(
                 role: .error,
@@ -1951,7 +1956,8 @@ final class ChatSession: ObservableObject {
                       includesAmbientContext: Bool = true,
                       consumesStagedContext: Bool = true,
                       queuedItem: QueuedPrompt? = nil,
-                      combinedItems: [QueuedPrompt] = []) {
+                      combinedItems: [QueuedPrompt] = [],
+                      continuing: (runID: UUID, prompt: String)? = nil) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isStreaming else { return }
         if !isLocalPrivate, prompt == "/login github" {
@@ -2065,8 +2071,9 @@ final class ChatSession: ObservableObject {
         if !isResume {
             // Fresh run: remember the prompt so an interrupted run can be
             // resumed, and re-arm the one free automatic resume.
+            // A Continue run keeps the failed run's request, so it can be continued in turn.
             beginRun(
-                prompt: prompt,
+                prompt: continuing?.prompt ?? prompt,
                 mode: .single,
                 backends: [settings.backendLabel(backendKind)],
                 backend: backendKind,
@@ -2074,7 +2081,7 @@ final class ChatSession: ObservableObject {
                 queueItemID: queuedItem?.id,
                 additionalQueueItemIDs: combinedItems.map(\.id)
             )
-            currentRunPrompt = prompt
+            currentRunPrompt = continuing?.prompt ?? prompt
             currentRunIncludesAmbientContext = includesAmbientContext
             autoResumeSpent = false
             cantripHomeCorrectionSpent = false
@@ -2091,7 +2098,9 @@ final class ChatSession: ObservableObject {
             shownTexts = ([queuedItem] + combinedItems).map(\.text)
         }
         for shown in shownTexts {
-            promptUsageMessageID = appendRunMessage(ChatMessage(role: .user, text: shown))
+            var message = ChatMessage(role: .user, text: shown)
+            message.continuesRunID = continuing?.runID
+            promptUsageMessageID = appendRunMessage(message)
         }
         appendRunMessage(ChatMessage(role: .assistant, text: ""))
         isStreaming = true
@@ -3102,9 +3111,9 @@ final class ChatSession: ObservableObject {
 
     // MARK: - Resume after an interrupted run
 
-    /// A run died mid-flight (watchdog timeout or backend failure).
-    /// Record the error, then — if the run had actually started work —
-    /// auto-resume once, or surface the Resume button after that.
+    /// A run died mid-flight (watchdog timeout or backend failure). Record the error, then pause
+    /// on it until the user taps Continue there. Tabs nobody watches (child tabs, Home handoffs)
+    /// wait out network drops and auto-resume once instead, then pause the same way.
     private func handleRunInterruption(errorText: String) {
         // Orphan any late events from the dead run (a backend can emit a
         // trailing .done/.failure after the first failure) and make sure
@@ -3140,6 +3149,14 @@ final class ChatSession: ObservableObject {
             }
             return
         }
+        if !runsUnattended, !isCantripHomeBackground, currentRunPrompt != nil, currentRunMode == .single,
+           journalError == nil {
+            // Retrying by itself could land after queued messages that already started; the user
+            // picks the moment instead, and the queue waits behind the failed task until then.
+            Log.write("resume: run failed — waiting for Continue on its message")
+            pauseUntilContinued()
+            return
+        }
         if waitForNetworkThenResume(after: errorText) { return }
         guard resumable else {
             completeRun(status: "failed", summary: errorText)
@@ -3161,20 +3178,42 @@ final class ChatSession: ObservableObject {
                 self?.scheduleAutoResume()
             }
         } else {
-            interruptionAwaitsResume = true
-            // Surface the Resume button only after the SIGTERM → SIGKILL
-            // escalation window, so a fast click can't relaunch the CLI
-            // session while the hung process is still dying.
-            finishStream(dequeue: false) { [weak self] in
-                guard let self else { return }
-                let generation = self.streamGeneration
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
-                    guard let self, !self.isStreaming,
-                          self.streamGeneration == generation else { return }
-                    self.canResume = true
+            pauseUntilContinued()
+        }
+    }
+
+    /// Ends the failed run waiting for Continue (or Resume); the queue stays put.
+    private func pauseUntilContinued() {
+        interruptionAwaitsResume = true
+        // Surface Continue only after the SIGTERM → SIGKILL escalation window, so a fast click
+        // can't relaunch the CLI session while the hung process is still dying.
+        finishStream(dequeue: false) { [weak self] in
+            guard let self else { return }
+            let generation = self.streamGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
+                guard let self, !self.isStreaming,
+                      self.streamGeneration == generation else { return }
+                self.canResume = true
+                if !self.queued.isEmpty, !self.runsUnattended {
+                    self.deliveryStatus = Self.pausedQueueStatus
                 }
             }
         }
+    }
+
+    static let pausedQueueStatus = "Queued messages wait for the task that stopped on an error."
+        + " Tap Continue on it, or Send now on a queued message to skip it."
+
+    /// Nobody is watching this tab's runs: a child tab, or a tab working on a Home handoff.
+    private var runsUnattended: Bool {
+        currentRunPrompt?.hasPrefix("(Handed off by") == true
+            || ChildTabStore.shared.isActiveChild(id)
+            || CantripHomeDelegations.shared.allHandoffs.contains { $0.isActive && $0.tabID == id }
+    }
+
+    /// A failed run that stopped on the user's watch holds the queue until Continue or Send now.
+    private var queueHeldByFailedRun: Bool {
+        interruptionAwaitsResume && !runsUnattended
     }
 
     /// Whether the interrupted run got anywhere (tool steps or partial
@@ -3270,6 +3309,12 @@ final class ChatSession: ObservableObject {
     func continueAfterLaunch(after delay: TimeInterval = 0) {
         guard hasRestoredWork, !isStreaming, !autoResumePending else { return }
         if let run = restoredRun, canResume, currentRunID == run.id {
+            // A run that had failed was waiting for Continue; relaunching doesn't retry it.
+            guard !run.stoppedOnFailure || runsUnattended else {
+                Log.write("resume: run \(run.id.uuidString.prefix(8)) stopped on an error; waiting for Continue")
+                interruptionAwaitsResume = true
+                return
+            }
             guard run.launchResumes < Self.launchResumeLimit else {
                 Log.write("resume: run \(run.id.uuidString.prefix(8)) already resumed after"
                           + " \(run.launchResumes) relaunches; waiting for Resume")
@@ -3317,16 +3362,96 @@ final class ChatSession: ObservableObject {
         performResume(auto: false)
     }
 
+    /// Error messages that offer Continue: each failed run's last message, when nothing in that
+    /// run came after it. The current run continues as itself; an earlier one (queued work went
+    /// ahead of it, or a new message replaced it) continues as a new run.
+    var continuableMessageIDs: Set<UUID> {
+        guard !isStreaming, !autoResumePending, !isCantripHomeBackground, journalError == nil else { return [] }
+        let start = (messages.lastIndex { $0.role == .freshStart }).map { $0 + 1 } ?? 0
+        // A run already continued as a new run offers Continue on that run's message instead.
+        let continued = Set(messages.compactMap(\.continuesRunID))
+        var last: [UUID: ChatMessage] = [:]
+        var lastError: [UUID: UUID] = [:]
+        for message in messages[start...] {
+            guard let run = message.runID, !continued.contains(run),
+                  !(message.role == .assistant && message.text.isEmpty && message.activities.isEmpty) else { continue }
+            last[run] = message
+            if message.role == .error { lastError[run] = message.id }
+        }
+        return Set(last.compactMap { run, message in
+            if run == currentRunID, interruptionAwaitsResume || restoredRun != nil {
+                // Same-run resume, once the dying backend process is gone. A run restored after
+                // relaunches keeps its one exit notice, with earlier resumes after it.
+                return canResume ? lastError[run] : nil
+            }
+            guard message.role == .error, let original = originalPrompt(ofRun: run), !original.hasPrefix("!"),
+                  original != "/login github" else { return nil }
+            return message.id
+        })
+    }
+
+    /// Continue on a failed run's message (`continuableMessageIDs`). Returns why it can't.
+    @discardableResult
+    func continueFailedRun(from messageID: UUID, includesAmbientContext: Bool) -> String? {
+        guard !isStreaming else { return "Wait for the current task to finish, then tap Continue." }
+        guard continuableMessageIDs.contains(messageID),
+              let run = messages.first(where: { $0.id == messageID })?.runID else {
+            return "That task can't be continued anymore."
+        }
+        let localModel = isLocalPrivate || (run == currentRunID ? currentRunBackend : settings.backend) == .localModel
+        guard localModel || NetworkMonitor.shared.isOnline else {
+            return "The Mac is offline. Tap Continue once the network is back."
+        }
+        if run == currentRunID, canResume {
+            performResume(auto: false)
+            return nil
+        }
+        guard let original = originalPrompt(ofRun: run) else { return "That task can't be continued anymore." }
+        Log.write("resume: continuing earlier failed run \(run.uuidString.prefix(8)) as a new run")
+        send(Self.resumePrompt, preamble: resumePreamble(original: original, runs: runChain(endingAt: run)),
+             includesAmbientContext: includesAmbientContext, consumesStagedContext: false,
+             continuing: (run, original))
+        return nil
+    }
+
+    /// The run and the earlier failed runs it continued, oldest first.
+    private func runChain(endingAt run: UUID) -> [UUID] {
+        var chain = [run]
+        while chain.count < 20,
+              let earlier = messages.first(where: { $0.runID == chain[0] && $0.role == .user })?.continuesRunID,
+              !chain.contains(earlier) {
+            chain.insert(earlier, at: 0)
+        }
+        return chain
+    }
+
+    /// The request a run (or the run it continued) started with.
+    private func originalPrompt(ofRun run: UUID) -> String? {
+        // A shell or script run leaves the last model request in `currentRunPrompt`.
+        if run == currentRunID, currentRunMode == .single, let currentRunPrompt { return currentRunPrompt }
+        let first = runChain(endingAt: run).first.flatMap { root in
+            messages.first { $0.runID == root && $0.role == .user }
+        }
+        guard let first, first.continuesRunID == nil, first.text != Self.resumePrompt else { return nil }
+        return first.text
+    }
+
+    private func resumePreamble(original: String, runs: [UUID]) -> String {
+        var preamble = "(My previous request was interrupted mid-run and cancelled."
+            + " Original request: \"\(original.prefix(1000))\""
+        if let steps = interruptedStepSummary(runs: runs) {
+            preamble += "\nSteps already taken before the interruption:\n\(steps)"
+        }
+        if let context = interruptedUserContext(runs: runs) { preamble += "\n\n\(context)" }
+        preamble += "\nResume that task from where it left off: verify which steps already completed, then continue — don't redo finished work or start over.)"
+        return preamble
+    }
+
     private func performResume(auto: Bool, reason: String? = nil) {
         guard !isStreaming, let original = currentRunPrompt else { return }
         canResume = false
-        var preamble = "(My previous request was interrupted mid-run and cancelled."
-            + " Original request: \"\(original.prefix(1000))\""
-        if let steps = interruptedStepSummary() {
-            preamble += "\nSteps already taken before the interruption:\n\(steps)"
-        }
-        if let context = interruptedUserContext() { preamble += "\n\n\(context)" }
-        preamble += "\nResume that task from where it left off: verify which steps already completed, then continue — don't redo finished work or start over.)"
+        interruptionAwaitsResume = false
+        let preamble = resumePreamble(original: original, runs: currentRunID.map(runChain(endingAt:)) ?? [])
         Log.write("resume: \(auto ? "auto" : "manual") resume of interrupted run")
         recordResumeAttempt(reason: reason ?? (auto ? "automatic-resume" : "manual-resume"))
         send(
@@ -3354,11 +3479,12 @@ final class ChatSession: ObservableObject {
     /// Work log of the interrupted turn, for backends without native
     /// session resume (Copilot, local models). Claude Code and Codex
     /// already recover full detail via --resume/exec resume.
-    private func interruptedStepSummary() -> String? {
-        // Only the interrupted turn itself — an earlier turn's steps
-        // would misrepresent what "was already done" for this task.
+    private func interruptedStepSummary(runs: [UUID]? = nil) -> String? {
+        // Only the interrupted turn itself (and the failed runs it continues) — an earlier
+        // turn's steps would misrepresent what "was already done" for this task.
+        let runs = runs ?? currentRunID.map { [$0] } ?? []
         let activities = messages.filter {
-            $0.runID == currentRunID && $0.role == .assistant
+            $0.runID.map(runs.contains) == true && $0.role == .assistant
         }.flatMap(\.activities)
         let lines = activities.suffix(30).map { activity in
             "- [\(stateLabel(activity.state))] \(activity.toolName): \(activity.title)"
@@ -3366,9 +3492,10 @@ final class ChatSession: ObservableObject {
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
-    private func interruptedUserContext() -> String? {
-        let instructions = messages.filter { $0.runID == currentRunID && $0.role == .user }
-            .dropFirst().map(\.text)
+    private func interruptedUserContext(runs: [UUID]? = nil) -> String? {
+        let runs = runs ?? currentRunID.map { [$0] } ?? []
+        let instructions = messages.filter { $0.runID.map(runs.contains) == true && $0.role == .user }
+            .dropFirst().map(\.text).filter { $0 != Self.resumePrompt }
         guard !instructions.isEmpty else { return nil }
         return "Additional user context recorded during this run (delivery may already have occurred; "
             + "verify completed work instead of replaying instructions):\n"
@@ -3600,6 +3727,11 @@ final class ChatSession: ObservableObject {
         guard !isStreaming, journalError == nil, !queued.isEmpty, !drainAfterGrouping, !childMergeHold else { return }
         // An interrupted run continues before anything queued behind it.
         guard !autoResumePending else { return }
+        // So does a failed one waiting for Continue; Send now on a message skips it.
+        guard !queueHeldByFailedRun else {
+            deliveryStatus = Self.pausedQueueStatus
+            return
+        }
         // Sending while offline would fail each queued message in turn; wait for the network.
         if !isLocalPrivate, settings.backend != .localModel, !NetworkMonitor.shared.isOnline {
             deliveryStatus = "Offline. Queued messages are sent when the network is back."
@@ -3749,6 +3881,7 @@ final class ChatSession: ObservableObject {
         currentRunIncludesAmbientContext = true
         autoResumeSpent = false
         autoResumePending = false
+        interruptionAwaitsResume = false
         restoredRun = nil
         networkRetries = 0
         if let runID = currentRunID ?? lastJournalRunID {

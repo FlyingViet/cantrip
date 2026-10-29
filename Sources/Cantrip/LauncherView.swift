@@ -48,6 +48,8 @@ struct LauncherView: View {
     /// A child tab whose Run in This Tab Instead is waiting for confirmation.
     @State private var requeueingChild: ChildTab?
     @State private var childTabError: String?
+    /// Why Continue on a failed message couldn't start (offline, busy).
+    @State private var continueError: String?
     /// The section header a dragged tab or section is over.
     @State private var sectionDropTarget: String?
     @ObservedObject private var sectionCollapse = TabSectionCollapse.shared
@@ -3046,6 +3048,7 @@ struct LauncherView: View {
                 // is capped at ~30 messages, so laziness buys nothing.
                 VStack(alignment: .leading, spacing: 12) {
                     let repeatedErrorID = session.repeatedErrorMessageID
+                    let continuableIDs = session.continuableMessageIDs
                     if let parentID = manager.parentID(ofChild: session.id), let record = childTabStore.record(session.id) {
                         ChildTabBanner(record: record) { manager.select(parentID) }
                     }
@@ -3056,6 +3059,10 @@ struct LauncherView: View {
                                        openProgressPane(background ? .background : .steps)
                                    },
                                    errorRecovery: message.id == repeatedErrorID ? errorRecovery : nil,
+                                   continueFailed: continuableIDs.contains(message.id) ? {
+                                       continueError = session.continueFailedRun(
+                                           from: message.id, includesAmbientContext: true)
+                                   } : nil,
                                    childAction: { action, child in runChildAction(action, child) },
                                    childTabOpen: message.childResult.map { child in
                                        manager.sessions.contains { $0.id == child.id }
@@ -3070,7 +3077,11 @@ struct LauncherView: View {
                         }
                         .id("status")
                     }
-                    if session.canResume, !session.isStreaming {
+                    if let continueError {
+                        Text(continueError).font(.caption).foregroundStyle(.secondary)
+                    }
+                    // The failed message offers Continue itself; this covers a run whose message is gone.
+                    if session.canResume, !session.isStreaming, continuableIDs.isEmpty {
                         Button {
                             session.resumeInterrupted()
                         } label: {
@@ -3110,6 +3121,7 @@ struct LauncherView: View {
                 scrollConversationToBottom(proxy)
             }
             .onChange(of: session.messages) {
+                continueError = nil
                 scrollConversationToBottom(proxy)
             }
             .onChange(of: session.statusText) {
@@ -3436,6 +3448,8 @@ struct MessageRow: View {
     var openSubagents: ((Bool) -> Void)?
     /// Offered on an error that repeated: the tab is likely stuck on its earlier context.
     var errorRecovery: ErrorRecovery?
+    /// A failed run's last message: picks the task up from where it stopped.
+    var continueFailed: (() -> Void)?
     /// A child tab card's buttons (`ChildTab.actions`).
     var childAction: ((String, ChildTab) -> Void)?
     var childTabOpen = false
@@ -3511,6 +3525,12 @@ struct MessageRow: View {
                 Label(message.text, systemImage: "exclamationmark.triangle")
                     .font(.callout)
                     .foregroundStyle(.orange)
+                if let continueFailed {
+                    Button("Continue", systemImage: "arrow.uturn.forward", action: continueFailed)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Pick this task up from where it stopped")
+                }
                 if let errorRecovery {
                     Text("This error happened twice in a row. Start fresh to drop the earlier context, or try another model.")
                         .font(.caption)

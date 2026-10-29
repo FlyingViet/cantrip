@@ -149,6 +149,8 @@ final class RunJournal {
         /// Automatic resumes after Cantrip relaunched mid-run; bounded so a run that keeps
         /// crashing Cantrip can't loop.
         var launchResumes = 0
+        /// The run failed and was waiting for Continue (not cut off by Cantrip exiting).
+        var stoppedOnFailure = false
 
         var hasProgress: Bool {
             messages.contains {
@@ -166,6 +168,8 @@ final class RunJournal {
 
     /// The attempt reason recorded when a run resumes because Cantrip relaunched.
     static let launchResumeReason = "launch-resume"
+    /// The interruption recorded for a run restored after Cantrip exited mid-run.
+    static let exitInterruptionReason = "Cantrip exited before the run reached a terminal state."
 
     static var defaultDirectory: URL {
         CantripPaths.cache("runs")
@@ -589,8 +593,10 @@ final class RunJournal {
                     event.attemptNumber ?? recovered.attemptNumber
                 )
                 if event.reason == Self.launchResumeReason { recovered.launchResumes += 1 }
+                recovered.stoppedOnFailure = false
             case .interruption:
                 recovered.lastInterruptionReason = event.reason
+                if event.reason != Self.exitInterruptionReason { recovered.stoppedOnFailure = true }
             default:
                 break
             }

@@ -181,6 +181,10 @@ extension SessionTabTests {
         precondition(recovered.messages.contains { $0.text.contains("RECOVERY_CONSTRAINT") })
         precondition(recovered.queued.isEmpty, "accepted steering cannot reappear in the recovered queue")
         backend.sink?(.failure("fixture disconnect"))
+        // The failed run waits for Continue on its message.
+        try await waitForJournalTest { chat.canResume }
+        guard let failed = chat.messages.last(where: { $0.role == .error }) else { preconditionFailure() }
+        precondition(chat.continueFailedRun(from: failed.id, includesAmbientContext: false) == nil)
         try await waitForJournalTest { backend.requests.count == 2 }
         precondition(backend.requests[1].prompt.contains("RECOVERY_CONSTRAINT"))
         precondition(backend.requests[1].prompt.contains("already-changed.swift"))
