@@ -137,11 +137,20 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   that tab's ID, so Cantrip acts on exactly that tab. Sent mentions read **@Title** and open
   the tab when clicked. Needs a Cantrip host with `supportsTabMentions`. Shared with iOS (see
   Hermes' README, *Mention a tab with @*).
+- **Terminal:** the toolbar's terminal button (or ⌃`) opens the tab's shell on the Mac under its
+  conversation: the same persistent shell as the Cantrip panel's terminal mode, so `cd`, exports
+  and history carry across devices, and the agent's own commands appear there too. Type a line
+  and press Return (while a command runs, the line goes to its input); Up/Down browse history,
+  ⌃C interrupts, and the pane has Clear, Restart Shell and Close. Drag its top edge to resize.
+  The button turns orange while a command runs with the pane hidden. Line-based, so full-screen
+  programs such as `vim` or `top` don't work. Not in Private Local. Needs a Cantrip host with
+  `supportsTerminal`.
 - **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS),
   delivery mode, Refresh (⌘R) and More (model settings, usage limits, voice mode,
   pause, memory (formatted Markdown or its source), builds, mascot, Cantrip maintenance).
 - **Keyboard:** ⌘1–⌘3 switch sections, ⌘4 opens Local Model, ⌘T opens a new tab and ⌘N
-  focuses a new message. ⇧⌘V opens voice mode and ⇧⌘P pauses the agent.
+  focuses a new message. ⇧⌘V opens voice mode, ⇧⌘P pauses the agent and ⌃` shows or hides the
+  terminal.
 
 When a tab Home handed work to finishes, fails, stops or needs an answer, a result card in
 the chat shows its outcome; **Open tab** opens that tab right in the window. Not on the Mac:

@@ -116,6 +116,7 @@ targets:
       - path: Hermes/Tests/CantripChildTabsTests.swift
       - path: Hermes/Tests/CantripThreadTagsTests.swift
       - path: Hermes/Tests/CantripTabMentionsTests.swift
+      - path: Hermes/Tests/CantripTerminalTests.swift
     dependencies:
       - target: CantripGatewayMac
     settings:

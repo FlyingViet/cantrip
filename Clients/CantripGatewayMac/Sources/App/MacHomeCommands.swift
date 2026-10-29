@@ -47,6 +47,8 @@ struct MacHomeCommands: Commands {
                 Task { await remote.startFresh(sessionID: id) }
             }
             .disabled(startFreshTabID == nil)
+            Button("Toggle Terminal") { navigation.showingTerminal.toggle() }
+            .keyboardShortcut("`", modifiers: .control)
             Button("Copilot Usage") { navigation.sheet = .usage }
             Button("Cantrip Memory") { navigation.sheet = .memory }
             Button("GitHub Builds") { navigation.sheet = .builds }

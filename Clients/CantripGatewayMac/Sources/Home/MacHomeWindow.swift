@@ -237,6 +237,7 @@ struct MacHomeWindow: View {
                     .disabled(remote.isMutating || vm.sending)
                     .help("Delivery: how a message reaches a working tab")
             }
+            MacTerminalButton(navigation: navigation, session: remote.selectedSession)
             tabMenu
         }
     }
@@ -289,6 +290,7 @@ struct MacHomeWindow: View {
             if navigation.section == .chat, remote.selectedSession != nil {
                 CantripDeliveryPicker(deliveryMode: $vm.remoteDeliveryMode, compact: true)
                     .disabled(remote.isMutating || vm.sending)
+                MacTerminalButton(navigation: navigation, session: remote.selectedSession)
             }
             Button {
                 Task { await remote.refreshNow() }
