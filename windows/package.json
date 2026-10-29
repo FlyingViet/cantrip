@@ -1,6 +1,6 @@
 {
   "name": "cantrip-windows",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A keyboard-first Windows AI launcher inspired by Cantrip",
   "main": "dist-electron/main/main.js",
   "author": "FlyingViet",
