@@ -165,6 +165,40 @@ final class CopilotUsageTests: XCTestCase {
         XCTAssertFalse(model.snapshot!.account!.primary!.summary.contains("requests"))
     }
 
+    func testClaudeLimitsDecodeAndLeadTheHeaderWhenTheMacRunsClaude() async throws {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        func data(backend: String?, checked: Date = now, sessionReset: Date = now.addingTimeInterval(3600)) throws -> Data {
+            var object = try JSONSerialization.jsonObject(with: fixture(remaining: 0, amount: 0)) as! [String: Any]
+            object["claude"] = ["checkedAt": iso.string(from: checked), "account": ["plan": "max", "windows": [
+                ["id": "five_hour", "percentUsed": 12, "resetsAt": iso.string(from: sessionReset), "severity": "normal"],
+                ["id": "seven_day", "percentUsed": 32.4, "resetsAt": iso.string(from: now.addingTimeInterval(86400 * 4))],
+            ]]]
+            if let backend { object["activeBackend"] = backend }
+            return try JSONSerialization.data(withJSONObject: object)
+        }
+        let decoder = JSONDecoder()
+        let snapshot = try decoder.decode(CopilotUsageSnapshot.self, from: data(backend: "Claude Code"))
+        XCTAssertEqual(snapshot.claude?.account?.windows.map(\.id), ["five_hour", "seven_day"])
+        XCTAssertEqual(snapshot.claude?.account?.primary?.title, "Weekly limit")
+        XCTAssertFalse(snapshot.claude!.isStale(at: now))
+        XCTAssertTrue(snapshot.leadsWithClaude)
+
+        let model = CopilotUsageModel()
+        await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: data(backend: "Claude Code")) }
+        XCTAssertEqual(model.headerText(at: now), "Week 32%", "The Mac runs Claude: its closest limit leads")
+        XCTAssertEqual(model.accessibilityValue(at: now), "Claude weekly limit 32% used")
+        await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: data(backend: "Claude Code", sessionReset: now.addingTimeInterval(-1))) }
+        XCTAssertEqual(model.headerText(at: now), "Stale", "A window that reset since it was read is stale")
+        await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: data(backend: "Copilot")) }
+        XCTAssertEqual(model.headerText(at: now, locale: Locale(identifier: "en_US")), "1M / 1M",
+                       "On Copilot the allowance leads")
+        // Macs before Claude limits send neither field.
+        let old = try decoder.decode(CopilotUsageSnapshot.self, from: fixture(remaining: 0, amount: 0))
+        XCTAssertNil(old.claude)
+        XCTAssertFalse(old.leadsWithClaude)
+    }
+
     func testCreditAmountsPrecisionMissingValuesAndLegacyUnits() async throws {
         let locale = Locale(identifier: "en_US")
         let model = CopilotUsageModel()
