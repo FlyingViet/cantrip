@@ -146,6 +146,7 @@ struct SessionTabTests {
         try testPromptPaging()
         try await testPromptPreparation()
         try await testCopilotUsage()
+        try await testClaudeUsage()
         try await testCopilotModels()
         try await testSessionModelSettings()
         try await testStartFresh()
@@ -290,7 +291,7 @@ struct SessionTabTests {
         let usage = UsageTracker(quotaLoader: { completion in
             quotaCalls += 1
             completion(.failure(CopilotQuotaError.authentication))
-        })
+        }, claudeLoader: nil)
         let server = RemoteControlServer(manager: manager, usage: usage)
         let port = Int.random(in: 49152...65535)
         let token = UUID().uuidString

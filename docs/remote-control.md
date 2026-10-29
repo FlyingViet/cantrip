@@ -804,27 +804,34 @@ not successful; inspect the checkout before retrying. Restart errors are
 logged to `~/Library/Logs/Cantrip-restart.log`. This updates only the selected
 Mac, not other hosts or the iPhone app.
 
-### See Copilot account usage in Cantrip Agent
+### See usage limits in Cantrip Agent
 
 Tap the **usage gauge beside the Local/Remote lane picker (antenna)** in
-Cantrip Agent's top header. It shows **AI credits used / total** in compact
-form, with full amounts and a secondary percentage progress bar in the details.
-Details also include reset time, additional usage, and the Copilot account
-signed in on the Mac. It is available from every chat lane;
-it does not switch sessions or change which backend receives your messages.
+Cantrip Agent's top header. It leads with the limit your Mac's backend uses:
+on Claude Code, the Claude window closest to its limit (for example
+`Week 32%`); on Copilot, **AI credits used / total**. **Usage Limits** shows
+both: Claude Code's 5-hour session and weekly limits (and per-model weekly
+limits when the plan has them) with reset times, then the Copilot allowance
+with its reset time, additional usage and account. It is available from every
+chat lane; it does not switch sessions or change which backend receives your
+messages. Cantrip Gateway (Mac and Windows) has the same sheet.
 
-Update both apps and reopen the Cantrip Mac host. The Mac needs Node.js and a
-recent Copilot CLI with the account SDK (tested with CLI 1.0.83); sign in through
-Copilot. The reader discovers the installed SDK/runtime, makes account-only
-calls, and stops its separate runtime without creating a session or invoking
-a model. It replaces the old billing-report estimate in the Mac's **Usage** panel.
+The Mac reads the limits the way the providers' own tools do, in well under a
+second: Claude's usage API with Claude Code's sign-in from the login keychain
+(read only, never refreshed, so Claude Code's own sign-in is untouched), and
+GitHub's Copilot allowance endpoint with the `gh` sign-in. When `gh` isn't
+signed in, it falls back to the Copilot SDK reader (Node.js and a recent
+Copilot CLI). It refreshes every five minutes on its own, and a Claude window
+at 100% sends new messages to the usage limit fallback right away.
 
 Pairing-authenticated, read-only `GET /api/v1/copilot/usage` returns a cached
-snapshot immediately and starts a background lookup at most once a minute.
-Mac and mobile share that cache. Only allowlisted quota/subscription fields
-leave the Mac, never the SDK authentication payload or credentials. The phone
-polls while foregrounded; pull-to-refresh does not bypass the host throttle.
-Re-pairing clears the phone's old account snapshot.
+snapshot immediately and starts a background lookup at most once a minute:
+Copilot's allowance at the top level, Claude Code's limits under `claude`
+(`account.windows[]`: `id`, `percentUsed`, `resetsAt`, `severity`,
+`lockedReason`; `checkedAt`, `error`), and `activeBackend`. Mac and mobile
+share that cache. Only these fields leave the Mac, never tokens or
+authentication payloads. The phone polls while foregrounded; pull-to-refresh
+does not bypass the host throttle. Re-pairing clears the phone's old snapshot.
 
 Credit/token amounts use the reported credit units directly, not prompt counts.
 Missing amounts remain unavailable, not inferred from rounded percentages.

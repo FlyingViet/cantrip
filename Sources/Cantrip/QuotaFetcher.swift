@@ -15,7 +15,81 @@ enum CopilotQuotaError: String, Error, LocalizedError {
 }
 
 enum QuotaFetcher {
+    /// GitHub's own allowance endpoint with the `gh` sign-in: one request, well under a second.
+    /// Falls back to asking the Copilot SDK (seconds, a separate runtime) when that doesn't work.
     static func fetchCopilotQuota(completion: @escaping (Result<CopilotAccountUsage, Error>) -> Void) {
+        fetchCopilotQuotaDirect { result in
+            if case .success = result { return completion(result) }
+            fetchCopilotQuotaFromSDK(completion: completion)
+        }
+    }
+
+    static let copilotUserEndpoint = URL(string: "https://api.github.com/copilot_internal/user")!
+
+    static func fetchCopilotQuotaDirect(completion: @escaping (Result<CopilotAccountUsage, Error>) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            guard let gh = ToolLocator.shared.gh,
+                  let run = try? ProcessRunner.run(gh, ["auth", "token"], errorOutput: .discard, timeout: 10),
+                  run.status == 0, !run.timedOut,
+                  let token = String(data: run.output, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else {
+                return completion(.failure(CopilotQuotaError.unavailable))
+            }
+            var request = URLRequest(url: copilotUserEndpoint, timeoutInterval: 15)
+            request.setValue("token \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            URLSession.shared.dataTask(with: request) { data, response, _ in
+                guard (response as? HTTPURLResponse)?.statusCode == 200, let data,
+                      let account = copilotAccount(fromUser: data) else {
+                    return completion(.failure(CopilotQuotaError.response))
+                }
+                completion(.success(account))
+            }.resume()
+        }
+    }
+
+    /// The allowance buckets from GitHub's Copilot user payload, as the SDK probe projects them.
+    static func copilotAccount(fromUser data: Data) -> CopilotAccountUsage? {
+        guard let user = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let snapshots = user["quota_snapshots"] as? [String: [String: Any]] else { return nil }
+        func number(_ value: Any?) -> Double? {
+            (value as? NSNumber).map(\.doubleValue).flatMap { $0.isFinite ? $0 : nil }
+        }
+        func date(_ value: Any?) -> String? {
+            (value as? String).flatMap { ISODate.date(from: $0) }.map(ISODate.string(from:))
+        }
+        let userBilling = user["token_based_billing"] as? Bool
+        let userReset = date(user["quota_reset_date_utc"]) ?? date(user["quota_reset_date"])
+        var buckets: [CopilotQuotaBucket] = []
+        for id in ["premium_interactions", "chat", "completions"] {
+            guard let s = snapshots[id] else { continue }
+            let entitlement = number(s["entitlement"])
+            let unlimited = s["unlimited"] as? Bool ?? (entitlement == -1)
+            let remaining = number(s["quota_remaining"]) ?? number(s["remaining"])
+            var percent: Double?
+            if let entitlement, entitlement > 0, let remaining { percent = remaining / entitlement * 100 }
+            else { percent = number(s["percent_remaining"]) }
+            let billing = s["token_based_billing"] as? Bool ?? userBilling
+            let epoch = number(s["quota_reset_at"]) ?? 0
+            let reset = epoch > 0 && epoch < 253_402_300_800
+                ? ISODate.string(from: Date(timeIntervalSince1970: epoch)) : userReset
+            buckets.append(CopilotQuotaBucket(
+                id: id, billingMode: billing == true ? "credits" : billing == false ? "requests" : "unknown",
+                isUnlimited: unlimited,
+                remainingPercent: unlimited ? nil : percent.map { max(0, min(100, $0)) },
+                entitlement: (entitlement ?? -1) >= 0 ? entitlement : nil,
+                remaining: (remaining ?? -1) >= 0 ? remaining : nil,
+                overage: number(s["overage_count"]), overageAllowed: s["overage_permitted"] as? Bool,
+                resetAt: reset, observedAt: date(s["timestamp_utc"])
+            ))
+        }
+        guard !buckets.isEmpty else { return nil }
+        return CopilotAccountUsage(login: (user["login"] as? String).map { String($0.prefix(100)) },
+                                   plan: (user["copilot_plan"] as? String).map { String($0.prefix(100)) },
+                                   buckets: buckets)
+    }
+
+    static func fetchCopilotQuotaFromSDK(completion: @escaping (Result<CopilotAccountUsage, Error>) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             do {
                 var environment = ProcessInfo.processInfo.environment

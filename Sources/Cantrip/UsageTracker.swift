@@ -28,9 +28,11 @@ final class UsageTracker: ObservableObject {
     var copilotQuota: String? { copilotUsage.summary }
     private var lastQuotaRefresh = Date.distantPast
     private let quotaLoader: (@escaping (Result<CopilotAccountUsage, Error>) -> Void) -> Void
+    private let claudeLoader: ((@escaping (Result<ClaudeAccountUsage, Error>) -> Void) -> Void)?
     private let quotaClock: () -> Date
+    private var autoRefresh: Timer?
 
-    /// Mac and Remote share one single-flight, once-per-minute account lookup.
+    /// Mac and Remote share one single-flight, once-per-minute lookup of every backend's limits.
     func refreshQuotas() {
         guard Thread.isMainThread else {
             DispatchQueue.main.async { self.refreshQuotas() }
@@ -39,10 +41,12 @@ final class UsageTracker: ObservableObject {
         guard !copilotUsage.isRefreshing, quotaClock().timeIntervalSince(lastQuotaRefresh) >= 60 else { return }
         lastQuotaRefresh = quotaClock()
         copilotUsage.isRefreshing = true
+        let group = DispatchGroup()
+        group.enter()
         quotaLoader { [weak self] result in
             DispatchQueue.main.async {
+                defer { group.leave() }
                 guard let self else { return }
-                self.copilotUsage.isRefreshing = false
                 switch result {
                 case .success(let account):
                     self.copilotUsage.account = account
@@ -52,6 +56,49 @@ final class UsageTracker: ObservableObject {
                     self.copilotUsage.error = ((error as? CopilotQuotaError) ?? .response).localizedDescription
                 }
             }
+        }
+        if let claudeLoader {
+            group.enter()
+            claudeLoader { [weak self] result in
+                DispatchQueue.main.async {
+                    defer { group.leave() }
+                    self?.apply(claude: result)
+                }
+            }
+        }
+        group.notify(queue: .main) { [weak self] in self?.copilotUsage.isRefreshing = false }
+    }
+
+    private func apply(claude result: Result<ClaudeAccountUsage, Error>) {
+        var state = copilotUsage.claude ?? ClaudeUsageState()
+        switch result {
+        case .success(let account):
+            state = ClaudeUsageState(account: account, checkedAt: ISODate.string(from: quotaClock()), error: nil)
+            // A window at its limit sends new messages to the fallback backend before Claude refuses one.
+            if let full = account.windows.filter(\.isExhausted)
+                .max(by: { (copilotDate($0.resetsAt) ?? .distantPast) < (copilotDate($1.resetsAt) ?? .distantPast) }) {
+                BackendLimitTracker.shared.markLimited(
+                    .claudeCode, message: "Claude \(full.title.lowercased()) reached",
+                    report: UsageLimitReport(code: "usage/\(full.id)", resetsAt: copilotDate(full.resetsAt)),
+                    now: quotaClock()
+                )
+            }
+        case .failure(let error):
+            state.error = ((error as? ClaudeUsageError) ?? .response).localizedDescription
+        }
+        copilotUsage.claude = state
+    }
+
+    /// Keeps the limits fresh without anyone looking, like Opsboard: every five minutes.
+    func startAutoRefresh(every interval: TimeInterval = 300) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.startAutoRefresh(every: interval) }
+            return
+        }
+        autoRefresh?.invalidate()
+        refreshQuotas()
+        autoRefresh = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.refreshQuotas()
         }
     }
     /// Bumped on every write so views refresh.
@@ -63,14 +110,21 @@ final class UsageTracker: ObservableObject {
 
     init(
         quotaLoader: @escaping (@escaping (Result<CopilotAccountUsage, Error>) -> Void) -> Void = QuotaFetcher.fetchCopilotQuota,
+        claudeLoader: ((@escaping (Result<ClaudeAccountUsage, Error>) -> Void) -> Void)? = UsageTracker.defaultClaudeLoader,
         quotaClock: @escaping () -> Date = Date.init
     ) {
         self.quotaLoader = quotaLoader
+        self.claudeLoader = claudeLoader
         self.quotaClock = quotaClock
         if let data = d.data(forKey: rateLimitKey),
            let saved = try? JSONDecoder().decode(RateLimit.self, from: data) {
             rateLimit = saved
         }
+    }
+
+    /// Claude's limits when Claude Code is installed; nil leaves them out.
+    static var defaultClaudeLoader: ((@escaping (Result<ClaudeAccountUsage, Error>) -> Void) -> Void)? {
+        ToolLocator.shared.claude(configured: AppSettings.shared.claudePath) == nil ? nil : ClaudeUsageFetcher.fetch
     }
 
     // MARK: - Recording
