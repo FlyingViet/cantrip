@@ -714,6 +714,11 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsContinueFromMessage: Bool? = nil
     /// Error rows that offer Continue: each failed run's latest error; empty while the tab works.
     var continuableMessageIDs: [String]? = nil
+    /// The tab's persistent shell is open to paired clients (`…/terminal`). Nil from older Macs;
+    /// false for Private Local.
+    var supportsTerminal: Bool? = nil
+    /// A command (the user's or the agent's) is running in that shell.
+    var terminalBusy: Bool? = nil
     /// Queued messages can run in child tabs (`POST …/queue/{id}/fork`). Nil from older Macs.
     var supportsChildTabs: Bool? = nil
     /// Queued messages carry the Mac's suggested `plan`. Nil from older Macs.
@@ -2521,6 +2526,29 @@ struct CantripRemoteAPI {
         return response.session
     }
 
+    /// The tab's terminal output after `from` in `epoch` (all of it, `reset`, when unknown).
+    func terminal(sessionID: String, from: Int?, epoch: String?) async throws -> CantripTerminalSnapshot {
+        try await request(path: try Self.terminalPath(sessionID: sessionID, action: nil, from: from, epoch: epoch))
+    }
+
+    /// Runs a command line (`action` nil) or `interrupt`, `clear` or `restart` in the tab's shell.
+    func terminal(_ action: String?, command: String? = nil, sessionID: String,
+                  from: Int?, epoch: String?) async throws -> CantripTerminalSnapshot {
+        let body = try JSONSerialization.data(withJSONObject: command.map { ["command": $0] } ?? [String: String]())
+        return try await request(path: try Self.terminalPath(sessionID: sessionID, action: action, from: from, epoch: epoch),
+                                 method: "POST", body: body)
+    }
+
+    static func terminalPath(sessionID: String, action: String?, from: Int?, epoch: String?) throws -> String {
+        var path = "/api/v1/sessions/\(try pathComponent(sessionID))/terminal"
+        if let action { path += "/\(try pathComponent(action))" }
+        var components = URLComponents()
+        components.queryItems = [from.map { URLQueryItem(name: "from", value: String($0)) },
+                                 epoch.map { URLQueryItem(name: "epoch", value: $0) }].compactMap { $0 }
+        if let query = components.percentEncodedQuery, !query.isEmpty { path += "?" + query }
+        return path
+    }
+
     private func request<Response: Decodable>(
         path: String,
         method: String = "GET",
@@ -3908,6 +3936,27 @@ final class CantripRemoteModel: ObservableObject {
 
     func privateLocalSettings(id: String) async throws -> CantripPrivateLocalSettings {
         try await performHistoryRead { try await $0.privateLocalSettings(id: id) }
+    }
+
+    /// Reads a tab's terminal; never holds the polling/mutation gate.
+    func terminal(sessionID: String, from: Int?, epoch: String?) async throws -> CantripTerminalSnapshot {
+        try await performHistoryRead { try await $0.terminal(sessionID: sessionID, from: from, epoch: epoch) }
+    }
+
+    /// Sends a terminal command or action on one route, without retrying elsewhere (a command
+    /// must never run twice) and without holding the chat's mutation gate.
+    func terminal(_ action: String?, command: String? = nil, sessionID: String,
+                  from: Int?, epoch: String?) async throws -> CantripTerminalSnapshot {
+        guard let token else { throw missingTokenError }
+        let generation = configurationGeneration
+        updateRoutes()
+        let writer = router.independentReader()
+        let result = try await writer.perform(readOnly: false) { transport in
+            try await CantripRemoteAPI(transport: transport, token: token, urlSession: urlSession)
+                .terminal(action, command: command, sessionID: sessionID, from: from, epoch: epoch)
+        }
+        guard generation == configurationGeneration else { throw CancellationError() }
+        return result
     }
 
     /// The Mac-wide backend runs move to when the Mac's backend reports its usage limit.
