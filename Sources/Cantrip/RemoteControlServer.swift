@@ -1605,6 +1605,19 @@ final class RemoteControlServer {
             session.cancel()
             sendSession(session, recentExchanges: recentExchanges, on: connection)
         case "resume":
+            // Continue on a failed run's message: {"messageID": …} from `continuableMessageIDs`.
+            if let raw = json?["messageID"] {
+                guard let messageID = (raw as? String).flatMap(UUID.init(uuidString:)) else {
+                    sendError(400, "messageID must be a message UUID.", on: connection)
+                    return
+                }
+                if let reason = session.continueFailedRun(from: messageID, includesAmbientContext: false) {
+                    sendError(409, reason, on: connection)
+                    return
+                }
+                sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
+                return
+            }
             guard session.canResume, !session.isStreaming else {
                 sendError(409, "session is not resumable", on: connection)
                 return
@@ -2160,6 +2173,9 @@ final class RemoteControlServer {
         if let repeated = session.repeatedErrorMessageID {
             result["repeatedErrorMessageID"] = repeated.uuidString
         }
+        // Failed runs' messages that offer Continue (POST …/resume with {"messageID"}).
+        result["supportsContinueFromMessage"] = true
+        result["continuableMessageIDs"] = session.continuableMessageIDs.map(\.uuidString).sorted()
         if session.isCantripHome {
             // Drives the Background button badge without fetching the run list.
             result["supportsBackgroundRuns"] = true
@@ -3305,6 +3321,9 @@ private extension RemoteControlServer {
       catch(error){$("tabError").textContent=`Start Fresh failed: ${error.message}`}
       finally{tabSaving=false;$("tabStartFresh").disabled=false}};
     async function startFresh(id){await api(`/api/v1/sessions/${id}/start-fresh`,{method:"POST"});renderedPayload="";await refresh()}
+    function appendContinue(row,session,messageID){const actions=document.createElement("div"),button=document.createElement("button");actions.className="error-actions";button.className="control";button.textContent="Continue";button.title="Pick this task up from where it stopped";
+      button.onclick=async()=>{button.disabled=true;$("actionError").textContent="";try{await api(`/api/v1/sessions/${session.id}/resume`,{method:"POST",body:JSON.stringify({messageID})});await refresh()}catch(error){$("actionError").textContent=`Continue failed: ${error.message}`;button.disabled=false}};
+      actions.append(button);row.append(actions)}
     function appendErrorRecovery(row,session){const note=document.createElement("p"),actions=document.createElement("div"),fresh=document.createElement("button"),model=document.createElement("button"),busy=Boolean(session.isStreaming||session.queuedCount);
       note.className="muted";note.textContent="This error happened twice in a row. Start fresh to drop the earlier context, or try another model.";actions.className="error-actions";
       fresh.className="control";fresh.textContent="Start Fresh";fresh.disabled=busy;model.className="control";model.textContent=session.isLocalPrivate?"Private Local Settings":"Change Model";model.disabled=busy;
@@ -3879,7 +3898,7 @@ private extension RemoteControlServer {
     function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight,anchor=prepend?visibleHistoryAnchor():null;
       $("inputBanner").classList.toggle("hidden",!session?.pendingInputs?.some(r=>r.kind==="secret"));$("inputBanner").textContent="Enter password securely";
       renderProgress(session);updateHistoryControls(session);const liveBox=$("messages"),box=document.createElement("div"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
-      const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession),scrollRevision=++renderScrollRevision;renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;if(!sameSession)historyReading=false;$("resume").classList.toggle("hidden",!session?.canResume);$("stop").classList.toggle("hidden",!session?.isStreaming);
+      const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession),scrollRevision=++renderScrollRevision;renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;if(!sameSession)historyReading=false;$("resume").classList.toggle("hidden",!session?.canResume||Boolean(session?.continuableMessageIDs?.length));$("stop").classList.toggle("hidden",!session?.isStreaming);
       const pinned=[];if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{if(session.isLocalPrivate){const notice=document.createElement("p");notice.className="muted";notice.textContent="Private Local - saved on the Mac and available remotely. Self-hosted models; no cloud fallback. Configure the server in the tab menu.";box.append(notice)}
         if(session.child)box.append(childBanner(session));
@@ -3890,6 +3909,7 @@ private extension RemoteControlServer {
           if(message.thread&&message.role!=="user"){row.classList.add("threaded");link=threadQuote(session.id,message);row.append(link)}
           appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);const replies=session.threadReplies?.[message.id];if(replies>0)row.append(threadRepliesButton(session.id,message,replies));if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
           if(message.role==="error"&&session.supportsStartFresh&&message.id===session.repeatedErrorMessageID)appendErrorRecovery(row,session);
+          if(message.role==="error"&&session.continuableMessageIDs?.includes(message.id))appendContinue(row,session,message.id);
           if(handoffs.length){const stack=document.createElement("div");stack.className="handoffs";for(const handoff of handoffs)stack.append(handoffCard(handoff));row.append(stack)}appendActivities(row,activities,message.id);
           if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
             const requestToken=token;button.disabled=true;try{const data=await api(`/api/v1/sessions/${session.id}/messages/${message.id}`);if(token!==requestToken||selected!==session.id)return;
