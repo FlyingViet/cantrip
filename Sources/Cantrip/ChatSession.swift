@@ -118,6 +118,10 @@ extension ChatMessage {
         } else {
             role = handoffResult == nil && childResult == nil ? storedRole : .handoff
         }
+        if role == .assistant, text.contains("](conversation://") {
+            activities = AntigravitySubagentTranscript.reconstructedActivities(fromText: text)
+            recordSubagentEnds()
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1366,7 +1370,7 @@ final class ChatSession: ObservableObject {
     }
 
     private func restoredActivity(_ activity: RunJournal.Activity) -> ToolActivity {
-        ToolActivity(
+        let toolActivity = ToolActivity(
             id: activity.id,
             title: activity.title,
             toolName: activity.toolName,
@@ -1379,6 +1383,7 @@ final class ChatSession: ObservableObject {
             terminalCommand: activity.terminalCommand,
             children: activity.children.map(restoredActivity)
         )
+        return AntigravitySubagentTranscript.enriched(toolActivity)
     }
 
     private func restoredActivityState(_ state: String) -> ToolActivityState {

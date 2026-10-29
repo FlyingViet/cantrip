@@ -32,7 +32,28 @@ enum TabMentions {
         pattern: #"@\[([^\[\]\n]{1,120})\]\(cantrip-tab:([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\)"#
     )
 
+    private nonisolated static let conversationLinkRegex = try! NSRegularExpression(
+        pattern: #"(?:\*\*)?\[([^\[\]\n]{1,200})\]\(conversation://[^\s)]+\)(?:\*\*)?"#
+    )
+
     // MARK: - Tokens
+
+    /// Rewrites Antigravity internal `[label](conversation://<id>)` links as bold labels so macOS
+    /// and Gateway clients never try to open an unregistered `conversation://` URL scheme.
+    nonisolated static func stripConversationLinks(_ text: String) -> String {
+        guard text.contains("](conversation://") else { return text }
+        let whole = NSRange(text.startIndex..., in: text)
+        var result = text
+        for match in conversationLinkRegex.matches(in: text, range: whole).reversed() {
+            guard let fullRange = Range(match.range, in: text),
+                  let labelRange = Range(match.range(at: 1), in: text) else { continue }
+            let rawLabel = String(text[labelRange]).trimmingCharacters(in: .whitespaces)
+            let cleaned = rawLabel.replacingOccurrences(of: "**", with: "")
+            let replacement = cleaned.isEmpty ? rawLabel : "**\(cleaned)**"
+            result.replaceSubrange(fullRange, with: replacement)
+        }
+        return result
+    }
 
     nonisolated static func parse(_ text: String) -> [Mention] {
         let whole = NSRange(text.startIndex..., in: text)
@@ -72,6 +93,7 @@ enum TabMentions {
 
     /// For Markdown renderers: each token becomes bold "@Label", never a link.
     nonisolated static func markdown(_ text: String) -> String {
+        let text = stripConversationLinks(text)
         guard text.contains("](\(scheme):") else { return text }
         var result = text
         for mention in parse(text).reversed() {
