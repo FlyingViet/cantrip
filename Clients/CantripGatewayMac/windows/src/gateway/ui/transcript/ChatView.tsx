@@ -28,6 +28,7 @@ import { chatQuestion, composerAcceptsText, composerPlaceholder, InputTranscript
 import { ChildBanner } from "./ChildTabs";
 import { MessageRow, ThinkingIndicator } from "./Message";
 import { useSlashSuggestions } from "./SlashSuggestions";
+import { TerminalPane } from "./TerminalPane";
 import { MentionChips, useTabMentions } from "./TabMentions";
 import "./transcript.css";
 
@@ -81,6 +82,7 @@ export function ChatView(props: { isTab: boolean }): JSX.Element {
         <div class="pinned-column"><PinnedSubagents sessionID={session.id} subagents={pinned} maxHeight={Math.max(120, height * 0.35)} /></div>
       ) : null}
       <InputBar session={session} isTab={props.isTab} height={height} handle={composer} />
+      {nav.terminalOpen.value && session ? <TerminalPane session={session} /> : null}
     </div>
   );
 }

@@ -186,7 +186,7 @@ function openExternally(url: string): void {
 /** App commands the Gateway page runs (menu items on macOS, the page's own shortcuts on Windows). */
 export type GatewayCommand =
   | "chat" | "tasks" | "artifacts" | "background" | "newTab" | "newMessage" | "refresh" | "voiceMode"
-  | "togglePause" | "modelSettings" | "startFresh" | "usage" | "memory" | "builds" | "mascot";
+  | "togglePause" | "modelSettings" | "startFresh" | "usage" | "memory" | "builds" | "mascot" | "toggleTerminal";
 
 function sendCommand(command: GatewayCommand): void {
   if (!mainWindow) return;
@@ -556,6 +556,7 @@ function buildMenu(): void {
         command("Pause Agent", "togglePause", "Shift+Cmd+P"),
         { type: "separator" },
         command("Model Settings…", "modelSettings", "Cmd+;"), command("Start Fresh", "startFresh"),
+        command("Toggle Terminal", "toggleTerminal", "Ctrl+`"),
         command("Usage Limits", "usage"), command("Cantrip Memory", "memory"), command("GitHub Builds", "builds"),
         command("Customize Mascot…", "mascot"),
       ],

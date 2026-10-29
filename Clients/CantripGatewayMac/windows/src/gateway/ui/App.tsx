@@ -51,6 +51,7 @@ export function runCommand(command: GatewayCommand): void {
     case "memory": nav.sheet.value = { kind: "memory" }; break;
     case "builds": nav.sheet.value = { kind: "builds" }; break;
     case "mascot": nav.sheet.value = { kind: "mascot" }; break;
+    case "toggleTerminal": if (nav.section.value === "chat" || nav.openTabID.value) nav.terminalOpen.value = !nav.terminalOpen.value; break;
   }
 }
 
@@ -58,6 +59,7 @@ export function runCommand(command: GatewayCommand): void {
 function shortcutCommand(event: KeyboardEvent): GatewayCommand | null {
   const primary = bridge.platform === "darwin" ? event.metaKey : event.ctrlKey;
   if (event.key === "F5") return "refresh";
+  if (event.key === "`" && event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) return "toggleTerminal";
   if (!primary || event.altKey) return null;
   const key = event.key.toLowerCase();
   if (event.shiftKey) return key === "v" ? "voiceMode" : key === "p" ? "togglePause" : null;

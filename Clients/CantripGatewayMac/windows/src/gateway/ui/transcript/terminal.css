@@ -1,0 +1,18 @@
+/* The tab's terminal pane (MacTerminalPane.swift): full width under the input bar. */
+.terminal-pane { flex: none; display: flex; flex-direction: column; min-height: 120px; border-top: 0.5px solid var(--separator); background: #1a1a1b; position: relative; }
+.terminal-resize { position: absolute; top: -3px; left: 0; right: 0; height: 7px; cursor: ns-resize; z-index: 1; }
+.terminal-resize:hover { background: rgba(255, 255, 255, 0.06); }
+.terminal-header { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 0.5px solid var(--separator); }
+.terminal-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; color: var(--text); flex: none; }
+.terminal-workdir { font-family: var(--mono); font-size: 11.5px; color: var(--secondary); min-width: 0; }
+.terminal-header .icon-btn { width: 26px; height: 26px; border-radius: 6px; }
+.terminal-output { flex: 1; min-height: 0; margin: 0; padding: 8px 12px; overflow: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.45; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.terminal-notice { font-family: var(--font); font-size: 13px; color: var(--secondary); padding-bottom: 6px; white-space: normal; }
+.terminal-notice.orange { color: var(--orange); }
+.terminal-prompt { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-top: 0.5px solid var(--separator); }
+.terminal-dollar { font-family: var(--mono); font-weight: 700; color: var(--accent); }
+.terminal-prompt input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--text); font-family: var(--mono); font-size: 13px; padding: 2px 0; }
+.terminal-prompt input::placeholder { color: var(--tertiary); }
+.terminal-prompt input:disabled { opacity: 0.5; }
+.glass-btn.active { background: rgba(255, 255, 255, 0.12); }
+.tint-accent { color: var(--accent); }
