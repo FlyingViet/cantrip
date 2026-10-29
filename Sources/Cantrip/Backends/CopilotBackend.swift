@@ -75,6 +75,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         let newRuntime: Bool
         let startedAt: Date
         var accepted = false
+        /// Copilot said the plan is used up: the failure that follows isn't a broken runtime.
+        var usageLimited = false
         /// Text, reasoning, tool activity, approvals or steering reached this turn. Replaying it
         /// could repeat work, so a lost runtime then ends the turn instead of retrying.
         var visibleOutput = false
@@ -760,10 +762,18 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                     idle = true
                     ready = false
                     finishIfIdle()
+                case "usageLimit":
+                    let message = object["message"] as? String ?? ""
+                    guard let report = UsageLimit.copilotReport(
+                        errorType: object["errorType"] as? String, errorCode: object["errorCode"] as? String,
+                        message: message) else { continue }
+                    attempt?.usageLimited = true
+                    onEvent?(.usageLimit(report))
                 case "failure":
                     let message = object["message"] as? String ?? "Copilot session failed."
                     // An idle runtime that rejects a prompt before accepting it is broken; a new one may not be.
-                    if let current = attempt, !current.newRuntime, !current.accepted {
+                    // A usage limit isn't: a new runtime would hit the same limit.
+                    if let current = attempt, !current.newRuntime, !current.accepted, !current.usageLimited {
                         runtimeLost("reused runtime rejected the prompt: \(message.prefix(200))", otherwise: message)
                         return
                     }
@@ -935,7 +945,7 @@ private extension BackendEvent {
     var isVisibleOutput: Bool {
         switch self {
         case .textDelta, .thinkingDelta, .activity, .approval, .inputRequired: true
-        case .status, .usage, .context, .backgroundWake, .done, .failure: false
+        case .status, .usage, .context, .backgroundWake, .usageLimit, .done, .failure: false
         }
     }
 }

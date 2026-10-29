@@ -32,6 +32,24 @@ extension SessionTabTests {
             == now.addingTimeInterval(2 * 3_600 + 5 * 60))
         precondition(UsageLimit.resetDate(in: "You've hit your limit · resets 3pm", now: now) == nil)
 
+        // Copilot's session.error category decides, not its wording.
+        let monthly = "You have exceeded your monthly quota (Request ID: DE85:240A65:64CE8F:76CB05:6AE2A78D)"
+        let quota = UsageLimit.copilotReport(errorType: "quota", errorCode: "quota_exceeded", message: monthly, now: now)
+        precondition(quota?.code == "quota/quota_exceeded")
+        precondition(quota?.resetsAt == UsageLimit.startOfNextMonthUTC(after: now),
+                     "the monthly allowance is skipped until it resets, not retried hourly")
+        precondition(UsageLimit.startOfNextMonthUTC(after: now) == ISO8601DateFormatter().date(from: "2027-02-01T00:00:00Z"))
+        precondition(UsageLimit.copilotReport(errorType: "rate_limit", errorCode: "user_weekly_rate_limited",
+                                              message: "Try again in 3 hours.", now: now)?.resetsAt
+            == now.addingTimeInterval(3 * 3_600))
+        precondition(UsageLimit.copilotReport(errorType: "rate_limit", errorCode: nil, message: "", now: now)?.resetsAt == nil)
+        precondition(UsageLimit.copilotReport(errorType: "authentication", errorCode: nil, message: "quota", now: now) == nil)
+        precondition(UsageLimit.copilotReport(errorType: "context_limit", errorCode: nil, message: "", now: now) == nil)
+        let reported = BackendLimitTracker()
+        reported.markLimited(.copilot, message: monthly, report: quota, now: now)
+        precondition(reported.limitedUntil(.copilot, now: now.addingTimeInterval(BackendLimitTracker.defaultCooldown + 1)) != nil,
+                     "a reported reset outlasts the default cooldown")
+
         let tracker = BackendLimitTracker()
         tracker.markLimited(.codex, message: "usage limit", now: now)
         precondition(tracker.limitedUntil(.codex, now: now.addingTimeInterval(60)) != nil)
@@ -55,16 +73,20 @@ extension SessionTabTests {
             BackendLimitTracker.shared.clear()
         }
 
-        // The limit stops a run partway: the same run continues on the fallback.
+        // The limit stops a run partway: the same run continues on the fallback. Copilot's own
+        // report decides; this message's wording matches none of the phrases.
         let copilot = LimitBackend()
         let claude = LimitBackend()
         let chat = ChatSession(copilotBackend: copilot, backendOverrides: [.claudeCode: claude])
         chat.submitRemote("first task", mode: .queue)
         try await waitForJournalTest { copilot.requests.count == 1 }
         copilot.sink?(.textDelta("partial work"))
-        copilot.sink?(.failure("You have exceeded your premium request allowance. Try again in 2 hours."))
+        precondition(!UsageLimit.isLimitError(monthly))
+        copilot.sink?(.usageLimit(UsageLimit.copilotReport(errorType: "quota", errorCode: "quota_exceeded", message: monthly)!))
+        copilot.sink?(.failure(monthly))
         try await waitForJournalTest { claude.requests.count == 1 }
-        precondition(BackendLimitTracker.shared.limitedUntil(.copilot) != nil)
+        precondition(BackendLimitTracker.shared.limitedUntil(.copilot) == UsageLimit.startOfNextMonthUTC(after: Date()),
+                     "Copilot is skipped until its monthly allowance resets")
         precondition(claude.requests[0].prompt.contains("first task"), "the interrupted task continues on the fallback")
         precondition(chat.messages.contains { $0.role == .error && $0.text.contains("Continuing this task with Claude Code") })
         claude.sink?(.done)
