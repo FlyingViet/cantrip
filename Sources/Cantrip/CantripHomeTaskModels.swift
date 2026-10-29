@@ -1,7 +1,7 @@
 import Foundation
 
-/// A Home task's own model and effort (Copilot or Claude Code, whichever runs Home). Tasks
-/// without one follow Home's selection.
+/// A Home task's own model and effort (Copilot, Claude Code or Antigravity, whichever runs Home).
+/// Tasks without one follow Home's selection.
 enum CantripHomeTaskModels {
     /// The model and settings a hidden run uses, and why it fell back to Home's model.
     struct Resolution: Equatable {
@@ -14,12 +14,13 @@ enum CantripHomeTaskModels {
 
     /// The backend whose models tasks pick from.
     static func backend(_ settings: AppSettings) -> BackendKind {
-        settings.backend == .claudeCode ? .claudeCode : .copilot
+        settings.tabModelBackend
     }
 
     /// IDs the model picker offers; empty until the Mac has loaded the backend's catalog.
     static func offered(_ settings: AppSettings) -> [String] {
         if backend(settings) == .claudeCode { return settings.claudeModelCatalog.map(\.id) }
+        if backend(settings) == .antigravity { return settings.agyAvailableModels }
         var ids = settings.copilotModelCatalog.map(\.id)
         for id in settings.copilotAvailableModels where !ids.contains(id) { ids.append(id) }
         return ids
@@ -75,16 +76,20 @@ enum CantripHomeTaskModels {
     static func resolve(task: CantripHomeTask?, settings: AppSettings) -> Resolution {
         let home = homeSelection(settings: settings)
         let claude = backend(settings) == .claudeCode
-        let homeModel = home.model.isEmpty
-            ? (claude ? "Claude Code's default model" : settings.copilotFileDefaultModel ?? "Copilot's default model")
-            : home.model
+        let defaultName: String
+        switch backend(settings) {
+        case .claudeCode: defaultName = "Claude Code's default model"
+        case .antigravity: defaultName = "Antigravity's default model"
+        default: defaultName = settings.copilotFileDefaultModel ?? "Copilot's default model"
+        }
+        let homeModel = home.model.isEmpty ? defaultName : home.model
         guard let task, task.model != nil || task.effort != nil else {
             return .init(selection: nil, model: homeModel, note: nil)
         }
         guard AppSettings.tabModelBackends.contains(settings.backend) else {
             return .init(
                 selection: nil, model: settings.backend.rawValue,
-                note: "Ran with Home's \(settings.backend.rawValue) backend: task models need Copilot or Claude Code."
+                note: "Ran with Home's \(settings.backend.rawValue) backend: task models need Copilot, Claude Code or Antigravity."
             )
         }
         let offered = offered(settings)

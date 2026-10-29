@@ -18,6 +18,13 @@ struct SessionModelSettingsView: View {
 
     private var catalog: TabModelCatalog { settings.tabModelCatalog(for: session.modelSettingsBackend) }
     private var isClaude: Bool { session.modelSettingsBackend == .claudeCode }
+    private var isAntigravity: Bool { session.modelSettingsBackend == .antigravity }
+    /// Only Copilot has context-window tiers.
+    private var showsContextTiers: Bool { !isClaude && !isAntigravity }
+
+    private func modelLabel(_ id: String) -> String {
+        isAntigravity ? settings.agyModelLabel(id) : id
+    }
 
     private var info: CopilotModelInfo? { catalog.info(selection.model) }
 
@@ -40,10 +47,10 @@ struct SessionModelSettingsView: View {
                     selection.effort = ""
                     selection.contextTier = info?.contextTiers?.contains("default") == true ? "default" : ""
                 })) {
-                    Text("CLI default (\(catalog.fileDefaultModel ?? "Auto"))").tag("")
+                    Text("CLI default (\(catalog.fileDefaultModel.map(modelLabel) ?? "Auto"))").tag("")
                     ForEach(CopilotModelInfo.choices(supported: catalog.models.map(\.id),
                                                    fallback: [], selected: selection.model), id: \.self) {
-                        Text($0).tag($0)
+                        Text(modelLabel($0)).tag($0)
                     }
                 }
                 Picker("Effort", selection: $selection.effort) {
@@ -54,7 +61,7 @@ struct SessionModelSettingsView: View {
                             .disabled(info?.reasoningEfforts?.contains($0) != true)
                     }
                 }
-                if !isClaude {
+                if showsContextTiers {
                 Picker("Context window", selection: $selection.contextTier) {
                     Text("CLI default").tag("")
                     ForEach(CopilotModelInfo.choices(supported: info?.contextTiers,
@@ -69,12 +76,14 @@ struct SessionModelSettingsView: View {
             .onChange(of: usesDefaults) { _, inherited in
                 if inherited { selection = session.defaultModelSelection }
             }
-            if !isClaude, let context = info?.contextLabel {
+            if showsContextTiers, let context = info?.contextLabel {
                 Text("Advertised maximum: \(context) tokens. Tier values are input budgets, not total context.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Text(isClaude
                  ? "Only this tab changes. Save while idle; the next prompt restarts Claude Code with the new settings and resumes the same conversation."
+                 : isAntigravity
+                 ? "Only this tab changes. Save while idle; the next prompt restarts Antigravity with the new model and resumes the same conversation."
                  : "Only this tab changes. Save while idle; the next prompt uses the new settings. The conversation stays visible, but Copilot rebuilds its runtime with recent history. Long context may cost more.")
                 .font(.caption).foregroundStyle(.secondary)
             if let message = error ?? session.modelSettingsUnavailableReason ?? validationError

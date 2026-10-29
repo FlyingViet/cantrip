@@ -21,6 +21,8 @@ struct SessionTabMetadata: Equatable {
     var modelSettings: SessionModelSelection?
     /// Claude Code's, kept apart: the two backends' model IDs differ.
     var claudeModelSettings: SessionModelSelection?
+    /// Antigravity's (`agy models` slugs such as `claude-opus-5-5-medium`), kept apart likewise.
+    var antigravityModelSettings: SessionModelSelection?
     /// The sidebar section this tab is filed under; nil (or a deleted section) shows it under Tabs.
     var sectionID: UUID?
 
@@ -47,22 +49,32 @@ struct SessionTabMetadata: Equatable {
         }
         result.modelSettings = selection("modelSettings")
         result.claudeModelSettings = selection("claudeModelSettings")
+        result.antigravityModelSettings = selection("antigravityModelSettings")
         return result
     }
 
     func modelSettings(for backend: BackendKind) -> SessionModelSelection? {
-        backend == .claudeCode ? claudeModelSettings : modelSettings
+        switch backend {
+        case .claudeCode: return claudeModelSettings
+        case .antigravity: return antigravityModelSettings
+        default: return modelSettings
+        }
     }
 
     mutating func setModelSettings(_ selection: SessionModelSelection?, for backend: BackendKind) {
-        if backend == .claudeCode { claudeModelSettings = selection } else { modelSettings = selection }
+        switch backend {
+        case .claudeCode: claudeModelSettings = selection
+        case .antigravity: antigravityModelSettings = selection
+        default: modelSettings = selection
+        }
     }
 
     func save(id: UUID, defaults: UserDefaults = .standard) {
         var value: [String: Any] = ["isLocked": isLocked]
         if let customTitle { value["customTitle"] = customTitle }
         if let sectionID { value["sectionID"] = sectionID.uuidString }
-        for (key, selection) in [("modelSettings", modelSettings), ("claudeModelSettings", claudeModelSettings)] {
+        for (key, selection) in [("modelSettings", modelSettings), ("claudeModelSettings", claudeModelSettings),
+                                 ("antigravityModelSettings", antigravityModelSettings)] {
             guard let selection else { continue }
             value[key] = ["model": selection.model, "effort": selection.effort, "contextTier": selection.contextTier]
         }
