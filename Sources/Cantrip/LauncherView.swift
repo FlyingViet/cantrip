@@ -1804,7 +1804,9 @@ struct LauncherView: View {
     private func councilModelButtons(backend: BackendKind, models: [String]) -> some View {
         Button("Configured default") { addCouncilSeat(backend: backend, model: "") }
         ForEach(models, id: \.self) { model in
-            Button(model) { addCouncilSeat(backend: backend, model: model) }
+            Button(backend == .antigravity ? settings.agyModelLabel(model) : model) {
+                addCouncilSeat(backend: backend, model: model)
+            }
         }
     }
 
@@ -4071,14 +4073,35 @@ struct SettingsView: View {
                 labeledField("agy path (blank = auto)", text: $settings.agyPath, prompt: "~/.local/bin/agy")
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Model").font(.caption).foregroundStyle(.secondary)
-                    Picker("", selection: $settings.agyModel) {
-                        Text("Default (account setting)").tag("")
-                        ForEach(settings.agyAvailableModels, id: \.self) { model in
-                            Text(model).tag(model)
+                    HStack(spacing: 6) {
+                        Picker("", selection: $settings.agyModel) {
+                            Text("Default (account setting)").tag("")
+                            ForEach(settings.agyModelOptions, id: \.self) { model in
+                                Text(settings.agyModelLabel(model)).tag(model)
+                            }
                         }
+                        .labelsHidden()
+                        Button(action: { settings.refreshAntigravityModels() }) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(settings.agyRefreshInFlight)
+                        .accessibilityLabel("Refresh Antigravity models")
+                        .help("Refresh the model list from `agy models` (Gemini, Claude Opus/Sonnet and more). No chat or model request is made.")
                     }
-                    .labelsHidden()
+                    if settings.agyRefreshInFlight {
+                        Text("Refreshing Antigravity models…").font(.caption).foregroundStyle(.secondary)
+                    } else if let error = settings.agyModelRefreshError {
+                        Text("\(error) Previously cached models are unchanged.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if let date = settings.agyCatalogUpdatedAt {
+                        Text("Models refreshed \(date.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
+                .onAppear { settings.refreshAntigravityModelsIfNeeded() }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Effort").font(.caption).foregroundStyle(.secondary)
                     Picker("", selection: $settings.agyEffort) {

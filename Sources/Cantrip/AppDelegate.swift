@@ -27,6 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Antigravity's model list (Gemini, Claude Opus/Sonnet, …) comes from `agy models`.
+        if AntigravityBackend.isInstalled(customPath: AppSettings.shared.agyPath) {
+            AppSettings.shared.refreshAntigravityModelsIfNeeded()
+        }
         // Main menu: invisible for accessory apps, but REQUIRED for standard
         // keyboard shortcuts (⌘C/⌘V/⌘X/⌘A/⌘Z) to route to the text field.
         let mainMenu = NSMenu()
