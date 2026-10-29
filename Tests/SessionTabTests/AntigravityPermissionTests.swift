@@ -133,7 +133,27 @@ extension SessionTabTests {
         settings.agyPermissionMode = "default"
         tab.guardrail = .attended
         precondition(tab.hookPolicy == .guardrail(.attended), "A guardrail decides for child tabs and Home")
+        settings.allowActions = true
+        precondition(tab.hookPolicy == .guardrail(.attended)
+                     && tab.buildArguments(resumingSessionID: nil).contains(skipFlag),
+                     "Attended Home with Allow actions keeps the guardrail hook and passes --dangerously-skip-permissions")
+        settings.allowActions = false
         tab.guardrail = nil
+
+        let strippedLinks = TabMentions.stripConversationLinks(
+            "1. **[HelloInterview Scraper](conversation://9f0776c7-fb10-46a8-9a6d-8c5cc0a29aa0)** and [ByteByteGo](conversation://902d6674-7315-4423-a787-d9070a1ead19)"
+        )
+        precondition(strippedLinks == "1. **HelloInterview Scraper** and **ByteByteGo**",
+                     "conversation:// links become bold text instead of unregistered URL links: \(strippedLinks)")
+
+        let writeAction = CantripHomeActionRequest(antigravityTool: "write_file", input: ["Path": "/tmp/out.md", "Content": "hi"])
+        let editAction = CantripHomeActionRequest(antigravityTool: "edit_file", input: ["Path": "/tmp/out.md", "Target": "a", "Replacement": "b"])
+        let readAction = CantripHomeActionRequest(antigravityTool: "read_file", input: ["Path": "/tmp/out.md"])
+        precondition(writeAction.kind == .write && writeAction.paths == ["/tmp/out.md"]
+                     && editAction.kind == .write && editAction.paths == ["/tmp/out.md"]
+                     && readAction.kind == .read && readAction.readOnly && readAction.paths == ["/tmp/out.md"]
+                     && AntigravityHook.isReadOnly(tool: "read_file", arguments: ["Path": "/tmp/out.md"]),
+                     "agy 1.4.10 write_file, edit_file, and read_file map to their Cantrip Home action kinds")
 
         // A user's own hooks survive Cantrip's entry being added.
         let config = AntigravityHook.configFile

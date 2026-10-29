@@ -9,7 +9,7 @@ enum RemoteHistory {
             "id": message.id.uuidString,
             // A child tab's card reads as a reply to clients that don't draw it.
             "role": message.childResult != nil ? "assistant" : message.role.rawValue,
-            "text": message.text,
+            "text": TabMentions.stripConversationLinks(message.text),
             "thinking": message.thinking,
             "activities": message.activities.map { activity -> [String: Any] in
                 var item: [String: Any] = [
@@ -37,7 +37,10 @@ enum RemoteHistory {
         if !reasoning.isEmpty {
             result["reasoning"] = reasoning.enumerated().map { $1.snapshot(number: $0 + 1) }
         }
-        let subagents = message.activities.flatMap(\.subagentActivities)
+        var subagents = message.activities.flatMap(\.subagentActivities)
+        if subagents.isEmpty, message.role == .assistant {
+            subagents = AntigravitySubagentTranscript.reconstructedActivities(fromText: message.text)
+        }
         if !subagents.isEmpty {
             result["subagents"] = subagents.compactMap { activity in
                 subagent(activity, textBlock: activity.subagent?.isActive == false
@@ -59,6 +62,7 @@ enum RemoteHistory {
     /// Monitor summary; contract shared with the web UI and Cantrip Agent.
     /// `textBlock`: a finished card follows that many reply blocks (see ReplyBlocks).
     static func subagent(_ activity: ToolActivity, textBlock: Int? = nil) -> [String: Any]? {
+        let activity = AntigravitySubagentTranscript.enriched(activity)
         guard let info = activity.subagent else { return nil }
         let current = activity.children.last(where: { $0.state == .running }) ?? activity.children.last
         var item: [String: Any] = [

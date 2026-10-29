@@ -498,7 +498,7 @@ enum ToolActivityFactory {
         let args = arguments as? [String: Any]
         let description = string(
             in: args,
-            keys: ["subject", "title", "description", "Description", "Instruction", "summary"]
+            keys: ["subject", "title", "description", "Description", "Instruction", "summary", "toolSummary"]
         )
         let changes = fileChanges(toolName: toolName, arguments: arguments)
         let terminalCommand = terminalCommand(toolName: toolName, arguments: args)
@@ -567,7 +567,7 @@ enum ToolActivityFactory {
 
         guard let args,
               let path = string(in: args, keys: [
-                  "file_path", "filePath", "path", "notebook_path", "TargetFile"
+                  "file_path", "filePath", "path", "Path", "notebook_path", "TargetFile"
               ]) else {
             return []
         }
@@ -593,9 +593,9 @@ enum ToolActivityFactory {
 
         if lowerName.contains("edit") || lowerName.contains("replace_file"),
            let replacement = string(in: args, keys: [
-               "new_string", "newString", "new_source", "ReplacementContent"
+               "new_string", "newString", "new_source", "ReplacementContent", "Replacement"
            ]) {
-            let original = string(in: args, keys: ["old_string", "oldString", "TargetContent"]) ?? ""
+            let original = string(in: args, keys: ["old_string", "oldString", "TargetContent", "Target"]) ?? ""
             return [ToolFileChange(
                 id: "\(path)#edit",
                 path: path,
@@ -604,7 +604,7 @@ enum ToolActivityFactory {
         }
 
         if lowerName.contains("write") || lowerName.contains("create"),
-           let content = string(in: args, keys: ["content", "file_text", "CodeContent"]) {
+           let content = string(in: args, keys: ["content", "Content", "file_text", "CodeContent"]) {
             let added = content.components(separatedBy: "\n").map { "+\($0)" }
             return [ToolFileChange(
                 id: "\(path)#write",
@@ -682,7 +682,7 @@ enum ToolActivityFactory {
         }
         if lowerName.contains("edit") || lowerName.contains("patch")
             || lowerName.contains("write") || lowerName.contains("replace_file") {
-            if let path = string(in: arguments, keys: ["file_path", "path", "TargetFile"])
+            if let path = string(in: arguments, keys: ["file_path", "path", "Path", "TargetFile"])
                 ?? fileChanges.first?.path {
                 return "Editing \((path as NSString).lastPathComponent)"
             }
@@ -706,9 +706,9 @@ enum ToolActivityFactory {
         switch shortName.lowercased() {
         case "bash", "shell", "run_shell", "exec_command", "command_execution", "run_command":
             return "Shell"
-        case "apply_patch", "edit", "write", "write_to_file", "replace_file_content", "multi_replace_file_content":
+        case "apply_patch", "edit", "edit_file", "write", "write_file", "write_to_file", "replace_file_content", "multi_replace_file_content":
             return "Edit"
-        case "read", "view", "view_file", "list_dir":
+        case "read", "read_file", "view", "view_file", "list_dir":
             return "Read"
         case "read_url_content":
             return "Fetch"
