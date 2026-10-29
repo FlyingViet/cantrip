@@ -776,7 +776,8 @@ final class RemoteControlServer {
                 return
             }
             usage.refreshQuotas()
-            let snapshot = usage.copilotUsage
+            var snapshot = usage.copilotUsage
+            snapshot.activeBackend = AppSettings.shared.backend.rawValue
             sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
             return
         }

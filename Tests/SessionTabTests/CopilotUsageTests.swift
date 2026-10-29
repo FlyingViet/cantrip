@@ -35,7 +35,72 @@ extension SessionTabTests {
         process.waitUntilExit()
         precondition(process.terminationStatus == 0)
         precondition(!String(decoding: data, as: UTF8.self).contains("must-not-leave-process"))
-        return try JSONDecoder().decode(CopilotAccountUsage.self, from: data)
+        let sdk = try JSONDecoder().decode(CopilotAccountUsage.self, from: data)
+        if normalized.isEmpty {
+            // GitHub's own endpoint returns the same user payload: both readers must agree.
+            let direct = try JSONSerialization.data(withJSONObject: user)
+            let swift = QuotaFetcher.copilotAccount(fromUser: direct)
+            let encoded = try JSONEncoder().encode(swift)
+            precondition(!String(decoding: encoded, as: UTF8.self).contains("must-not-leave-process"))
+            precondition(swift?.plan == sdk.plan && swift?.buckets.count == sdk.buckets.count,
+                         "Direct and SDK readers agree: \(String(describing: swift))")
+            for (a, b) in zip(swift?.buckets ?? [], sdk.buckets) {
+                precondition(a.id == b.id && a.billingMode == b.billingMode && a.isUnlimited == b.isUnlimited
+                             && a.remainingPercent == b.remainingPercent && a.entitlement == b.entitlement
+                             && a.remaining == b.remaining && a.overage == b.overage
+                             && a.overageAllowed == b.overageAllowed
+                             && copilotDate(a.resetAt) == copilotDate(b.resetAt)
+                             && copilotDate(a.observedAt) == copilotDate(b.observedAt),
+                             "Bucket \(a.id): direct \(a) vs SDK \(b)")
+            }
+        }
+        return sdk
+    }
+
+    /// Claude's limits from its usage reply, how the tracker keeps them, and a full window reaching
+    /// the fallback tracker before Claude refuses a message.
+    @MainActor
+    static func testClaudeUsage() async throws {
+        let reply = try JSONSerialization.data(withJSONObject: [
+            "five_hour": ["utilization": 89.0, "resets_at": "2026-10-29T16:00:00.008092+00:00", "locked_reason": NSNull()],
+            "seven_day": ["utilization": 31, "resets_at": "2026-11-03T04:00:00.008112+00:00"],
+            "seven_day_opus": NSNull(), "seven_day_sonnet": ["utilization": 100, "resets_at": "2026-11-02T04:00:00Z"],
+            "limits": [["kind": "session", "severity": "warning"], ["kind": "weekly_all", "severity": "normal"],
+                       ["kind": "weekly_sonnet", "severity": "critical"]],
+        ])
+        let usage = try requireHome(ClaudeUsageFetcher.parse(reply, plan: "max"))
+        precondition(usage.windows.map(\.id) == ["five_hour", "seven_day", "seven_day_sonnet"]
+                     && usage.windows[0].percentUsed == 89 && usage.windows[0].severity == "warning"
+                     && usage.windows[0].resetsAt == "2026-10-29T16:00:00Z"
+                     && usage.windows[2].severity == "critical" && usage.windows[2].isExhausted
+                     && usage.primary?.id == "seven_day_sonnet" && usage.plan == "max",
+                     "Windows, severity and resets: \(usage)")
+        precondition(ClaudeUsageFetcher.parse(Data("{}".utf8), plan: nil) == nil, "No windows is no answer")
+        let credentials = ClaudeUsageFetcher.credentials(from: Data(#"{"claudeAiOauth":{"accessToken":"t","expiresAt":1800000000000,"subscriptionType":"max"}}"#.utf8))
+        precondition(credentials == .init(accessToken: "t", expiresAt: Date(timeIntervalSince1970: 1_800_000_000), plan: "max"))
+        precondition(ClaudeUsageFetcher.credentials(from: Data("{}".utf8)) == nil)
+
+        let now = copilotDate("2026-10-29T15:00:00Z")!
+        var claudeCompletion: ((Result<ClaudeAccountUsage, Error>) -> Void)?
+        var copilotCompletion: ((Result<CopilotAccountUsage, Error>) -> Void)?
+        let tracker = UsageTracker(quotaLoader: { copilotCompletion = $0 }, claudeLoader: { claudeCompletion = $0 },
+                                   quotaClock: { now })
+        BackendLimitTracker.shared.clear()
+        defer { BackendLimitTracker.shared.clear() }
+        tracker.refreshQuotas()
+        precondition(claudeCompletion != nil && copilotCompletion != nil, "One refresh reads every backend")
+        claudeCompletion?(.success(usage))
+        try await Task.sleep(for: .milliseconds(20))
+        precondition(tracker.copilotUsage.isRefreshing, "Still refreshing until Copilot answers too")
+        copilotCompletion?(.failure(CopilotQuotaError.timeout))
+        try await Task.sleep(for: .milliseconds(20))
+        precondition(!tracker.copilotUsage.isRefreshing && tracker.copilotUsage.claude?.account == usage
+                     && tracker.copilotUsage.claude?.isStale(at: now) == false)
+        precondition(BackendLimitTracker.shared.limitedUntil(.claudeCode, now: now) == copilotDate("2026-11-02T04:00:00Z"),
+                     "A full window sends messages to the fallback until it resets")
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(tracker.copilotUsage)) as? [String: Any]
+        precondition(((encoded?["claude"] as? [String: Any])?["account"] as? [String: Any])?["windows"] != nil,
+                     "Remote clients get Claude's limits under `claude`")
     }
 
     @MainActor
@@ -109,7 +174,7 @@ extension SessionTabTests {
         let tracker = UsageTracker(quotaLoader: {
             calls += 1
             completion = $0
-        }, quotaClock: { now })
+        }, claudeLoader: nil, quotaClock: { now })
         tracker.refreshQuotas()
         tracker.refreshQuotas()
         precondition(calls == 1 && tracker.copilotUsage.isRefreshing)
