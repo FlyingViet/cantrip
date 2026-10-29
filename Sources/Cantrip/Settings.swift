@@ -95,8 +95,11 @@ final class AppSettings: ObservableObject {
                 return existing
             }
         } catch {
-            // A headless host reached over SSH can't use the locked login Keychain.
-            if HostMode.isHeadless { return useRemoteTokenFile(because: "Keychain unavailable (\(error.localizedDescription))") }
+            // Fall back to the user-only token file whenever the Keychain item is inaccessible
+            // (e.g. headless SSH or a Keychain entry locked to an earlier build's signature).
+            if !RemoteTokenFile.inUse {
+                return useRemoteTokenFile(because: "Keychain unavailable (\(error.localizedDescription))")
+            }
             MacAttention.report(.keychain)
             remoteControlError = "Keychain access is blocked. Review Cantrip's access on the Mac; the existing pairing token was not replaced."
             return nil
@@ -107,7 +110,9 @@ final class AppSettings: ObservableObject {
         }
         let status = RemoteControlCredentials.store(token)
         guard status == errSecSuccess else {
-            if HostMode.isHeadless { return useRemoteTokenFile(because: "Keychain save failed (OSStatus \(status))") }
+            if !RemoteTokenFile.inUse {
+                return useRemoteTokenFile(because: "Keychain save failed (OSStatus \(status))", token: token)
+            }
             remoteControlError = "Could not save the pairing token in Keychain (OSStatus \(status))."
             return nil
         }
@@ -129,7 +134,7 @@ final class AppSettings: ObservableObject {
             remoteControlCredentialRevision += 1
             return true
         }
-        if HostMode.isHeadless, !RemoteTokenFile.inUse {
+        if !RemoteTokenFile.inUse {
             return useRemoteTokenFile(because: "Keychain save failed (OSStatus \(status))", token: token) != nil
         }
         remoteControlError = RemoteTokenFile.inUse
@@ -907,8 +912,13 @@ private enum RemoteControlCredentials {
             kSecValueData as String: Data(token.utf8),
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
+        var query = baseQuery
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        defer { context.invalidate() }
+        query[kSecUseAuthenticationContext as String] = context
         let updateStatus = SecItemUpdate(
-            baseQuery as CFDictionary,
+            query as CFDictionary,
             attributes as CFDictionary
         )
         if updateStatus == errSecSuccess { return updateStatus }
