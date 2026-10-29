@@ -48,6 +48,9 @@ export const section = signal<Section>("chat");
 export const openTabID = signal<string | null>(null);
 export const sheet = signal<SheetState | null>(null);
 export const sidebarHidden = persisted("gateway.sidebarHidden", false);
+/** The open tab's terminal pane under its conversation (Ctrl+`). */
+export const terminalOpen = persisted("gateway.terminalOpen", false);
+export const terminalHeight = persisted("gateway.terminalHeight", 240);
 /** Same key as the Mac app ("hermes.paused"): no requests are sent while paused. */
 export const paused = persisted("hermes.paused", false);
 /** How the next message reaches a working tab; back to Auto after each send (like the Mac). */

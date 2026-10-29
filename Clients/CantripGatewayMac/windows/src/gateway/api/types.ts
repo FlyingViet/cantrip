@@ -630,6 +630,10 @@ export interface RemoteSessionSummary {
   supportsContinueFromMessage?: boolean;
   /** Failed runs' error messages that offer Continue. */
   continuableMessageIDs?: string[];
+  /** The tab's persistent shell is open to paired clients (…/terminal); false for Private Local. */
+  supportsTerminal?: boolean;
+  /** A command (the user's or the agent's) is running in that shell. */
+  terminalBusy?: boolean;
   /** GET .../commands lists the backend's slash commands and skills. Absent on older hosts: never call it. */
   supportsBackendCommands?: boolean;
   /** Queued messages can run in child tabs (POST .../queue/<id>/fork). Absent on older hosts. */
@@ -1801,4 +1805,19 @@ export interface PairingLink {
   direct?: string;
   name?: string;
   tailscaleOnly?: '0' | '1';
+}
+
+/** A tab's terminal (GET/POST /api/v1/sessions/{id}/terminal): the Mac's persistent shell for the tab.
+ * Offsets count Unicode code points of the Mac's output; `text` follows the request's `from`/`epoch`. */
+export interface TerminalSnapshot {
+  epoch: string;
+  start: number;
+  end: number;
+  text: string;
+  /** Replace the output with `text` instead of appending (cleared, trimmed or a first read). */
+  reset: boolean;
+  isRunning: boolean;
+  agentCommandRunning: boolean;
+  history: string[];
+  workdir: string;
 }

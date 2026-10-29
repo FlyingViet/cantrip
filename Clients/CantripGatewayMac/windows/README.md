@@ -37,6 +37,13 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 - **Attachments.** Up to 4 images, a video and up to 5 files per message (pasted into the
   message box, dropped or picked), uploaded resumably the way the Mac app sends them. Copied
   text still pastes as text, even when Excel or Word put a picture of it on the clipboard too.
+- **Terminal.** The toolbar's terminal button (or Ctrl+`) opens the tab's shell on the Mac
+  under its conversation: the same persistent shell as the Cantrip panel's terminal mode, so
+  `cd`, exports and history carry across devices, and the agent's own commands show up too.
+  Up/Down browse history, Ctrl+C interrupts (or copies when text is selected), and the pane has
+  Clear, Restart Shell and Close; drag its top edge to resize. Line-based, so full-screen
+  programs such as `vim` don't work. Not in Private Local (needs a Cantrip version that offers
+  the terminal).
 - **Tasks and Artifacts.** Scheduled tasks with runs, workspaces and their records;
   artifacts with thumbnails, the image viewer, Save and Delete.
 - **Sheets.** Background runs (answer a waiting run in place), a tab's background tasks and
@@ -104,6 +111,8 @@ The sidebar's footer shows the Mac's address on the route in use.
 | Ctrl+; | Model Settings |
 | Ctrl+Shift+V | Voice Mode |
 | Ctrl+Shift+P | Pause or resume the agent |
+| Ctrl+` | Show or hide the terminal |
+| Up / Down, Ctrl+C | In the terminal: browse history, interrupt the running command |
 | Ctrl+, | Settings |
 | Enter / Shift+Enter | Send / new line |
 | Up / Down, Tab, Enter, Esc | In the `/` command list: move, insert, choose (or send as typed when nothing is highlighted), dismiss |

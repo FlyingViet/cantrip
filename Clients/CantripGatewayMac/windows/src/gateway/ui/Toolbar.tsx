@@ -8,6 +8,7 @@ import * as remote from "../state/remote";
 import { Icon } from "./icons";
 import { MenuButton, toast, type MenuEntry } from "./kit";
 import { startFreshEntry, tabActions } from "./tabActions";
+import { TerminalButton } from "./transcript/TerminalPane";
 
 export const DELIVERY_TITLES: Record<DeliveryMode, string> = { auto: "Auto", queue: "Queue", interrupt: "Redirect", inject: "Inject" };
 
@@ -110,6 +111,7 @@ function HomeToolbar(): JSX.Element {
       <div class="glass-group">
         <BackgroundButton />
         {chat && session ? <DeliveryPicker disabled={remote.isMutating.value} /> : null}
+        {chat && session ? <TerminalButton session={session} /> : null}
         <RefreshButton />
       </div>
       <div class="glass-group">
@@ -153,6 +155,7 @@ function TabToolbar(): JSX.Element {
       <div class="glass-group">
         <StopButton />
         {session ? <DeliveryPicker disabled={remote.isMutating.value} /> : null}
+        <TerminalButton session={session} />
       </div>
       <div class="glass-group">
         <MenuButton label={nav.paused.value ? "Tab actions — agent paused" : "Tab actions"} entries={tabMoreMenu}>
