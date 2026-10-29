@@ -3387,6 +3387,9 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
             sidebarToggle: sidebarToggle, modelSettings: modelSettings, hidesLeadingInRail: hidesLeadingInRail,
             leading: leading, refresh: refresh, settings: settings, trailing: trailing
         ))
+        // Unfolding adds the sidebar toggle and model settings above the bar's items; the system
+        // keeps the existing items' slots but draws them empty. A fresh toolbar per layout fixes it.
+        .id(ChatToolbarLayout(traits: displayTraits))
     }
 
     /// The title stays centered on the screen and clear of the wider of the two side controls.
