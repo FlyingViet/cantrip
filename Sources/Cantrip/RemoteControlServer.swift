@@ -1301,6 +1301,38 @@ final class RemoteControlServer {
             return
         }
 
+        if parts.count >= 2, parts[1] == "terminal" {
+            let from = request.query("from").flatMap(Int.init)
+            let epoch = request.query("epoch")
+            switch (request.method, parts.count) {
+            case ("GET", 2):
+                guard !session.isLocalPrivate else {
+                    sendError(409, "Shell commands and tools are disabled in Private Local.", on: connection)
+                    return
+                }
+                let snapshot = TabTerminalRemote.snapshot(session, from: from, epoch: epoch)
+                sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
+            case ("POST", 2), ("POST", 3):
+                guard request.body.count <= TabTerminalRemote.maximumCommandLength + 1024 else {
+                    sendError(413, "That command is too long for the terminal.", on: connection)
+                    return
+                }
+                do {
+                    let snapshot = try TabTerminalRemote.perform(parts.count == 3 ? String(parts[2]) : nil,
+                                                                 json: json, session: session,
+                                                                 from: from, epoch: epoch)
+                    sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
+                } catch let error as TabTerminalError {
+                    sendError(error.status, error.message, on: connection)
+                } catch {
+                    sendError(500, "The terminal could not run that on the Mac.", on: connection)
+                }
+            default:
+                sendError(parts.count > 3 ? 404 : 405, parts.count > 3 ? "not found" : "method not allowed",
+                          on: connection)
+            }
+            return
+        }
         if parts.count >= 2, parts[1] == "previews" {
             guard request.method == "GET" else {
                 sendError(405, "method not allowed", on: connection)
@@ -2176,6 +2208,9 @@ final class RemoteControlServer {
         }
         // Failed runs' messages that offer Continue (POST …/resume with {"messageID"}).
         result["supportsContinueFromMessage"] = true
+        // The tab's persistent shell (…/terminal); busy while a command (yours or the agent's) runs.
+        result["supportsTerminal"] = !session.isLocalPrivate
+        result["terminalBusy"] = session.shell.isRunning || session.shell.hasAgentCommandRunning
         result["continuableMessageIDs"] = session.continuableMessageIDs.map(\.uuidString).sorted()
         if session.isCantripHome {
             // Drives the Background button badge without fetching the run list.
