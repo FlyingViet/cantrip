@@ -28,6 +28,14 @@ struct CantripDeliveryPicker: View {
     @Binding var deliveryMode: CantripDeliveryMode
     var compact = false
 
+    /// A 44 pt touch target on iOS; on the Mac it sits in the toolbar's glass with the other
+    /// controls, so it takes their height instead of stretching that glass taller.
+    #if os(iOS)
+    static let height: CGFloat = 44
+    #else
+    static let height: CGFloat = 28
+    #endif
+
     var body: some View {
         Menu {
             Picker("Delivery", selection: $deliveryMode) {
@@ -48,7 +56,7 @@ struct CantripDeliveryPicker: View {
             .padding(.horizontal, compact ? 4 : 8)
             .padding(.vertical, 5)
             .background(.tint.opacity(0.12), in: Capsule())
-            .frame(width: compact ? 64 : 84, height: 44)
+            .frame(width: compact ? 64 : 84, height: Self.height)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
