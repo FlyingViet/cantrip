@@ -163,6 +163,20 @@ advertise `supportsStartFresh`, and `repeatedErrorMessageID` names an error row
 that repeated the previous error, where clients offer Start Fresh and Change
 Model.
 
+## Continue a failed run
+
+A run that fails or times out in a conversation waits for the user instead of
+retrying (see [Sessions](sessions-and-council.md#continue-a-failed-run)).
+Sessions advertise `supportsContinueFromMessage`, and `continuableMessageIDs`
+lists the error rows that offer **Continue**: each failed run's latest error,
+empty while the tab runs. `POST /api/v1/sessions/{id}/resume` with
+`{"messageID": "<id>"}` continues that run — the same run when it's the tab's
+latest, otherwise a new run with the original request — and returns `202` with
+the session. It returns `400` for a malformed ID, and `409` with a reason while
+the tab runs, while the Mac is offline, or when the row no longer offers
+Continue. Without a body, `resume` keeps resuming the tab's paused run
+(`canResume`), so older clients' **Resume** still works.
+
 ## Remote approvals and secure input
 
 Cantrip, Mac/browser Remote and Cantrip Agent display questions, approvals and
