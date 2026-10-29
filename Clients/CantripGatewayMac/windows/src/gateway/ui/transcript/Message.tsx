@@ -404,6 +404,20 @@ function HandoffResultCard(props: { result: RemoteHandoffResult }): JSX.Element 
 
 // MARK: Rows
 
+/** Continue under a failed run's error: picks the task up from where it stopped (Cantrip Agent's error row). */
+function ContinueAction(props: { session: RemoteSessionSummary; messageID: string }): JSX.Element {
+  const { session, messageID } = props;
+  return (
+    <div class="row error-actions">
+      <button type="button" class="btn primary" disabled={remote.isMutating.value || isBusy(session)}
+        title="Pick this task up from where it stopped"
+        onClick={() => void remote.continueFromMessage(session.id, messageID).catch((error) => toast(`Continue failed: ${error.message}`))}>
+        <Icon name="play" size={14} />Continue
+      </button>
+    </div>
+  );
+}
+
 function RepeatedErrorActions(props: { session: RemoteSessionSummary }): JSX.Element | null {
   const { session } = props;
   const fresh = session.supportsStartFresh === true;
@@ -499,6 +513,7 @@ export function MessageRow(props: {
           {isError ? (
             <>
               <div class="error-line selectable" role="alert"><Icon name="exclamationmark.triangle" size={14} />{message.text}</div>
+              {session.continuableMessageIDs?.includes(message.id) ? <ContinueAction session={session} messageID={message.id} /> : null}
               {message.id === session.repeatedErrorMessageID ? <RepeatedErrorActions session={session} /> : null}
             </>
           ) : null}

@@ -626,6 +626,10 @@ export interface RemoteSessionSummary {
   supportsPagedHistory: true;
   /** False for Home-reserved sessions. */
   supportsStartFresh: boolean;
+  /** POST .../resume takes {"messageID"} to continue a failed run from its error message. Absent on older hosts. */
+  supportsContinueFromMessage?: boolean;
+  /** Failed runs' error messages that offer Continue. */
+  continuableMessageIDs?: string[];
   /** GET .../commands lists the backend's slash commands and skills. Absent on older hosts: never call it. */
   supportsBackendCommands?: boolean;
   /** Queued messages can run in child tabs (POST .../queue/<id>/fork). Absent on older hosts. */
