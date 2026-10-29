@@ -1852,7 +1852,7 @@ struct ChatView: View {
                         }
                     } label: {
                         Label(
-                            "Copilot Usage",
+                            "Usage Limits",
                             systemImage: "gauge.with.dots.needle.33percent"
                         )
                     }

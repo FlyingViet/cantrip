@@ -122,7 +122,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | (fields) `supportsTabMentions`, `mentionable` | `@` suggestions in that composer; which tabs may be suggested. Picked tabs travel in the message text as `@[Title](cantrip-tab:<UUID>)` |
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
-| `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, Copilot usage, View Mac |
+| `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, usage limits (Copilot at the top level, Claude Code under `claude`, plus `activeBackend`), View Mac |
 | `GET/POST /api/v1/usage-fallback` | Usage limit fallback in Model Settings (Mac-wide): `{backend, primary, choices, limited, revision}`; POST `{revision, backend}` (`""` = off) or `{revision, resetLimits: true}`; `supportsUsageFallback` on session lists; older hosts `404` and the section stays hidden |
 | `GET /api/v1/voice/vocabulary` | Dictation names: project, tab, note, task and tracker terms plus the busiest people (handles, optional names); older hosts reply `404` and the app falls back to tab and task titles |
 
@@ -175,7 +175,7 @@ sits at the bottom.
 
 A tab opens full screen with **‹ Home** on the left, its name and **Working / Idle** state in
 the center, and a **⋯** menu on the right: **All Tabs**, the tab's actions, delivery mode,
-Copilot usage, Resume, voice mode and the Mac menu items. Stop, queued prompts, input
+usage limits, Resume, voice mode and the Mac menu items. Stop, queued prompts, input
 requests, attachments, per-tab models and history paging work as before. **‹ Home** or a
 right swipe from the left edge returns to Home. The swipe drags the tab with your finger over
 Home, like a navigation back swipe: let go past about a third of the width (or flick) to
@@ -761,7 +761,7 @@ Codex backend is required (`supportsVideoAttachments`). Legacy hosts are
 blocked before uploading; videos cannot accompany shell/slash commands or
 image attachments. The browser/Mac Remote composer remains text-only.
 
-### Copilot account usage
+### Usage limits (Claude Code and Copilot)
 
 The **usage gauge next to the Local/Remote antenna lane picker** shares its
 icon size and row beneath the chat title. It shows **AI credits used / total**
@@ -770,11 +770,16 @@ additional usage is reported separately. Tap it for the full credit amounts, a s
 progress bar, the reset date/time, additional-usage status, account, and
 last-checked time. It works from every chat lane without switching sessions.
 
-This reads the Copilot account signed in on your **Cantrip Mac**, not a phone
-login or a per-chat token estimate. Update/reopen Cantrip and install a recent
-Copilot CLI plus Node.js on the Mac. Existing Remote pairing is used for the
-read-only `/api/v1/copilot/usage` endpoint; credentials never reach the phone.
-An older host shows an explicit update notice.
+The sheet (**Usage Limits**) also shows Claude Code's 5-hour session and weekly
+limits with reset times, and on a Mac running Claude Code the header gauge
+leads with the Claude window closest to its limit (for example `Week 32%`).
+
+This reads the accounts signed in on your **Cantrip Mac** (Claude Code and the
+`gh`/Copilot sign-in), not a phone login or a per-chat token estimate. Existing
+Remote pairing is used for the read-only `/api/v1/copilot/usage` endpoint;
+credentials never reach the phone. Claude's limits need Cantrip 1.1.4 or later;
+an older host shows only the Copilot allowance, and a much older one an explicit
+update notice.
 
 The Mac refreshes at most once per minute, shared with its Usage panel. Mobile
 polling stops in the background. Pull-to-refresh reads the host cache without

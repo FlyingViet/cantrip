@@ -1,10 +1,17 @@
 import SwiftUI
 
+/// `GET /api/v1/copilot/usage`: Copilot's allowance at the top level, Claude Code's limits under
+/// `claude` (Macs with Cantrip 1.1.4+), and the Mac's active backend.
 struct CopilotUsageSnapshot: Decodable {
     let account: CopilotAccountUsage?
     let checkedAt: String?
     let isRefreshing: Bool
     let error: String?
+    var claude: ClaudeUsageState? = nil
+    var activeBackend: String? = nil
+
+    /// The Mac runs Claude Code and has its limits: lead with them.
+    var leadsWithClaude: Bool { activeBackend == "Claude Code" && claude?.account != nil }
 
     func isStale(at now: Date = Date()) -> Bool {
         guard account != nil, error == nil, let checked = copilotDate(checkedAt),
@@ -15,6 +22,58 @@ struct CopilotUsageSnapshot: Decodable {
             return false
         } ?? true
     }
+}
+
+struct ClaudeUsageState: Decodable, Equatable {
+    let account: ClaudeAccountUsage?
+    let checkedAt: String?
+    let error: String?
+
+    /// Older than ten minutes, or a window has reset since it was read.
+    func isStale(at now: Date = Date()) -> Bool {
+        guard account != nil, let checked = copilotDate(checkedAt), now.timeIntervalSince(checked) < 600 else {
+            return true
+        }
+        return account?.windows.contains { copilotDate($0.resetsAt).map { now >= $0 } ?? false } ?? true
+    }
+}
+
+struct ClaudeAccountUsage: Decodable, Equatable {
+    let plan: String?
+    let windows: [ClaudeLimitWindow]
+    var primary: ClaudeLimitWindow? { windows.max { $0.percentUsed < $1.percentUsed } }
+}
+
+struct ClaudeLimitWindow: Decodable, Equatable, Identifiable {
+    let id: String
+    let percentUsed: Double
+    let resetsAt: String?
+    let severity: String?
+    let lockedReason: String?
+
+    var title: String {
+        switch id {
+        case "five_hour": return "5-hour session"
+        case "seven_day": return "Weekly limit"
+        case "seven_day_opus": return "Weekly Opus limit"
+        case "seven_day_sonnet": return "Weekly Sonnet limit"
+        default: return "Claude limit"
+        }
+    }
+
+    /// For the header button: "5h", "Week", "Opus" or "Sonnet".
+    var shortTitle: String {
+        switch id {
+        case "five_hour": return "5h"
+        case "seven_day": return "Week"
+        case "seven_day_opus": return "Opus"
+        case "seven_day_sonnet": return "Sonnet"
+        default: return "Claude"
+        }
+    }
+
+    var isExhausted: Bool { lockedReason != nil || percentUsed >= 100 }
+    var percentText: String { String(format: "%.0f%%", min(100, max(0, percentUsed))) }
 }
 
 struct CopilotAccountUsage: Decodable {
@@ -142,6 +201,11 @@ final class CopilotUsageModel: ObservableObject {
     }
 
     func headerText(at date: Date, locale: Locale = .current) -> String {
+        if let snapshot, snapshot.leadsWithClaude, let state = snapshot.claude,
+           let window = state.account?.primary {
+            guard error == nil, !state.isStale(at: date) else { return "Stale" }
+            return "\(window.shortTitle) \(window.percentText)"
+        }
         guard let snapshot, let bucket = snapshot.account?.primary else { return "--" }
         guard error == nil, !snapshot.isStale(at: date) else { return "Stale" }
         if bucket.isUnlimited { return "Unlimited" }
@@ -152,6 +216,11 @@ final class CopilotUsageModel: ObservableObject {
     }
 
     func accessibilityValue(at date: Date) -> String {
+        if let snapshot, snapshot.leadsWithClaude, let state = snapshot.claude,
+           let window = state.account?.primary {
+            let stale = error != nil || state.isStale(at: date)
+            return (stale ? "Stale. Last known: " : "") + "Claude \(window.title.lowercased()) \(window.percentText) used"
+        }
         guard let snapshot, let bucket = snapshot.account?.primary else { return "Account allowance unavailable" }
         let stale = error != nil || snapshot.isStale(at: date)
         return (stale ? "Stale. Last known: " : "") + bucket.summary
@@ -177,9 +246,9 @@ struct CopilotUsageButton: View {
                     compact: compact
                 )
             }
-            .accessibilityLabel("Copilot account usage")
+            .accessibilityLabel("Usage limits")
             .accessibilityValue(model.accessibilityValue(at: context.date))
-            .accessibilityHint("Shows account allowance details")
+            .accessibilityHint("Shows Claude Code's limits and the Copilot allowance")
             .accessibilityIdentifier("copilot-usage-button")
         }
         .sheet(isPresented: $isPresented) {
@@ -273,8 +342,11 @@ struct CopilotUsageView: View {
                         Text("The Copilot account signed in on your Cantrip Mac. This is account-wide, not just this conversation, and remains available from any chat lane.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    if let claude = model.snapshot?.claude {
+                        ClaudeUsageSection(state: claude, now: context.date)
+                    }
                     if let account = model.snapshot?.account {
-                        Section("Mac account") {
+                        Section("Copilot account") {
                             if let login = account.login { LabeledContent("Account", value: login) }
                             if let plan = account.plan { LabeledContent("Plan", value: plan) }
                             if let checked = copilotDate(model.snapshot?.checkedAt) {
@@ -286,14 +358,14 @@ struct CopilotUsageView: View {
                         }
                     }
                     Section {
-                        Text("The Mac refreshes at most once a minute. No prompts are sent and no model is invoked. Credentials stay on the Mac.")
+                        Text("The Mac refreshes every five minutes, and at most once a minute when you ask. No prompts are sent and no model is invoked. Credentials stay on the Mac.")
                         Text("Remaining account allowance does not rule out model-specific or short-term rate limits.")
                     }
                     .font(.caption).foregroundStyle(.secondary)
                 }
                 .refreshable { await model.refresh { try await remote.copilotUsage() } }
             }
-            .navigationTitle("Copilot Usage")
+            .navigationTitle("Usage Limits")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -304,7 +376,7 @@ struct CopilotUsageView: View {
                         Task { await model.refresh { try await remote.copilotUsage() } }
                     } label: { Image(systemName: "arrow.clockwise") }
                         .disabled(model.isLoading || model.snapshot?.isRefreshing == true)
-                        .accessibilityLabel("Refresh Copilot usage")
+                        .accessibilityLabel("Refresh usage limits")
                 }
             }
         }
@@ -348,5 +420,55 @@ struct CopilotQuotaRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// Claude Code's 5-hour and weekly limits, as the Mac reads them from Claude.
+struct ClaudeUsageSection: View {
+    let state: ClaudeUsageState
+    let now: Date
+
+    var body: some View {
+        Section {
+            if let error = state.error {
+                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+            }
+            if let account = state.account {
+                if state.isStale(at: now) {
+                    Label("Last known limits - data is stale", systemImage: "clock.badge.exclamationmark")
+                        .foregroundStyle(.orange)
+                }
+                ForEach(account.windows) { window in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(window.title)
+                            Spacer()
+                            Text("\(window.percentText) used").monospacedDigit().foregroundStyle(tint(window))
+                        }
+                        ProgressView(value: min(100, max(0, window.percentUsed)), total: 100)
+                            .tint(tint(window))
+                        if let reset = copilotDate(window.resetsAt) {
+                            Text("Resets \(reset.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("usage.claude.\(window.id)")
+                }
+                if let checked = copilotDate(state.checkedAt) {
+                    LabeledContent("Checked", value: checked.formatted(date: .abbreviated, time: .shortened))
+                }
+            } else if state.error == nil {
+                Text("Claude's limits unavailable").foregroundStyle(.secondary)
+            }
+        } header: {
+            Text(state.account?.plan.map { "Claude Code · \($0.capitalized)" } ?? "Claude Code")
+        }
+    }
+
+    private func tint(_ window: ClaudeLimitWindow) -> Color {
+        if window.isExhausted || window.severity == "critical" { return .red }
+        if window.severity == "warning" || window.percentUsed >= 80 { return .orange }
+        return .accentColor
     }
 }
