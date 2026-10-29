@@ -33,13 +33,28 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     private let overrideLock = NSLock()
     private var storedModelOverride: String?
     private var storedEffortOverride: String?
+    private var storedTurnModelOverride: String?
+    private var storedFallbackSourceModel: String?
+    private var storedIsIncidentTurn = false
     var modelOverride: String? {
         get { overrideLock.withLock { storedModelOverride } }
-        set { overrideLock.withLock { storedModelOverride = newValue } }
+        set { overrideLock.withLock { storedModelOverride = newValue; storedTurnModelOverride = nil } }
     }
     var effortOverride: String? {
         get { overrideLock.withLock { storedEffortOverride } }
         set { overrideLock.withLock { storedEffortOverride = newValue } }
+    }
+    var turnModelOverride: String? {
+        get { overrideLock.withLock { storedTurnModelOverride } }
+        set { overrideLock.withLock { storedTurnModelOverride = newValue } }
+    }
+    var fallbackSourceModel: String? {
+        get { overrideLock.withLock { storedFallbackSourceModel } }
+        set { overrideLock.withLock { storedFallbackSourceModel = newValue } }
+    }
+    var isIncidentTurn: Bool {
+        get { overrideLock.withLock { storedIsIncidentTurn } }
+        set { overrideLock.withLock { storedIsIncidentTurn = newValue } }
     }
     var guardrail: CantripHomeGuardrail?
     var guardrailLabel = "Cantrip Home"
@@ -163,8 +178,8 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         if let sid = resumingSessionID, !sid.isEmpty {
             args += ["--conversation", sid]
         }
-        let model = (modelOverride ?? settings.agyModel).trimmingCharacters(in: .whitespacesAndNewlines)
-        if !model.isEmpty {
+        let model = (turnModelOverride ?? modelOverride ?? settings.agyModel).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !model.isEmpty, model != "auto" {
             args += ["--model", model]
         }
         let effort = (effortOverride ?? settings.agyEffort).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -186,10 +201,44 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     }
 
     private func launchSignature(for workdir: String) -> String {
-        let model = (modelOverride ?? settings.agyModel).trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = (turnModelOverride ?? modelOverride ?? settings.agyModel).trimmingCharacters(in: .whitespacesAndNewlines)
         let effort = (effortOverride ?? settings.agyEffort).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let guardrailKey = guardrail?.rawValue ?? "none"
         return "\(workdir)|\(model)|\(effort)|\(readOnly)|\(settings.allowActions)|\(settings.agyPermissionMode)|\(guardrailKey)"
+    }
+
+    /// Resolves the per-turn Antigravity model when the configured model is auto/default, a fallback
+    /// from Claude/ChatGPT/Copilot, or an external credit-consuming model slug.
+    func resolveTurnModel(for request: BackendRequest) {
+        let configuredModel = (modelOverride ?? settings.agyModel).trimmingCharacters(in: .whitespacesAndNewlines)
+        let configuredEffort = (effortOverride ?? settings.agyEffort).trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = fallbackSourceModel
+        let incident = isIncidentTurn
+        fallbackSourceModel = nil
+        isIncidentTurn = false
+
+        let isUnitTest = ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"] != nil
+        let shouldTier = configuredModel == "auto"
+            || (configuredModel.isEmpty && !isUnitTest)
+            || AntigravityTaskTier.usesExternalCredits(configuredModel)
+            || source != nil
+            || incident
+        guard shouldTier else {
+            turnModelOverride = nil
+            return
+        }
+        let queryText = request.userMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? request.prompt : request.userMessage
+        let effectiveSource = source ?? (AntigravityTaskTier.usesExternalCredits(configuredModel) ? configuredModel : nil)
+        let chosen = AntigravityTaskTier.chooseModel(
+            for: queryText,
+            available: settings.agyAvailableModels,
+            effort: configuredEffort,
+            sourceModel: effectiveSource,
+            isIncident: incident
+        )
+        turnModelOverride = chosen
+        Log.write("antigravity: task tiering (\(queryText.count) chars, configured=\(configuredModel.isEmpty ? "default" : configuredModel)) -> \(chosen)")
     }
 
     // MARK: - Backend Protocol
@@ -204,6 +253,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
             return
         }
 
+        resolveTurnModel(for: request)
         let resolvedWorkdir = workdir.isEmpty ? NSHomeDirectory() : workdir
         let prompt = stagePromptAttachments(in: request.prompt, workdir: resolvedWorkdir)
 

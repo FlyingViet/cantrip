@@ -1499,6 +1499,18 @@ final class ChatSession: ObservableObject {
     /// The tool-free router for this tab's backend (Auto routing, plans, Done when checks).
     var routerProvider: MessageRouter.Provider {
         let kind = settings.backend == .localModel ? .localModel : runningBackendKind ?? settings.backend
+        if kind == .localModel {
+            return .local(baseURL: settings.localBaseURL, model: settings.localModel,
+                          apiKey: settings.localAPIKey)
+        }
+        let isUnitTest = ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"] != nil
+        if !isUnitTest || (kind == .antigravity && !settings.agyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+           let agyCommand = AntigravityBackend.resolveExecutable(customPath: settings.agyPath) {
+            return .antigravity(
+                command: agyCommand,
+                model: AntigravityTaskTier.smallModel(available: settings.agyAvailableModels)
+            )
+        }
         switch kind {
         case .copilot:
             return .copilot(command: ToolLocator.shared.copilotCommand(configured: settings.copilotPath))
@@ -2060,7 +2072,10 @@ final class ChatSession: ObservableObject {
             if automatedRun.isIncident { includesAmbientContext = false }
             // Each scheduled task or incident starts from a clean model context; the
             // transcript remains as the background log.
-            if automatedRun.isIncident { cantripHomeTask = nil }
+            if automatedRun.isIncident {
+                cantripHomeTask = nil
+                antigravity.isIncidentTurn = true
+            }
             applyModelSelection()
             if let backend = copilot as? CopilotBackend {
                 CantripHomeTaskTools.configure(backend, taskRun: cantripHomeTask != nil)
@@ -2068,8 +2083,9 @@ final class ChatSession: ObservableObject {
             resetBackendConversations()
         }
 
-        var backendKind = isLocalPrivate ? .localModel
+        let requestedBackend = isLocalPrivate ? .localModel
             : isResume ? (currentRunBackend ?? settings.backend) : settings.backend
+        var backendKind = requestedBackend
         // The chosen backend is still at its usage limit: start on the fallback instead of failing first.
         var limitNotice: String?
         if !isLocalPrivate, !isResume, let until = BackendLimitTracker.shared.limitedUntil(backendKind),
@@ -2077,6 +2093,9 @@ final class ChatSession: ObservableObject {
                                                  homeRun: isCantripHomeRun) {
             limitNotice = "\(backendKind.rawValue) is at its usage limit until \(BackendFallback.untilLabel(until))."
                 + " Using \(settings.backendLabel(fallback))."
+            if fallback == .antigravity {
+                antigravity.fallbackSourceModel = sourceModelName(for: requestedBackend)
+            }
             backendKind = fallback
         }
         if !isLocalPrivate { Log.write("send: \"\(prompt.prefix(80))\" via \(backendKind.rawValue)") }
@@ -3158,6 +3177,9 @@ final class ChatSession: ObservableObject {
         } ?? errorText))
         if let fallback {
             Log.write("resume: \(runningBackendKind?.rawValue ?? "backend") hit its usage limit — continuing on \(fallback.rawValue)")
+            if fallback == .antigravity, let source = runningBackendKind ?? currentRunBackend {
+                antigravity.fallbackSourceModel = sourceModelName(for: source)
+            }
             currentRunBackend = fallback
             interruptionAwaitsResume = false
             finishStream(dequeue: false, notify: false) { [weak self] in
@@ -3246,6 +3268,22 @@ final class ChatSession: ObservableObject {
     /// backend this run continues on (Settings' usage limit fallback), or nil to fail as usual.
     /// The backend's structured report decides; matching the error's wording is the last resort
     /// for CLIs that don't send one.
+    private func sourceModelName(for kind: BackendKind) -> String? {
+        switch kind {
+        case .claudeCode:
+            let m = claudeCode.modelOverride ?? settings.claudeModel
+            return m.isEmpty ? "claude-sonnet" : m
+        case .copilot:
+            let m = (copilot as? CopilotBackend)?.modelOverride ?? settings.effectiveCopilotModel ?? ""
+            return m.isEmpty ? "copilot" : m
+        case .codex:
+            let m = settings.codexModel
+            return m.isEmpty ? "gpt-5-codex" : m
+        default:
+            return nil
+        }
+    }
+
     private func usageLimitFallback(after errorText: String) -> BackendKind? {
         let report = reportedUsageLimit
         reportedUsageLimit = nil

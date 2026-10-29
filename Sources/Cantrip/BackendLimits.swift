@@ -14,7 +14,8 @@ enum UsageLimit {
         "hit a rate limit", "weekly rate limit", "user_weekly_rate_limited",
         "quota exceeded", "exceeded your quota", "exceeded your current quota", "insufficient_quota",
         "no quota", "resource_exhausted", "exhausted your capacity", "usage_limit_reached",
-        "credit balance is too low",
+        "credit balance is too low", "out of credits", "insufficient credits", "billing_error",
+        "oauth session expired", "failed to authenticate",
     ]
 
     /// Copilot's `session.error` categories that mean the plan, not the request, is the problem.

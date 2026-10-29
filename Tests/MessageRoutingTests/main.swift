@@ -34,6 +34,18 @@ struct MessageRoutingTests {
         // output collection, cancellation and deadlines without provider usage.
         if CommandLine.arguments.dropFirst().first == "-p" {
             let args = CommandLine.arguments
+            if args.contains("--disable-slash-commands"), !args.contains("--safe-mode") {
+                guard let modelIndex = args.firstIndex(of: "--model"),
+                      args[modelIndex + 1] == "gemini-3.8-flash-medium",
+                      let fmtIndex = args.firstIndex(of: "--output-format"),
+                      args[fmtIndex + 1] == "text"
+                else { exit(6) }
+                let grouping = args[2].hasPrefix("You group queued chat messages")
+                print(grouping
+                    ? #"{"combine":[3],"confidence":0.9}"#
+                    : #"{"intent":"context","confidence":0.99,"evidence":"The config lives in /config"}"#)
+                return
+            }
             guard args.contains("--available-tools="), args.contains("--disable-builtin-mcps"),
                   args.contains("--no-custom-instructions"), !args.contains("--allow-all-tools"),
                   let home = ProcessInfo.processInfo.environment["COPILOT_HOME"],
@@ -162,6 +174,12 @@ struct MessageRoutingTests {
                "Queue grouping uses the same isolated, tool-free CLI with its own instructions")
         let decision = try await MessageRouter.classify(snapshot("The config lives in /config"), provider: provider)
         expect(decision.intent == .context, "Isolated CLI returns a parsed decision")
+        let agyProvider = MessageRouter.Provider.antigravity(
+            command: URL(fileURLWithPath: CommandLine.arguments[0]).path,
+            model: "gemini-3.8-flash-medium"
+        )
+        let agyDecision = try await MessageRouter.classify(snapshot("The config lives in /config"), provider: agyProvider)
+        expect(agyDecision.intent == .context, "Antigravity CLI router returns a parsed decision using Gemini 3.8 Flash")
         do {
             _ = try await MessageRouter.classify(snapshot("FAIL_FIXTURE"), provider: provider)
             expect(false, "Nonzero exit must surface")

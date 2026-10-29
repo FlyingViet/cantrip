@@ -811,7 +811,9 @@ final class AppSettings: ObservableObject {
         councilMembers = (d.data(forKey: "councilMembers")
             .flatMap { try? JSONDecoder().decode([CouncilMember].self, from: $0) }) ?? []
         councilScope = d.string(forKey: "councilScope") ?? "planReview"
-        limitFallbackBackend = d.string(forKey: "limitFallbackBackend") ?? ""
+        let defaultFallback = ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"] != nil
+            ? "" : BackendKind.antigravity.rawValue
+        limitFallbackBackend = d.string(forKey: "limitFallbackBackend") ?? defaultFallback
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
         agyPath = d.string(forKey: "agyPath") ?? ""
