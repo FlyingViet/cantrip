@@ -73,6 +73,8 @@ def launch_app():
     repo = repo_dir()
     app = os.path.join(repo, "Cantrip.app")
     if not os.path.isdir(app):
+        app = "/Applications/Cantrip.app"
+    if not os.path.isdir(app):
         return None
     build = quiet_output(["defaults", "read",
                           os.path.join(app, "Contents", "Info"),
@@ -246,6 +248,8 @@ def is_host_command(args):
 def run_host_command(args):
     """Setup and pairing commands live in the Cantrip binary itself (shared with headless hosts)."""
     binary = os.path.join(repo_dir(), "Cantrip.app", "Contents", "MacOS", "Cantrip")
+    if not os.access(binary, os.X_OK):
+        binary = "/Applications/Cantrip.app/Contents/MacOS/Cantrip"
     if not os.access(binary, os.X_OK):
         print(f"cantrip: build Cantrip first: make -C {repo_dir()} app", file=sys.stderr)
         return 1
