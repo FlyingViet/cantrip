@@ -17,6 +17,17 @@ enum Consolidator {
     /// Checks 15 s after launch, then every `checkInterval`. Main thread.
     static func start() {
         ConsolidationState.migrateLegacyStamp(in: .standard)
+        // Clear legacy backoff when an older build failed only because Antigravity wasn't a
+        // consolidation candidate yet.
+        var state = ConsolidationState.load(from: .standard)
+        if state.failures > 0,
+           state.lastError?.contains("Copilot CLI wasn't found to fall back to") == true,
+           AntigravityBackend.isInstalled(customPath: AppSettings.shared.agyPath) {
+            state.failures = 0
+            state.lastError = nil
+            state.nextRetry = nil
+            state.save(to: .standard)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { runIfDue() }
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: checkInterval, repeats: true) { _ in runIfDue() }
@@ -36,7 +47,9 @@ enum Consolidator {
         running = true
         MemoryStore.shared.ensureVault()
         let vault = settings.memoryPath
-        let allowActions = settings.allowActions
+        let allowActions = settings.allowActions || settings.agyPermissionMode == "bypassPermissions"
+        let agyPath = settings.agyPath
+        let agyModels = settings.agyAvailableModels
         let claudePath = settings.claudePath
         let copilotPath = settings.copilotPath
         let copilotModels = settings.copilotModelCatalog.map(\.id)
@@ -44,6 +57,9 @@ enum Consolidator {
 
         DispatchQueue.global(qos: .utility).async {
             let candidates = ConsolidationBackend.candidates(
+                antigravity: AntigravityBackend.resolveExecutable(customPath: agyPath),
+                antigravityModels: agyModels,
+                preferAntigravity: true,
                 claude: ToolLocator.shared.claude(configured: claudePath),
                 copilot: ToolLocator.shared.copilot(configured: copilotPath),
                 copilotModels: copilotModels
