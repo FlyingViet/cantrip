@@ -1,10 +1,16 @@
 import Foundation
 
+/// Every backend's account limits for `/api/v1/copilot/usage`: Copilot's allowance at the top
+/// level (as before) and Claude's plan limits under `claude`.
 struct CopilotUsageSnapshot: Codable {
     var account: CopilotAccountUsage?
     var checkedAt: String?
     var isRefreshing = false
     var error: String?
+    /// Claude Code's 5-hour and weekly limits; nil when Claude Code isn't installed.
+    var claude: ClaudeUsageState?
+    /// The Mac's backend when the snapshot was served, so clients lead with the limit in use.
+    var activeBackend: String?
 
     func isStale(at now: Date = Date()) -> Bool {
         guard account != nil, error == nil, let checked = copilotDate(checkedAt),
@@ -19,6 +25,20 @@ struct CopilotUsageSnapshot: Codable {
     var summary: String? {
         guard let bucket = account?.primary else { return nil }
         return (isStale() ? "Last known: " : "") + bucket.summary
+    }
+}
+
+struct ClaudeUsageState: Codable, Equatable {
+    var account: ClaudeAccountUsage?
+    var checkedAt: String?
+    var error: String?
+
+    /// Older than ten minutes, or a window has reset since it was read.
+    func isStale(at now: Date = Date()) -> Bool {
+        guard account != nil, let checked = copilotDate(checkedAt), now.timeIntervalSince(checked) < 600 else {
+            return true
+        }
+        return account?.windows.contains { copilotDate($0.resetsAt).map { now >= $0 } ?? false } ?? true
     }
 }
 

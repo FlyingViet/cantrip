@@ -7,7 +7,7 @@ struct CopilotUsageView: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Label("Copilot account usage", systemImage: "chart.bar.xaxis").font(.headline)
+                    Label("Copilot allowance", systemImage: "chart.bar.xaxis").font(.headline)
                     Spacer()
                     Button { usage.refreshQuotas() } label: { Image(systemName: "arrow.clockwise") }
                         .disabled(usage.copilotUsage.isRefreshing)
@@ -71,5 +71,59 @@ struct CopilotUsageView: View {
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }
         }
+    }
+}
+
+/// Claude Code's 5-hour and weekly limits, read from Claude's usage API (the same numbers as
+/// Claude Code's `/usage`), with the last streamed rate-limit event as a fallback.
+struct ClaudeUsageView: View {
+    @ObservedObject var usage: UsageTracker
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Claude Code limits", systemImage: "gauge.with.dots.needle.67percent").font(.headline)
+                if let state = usage.copilotUsage.claude, let account = state.account {
+                    if state.isStale(at: context.date) {
+                        Label("Last known limits - data is stale", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
+                    if let plan = account.plan { Text("Plan: \(plan.capitalized)").foregroundStyle(.secondary) }
+                    ForEach(account.windows) { window in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Text(window.title).fontWeight(.medium)
+                                Spacer()
+                                Text(window.summary).foregroundStyle(tint(window))
+                            }
+                            ProgressView(value: min(100, max(0, window.percentUsed)), total: 100)
+                                .tint(tint(window))
+                                .accessibilityLabel(window.title)
+                                .accessibilityValue(String(format: "%.0f%% used", window.percentUsed))
+                        }
+                    }
+                    if let error = state.error { Text(error).foregroundStyle(.orange) }
+                    if let checked = copilotDate(state.checkedAt) {
+                        Text("Checked \(checked.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary)
+                    }
+                } else if let limit = usage.rateLimit {
+                    Text("From the last Claude reply: \(limit.type.replacingOccurrences(of: "_", with: " ")) window \(limit.status)"
+                         + (limit.percentUsed.map { String(format: ", %.0f%% used", $0) } ?? "")
+                         + " · resets \(limit.resetsAt.formatted(date: .omitted, time: .shortened))")
+                    if let error = usage.copilotUsage.claude?.error { Text(error).foregroundStyle(.orange) }
+                } else {
+                    Text(usage.copilotUsage.claude?.error
+                         ?? (usage.copilotUsage.isRefreshing ? "Reading Claude's limits..." : "Claude's limits unavailable"))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption)
+        }
+    }
+
+    private func tint(_ window: ClaudeLimitWindow) -> Color {
+        if window.isExhausted || window.severity == "critical" { return .red }
+        if window.severity == "warning" || window.percentUsed >= 80 { return .orange }
+        return .primary
     }
 }

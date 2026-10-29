@@ -2731,34 +2731,7 @@ struct LauncherView: View {
 
     private var usageView: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let limit = usage.rateLimit {
-                HStack(spacing: 6) {
-                    Image(systemName: limit.status == "allowed"
-                          ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(limit.status == "allowed" ? .green : .orange)
-                    if let percent = limit.percentUsed {
-                        Text("Claude: \(Int(percent))% of \(limit.type.replacingOccurrences(of: "_", with: " ")) limit used · resets \(limit.resetsAt.formatted(date: .omitted, time: .shortened))")
-                            .font(.callout)
-                    } else {
-                        Text("Claude \(limit.type.replacingOccurrences(of: "_", with: " ")) window: \(limit.status) · resets \(limit.resetsAt.formatted(date: .omitted, time: .shortened))")
-                            .font(.callout)
-                    }
-                }
-                if limit.percentUsed == nil {
-                    Text("(exact % isn't exposed by the claude CLI in headless mode yet — shown when available)")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            } else {
-                HStack(spacing: 6) {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Text("Claude: no window data yet — send a Claude query first")
-                        .font(.callout)
-                        .foregroundStyle(.tertiary)
-                }
-            }
+            ClaudeUsageView(usage: usage)
             CopilotUsageView(usage: usage)
             if claudeMonthSpend > 0 {
                 HStack(spacing: 6) {
