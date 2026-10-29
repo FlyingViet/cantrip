@@ -377,19 +377,38 @@ When Cantrip reopens after a quit, crash or update, each tab picks up where it
 stopped: the run it was in the middle of resumes from where it left off, then
 the messages queued behind it are sent in order. Tabs start a few seconds apart.
 If a run is cut off by relaunches twice in a row, Cantrip stops resuming it on
-its own and offers **Resume from where it left off** instead.
+its own and offers **Continue** on its interruption message instead.
 
-A dropped network doesn't fail the task either. A run that fails while the Mac
-is offline, or with a connection error such as a DNS failure, waits until the
-network has been back for a few seconds, then continues the same task. Queued
-messages wait too instead of failing one by one. Messages you send meanwhile
-queue behind the interrupted task; use **Redirect** to replace it. After six
-connection retries in one run, Cantrip reports the failure as usual.
+### Continue a failed run
+
+A run that errors or times out in your conversation — including a dropped
+network or a connection error such as a DNS failure — doesn't retry by itself.
+It stops on its error message, which shows **Continue**. Messages queued behind
+it wait instead of jumping ahead, so nothing runs before you decide:
+
+- **Continue** on the failed message picks the task up from where it stopped,
+  with the steps it already took. The queue runs after it.
+- **Send now** on a queued message skips the failed run for now. Its message
+  keeps **Continue**, so you can go back to it later: it continues as a new run
+  with the same request and the steps from every earlier attempt.
+- Typing a new message with nothing queued sends it at once; the failed message
+  still offers **Continue** afterwards.
+
+Continue waits a few seconds after the failure, while the old backend process
+shuts down, and is refused while the Mac is offline. Only the latest attempt of
+a task offers it, never messages above a **Start Fresh** divider. A run that
+was waiting for Continue when Cantrip relaunched keeps waiting.
+
+Tabs nobody is watching keep continuing on their own: child tabs and tabs
+working on a Cantrip Home handoff wait for the network and continue the same
+task (up to six connection retries per run), and resume once after any other
+failure before they stop on **Continue** too. Usage-limit fallbacks still
+switch backends by themselves.
 
 To check on recovered work:
 
 1. Read the recovery message and restored partial output.
-2. If offered, select **Resume from where it left off**.
+2. If offered, select **Continue** on that message.
 3. Check what already completed before repeating commands with side effects.
 
 Cantrip records normal runs in an append-only journal and can restore partial

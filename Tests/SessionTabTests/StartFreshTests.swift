@@ -269,9 +269,10 @@ extension SessionTabTests {
         let manager = SessionManager()
         let chat = manager.newSession()
         let failure = "Execution failed: 400 The requested model is not supported."
-        let repeated = ChatMessage(role: .error, text: failure + " (Request ID: B)")
+        let failedRun = UUID()
+        let repeated = ChatMessage(role: .error, text: failure + " (Request ID: B)", runID: failedRun)
         chat.messages = [ChatMessage(role: .user, text: "hi"), ChatMessage(role: .error, text: failure + " (Request ID: A)"),
-                         ChatMessage(role: .user, text: "hi"), repeated]
+                         ChatMessage(role: .user, text: "hi", runID: failedRun), repeated]
         let server = RemoteControlServer(manager: manager)
         let port = Int.random(in: 49152...65535), token = UUID().uuidString
         server.start(port: port, token: token)
@@ -299,6 +300,14 @@ extension SessionTabTests {
         let session = loaded.1["session"] as! [String: Any]
         precondition(loaded.0 == 200 && session["supportsStartFresh"] as? Bool == true)
         precondition(session["repeatedErrorMessageID"] as? String == repeated.id.uuidString, "\(session)")
+        // The failed run's message offers Continue; …/resume takes it by message ID.
+        precondition(session["supportsContinueFromMessage"] as? Bool == true
+                     && session["continuableMessageIDs"] as? [String] == [repeated.id.uuidString], "\(session)")
+        let badID = try await request("/resume", method: "POST", body: Data(#"{"messageID":"nope"}"#.utf8))
+        precondition(badID.0 == 400)
+        let gone = try await request("/resume", method: "POST",
+                                     body: Data(#"{"messageID":"\#(UUID().uuidString)"}"#.utf8))
+        precondition(gone.0 == 409 && (gone.1["error"] as? String)?.contains("can't be continued") == true)
 
         let wrongMethod = try await request("/start-fresh", method: "DELETE")
         precondition(wrongMethod.0 == 405)
@@ -317,6 +326,7 @@ extension SessionTabTests {
                      && messages.last?["text"] as? String == ChatSession.freshStartCaption,
                      "The response shows the divider below the kept history: \(messages)")
         precondition(after["repeatedErrorMessageID"] == nil, "Start Fresh clears the recovery offer")
+        precondition(after["continuableMessageIDs"] as? [String] == [], "Runs above the divider don't continue")
         let again = try await request("/start-fresh", method: "POST", body: Data("{}".utf8))
         precondition(again.0 == 200 && chat.messages.count == 5, "Repeating Start Fresh adds nothing")
 
