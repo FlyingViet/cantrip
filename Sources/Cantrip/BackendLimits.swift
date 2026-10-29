@@ -2,7 +2,9 @@ import Foundation
 
 /// Recognizes a backend error that means the account's plan is used up for now (Claude's
 /// 5-hour and weekly limits, Copilot's premium requests, Codex and Gemini quotas), as opposed
-/// to a failure retrying the same backend could fix.
+/// to a failure retrying the same backend could fix. Backends that send a structured error
+/// (Copilot's `session.error`, Claude's `rate_limit` and `billing_error`) report it as a
+/// `UsageLimitReport`; the phrases are only the last resort for CLIs that don't.
 enum UsageLimit {
     /// Lowercased phrases each CLI uses. Generic "limit reached" is left out on purpose:
     /// "Context limit reached" means the conversation is full, not the plan.
@@ -14,6 +16,28 @@ enum UsageLimit {
         "no quota", "resource_exhausted", "exhausted your capacity", "usage_limit_reached",
         "credit balance is too low",
     ]
+
+    /// Copilot's `session.error` categories that mean the plan, not the request, is the problem.
+    /// `errorCode` narrows it ("quota_exceeded", "user_weekly_rate_limited", ...).
+    static func copilotReport(errorType: String?, errorCode: String?, message: String,
+                              now: Date = Date()) -> UsageLimitReport? {
+        guard let errorType, ["quota", "rate_limit"].contains(errorType) else { return nil }
+        var resets = resetDate(in: message, now: now)
+        // The monthly premium-request allowance resets on the 1st at 00:00 UTC; skipping
+        // Copilot for only the default hour would fail again every hour until then.
+        if resets == nil, errorType == "quota", errorCode == "quota_exceeded" {
+            resets = startOfNextMonthUTC(after: now)
+        }
+        return UsageLimitReport(code: [errorType, errorCode].compactMap { $0 }.joined(separator: "/"),
+                                resetsAt: resets)
+    }
+
+    static func startOfNextMonthUTC(after date: Date) -> Date? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        guard let month = calendar.dateInterval(of: .month, for: date) else { return nil }
+        return month.end
+    }
 
     static func isLimitError(_ text: String) -> Bool {
         let lowered = text.lowercased()
@@ -55,15 +79,17 @@ final class BackendLimitTracker {
     private let lock = NSLock()
     private var limitedUntil: [BackendKind: Date] = [:]
 
-    func markLimited(_ kind: BackendKind, message: String, now: Date = Date()) {
-        var until = UsageLimit.resetDate(in: message, now: now)
+    func markLimited(_ kind: BackendKind, message: String, report: UsageLimitReport? = nil,
+                     now: Date = Date()) {
+        var until = report?.resetsAt.flatMap { $0 > now ? $0 : nil } ?? UsageLimit.resetDate(in: message, now: now)
         if until == nil, kind == .claudeCode, let limit = UsageTracker.shared.rateLimit,
            limit.status == "rejected", limit.resetsAt > now {
             until = limit.resetsAt
         }
         let date = until ?? now.addingTimeInterval(Self.defaultCooldown)
         lock.withLock { limitedUntil[kind] = date }
-        Log.write("usage-limit: \(kind.rawValue) limited until \(ISODate.string(from: date))")
+        Log.write("usage-limit: \(kind.rawValue) limited until \(ISODate.string(from: date))"
+            + (report.map { " (\($0.code))" } ?? ""))
     }
 
     func limitedUntil(_ kind: BackendKind, now: Date = Date()) -> Date? {

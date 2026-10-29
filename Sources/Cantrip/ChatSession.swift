@@ -281,6 +281,8 @@ final class ChatSession: ObservableObject {
     private(set) var lastRunOutcome: LiveStatusRunOutcome?
     private var currentRunMode: RunJournal.Mode?
     private var currentRunBackend: BackendKind?
+    /// The backend's own usage-limit report for the attempt that's about to fail, if it sent one.
+    private var reportedUsageLimit: UsageLimitReport?
     private var currentAttempt = 0
     private var pendingTurnCompletion: (runID: UUID, status: String, summary: String)?
     private var runningBackendKind: BackendKind?
@@ -720,6 +722,7 @@ final class ChatSession: ObservableObject {
         currentRunStartedAt = Date()
         currentRunMode = mode
         currentRunBackend = backend
+        reportedUsageLimit = nil
         currentAttempt = 1
         promptUsageMessageID = nil
         activityStartedAt.removeAll()
@@ -976,6 +979,7 @@ final class ChatSession: ObservableObject {
         currentRunStartedAt = nil
         currentRunMode = nil
         currentRunBackend = nil
+        reportedUsageLimit = nil
         currentAttempt = 0
         runningBackendKind = nil
         activityStartedAt.removeAll()
@@ -2533,7 +2537,7 @@ final class ChatSession: ObservableObject {
             }
         case .usage(let usage):
             recordUsage(usage)
-        case .context, .backgroundWake:
+        case .context, .backgroundWake, .usageLimit:
             break // several models share the prompt
         case .approval(let approval):
             recordApproval(approval)
@@ -2632,7 +2636,7 @@ final class ChatSession: ObservableObject {
                     }
                 case .usage(let usage):
                     self.recordUsage(usage)
-                case .context, .backgroundWake:
+                case .context, .backgroundWake, .usageLimit:
                     break
                 case .approval(let approval):
                     self.recordApproval(approval)
@@ -3042,7 +3046,10 @@ final class ChatSession: ObservableObject {
             recordApproval(approval)
         case .backgroundWake(let ids):
             openBackgroundResultBubble(for: ids)
+        case .usageLimit(let report):
+            reportedUsageLimit = report
         case .done:
+            reportedUsageLimit = nil
             isWaitingOnBackgroundWatchers = false
             if !pendingInjections.isEmpty {
                 deferredInjectionDone = true
@@ -3189,10 +3196,15 @@ final class ChatSession: ObservableObject {
 
     /// The backend reported its plan's usage limit: remember that for every tab, and return the
     /// backend this run continues on (Settings' usage limit fallback), or nil to fail as usual.
+    /// The backend's structured report decides; matching the error's wording is the last resort
+    /// for CLIs that don't send one.
     private func usageLimitFallback(after errorText: String) -> BackendKind? {
-        guard !isLocalPrivate, UsageLimit.isLimitError(errorText),
+        let report = reportedUsageLimit
+        reportedUsageLimit = nil
+        guard !isLocalPrivate, report != nil || UsageLimit.isLimitError(errorText),
               let limited = runningBackendKind ?? currentRunBackend, limited != .localModel else { return nil }
-        BackendLimitTracker.shared.markLimited(limited, message: errorText)
+        if report == nil { Log.write("usage-limit: \(limited.rawValue) matched by wording only: \(errorText.prefix(120))") }
+        BackendLimitTracker.shared.markLimited(limited, message: errorText, report: report)
         guard currentRunPrompt != nil, currentRunMode == .single, !councilMode, journalError == nil else { return nil }
         return BackendFallback.target(for: limited, configured: settings.limitFallbackBackend,
                                       homeRun: isCantripHomeRun)

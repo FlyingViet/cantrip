@@ -26,6 +26,9 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     /// Claude's own text for a turn the plan's usage limit stopped (an assistant message marked
     /// `rate_limit` or `billing_error`), so the turn ends as a failure Cantrip can fall back on.
     private var usageLimitText: String?
+    /// Claude's own code for a usage limit this turn: the assistant message's `error`, or a
+    /// `rate_limit_event` whose status is `rejected` (with its reset time).
+    private var usageLimitReport: UsageLimitReport?
     /// A turn is running and owes exactly one terminal `result` event.
     private var turnInFlight = false
     /// Set by a graceful interrupt while a turn is in flight: the aborted
@@ -116,6 +119,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             self.hasEmittedText = false
             self.hasEmittedThinking = false
             self.usageLimitText = nil
+            self.usageLimitReport = nil
             self.idleRelease?.cancel()
             self.endBackgroundWait()
             if self.process?.isRunning != true || self.processWorkdir != workdir
@@ -947,6 +951,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
                 let text = content.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
                     .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
                 usageLimitText = text.isEmpty ? "Claude usage limit reached." : text
+                if usageLimitReport == nil { usageLimitReport = UsageLimitReport(code: error, resetsAt: nil) }
             }
             if let parentID, var parent = activities[parentID], parent.subagent != nil {
                 // A subagent's own message: feed the monitor, keep it out of the answer.
@@ -1070,8 +1075,10 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             }
             if let isError = obj["is_error"] as? Bool, isError,
                let result = obj["result"] as? String {
+                if let report = usageLimitReport { onEvent(.usageLimit(report)) }
                 onEvent(.failure(result))
             } else if let limit = usageLimitText, !hasEmittedText {
+                if let report = usageLimitReport { onEvent(.usageLimit(report)) }
                 onEvent(.failure(UsageLimit.isLimitError(limit) ? limit : "Claude usage limit reached: \(limit)"))
             } else {
                 // Local slash commands (/context, /cost, ...) answer with a synthetic message and
@@ -1094,11 +1101,18 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
                 let rawUtil = (info["utilization"] ?? info["used_percentage"]
                     ?? info["percentUsed"] ?? info["percent_used"]) as? Double
                 let percent = rawUtil.map { $0 <= 1.0 ? $0 * 100 : $0 }
+                let type = info["rateLimitType"] as? String ?? "window"
+                let status = info["status"] as? String ?? "unknown"
                 UsageTracker.shared.updateRateLimit(
-                    type: info["rateLimitType"] as? String ?? "window",
+                    type: type,
                     resetsAtEpoch: resets,
-                    status: info["status"] as? String ?? "unknown",
+                    status: status,
                     percentUsed: percent)
+                if status == "rejected" {
+                    // The window that's used up, and when it opens again.
+                    usageLimitReport = UsageLimitReport(code: "rate_limit/\(type)",
+                                                        resetsAt: Date(timeIntervalSince1970: resets))
+                }
             }
         case "system":
             let subtype = obj["subtype"] as? String ?? ""

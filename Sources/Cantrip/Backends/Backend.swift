@@ -384,8 +384,19 @@ enum BackendEvent {
     case inputRequired(BackendInputRequest)
     /// The root agent was idle and finished background work (agent or shell IDs) woke it.
     case backgroundWake([String])
+    /// The backend's own error code says its plan is used up for now. Sent just before the
+    /// run's `.failure`, so Cantrip switches backends without reading the error's wording.
+    case usageLimit(UsageLimitReport)
     case done                      // stream finished successfully
     case failure(String)           // error message
+}
+
+/// A usage limit as the backend reported it in a structured field, not in prose.
+struct UsageLimitReport: Equatable {
+    /// The backend's code for it, for the log: "quota/quota_exceeded", "rate_limit", ...
+    let code: String
+    /// When the limit lifts, if the backend says.
+    let resetsAt: Date?
 }
 
 struct BackendRequest {

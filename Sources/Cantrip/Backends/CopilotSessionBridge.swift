@@ -224,6 +224,11 @@ enum CopilotSessionBridge {
         emit({ kind: 'event', runID, event });
         finishIfIdle();
       } else if (event.type === 'session.error' && !event.agentId) {
+        // Pass the error's category on so Cantrip decides on it, not on the message's wording.
+        if (event.data?.errorType === 'quota' || event.data?.errorType === 'rate_limit') {
+          emit({ kind: 'usageLimit', runID, errorType: event.data.errorType,
+            errorCode: event.data.errorCode ?? null, message: event.data.message });
+        }
         emit({ kind: 'failure', runID, message: event.data.message });
         runID = undefined;
       } else {

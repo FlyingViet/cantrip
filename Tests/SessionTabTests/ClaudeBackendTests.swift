@@ -34,7 +34,26 @@ extension SessionTabTests {
         try await testClaudeLaunchAndIdleRelease(directory)
         try await testClaudeTabModels(script)
         try await testClaudeCarriesEarlierTurns(directory)
+        try await testClaudeReportsUsageLimit(directory)
         try testClaudeSharedMCP(directory)
+    }
+
+    /// A turn the plan's limit stops reports it from Claude's own fields (the `rejected`
+    /// rate-limit event and the message's `rate_limit` error), whatever the wording says.
+    @MainActor
+    private static func testClaudeReportsUsageLimit(_ directory: URL) async throws {
+        let backend = ClaudeCodeBackend(persistKey: "test-claude-limit")
+        backend.reset()
+        defer { backend.cancel() }
+        let turn = ClaudeTurn()
+        backend.send(BackendRequest(prompt: "limited", userMessage: "limited", previousTurns: []),
+                     workdir: directory.path, onEvent: turn.record)
+        try await waitForJournalTest { turn.finished }
+        precondition(!UsageLimit.isLimitError(turn.failure ?? ""), "The fixture's wording isn't a known phrase")
+        precondition(turn.limitReports == [UsageLimitReport(code: "rate_limit/five_hour",
+                                                            resetsAt: Date(timeIntervalSince1970: 1_900_000_000))],
+                     "The report carries the window and its reset time: \(turn.limitReports)")
+        precondition(turn.log.suffix(2) == ["limit", "failure"], "The report comes just before the failure: \(turn.log)")
     }
 
     /// A Claude session that hasn't seen the tab's earlier turns (a tab that ran on Copilot, or turns
@@ -248,6 +267,7 @@ extension SessionTabTests {
     private final class ClaudeTurn {
         var text = "", failure: String?, finished = false
         var statuses: [String] = [], log: [String] = [], wakes: [[String]] = [], limits: [Int] = []
+        var limitReports: [UsageLimitReport] = []
         var activities: [String: ToolActivity] = [:]
 
         nonisolated func record(_ event: BackendEvent) {
@@ -263,6 +283,7 @@ extension SessionTabTests {
                 for child in activity.children { activities.removeValue(forKey: child.id) }
             case .context(let context): if let limit = context.limit { limits.append(limit) }
             case .backgroundWake(let ids): wakes.append(ids); log.append("wake")
+            case .usageLimit(let report): limitReports.append(report); log.append("limit")
             case .done: finished = true; log.append("done")
             case .failure(let message): failure = message; finished = true; log.append("failure")
             default: break
@@ -338,6 +359,14 @@ extension SessionTabTests {
             emit({'type': 'stream_event', 'event': {'type': 'content_block_start', 'content_block': {'type': 'text'}}})
             emit({'type': 'stream_event', 'event': {'type': 'content_block_delta', 'delta': {'type': 'text_delta', 'text': 'The build passed.'}}})
             emit({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': 'The build passed.', 'num_turns': 1})
+        elif prompt == 'limited':
+            emit({'type': 'system', 'subtype': 'init', 'session_id': 'session-limited', 'model': 'claude-opus-5-5'})
+            emit({'type': 'rate_limit_event', 'rate_limit_info': {
+                'status': 'rejected', 'resetsAt': 1900000000, 'rateLimitType': 'five_hour'}})
+            emit({'type': 'assistant', 'parent_tool_use_id': None, 'error': 'rate_limit', 'message': {
+                'id': 'm-limit', 'content': [{'type': 'text', 'text': 'Out of credits for now.'}]}})
+            emit({'type': 'result', 'subtype': 'success', 'is_error': True, 'result': 'Out of credits for now.',
+                  'num_turns': 1})
         elif prompt == 'stoppable':
             agent_turn('side-lookup')
         elif prompt == 'child':
