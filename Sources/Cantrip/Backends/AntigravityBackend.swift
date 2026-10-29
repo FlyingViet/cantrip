@@ -28,8 +28,19 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     private let settings = AppSettings.shared
     private let persistKey: String
     private let readOnly: Bool
-    private let modelOverride: String?
-    private let effortOverride: String?
+    /// A tab's own model and effort (nil follows the Mac's Antigravity settings). Set on the main
+    /// thread, read when a turn launches `agy`; a change relaunches it on the same conversation.
+    private let overrideLock = NSLock()
+    private var storedModelOverride: String?
+    private var storedEffortOverride: String?
+    var modelOverride: String? {
+        get { overrideLock.withLock { storedModelOverride } }
+        set { overrideLock.withLock { storedModelOverride = newValue } }
+    }
+    var effortOverride: String? {
+        get { overrideLock.withLock { storedEffortOverride } }
+        set { overrideLock.withLock { storedEffortOverride = newValue } }
+    }
     var guardrail: CantripHomeGuardrail?
     var guardrailLabel = "Cantrip Home"
 
@@ -80,8 +91,8 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     ) {
         self.persistKey = persistKey
         self.readOnly = readOnly
-        self.modelOverride = modelOverride
-        self.effortOverride = effortOverride
+        self.storedModelOverride = modelOverride
+        self.storedEffortOverride = effortOverride
         self.sessionID = UserDefaults.standard.string(forKey: persistKey)
     }
 
