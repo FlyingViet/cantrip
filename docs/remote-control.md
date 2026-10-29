@@ -177,6 +177,32 @@ the tab runs, while the Mac is offline, or when the row no longer offers
 Continue. Without a body, `resume` keeps resuming the tab's paused run
 (`canResume`), so older clients' **Resume** still works.
 
+## Tab terminal
+
+**Terminal** in Cantrip Gateway for Mac and Windows opens the tab's persistent
+shell: the same one as the Mac panel's terminal mode, so `cd`, exports and
+history carry across devices, and the agent's own commands appear in it too.
+Sessions advertise `supportsTerminal` (false for Private Local) and
+`terminalBusy` while a command, yours or the agent's, runs.
+
+- `GET /api/v1/sessions/{id}/terminal?from=<end>&epoch=<epoch>` returns
+  `epoch`, `start`, `end`, `text`, `reset`, `isRunning`, `agentCommandRunning`,
+  `history` (the last 50 commands) and `workdir`. `text` is the output after
+  `from`; when the client's place was cleared or trimmed (the Mac keeps about
+  60,000 characters), `reset` is true and `text` is everything the Mac kept.
+  Poll from the reply's `end` and `epoch`.
+- `POST …/terminal` with `{"command": "<one line>"}` runs it. While a command
+  runs, the line goes to that command's input.
+- `POST …/terminal/interrupt` sends Control-C (or stops the run when only the
+  agent's command is running), `…/terminal/clear` empties the output (a new
+  `epoch`) and `…/terminal/restart` restarts the shell. They take no body.
+
+Every reply is the terminal tailing from the request's `from` and `epoch`.
+Malformed commands return `400` and Private Local returns `409`. The terminal
+is a line-based shell without a TTY, so full-screen programs such as `vim` or
+`top` aren't supported. Pairing already allows `!` shell commands, so the
+terminal grants no new access.
+
 ## Remote approvals and secure input
 
 Cantrip, Mac/browser Remote and Cantrip Agent display questions, approvals and

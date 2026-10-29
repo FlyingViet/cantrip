@@ -9,6 +9,11 @@ final class PersistentShell: ObservableObject {
     @Published private(set) var hasAgentCommandRunning = false
     @Published private(set) var agentCommandVersion = 0
     private(set) var commandHistory: [String] = []
+    /// Unicode scalars trimmed from the front of `output`, so `outputEnd` only grows
+    /// (until Clear starts a new `epoch`). Paired clients tail the output by these offsets.
+    private(set) var outputBase = 0
+    private(set) var epoch = UUID().uuidString
+    var outputEnd: Int { outputBase + output.unicodeScalars.count }
 
     private var process: Process?
     private var stdinHandle: FileHandle?
@@ -36,6 +41,19 @@ final class PersistentShell: ObservableObject {
 
     func clear() {
         output = ""
+        outputBase = 0
+        epoch = UUID().uuidString
+    }
+
+    /// The output after scalar offset `from` in `epoch`, or all of it (`reset`) when the
+    /// client's place was trimmed, cleared or is unknown.
+    func tail(from: Int?, epoch clientEpoch: String?) -> (text: String, start: Int, reset: Bool) {
+        let scalars = output.unicodeScalars
+        guard let from, clientEpoch == epoch, from >= outputBase, from <= outputEnd else {
+            return (output, outputBase, true)
+        }
+        let start = scalars.index(scalars.startIndex, offsetBy: from - outputBase)
+        return (String(scalars[start...]), from, false)
     }
 
     /// Reflect commands that the agent CLI executes itself. They are not
@@ -175,7 +193,9 @@ final class PersistentShell: ObservableObject {
     private func append(_ text: String) {
         output += text
         if output.count > maxOutput {
+            let before = output.unicodeScalars.count
             output = String(output.suffix(maxOutput / 2))
+            outputBase += before - output.unicodeScalars.count
         }
     }
 
