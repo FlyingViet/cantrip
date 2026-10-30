@@ -1093,6 +1093,9 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
                 commitSeenTurns()
                 finishRootTurn(onEvent)
             }
+        case "tool_progress":
+            // A long command or agent still running; nothing to show, but the run is alive.
+            onEvent(.heartbeat)
         case "rate_limit_event":
             if let info = obj["rate_limit_info"] as? [String: Any],
                let resets = info["resetsAt"] as? TimeInterval {

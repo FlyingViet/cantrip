@@ -387,6 +387,9 @@ enum BackendEvent {
     /// The backend's own error code says its plan is used up for now. Sent just before the
     /// run's `.failure`, so Cantrip switches backends without reading the error's wording.
     case usageLimit(UsageLimitReport)
+    /// The backend is still working but has nothing to show (a long command's progress tick).
+    /// It only keeps the run's inactivity watchdog from firing.
+    case heartbeat
     case done                      // stream finished successfully
     case failure(String)           // error message
 }

@@ -400,7 +400,8 @@ final class ChatSession: ObservableObject {
     }
     /// Auto-cancel if the backend goes silent for this long. Generous so
     /// long downloads/builds under a tool call aren't killed.
-    private let inactivityLimit: TimeInterval = 900
+    /// A run with no backend event for this long is cancelled (tests shorten it).
+    var inactivityLimit: TimeInterval = 900
     private var watchdog: Timer?
     let claudeCode: ClaudeCodeBackend
     private let copilot: Backend
@@ -2546,7 +2547,7 @@ final class ChatSession: ObservableObject {
             }
         case .usage(let usage):
             recordUsage(usage)
-        case .context, .backgroundWake, .usageLimit:
+        case .context, .backgroundWake, .usageLimit, .heartbeat:
             break // several models share the prompt
         case .approval(let approval):
             recordApproval(approval)
@@ -2645,7 +2646,7 @@ final class ChatSession: ObservableObject {
                     }
                 case .usage(let usage):
                     self.recordUsage(usage)
-                case .context, .backgroundWake, .usageLimit:
+                case .context, .backgroundWake, .usageLimit, .heartbeat:
                     break
                 case .approval(let approval):
                     self.recordApproval(approval)
@@ -3055,6 +3056,8 @@ final class ChatSession: ObservableObject {
             recordApproval(approval)
         case .backgroundWake(let ids):
             openBackgroundResultBubble(for: ids)
+        case .heartbeat:
+            break // armWatchdog() above is the point
         case .usageLimit(let report):
             reportedUsageLimit = report
         case .done:

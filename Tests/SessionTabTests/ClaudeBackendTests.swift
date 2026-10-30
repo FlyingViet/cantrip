@@ -176,6 +176,8 @@ extension SessionTabTests {
         try await waitForJournalTest { turn.finished }
         precondition(turn.failure == nil, "No failure: \(turn.log)")
         precondition(turn.wakes == [["toolu_agent"]], "One wake names the watcher's call: \(turn.wakes)")
+        precondition(turn.log.contains("heartbeat"),
+                     "A long command's tool_progress keeps the run's watchdog from firing: \(turn.log)")
         let index = turn.log.firstIndex(of: "wake") ?? 0
         precondition(turn.log.firstIndex(of: "done") ?? 0 > index && turn.log.filter({ $0 == "done" }).count == 1,
                      "Done comes once, after the wake: \(turn.log)")
@@ -283,6 +285,7 @@ extension SessionTabTests {
                 for child in activity.children { activities.removeValue(forKey: child.id) }
             case .context(let context): if let limit = context.limit { limits.append(limit) }
             case .backgroundWake(let ids): wakes.append(ids); log.append("wake")
+            case .heartbeat: log.append("heartbeat")
             case .usageLimit(let report): limitReports.append(report); log.append("limit")
             case .done: finished = true; log.append("done")
             case .failure(let message): failure = message; finished = true; log.append("failure")
@@ -350,6 +353,7 @@ extension SessionTabTests {
                   'owned_by_subagent': True, 'parent_task_id': 'task1', 'is_backgrounded': False})
             emit({'type': 'system', 'subtype': 'task_progress', 'task_id': 'task1', 'tool_use_id': 'toolu_agent',
                   'description': 'Waiting for build 42', 'usage': {'total_tokens': 900, 'tool_uses': 1}})
+            emit({'type': 'tool_progress', 'tool_use_id': 'toolu_sub_bash', 'tool_name': 'Bash', 'elapsed_time_seconds': 30})
             emit({'type': 'user', 'parent_tool_use_id': 'toolu_agent', 'message': {'content': [
                 {'type': 'tool_result', 'tool_use_id': 'toolu_sub_bash', 'content': 'ok'}]}})
             emit({'type': 'system', 'subtype': 'task_notification', 'task_id': 'task1', 'tool_use_id': 'toolu_agent',
