@@ -38,7 +38,8 @@ private struct CantripTabDrawer<Panel: View>: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .allowsHitTesting(!isPresented)
+            // The dimmed backdrop takes taps over the chat; the iPhone Duo's vertical bar stays
+            // above it, so its Tabs button can put the drawer away again.
             .accessibilityHidden(isPresented)
             // Observe alongside transcript scrolling; only a horizontal edge swipe opens tabs.
             .simultaneousGesture(

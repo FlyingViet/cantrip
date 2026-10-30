@@ -1723,7 +1723,8 @@ struct ChatView: View {
                     isEnabled: remoteTabsEnabled
                 ) {
                     composerFocused = false
-                    showRemoteTabs = true
+                    // A toggle: the system's vertical bar stays above the open drawer.
+                    showRemoteTabs.toggle()
                 }
             }
         } trailing: {

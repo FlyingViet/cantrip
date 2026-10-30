@@ -42,6 +42,11 @@ final class CantripDuoTabPickerUITests: XCTestCase {
         XCTAssertTrue(drawer.waitForExistence(timeout: 5), "Tabs brings out the tab picker")
         sleep(1)
         save("picker-from-tabs")
+        // Tabs is a toggle: tapping it again puts the picker away.
+        tabs.tap()
+        XCTAssertTrue(waitForAbsence(drawer), "Tapping Tabs again closes the tab picker")
+        tabs.tap()
+        XCTAssertTrue(drawer.waitForExistence(timeout: 5), "And opens it again")
         // Another tab (the fixture opens on its first one).
         let rows = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier MATCHES 'cantrip-tab-[0-9A-Fa-f-]{36}'"))
