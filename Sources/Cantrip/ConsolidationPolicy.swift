@@ -115,11 +115,13 @@ struct ConsolidationState: Equatable {
 
 /// A CLI that can run the consolidation prompt headlessly.
 enum ConsolidationBackend: Equatable {
+    case antigravity(path: String, model: String?)
     case claude(path: String)
     case copilot(path: String, model: String?)
 
     var name: String {
         switch self {
+        case .antigravity: return "Antigravity"
         case .claude: return "Claude Code"
         case .copilot: return "Copilot"
         }
@@ -127,16 +129,49 @@ enum ConsolidationBackend: Equatable {
 
     var executable: String {
         switch self {
-        case .claude(let path), .copilot(let path, _): return path
+        case .antigravity(let path, _), .claude(let path), .copilot(let path, _): return path
         }
     }
 
-    /// Claude Code stays first (a cheap Haiku run, as before); Copilot is the fallback.
-    static func candidates(claude: String?, copilot: String?, copilotModels: [String]) -> [Self] {
+    /// Claude Code stays first (a cheap Haiku run, as before); Copilot is the fallback. When
+    /// Antigravity is available and preferred, it runs first with Gemini 3.8 Flash; otherwise it
+    /// serves as a fallback after Claude Code and Copilot.
+    static func candidates(
+        antigravity: String? = nil,
+        antigravityModels: [String] = [],
+        preferAntigravity: Bool = false,
+        claude: String?,
+        copilot: String?,
+        copilotModels: [String]
+    ) -> [Self] {
         var result: [Self] = []
+        let agyCandidate = antigravity.map {
+            Self.antigravity(path: $0, model: preferredAntigravityModel(antigravityModels))
+        }
+        if preferAntigravity, let agyCandidate {
+            result.append(agyCandidate)
+        }
         if let claude { result.append(.claude(path: claude)) }
         if let copilot { result.append(.copilot(path: copilot, model: preferredCopilotModel(copilotModels))) }
+        if !preferAntigravity, let agyCandidate {
+            result.append(agyCandidate)
+        }
         return result
+    }
+
+    /// Picks Gemini 3.8 Flash (or the newest Flash model in the Antigravity catalog) for fast,
+    /// low-cost background memory consolidation instead of a heavy frontier model like Argon.
+    static func preferredAntigravityModel(_ ids: [String]) -> String {
+        if ids.contains("gemini-3.8-flash-medium") { return "gemini-3.8-flash-medium" }
+        if ids.contains("gemini-3.8-flash-high") { return "gemini-3.8-flash-high" }
+        if let flash38 = ids.first(where: { $0.lowercased().hasPrefix("gemini-3.8-flash") }) {
+            return flash38
+        }
+        let flash = ids.filter { $0.lowercased().contains("flash") }
+        if let best = flash.max(by: { versionParts($0).lexicographicallyPrecedes(versionParts($1)) }) {
+            return best
+        }
+        return "gemini-3.8-flash-medium"
     }
 
     /// The newest Haiku in the Copilot catalog, matching Claude's `haiku` alias; nil keeps the
@@ -150,11 +185,19 @@ enum ConsolidationBackend: Equatable {
         id.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
     }
 
-    /// The same permission policy for either CLI: with Allow actions on, every tool runs without
-    /// asking (Claude `bypassPermissions`, Copilot `--allow-all-tools`); otherwise only file edits
-    /// are approved and commands are refused (Claude `acceptEdits`, Copilot write-only).
+    /// The same permission policy for every CLI: with Allow actions on, every tool runs without
+    /// asking (Antigravity `--dangerously-skip-permissions`, Claude `bypassPermissions`, Copilot
+    /// `--allow-all-tools`); otherwise only file edits are approved and commands are refused
+    /// (Antigravity `--mode accept-edits`, Claude `acceptEdits`, Copilot write-only).
     func arguments(prompt: String, allowActions: Bool) -> [String] {
         switch self {
+        case .antigravity(_, let model):
+            var arguments = ["-p", prompt]
+            if let model, !model.isEmpty { arguments += ["--model", model] }
+            arguments += allowActions
+                ? ["--dangerously-skip-permissions"]
+                : ["--mode", "accept-edits"]
+            return arguments
         case .claude:
             return ["-p", prompt, "--model", "haiku",
                     "--permission-mode", allowActions ? "bypassPermissions" : "acceptEdits"]

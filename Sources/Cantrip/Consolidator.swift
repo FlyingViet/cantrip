@@ -17,6 +17,18 @@ enum Consolidator {
     /// Checks 15 s after launch, then every `checkInterval`. Main thread.
     static func start() {
         ConsolidationState.migrateLegacyStamp(in: .standard)
+        // Clear legacy backoff when an older build failed only because Antigravity wasn't a
+        // consolidation candidate yet.
+        var state = ConsolidationState.load(from: .standard)
+        if state.failures > 0,
+           state.lastError?.contains("Copilot CLI wasn't found to fall back to") == true,
+           AppSettings.shared.agyMemoryConsolidation,
+           AntigravityBackend.isInstalled(customPath: AppSettings.shared.agyPath) {
+            state.failures = 0
+            state.lastError = nil
+            state.nextRetry = nil
+            state.save(to: .standard)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { runIfDue() }
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: checkInterval, repeats: true) { _ in runIfDue() }
@@ -37,6 +49,10 @@ enum Consolidator {
         MemoryStore.shared.ensureVault()
         let vault = settings.memoryPath
         let allowActions = settings.allowActions
+        let agyAllowActions = settings.allowActions || settings.agyPermissionMode == "bypassPermissions"
+        // Memory stays on Cantrip's own pass unless the user opts in to Antigravity for it.
+        let agyPath: String? = settings.agyMemoryConsolidation ? settings.agyPath : nil
+        let agyModels = settings.agyAvailableModels
         let claudePath = settings.claudePath
         let copilotPath = settings.copilotPath
         let copilotModels = settings.copilotModelCatalog.map(\.id)
@@ -44,12 +60,18 @@ enum Consolidator {
 
         DispatchQueue.global(qos: .utility).async {
             let candidates = ConsolidationBackend.candidates(
+                antigravity: agyPath.flatMap { AntigravityBackend.resolveExecutable(customPath: $0) },
+                antigravityModels: agyModels,
+                preferAntigravity: true,
                 claude: ToolLocator.shared.claude(configured: claudePath),
                 copilot: ToolLocator.shared.copilot(configured: copilotPath),
                 copilotModels: copilotModels
             )
             let outcome = ConsolidationAttempt.execute(candidates) { backend in
-                run(backend, prompt: prompt, allowActions: allowActions, vault: vault)
+                if case .antigravity = backend {
+                    return run(backend, prompt: prompt, allowActions: agyAllowActions, vault: vault)
+                }
+                return run(backend, prompt: prompt, allowActions: allowActions, vault: vault)
             }
             DispatchQueue.main.async {
                 running = false

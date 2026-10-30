@@ -28,8 +28,34 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     private let settings = AppSettings.shared
     private let persistKey: String
     private let readOnly: Bool
-    private let modelOverride: String?
-    private let effortOverride: String?
+    /// A tab's own model and effort (nil follows the Mac's Antigravity settings). Set on the main
+    /// thread, read when a turn launches `agy`; a change relaunches it on the same conversation.
+    private let overrideLock = NSLock()
+    private var storedModelOverride: String?
+    private var storedEffortOverride: String?
+    private var storedTurnModelOverride: String?
+    private var storedFallbackSourceModel: String?
+    private var storedIsIncidentTurn = false
+    var modelOverride: String? {
+        get { overrideLock.withLock { storedModelOverride } }
+        set { overrideLock.withLock { storedModelOverride = newValue; storedTurnModelOverride = nil } }
+    }
+    var effortOverride: String? {
+        get { overrideLock.withLock { storedEffortOverride } }
+        set { overrideLock.withLock { storedEffortOverride = newValue } }
+    }
+    var turnModelOverride: String? {
+        get { overrideLock.withLock { storedTurnModelOverride } }
+        set { overrideLock.withLock { storedTurnModelOverride = newValue } }
+    }
+    var fallbackSourceModel: String? {
+        get { overrideLock.withLock { storedFallbackSourceModel } }
+        set { overrideLock.withLock { storedFallbackSourceModel = newValue } }
+    }
+    var isIncidentTurn: Bool {
+        get { overrideLock.withLock { storedIsIncidentTurn } }
+        set { overrideLock.withLock { storedIsIncidentTurn = newValue } }
+    }
     var guardrail: CantripHomeGuardrail?
     var guardrailLabel = "Cantrip Home"
 
@@ -59,6 +85,8 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     private var turnEventCallback: ((BackendEvent) -> Void)?
     private var activeTools: [String: ToolActivity] = [:]
     private var activeSubagents: [String: SubagentInfo] = [:]
+    private var activeSubagentChildren: [String: [ToolActivity]] = [:]
+    private var subagentPollTimer: DispatchSourceTimer?
     private var pendingInputRequests: [UUID: BackendInputRequest] = [:]
     private var approvedGuardrailScopes: Set<String> = []
     private var stdoutRemainder = Data()
@@ -80,8 +108,8 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     ) {
         self.persistKey = persistKey
         self.readOnly = readOnly
-        self.modelOverride = modelOverride
-        self.effortOverride = effortOverride
+        self.storedModelOverride = modelOverride
+        self.storedEffortOverride = effortOverride
         self.sessionID = UserDefaults.standard.string(forKey: persistKey)
     }
 
@@ -150,8 +178,8 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         if let sid = resumingSessionID, !sid.isEmpty {
             args += ["--conversation", sid]
         }
-        let model = (modelOverride ?? settings.agyModel).trimmingCharacters(in: .whitespacesAndNewlines)
-        if !model.isEmpty {
+        let model = (turnModelOverride ?? modelOverride ?? settings.agyModel).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !model.isEmpty, model != "auto" {
             args += ["--model", model]
         }
         let effort = (effortOverride ?? settings.agyEffort).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -159,8 +187,11 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
             args += ["--effort", effort]
         }
         // Headless agy allows file edits inside the workspace on its own, so anything short of
-        // "may do anything" is decided by Cantrip's PreToolUse hook instead.
-        if hookPolicy == nil {
+        // "may do anything" is decided by Cantrip's PreToolUse hook instead. In attended Home
+        // sessions with automatic approval enabled, also pass --dangerously-skip-permissions so
+        // agy's internal WriteFile confirmation manager does not soft-deny dot-directory writes
+        // after Cantrip's PreToolUse hook has already approved them.
+        if hookPolicy == nil || (guardrail == .attended && (settings.allowActions || settings.agyPermissionMode == "bypassPermissions")) {
             args.append("--dangerously-skip-permissions")
         }
         if settings.agyPermissionMode == "sandbox" {
@@ -170,10 +201,42 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     }
 
     private func launchSignature(for workdir: String) -> String {
-        let model = (modelOverride ?? settings.agyModel).trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = (turnModelOverride ?? modelOverride ?? settings.agyModel).trimmingCharacters(in: .whitespacesAndNewlines)
         let effort = (effortOverride ?? settings.agyEffort).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let guardrailKey = guardrail?.rawValue ?? "none"
         return "\(workdir)|\(model)|\(effort)|\(readOnly)|\(settings.allowActions)|\(settings.agyPermissionMode)|\(guardrailKey)"
+    }
+
+    /// Resolves the per-turn Antigravity model when the configured model is auto/default, a fallback
+    /// from Claude/ChatGPT/Copilot, or an external credit-consuming model slug.
+    func resolveTurnModel(for request: BackendRequest) {
+        let configuredModel = (modelOverride ?? settings.agyModel).trimmingCharacters(in: .whitespacesAndNewlines)
+        let configuredEffort = (effortOverride ?? settings.agyEffort).trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = fallbackSourceModel
+        let incident = isIncidentTurn
+        fallbackSourceModel = nil
+        isIncidentTurn = false
+
+        // Default/Auto tiers by task; a model the user picked is used as picked. Standing in for
+        // another backend (the usage-limit fallback the user chose) tiers from that model.
+        let automatic = configuredModel.isEmpty || configuredModel == "auto"
+        let shouldTier = automatic || source != nil
+        guard shouldTier else {
+            turnModelOverride = nil
+            return
+        }
+        let queryText = request.userMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? request.prompt : request.userMessage
+        let effectiveSource = source ?? (AntigravityTaskTier.usesExternalCredits(configuredModel) ? configuredModel : nil)
+        let chosen = AntigravityTaskTier.chooseModel(
+            for: queryText,
+            available: settings.agyAvailableModels,
+            effort: configuredEffort,
+            sourceModel: effectiveSource,
+            isIncident: incident
+        )
+        turnModelOverride = chosen
+        Log.write("antigravity: task tiering (\(queryText.count) chars, configured=\(configuredModel.isEmpty ? "default" : configuredModel)) -> \(chosen)")
     }
 
     // MARK: - Backend Protocol
@@ -188,6 +251,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
             return
         }
 
+        resolveTurnModel(for: request)
         let resolvedWorkdir = workdir.isEmpty ? NSHomeDirectory() : workdir
         let prompt = stagePromptAttachments(in: request.prompt, workdir: resolvedWorkdir)
 
@@ -249,8 +313,10 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         turnEventCallback = onEvent
         activeTools.removeAll()
         activeSubagents.removeAll()
+        activeSubagentChildren.removeAll()
         stderrCollected.removeAll(keepingCapacity: true)
         stateLock.unlock()
+        stopSubagentPollTimer()
 
         onEvent(.status("Thinking"))
 
@@ -437,6 +503,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     }
 
     private func finishTurn(with terminalEvent: BackendEvent) {
+        stopSubagentPollTimer()
         cancelPendingInputRequests()
         stateLock.lock()
         guard turnInFlight, !turnCompleted else {
@@ -450,7 +517,9 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         let remainingTools = Array(activeTools.values)
         activeTools.removeAll()
         let remainingSubagents = Array(activeSubagents.values)
+        let remainingChildren = activeSubagentChildren
         activeSubagents.removeAll()
+        activeSubagentChildren.removeAll()
         stateLock.unlock()
 
         guard let callback else { return }
@@ -459,14 +528,19 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
             callback(.activity(tool))
         }
         for var sub in remainingSubagents where sub.status == .running {
-            sub.status = .completed
-            sub.finishedAt = Date()
-            callback(.activity(Self.subagentActivity(for: sub)))
+            var children = remainingChildren[sub.agentID] ?? []
+            _ = AntigravitySubagentTranscript.hydrate(&sub, children: &children, forceComplete: true)
+            if sub.status == .running {
+                sub.status = .completed
+                sub.finishedAt = sub.finishedAt ?? Date()
+            }
+            callback(.activity(Self.subagentActivity(for: sub, children: children)))
         }
         callback(terminalEvent)
     }
 
     private func stopProcessAndCleanUp() {
+        stopSubagentPollTimer()
         cancelPendingInputRequests()
         stateLock.lock()
         let process = currentProcess
@@ -628,23 +702,35 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         callback: (BackendEvent) -> Void
     ) {
         let paramSpecs = ((toolInfo?["parameters"] as? [String: Any])?["Subagents"] as? [[String: Any]]) ?? []
+        let singleParams = toolInfo?["parameters"] as? [String: Any]
         let errorValue = toolInfo?["error"]
         let hasError = (errorValue != nil && !(errorValue is NSNull))
         let outputText = toolInfo?["output"] as? String
+        let isAsyncSpawn = outputText?.contains("Created the following subagent") == true
 
         for (idx, item) in subagents.enumerated() {
-            let id = (item["conversation_id"] as? String)
-                ?? stepIndex.map { "subagent-\($0)-\(idx)" }
-                ?? "subagent-\(idx)"
+            let fallbackID = stepIndex.map { "subagent-\($0)-\(idx)" } ?? "subagent-\(idx)"
+            let rawID = (item["conversation_id"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let id = (rawID?.isEmpty == false ? rawID : nil)
+                ?? Self.extractSpawnedConversationID(from: outputText)
+                ?? fallbackID
             let role = (item["role"] as? String)
                 ?? (idx < paramSpecs.count ? paramSpecs[idx]["Role"] as? String : nil)
+                ?? (singleParams?["Role"] as? String)
                 ?? ""
             let typeName = (item["type_name"] as? String)
                 ?? (idx < paramSpecs.count ? paramSpecs[idx]["TypeName"] as? String : nil)
+                ?? (singleParams?["TypeName"] as? String)
                 ?? "subagent"
             let prompt = (idx < paramSpecs.count ? paramSpecs[idx]["Prompt"] as? String : nil)
+                ?? (singleParams?["Prompt"] as? String)
 
             stateLock.lock()
+            if id != fallbackID {
+                activeSubagents.removeValue(forKey: fallbackID)
+                activeSubagentChildren.removeValue(forKey: fallbackID)
+            }
             var info = activeSubagents[id] ?? SubagentInfo(
                 agentID: id,
                 name: role.isEmpty ? typeName : role,
@@ -653,29 +739,147 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                 status: .running,
                 startedAt: Date()
             )
+            info.agentID = id
+            if !role.isEmpty { info.name = role }
+            if !typeName.isEmpty { info.agentType = typeName }
+            if let prompt, !prompt.isEmpty,
+               info.summary.isEmpty || info.summary.hasPrefix("Created the following subagent") {
+                info.summary = SubagentInfo.clipped(prompt, limit: 400) ?? ""
+            }
+            var children = activeSubagentChildren[id] ?? []
+            _ = AntigravitySubagentTranscript.hydrate(&info, children: &children, forceComplete: false)
+
             if state == "DONE" {
-                info.status = hasError ? .failed : .completed
-                info.finishedAt = Date()
-                if let outputText, !outputText.isEmpty,
-                   let clipped = SubagentInfo.clipped(outputText, limit: 400) {
-                    info.summary = clipped
+                if hasError {
+                    info.status = .failed
+                    info.finishedAt = Date()
+                    activeSubagents.removeValue(forKey: id)
+                    activeSubagentChildren.removeValue(forKey: id)
+                } else if isAsyncSpawn {
+                    // `invoke_subagent` returns immediately after spawning the background agent;
+                    // keep tracking its transcript until it finishes or the parent turn ends.
+                    if info.status != .completed && info.status != .failed {
+                        info.status = .running
+                        activeSubagents[id] = info
+                        activeSubagentChildren[id] = children
+                    } else {
+                        activeSubagents.removeValue(forKey: id)
+                        activeSubagentChildren.removeValue(forKey: id)
+                    }
+                } else {
+                    info.status = .completed
+                    info.finishedAt = info.finishedAt ?? Date()
+                    if let outputText, !outputText.isEmpty,
+                       let clipped = SubagentInfo.clipped(outputText, limit: 400) {
+                        info.summary = clipped
+                    }
+                    activeSubagents.removeValue(forKey: id)
+                    activeSubagentChildren.removeValue(forKey: id)
                 }
-                activeSubagents.removeValue(forKey: id)
             } else {
                 info.status = .running
                 activeSubagents[id] = info
+                activeSubagentChildren[id] = children
             }
+            let shouldPoll = !activeSubagents.isEmpty && turnInFlight && !turnCompleted
             stateLock.unlock()
 
-            let activity = Self.subagentActivity(for: info)
+            let activity = Self.subagentActivity(for: info, children: children)
             callback(.activity(activity))
-            if state == "ACTIVE" {
+            if state == "ACTIVE" || info.status == .running {
                 callback(.status("Running \(info.displayName)"))
+            }
+            if shouldPoll {
+                ensureSubagentPollTimer()
             }
         }
     }
 
-    private static func subagentActivity(for info: SubagentInfo) -> ToolActivity {
+    private static func extractSpawnedConversationID(from output: String?) -> String? {
+        guard let output, output.contains("conversationId") else { return nil }
+        guard let start = output.firstIndex(of: "{"),
+              let end = output.lastIndex(of: "}") else { return nil }
+        let jsonSlice = String(output[start...end])
+        guard let data = jsonSlice.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let cid = (obj["conversationId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !cid.isEmpty else {
+            return nil
+        }
+        return cid
+    }
+
+    private func ensureSubagentPollTimer() {
+        stateLock.lock()
+        guard subagentPollTimer == nil, turnInFlight, !turnCompleted, !activeSubagents.isEmpty else {
+            stateLock.unlock()
+            return
+        }
+        let timer = DispatchSource.makeTimerSource(queue: ioQueue)
+        timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
+        timer.setEventHandler { [weak self] in
+            self?.pollActiveSubagents()
+        }
+        subagentPollTimer = timer
+        stateLock.unlock()
+        timer.resume()
+    }
+
+    private func stopSubagentPollTimer() {
+        let timer: DispatchSourceTimer? = stateLock.withLock {
+            defer { subagentPollTimer = nil }
+            return subagentPollTimer
+        }
+        timer?.cancel()
+    }
+
+    private func pollActiveSubagents() {
+        stateLock.lock()
+        guard turnInFlight, !turnCompleted, let callback = turnEventCallback, !activeSubagents.isEmpty else {
+            stateLock.unlock()
+            stopSubagentPollTimer()
+            return
+        }
+        let currentIDs = Array(activeSubagents.keys)
+        stateLock.unlock()
+
+        var updates: [ToolActivity] = []
+        for id in currentIDs {
+            stateLock.lock()
+            guard var info = activeSubagents[id] else {
+                stateLock.unlock()
+                continue
+            }
+            var children = activeSubagentChildren[id] ?? []
+            stateLock.unlock()
+
+            let changed = AntigravitySubagentTranscript.hydrate(&info, children: &children, forceComplete: false)
+            guard changed else { continue }
+
+            stateLock.lock()
+            if info.status == .completed || info.status == .failed {
+                activeSubagents.removeValue(forKey: id)
+                activeSubagentChildren.removeValue(forKey: id)
+            } else {
+                activeSubagents[id] = info
+                activeSubagentChildren[id] = children
+            }
+            stateLock.unlock()
+
+            updates.append(Self.subagentActivity(for: info, children: children))
+        }
+
+        for activity in updates {
+            callback(.activity(activity))
+        }
+
+        let stillActive = stateLock.withLock { !activeSubagents.isEmpty && turnInFlight && !turnCompleted }
+        if !stillActive {
+            stopSubagentPollTimer()
+        }
+    }
+
+    fileprivate static func subagentActivity(for info: SubagentInfo, children: [ToolActivity] = []) -> ToolActivity {
         var activity = ToolActivity(
             id: "subagent-\(info.agentID)",
             title: info.displayName,
@@ -683,7 +887,8 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
             state: ToolActivityState(info.status),
             input: info.summary.isEmpty ? nil : info.summary,
             output: info.latestMessage,
-            fileChanges: []
+            fileChanges: [],
+            children: children
         )
         activity.subagent = info
         return activity
@@ -985,5 +1190,318 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
             return current
         }
         requests.forEach { $0.cancel() }
+    }
+}
+
+// MARK: - Antigravity Subagent Transcript Hydration
+
+/// Reads and caches `~/.gemini/antigravity-cli/brain/<agentID>/.system_generated/logs/transcript.jsonl`
+/// so background subagents spawned by `invoke_subagent` report their real runtime status, elapsed
+/// duration, token usage, tool call steps, reasoning blocks, and final synthesis message.
+enum AntigravitySubagentTranscript {
+    struct Snapshot: Equatable {
+        var startedAt: Date?
+        var lastStepAt: Date?
+        var summary: String?
+        var tokens: Int = 0
+        var children: [ToolActivity] = []
+        var reasoning: [String] = []
+        var intent: String?
+        var latestMessage: String?
+        var isCompleted: Bool = false
+        var hasError: Bool = false
+    }
+
+    private struct CacheEntry {
+        let fileSize: UInt64
+        let modDate: Date
+        let snapshot: Snapshot
+    }
+
+    private static let lock = NSLock()
+    private static var cache: [String: CacheEntry] = [:]
+
+    private static let conversationLinkRegex = try! NSRegularExpression(
+        pattern: #"\[([^\[\]\n]{1,200})\]\(conversation://([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\)"#
+    )
+
+    /// Reconstructs subagent activities from `conversation://<uuid>` references in an assistant
+    /// message when runtime activities were not persisted across a Cantrip restart.
+    static func reconstructedActivities(fromText text: String) -> [ToolActivity] {
+        guard text.contains("](conversation://") else { return [] }
+        let whole = NSRange(text.startIndex..., in: text)
+        var seen = Set<String>()
+        var result: [ToolActivity] = []
+        for match in conversationLinkRegex.matches(in: text, range: whole) {
+            guard let labelRange = Range(match.range(at: 1), in: text),
+                  let idRange = Range(match.range(at: 2), in: text) else { continue }
+            let agentID = String(text[idRange]).lowercased()
+            guard !seen.contains(agentID), transcriptURL(for: agentID) != nil else { continue }
+            seen.insert(agentID)
+            let rawName = String(text[labelRange])
+                .replacingOccurrences(of: "**", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            var info = SubagentInfo(
+                agentID: agentID,
+                name: rawName.isEmpty ? "Subagent" : rawName,
+                agentType: "self",
+                summary: "",
+                status: .completed,
+                startedAt: Date()
+            )
+            var children: [ToolActivity] = []
+            _ = hydrate(&info, children: &children, forceComplete: true)
+            result.append(AntigravityBackend.subagentActivity(for: info, children: children))
+        }
+        return result
+    }
+
+    static func enriched(_ activity: ToolActivity) -> ToolActivity {
+        var activity = activity
+        if activity.subagent == nil,
+           activity.id.hasPrefix("subagent-"),
+           activity.toolName == "Subagent" {
+            let agentID = String(activity.id.dropFirst("subagent-".count))
+            activity.subagent = SubagentInfo(
+                agentID: agentID,
+                name: activity.title,
+                agentType: "self",
+                summary: activity.input ?? "",
+                status: activity.state == .running ? .running : .completed,
+                startedAt: Date()
+            )
+        }
+        guard var info = activity.subagent, !info.agentID.isEmpty else { return activity }
+        var children = activity.children
+        let forceComplete = !info.isActive
+        guard hydrate(&info, children: &children, forceComplete: forceComplete)
+                || children.count != activity.children.count
+                || info != activity.subagent else {
+            return activity
+        }
+        activity.subagent = info
+        activity.children = children
+        activity.state = ToolActivityState(info.status)
+        if !info.summary.isEmpty { activity.input = info.summary }
+        if let latest = info.latestMessage { activity.output = latest }
+        return activity
+    }
+
+    @discardableResult
+    static func hydrate(
+        _ info: inout SubagentInfo,
+        children: inout [ToolActivity],
+        forceComplete: Bool
+    ) -> Bool {
+        guard let snap = snapshot(for: info.agentID) else { return false }
+        let beforeInfo = info
+        let beforeChildren = children
+
+        if let started = snap.startedAt {
+            info.startedAt = started
+        }
+        if let summary = snap.summary,
+           !summary.isEmpty,
+           info.summary.isEmpty || info.summary.hasPrefix("Created the following subagent") {
+            info.summary = summary
+        }
+        if snap.tokens > 0 {
+            info.tokens = snap.tokens
+        }
+        if !snap.children.isEmpty {
+            children = snap.children
+            info.toolCalls = snap.children.count
+        }
+        if !snap.reasoning.isEmpty {
+            info.reasoning = snap.reasoning
+        }
+        if let intent = snap.intent, !intent.isEmpty {
+            info.intent = intent
+        }
+        if let latest = snap.latestMessage, !latest.isEmpty {
+            info.latestMessage = latest
+        }
+        if snap.hasError {
+            info.status = .failed
+            info.finishedAt = snap.lastStepAt ?? info.finishedAt ?? Date()
+        } else if snap.isCompleted || forceComplete {
+            info.status = .completed
+            info.finishedAt = snap.lastStepAt ?? info.finishedAt ?? Date()
+        }
+        return info != beforeInfo || children != beforeChildren
+    }
+
+    private static func transcriptURL(for agentID: String) -> URL? {
+        let trimmed = agentID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("/"), !trimmed.contains("..") else { return nil }
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let candidates = [
+            home.appendingPathComponent(".gemini/antigravity-cli/brain/\(trimmed)/.system_generated/logs/transcript.jsonl"),
+            home.appendingPathComponent(".gemini/antigravity/brain/\(trimmed)/.system_generated/logs/transcript.jsonl"),
+        ]
+        return candidates.first { fm.fileExists(atPath: $0.path) }
+    }
+
+    private static func snapshot(for agentID: String) -> Snapshot? {
+        guard let url = transcriptURL(for: agentID),
+              let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? UInt64,
+              let modDate = attrs[.modificationDate] as? Date,
+              size > 0 else {
+            return nil
+        }
+
+        lock.lock()
+        if let cached = cache[agentID], cached.fileSize == size, cached.modDate == modDate {
+            lock.unlock()
+            return cached.snapshot
+        }
+        lock.unlock()
+
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        let parsed = parseTranscript(text, agentID: agentID)
+        lock.lock()
+        cache[agentID] = CacheEntry(fileSize: size, modDate: modDate, snapshot: parsed)
+        lock.unlock()
+        return parsed
+    }
+
+    private static func parseTranscript(_ text: String, agentID: String) -> Snapshot {
+        var snap = Snapshot()
+        let iso = ISO8601DateFormatter()
+        let lines = text.split(whereSeparator: \.isNewline)
+
+        var pendingToolIndices: [Int] = []
+        var sentMessageToParent = false
+        var lastStepWasFinalResponse = false
+
+        for rawLine in lines {
+            guard let lineData = String(rawLine).data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: lineData)) as? [String: Any] else {
+                continue
+            }
+
+            let stepIndex = obj["step_index"] as? Int ?? snap.children.count
+            let type = (obj["type"] as? String ?? "").uppercased()
+            let status = (obj["status"] as? String ?? "").uppercased()
+            if let createdStr = obj["created_at"] as? String,
+               let date = iso.date(from: createdStr) {
+                if snap.startedAt == nil { snap.startedAt = date }
+                snap.lastStepAt = date
+            }
+
+            if type == "SYSTEM_MESSAGE", snap.summary == nil,
+               let content = obj["content"] as? String,
+               let range = content.range(of: "content=") {
+                var body = String(content[range.upperBound...])
+                if let endRange = body.range(of: "</SYSTEM_MESSAGE>") {
+                    body = String(body[..<endRange.lowerBound])
+                }
+                body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !body.isEmpty {
+                    snap.summary = SubagentInfo.clipped(body, limit: 400)
+                }
+            }
+
+            if type == "PLANNER_RESPONSE" {
+                let inputTokens = (obj["input_tokens"] as? Int) ?? 0
+                let outputTokens = (obj["output_tokens"] as? Int) ?? 0
+                snap.tokens += inputTokens + outputTokens
+
+                if let thinking = obj["thinking"] as? String {
+                    let trimmed = thinking.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        snap.reasoning.append(trimmed)
+                        if let title = ReasoningStep.steps(from: [trimmed]).last?.title {
+                            snap.intent = title
+                        }
+                    }
+                }
+
+                let toolCalls = (obj["tool_calls"] as? [[String: Any]]) ?? []
+                pendingToolIndices.removeAll()
+
+                if !toolCalls.isEmpty {
+                    lastStepWasFinalResponse = false
+                    for (tIdx, tc) in toolCalls.enumerated() {
+                        let toolName = (tc["name"] as? String) ?? "Tool"
+                        let rawArgs = (tc["args"] as? [String: Any]) ?? [:]
+                        let cleanedArgs = cleanTranscriptArgs(rawArgs)
+
+                        if toolName == "send_message",
+                           let msg = cleanedArgs["Message"] as? String,
+                           !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            snap.latestMessage = TabMentions.stripConversationLinks(msg)
+                            sentMessageToParent = true
+                        }
+
+                        var activity = ToolActivityFactory.start(
+                            id: "sub-\(agentID.prefix(8))-\(stepIndex)-\(tIdx)",
+                            toolName: toolName,
+                            arguments: cleanedArgs
+                        )
+                        if status == "DONE" {
+                            activity.state = .succeeded
+                        } else if status == "ERROR" {
+                            activity.state = .failed
+                        }
+                        snap.intent = activity.title
+                        pendingToolIndices.append(snap.children.count)
+                        snap.children.append(activity)
+                    }
+                } else if let content = obj["content"] as? String {
+                    let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        if snap.latestMessage == nil {
+                            snap.latestMessage = TabMentions.stripConversationLinks(trimmed)
+                        }
+                        if status == "DONE" {
+                            lastStepWasFinalResponse = true
+                        }
+                    }
+                }
+            } else if type == "GENERIC" {
+                let output = obj["content"] ?? obj["error"]
+                let hasError = obj["error"] != nil && !(obj["error"] is NSNull)
+                if let idx = pendingToolIndices.first, idx < snap.children.count {
+                    pendingToolIndices.removeFirst()
+                    let existing = snap.children[idx]
+                    snap.children[idx] = ToolActivityFactory.complete(
+                        existing,
+                        id: existing.id,
+                        toolName: existing.toolName,
+                        success: !hasError && status != "ERROR",
+                        output: output
+                    )
+                }
+            }
+        }
+
+        snap.isCompleted = sentMessageToParent || lastStepWasFinalResponse
+        return snap
+    }
+
+    private static func cleanTranscriptArgs(_ raw: [String: Any]) -> [String: Any] {
+        var cleaned: [String: Any] = [:]
+        for (key, value) in raw {
+            if let str = value as? String {
+                let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.count >= 2, trimmed.first == "\"", trimmed.last == "\"",
+                   let data = trimmed.data(using: .utf8),
+                   let decoded = try? JSONDecoder().decode(String.self, from: data) {
+                    cleaned[key] = decoded
+                } else {
+                    cleaned[key] = str
+                }
+            } else {
+                cleaned[key] = value
+            }
+        }
+        return cleaned
     }
 }

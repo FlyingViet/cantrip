@@ -102,31 +102,73 @@ struct TabModelCatalog {
 
 extension AppSettings {
     /// Backends whose tabs can pick their own model and effort.
-    static let tabModelBackends: Set<BackendKind> = [.copilot, .claudeCode]
+    static let tabModelBackends: Set<BackendKind> = [.copilot, .claudeCode, .antigravity]
+
+    /// The backend whose model list per-tab settings, Home and Home tasks use.
+    var tabModelBackend: BackendKind {
+        switch backend {
+        case .claudeCode: return .claudeCode
+        case .antigravity: return .antigravity
+        default: return .copilot
+        }
+    }
+
+    /// Efforts `agy --effort` accepts for every model.
+    static let antigravityEfforts = ["low", "medium", "high"]
+
+    /// Antigravity's models from `agy models`, in the shape per-tab settings and Remote use.
+    var antigravityModelCatalog: [CopilotModelInfo] {
+        agyAvailableModels.map {
+            CopilotModelInfo(id: $0, contextWindow: nil, reasoningEfforts: Self.antigravityEfforts, contextTiers: [])
+        }
+    }
 
     func tabModelCatalog(for backend: BackendKind) -> TabModelCatalog {
-        backend == .claudeCode
-            ? TabModelCatalog(backend: backend, models: claudeModelCatalog, fileDefaultModel: "default",
-                              fileDefaultContextTier: nil, refreshError: claudeModelRefreshError,
-                              isRefreshing: claudeRefreshInFlight)
-            : TabModelCatalog(backend: backend, models: copilotModelCatalog, fileDefaultModel: copilotFileDefaultModel,
-                              fileDefaultContextTier: copilotFileContextTier, refreshError: copilotModelRefreshError,
-                              isRefreshing: copilotRefreshInFlight)
+        switch backend {
+        case .claudeCode:
+            return TabModelCatalog(backend: backend, models: claudeModelCatalog, fileDefaultModel: "default",
+                                   fileDefaultContextTier: nil, refreshError: claudeModelRefreshError,
+                                   isRefreshing: claudeRefreshInFlight)
+        case .antigravity:
+            // "CLI default" is the Mac's Antigravity model, or the account's default when none is set.
+            let macModel = agyModel.trimmingCharacters(in: .whitespaces)
+            return TabModelCatalog(backend: backend, models: antigravityModelCatalog,
+                                   fileDefaultModel: macModel.isEmpty ? nil : macModel,
+                                   fileDefaultContextTier: nil, refreshError: agyModelRefreshError,
+                                   isRefreshing: agyRefreshInFlight)
+        default:
+            return TabModelCatalog(backend: backend, models: copilotModelCatalog, fileDefaultModel: copilotFileDefaultModel,
+                                   fileDefaultContextTier: copilotFileContextTier, refreshError: copilotModelRefreshError,
+                                   isRefreshing: copilotRefreshInFlight)
+        }
     }
 
     /// The Mac-wide model settings a tab without its own uses.
     func tabModelDefaults(for backend: BackendKind) -> SessionModelSelection {
-        backend == .claudeCode
-            ? SessionModelSelection(model: claudeModel, effort: claudeEffort, contextTier: "")
-            : SessionModelSelection(model: copilotModel, effort: copilotEffort, contextTier: copilotContextTier)
+        switch backend {
+        case .claudeCode:
+            return SessionModelSelection(model: claudeModel, effort: claudeEffort, contextTier: "")
+        case .antigravity:
+            return SessionModelSelection(model: agyModel, effort: agyEffort, contextTier: "")
+        default:
+            return SessionModelSelection(model: copilotModel, effort: copilotEffort, contextTier: copilotContextTier)
+        }
     }
 
     func refreshTabModels(for backend: BackendKind) {
-        backend == .claudeCode ? refreshClaudeModels() : refreshCopilotModels()
+        switch backend {
+        case .claudeCode: refreshClaudeModels()
+        case .antigravity: refreshAntigravityModels()
+        default: refreshCopilotModels()
+        }
     }
 
     func refreshTabModelsIfNeeded(for backend: BackendKind) {
-        backend == .claudeCode ? refreshClaudeModelsIfNeeded() : refreshCopilotModelsIfNeeded()
+        switch backend {
+        case .claudeCode: refreshClaudeModelsIfNeeded()
+        case .antigravity: refreshAntigravityModelsIfNeeded()
+        default: refreshCopilotModelsIfNeeded()
+        }
     }
 
     func refreshClaudeModels(

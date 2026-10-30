@@ -181,6 +181,7 @@ struct SessionTabTests {
         try await testCantripHomeArtifactThumbnails()
         try await testCantripHomeBuilds()
         try await testCantripHomeGuardrails()
+        try await testAntigravityModels()
         try await testCantripHomeHandoffResults()
         try await testCantripHomeDoneWhen()
         try await testThreadTags()

@@ -2313,7 +2313,7 @@ final class RemoteControlServer {
                 additionalRoots: generatedImageRoots(sessionID: sessionID)
             )
             if !presentation.images.isEmpty {
-                object["displayText"] = presentation.text
+                object["displayText"] = TabMentions.stripConversationLinks(presentation.text)
                 object["images"] = presentation.images.map(\.snapshot)
             }
         }
