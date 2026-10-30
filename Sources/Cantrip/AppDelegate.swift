@@ -18,6 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let services: HostServices
     private let recoveryReport: CrashRecovery.Report?
     private var remoteControlMenuItem: NSMenuItem?
+    private var panelInterfaceMenuItem: NSMenuItem?
+    private var windowInterfaceMenuItem: NSMenuItem?
+    private var openHomeWindowMenuItem: NSMenuItem?
 
     init(recoveryReport: CrashRecovery.Report?) {
         self.recoveryReport = recoveryReport
@@ -76,6 +79,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         let menu = NSMenu()
         menu.addItem(withTitle: "Toggle (⌥Space)", action: #selector(togglePanel), keyEquivalent: "")
+        let openHomeWindowMenuItem = NSMenuItem(title: "Open Home Window", action: #selector(openHomeWindow),
+                                                keyEquivalent: "")
+        openHomeWindowMenuItem.target = self
+        menu.addItem(openHomeWindowMenuItem)
+        self.openHomeWindowMenuItem = openHomeWindowMenuItem
         menu.addItem(withTitle: "Stop Current Request", action: #selector(stopRequest), keyEquivalent: "")
         menu.addItem(withTitle: "End Remote View", action: #selector(endRemoteView), keyEquivalent: "")
         menu.addItem(withTitle: "Hide Panel & Overlays", action: #selector(forceHide), keyEquivalent: "")
@@ -89,8 +97,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         menu.addItem(remoteControlMenuItem)
         self.remoteControlMenuItem = remoteControlMenuItem
         menu.addItem(.separator())
+        // Interface: the floating panel or Cantrip Gateway's Home window (macOS 26).
+        for mode in InterfaceMode.allCases {
+            let item = NSMenuItem(title: "Interface: \(mode.label)", action: #selector(chooseInterface(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.rawValue
+            menu.addItem(item)
+            if mode == .panel { panelInterfaceMenuItem = item } else { windowInterfaceMenuItem = item }
+        }
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Cantrip", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
+        AppSettings.shared.$interfaceMode
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mode in self?.applyInterfaceMode(mode) }
+            .store(in: &cancellables)
 
         // Floating panel
         panel = LauncherPanel()
@@ -311,6 +334,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func togglePanel() {
+        if usesHomeWindow {
+            toggleHomeWindow()
+            return
+        }
         if panel.isVisible {
             hidePanel()
         } else {
@@ -333,5 +360,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func hidePanel() {
         panel.orderOut(nil)
+    }
+
+    // MARK: - Home window (Window interface)
+
+    private var usesHomeWindow: Bool {
+        AppSettings.shared.interfaceMode == .window && HomeWindow.isAvailable
+    }
+
+    private func toggleHomeWindow() {
+        if HomeWindow.isOpen, NSApp.isActive {
+            HomeWindow.close()
+        } else {
+            openHomeWindow()
+        }
+    }
+
+    /// Opens the Home window on this host's own server (loopback), hiding the panel.
+    @objc func openHomeWindow() {
+        guard HomeWindow.isAvailable else {
+            presentHomeWindowUnavailable()
+            return
+        }
+        guard let token = AppSettings.shared.ensureRemoteControlToken() else {
+            Log.write("home-window: no server token")
+            return
+        }
+        hidePanel()
+        HomeWindow.open(port: AppSettings.shared.remoteControlPort, token: token) {}
+    }
+
+    @objc func chooseInterface(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let mode = InterfaceMode(rawValue: raw) else { return }
+        if mode == .window, !HomeWindow.isAvailable {
+            presentHomeWindowUnavailable()
+            return
+        }
+        AppSettings.shared.interfaceMode = mode
+    }
+
+    /// Switching interface opens the one picked and puts the other away.
+    private func applyInterfaceMode(_ mode: InterfaceMode) {
+        panelInterfaceMenuItem?.state = mode == .panel ? .on : .off
+        windowInterfaceMenuItem?.state = mode == .window ? .on : .off
+        openHomeWindowMenuItem?.isHidden = !HomeWindow.isAvailable
+        guard didApplyInterface else {
+            didApplyInterface = true
+            return
+        }
+        if mode == .window, HomeWindow.isAvailable {
+            // After the server has picked up the change (its settings are debounced).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.openHomeWindow() }
+        } else {
+            HomeWindow.close()
+        }
+    }
+    private var didApplyInterface = false
+
+    private func presentHomeWindowUnavailable() {
+        let alert = NSAlert()
+        alert.messageText = "The Home window isn't available"
+        alert.informativeText = HomeWindow.unavailableReason ?? ""
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    /// Opening Cantrip.app again (Finder, Spotlight, the Dock while the window is up) shows the
+    /// interface: the Home window in the Window interface.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if usesHomeWindow { openHomeWindow() }
+        return false
     }
 }

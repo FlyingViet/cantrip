@@ -9,7 +9,7 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep cert artwork icon app run clean
+.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep cert artwork icon app run clean
 
 all: app
 
@@ -137,7 +137,11 @@ artwork:
 icon:
 	@sh Scripts/make-icns.sh
 
-app: build cert icon
+# The Window interface's plug-in (optional; see Scripts/build-home-window.sh).
+home-window:
+	@bash Scripts/build-home-window.sh
+
+app: build cert icon home-window
 	@set -eu; \
 	APP="$(APP_BUNDLE)"; STAGING="$(APP_STAGING)"; BACKUP="$(APP_BACKUP)"; PENDING="$(APP_PENDING)"; \
 	cleanup() { \
@@ -159,6 +163,10 @@ app: build cert icon
 	plutil -replace CantripBuildIdentity -string "$$BUILD_ID" "$$STAGING/Contents/Info.plist"; \
 	plutil -replace CantripBuildDate -string "$$BUILD_DATE" "$$STAGING/Contents/Info.plist"; \
 	if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$$STAGING/Contents/Resources/"; fi; \
+	if [ -d .build/home-window/CantripHomeWindow.bundle ]; then \
+		mkdir -p "$$STAGING/Contents/PlugIns"; \
+		ditto .build/home-window/CantripHomeWindow.bundle "$$STAGING/Contents/PlugIns/CantripHomeWindow.bundle"; \
+	fi; \
 	bash Scripts/verify-macos-architectures.sh "$$STAGING"; \
 	IDENT=$$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' \
 		'/"$(CERT_NAME)"/ { print $$2; found=1; exit } /^[[:space:]]*[0-9]+\)/ && first == "" { first=$$2 } END { if (!found && first != "") print first }'); \

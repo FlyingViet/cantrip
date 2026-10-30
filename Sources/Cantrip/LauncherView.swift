@@ -3957,6 +3957,24 @@ struct SettingsView: View {
     var busySessions = 0
     var onUpdate: (() -> Void)?
 
+    /// Panel (this window) or Cantrip Gateway's Home window, both on this Mac's sessions.
+    private var interfacePicker: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Interface").font(.caption).foregroundStyle(.secondary)
+            Picker("", selection: $settings.interfaceMode) {
+                Text("Panel (⌥Space)").tag(InterfaceMode.panel)
+                Text("Home window, like Cantrip Gateway").tag(InterfaceMode.window)
+                    .disabled(!HomeWindow.isAvailable)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            Text(HomeWindow.unavailableReason
+                 ?? "The Home window has a sidebar of tabs, Home, tasks, artifacts and a terminal. ⌥Space and the menu bar icon open whichever you pick; the other stays available from the menu.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     var body: some View {
         ScrollView(.vertical) {
             settingsContent
@@ -3966,6 +3984,8 @@ struct SettingsView: View {
 
     private var settingsContent: some View {
         VStack(alignment: .leading, spacing: 10) {
+            interfacePicker
+            Divider().opacity(0.3)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Backend").font(.caption).foregroundStyle(.secondary)
                 Picker("", selection: $settings.backend) {

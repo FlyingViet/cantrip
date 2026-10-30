@@ -37,8 +37,13 @@ if ! version_at_most "$minimum" "14.0"; then
     exit 1
 fi
 
+# The Home window plug-in (Window interface) needs macOS 26; Cantrip loads it only there.
+home_window_plugin="$bundle/Contents/PlugIns/CantripHomeWindow.bundle/"
+home_window_minimum="26.0"
+
 verify_binary() {
     local architectures required build_info deployment
+    local allowed="${2:-$minimum}"
     if ! architectures=$(/usr/bin/lipo -archs "$1"); then
         echo "Cannot read macOS architectures: $1" >&2
         return 1
@@ -75,8 +80,8 @@ verify_binary() {
             echo "Missing or non-macOS deployment metadata: $1 ($required)" >&2
             return 1
         fi
-        if ! version_at_most "$deployment" "$minimum"; then
-            echo "Incompatible macOS deployment target: $1 ($required requires $deployment; app promises $minimum)" >&2
+        if ! version_at_most "$deployment" "$allowed"; then
+            echo "Incompatible macOS deployment target: $1 ($required requires $deployment; app promises $allowed)" >&2
             return 1
         fi
     done
@@ -96,7 +101,10 @@ while IFS= read -r -d '' component; do
     description=$(/usr/bin/file -L -b "$component")
     case "$description" in
         *Mach-O*)
-            verify_binary "$component"
+            case "$component" in
+                "$home_window_plugin"*) verify_binary "$component" "$home_window_minimum" ;;
+                *) verify_binary "$component" ;;
+            esac
             count=$((count + 1))
             ;;
     esac

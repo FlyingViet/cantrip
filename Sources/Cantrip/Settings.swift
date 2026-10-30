@@ -41,6 +41,11 @@ final class AppSettings: ObservableObject {
     @Published var remoteControlEnabled: Bool {
         didSet { d.set(remoteControlEnabled, forKey: "remoteControlEnabled") }
     }
+    /// Cantrip's interface on this Mac: the floating panel, or Cantrip Gateway's Home window
+    /// (`HomeWindow`, macOS 26). Both run on this host; the window talks to its server on loopback.
+    @Published var interfaceMode: InterfaceMode {
+        didSet { d.set(interfaceMode.rawValue, forKey: "interfaceMode") }
+    }
     @Published var remoteControlPort: Int {
         didSet { d.set(remoteControlPort, forKey: "remoteControlPort") }
     }
@@ -737,6 +742,7 @@ final class AppSettings: ObservableObject {
 
     private init() {
         remoteControlEnabled = d.bool(forKey: "remoteControlEnabled")
+        interfaceMode = InterfaceMode(rawValue: d.string(forKey: "interfaceMode") ?? "") ?? .panel
         let storedRemotePort = d.integer(forKey: "remoteControlPort")
         remoteControlPort = storedRemotePort == 0 ? 8765 : storedRemotePort
         remoteLANPort = min(max(d.integer(forKey: "remoteLANPort"), 0), 65535)
