@@ -217,12 +217,10 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         fallbackSourceModel = nil
         isIncidentTurn = false
 
-        let isUnitTest = ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"] != nil
-        let shouldTier = configuredModel == "auto"
-            || (configuredModel.isEmpty && !isUnitTest)
-            || AntigravityTaskTier.usesExternalCredits(configuredModel)
-            || source != nil
-            || incident
+        // Default/Auto tiers by task; a model the user picked is used as picked. Standing in for
+        // another backend (the usage-limit fallback the user chose) tiers from that model.
+        let automatic = configuredModel.isEmpty || configuredModel == "auto"
+        let shouldTier = automatic || source != nil
         guard shouldTier else {
             turnModelOverride = nil
             return

@@ -22,6 +22,7 @@ enum Consolidator {
         var state = ConsolidationState.load(from: .standard)
         if state.failures > 0,
            state.lastError?.contains("Copilot CLI wasn't found to fall back to") == true,
+           AppSettings.shared.agyMemoryConsolidation,
            AntigravityBackend.isInstalled(customPath: AppSettings.shared.agyPath) {
             state.failures = 0
             state.lastError = nil
@@ -47,8 +48,10 @@ enum Consolidator {
         running = true
         MemoryStore.shared.ensureVault()
         let vault = settings.memoryPath
-        let allowActions = settings.allowActions || settings.agyPermissionMode == "bypassPermissions"
-        let agyPath = settings.agyPath
+        let allowActions = settings.allowActions
+        let agyAllowActions = settings.allowActions || settings.agyPermissionMode == "bypassPermissions"
+        // Memory stays on Cantrip's own pass unless the user opts in to Antigravity for it.
+        let agyPath: String? = settings.agyMemoryConsolidation ? settings.agyPath : nil
         let agyModels = settings.agyAvailableModels
         let claudePath = settings.claudePath
         let copilotPath = settings.copilotPath
@@ -57,7 +60,7 @@ enum Consolidator {
 
         DispatchQueue.global(qos: .utility).async {
             let candidates = ConsolidationBackend.candidates(
-                antigravity: AntigravityBackend.resolveExecutable(customPath: agyPath),
+                antigravity: agyPath.flatMap { AntigravityBackend.resolveExecutable(customPath: $0) },
                 antigravityModels: agyModels,
                 preferAntigravity: true,
                 claude: ToolLocator.shared.claude(configured: claudePath),
@@ -65,7 +68,10 @@ enum Consolidator {
                 copilotModels: copilotModels
             )
             let outcome = ConsolidationAttempt.execute(candidates) { backend in
-                run(backend, prompt: prompt, allowActions: allowActions, vault: vault)
+                if case .antigravity = backend {
+                    return run(backend, prompt: prompt, allowActions: agyAllowActions, vault: vault)
+                }
+                return run(backend, prompt: prompt, allowActions: allowActions, vault: vault)
             }
             DispatchQueue.main.async {
                 running = false

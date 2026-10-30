@@ -392,6 +392,16 @@ final class AppSettings: ObservableObject {
         "claude-sonnet-5-5-high": "Claude Sonnet 5.5 (High)",
         "gpt-oss-120b-medium": "GPT-OSS 120B (Medium)",
     ]
+    /// Opt-in: Antigravity's Gemini Flash also routes, plans and checks "Done when" for tabs on
+    /// other backends (their messages then go to Google). Off: only Antigravity tabs use it.
+    @Published var agyAuxiliaryRouting: Bool {
+        didSet { d.set(agyAuxiliaryRouting, forKey: "agyAuxiliaryRouting") }
+    }
+    /// Opt-in: memory consolidation runs on Antigravity's Gemini Flash first (the vault's notes
+    /// then go to Google). Off: memory stays on Cantrip's own Claude Code / Copilot pass.
+    @Published var agyMemoryConsolidation: Bool {
+        didSet { d.set(agyMemoryConsolidation, forKey: "agyMemoryConsolidation") }
+    }
     @Published var agyAvailableModels: [String] {
         didSet { d.set(agyAvailableModels, forKey: "agyAvailableModels") }
     }
@@ -811,9 +821,7 @@ final class AppSettings: ObservableObject {
         councilMembers = (d.data(forKey: "councilMembers")
             .flatMap { try? JSONDecoder().decode([CouncilMember].self, from: $0) }) ?? []
         councilScope = d.string(forKey: "councilScope") ?? "planReview"
-        let defaultFallback = ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"] != nil
-            ? "" : BackendKind.antigravity.rawValue
-        limitFallbackBackend = d.string(forKey: "limitFallbackBackend") ?? defaultFallback
+        limitFallbackBackend = d.string(forKey: "limitFallbackBackend") ?? ""
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
         agyPath = d.string(forKey: "agyPath") ?? ""
@@ -821,6 +829,8 @@ final class AppSettings: ObservableObject {
         agyEffort = d.string(forKey: "agyEffort") ?? ""
         agyPermissionMode = d.string(forKey: "agyPermissionMode") ?? "default"
         agyAvailableModels = d.stringArray(forKey: "agyAvailableModels") ?? Self.agyDefaultModels
+        agyAuxiliaryRouting = d.bool(forKey: "agyAuxiliaryRouting")
+        agyMemoryConsolidation = d.bool(forKey: "agyMemoryConsolidation")
         agyModelNames = (d.dictionary(forKey: "agyModelNames") as? [String: String]) ?? Self.agyDefaultModelNames
         localBaseURL = d.string(forKey: "localBaseURL") ?? "http://localhost:8000/v1"
         localModel = d.string(forKey: "localModel") ?? "hermes"

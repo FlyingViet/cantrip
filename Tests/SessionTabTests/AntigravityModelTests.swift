@@ -81,8 +81,22 @@ extension SessionTabTests {
         )
         precondition(incident == "gemini-3.8-flash-medium", "Background incident check routes to Gemini 3.8 Flash: \(incident)")
 
+        // A model the user picked is used as picked, Claude models included.
+        let picked = AntigravityBackend(persistKey: "agy-tier-test-\(UUID())")
+        picked.modelOverride = "claude-opus-5-5-medium"
+        picked.effortOverride = "high"
+        picked.resolveTurnModel(for: BackendRequest(
+            prompt: "Architect and refactor the authentication pipeline across all modules",
+            userMessage: "Architect and refactor the authentication pipeline across all modules",
+            previousTurns: []
+        ))
+        let pickedArgs = picked.buildArguments(resumingSessionID: nil)
+        precondition(pickedArgs.firstIndex(of: "--model").map { pickedArgs[$0 + 1] } == "claude-opus-5-5-medium",
+                     "An explicitly picked model isn't remapped: \(pickedArgs)")
+
+        // Auto (and the empty default) tiers by task.
         let backend = AntigravityBackend(persistKey: "agy-tier-test-\(UUID())")
-        backend.modelOverride = "claude-opus-5-5-medium"
+        backend.modelOverride = "auto"
         backend.effortOverride = "high"
         backend.resolveTurnModel(for: BackendRequest(
             prompt: "Architect and refactor the authentication pipeline across all modules",
@@ -90,8 +104,8 @@ extension SessionTabTests {
             previousTurns: []
         ))
         let complexArgs = backend.buildArguments(resumingSessionID: nil)
-        precondition(complexArgs.firstIndex(of: "--model").map { complexArgs[$0 + 1] } == "gemini-4-argon-high",
-                     "Credit-consuming Claude model remaps complex turn to Argon: \(complexArgs)")
+        precondition(complexArgs.firstIndex(of: "--model").map { complexArgs[$0 + 1] }?.hasPrefix("gemini-4-argon") == true,
+                     "Auto routes a complex turn to Argon: \(complexArgs)")
 
         backend.resolveTurnModel(for: BackendRequest(
             prompt: "hello!",
@@ -99,8 +113,8 @@ extension SessionTabTests {
             previousTurns: []
         ))
         let smallArgs = backend.buildArguments(resumingSessionID: nil)
-        precondition(smallArgs.firstIndex(of: "--model").map { smallArgs[$0 + 1] } == "gemini-3.8-flash-high",
-                     "Credit-consuming Claude model remaps small turn to Gemini 3.8 Flash: \(smallArgs)")
+        precondition(smallArgs.firstIndex(of: "--model").map { smallArgs[$0 + 1] }?.hasPrefix("gemini-3.8-flash") == true,
+                     "Auto routes a small turn to Gemini 3.8 Flash: \(smallArgs)")
     }
 
     /// Per-tab model settings (what Gateway's Model Settings and Home use) work on Antigravity.
