@@ -26,6 +26,10 @@ extension ChatSession {
             return
         }
         let id = request.snapshot.id
+        // Which tab and backend asked, so prompts that reach the user can be traced (no details:
+        // they can hold commands and paths).
+        Log.write("input: \(request.snapshot.kind) from \(request.snapshot.source) in tab \(self.id.uuidString.prefix(8)) "
+                  + "on \((runningBackendKind ?? effectiveBackendKind).rawValue): \(request.snapshot.title.prefix(120))")
         inputRequests[id] = request
         request.onResolved = { [weak self] in
             Task { @MainActor in self?.removeInput(id) }
