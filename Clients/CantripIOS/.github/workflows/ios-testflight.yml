@@ -65,7 +65,7 @@ jobs:
         run: |
           KC="$HOME/Library/Keychains/login.keychain-db"
           security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" "$KC"
-          security set-keychain-settings -lut 21600 "$KC"
+          # Unlock only: changing lock settings here re-enabled auto-lock on the Mac's login keychain.
 
       - name: Write App Store Connect API key
         run: |
