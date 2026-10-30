@@ -22,6 +22,10 @@ packages:
     url: https://github.com/FluidInference/FluidAudio
     revision: c79c4106b954f81205113c3343e5a7e59a1089b5
 schemes:
+  CantripHomeWindow:
+    build:
+      targets:
+        CantripHomeWindow: all
   CantripGatewayMac:
     build:
       targets:
@@ -82,6 +86,44 @@ targets:
         # Notarized Developer ID releases require the hardened runtime.
         Release:
           ENABLE_HARDENED_RUNTIME: YES
+    dependencies:
+      - package: MarkdownUI
+      - package: Qwen3TTS
+      - package: FluidAudio
+  # Cantrip.app's Window interface: the same Home window as a plug-in bundle Cantrip loads
+  # (Cantrip's `make app` builds it with CODE_SIGNING_ALLOWED=NO and signs it with the app).
+  CantripHomeWindow:
+    type: bundle
+    platform: macOS
+    sources:
+      - path: Embedded
+      - path: Sources
+        excludes:
+          - App/CantripGatewayMacApp.swift
+          - App/CantripGatewayMac.entitlements
+          - Info.plist
+      - path: Hermes/Sources
+        excludes:
+          - App.swift
+          - Info.plist
+          - Hermes.entitlements
+          - Assets.xcassets
+      - path: Hermes/Shared
+    info:
+      path: Embedded/Info.plist
+      properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSPrincipalClass: CantripHomeWindowPlugin
+    settings:
+      base:
+        PRODUCT_NAME: CantripHomeWindow
+        PRODUCT_MODULE_NAME: Hermes
+        PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.cantrip.homewindow
+        WRAPPER_EXTENSION: bundle
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) CANTRIP_EMBEDDED"
+        ENABLE_HARDENED_RUNTIME: NO
+        SKIP_INSTALL: YES
     dependencies:
       - package: MarkdownUI
       - package: Qwen3TTS
