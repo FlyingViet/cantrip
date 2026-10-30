@@ -181,7 +181,10 @@ right swipe from the left edge returns to Home. The swipe drags the tab with you
 Home, like a navigation back swipe: let go past about a third of the width (or flick) to
 finish, or earlier to stay in the tab. Home shows its latest look until its conversation has
 reloaded; with Reduce Motion, **‹ Home** switches without sliding. Handoff cards' **Open tab**, a tab's push
-notification and the Tabs widget open the tab the same way. Tab ages and outcomes need
+notification and the Tabs widget open the tab the same way. On an iPhone Duo, folded or
+unfolded, a tab has no **‹ Home**: the right swipe from the left edge, or **Tabs** at the bottom of
+the side bar when folded (the sidebar button when unfolded), brings out the tab list instead, so you
+can switch straight to another tab or pick Cantrip Home, pinned at the top. Tab ages and outcomes need
 Cantrip host e8e5c0b or later; older hosts show names and live status only.
 
 In **Settings → Backends**, choose which execution backends appear in the picker

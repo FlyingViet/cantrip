@@ -1214,7 +1214,7 @@ struct ChatView: View {
     var body: some View {
         ChatNavigationView(
             isTabListPresented: $showRemoteTabs,
-            hasTabs: vm.activeLane == .home,
+            hasTabs: vm.activeLane == .home || usesDuoTabPicker,
             canSelectTabs: remoteTabsEnabled,
             isReorderingTabs: remote.isReorderingTabs,
             showsPersistentSidebar: showsDuoSidebar
@@ -1225,7 +1225,10 @@ struct ChatView: View {
                 backgroundActiveCount: homeBackgroundCount,
                 backgroundInputCount: homeBackgroundInputCount,
                 onDismiss: dismiss,
-                onSelectHome: dismiss,
+                onSelectHome: {
+                    dismiss()
+                    if vm.activeLane == .cantrip { returnHome() }
+                },
                 onOpenBackground: {
                     dismiss()
                     composerFocused = false
@@ -1392,11 +1395,12 @@ struct ChatView: View {
         } persistentRail: {
             duoAppRail
         }
-        // Inside a tab, the same left-edge swipe that opens the drawer in Home drags the tab away to Home.
+        // Inside a tab, the same left-edge swipe that opens the drawer in Home drags the tab away to Home
+        // (on the iPhone Duo it opens the tab picker instead).
         .cantripTabBackSwipe(
             backTransition,
             isEnabled: vm.activeLane == .cantrip && !vm.sending && !importingImages && !submittingRemote
-                && !showsDuoSidebar,
+                && !showsDuoSidebar && !usesDuoTabPicker,
             isHomeReady: isHomeLoadedAfterReturn,
             pop: returnHome
         )
@@ -1425,7 +1429,7 @@ struct ChatView: View {
             if lane == .home { scheduleHomeSnapshot(after: .seconds(2)) }
         }
         .onChange(of: remote.tabDrawerRequest) { _, _ in
-            if vm.activeLane == .home {
+            if vm.activeLane == .home || usesDuoTabPicker {
                 DispatchQueue.main.async { showRemoteTabs = true }
             } else {
                 opensDrawerAfterReturningHome = true
@@ -1600,10 +1604,10 @@ struct ChatView: View {
                 : vm.activeLane == .cantrip ? .tab : .standard,
             sidebarToggle: duoSidebarToggle,
             modelSettings: duoModelSettingsButton,
-            // The open sidebar lists Home and the tabs; closed, the toggle takes Home's tabs button's
-            // place. A tab's "‹ Home" pill stays while the sidebar is closed.
+            // The open sidebar lists Home and the tabs; closed, the toggle takes the Tabs button's place
+            // (in a tab too: on the Duo a tab has no "‹ Home", the tab picker leads back).
             hidesLeadingInRail: showsDuoSidebar
-                || (displayTraits.isUnfoldedDuo && vm.activeLane == .home),
+                || (displayTraits.isUnfoldedDuo && vm.activeLane.usesCantripRemote),
             actionsInRail: showsDuoAppRail
         ) {
             if vm.activeLane == .cantrip {
@@ -1699,10 +1703,10 @@ struct ChatView: View {
             ChatSettingsButton { showSettings = true }
                 .disabled(vm.sending || importingImages || submittingRemote)
         } leading: {
-            if vm.activeLane == .cantrip {
+            if vm.activeLane == .cantrip, !usesDuoTabPicker {
                 CantripHomeBackPill { returnHomeAnimated() }
                     .disabled(importingImages || submittingRemote)
-            } else if vm.activeLane == .home {
+            } else if vm.activeLane.usesCantripRemote {
                 // The Pip title is already the lane menu, so this slot opens the tab drawer, which
                 // also holds background jobs.
                 CantripHomeTabsButton(
@@ -2061,7 +2065,7 @@ struct ChatView: View {
     }
 
     private var remoteTabsEnabled: Bool {
-        vm.activeLane == .home
+        (vm.activeLane == .home || usesDuoTabPicker)
             && !vm.sending && !importingImages && !submittingRemote && !remote.isMutating
     }
 
@@ -2458,6 +2462,12 @@ struct ChatView: View {
         #endif
     }
 
+    /// A tab on the iPhone Duo, folded or not: no way back to Home. The left-edge swipe and the Tabs
+    /// button (folded; unfolded, the sidebar toggle) bring out the tab picker, with Home pinned first.
+    private var usesDuoTabPicker: Bool {
+        vm.activeLane == .cantrip && (displayTraits.hasVerticalBar || displayTraits.isUnfoldedDuo)
+    }
+
     /// iPhone Duo unfolded, in Cantrip, with its sidebar open: Gateway Mac's sidebar beside the chat.
     private var showsDuoSidebar: Bool {
         displayTraits.isUnfoldedDuo && duoSidebarOpen && vm.activeLane.usesCantripRemote
@@ -2489,10 +2499,6 @@ struct ChatView: View {
                         selection: $homeSection,
                         runningTasks: remote.homeTasks.filter { $0.state == "running" }.count
                     )
-                } else if vm.activeLane == .cantrip, !showsDuoSidebar {
-                    CantripHomeBackPill { returnHomeAnimated() }
-                        .environment(\.cantripCompactBackPill, true)
-                        .disabled(importingImages || submittingRemote)
                 }
             }
         }
