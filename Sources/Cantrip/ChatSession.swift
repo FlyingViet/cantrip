@@ -289,7 +289,7 @@ final class ChatSession: ObservableObject {
     private var reportedUsageLimit: UsageLimitReport?
     private var currentAttempt = 0
     private var pendingTurnCompletion: (runID: UUID, status: String, summary: String)?
-    private var runningBackendKind: BackendKind?
+    private(set) var runningBackendKind: BackendKind?
     /// The prompt whose line shows this run's context and token use.
     private var promptUsageMessageID: UUID?
     private var activityStartedAt: [String: Date] = [:]
