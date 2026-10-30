@@ -5,6 +5,30 @@
 **Platform: macOS.** For Windows controls and limitations, see
 [the Windows guide](windows.md).
 
+## Use the Home window instead of the panel
+
+On macOS 26 or later, Cantrip can show Cantrip Gateway's Home window instead
+of the floating panel: a sidebar with Home, Tasks, Artifacts and your tabs,
+each tab's conversation and terminal, and Home's background runs. It runs on
+this Mac's own sessions, so nothing needs pairing and everything else works
+the same.
+
+1. Open the panel (**Option+Space**), click **Settings**, then under
+   **Interface** choose **Home window**. You can also click the menu bar icon
+   and choose **Interface: Window**.
+2. The window opens. From now on **Option+Space** and **Toggle** in the menu bar
+   menu open or hide the window. **Open Home Window** in the menu works in
+   either interface.
+3. To go back, choose **Interface: Panel** in the menu bar menu.
+
+The window talks to Cantrip's server on this Mac only (127.0.0.1). If Remote
+control is off, Cantrip runs that server just for the window, with no
+network listener. The window is built when you build Cantrip with full Xcode
+and xcodegen installed (`make app` builds it from the CantripGatewayMac
+submodule). Without them, Cantrip builds with the panel only and the setting
+explains what's missing. **Option+Shift+Space** (send the selected text)
+still opens the panel.
+
 ## Open or switch to an app
 
 1. Press **Option+Space**.

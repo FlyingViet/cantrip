@@ -33,6 +33,9 @@ Cantrip Agent (formerly AgentGateway) is the native iPhone/iPad client.
 Cantrip Gateway Mac brings the same Home and project tabs to a Mac window by
 compiling Cantrip Agent's shared Swift code as a submodule. Pair either one
 under **Settings > Remote control**; see [Remote control](docs/remote-control.md).
+On macOS 26 the Cantrip menu bar app can also show that same window itself,
+in place of the panel, with no pairing: see
+[Use the Home window instead of the panel](docs/everyday-tasks.md#use-the-home-window-instead-of-the-panel).
 
 Windows supports the launcher, math, Claude/Copilot/Codex/Antigravity, screen capture and
 plugins, but not yet local models, session tabs, memory, voice, council or

@@ -112,31 +112,43 @@ final class HostServices {
         // A headless host exists to serve remote clients, so its server runs whatever the app's
         // Remote control toggle says (and that setting isn't changed).
         let headless = HostMode.isHeadless
+        // The Home window (Window interface) is a client of this server on loopback, so the
+        // server also runs for it, without the LAN listener, while Remote control is off.
+        let servesHomeWindow = { !headless && AppSettings.shared.interfaceMode == .window && HomeWindow.isAvailable }
         AppSettings.shared.$remoteControlEnabled
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] enabled in
                 self?.onRemoteControlEnabledChange?(enabled)
-                if !enabled, !headless {
+                if !enabled, !headless, !servesHomeWindow() {
                     self?.remoteControlServer?.stop()
                     AppSettings.shared.reportRemoteControlError(nil)
                 }
             }
             .store(in: &cancellables)
-        Publishers.CombineLatest4(
-            AppSettings.shared.$remoteControlEnabled,
-            AppSettings.shared.$remoteControlPort,
-            AppSettings.shared.$remoteLANPort,
-            AppSettings.shared.$remoteControlCredentialRevision
+        Publishers.CombineLatest(
+            Publishers.CombineLatest4(
+                AppSettings.shared.$remoteControlEnabled,
+                AppSettings.shared.$remoteControlPort,
+                AppSettings.shared.$remoteLANPort,
+                AppSettings.shared.$remoteControlCredentialRevision
+            ),
+            AppSettings.shared.$interfaceMode
         )
         .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
-        .sink { enabled, port, lanPort, _ in
-            guard enabled || headless else { return }
+        .sink { values, _ in
+            let (enabled, port, lanPort, _) = values
+            let remote = enabled || headless
+            guard remote || servesHomeWindow() else {
+                remoteControlServer.stop()
+                return
+            }
             guard let token = AppSettings.shared.ensureRemoteControlToken() else {
                 remoteControlServer.stop()
                 return
             }
-            remoteControlServer.start(port: port, token: token, lanPort: lanPort == 0 ? nil : lanPort)
+            remoteControlServer.start(port: port, token: token, lanPort: lanPort == 0 ? nil : lanPort,
+                                      servesLAN: remote)
         }
         .store(in: &cancellables)
 
