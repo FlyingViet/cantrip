@@ -25,7 +25,12 @@ still refuses its blocked commands (administrator commands, erasing disks or
 the home folder, piping downloads into a shell, stopping Cantrip, and writing
 Home's own state) under every setting. It judges what a command actually does:
 words inside heredocs, quoted text or notes being written don't count, and
-relative paths are checked in the folder a `cd` moves to. Local models keep
+relative paths are checked in the folder a `cd` moves to. Deletes Cantrip
+can't resolve (a script's `rm "$f"` or `rm -rf "$OUT/dist"`) and input typed into
+a running task are approved too. The one exception is a recursive delete
+through a variable that could reach the home folder or a system folder if the
+variable is empty or holds the home folder (`rm -rf "$DIR"`, `"$DIR/"`,
+`"$DIR/Documents"`, `~user`, `..`): that still waits for you. Local models keep
 Home's approval pauses.
 
 Turning off that one switch is not a universal lock:

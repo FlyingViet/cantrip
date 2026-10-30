@@ -430,8 +430,9 @@ enum CantripHomeProtocol {
             : approval == .automatic
             ? " The user set this backend to act on their behalf, so in this unattended run anything else, "
                 + "including sending messages or email, pushing, deploying and deleting files, runs without "
-                + "asking. Do only what the task calls for. Deletes Cantrip can't check (targets given as "
-                + "variables or command output) still wait for the user, so delete by literal path."
+                + "asking. Do only what the task calls for. A recursive delete through a variable with no "
+                + "named folder after it (rm -rf \"$DIR\" or \"$DIR/\") still waits for the user, so name "
+                + "the folder (rm -rf \"$OUT/dist\") or use a literal path."
             : " In this unattended run, sending messages or email, pushing, deploying, deleting files "
                 + "outside temporary folders and Artifacts, and system changes wait for the user's approval."
         let actions = checksActions
