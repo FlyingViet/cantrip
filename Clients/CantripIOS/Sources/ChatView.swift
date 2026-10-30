@@ -1170,6 +1170,11 @@ struct ChatView: View {
     @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
     @State private var showCantripMaintenance = false
     @State private var showRemoteTabs = false
+    /// The Duo sidebar slides over the chat (narrow window) rather than sitting beside it. Over the
+    /// chat it has its own open state, closed at first and never saved, so a window that just got
+    /// narrow (split screen) isn't covered by a sidebar left open full width.
+    @State private var duoSidebarOverlays = false
+    @State private var duoOverlaySidebarOpen = false
     @State private var opensDrawerAfterReturningHome = false
     @StateObject private var backTransition = CantripTabBackTransition()
     @State private var homeSnapshotTask: Task<Void, Never>?
@@ -1217,7 +1222,9 @@ struct ChatView: View {
             hasTabs: vm.activeLane == .home || usesDuoTabPicker,
             canSelectTabs: remoteTabsEnabled,
             isReorderingTabs: remote.isReorderingTabs,
-            showsPersistentSidebar: showsDuoSidebar
+            showsPersistentSidebar: showsDuoSidebar,
+            sidebarOverlays: $duoSidebarOverlays,
+            dismissPersistentSidebar: { withAnimation(.snappy) { isDuoSidebarOpen = false } }
         ) { isModal, dismiss in
             CantripHomeTabDrawer(
                 model: remote,
@@ -1404,6 +1411,7 @@ struct ChatView: View {
             isHomeReady: isHomeLoadedAfterReturn,
             pop: returnHome
         )
+        .onChange(of: duoSidebarOverlays) { _, _ in duoOverlaySidebarOpen = false }
         .onChange(of: showRemoteTabs) { _, showing in
             if showing {
                 if vm.activeLane == .home {
@@ -2470,7 +2478,15 @@ struct ChatView: View {
 
     /// iPhone Duo unfolded, in Cantrip, with its sidebar open: Gateway Mac's sidebar beside the chat.
     private var showsDuoSidebar: Bool {
-        displayTraits.isUnfoldedDuo && duoSidebarOpen && vm.activeLane.usesCantripRemote
+        displayTraits.isUnfoldedDuo && isDuoSidebarOpen && vm.activeLane.usesCantripRemote
+    }
+
+    /// Whichever open state applies: over the chat (narrow) or beside it (saved).
+    private var isDuoSidebarOpen: Bool {
+        get { duoSidebarOverlays ? duoOverlaySidebarOpen : duoSidebarOpen }
+        nonmutating set {
+            if duoSidebarOverlays { duoOverlaySidebarOpen = newValue } else { duoSidebarOpen = newValue }
+        }
     }
 
     /// Unfolded upright, where the system's bar runs along the top: the app draws the rail.
@@ -2508,12 +2524,12 @@ struct ChatView: View {
     private var duoSidebarToggle: AnyView? {
         guard vm.activeLane.usesCantripRemote else { return nil }
         return AnyView(CantripDuoSidebarToggle(
-            isOpen: duoSidebarOpen,
+            isOpen: isDuoSidebarOpen,
             workingCount: CantripHomeTabCounts.working(in: remote.sessions),
             inputCount: CantripHomeTabCounts.needingInput(in: remote.sessions) + homeBackgroundInputCount
         ) {
             composerFocused = false
-            withAnimation(.snappy) { duoSidebarOpen.toggle() }
+            withAnimation(.snappy) { isDuoSidebarOpen.toggle() }
         })
     }
 
@@ -2542,10 +2558,14 @@ struct ChatView: View {
             isListening: voice.isListening,
             isSpeaking: voice.isSpeaking,
             onSelectSection: { section in
+                closeOverlaySidebar()
                 homeSection = section
                 if vm.activeLane != .home { returnHome() }
             },
-            onSelectTab: { openTab($0, picturesHome: false) },
+            onSelectTab: { id in
+                closeOverlaySidebar()
+                openTab(id, picturesHome: false)
+            },
             onCreateTab: createRemoteSession,
             onRename: { renamingRemoteSession = $0 },
             onClose: closeRemoteSession,
@@ -2560,6 +2580,11 @@ struct ChatView: View {
             onChoose: { chooseBackendCommand($0, via: .activate) }
         )
         .disabled(vm.sending || importingImages || submittingRemote)
+    }
+
+    /// Over the chat, the sidebar steps aside once something is picked, like the tab drawer.
+    private func closeOverlaySidebar() {
+        if duoSidebarOverlays { withAnimation(.snappy) { duoOverlaySidebarOpen = false } }
     }
 
     private var duoSidebarBackground: CantripDuoSidebarBackground? {

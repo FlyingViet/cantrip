@@ -64,7 +64,10 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
   orientation: `ChatDisplayTraits.isUnfoldedDuo`) that bar is the app's rail: a sidebar toggle at
   the top, then Model Settings and Settings. The toggle shows `CantripDuoSidebar` beside the same
   stack; its open state is saved (`cantrip.duoSidebar.open`), so folding, rotation and the keyboard
-  never change it. On a Duo, in every pose and with the sidebar open or closed, Home's sections are at
+  never change it. When the window can't keep the chat 400 pt wide beside it (split screen, or
+  unfolded upright) the sidebar slides over the dimmed chat instead (`ChatNavigationView.overlaysSidebar`),
+  with its own unsaved open state that starts closed; a tap outside, the toggle or a pick closes it.
+  On a Duo, in every pose and with the sidebar open or closed, Home's sections are at
   the bottom of the right-side rail (the system's tab bar in the vertical bar, or
   `CantripDuoRailSections` in the app rail upright), never a bottom bar; other iPhones use
   `CantripHomeCompactTabBar`. Home puts only Tabs and the menu at the top of the vertical bar when
