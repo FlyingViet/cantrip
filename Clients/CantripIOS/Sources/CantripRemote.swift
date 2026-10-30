@@ -1144,6 +1144,9 @@ private enum CantripRemoteCredentials {
     private static let service = "AgentGateway"
 
     static func loadToken() -> String? {
+        #if CANTRIP_EMBEDDED
+        return EmbeddedSecrets.get(account)
+        #endif
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: account,
@@ -1161,6 +1164,9 @@ private enum CantripRemoteCredentials {
     }
 
     static func saveToken(_ token: String) throws {
+        #if CANTRIP_EMBEDDED
+        return EmbeddedSecrets.set(token, for: account)
+        #endif
         let data = Data(token.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -1190,6 +1196,9 @@ private enum CantripRemoteCredentials {
     }
 
     static func removeToken() throws {
+        #if CANTRIP_EMBEDDED
+        return EmbeddedSecrets.set(nil, for: account)
+        #endif
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: account,
