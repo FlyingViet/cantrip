@@ -90,7 +90,34 @@ extension SessionTabTests {
         server.stop()
         try await Task.sleep(nanoseconds: 100_000_000)
         precondition(statuses.last == .some(nil), "Stopping clears the reported LAN port")
-        print("Remote LAN port: pinned TLS-PSK by host:port, token mismatch rejected, busy-port fallback passed")
+
+        // The Home window with Remote control off: loopback only, no encrypted LAN listener.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        statuses.removeAll()
+        let localOnly = Int.random(in: 58001...60000)
+        server.start(port: localOnly, token: renewed, lanPort: pinned, servesLAN: false)
+        var localUp = false
+        for _ in 0..<40 where !localUp {
+            let health = URL(string: "http://127.0.0.1:\(localOnly)/health")!
+            if let (_, response) = try? await URLSession.shared.data(from: health),
+               (response as? HTTPURLResponse)?.statusCode == 200 { localUp = true }
+            else { try await Task.sleep(nanoseconds: 100_000_000) }
+        }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        precondition(localUp && !statuses.contains { $0 != nil }, "Loopback-only serves HTTP with no LAN listener: \(statuses)")
+        do {
+            _ = try await lanRequest(port: pinned, token: renewed, path: "/health")
+            preconditionFailure("Loopback-only must not listen on the LAN port")
+        } catch {}
+        // Turning Remote control on later adds the LAN listener to the running server.
+        server.start(port: localOnly, token: renewed, lanPort: pinned, servesLAN: true)
+        let added = try await waitForStatus { $0.port == pinned }
+        precondition(!added.fellBack, "The LAN listener joins the loopback server")
+        server.start(port: localOnly, token: renewed, lanPort: pinned, servesLAN: false)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        precondition(statuses.last == .some(nil), "Turning Remote off again drops the LAN listener")
+        server.stop()
+        print("Remote LAN port: pinned TLS-PSK by host:port, token mismatch rejected, busy-port fallback, loopback-only passed")
     }
 
     struct LANRequestFailure: Error { let reason: String }

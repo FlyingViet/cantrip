@@ -79,7 +79,9 @@ final class RemoteControlServer {
 
     /// `lanPort` pins the encrypted LAN listener (for direct addresses such as a Tailscale
     /// subnet route to this Mac); nil, or a port that is busy, uses a dynamic port.
-    func start(port: Int, token: String, lanPort: Int? = nil) {
+    /// `servesLAN` false keeps the server on loopback only (the Home window on this Mac while
+    /// Remote control is off): no encrypted LAN listener and no Bonjour advertising.
+    func start(port: Int, token: String, lanPort: Int? = nil, servesLAN: Bool = true) {
         let lanPort = lanPort.flatMap { (1...65535).contains($0) && $0 != port ? $0 : nil }
         guard (1...65535).contains(port) else {
             onError?("Remote control port must be between 1 and 65535.")
@@ -91,17 +93,17 @@ final class RemoteControlServer {
             stop()
             return
         }
-        if listener != nil, lanListener != nil, activePort == port, self.token == token,
+        if listener != nil, (lanListener != nil) == servesLAN, activePort == port, self.token == token,
            activeLANPort == lanPort {
             return
         }
-        // Only the LAN port changed: keep the loopback listener, whose port can't be rebound
-        // until the old socket finishes closing on the listener queue.
+        // Only the LAN port (or whether there is one) changed: keep the loopback listener, whose
+        // port can't be rebound until the old socket finishes closing on the listener queue.
         if listener != nil, activePort == port, self.token == token {
             cancelLANListener()
             activeLANPort = lanPort
             onLANStatus?(nil)
-            startLANListener(token: token, pinnedPort: lanPort)
+            if servesLAN { startLANListener(token: token, pinnedPort: lanPort) }
             return
         }
         stop()
@@ -113,7 +115,7 @@ final class RemoteControlServer {
             self.token = token
             updateNotificationActivation(fingerprint: RemoteLANProtocol.tokenFingerprint(token))
             updateLiveStatusActivation(fingerprint: RemoteLANProtocol.tokenFingerprint(token))
-            startLANListener(token: token, pinnedPort: lanPort)
+            if servesLAN { startLANListener(token: token, pinnedPort: lanPort) }
         } catch {
             onError?("Remote control daemon failed: \(error.localizedDescription)")
             Log.write("remote-control: listener failed: \(error.localizedDescription)")
