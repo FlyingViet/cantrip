@@ -172,8 +172,11 @@ struct CantripHomeActionDecision: Equatable {
     /// stricter mode would have paused for the user.
     var automatic = false
     /// Asked because Cantrip can't check the action against its blocked list (for example a delete
-    /// whose target is a variable), so automatic approval never covers it.
+    /// whose target is a variable).
     var unverifiable = false
+    /// An unverifiable recursive delete that could reach the home folder or a system folder (a bare
+    /// variable, `"$X/"`, `~user`, `..`): automatic approval never covers it.
+    var reachesCriticalFolder = false
 
     static let allow = Self(verdict: .allow)
 }
@@ -276,13 +279,14 @@ enum CantripHomeActionPolicy {
         guard mode == .unattended, var asked = findings.first(where: { $0.verdict == .ask }) else {
             return .allow
         }
-        // Automatic approval covers actions Cantrip has checked, never ones it can't verify.
+        // Automatic approval covers everything Cantrip doesn't block, including deletes and task
+        // input it can't check, except a delete that could reach the home folder or a system folder.
         if approval == .automatic {
-            guard let unverifiable = findings.first(where: { $0.verdict == .ask && $0.unverifiable }) else {
+            guard let critical = findings.first(where: { $0.verdict == .ask && $0.reachesCriticalFolder }) else {
                 return .init(verdict: .allow, action: asked.action, automatic: true)
             }
-            asked = unverifiable
-            asked.reason += " Act on my behalf doesn't cover actions Cantrip can't check."
+            asked = critical
+            asked.reason += " Act on my behalf doesn't cover a delete that could reach the home folder or a system folder."
         }
         let text = request.kind == .shell ? request.command
             : (request.paths + [request.server, request.tool].compactMap { $0 }).joined(separator: " ")
@@ -969,14 +973,18 @@ enum CantripHomeActionPolicy {
             }
             targets.append(arg)
         }
-        guard !targets.isEmpty else {
-            return [ask("delete files", "Cantrip can't tell what this deletes.", scope: "delete", unverifiable: true)]
+        func unchecked(_ target: String?) -> [CantripHomeActionDecision] {
+            var finding = ask("delete files", "Cantrip can't tell what this deletes.", scope: "delete", unverifiable: true)
+            // A plain rm removes files, never folders; a recursive one is safe to approve only when a
+            // named folder follows the variable and an empty variable still misses every critical folder.
+            finding.reachesCriticalFolder = isRecursive
+                && !(target.map { uncheckedTargetStaysClear($0, environment) } ?? false)
+            return [finding]
         }
+        guard !targets.isEmpty else { return unchecked(nil) }
         var resolved: [String] = []
         for target in targets {
-            guard let path = resolve(target, environment) else {
-                return [ask("delete files", "Cantrip can't tell what this deletes.", scope: "delete", unverifiable: true)]
-            }
+            guard let path = resolve(target, environment) else { return unchecked(target) }
             resolved.append(path)
         }
         if resolved.contains(where: { isProtected($0, environment) || containsProtected($0, environment) }) {
@@ -1069,6 +1077,44 @@ enum CantripHomeActionPolicy {
         }
         return false
     }
+
+    /// A recursive delete target Cantrip can't resolve, such as `"$OUT/dist"` or `build` in a folder it
+    /// couldn't follow, is clear of the home folder and system folders whatever its variables hold:
+    /// a named folder follows the last variable, nothing climbs with `..`, and with `$USER` filled in
+    /// and other variables empty it lands on no critical or protected folder.
+    static func uncheckedTargetStaysClear(_ raw: String, _ environment: Environment) -> Bool {
+        let target = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\"' \t"))
+        guard !target.isEmpty, !(target.hasPrefix("~") && !target.hasPrefix("~/")) else { return false }
+        let variable = try! NSRegularExpression(pattern: #"\$\([^)]*\)|`[^`]*`|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?$!-]"#)
+        let whole = NSRange(target.startIndex..., in: target)
+        let matches = variable.matches(in: target, range: whole)
+        let suffix = matches.last.flatMap { Range($0.range, in: target) }.map { String(target[$0.upperBound...]) } ?? target
+        let named = suffix.split(separator: "/").map(String.init)
+        guard let last = named.last, !named.contains(".."),
+              last.contains(where: { !"*?.[]".contains($0) }) else { return false }
+        if target.split(separator: "/").contains("..") { return false }
+        // `"$DIR/Documents"` with DIR holding the home folder would erase Documents.
+        if !matches.isEmpty, named.count == 1, homeFolders.contains(last.lowercased()) { return false }
+        var filled = target
+        for (name, value) in [("${USER}", NSUserName()), ("$USER", NSUserName()),
+                              ("${HOME}", environment.home), ("$HOME", environment.home)] {
+            filled = filled.replacingOccurrences(of: name, with: value)
+        }
+        filled = variable.stringByReplacingMatches(in: filled, range: NSRange(filled.startIndex..., in: filled),
+                                                   withTemplate: "")
+        if filled.hasPrefix("~/") { filled = environment.home + filled.dropFirst(1) }
+        let base = environment.workdir.contains("$") ? "/" : environment.workdir
+        let path = URL(fileURLWithPath: filled.hasPrefix("/") ? filled : base + "/" + filled)
+            .standardizedFileURL.path
+        return !isCriticalRoot(path, environment) && !isProtected(path, environment)
+            && !containsProtected(path, environment)
+    }
+
+    private static let homeFolders: Set<String> = [
+        "desktop", "documents", "downloads", "library", "movies", "music", "pictures", "public",
+        "applications", "coding", "projects", "developer", "icloud drive", ".ssh", ".config", ".local",
+        ".cache", ".gnupg", ".aws", ".kube", ".docker", ".claude", ".copilot",
+    ]
 
     private static func isCriticalRoot(_ path: String, _ environment: Environment) -> Bool {
         if isSystemRoot(path) || path == environment.home { return true }

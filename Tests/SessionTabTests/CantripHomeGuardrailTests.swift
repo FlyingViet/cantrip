@@ -89,16 +89,32 @@ extension SessionTabTests {
             precondition(decide(.shell(command), approval: .fileEdits).verdict == .ask,
                          "Allowing file edits doesn't extend to outbound actions: \(command)")
         }
-        // Deletes Cantrip can't resolve might be on the blocked list, so no mode approves them.
+        // A recursive delete Cantrip can't resolve that could reach the home folder or a system
+        // folder through its variables: no mode approves it.
         let unverifiable = [
-            "rm -f \"$SOME_FILE\"", "xargs rm < list.txt", "rm -rf /Users/$USER", "rm -rf ${HOME:?}",
+            "rm -rf /Users/$USER", "rm -rf ${HOME:?}", "rm -rf \"$X/\"", "rm -rf \"$BUILD_DIR\"",
             "rm -rf \"$(echo ~)\"", "rm -rf `pwd`/..", "find /Users/$USER -delete", "rm -rf ~otheruser",
+            "rm -rf \"$X/Library\"", "rm -rf \"$DIR/Documents\"", "rm -rf \"$X\"/../work", "xargs rm -rf < list.txt",
+            "rm -rf \"$DIR\"/*",
         ]
         for command in unverifiable {
             let automatic = decide(.shell(command), approval: .automatic)
-            precondition(automatic.verdict == .ask && automatic.unverifiable && !automatic.automatic
-                         && automatic.detail.contains("can't check"),
-                         "Automatic approval never covers a delete Cantrip can't check: \(command)")
+            precondition(automatic.verdict == .ask && automatic.unverifiable && automatic.reachesCriticalFolder
+                         && !automatic.automatic && automatic.detail.contains("home folder or a system folder"),
+                         "Automatic approval never covers a delete that could reach a critical folder: \(command)")
+        }
+        // Deletes Cantrip can't resolve but that can't reach a critical folder: Act on my behalf
+        // approves them (a plain rm only removes files; a named folder follows the variable).
+        let uncheckedButClear = [
+            "rm -f \"$SOME_FILE\"", "xargs rm < list.txt", "rm \"$f\"", "rm -rf \"$OUT/dist\"",
+            "rm -rf \"${BUILD_DIR}/cache/tmp\"", "find \"$WORK/logs\" -name '*.log' -delete",
+            "cd \"$X\" && rm -f build.log",
+        ]
+        for command in uncheckedButClear {
+            precondition(verdict(command) == .ask, "Unattended runs on Ask still pause: \(command)")
+            let automatic = decide(.shell(command), approval: .automatic)
+            precondition(automatic.verdict == .allow && automatic.automatic,
+                         "Act on my behalf approves a delete that can't reach a critical folder: \(command) \(automatic)")
         }
         for command in askedWhenUnattended where !unverifiable.contains(command) {
             let automatic = decide(.shell(command), approval: .automatic)
@@ -188,10 +204,12 @@ extension SessionTabTests {
         let taskStatus = CantripHomeActionRequest(antigravityTool: "manage_task", input: ["Action": "status", "TaskId": "t1"])
         precondition(taskInput("sudo ls").kind == .shell && decide(taskInput("sudo ls"), .attended).verdict == .deny
                      && decide(taskInput("rm -rf ~")).verdict == .deny
-                     && decide(taskInput("echo hi"), approval: .automatic).verdict == .ask
+                     && decide(taskInput("echo hi")).verdict == .ask
+                     && decide(taskInput("echo hi"), approval: .automatic).verdict == .allow
+                     && decide(taskInput("rm -rf ~"), approval: .automatic).verdict == .deny
                      && decide(taskInput("echo hi"), .attended).verdict == .allow
                      && taskStatus.kind == .other && decide(taskStatus).verdict == .allow,
-                     "Input sent to a running Antigravity task is checked like a command, and Act on my behalf doesn't cover it")
+                     "Input sent to a running Antigravity task is checked like a command, and Act on my behalf covers it")
         let agyWriteActivity = ToolActivityFactory.start(
             id: "w1", toolName: "write_to_file",
             arguments: ["TargetFile": "/tmp/hello.swift", "CodeContent": "print(1)\n"]
@@ -230,7 +248,7 @@ extension SessionTabTests {
         let rulesAuto = CantripHomeProtocol.rules(unattended: true, approval: .automatic)
         let rulesAsk = CantripHomeProtocol.rules(unattended: true)
         precondition(rulesAuto.contains("act on their behalf") && rulesAuto.contains("always blocks")
-                     && rulesAuto.contains("delete by literal path")
+                     && rulesAuto.contains("name the folder")
                      && !rulesAuto.contains("wait for the user's approval")
                      && rulesAsk.contains("wait for the user's approval")
                      && !CantripHomeProtocol.rules(unattended: false, approval: .automatic).contains("act on their behalf"),
