@@ -3201,17 +3201,19 @@ struct ChatMenuIcon: View {
     }
 }
 
-/// The unfolded iPhone Duo's rail when the system's bar runs along the top (upright): its items at
-/// the top, a tab's way back to Home at the bottom, on the bar material, beside the chat.
+/// The unfolded iPhone Duo's rail when the system's bar runs along the top (upright), on the bar
+/// material beside the chat. Its actions sit low, within reach of the thumb; Home's sections (when
+/// shown) are the bottom-most group.
 struct CantripDuoAppRail<Top: View, Bottom: View>: View {
     @ViewBuilder var top: () -> Top
     @ViewBuilder var bottom: () -> Bottom
 
     var body: some View {
         VStack(spacing: 8) {
-            top()
             Spacer(minLength: 8)
+            top()
             bottom()
+                .padding(.top, 8)
         }
         .buttonStyle(.plain)
         .padding(.vertical, 12)
