@@ -389,7 +389,13 @@ struct MacHomeWindow: View {
     /// keeps updating on screen (slower; see setFrontmost); a hidden or minimized-only app
     /// stops polling.
     private func setActive(_ phase: ScenePhase) {
+        #if CANTRIP_EMBEDDED
+        // Inside Cantrip.app the window has no SwiftUI scene, so its phase reads as background;
+        // the plug-in starts and stops polling as the window opens and closes instead.
+        let active = true
+        #else
         let active = phase != .background
+        #endif
         remote.setAppActive(active)
         vm.setAppActive(active)
     }
