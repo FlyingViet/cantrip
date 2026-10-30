@@ -86,12 +86,18 @@ struct SubagentMonitorView: View {
 }
 
 struct SubagentCard: View {
-    let activity: ToolActivity
+    let rawActivity: ToolActivity
     let stop: ((SubagentInfo, @escaping (String?) -> Void) -> Void)?
     @State private var showSteps = false
     @State private var stopping = false
     @State private var stopError: String?
 
+    init(activity: ToolActivity, stop: ((SubagentInfo, @escaping (String?) -> Void) -> Void)?) {
+        self.rawActivity = activity
+        self.stop = stop
+    }
+
+    private var activity: ToolActivity { AntigravitySubagentTranscript.enriched(rawActivity) }
     private var info: SubagentInfo { activity.subagent ?? SubagentInfo(agentID: "", name: "", agentType: "", summary: "") }
 
     static let queuedHint = "Starts when the main agent waits for it or finishes its turn."

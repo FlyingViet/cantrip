@@ -172,6 +172,21 @@ do {
            "Copilot keeps its path and URL checks")
     expect(ConsolidationBackend.copilot(path: "/c/copilot", model: nil).arguments(prompt: "P", allowActions: true).contains("--model") == false,
            "without a Haiku, no model is forced")
+
+    let agyModels = ["gemini-4-argon-medium", "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"]
+    expect(ConsolidationBackend.preferredAntigravityModel(agyModels) == "gemini-3.8-flash-medium",
+           "Antigravity consolidation prefers gemini-3.8-flash-medium over Argon")
+    let agyPreferred = ConsolidationBackend.candidates(
+        antigravity: "/c/agy", antigravityModels: agyModels, preferAntigravity: true,
+        claude: "/c/claude", copilot: "/c/copilot", copilotModels: []
+    )
+    expect(agyPreferred.first == .antigravity(path: "/c/agy", model: "gemini-3.8-flash-medium"),
+           "Preferred Antigravity candidate runs first with Gemini 3.8 Flash")
+    let agy = ConsolidationBackend.antigravity(path: "/c/agy", model: "gemini-3.8-flash-medium")
+    expect(agy.arguments(prompt: "P", allowActions: true) == ["-p", "P", "--model", "gemini-3.8-flash-medium", "--dangerously-skip-permissions"],
+           "Allow actions: Antigravity runs with --dangerously-skip-permissions")
+    expect(agy.arguments(prompt: "P", allowActions: false) == ["-p", "P", "--model", "gemini-3.8-flash-medium", "--mode", "accept-edits"],
+           "Otherwise Antigravity runs in accept-edits mode")
 }
 
 // MARK: Log rotation

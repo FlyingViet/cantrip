@@ -360,21 +360,58 @@ final class AppSettings: ObservableObject {
     @Published var agyPermissionMode: String {
         didSet { d.set(agyPermissionMode, forKey: "agyPermissionMode") }
     }
-    /// Model slugs advertised by `agy models`.
+    /// Model slugs advertised by `agy models`, used until the first lookup
+    /// (`refreshAntigravityModels`) replaces them with the signed-in account's list.
     static let agyDefaultModels: [String] = [
+        "gemini-4-argon-medium",
+        "gemini-4-argon-high",
+        "gemini-4-argon-low",
         "gemini-3.8-flash-high",
         "gemini-3.8-flash-medium",
-        "gemini-3.7-flash-high",
-        "gemini-3.7-flash-medium",
-        "gemini-3.6-flash-high",
-        "gemini-3.6-flash-medium",
-        "gemini-3.1-pro-high",
-        "gemini-4-argon-high",
-        "gemini-4-argon-medium",
+        "gemini-3.8-flash-low",
+        "claude-opus-5-5-low",
+        "claude-opus-5-5-medium",
+        "claude-opus-5-5-high",
+        "claude-sonnet-5-5-low",
+        "claude-sonnet-5-5-medium",
+        "claude-sonnet-5-5-high",
+        "gpt-oss-120b-medium",
     ]
+    static let agyDefaultModelNames: [String: String] = [
+        "gemini-4-argon-medium": "Gemini 4 Argon (Medium)",
+        "gemini-4-argon-high": "Gemini 4 Argon (High)",
+        "gemini-4-argon-low": "Gemini 4 Argon (Low)",
+        "gemini-3.8-flash-high": "Gemini 3.8 Flash (High)",
+        "gemini-3.8-flash-medium": "Gemini 3.8 Flash (Medium)",
+        "gemini-3.8-flash-low": "Gemini 3.8 Flash (Low)",
+        "claude-opus-5-5-low": "Claude Opus 5.5 (Low)",
+        "claude-opus-5-5-medium": "Claude Opus 5.5 (Medium)",
+        "claude-opus-5-5-high": "Claude Opus 5.5 (High)",
+        "claude-sonnet-5-5-low": "Claude Sonnet 5.5 (Low)",
+        "claude-sonnet-5-5-medium": "Claude Sonnet 5.5 (Medium)",
+        "claude-sonnet-5-5-high": "Claude Sonnet 5.5 (High)",
+        "gpt-oss-120b-medium": "GPT-OSS 120B (Medium)",
+    ]
+    /// Opt-in: Antigravity's Gemini Flash also routes, plans and checks "Done when" for tabs on
+    /// other backends (their messages then go to Google). Off: only Antigravity tabs use it.
+    @Published var agyAuxiliaryRouting: Bool {
+        didSet { d.set(agyAuxiliaryRouting, forKey: "agyAuxiliaryRouting") }
+    }
+    /// Opt-in: memory consolidation runs on Antigravity's Gemini Flash first (the vault's notes
+    /// then go to Google). Off: memory stays on Cantrip's own Claude Code / Copilot pass.
+    @Published var agyMemoryConsolidation: Bool {
+        didSet { d.set(agyMemoryConsolidation, forKey: "agyMemoryConsolidation") }
+    }
     @Published var agyAvailableModels: [String] {
         didSet { d.set(agyAvailableModels, forKey: "agyAvailableModels") }
     }
+    /// Display names from `agy models`, keyed by slug.
+    @Published var agyModelNames: [String: String] = [:] {
+        didSet { d.set(agyModelNames, forKey: "agyModelNames") }
+    }
+    @Published var agyCatalogUpdatedAt: Date? = nil
+    @Published var agyRefreshInFlight = false
+    @Published var agyModelRefreshError: String? = nil
     /// OpenAI-compatible base URL, e.g. http://hermes.local:8000/v1
     @Published var localBaseURL: String {
         didSet { d.set(localBaseURL, forKey: "localBaseURL") }
@@ -533,7 +570,7 @@ final class AppSettings: ObservableObject {
             return model.isEmpty ? "Codex" : "Codex · \(model)"
         case .antigravity:
             let model = agyModel.trimmingCharacters(in: .whitespaces)
-            return model.isEmpty ? "Antigravity" : "Antigravity · \(model)"
+            return model.isEmpty ? "Antigravity" : "Antigravity · \(agyModelLabel(model))"
         case .localModel:
             return "Local · \(localModel)"
         }
@@ -793,6 +830,9 @@ final class AppSettings: ObservableObject {
         agyEffort = d.string(forKey: "agyEffort") ?? ""
         agyPermissionMode = d.string(forKey: "agyPermissionMode") ?? "default"
         agyAvailableModels = d.stringArray(forKey: "agyAvailableModels") ?? Self.agyDefaultModels
+        agyAuxiliaryRouting = d.bool(forKey: "agyAuxiliaryRouting")
+        agyMemoryConsolidation = d.bool(forKey: "agyMemoryConsolidation")
+        agyModelNames = (d.dictionary(forKey: "agyModelNames") as? [String: String]) ?? Self.agyDefaultModelNames
         localBaseURL = d.string(forKey: "localBaseURL") ?? "http://localhost:8000/v1"
         localModel = d.string(forKey: "localModel") ?? "hermes"
         localAPIKey = d.string(forKey: "localAPIKey") ?? ""

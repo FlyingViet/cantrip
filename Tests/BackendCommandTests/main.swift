@@ -369,6 +369,8 @@ do {
            "Antigravity discovers .agents/skills project skills: \(result)")
     expect(result.commands.first { $0.name == "clear" }?.availability == .cantrip,
            "Antigravity /clear routes to Cantrip Start Fresh: \(result)")
+    expect(result.commands.contains { $0.name == "model" && $0.action == "modelSettings" },
+           "Antigravity /model opens this tab's model settings: \(result)")
 }
 
 do {

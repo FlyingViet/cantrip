@@ -273,7 +273,8 @@ enum BackendCommandPolicy {
             return (.unavailable, scheduleNote, nil)
         case (.copilot, "cwd"), (.copilot, "cd"), (.copilotRemote, "cwd"), (.copilotRemote, "cd"):
             return (.unavailable, cwdNote, nil)
-        case (.copilot, "model"), (.copilot, "models"), (.claudeCode, "model"):
+        case (.copilot, "model"), (.copilot, "models"), (.claudeCode, "model"),
+             (.antigravity, "model"), (.antigravity, "models"):
             return (.cantrip, modelNote, "modelSettings")
         case (.claudeCode, "clear"), (.claudeCode, "reset"), (.claudeCode, "new"),
              (.antigravity, "clear"), (.antigravity, "reset"), (.antigravity, "new"):
@@ -514,6 +515,7 @@ enum BackendCommandParsers {
             ("compact", "Compact or summarize the conversation context", nil),
             ("learn", "Persist a correction or setup behavior for future tasks", "lesson"),
             ("clear", "Start a fresh conversation", nil),
+            ("model", "Choose this tab's Antigravity model and effort", "model [effort]"),
         ]
         var commands: [BackendCommand] = []
         var seen = Set<String>()

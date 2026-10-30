@@ -1804,7 +1804,9 @@ struct LauncherView: View {
     private func councilModelButtons(backend: BackendKind, models: [String]) -> some View {
         Button("Configured default") { addCouncilSeat(backend: backend, model: "") }
         ForEach(models, id: \.self) { model in
-            Button(model) { addCouncilSeat(backend: backend, model: model) }
+            Button(backend == .antigravity ? settings.agyModelLabel(model) : model) {
+                addCouncilSeat(backend: backend, model: model)
+            }
         }
     }
 
@@ -4091,14 +4093,35 @@ struct SettingsView: View {
                 labeledField("agy path (blank = auto)", text: $settings.agyPath, prompt: "~/.local/bin/agy")
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Model").font(.caption).foregroundStyle(.secondary)
-                    Picker("", selection: $settings.agyModel) {
-                        Text("Default (account setting)").tag("")
-                        ForEach(settings.agyAvailableModels, id: \.self) { model in
-                            Text(model).tag(model)
+                    HStack(spacing: 6) {
+                        Picker("", selection: $settings.agyModel) {
+                            Text("Default (Auto: Argon / Gemini 3.8 Flash)").tag("")
+                            ForEach(settings.agyModelOptions, id: \.self) { model in
+                                Text(settings.agyModelLabel(model)).tag(model)
+                            }
                         }
+                        .labelsHidden()
+                        Button(action: { settings.refreshAntigravityModels() }) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(settings.agyRefreshInFlight)
+                        .accessibilityLabel("Refresh Antigravity models")
+                        .help("Refresh the model list from `agy models` (Gemini, Claude Opus/Sonnet and more). No chat or model request is made.")
                     }
-                    .labelsHidden()
+                    if settings.agyRefreshInFlight {
+                        Text("Refreshing Antigravity models…").font(.caption).foregroundStyle(.secondary)
+                    } else if let error = settings.agyModelRefreshError {
+                        Text("\(error) Previously cached models are unchanged.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if let date = settings.agyCatalogUpdatedAt {
+                        Text("Models refreshed \(date.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
+                .onAppear { settings.refreshAntigravityModelsIfNeeded() }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Effort").font(.caption).foregroundStyle(.secondary)
                     Picker("", selection: $settings.agyEffort) {
@@ -4165,6 +4188,19 @@ struct SettingsView: View {
                 .toggleStyle(.checkbox)
             if settings.memoryEnabled {
                 labeledField("Memory vault folder", text: $settings.memoryPath, prompt: "\(NSHomeDirectory())/Cantrip Memory")
+            }
+            if AntigravityBackend.isInstalled(customPath: settings.agyPath) {
+                // Opt-ins: both send content to Google through Antigravity; off by default.
+                Toggle("Use Antigravity's Gemini Flash for routing, queue plans and Done-when checks in every tab (sends those messages to Google)",
+                       isOn: $settings.agyAuxiliaryRouting)
+                    .font(.caption)
+                    .toggleStyle(.checkbox)
+                if settings.memoryEnabled {
+                    Toggle("Consolidate memory with Antigravity's Gemini Flash (sends your memory notes to Google)",
+                           isOn: $settings.agyMemoryConsolidation)
+                        .font(.caption)
+                        .toggleStyle(.checkbox)
+                }
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Panel opacity — \(Int(settings.panelOpacity * 100))%")
