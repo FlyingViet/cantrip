@@ -68,7 +68,10 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
   the bottom of the right-side rail (the system's tab bar in the vertical bar, or
   `CantripDuoRailSections` in the app rail upright), never a bottom bar; other iPhones use
   `CantripHomeCompactTabBar`. Home puts only Tabs and the menu at the top of the vertical bar when
-  folded (`sharesVerticalBarWithTabBar`); unfolded, the toggle replaces Tabs. Do not infer Duo from dimensions or device
+  folded (`sharesVerticalBarWithTabBar`); unfolded, the toggle replaces Tabs. A project tab on the Duo
+  (folded or not) has no "‹ Home": the left-edge swipe and the Tabs button (folded; unfolded, the
+  sidebar toggle) bring out the tab picker, with Home pinned first (`usesDuoTabPicker`). Other
+  iPhones keep "‹ Home" and the swipe back to Home. Do not infer Duo from dimensions or device
   names. `AGENTGATEWAY_DUO_SDK` is selected by SDK in `project.yml`, not by the
   Swift compiler version; keep both SDK and iOS availability guards.
 - Saved servers live in `ServerProfiles`; each server's credential is stored
