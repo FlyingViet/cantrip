@@ -1503,8 +1503,9 @@ final class ChatSession: ObservableObject {
             return .local(baseURL: settings.localBaseURL, model: settings.localModel,
                           apiKey: settings.localAPIKey)
         }
-        let isUnitTest = ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"] != nil
-        if !isUnitTest || (kind == .antigravity && !settings.agyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+        // Gemini Flash routes an Antigravity tab's own messages; other backends' messages go to
+        // Google only when the user opts in (agyAuxiliaryRouting).
+        if kind == .antigravity || settings.agyAuxiliaryRouting,
            let agyCommand = AntigravityBackend.resolveExecutable(customPath: settings.agyPath) {
             return .antigravity(
                 command: agyCommand,

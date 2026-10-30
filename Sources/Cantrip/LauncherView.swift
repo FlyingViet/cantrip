@@ -4169,6 +4169,19 @@ struct SettingsView: View {
             if settings.memoryEnabled {
                 labeledField("Memory vault folder", text: $settings.memoryPath, prompt: "\(NSHomeDirectory())/Cantrip Memory")
             }
+            if AntigravityBackend.isInstalled(customPath: settings.agyPath) {
+                // Opt-ins: both send content to Google through Antigravity; off by default.
+                Toggle("Use Antigravity's Gemini Flash for routing, queue plans and Done-when checks in every tab (sends those messages to Google)",
+                       isOn: $settings.agyAuxiliaryRouting)
+                    .font(.caption)
+                    .toggleStyle(.checkbox)
+                if settings.memoryEnabled {
+                    Toggle("Consolidate memory with Antigravity's Gemini Flash (sends your memory notes to Google)",
+                           isOn: $settings.agyMemoryConsolidation)
+                        .font(.caption)
+                        .toggleStyle(.checkbox)
+                }
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Panel opacity — \(Int(settings.panelOpacity * 100))%")
                     .font(.caption)
