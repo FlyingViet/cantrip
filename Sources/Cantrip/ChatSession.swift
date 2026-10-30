@@ -2986,8 +2986,10 @@ final class ChatSession: ObservableObject {
                                         repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.isStreaming else { return }
-                if self.hasActiveBackgroundWatcher {
-                    Log.write("watchdog: background watcher still active — keeping the run available")
+                // The backend reports a background wait (watch-*, side-* or other detached work it
+                // still tracks): the run is idle on purpose, not stuck.
+                if self.hasActiveBackgroundWatcher || self.isWaitingOnBackgroundWatchers {
+                    Log.write("watchdog: background work still active — keeping the run available")
                     self.armWatchdog()
                     return
                 }
