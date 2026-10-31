@@ -1678,6 +1678,12 @@ struct CantripRemoteAPI {
         }
     }
 
+    /// The app opened: the Mac counts only newer alerts toward this device's badge.
+    func notificationsOpened(body: Data) async throws {
+        struct Response: Decodable { let badge: Int }
+        let _: Response = try await request(path: "/api/v1/notifications/opened", method: "POST", body: body)
+    }
+
     /// Tells the Mac the tab is on screen; returns the app icon's badge count afterwards.
     func markSeen(sessionID: String) async throws -> Int {
         struct Response: Decodable { let badge: Int }
@@ -3062,6 +3068,7 @@ final class CantripRemoteModel: ObservableObject {
             startLANDiscovery()
             startPolling()
             refreshCompletionNotificationRegistration(force: true)
+            reportAppOpened()
             markVisibleTabSeen()
         } else {
             videoUploadTask?.cancel()
@@ -3082,10 +3089,29 @@ final class CantripRemoteModel: ObservableObject {
         markVisibleTabSeen()
     }
 
-    /// An alert arrived for the tab on screen: it's already seen.
+    /// An alert arrived while the app is open: it's seen already, so the next badge starts after
+    /// it, and the tab on screen counts as opened.
     func noteAlert(forSessionID id: UUID) {
+        reportAppOpened()
         guard visibleTabID?.uppercased() == id.uuidString else { return }
         markVisibleTabSeen()
+    }
+
+    /// The app is open, which clears its icon badge (`CantripNotifications.clearBadge`, at once):
+    /// this Mac's later pushes count only tabs alerted after now. Older Macs answer 404; the badge
+    /// still clears.
+    private func reportAppOpened() {
+        #if os(iOS)
+        guard appIsActive, isConfigured, let serverID = selectedServerID,
+              completionAlerts.hasSubscription(serverID: serverID) else { return }
+        let installationID = completionAlerts.installationID
+        Task { [weak self] in
+            guard let self, let body = try? JSONSerialization.data(withJSONObject: [
+                "installationID": installationID.uuidString, "serverID": serverID.uuidString,
+            ]) else { return }
+            _ = try? await performAuthenticated(allowFallback: true) { try await $0.notificationsOpened(body: body) }
+        }
+        #endif
     }
 
     private func markVisibleTabSeen() {
@@ -3096,13 +3122,9 @@ final class CantripRemoteModel: ObservableObject {
         completionAlerts.removeDelivered(sessionID: id, serverID: serverID)
         #endif
         Task { [weak self] in
-            // Older Macs don't track badges; the alerts themselves still work.
-            guard let self, let badge = try? await performAuthenticated(allowFallback: true, {
-                try await $0.markSeen(sessionID: id)
-            }) else { return }
-            #if os(iOS)
-            try? await UNUserNotificationCenter.current().setBadgeCount(badge)
-            #endif
+            // Other devices' badges drop; this one's cleared when the app opened. Older Macs
+            // don't track badges.
+            _ = try? await self?.performAuthenticated(allowFallback: true) { try await $0.markSeen(sessionID: id) }
         }
     }
 

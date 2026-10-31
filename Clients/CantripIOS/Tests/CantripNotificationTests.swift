@@ -519,4 +519,26 @@ final class CantripNotificationTests: XCTestCase {
         await model.refreshNow()
         XCTAssertEqual(model.selectedSessionID, tab, "A finished run falls back to the tabs")
     }
+
+    func testAppActiveReportsOpenedToMac() async throws {
+        let (model, alerts, a, _, _) = try fixture()
+        alerts.save(serverID: a.id, fingerprint: fingerprint("paired-a"))
+        try await model.selectServer(a)
+        var openedCalled = false
+        NotificationTestProtocol.handler = { request in
+            if request.url?.path == "/api/v1/notifications/opened" {
+                openedCalled = true
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer paired-a")
+                let body = try self.body(request)
+                XCTAssertEqual(body["serverID"] as? String, a.id.uuidString)
+                XCTAssertEqual(body["installationID"] as? String, alerts.installationID.uuidString)
+                return (200, Data(#"{"badge":0}"#.utf8))
+            }
+            return (200, Data(#"{"sessions":[]}"#.utf8))
+        }
+        model.setAppActive(true)
+        for _ in 0..<50 where !openedCalled { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(openedCalled, "Foregrounding the app notifies the Mac to reset this device's badge baseline")
+    }
 }

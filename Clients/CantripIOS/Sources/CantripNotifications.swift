@@ -149,6 +149,14 @@ final class CantripNotifications: NSObject, ObservableObject, UNUserNotification
         Task { _ = try? await authorize() }
     }
 
+    /// Opening the app clears its icon badge at once, without waiting for the Mac; pushes after
+    /// this count only newer alerts (`CantripRemoteModel.reportAppOpened`).
+    func clearBadge() {
+        #if os(iOS)
+        UNUserNotificationCenter.current().setBadgeCount(0)
+        #endif
+    }
+
     /// Clears a tab's alerts from Notification Center once it's opened.
     func removeDelivered(sessionID: String, serverID: UUID) {
         UNUserNotificationCenter.current().getDeliveredNotifications { notifications in

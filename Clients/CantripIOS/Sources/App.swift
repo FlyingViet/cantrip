@@ -39,6 +39,7 @@ struct HermesApp: App {
         }
         .preferredColorScheme(.dark)
         .onAppear {
+            if scenePhase == .active { notifications.clearBadge() }
             remoteModel.setAppActive(scenePhase == .active)
             openNotification()
         }
@@ -46,6 +47,7 @@ struct HermesApp: App {
         .task { await CantripUITestFixtures.pairRemoteIfRequested(remoteModel, env: env) }
         #endif
         .onChange(of: scenePhase) { _, phase in
+            if phase == .active { notifications.clearBadge() }
             remoteModel.setAppActive(phase == .active)
             if phase == .active { openNotification() }
         }
