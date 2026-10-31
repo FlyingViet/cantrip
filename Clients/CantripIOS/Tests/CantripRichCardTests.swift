@@ -117,7 +117,7 @@ final class CantripRichCardTests: XCTestCase {
 
         XCTAssertTrue(CantripLinkPreview.isSafeWebURL(try XCTUnwrap(URL(string: "https://www.apple.com/shop/buy-mac/mac-studio"))))
         XCTAssertFalse(CantripLinkPreview.isSafeWebURL(try XCTUnwrap(URL(string: "https://host.example-tailnet.ts.net/status"))))
-        XCTAssertFalse(CantripLinkPreview.isSafeWebURL(try XCTUnwrap(URL(string: "http://fixer.example-home.com"))))
+        XCTAssertFalse(CantripLinkPreview.isSafeWebURL(try XCTUnwrap(URL(string: "http://printer.local"))))
         XCTAssertFalse(CantripLinkPreview.isSafeWebURL(try XCTUnwrap(URL(string: "http://localhost:8080"))))
         XCTAssertFalse(CantripLinkPreview.isSafeWebURL(try XCTUnwrap(URL(string: "file:///etc/hosts"))))
         XCTAssertFalse(CantripLinkPreview.isSafeWebURL(try XCTUnwrap(URL(string: "https://user:pass@example.com"))))

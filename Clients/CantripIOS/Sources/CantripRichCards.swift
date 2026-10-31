@@ -24,7 +24,7 @@ struct CantripLinkPreview: Codable, Equatable, Identifiable, Sendable {
               url.user == nil, url.password == nil,
               let host = url.host?.lowercased(), !host.isEmpty else { return false }
         if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local")
-            || host.hasSuffix(".ts.net") || host.hasSuffix(".example-home.com") {
+            || host.hasSuffix(".ts.net") {
             return false
         }
         return true
