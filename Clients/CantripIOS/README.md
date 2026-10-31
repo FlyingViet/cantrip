@@ -581,9 +581,12 @@ places resolved by the Mac with Apple MapKit and OpenStreetMap Nominatim), the
 message carries a `placeCard` with numbered pins, ratings, categories,
 open/closed status when known, and tap-through actions for **Directions**,
 **Call**, and **Website**. Native iOS and macOS clients render an interactive
-MapKit map with numbered markers — floating a scrollable place card on wide
-layouts (Mac, iPad, and unfolded iPhone Duo) and stacking the list below the
-map on compact widths.
+MapKit map with numbered markers — floating a scrollable place list over the
+map when the card is at least 600 pt wide, and stacking the list below the map
+on narrower cards (iPhone, iPhone Duo folded or unfolded beside the sidebar).
+The camera is fitted so every pin and its label sit in the area the list
+doesn't cover. The Mac leaves out link cards for links the map already covers
+(a place's website, or a link named for a place).
 
 ### Live agent browser preview
 
