@@ -82,6 +82,7 @@ extension SessionTabTests {
         chat.submit("Find urgent care near Santa Clara and Mac Studio order link")
         try await waitForJournalTest { backend.requests.count == 1 }
         let replyText = """
+        Try **[Concentra Urgent Care](https://www.concentra.com/urgent-care-centers/santa-clara/)** first.
         Order at https://www.apple.com/shop/buy-mac/mac-studio (internal https://mac-mini.example-tailnet.ts.net/status stays plain).
 
         ```places
@@ -99,7 +100,8 @@ extension SessionTabTests {
 
         let assistant = chat.messages.last!
         precondition(!assistant.text.contains("```places"), "Places block must be stripped from assistant text")
-        precondition(assistant.linkPreviews.count == 1, "Only public URL should be unfurled")
+        precondition(assistant.linkPreviews.count == 1,
+                     "Only the public URL the map card doesn't cover should be unfurled")
         precondition(assistant.linkPreviews[0].title == "Shop Mac Studio")
         precondition(assistant.linkPreviews[0].domain == "apple.com")
         precondition(assistant.placeCard?.places.first?.name == "Concentra Urgent Care")
@@ -131,6 +133,19 @@ extension SessionTabTests {
         let remotePlace = remoteMsg["placeCard"] as? [String: Any]
         let remotePlaces = remotePlace?["places"] as? [[String: Any]] ?? []
         precondition(remotePlaces.count == 1 && remotePlaces[0]["name"] as? String == "Concentra Urgent Care")
+
+        // A reply saved before the map card rule: its place link card is dropped from the snapshot.
+        let placeLinkCard = LinkPreviewCard(
+            id: LinkPreviewSecurity.cardID(for: "https://www.concentra.com/urgent-care-centers/santa-clara/"),
+            url: "https://www.concentra.com/urgent-care-centers/santa-clara/",
+            domain: "concentra.com", title: "Santa Clara Urgent Care")
+        chat.messages[chat.messages.count - 1].linkPreviews.insert(placeLinkCard, at: 0)
+        let savedResp = try await call("api/v1/sessions/\(chat.id)")
+        let savedMessages = (savedResp.1["session"] as? [String: Any])?["messages"] as? [[String: Any]] ?? []
+        let savedLinks = savedMessages.last { ($0["role"] as? String) == "assistant" }?["linkPreviews"]
+            as? [[String: Any]] ?? []
+        precondition(savedLinks.map { $0["title"] as? String } == ["Shop Mac Studio"],
+                     "Snapshot drops link cards the map card covers: \(savedLinks)")
 
         let imageID = remoteLinks[0]["imageID"] as! String
         let unauthImg = try await call("api/v1/link-previews/image?id=\(imageID)", auth: false)

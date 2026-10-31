@@ -217,20 +217,31 @@ enum LinkPreviewSecurity {
 enum LinkPreviewExtractor {
     static let maximumLinksPerMessage = 3
 
+    /// A link found in a reply, with its Markdown label when it had one (`[label](url)`).
+    struct Link: Equatable {
+        var url: URL
+        var label: String?
+    }
+
     /// Extracts up to 3 distinct allowed HTTP/HTTPS URLs from Markdown text outside code blocks and inline code.
     static func extractURLs(from markdown: String, limit: Int = maximumLinksPerMessage) -> [URL] {
+        extractLinks(from: markdown, limit: limit).map(\.url)
+    }
+
+    /// Like `extractURLs`, keeping each link's Markdown label.
+    static func extractLinks(from markdown: String, limit: Int = maximumLinksPerMessage) -> [Link] {
         guard limit > 0, !markdown.isEmpty else { return [] }
         let stripped = stripCodeBlocksAndSpans(from: markdown)
-        var results: [URL] = []
+        var results: [Link] = []
         var seen = Set<String>()
 
-        func consider(_ raw: String) {
+        func consider(_ raw: String, label: String?) {
             guard results.count < limit else { return }
             let cleaned = trimURLPunctuation(raw)
             guard let url = URL(string: cleaned), LinkPreviewSecurity.isAllowed(url: url) else { return }
             let key = normalizedKey(for: url)
             guard seen.insert(key).inserted else { return }
-            results.append(url)
+            results.append(Link(url: url, label: label))
         }
 
         // Remove Markdown image links ![alt](url) so inline images aren't treated as page links.
@@ -241,17 +252,19 @@ enum LinkPreviewExtractor {
         )
 
         // Match Markdown links [label](url), autolinks <https://...>, or bare https?://...
-        let pattern = #"\[[^\]]+\]\(\s*(https?://[^\s)"']+)(?:\s+["'][^"']*["'])?\s*\)|<(https?://[^>\s]+)>|\b(https?://[^\s<>()]+)"#
+        let pattern = #"\[([^\]]+)\]\(\s*(https?://[^\s)"']+)(?:\s+["'][^"']*["'])?\s*\)|<(https?://[^>\s]+)>|\b(https?://[^\s<>()]+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
             return []
         }
         let nsRange = NSRange(withoutImages.startIndex..<withoutImages.endIndex, in: withoutImages)
         regex.enumerateMatches(in: withoutImages, options: [], range: nsRange) { match, _, stop in
             guard let match else { return }
-            for group in 1...3 {
+            for group in 2...4 {
                 let range = match.range(at: group)
                 if range.location != NSNotFound, let swiftRange = Range(range, in: withoutImages) {
-                    consider(String(withoutImages[swiftRange]))
+                    let label = group == 2 ? Range(match.range(at: 1), in: withoutImages)
+                        .map { String(withoutImages[$0]) } : nil
+                    consider(String(withoutImages[swiftRange]), label: label)
                     break
                 }
             }
@@ -805,6 +818,92 @@ struct PlaceBlockProposal: Codable, Equatable, Sendable {
     var query: String?
     var near: String?
     var places: [Item]
+}
+
+// MARK: - Links a Map Card Already Covers
+
+/// When a reply has a map card, its place list already links each place, so a link preview for
+/// one of those places only repeats it. A link is covered when it points at a place's website
+/// domain, or its Markdown label names a place; other links (a form, an article) keep their card.
+/// Applied when resolving previews and again when building each message snapshot, so every
+/// client shows the same cards, including for replies saved before this rule.
+enum PlaceLinkFilter {
+    /// Hosts many unrelated businesses share; a link there must start with the place's own URL.
+    static let sharedHosts: Set<String> = [
+        "facebook.com", "m.facebook.com", "instagram.com", "sites.google.com", "google.com",
+        "business.site", "yelp.com", "linktr.ee", "squareup.com", "square.site",
+        "wixsite.com", "linkedin.com", "x.com", "twitter.com", "tiktok.com",
+    ]
+
+    private static let fillerWords: Set<String> = ["the", "and", "a", "an", "of", "at", "in", "on"]
+
+    /// The previews to show under a reply: all of them without a map card, otherwise only links
+    /// the map's places don't cover. `text` is the reply, for each link's Markdown label.
+    static func visible(_ previews: [LinkPreviewCard], placeCard: PlaceCard?, text: String) -> [LinkPreviewCard] {
+        guard let places = placeCard?.places, !places.isEmpty, !previews.isEmpty else { return previews }
+        // A card's id hashes the link as written; its `url` is where redirects ended.
+        let links = Dictionary(
+            LinkPreviewExtractor.extractLinks(from: text, limit: 64)
+                .map { (LinkPreviewSecurity.cardID(for: $0.url.absoluteString), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return previews.filter { preview in
+            let link = links[preview.id]
+            if let link, covers(url: link.url, label: link.label, places: places) { return false }
+            guard let url = URL(string: preview.url) else { return true }
+            return !covers(url: url, label: nil, places: places)
+        }
+    }
+
+    static func uncovered(_ links: [LinkPreviewExtractor.Link], places: [PlacePin]) -> [LinkPreviewExtractor.Link] {
+        guard !places.isEmpty else { return links }
+        return links.filter { !covers(url: $0.url, label: $0.label, places: places) }
+    }
+
+    static func covers(url: URL, label: String?, places: [PlacePin]) -> Bool {
+        places.contains { place in
+            if let website = place.website.flatMap(URL.init(string:)), sameSite(url, website) { return true }
+            if let label, labelNames(label, place: place.name) { return true }
+            return false
+        }
+    }
+
+    /// Same site: one host is the other or a subdomain of it. On shared hosts, the link must also
+    /// sit under the place's own page.
+    static func sameSite(_ link: URL, _ website: URL) -> Bool {
+        let linkHost = LinkPreviewSecurity.cleanDomain(for: link)
+        let siteHost = LinkPreviewSecurity.cleanDomain(for: website)
+        guard !linkHost.isEmpty, !siteHost.isEmpty else { return false }
+        guard linkHost == siteHost || linkHost.hasSuffix("." + siteHost) || siteHost.hasSuffix("." + linkHost) else {
+            return false
+        }
+        let isShared = sharedHosts.contains { linkHost == $0 || linkHost.hasSuffix("." + $0) }
+        guard isShared else { return true }
+        let sitePath = website.path.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let linkPath = link.path.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return !sitePath.isEmpty && (linkPath == sitePath || linkPath.hasPrefix(sitePath + "/"))
+    }
+
+    /// A label names a place when it has every word of the place's name, or when its words all
+    /// appear in the name starting with the name's first word: "Carbon Health Urgent Care" names
+    /// "Carbon Health Urgent & Primary Care Santa Clara", but "Urgent Care" or "Santa Clara" don't.
+    static func labelNames(_ label: String, place: String) -> Bool {
+        let labelWords = words(label)
+        let placeWords = words(place)
+        guard let first = placeWords.first, !labelWords.isEmpty else { return false }
+        let labelSet = Set(labelWords)
+        let placeSet = Set(placeWords)
+        if placeSet.isSubset(of: labelSet) { return true }
+        // One short word ("Map", "Home") is too weak to call a match.
+        guard labelWords.count >= 2 || labelWords[0].count >= 4 else { return false }
+        return labelSet.contains(first) && labelSet.isSubset(of: placeSet)
+    }
+
+    static func words(_ text: String) -> [String] {
+        let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        return folded.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty && !fillerWords.contains($0) }
+    }
 }
 
 // MARK: - OpenStreetMap Opening Hours Evaluator

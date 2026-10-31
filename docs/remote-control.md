@@ -1616,6 +1616,13 @@ Windows clients render an interactive slippy map backed by the Mac's cached
 OpenStreetMap tile proxy at `GET /api/v1/map-tile?z=<z>&x=<x>&y=<y>` (or
 `format=json` for base64 JSON).
 
+A reply with a `placeCard` gets no `linkPreviews` for links the map already
+covers: a link to a place's website (same domain or a subdomain; on shared hosts
+such as facebook.com, under the place's own page) or a Markdown link whose label
+names a place. Other links, such as a form or an article, keep their cards, and
+the three-card limit counts only those. The Mac applies this when it builds the
+snapshot, so replies saved before the rule show the same cards on every client.
+
 ## Understand what is available remotely
 
 | Situation | Behavior |

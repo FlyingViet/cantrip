@@ -9,6 +9,7 @@ struct RichCardTests {
         try await testLinkPreviewStore()
         testOSMOpeningHours()
         testPlaceBlockExtraction()
+        testPlaceLinkFilter()
         print("Rich card unit tests passed")
     }
 
@@ -164,5 +165,77 @@ struct RichCardTests {
         precondition(proposal?.places[0].name == "Concentra Urgent Care")
         precondition(!reply.contains("```places"), "Places block must be stripped from visible reply text")
         precondition(reply.contains("Concentra Urgent Care"))
+    }
+
+    static func testPlaceLinkFilter() {
+        func pin(_ name: String, website: String?) -> PlacePin {
+            PlacePin(id: name, name: name, latitude: 37.37, longitude: -121.95, website: website)
+        }
+        let places = [
+            pin("Harbor Urgent Care", website: "https://www.harborcare.example.com/locations/bayside/"),
+            pin("Lantern Clinic", website: "https://lanternclinic.example.org/"),
+            pin("Northgate Health Urgent & Primary Care Bayside - Bayside Square",
+                website: "https://northgatehealth.example.com/locations/bayside"),
+            pin("Corner Bakery", website: "https://www.facebook.com/cornerbakerybayside"),
+        ]
+        // Linked place names, the reply format a places block follows.
+        let reply = """
+        - **[Harbor Urgent Care](https://www.harborcare.example.com/urgent-care/bayside/)**: walk-in.
+        - **[Lantern Clinic](https://lanternclinic.example.org/resources/fit-for-duty/)**: fit-for-duty exams.
+        - **[Northgate Health Urgent Care](https://directory.example.net/clinics/northgate-bayside.html)**: book in the app.
+        - Fill in [the leave certification form](https://www.dol.example.gov/forms/leave-cert.pdf) first.
+        - Their [hours page](https://www.facebook.com/otherbusiness/hours) and [Corner Bakery](https://cornerbakery.example.com/).
+        - See https://news.example.com/urgent-care-costs for typical fees, and [Urgent Care](https://guide.example.com/what-is-urgent-care).
+        """
+        let links = LinkPreviewExtractor.extractLinks(from: reply, limit: 64)
+        precondition(links.first?.label == "Harbor Urgent Care", "Labels come with links: \(links)")
+        precondition(links.count == 8, "Every link is found: \(links.map(\.url))")
+        precondition(LinkPreviewExtractor.extractURLs(from: reply) == links.prefix(3).map(\.url))
+
+        let uncovered = PlaceLinkFilter.uncovered(links, places: places).map(\.url.absoluteString)
+        precondition(uncovered == [
+            "https://www.dol.example.gov/forms/leave-cert.pdf",
+            "https://www.facebook.com/otherbusiness/hours",
+            "https://news.example.com/urgent-care-costs",
+            "https://guide.example.com/what-is-urgent-care",
+        ], "Only links the map doesn't cover keep a preview: \(uncovered)")
+        precondition(PlaceLinkFilter.uncovered(links, places: []).count == links.count,
+                     "Without a map card every link keeps its preview")
+
+        // Matching by site: subdomains count; shared hosts need the place's own page.
+        let site = URL(string: "https://harborcare.example.com/")!
+        precondition(PlaceLinkFilter.sameSite(URL(string: "https://booking.harborcare.example.com/x")!, site))
+        precondition(!PlaceLinkFilter.sameSite(URL(string: "https://notharborcare.example.com/")!, site))
+        let page = URL(string: "https://www.facebook.com/cornerbakerybayside")!
+        precondition(PlaceLinkFilter.sameSite(URL(string: "https://facebook.com/cornerbakerybayside/photos")!, page))
+        precondition(!PlaceLinkFilter.sameSite(URL(string: "https://facebook.com/cornerbakerybaysideextra")!, page))
+
+        // Matching by label.
+        precondition(PlaceLinkFilter.labelNames("**Lantern Clinic**", place: "Lantern Clinic"))
+        precondition(PlaceLinkFilter.labelNames("Lantern Clinic Bayside, CA", place: "Lantern Clinic"))
+        precondition(PlaceLinkFilter.labelNames("Harbor", place: "Harbor Urgent Care"))
+        precondition(!PlaceLinkFilter.labelNames("Urgent care", place: "Harbor Urgent Care"))
+        precondition(!PlaceLinkFilter.labelNames("Bayside", place: "Northgate Health Urgent & Primary Care Bayside"))
+        precondition(!PlaceLinkFilter.labelNames("map", place: "Map Room Cafe"))
+        precondition(PlaceLinkFilter.labelNames("Café Olé", place: "Cafe Ole"))
+
+        // Saved replies: cards resolved before the rule are filtered when shown, matched by
+        // the link as written even when the card's URL is where a redirect ended.
+        func card(_ written: String, final: String) -> LinkPreviewCard {
+            LinkPreviewCard(id: LinkPreviewSecurity.cardID(for: written), url: final,
+                            domain: "", title: "", siteName: nil, imageID: nil)
+        }
+        let saved = [
+            card("https://directory.example.net/clinics/northgate-bayside.html",
+                 final: "https://directory.example.net/c/12345"),
+            card("https://lanternclinic.example.org/resources/fit-for-duty/",
+                 final: "https://lanternclinic.example.org/resources/fit-for-duty/"),
+            card("https://www.dol.example.gov/forms/leave-cert.pdf",
+                 final: "https://www.dol.example.gov/forms/leave-cert.pdf"),
+        ]
+        let map = PlaceCardResolver.buildCard(query: "Clinics", regionName: nil, places: places)
+        let shown = PlaceLinkFilter.visible(saved, placeCard: map, text: reply).map(\.url)
+        precondition(shown == ["https://www.dol.example.gov/forms/leave-cert.pdf"], "Shown: \(shown)")
+        precondition(PlaceLinkFilter.visible(saved, placeCard: nil, text: reply) == saved)
     }
 }
