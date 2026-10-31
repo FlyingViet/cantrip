@@ -123,7 +123,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, usage limits (Copilot at the top level, Claude Code under `claude`, plus `activeBackend`), View Mac |
-| `GET/POST /api/v1/usage-fallback` | Usage limit fallback in Model Settings (Mac-wide): `{backend, primary, choices, limited, revision}`; POST `{revision, backend}` (`""` = off) or `{revision, resetLimits: true}`; `supportsUsageFallback` on session lists; older hosts `404` and the section stays hidden |
+| `GET/POST /api/v1/usage-fallback` | Usage limit fallbacks in Model Settings (Mac-wide): `{backends, backend, primary, choices, limited, revision}`; the section lists the backups in order with **Add a backup**, up/down and **Remove**, each saving right away with POST `{revision, backends}`, or `{revision, resetLimits: true}` for **Try every backend again**. Macs from before the chain send no `backends`: one backup, set with `{revision, backend}` (`""` = off). `supportsUsageFallback` on session lists; older hosts `404` and the section stays hidden |
 | `GET /api/v1/voice/vocabulary` | Dictation names: project, tab, note, task and tracker terms plus the busiest people (handles, optional names); older hosts reply `404` and the app falls back to tab and task titles |
 
 Responses of 4 KB or more come gzip-compressed when the request sends

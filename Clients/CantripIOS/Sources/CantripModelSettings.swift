@@ -76,7 +76,8 @@ struct CantripModelSettingsChange: Encodable {
     }
 }
 
-/// `GET/POST /api/v1/usage-fallback`: the backend the Mac moves runs to at a usage limit.
+/// `GET/POST /api/v1/usage-fallback`: the backup backends, in order, the Mac moves a run through
+/// when the backend it's on reports its usage limit.
 struct CantripUsageFallback: Decodable, Equatable {
     struct Choice: Decodable, Equatable, Identifiable {
         let id: String
@@ -87,31 +88,57 @@ struct CantripUsageFallback: Decodable, Equatable {
         let until: String
         let untilLabel: String
     }
-    /// "" when off.
+    /// The chain's first entry, "" when off; all a Mac from before the chain sends.
     let backend: String
+    /// The whole chain in the order tried; nil from Macs before the chain.
+    var backends: [String]? = nil
     let primary: String
     let choices: [Choice]
     let limited: [Limited]
     let revision: String
 
-    /// The picker's value: "" when off or set to a backend that is now the Mac's own.
-    var selection: String { choices.contains { $0.id == backend } ? backend : "" }
+    /// Whether the Mac takes more than one backup; older Macs keep a chain of one.
+    var supportsChain: Bool { backends != nil }
+
+    var chain: [String] { backends ?? (backend.isEmpty ? [] : [backend]) }
+
+    /// Backends that could still be added.
+    var addable: [Choice] {
+        guard supportsChain || chain.isEmpty else { return [] }
+        return choices.filter { !chain.contains($0.id) }
+    }
+
+    func label(_ id: String) -> String {
+        let name = choices.first { $0.id == id }?.label ?? id
+        return id == primary ? "\(name) (skipped: the Mac's backend)" : name
+    }
 
     var status: String {
-        limited.isEmpty
-            ? "New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch."
-            : "At its usage limit: " + limited.map { "\($0.backend) until \($0.untilLabel)" }.joined(separator: ", ") + "."
+        if !limited.isEmpty {
+            return "At its usage limit: " + limited.map { "\($0.backend) until \($0.untilLabel)" }.joined(separator: ", ") + "."
+        }
+        return chain.isEmpty
+            ? "Off: a usage limit stops the run with the error."
+            : "New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch."
+    }
+
+    /// The change that sets `chain`; a Mac from before the chain only takes its first entry.
+    func change(to chain: [String]) -> CantripUsageFallbackChange {
+        supportsChain
+            ? CantripUsageFallbackChange(revision: revision, backends: chain)
+            : CantripUsageFallbackChange(revision: revision, backend: chain.first ?? "")
     }
 }
 
 struct CantripUsageFallbackChange: Encodable {
     let revision: String
     var backend: String?
+    var backends: [String]?
     var resetLimits: Bool?
 }
 
-/// Mac-wide, so it saves on change, apart from the tab's Save. The sheet loads it (`load`): a
-/// hidden section has no view to run a task from.
+/// Mac-wide, so each change saves right away, apart from the tab's Save. The sheet loads it
+/// (`load`): a hidden section has no view to run a task from.
 struct CantripUsageFallbackSection: View {
     @ObservedObject var model: CantripRemoteModel
     @Binding var fallback: CantripUsageFallback?
@@ -122,28 +149,73 @@ struct CantripUsageFallbackSection: View {
         Group {
             if let fallback {
                 Section {
-                    Picker("Continue on", selection: Binding(get: { fallback.selection }, set: { value in
-                        Task { await save(CantripUsageFallbackChange(revision: fallback.revision, backend: value)) }
-                    })) {
-                        Text("Off - stop and show the error").tag("")
-                        ForEach(fallback.choices) { Text($0.label).tag($0.id) }
+                    ForEach(Array(fallback.chain.enumerated()), id: \.element) { index, id in
+                        row(fallback, id: id, index: index)
                     }
-                    .disabled(saving)
-                    .accessibilityIdentifier("usageFallback.picker")
+                    if !fallback.addable.isEmpty {
+                        Picker("Add a backup", selection: Binding(get: { "" }, set: { id in
+                            guard !id.isEmpty else { return }
+                            Task { await save(fallback.change(to: fallback.chain + [id])) }
+                        })) {
+                            Text(fallback.chain.isEmpty ? "Off - choose a backend" : "Choose a backend").tag("")
+                            ForEach(fallback.addable) { Text($0.label).tag($0.id) }
+                        }
+                        .disabled(saving)
+                        .accessibilityIdentifier("usageFallback.add")
+                    }
                     if !fallback.limited.isEmpty {
                         Button("Try every backend again") {
                             Task { await save(CantripUsageFallbackChange(revision: fallback.revision, resetLimits: true)) }
                         }
                         .disabled(saving)
+                        .accessibilityIdentifier("usageFallback.reset")
                     }
                     if let error { Text(error).foregroundStyle(.orange) }
                 } header: {
-                    Text("Usage limit fallback (all tabs)")
+                    Text("Usage limit fallbacks (all tabs)")
                 } footer: {
-                    Text("When the Mac's backend says its plan's usage limit is reached. " + fallback.status)
+                    Text("When a backend hits its usage limit, the task continues on the first backup here that isn't at its limit too. "
+                         + fallback.status)
                 }
             }
         }
+    }
+
+    private func row(_ fallback: CantripUsageFallback, id: String, index: Int) -> some View {
+        let chain = fallback.chain
+        let name = fallback.label(id)
+        func moved(_ offset: Int) -> [String] {
+            var next = chain
+            next.swapAt(index, index + offset)
+            return next
+        }
+        return HStack(spacing: 14) {
+            Text("\(index + 1).").monospacedDigit().foregroundStyle(.secondary)
+            Text(name)
+            Spacer()
+            Group {
+                Button { Task { await save(fallback.change(to: moved(-1))) } } label: { Image(systemName: "arrow.up") }
+                    .disabled(saving || index == 0)
+                    .accessibilityLabel("Try \(name) earlier")
+                Button { Task { await save(fallback.change(to: moved(1))) } } label: { Image(systemName: "arrow.down") }
+                    .disabled(saving || index == chain.count - 1)
+                    .accessibilityLabel("Try \(name) later")
+                Button("Remove", role: .destructive) {
+                    Task { await save(fallback.change(to: chain.filter { $0 != id })) }
+                }
+                .disabled(saving)
+                .accessibilityLabel("Remove \(name)")
+            }
+            #if os(macOS)
+            // Borderless symbols are tiny, grey click targets on the Mac.
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            #else
+            .buttonStyle(.borderless)
+            #endif
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("usageFallback.backup.\(id)")
     }
 
     /// Older Macs don't offer it; the section stays hidden.

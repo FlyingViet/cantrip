@@ -79,11 +79,10 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Model Settings"].waitForExistence(timeout: 10),
                       "Model Settings opens the existing sheet")
         if environment["CANTRIP_UITEST_EXPECTS_FALLBACK"] == "1" {
-            let fallback = app.staticTexts["Usage limit fallback (all tabs)"].firstMatch
+            let fallback = app.staticTexts["Usage limit fallbacks (all tabs)"].firstMatch
             for _ in 0..<4 where !fallback.exists { app.swipeUp() }
-            XCTAssertTrue(fallback.waitForExistence(timeout: 5), "It reaches the Mac's usage limit fallback")
-            XCTAssertTrue(app.buttons["usageFallback.picker"].firstMatch.exists
-                          || app.otherElements["usageFallback.picker"].firstMatch.exists, "The fallback picker")
+            XCTAssertTrue(fallback.waitForExistence(timeout: 5), "It reaches the Mac's usage limit fallbacks")
+            XCTAssertTrue(app.buttons["usageFallback.add"].firstMatch.exists, "Add a backup")
         }
         save(app, "model-settings")
         app.navigationBars["Model Settings"].buttons["Cancel"].tap()
