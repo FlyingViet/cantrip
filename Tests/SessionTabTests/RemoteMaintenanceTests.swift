@@ -140,6 +140,27 @@ extension SessionTabTests {
             preconditionFailure("A stale revision cannot start new work, even if its receipt was evicted")
         } catch let error as RemoteMaintenanceError { precondition(error.status == 409) }
 
+        // A rewritten origin (new commits for the same history, tags moved) with no unpushed local
+        // commits: update moves main to it and keeps the old history on a branch.
+        try await git(["reset", "--hard", "origin/main"], in: repo)
+        try await git(["tag", "v0.1"], in: producer)
+        try await git(["push", "origin", "v0.1"], in: producer)
+        try await git(["fetch", "--tags", "origin"], in: repo)
+        let before = try await RemoteMaintenance.runCommand("/usr/bin/git", ["rev-parse", "HEAD"], repo) { _ in }
+        try await git(["commit", "--amend", "-m", "Divergent update, rewritten"], in: producer)
+        try await git(["tag", "-f", "v0.1"], in: producer)
+        try await git(["push", "--force", "origin", "main", "v0.1"], in: producer)
+        _ = try service.start(action(.update))
+        try await wait()
+        precondition(service.snapshot().job?.phase == "succeeded" && builds == 4,
+                     "A rewritten origin is followed when main has no commits of its own")
+        func head(_ ref: String) async throws -> String {
+            try await RemoteMaintenance.runCommand("/usr/bin/git", ["rev-parse", ref], repo) { _ in }
+        }
+        let (moved, upstream, kept, tag) = (try await head("HEAD"), try await head("origin/main"),
+                                            try await head("before-history-rewrite"), try await head("v0.1^{commit}"))
+        precondition(moved == upstream && kept == before && tag == upstream, "main, its backup and the moved tag")
+
         busyDuringRestart = true
         _ = try service.start(action(.restart))
         try await wait()

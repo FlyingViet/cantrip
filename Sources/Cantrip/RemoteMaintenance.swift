@@ -238,7 +238,8 @@ final class RemoteMaintenance {
         if action == .check || action == .update {
             if action == .update { try requireCleanMain() }
             try phase("checking", "Fetching updates from origin/main...")
-            try await git(["fetch", "--quiet", "origin", "main"])
+            // Forced tags: a rewritten history moves release tags, which a plain fetch refuses to clobber.
+            try await git(["fetch", "--quiet", "--force", "--tags", "origin", "main"])
             let count = try await git(["rev-list", "--count", "HEAD..origin/main"])
             guard let count = Int(count) else {
                 throw RemoteMaintenanceError(status: 500, message: "Git returned an invalid update count.")
@@ -255,7 +256,7 @@ final class RemoteMaintenance {
             try requireCleanMain()
             try requireIdle()
             try phase("updating", "Fast-forwarding main. Local edits will not be stashed or discarded.")
-            try await git(["merge", "--ff-only", "--no-edit", "origin/main"])
+            try await followOriginMain()
             commitsBehind = 0
         }
         guard try await git(["diff", "--name-only", "--diff-filter=U"]).isEmpty else {
@@ -268,6 +269,26 @@ final class RemoteMaintenance {
             throw RemoteMaintenanceError(status: 500, message: "The build did not produce a Cantrip app with a build identity.")
         }
         try phase("succeeded", "Build ready. Restart Cantrip when all tabs are idle to activate it.", finished: true)
+    }
+
+    /// Fast-forwards main. When origin's history was rewritten (force-pushed with new commits for
+    /// the same changes) and every local commit was once on origin/main, as its reflog remembers,
+    /// main moves to the new history; the old one stays on `before-history-rewrite`. Local commits
+    /// that were never pushed still stop the update.
+    private func followOriginMain() async throws {
+        if (try? await git(["merge-base", "--is-ancestor", "HEAD", "origin/main"])) != nil {
+            try await git(["merge", "--ff-only", "--no-edit", "origin/main"])
+            return
+        }
+        let seen = Set(try await git(["log", "-g", "--format=%H", "refs/remotes/origin/main"])
+            .split(separator: "\n").map(String.init))
+        guard !seen.isEmpty, try await git(["rev-list", "-1", "HEAD", "--not"] + seen.sorted()).isEmpty else {
+            throw RemoteMaintenanceError(status: 409,
+                message: "main has commits that aren't on origin/main. Merge or rebase them on the Mac, then update.")
+        }
+        try phase("updating", "origin/main's history was rewritten. Moving main to it; the old history stays on before-history-rewrite.")
+        try await git(["branch", "-f", "before-history-rewrite", "HEAD"])
+        try await git(["reset", "--hard", "--quiet", "origin/main"])
     }
 
     private func requireCleanMain() throws {
