@@ -288,15 +288,16 @@ extension SessionTabTests {
           children:[],replaceChildren(...items){this.children=items},append(item){this.children.push(item)},
           classList:{hidden:true,toggle(name,on){this.hidden=on}},addEventListener(){},showModal(){},close(){}});
         function Option(label,value){this.label=label;this.value=value}
-        let fallbackCalls=[];const fallback={backend:"",primary:"Claude Code",revision:"fallback-a",
-          choices:[{id:"Copilot",label:"Copilot"}],limited:[{backend:"Claude Code",until:"2026-10-28T12:00:00Z",untilLabel:"5:00 AM"}]};
-        const document={createElement(){return {}}};let token="fixture",selected="tab-a",calls=[],sessionItems=[];
+        let fallbackCalls=[];const fallback={backends:[],backend:"",primary:"Claude Code",revision:"fallback-a",
+          choices:[{id:"Copilot",label:"Copilot"},{id:"Codex",label:"Codex"}],limited:[{backend:"Claude Code",until:"2026-10-28T12:00:00Z",untilLabel:"5:00 AM"}]};
+        const document={createElement(){return {children:[],attributes:{},append(...items){this.children.push(...items)},setAttribute(name,value){this.attributes[name]=value}}}};
+        function setTimeout(callback){callback()}let token="fixture",selected="tab-a",calls=[],sessionItems=[];
         const response={selection:{model:"model-a",effort:"low",contextTier:"default"},
           defaults:{model:"model-a",effort:"low",contextTier:"default"},revision:"revision-a",usesDefaults:true,
           models:[{id:"model-a",reasoningEfforts:["low","high"],contextTiers:["default","long_context"],contextWindow:1050000,longContextPromptTokens:1050000},
                   {id:"model-b",reasoningEfforts:[],contextTiers:["default"]}],isRefreshing:false};
         function api(path,options){const body=options?JSON.parse(options.body):null;
-          if(path==="/api/v1/usage-fallback"){fallbackCalls.push(body);return Promise.resolve(body?{...fallback,backend:body.backend??"",limited:[],revision:"fallback-b"}:fallback)}
+          if(path==="/api/v1/usage-fallback"){fallbackCalls.push(body);return Promise.resolve(body?{...fallback,backends:body.backends,backend:body.backends[0]??"",limited:[],revision:`fallback-${fallbackCalls.length}`}:fallback)}
           calls.push({path,body});return Promise.resolve(response)}
         function refresh(){return Promise.resolve()}
         \(source[start.lowerBound..<end.lowerBound])
@@ -312,18 +313,40 @@ extension SessionTabTests {
         precondition(context.evaluateScript("calls[1].path")!.toString() == "/api/v1/sessions/tab-a/model-settings")
         precondition(context.evaluateScript("calls[1].body.effort==='high' && calls[1].body.contextTier==='long_context'")!.toBool())
         precondition(context.evaluateScript("modelTokens(1050000)")!.toString() == "1.05M")
-        // The Mac-wide fallback loads with the sheet, names the limited backend and saves on change.
+        // The Mac-wide fallbacks load with the sheet, name the limited backend and save on change.
         precondition(context.evaluateScript("""
-        !$("fallbackBox").classList.hidden && $("fallbackChoice").children.length===2
+        !$("fallbackBox").classList.hidden && $("fallbackAdd").children.length===3 && $("fallbackList").children.length===0
           && $("fallbackStatus").textContent==="At its usage limit: Claude Code until 5:00 AM." && !$("fallbackReset").classList.hidden
         """)!.toBool(), "The fallback section shows the choices and the limited backend")
         context.evaluateScript("""
-        $("fallbackChoice").value="Copilot";$("fallbackChoice").onchange();
+        $("fallbackAdd").value="Copilot";$("fallbackAdd").onchange();
         """)
         precondition(context.evaluateScript("""
-        fallbackCalls.length===2 && fallbackCalls[1].backend==="Copilot" && fallbackCalls[1].revision==="fallback-a"
-          && fallbackState.revision==="fallback-b" && $("fallbackReset").classList.hidden
-        """)!.toBool(), "Picking a backend posts it with the loaded revision")
+        fallbackCalls.length===2 && fallbackCalls[1].backends.join()==="Copilot" && fallbackCalls[1].revision==="fallback-a"
+          && fallbackState.revision==="fallback-2" && $("fallbackReset").classList.hidden
+          && $("fallbackList").children.length===1 && $("fallbackAdd").children.length===2
+        """)!.toBool(), "Adding a backend posts the chain with the loaded revision")
+        // A second backup chains after the first; the arrows reorder and Remove drops one.
+        context.evaluateScript("""
+        $("fallbackAdd").value="Codex";$("fallbackAdd").onchange();
+        """)
+        precondition(context.evaluateScript("""
+        fallbackCalls[2].backends.join()==="Copilot,Codex" && fallbackCalls[2].revision==="fallback-2" && $("fallbackAdd").disabled
+          && $("fallbackList").children[1].children[0].textContent==="Codex" && $("fallbackList").children[1].children[2].disabled
+        """)!.toBool(), "Backups chain in the order they're added")
+        context.evaluateScript("""
+        $("fallbackList").children[1].children[1].onclick();
+        """)
+        precondition(context.evaluateScript("""
+        fallbackCalls[3].backends.join()==="Codex,Copilot" && $("fallbackList").children[0].children[0].textContent==="Codex"
+          && $("fallbackList").children[0].children[1].attributes["aria-label"]==="Try Codex earlier"
+        """)!.toBool(), "Moving a backup up posts the new order")
+        context.evaluateScript("""
+        $("fallbackList").children[0].children[3].onclick();
+        """)
+        precondition(context.evaluateScript("""
+        fallbackCalls[4].backends.join()==="Copilot" && $("fallbackList").children.length===1
+        """)!.toBool(), "Remove drops that backup and keeps the rest")
         context.evaluateScript("""
         editModelSettings({id:"tab-a",title:"Fixture"});
         """)

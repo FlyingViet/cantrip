@@ -4153,22 +4153,7 @@ struct SettingsView: View {
                 labeledField("System prompt", text: $settings.localSystemPrompt, prompt: "")
             }
             Divider().opacity(0.3)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Usage limit fallback").font(.caption).foregroundStyle(.secondary)
-                Picker("", selection: $settings.limitFallbackBackend) {
-                    Text("Off — stop and show the error").tag("")
-                    ForEach(BackendKind.allCases) { kind in
-                        Text(settings.backendLabel(kind)).tag(kind.rawValue)
-                    }
-                }
-                .labelsHidden()
-                Text(settings.limitFallbackBackend == settings.backend.rawValue
-                     ? "Choose a backend other than the one above; a backend can't fall back on itself."
-                     : "When a backend says its plan's usage limit is reached, Cantrip continues the task on this backend and sends new messages from every tab there until the limit resets (an hour when the backend doesn't say). Council seats and Private Local tabs don't switch.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            usageLimitFallbacks
             Divider().opacity(0.3)
             Toggle("Act on my behalf — all backends (run commands, edit files, send messages without asking)", isOn: $settings.allowActions)
                 .font(.caption)
@@ -4426,6 +4411,55 @@ struct SettingsView: View {
         .onAppear {
             settings.refreshCopilotModelsIfNeeded()
         }
+    }
+
+    /// Backups tried in order when the backend a run is on reports its plan's usage limit.
+    private var usageLimitFallbacks: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Usage limit fallbacks").font(.caption).foregroundStyle(.secondary)
+            let chain = settings.limitFallbackBackends.compactMap(BackendKind.init(rawValue:))
+            ForEach(Array(chain.enumerated()), id: \.element) { index, kind in
+                HStack(spacing: 6) {
+                    Text("\(index + 1).").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Text(settings.backendLabel(kind)).font(.caption).lineLimit(1)
+                    if kind == settings.backend {
+                        Text("skipped: it's the backend above").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    Spacer(minLength: 4)
+                    Button { moveFallback(at: index, by: -1) } label: { Image(systemName: "chevron.up") }
+                        .disabled(index == 0)
+                        .help("Try earlier")
+                    Button { moveFallback(at: index, by: 1) } label: { Image(systemName: "chevron.down") }
+                        .disabled(index == chain.count - 1)
+                        .help("Try later")
+                    Button { settings.limitFallbackBackends.remove(at: index) } label: { Image(systemName: "minus.circle") }
+                        .help("Remove \(kind.rawValue)")
+                }
+                .buttonStyle(.borderless)
+            }
+            let addable = BackendKind.allCases.filter { $0 != settings.backend && !chain.contains($0) }
+            Menu(chain.isEmpty ? "Off — add a backup backend" : "Add a backup backend") {
+                ForEach(addable) { kind in
+                    Button(settings.backendLabel(kind)) { settings.limitFallbackBackends.append(kind.rawValue) }
+                }
+            }
+            .font(.caption)
+            .fixedSize()
+            .disabled(addable.isEmpty)
+            Text(chain.isEmpty
+                 ? "Off: when a backend says its plan's usage limit is reached, the run stops and shows the error."
+                 : "When a backend says its plan's usage limit is reached, Cantrip continues the task on the first backup that isn't at its limit too, moving down the list each time another one runs out, and sends new messages from every tab there until the limit resets (an hour when the backend doesn't say). Council seats and Private Local tabs don't switch.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func moveFallback(at index: Int, by offset: Int) {
+        var chain = settings.limitFallbackBackends
+        guard chain.indices.contains(index), chain.indices.contains(index + offset) else { return }
+        chain.swapAt(index, index + offset)
+        settings.limitFallbackBackends = chain
     }
 
     private func labeledField(_ label: String, text: Binding<String>, prompt: String) -> some View {

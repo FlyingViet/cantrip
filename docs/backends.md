@@ -223,19 +223,25 @@ because the Copilot CLI can crash after long idle periods.
 
 ## Fall back when a backend hits its usage limit
 
-Choose a backend under **Usage limit fallback** (Off by default): in Mac
-Settings, or in any tab's **Model Settings** on Cantrip Agent (iPhone/iPad),
-Cantrip Gateway (Mac and Windows) or the browser/Mac Remote. It's one setting
-for the whole Mac, so changing it there saves right away and applies to every
-tab. Those screens also show which backend is at its limit and until when, with
+Add backup backends under **Usage limit fallbacks** (Off by default) in Mac
+Settings or in the browser/Mac Remote's **Model Settings**: use **Add a backup
+backend** as many times as you like, the arrows to set the order they're tried
+in, and the remove button to drop one. Each backend can be in the list once;
+your main backend isn't offered, and is skipped if you switch to one that's
+already listed. Cantrip Agent (iPhone/iPad) and Cantrip Gateway (Mac and
+Windows) show and change only the first backup until they're updated; picking
+one there replaces the first backup and keeps the rest. It's one setting for
+the whole Mac, so changing it saves right away and applies to every tab. Those screens also show which backend is at its limit and until when, with
 **Try every backend again** to clear that early. When the backend you use reports that its plan's usage limit
 is reached (Claude's 5-hour or weekly limit, Copilot's premium requests, a
 Codex or Gemini quota), Cantrip:
 
 1. Shows the error and notes which backend takes over.
-2. Continues the same task on the fallback backend, with the original request
-   and the steps already taken, like an automatic resume.
-3. Sends new messages from every tab to the fallback until the limit resets.
+2. Continues the same task on the first backup in the list that isn't at its
+   limit too, with the original request and the steps already taken, like an
+   automatic resume. If that backup then hits its own limit, the task moves on
+   to the next one, and so on down the list.
+3. Sends new messages from every tab to that backup until the limit resets.
    Cantrip uses the reset time from the error when the backend gives one, and
    tries the original backend again after an hour when it doesn't. Copilot's
    monthly premium-request allowance is skipped until it resets on the 1st
@@ -250,16 +256,19 @@ gives the reset time. Matching known phrases in the message is only the last
 resort, for CLIs that don't send a code (Codex and Gemini today); the host log
 notes when a switch relied on it.
 
-The fallback uses its own model and effort settings. It doesn't share the
+Each backup uses its own model and effort settings. It doesn't share the
 original backend's session, so it works from the conversation Cantrip passes
-along. If the fallback is at its limit too, the run stops with the error.
-Council seats and Private Local tabs never switch. Scheduled Cantrip Home tasks
-don't move to Codex or Copilot Remote, because Cantrip can't check their
-actions one at a time. A full context window ("Context limit reached") isn't a
+along. Once every backup is at its limit, the run stops with the error; a
+backend is never tried again before its limit resets, so a run can't go round
+in circles. Council seats and Private Local tabs never switch. Scheduled
+Cantrip Home tasks skip Codex and Copilot Remote in the list and use the next
+backup, because Cantrip can't check those backends' actions one at a time. A full context window ("Context limit reached") isn't a
 usage limit and doesn't switch backends.
 
-From Terminal: `cantrip config set limitFallbackBackend copilot` (or `claude`,
-`codex`, `agy`, `local`, `off`). Paired clients use `GET/POST
+From Terminal: `cantrip config set limitFallbackBackends "copilot, codex, agy"`
+(any of `copilot`, `claude`, `codex`, `agy`, `local`, `copilot-remote`, in the
+order to try them), or `off`. The older `limitFallbackBackend` name still sets a
+single backup. Paired clients use `GET/POST
 /api/v1/usage-fallback`; see [Remote control](remote-control.md#usage-limit-fallback).
 
 ## Connect a local model
