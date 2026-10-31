@@ -229,8 +229,16 @@ backend** as many times as you like, the arrows to set the order they're tried
 in, and the remove button to drop one. Each backend can be in the list once;
 your main backend isn't offered, and is skipped if you switch to one that's
 already listed. Cantrip Agent (iPhone/iPad) and Cantrip Gateway (Mac and
-Windows) show and change only the first backup until they're updated; picking
-one there replaces the first backup and keeps the rest. It's one setting for
+Windows) edit the same list. Under each backup on a backend with a model
+picker (Copilot, Claude Code, Antigravity), **Model** and **Effort** menus list
+that backend's own models and the efforts each takes; **Default** means the
+Mac's own setting for that backend. A run that moves to the backup uses them,
+and its note names what runs, for example "Continuing this task with Claude
+Code · claude-opus-5-5 · high". If the chosen model isn't offered any more, the
+run uses the default and the note says so. A backend's choice is kept when it's
+removed and added back, and clients that only change the order don't touch it.
+`cantrip config set limitFallbackBackends "claude:claude-opus-5-5:high, codex"`
+sets them from a terminal (a bare name keeps the saved choice). It's one setting for
 the whole Mac, so changing it saves right away and applies to every tab. Those screens also show which backend is at its limit and until when, with
 **Try every backend again** to clear that early. When the backend you use reports that its plan's usage limit
 is reached (Claude's 5-hour or weekly limit, Copilot's premium requests, a

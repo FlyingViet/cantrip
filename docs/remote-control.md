@@ -146,11 +146,16 @@ separately from the tab's Save. When a backend is at its limit the section
 names it and its reset time, and **Try every backend again** clears that.
 
 `GET /api/v1/usage-fallback` returns `backends` (the chain in the order tried;
-`[]` = off), `backend` (its first entry, `""` = off, for older clients),
+`[]` = off), `entries` (the same chain as `{backend, model, effort}`, `""` =
+the backend's default), `backend` (its first entry, `""` = off, for older clients),
 `primary` (the Mac's backend, skipped if the chain names it), `choices` (`id`,
-`label`; never the Mac's own backend), `limited` (`backend`, ISO `until`,
-`untilLabel`) and `revision`. `POST` takes `{"revision", "backends": [...]}`
-to replace the chain (known backends, each once), `{"revision", "backend"}` to
+`label`; never the Mac's own backend; backends with a model picker add
+`models` (`id`, `label`, `efforts`), `defaultModel` and `defaultEfforts`),
+`limited` (`backend`, ISO `until`, `untilLabel`) and `revision`. `POST` takes
+`{"revision", "entries": [{"backend", "model", "effort"}]}` to replace the chain
+with each backup's model and effort (a model the backend lists and an effort
+that model takes, or `400`), `{"revision", "backends": [...]}` to replace only
+the order (known backends, each once; saved models are kept), `{"revision", "backend"}` to
 replace only its first entry (`""` turns every backup off), or
 `{"revision", "resetLimits": true}`; a stale revision gets `409`, and an
 unknown or repeated backend, or the Mac's own backend as `backend`, `400`.
