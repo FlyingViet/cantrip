@@ -1,13 +1,14 @@
-// Usage Limits (CopilotUsageView + ClaudeUsageSection, CopilotUsageView.swift): Claude Code's limits
-// and the Copilot account signed in on the Mac. Re-read every 2 s while the Mac refreshes, else every 60 s.
+// Usage Limits (CopilotUsageView + ClaudeUsageSection + AntigravityUsageSection, CopilotUsageView.swift):
+// Claude Code's and Antigravity's limits and the Copilot account signed in on the Mac. Re-read every 2 s while the Mac refreshes, else every 60 s.
 import type { JSX } from "preact";
 import { useSignal } from "@preact/signals";
 import { api } from "../../api/client";
-import type { ClaudeUsageState, CopilotQuotaBucket, CopilotUsageSnapshot } from "../../api/types";
+import type { AntigravityUsageState, ClaudeUsageState, CopilotQuotaBucket, CopilotUsageSnapshot } from "../../api/types";
 import { FormRow, FormSection, Sheet } from "../kit";
 import { Caption, Loading, RefreshButton, StatusLabel, Warning, useAlive, usePolling, useTick } from "./common";
 import {
-  billingText, bucketSummary, bucketTitle, claudeWindowTitle, claudeWindowTone, copilotDate, errorText, formatDateTime,
+  antigravityBucketTitle, antigravityBucketTone, antigravityBucketUsed, billingText, bucketSummary, bucketTitle,
+  claudeWindowTitle, claudeWindowTone, copilotDate, errorText, formatDateTime, isAntigravityUsageStale,
   isClaudeUsageStale, isUnsupported, isUsageStale, overageAllowedText, overageText, percentageSummary, usagePollDelay,
 } from "./sheetLogic";
 
@@ -65,6 +66,7 @@ export function UsageSheet(props: { onClose: () => void }): JSX.Element | null {
         </div>
       </FormSection>
       {value?.claude ? <ClaudeSection state={value.claude} now={now} /> : null}
+      {value?.antigravity ? <AntigravitySection state={value.antigravity} now={now} /> : null}
       {account ? (
         <>
           {account.login !== undefined || account.plan !== undefined || checked ? (
@@ -127,6 +129,55 @@ function ClaudeSection(props: { state: ClaudeUsageState; now: number }): JSX.Ele
         </div>
       </div>
     </FormSection>
+  );
+}
+
+/** AntigravityUsageSection: Antigravity's weekly and 5-hour limits per model group, as the Mac reads them from agy. */
+function AntigravitySection(props: { state: AntigravityUsageState; now: number }): JSX.Element {
+  const { state, now } = props;
+  const groups = state.account?.groups ?? [];
+  const checked = copilotDate(state.checkedAt);
+  if (!groups.length) {
+    return (
+      <FormSection header="Antigravity">
+        <div class="form-row">
+          {state.error ? <Warning>{state.error}</Warning> : <span class="muted">Antigravity's limits unavailable</span>}
+        </div>
+      </FormSection>
+    );
+  }
+  return (
+    <>
+      {groups.map((group, index) => (
+        <FormSection key={group.name} header={`Antigravity · ${group.name}`}>
+          <div class="form-row">
+            <div class="sh-stack wide grow selectable">
+              {index === 0 && state.error ? <Warning>{state.error}</Warning> : null}
+              {index === 0 && isAntigravityUsageStale(state, now)
+                ? <StatusLabel icon="clock" tone="warning">Last known limits - data is stale</StatusLabel> : null}
+              {group.buckets.map((bucket) => {
+                const used = antigravityBucketUsed(bucket);
+                const tone = antigravityBucketTone(bucket);
+                const reset = copilotDate(bucket.resetsAt);
+                return (
+                  <div key={bucket.id} class="sh-stack">
+                    <div class="headline">{antigravityBucketTitle(bucket)} · {used.toFixed(0)}% used</div>
+                    <div class={`sh-meter${tone === "normal" ? "" : " low"}`} role="progressbar"
+                      aria-label={`${group.name}, ${antigravityBucketTitle(bucket)}`} aria-valuemin={0} aria-valuemax={100}
+                      aria-valuenow={used} aria-valuetext={`${used.toFixed(0)}%`}>
+                      <div style={{ width: `${used}%` }} />
+                    </div>
+                    {reset ? <Caption>Resets {formatDateTime(reset)}</Caption> : null}
+                  </div>
+                );
+              })}
+              {group.models ? <Caption>{group.models}</Caption> : null}
+              {index === groups.length - 1 && checked ? <Caption>Checked {formatDateTime(checked)}</Caption> : null}
+            </div>
+          </div>
+        </FormSection>
+      ))}
+    </>
   );
 }
 

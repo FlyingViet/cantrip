@@ -1544,6 +1544,8 @@ export interface CopilotUsageSnapshot {
   error?: string;
   /** Claude Code's 5-hour and weekly limits (Cantrip 1.1.4+). */
   claude?: ClaudeUsageState;
+  /** Antigravity's weekly and 5-hour limits per model group. */
+  antigravity?: AntigravityUsageState;
   /** The Mac's backend ("Claude Code", "Copilot", ...) when the snapshot was served. */
   activeBackend?: string;
 }
@@ -1552,6 +1554,29 @@ export interface ClaudeUsageState {
   account?: { plan?: string; windows: ClaudeLimitWindow[] };
   checkedAt?: ISO8601String;
   error?: string;
+}
+
+export interface AntigravityUsageState {
+  account?: { groups: AntigravityLimitGroup[] };
+  checkedAt?: ISO8601String;
+  error?: string;
+}
+
+/** "Gemini Models", "Claude and GPT models", "Gemini 4 Argon". */
+export interface AntigravityLimitGroup {
+  name: string;
+  /** Which models share the group ("Gemini Flash, Gemini Pro"). */
+  models?: string;
+  buckets: AntigravityLimitBucket[];
+}
+
+export interface AntigravityLimitBucket {
+  id: string;
+  name: string;
+  /** "weekly" or "5h". */
+  window?: string;
+  remainingPercent: number;
+  resetsAt?: ISO8601String;
 }
 
 /** `five_hour`, `seven_day`, `seven_day_opus` or `seven_day_sonnet`. */

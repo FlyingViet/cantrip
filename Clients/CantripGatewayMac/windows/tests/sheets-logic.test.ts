@@ -541,3 +541,34 @@ describe("Claude usage limits", () => {
     expect(isClaudeUsageStale({ error: "signed out" }, now)).toBe(true);
   });
 });
+
+describe("Antigravity usage limits", () => {
+  const now = Date.parse("2026-10-31T05:00:00Z");
+  const bucket = (window: string, remainingPercent: number, resetsAt = "2026-10-31T07:31:18Z") =>
+    ({ id: `gemini-${window}`, name: "Five Hour Limit Remaining", window, remainingPercent, resetsAt });
+
+  it("names each window and reports what's used", async () => {
+    const { antigravityBucketTitle, antigravityBucketUsed } = await import("../src/gateway/ui/sheets/sheetLogic");
+    expect(["weekly", "5h", "other"].map((window) => antigravityBucketTitle(bucket(window, 50))))
+      .toEqual(["Weekly limit", "5-hour limit", "Five Hour Limit Remaining"]);
+    expect(antigravityBucketUsed(bucket("5h", 97))).toBe(3);
+    expect(antigravityBucketUsed(bucket("5h", 120))).toBe(0);
+  });
+
+  it("warns from 80% used and is critical when used up", async () => {
+    const { antigravityBucketTone } = await import("../src/gateway/ui/sheets/sheetLogic");
+    expect(antigravityBucketTone(bucket("5h", 50))).toBe("normal");
+    expect(antigravityBucketTone(bucket("5h", 15))).toBe("warning");
+    expect(antigravityBucketTone(bucket("5h", 0))).toBe("critical");
+  });
+
+  it("is stale after ten minutes or once a window resets", async () => {
+    const { isAntigravityUsageStale } = await import("../src/gateway/ui/sheets/sheetLogic");
+    const state = (checked: string, resets = "2026-10-31T07:31:18Z") =>
+      ({ checkedAt: checked, account: { groups: [{ name: "Gemini Models", buckets: [bucket("5h", 90, resets)] }] } });
+    expect(isAntigravityUsageStale(state("2026-10-31T04:58:00Z"), now)).toBe(false);
+    expect(isAntigravityUsageStale(state("2026-10-31T04:49:00Z"), now)).toBe(true);
+    expect(isAntigravityUsageStale(state("2026-10-31T04:58:00Z", "2026-10-31T04:59:00Z"), now)).toBe(true);
+    expect(isAntigravityUsageStale({ error: "not installed" }, now)).toBe(true);
+  });
+});
