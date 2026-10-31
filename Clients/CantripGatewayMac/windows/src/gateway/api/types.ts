@@ -221,6 +221,20 @@ export interface RemoteActivity {
   input?: string;
   /** Tool output text; omitted when none. */
   output?: string;
+  /** From the Mac's `browser` MCP server (agent-only Chrome): the reply shows a live preview card. */
+  browser?: boolean;
+}
+
+/** `GET /api/v1/browser/frame`: a JPEG (base64) of the tab the agent-only Chrome is working in. */
+export interface BrowserFrame {
+  data: string;
+  width: number;
+  height: number;
+  url: string;
+  title: string;
+  /** The agent used the browser in the last two minutes. */
+  active: boolean;
+  capturedAt: string;
 }
 
 /** A recent step of a subagent (last 6). The Mac client derives an id from title+toolName+state. */

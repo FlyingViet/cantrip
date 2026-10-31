@@ -16,7 +16,7 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   parent with a branch mark. A unified toolbar with Background, delivery (Auto, Queue,
   Redirect, Inject), Refresh and More.
 - **Chat.** Replies with Markdown and the Mac's image previews, reasoning steps, MCP App
-  views, subagent cards (running ones pinned above the composer), handoff cards with
+  views, a live agent browser card (click for a larger view; Escape closes it), subagent cards (running ones pinned above the composer), handoff cards with
   **Open tab**, child tab cards (the request, replies and files; merge state; the merge
   question on a conflict) and a child's banner with **Open parent**, thread tags in Home, drawn
   like inline replies in Messages (a reply from a different thread than the message above

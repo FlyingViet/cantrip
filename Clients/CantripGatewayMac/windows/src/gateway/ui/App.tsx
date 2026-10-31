@@ -26,6 +26,7 @@ import { Toolbar } from "./Toolbar";
 import { ChatView } from "./transcript/ChatView";
 import { ThreadView } from "./transcript/ThreadTags";
 import { ImageViewer } from "./viewer";
+import { BrowserViewer } from "./transcript/BrowserPreview";
 import { VoiceModeSheet } from "./voice/VoiceControls";
 
 export function runCommand(command: GatewayCommand): void {
@@ -96,6 +97,7 @@ export function App(): JSX.Element {
       </main>
       <SheetHost />
       <ImageViewer />
+      <BrowserViewer />
       <ThreadView />
       <MenuLayer />
       <ConfirmLayer />
