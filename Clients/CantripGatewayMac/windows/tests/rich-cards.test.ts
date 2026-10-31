@@ -34,3 +34,21 @@ describe("rich cards logic", () => {
     expect(initialZoomForDelta(0.04)).toBe(13);
   });
 });
+
+describe("place pin icons and notes", () => {
+  const pin = (patch: Record<string, unknown>) => ({ id: "p", name: "Place", latitude: 1, longitude: 1, ...patch }) as never;
+  it("draws the Mac's emoji, or one from the category on cards from older Macs", async () => {
+    const { placeGlyph } = await import("../src/gateway/ui/transcript/richCardLogic");
+    expect(placeGlyph(pin({ glyph: "☕", category: "Urgent care" }))).toBe("☕");
+    expect(placeGlyph(pin({ category: "Tea house" }))).toBe("☕");
+    expect(placeGlyph(pin({ category: "Urgent care clinic" }))).toBe("✚");
+    expect(placeGlyph(pin({}))).toBe("📍");
+    expect(placeGlyph(pin({ glyph: "<b>too long</b>" }))).toBe("📍");
+  });
+  it("notes approximate pins and the listing's own name", async () => {
+    const { placeNote } = await import("../src/gateway/ui/transcript/richCardLogic");
+    expect(placeNote(pin({ approximate: true, listedName: "X" }))).toEqual({ text: "Approximate location", warning: true });
+    expect(placeNote(pin({ listedName: "Arisan" }))).toEqual({ text: "Listed as Arisan", warning: false });
+    expect(placeNote(pin({}))).toBeNull();
+  });
+});

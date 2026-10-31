@@ -488,3 +488,5 @@ button.mention:hover { text-decoration: underline; }
   position: absolute; right: 10px; bottom: 10px; padding: 3px 8px; border-radius: 999px;
   background: rgba(0, 0, 0, 0.65); color: rgba(255, 255, 255, 0.75); font-size: 10px; z-index: 5;
 }
+
+.place-row-warning { color: var(--orange, #f5b841); }
