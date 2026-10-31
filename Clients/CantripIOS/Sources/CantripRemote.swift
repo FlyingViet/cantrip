@@ -628,6 +628,10 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var threadID: String? = nil
     /// Cantrip Home: set when this reply belongs to a different thread than the message above it.
     var thread: CantripRemoteThreadTag? = nil
+    /// Public web link preview cards resolved on the Mac; absent when disabled or from older hosts.
+    var linkPreviews: [CantripLinkPreview]? = nil
+    /// Interactive map card with place pins resolved on the Mac; absent when there are no places.
+    var placeCard: CantripPlaceCard? = nil
 
     var presentedText: String { displayText ?? text }
     /// Result cards Cantrip posts into Home's chat; never a model reply.
@@ -1620,6 +1624,7 @@ struct CantripRemoteAPI {
             parts == ["api", "v1", "maintenance"]
                 || parts.starts(with: ["api", "v1", "home"])
                 || parts == ["api", "v1", "memory"] || parts == ["api", "v1", "memory", "document"]
+                || parts == ["api", "v1", "link-previews", "image"]
                 || (parts.starts(with: ["api", "v1", "sessions"])
                     && (parts.count == 4 || (parts.count == 6 && (parts[4] == "messages" || parts[4] == "apps"))
                         // A folder's first command discovery can take a few seconds on the Mac.
@@ -1794,6 +1799,21 @@ struct CantripRemoteAPI {
         guard !response.data.isEmpty,
               response.data.count <= (isPreview ? GeneratedImagePreview.maximumImageBytes
                                                : ImageAttachmentProcessor.maximumImageBytes) else {
+            throw ImageAttachmentError.invalidImage
+        }
+        return response.data
+    }
+
+    func linkPreviewImageData(id: String) async throws -> Data {
+        guard CantripLinkPreview.validImageID(id) else {
+            throw CantripRemoteError.invalidResponse
+        }
+        struct ImageResponse: Decodable { let data: Data }
+        let response: ImageResponse = try await request(
+            path: "/api/v1/link-previews/image?id=\(id)"
+        )
+        guard !response.data.isEmpty,
+              response.data.count <= GeneratedImagePreview.maximumImageBytes else {
             throw ImageAttachmentError.invalidImage
         }
         return response.data
@@ -3856,6 +3876,24 @@ final class CantripRemoteModel: ObservableObject {
         let image = try await Task.detached(priority: .userInitiated) {
             try ChatImageDecoder.decode(data, maximumDimension: GeneratedImagePreview.maximumDimension,
                                         maximumBytes: 20 * 1024 * 1024)
+        }.value
+        try Task.checkCancellation()
+        guard identity == usageIdentity else { throw CancellationError() }
+        imageCache.setObject(image, forKey: key, cost: image.cgImage.map { $0.bytesPerRow * $0.height } ?? data.count)
+        return image
+    }
+
+    func linkPreviewImage(id: String) async throws -> UIImage {
+        let identity = usageIdentity
+        let key = "\(identity)/link-preview/\(id)" as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
+        let data = try await performHistoryRead { try await $0.linkPreviewImageData(id: id) }
+        let image = try await Task.detached(priority: .userInitiated) {
+            try ChatImageDecoder.decode(
+                data,
+                maximumDimension: 1200,
+                maximumBytes: GeneratedImagePreview.maximumImageBytes
+            )
         }.value
         try Task.checkCancellation()
         guard identity == usageIdentity else { throw CancellationError() }

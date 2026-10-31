@@ -343,6 +343,8 @@ final class ChatViewModel: ObservableObject {
                 thinking: message.thinking.isEmpty ? nil : message.thinking,
                 author: message.author,
                 images: message.images?.map { $0.inSession(session?.id ?? "") },
+                linkPreviews: message.linkPreviews,
+                placeCard: message.placeCard,
                 isRepeatedError: isError && message.id == session?.repeatedErrorMessageID ? true : nil,
                 isContinuable: isError && session?.continuableMessageIDs?.contains(message.id) == true ? true : nil
             )
@@ -3905,6 +3907,12 @@ struct TurnView: View {
                             ChatAssistantText(text: part, images: turn.images ?? [], remote: remote)
                         }
                     }
+                }
+                if let placeCard = remoteMessage?.placeCard ?? turn.placeCard, !placeCard.places.isEmpty {
+                    CantripPlaceCardView(card: placeCard)
+                }
+                if let linkPreviews = remoteMessage?.linkPreviews ?? turn.linkPreviews, !linkPreviews.isEmpty {
+                    CantripLinkPreviewStack(cards: linkPreviews, remote: remote)
                 }
                 if let handoffs = remoteMessage?.delegations, !handoffs.isEmpty {
                     CantripHandoffStack(handoffs: handoffs, onOpenTab: onOpenTab)
