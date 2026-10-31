@@ -31,6 +31,24 @@ struct CantripLinkPreview: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// A pin's icon: the Mac's choice when it's one Cantrip uses, else one from the category.
+enum CantripPlaceSymbol {
+    static let known: Set<String> = [
+        "cross.case.fill", "cup.and.saucer.fill", "birthday.cake.fill", "wineglass.fill", "fork.knife", "bed.double.fill",
+        "cart.fill", "bag.fill", "tree.fill", "building.columns.fill", "fuelpump.fill", "figure.run", "graduationcap.fill",
+        "airplane", "mappin",
+    ]
+
+    static func resolve(symbol: String?, category: String?) -> String {
+        if let symbol, known.contains(symbol) { return symbol }
+        let text = (category ?? "").lowercased()
+        if ["urgent", "clinic", "hospital", "medical", "pharmacy", "dental"].contains(where: text.contains) { return "cross.case.fill" }
+        if ["cafe", "café", "coffee", "tea", "matcha", "boba"].contains(where: text.contains) { return "cup.and.saucer.fill" }
+        if ["restaurant", "food", "bakery"].contains(where: text.contains) { return "fork.knife" }
+        return "mappin"
+    }
+}
+
 struct CantripPlacePin: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let name: String
@@ -46,6 +64,14 @@ struct CantripPlacePin: Codable, Equatable, Identifiable, Sendable {
     var isOpenNow: Bool? = nil
     var hoursSummary: String? = nil
     var appleMapsURL: String? = nil
+    /// The name Apple Maps or OpenStreetMap lists it under, when it differs from the reply's.
+    var listedName: String? = nil
+    /// No listing matched confidently; the pin is near where the place should be.
+    var approximate: Bool? = nil
+    /// The Mac's SF Symbol for the pin; older Macs send none.
+    var symbol: String? = nil
+
+    var pinSymbol: String { CantripPlaceSymbol.resolve(symbol: symbol, category: category) }
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
@@ -310,7 +336,7 @@ struct CantripPlaceCardView: View {
                         openDirections(place)
                     } label: {
                         HStack(spacing: 5) {
-                            Image(systemName: "cross.case.fill")
+                            Image(systemName: place.pinSymbol)
                                 .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(.white)
                                 .padding(5)
@@ -517,6 +543,16 @@ private struct CantripPlaceRowView: View {
                             )
                     } else if let address = place.address, !address.isEmpty {
                         Text(address)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .lineLimit(1)
+                    }
+                    if place.approximate == true {
+                        Label("Approximate location", systemImage: "location.slash")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Color(red: 0.96, green: 0.72, blue: 0.25))
+                    } else if let listed = place.listedName, !listed.isEmpty {
+                        Text("Listed as \(listed)")
                             .font(.system(size: 10.5))
                             .foregroundStyle(.white.opacity(0.55))
                             .lineLimit(1)
