@@ -65,8 +65,17 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     private var activeWorkdir: String = ""
     private var activeLaunchSignature: String = ""
     private var sessionID: String? {
-        didSet { UserDefaults.standard.set(sessionID, forKey: persistKey) }
+        didSet {
+            UserDefaults.standard.set(sessionID, forKey: persistKey)
+            // agy keeps a conversation in the folder it started in, so remember which one.
+            if sessionID == nil {
+                UserDefaults.standard.removeObject(forKey: workdirKey)
+            } else if sessionID != oldValue, !activeWorkdir.isEmpty {
+                UserDefaults.standard.set(activeWorkdir, forKey: workdirKey)
+            }
+        }
     }
+    private var workdirKey: String { persistKey + ".workdir" }
     private var outputSessionKey = UUID().uuidString
 
     var conversationID: String? {
@@ -356,7 +365,14 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
             stateLock.unlock()
             return
         }
-        let resumeID = sessionID
+        var resumeID = sessionID
+        // Resuming would keep agy in the conversation's old folder (deleted, for a merged child
+        // tab's worktree), so a tab moved to another folder starts a fresh conversation.
+        if resumeID != nil, let folder = UserDefaults.standard.string(forKey: workdirKey), folder != workdir {
+            sessionID = nil
+            resumeID = nil
+            Log.write("antigravity: the tab moved from \(folder) to \(workdir); starting a new conversation there")
+        }
         stateLock.unlock()
 
         stopProcessAndCleanUp()
