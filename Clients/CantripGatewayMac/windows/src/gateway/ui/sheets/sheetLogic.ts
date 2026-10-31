@@ -864,3 +864,10 @@ export function isAntigravityUsageStale(state: AntigravityUsageState, now: numbe
     return !Number.isNaN(reset) && now >= reset;
   }));
 }
+
+/** A Copilot bucket's meter: "warning" from 80% used (10% left), "critical" when used up. */
+export function copilotBucketTone(bucket: CopilotQuotaBucket): "normal" | "warning" | "critical" {
+  const remaining = bucket.remainingPercent ?? 100;
+  if (remaining <= 0) return "critical";
+  return remaining <= 20 ? "warning" : "normal";
+}
