@@ -1216,6 +1216,15 @@ struct ChatView: View {
         )
     }
 
+    /// The tab on screen (a project tab, or Home's chat), for the app icon's badge.
+    private var visibleTabID: String? {
+        switch vm.activeLane {
+        case .cantrip: remote.selectedSessionID
+        case .home: homeSection == .chat ? CantripHomeIdentity.sessionID : nil
+        default: nil
+        }
+    }
+
     var body: some View {
         ChatNavigationView(
             isTabListPresented: $showRemoteTabs,
@@ -1273,6 +1282,7 @@ struct ChatView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                 chatAvailableHeight = $0
             }
+            .onChange(of: visibleTabID, initial: true) { _, id in remote.setVisibleTab(id) }
             .safeAreaInset(edge: .top, spacing: 0) {
                 if vm.activeLane != .home || homeSection == .chat {
                     chatHeader

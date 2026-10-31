@@ -50,6 +50,9 @@ struct HermesApp: App {
             if phase == .active { openNotification() }
         }
         .onChange(of: notifications.pendingTarget) { _, _ in openNotification() }
+        .onChange(of: notifications.presentedTarget) { _, target in
+            if let target { remoteModel.noteAlert(forSessionID: target.sessionID) }
+        }
         .onChange(of: notifications.deviceToken) { _, _ in remoteModel.refreshCompletionNotificationRegistration(force: true) }
         .onOpenURL { url in
             if let pairing = CantripPairingLink.parse(url) {
