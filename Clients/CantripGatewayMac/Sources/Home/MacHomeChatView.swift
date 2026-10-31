@@ -299,7 +299,7 @@ struct MacHomeChatView: View {
             }
             if let session = remote.selectedSession, session.id == remote.selectedSessionID,
                session.queuedCount > 0 {
-                CantripQueueButton(session: session) { navigation.sheet = .queue }
+                CantripQueueButton(session: session, resume: queueResume(session)) { navigation.sheet = .queue }
             }
             if paused {
                 pausedBar
@@ -434,6 +434,13 @@ struct MacHomeChatView: View {
         guard let token = slashToken, let presentation = slashPresentation else { return nil }
         if let slashHighlight, slashHighlight.text == input { return slashHighlight.index }
         return BackendSlashCommands.defaultHighlight(token: token, matches: presentation.matches)
+    }
+
+    /// Resume for a queue Stop paused; nil otherwise.
+    private func queueResume(_ session: CantripRemoteSession) -> (() -> Void)? {
+        guard session.queuePaused == true else { return nil }
+        let id = session.id
+        return { Task { await remote.resumeQueue(sessionID: id) } }
     }
 
     private var canOpenModelSettingsFromSlash: Bool {
