@@ -83,6 +83,12 @@ struct CantripTabActions: View {
         } label: {
             Label("Mac Permissions & View Mac", systemImage: "display")
         }
+        Button {
+            model.mcpServersTab = state.id
+            model.showingMCPServers = true
+        } label: {
+            Label("MCP Servers", systemImage: "point.3.connected.trianglepath.dotted")
+        }
         if state.supportsInputRequests {
             Button {
                 Task { await model.showInputRequests(sessionID: state.id) }

@@ -1369,6 +1369,9 @@ struct ChatView: View {
             .sheet(isPresented: $remote.showingMacAccess) {
                 NavigationStack { CantripMacAccessView(remote: remote) }
             }
+            .sheet(isPresented: $remote.showingMCPServers) {
+                CantripMCPServersView(remote: remote, tabID: remote.mcpServersTab)
+            }
             .sheet(isPresented: $showCantripMaintenance) {
                 CantripMaintenanceSheet(remote: remote)
             }
