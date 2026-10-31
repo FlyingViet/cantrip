@@ -10,7 +10,7 @@ import Foundation
 ///   `{"event":"user","message":{"content":"..."}}`
 /// - Stdout emits newline-delimited JSON events:
 ///   - `{"event":"init","conversation_id":"...","init":{...}}`
-///   - `{"event":"step_update","step_update":{"state":"ACTIVE"|"DONE","step_type":"agent_response"|"tool"|...}}`
+///   - `{"event":"step_update","step_update":{"state":"ACTIVE"|"DONE"|"ERROR"|"CANCELED","step_type":"agent_response"|"tool"|...}}`
 ///   - `{"event":"result","result":{"status":"SUCCESS"|"ERROR"|"CANCELED"|"INTERRUPTED","usage":{...}}}`
 ///     (`result.usage` is cumulative across the session; per-turn token usage is computed as a delta.)
 /// - Stopping a turn sends `SIGINT`, and subsequent processes resume via `--conversation <id>`.
@@ -105,6 +105,8 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     // made mean the hook isn't reaching Cantrip.
     private var hookServer: AntigravityHookServer?
     private var hookRequestCount = 0
+    /// Calls the hook refused this turn, by `deniedKey`, with the reason given to agy.
+    private var deniedTools: [String: String] = [:]
     private var hookedToolSteps = 0
 
     private let ioQueue = DispatchQueue(label: "cantrip.antigravity.io", qos: .userInitiated)
@@ -421,6 +423,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         cumulativeOutputTokens = 0
         cumulativeCachedInputTokens = 0
         hookRequestCount = 0
+        deniedTools.removeAll()
         hookedToolSteps = 0
         stdoutRemainder.removeAll(keepingCapacity: true)
         stateLock.unlock()
@@ -532,6 +535,8 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         turnEventCallback = nil
         let remainingTools = Array(activeTools.values)
         activeTools.removeAll()
+        let denied = deniedTools
+        deniedTools.removeAll()
         let remainingSubagents = Array(activeSubagents.values)
         let remainingChildren = activeSubagentChildren
         activeSubagents.removeAll()
@@ -540,7 +545,14 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
 
         guard let callback else { return }
         for var tool in remainingTools where tool.state == .running {
-            tool.state = .succeeded
+            // A call Cantrip refused never gets a finished step from agy.
+            let target = tool.terminalCommand ?? tool.fileChanges.first?.path ?? ""
+            if let reason = denied["\(tool.toolName)|\(target)"] {
+                tool.state = .failed
+                tool.output = reason
+            } else {
+                tool.state = .succeeded
+            }
             callback(.activity(tool))
         }
         for var sub in remainingSubagents where sub.status == .running {
@@ -683,7 +695,8 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                 stateLock.withLock { activeTools[toolID] = activity }
                 callback(.activity(activity))
                 callback(.status(activity.title))
-            } else if state == "DONE" {
+            } else if ["DONE", "ERROR", "CANCELED"].contains(state) {
+                // A call Cantrip refused (or agy stopped) ends in ERROR or CANCELED.
                 let starting: ToolActivity? = stateLock.withLock {
                     activeTools.removeValue(forKey: toolID)
                 } ?? (params != nil ? ToolActivityFactory.start(id: toolID, toolName: toolName, arguments: params) : nil)
@@ -696,12 +709,16 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                     }
                     return errorValue as? String
                 }()
-                let output: Any? = errorMessage ?? toolInfo?["output"]
+                let denial = stateLock.withLock {
+                    deniedTools.removeValue(forKey: Self.deniedKey(tool: toolName, arguments: params ?? [:]))
+                }
+                let output: Any? = errorMessage ?? denial ?? toolInfo?["output"]
                 let completed = ToolActivityFactory.complete(
                     starting,
                     id: toolID,
                     toolName: toolName,
-                    success: !hasError,
+                    success: state == "DONE" && !hasError && denial == nil
+                        && !Self.commandFailed(toolName: toolName, output: output),
                     output: output
                 )
                 callback(.activity(completed))
@@ -1039,17 +1056,39 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         server?.stop()
     }
 
+    static func deniedKey(tool: String, arguments: [String: Any]) -> String {
+        let target = arguments["CommandLine"] ?? arguments["Path"] ?? arguments["TargetFile"]
+            ?? arguments["AbsolutePath"] ?? ""
+        return "\(tool)|\(target)"
+    }
+
+    /// agy finishes a shell step that couldn't start or exited non-zero like any other; its output says so.
+    static func commandFailed(toolName: String, output: Any?) -> Bool {
+        guard toolName == "run_command", let text = output as? String else { return false }
+        if text.hasPrefix("Command failed to run") { return true }
+        guard let match = text.range(of: #"^Command exited with code (-?\d+)"#, options: .regularExpression) else { return false }
+        return !text[match].hasSuffix(" 0")
+    }
+
     private func handleHookRequest(
         _ request: [String: Any],
         policy: HookPolicy,
-        respond: @escaping AntigravityHookServer.Respond
+        respond reply: @escaping AntigravityHookServer.Respond
     ) {
         let toolCall = request["toolCall"] as? [String: Any]
         guard let toolName = toolCall?["name"] as? String, !toolName.isEmpty else {
-            respond("deny", "Cantrip couldn't read this tool call.")
+            reply("deny", "Cantrip couldn't read this tool call.")
             return
         }
         let args = (toolCall?["args"] as? [String: Any]) ?? [:]
+        // agy reports a refused call as a finished step with no output; remember why it was refused.
+        let respond: AntigravityHookServer.Respond = { [weak self] decision, reason in
+            if decision == "deny", let self {
+                let key = Self.deniedKey(tool: toolName, arguments: args)
+                self.stateLock.withLock { self.deniedTools[key] = reason ?? "Cantrip refused this call." }
+            }
+            reply(decision, reason)
+        }
 
         stateLock.lock()
         hookRequestCount += 1
