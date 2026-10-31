@@ -1321,6 +1321,32 @@ Image reads and downsampling run off the main actor. Cantrip Agent keeps a
 bounded in-memory cache, clears it on pairing changes, and uses the same
 Tailscale-first/LAN-fallback routing as other read-only requests.
 
+## Live agent browser preview
+
+When a reply uses tools from an MCP server named `browser` that drives a
+dedicated, agent-only Chrome, clients show a card under that reply with a live
+picture of the tab the agent is working in. While the reply is still running the
+card is marked **Live** and refreshes about once a second while it's on screen;
+afterwards it shows the latest view. Tap it for a larger view that refreshes a
+few times per second, with the page title and address.
+
+- The browser MCP server records its current tab in
+  `~/.local/share/agent-browser/active.json` (`targetId`, `url`, `title`, `tool`,
+  `updatedAt`). Cantrip captures that tab through Chrome DevTools on
+  `127.0.0.1` (port 9333; change it with
+  `defaults write <bundle id> browserPreviewCDPPort -int <port>`).
+- `GET /api/v1/browser` returns the current tab and whether the agent used it in
+  the last two minutes. `GET /api/v1/browser/frame?width=N` returns a JPEG
+  (base64 in JSON, width 240–1920). Both need the pairing token.
+- View only. It never clicks, types or navigates, and frames are kept in memory
+  only: they aren't added to transcripts, journals, memory or model context.
+- Browser-internal pages are never captured: extension pages such as a password
+  manager's popup, `chrome://` pages, devtools and local files.
+- Turn it off with `defaults write <bundle id> browserPreviewEnabled -bool false`.
+- Activities from that server carry `"browser": true` in session history, so
+  clients don't have to match backend-specific tool names (`browser-…` on
+  Copilot, `mcp__browser__…` on Claude Code).
+
 ## Generated image previews in Cantrip Agent and the browser Remote
 
 With the Mac host reopened, screenshots and generated images can appear
