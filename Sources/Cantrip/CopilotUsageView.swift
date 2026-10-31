@@ -1,17 +1,65 @@
 import SwiftUI
 
+/// One limit: how much is used and when it resets. Nothing else.
+struct UsageLimitRow: View {
+    let title: String
+    /// Nil for an unlimited allowance (no bar, no reset).
+    let percentUsed: Double?
+    let resetsAt: Date?
+    var critical = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(title).fontWeight(.medium)
+                Spacer()
+                Text(percentUsed.map { String(format: "%.0f%% used", min(100, max(0, $0))) } ?? "Unlimited")
+                    .monospacedDigit().foregroundStyle(tint)
+            }
+            if let percentUsed {
+                // Drawn rather than ProgressView: macOS ignores a ProgressView's tint.
+                Capsule().fill(Color.secondary.opacity(0.25))
+                    .frame(height: 6)
+                    .overlay(alignment: .leading) {
+                        GeometryReader { proxy in
+                            Capsule().fill(tint)
+                                .frame(width: max(percentUsed > 0 ? 6 : 0,
+                                                  proxy.size.width * min(100, max(0, percentUsed)) / 100))
+                        }
+                    }
+                    .accessibilityHidden(true)
+            }
+            if let resetsAt {
+                Text("Resets \(resetsAt.formatted(Self.resetStyle(resetsAt)))").foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var tint: Color {
+        guard let percentUsed else { return .secondary }
+        if critical || percentUsed >= 100 { return .red }
+        return percentUsed >= 80 ? .orange : .primary
+    }
+
+    static func resetStyle(_ date: Date) -> Date.FormatStyle {
+        Calendar.current.isDateInToday(date) ? .dateTime.hour().minute()
+            : .dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()
+    }
+}
+
 struct CopilotUsageView: View {
     @ObservedObject var usage: UsageTracker
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Label("Copilot allowance", systemImage: "chart.bar.xaxis").font(.headline)
+                    Label("Copilot", systemImage: "chart.bar.xaxis").font(.headline)
                     Spacer()
                     Button { usage.refreshQuotas() } label: { Image(systemName: "arrow.clockwise") }
                         .disabled(usage.copilotUsage.isRefreshing)
-                        .help("Refresh account allowance (at most once a minute)")
+                        .help("Refresh usage limits (at most once a minute)")
                     if usage.copilotUsage.isRefreshing { ProgressView().controlSize(.small) }
                 }
                 if let error = usage.copilotUsage.error {
@@ -19,49 +67,18 @@ struct CopilotUsageView: View {
                 }
                 if let account = usage.copilotUsage.account {
                     if usage.copilotUsage.isStale(at: context.date) {
-                        Label("Last known allowance - data is stale", systemImage: "exclamationmark.triangle")
+                        Label("Last known limits - data is stale", systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
                     }
-                    if let login = account.login { Text("Mac account: \(login)").foregroundStyle(.secondary) }
-                    if let plan = account.plan { Text("Plan: \(plan)").foregroundStyle(.secondary) }
                     ForEach(account.buckets) { bucket in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(bucket.title).fontWeight(.medium)
-                            Text(bucket.summary)
-                            if !bucket.isUnlimited, let remaining = bucket.remainingPercent,
-                               let percentage = bucket.percentageSummary {
-                                ProgressView(value: 100 - remaining, total: 100)
-                                    .accessibilityLabel("Included allowance used")
-                                    .accessibilityValue(String(format: "%.1f%%", 100 - remaining))
-                                Text(percentage)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(bucket.billingMode == "credits"
-                                 ? "Token / AI-credit billing; these are not prompt counts."
-                                 : bucket.billingMode == "requests" ? "Request-based billing" : "Billing units not reported")
-                                .foregroundStyle(.secondary)
-                            Text(bucket.overageAllowed.map { "Additional usage: \($0 ? "enabled" : "disabled")" }
-                                 ?? "Additional usage: not reported")
-                            if let overage = bucket.overage {
-                                Text(overage == 0 ? "No additional usage reported consumed"
-                                     : "Additional usage consumed: \(overage.formatted()) \(bucket.billingMode == "requests" ? "requests" : "billing units")")
-                            }
-                            if let reset = copilotDate(bucket.resetAt) {
-                                Text("Resets \(reset.formatted(date: .abbreviated, time: .shortened)) (local time)")
-                            } else {
-                                Text("Reset date unavailable").foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    if let checked = copilotDate(usage.copilotUsage.checkedAt) {
-                        Text("Checked \(checked.formatted(date: .abbreviated, time: .shortened))")
-                            .foregroundStyle(.secondary)
+                        UsageLimitRow(title: bucket.title,
+                                      percentUsed: bucket.isUnlimited ? nil : bucket.remainingPercent.map { 100 - $0 } ?? 0,
+                                      resetsAt: bucket.isUnlimited ? nil : copilotDate(bucket.resetAt))
                     }
                 } else if usage.copilotUsage.error == nil {
-                    Text(usage.copilotUsage.isRefreshing ? "Reading Copilot account allowance..." : "Account allowance unavailable")
+                    Text(usage.copilotUsage.isRefreshing ? "Reading Copilot's limits..." : "Copilot's limits unavailable")
+                        .foregroundStyle(.secondary)
                 }
-                Text("Account-wide allowance, not this conversation's usage. Model-specific and short-term rate limits may still apply.")
-                    .foregroundStyle(.secondary)
             }
             .font(.caption)
         }
@@ -82,34 +99,23 @@ struct ClaudeUsageView: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             VStack(alignment: .leading, spacing: 6) {
-                Label("Claude Code limits", systemImage: "gauge.with.dots.needle.67percent").font(.headline)
+                Label("Claude Code", systemImage: "gauge.with.dots.needle.67percent").font(.headline)
                 if let state = usage.copilotUsage.claude, let account = state.account {
                     if state.isStale(at: context.date) {
                         Label("Last known limits - data is stale", systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
                     }
-                    if let plan = account.plan { Text("Plan: \(plan.capitalized)").foregroundStyle(.secondary) }
                     ForEach(account.windows) { window in
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack {
-                                Text(window.title).fontWeight(.medium)
-                                Spacer()
-                                Text(window.summary).foregroundStyle(tint(window))
-                            }
-                            ProgressView(value: min(100, max(0, window.percentUsed)), total: 100)
-                                .tint(tint(window))
-                                .accessibilityLabel(window.title)
-                                .accessibilityValue(String(format: "%.0f%% used", window.percentUsed))
-                        }
+                        UsageLimitRow(title: window.title, percentUsed: window.percentUsed,
+                                      resetsAt: copilotDate(window.resetsAt),
+                                      critical: window.isExhausted || window.severity == "critical")
                     }
                     if let error = state.error { Text(error).foregroundStyle(.orange) }
-                    if let checked = copilotDate(state.checkedAt) {
-                        Text("Checked \(checked.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary)
-                    }
                 } else if let limit = usage.rateLimit {
-                    Text("From the last Claude reply: \(limit.type.replacingOccurrences(of: "_", with: " ")) window \(limit.status)"
-                         + (limit.percentUsed.map { String(format: ", %.0f%% used", $0) } ?? "")
-                         + " · resets \(limit.resetsAt.formatted(date: .omitted, time: .shortened))")
+                    UsageLimitRow(title: limit.type == "five_hour" ? "5-hour session"
+                                    : limit.type.replacingOccurrences(of: "_", with: " ").capitalized,
+                                  percentUsed: limit.percentUsed, resetsAt: limit.resetsAt,
+                                  critical: limit.status == "rejected")
                     if let error = usage.copilotUsage.claude?.error { Text(error).foregroundStyle(.orange) }
                 } else {
                     Text(usage.copilotUsage.claude?.error
@@ -120,12 +126,6 @@ struct ClaudeUsageView: View {
             .font(.caption)
         }
     }
-
-    private func tint(_ window: ClaudeLimitWindow) -> Color {
-        if window.isExhausted || window.severity == "critical" { return .red }
-        if window.severity == "warning" || window.percentUsed >= 80 { return .orange }
-        return .primary
-    }
 }
 
 /// Antigravity's weekly and 5-hour limits per model group, from `agy -p /usage` (no quota spent).
@@ -135,32 +135,20 @@ struct AntigravityUsageView: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             VStack(alignment: .leading, spacing: 6) {
-                Label("Antigravity limits", systemImage: "gauge.with.dots.needle.33percent").font(.headline)
+                Label("Antigravity", systemImage: "gauge.with.dots.needle.33percent").font(.headline)
                 if let state = usage.copilotUsage.antigravity, let account = state.account {
                     if state.isStale(at: context.date) {
                         Label("Last known limits - data is stale", systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
                     }
                     ForEach(account.groups) { group in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(group.name).fontWeight(.semibold)
-                            ForEach(group.buckets) { bucket in
-                                HStack {
-                                    Text(bucket.title).fontWeight(.medium)
-                                    Spacer()
-                                    Text(bucket.summary).foregroundStyle(tint(bucket))
-                                }
-                                ProgressView(value: bucket.percentUsed, total: 100)
-                                    .tint(tint(bucket))
-                                    .accessibilityLabel("\(group.name), \(bucket.title)")
-                                    .accessibilityValue(String(format: "%.0f%% used", bucket.percentUsed))
-                            }
+                        Text(group.name).fontWeight(.semibold).padding(.top, 2)
+                        ForEach(group.buckets) { bucket in
+                            UsageLimitRow(title: bucket.title, percentUsed: bucket.percentUsed,
+                                          resetsAt: copilotDate(bucket.resetsAt), critical: bucket.isExhausted)
                         }
                     }
                     if let error = state.error { Text(error).foregroundStyle(.orange) }
-                    if let checked = copilotDate(state.checkedAt) {
-                        Text("Checked \(checked.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary)
-                    }
                 } else {
                     Text(usage.copilotUsage.antigravity?.error
                          ?? (usage.copilotUsage.isRefreshing ? "Reading Antigravity's limits..." : "Antigravity's limits unavailable"))
@@ -169,11 +157,5 @@ struct AntigravityUsageView: View {
             }
             .font(.caption)
         }
-    }
-
-    private func tint(_ bucket: AntigravityLimitBucket) -> Color {
-        if bucket.isExhausted { return .red }
-        if bucket.percentUsed >= 80 { return .orange }
-        return .primary
     }
 }
