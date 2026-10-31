@@ -95,11 +95,25 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     private var activeTools: [String: ToolActivity] = [:]
     private var activeSubagents: [String: SubagentInfo] = [:]
     private var activeSubagentChildren: [String: [ToolActivity]] = [:]
-    private var subagentPollTimer: DispatchSourceTimer?
+    private var turnPollTimer: DispatchSourceTimer?
     private var pendingInputRequests: [UUID: BackendInputRequest] = [:]
     private var approvedGuardrailScopes: Set<String> = []
     private var stdoutRemainder = Data()
     private var stderrCollected = Data()
+
+    // Intermediate step & root transcript streaming state.
+    private var turnMinStepIndex = 0
+    private var emittedPlannerSteps: Set<Int> = []
+    private var plannerStepsWithThinking: Set<Int> = []
+    private var toolParentPlannerStep: [Int: Int] = [:]
+    private var transcriptToolArgs: [Int: [String: Any]] = [:]
+    private var latestHookToolArgs: [String: [String: Any]] = [:]
+    private var hasEmittedThinking = false
+    private var lastFallbackThinkingTitle: String?
+    private var lastTextStepIndex: Int?
+    private var lastTranscriptSize: UInt64 = 0
+    private var lastTranscriptModDate: Date?
+    var customTranscriptURL: URL?
 
     // The current process's PreToolUse hook. Tool steps agy reports beyond the hook requests it
     // made mean the hook isn't reaching Cantrip.
@@ -305,6 +319,17 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         sessionID = nil
         outputSessionKey = UUID().uuidString
         approvedGuardrailScopes.removeAll()
+        turnMinStepIndex = 0
+        emittedPlannerSteps.removeAll()
+        plannerStepsWithThinking.removeAll()
+        toolParentPlannerStep.removeAll()
+        transcriptToolArgs.removeAll()
+        latestHookToolArgs.removeAll()
+        hasEmittedThinking = false
+        lastFallbackThinkingTitle = nil
+        lastTextStepIndex = nil
+        lastTranscriptSize = 0
+        lastTranscriptModDate = nil
         stateLock.unlock()
     }
 
@@ -326,8 +351,32 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         activeSubagents.removeAll()
         activeSubagentChildren.removeAll()
         stderrCollected.removeAll(keepingCapacity: true)
+
+        emittedPlannerSteps.removeAll()
+        plannerStepsWithThinking.removeAll()
+        toolParentPlannerStep.removeAll()
+        transcriptToolArgs.removeAll()
+        latestHookToolArgs.removeAll()
+        hasEmittedThinking = false
+        lastFallbackThinkingTitle = nil
+        lastTextStepIndex = nil
+        lastTranscriptSize = 0
+        lastTranscriptModDate = nil
+
+        let sid = sessionID ?? outputSessionKey
+        let customURL = customTranscriptURL
         stateLock.unlock()
-        stopSubagentPollTimer()
+
+        stopTurnPollTimer()
+
+        let transcriptURL = customURL ?? AntigravitySubagentTranscript.transcriptURL(for: sid)
+        let minStep: Int
+        if let transcriptURL {
+            minStep = Self.latestStepIndex(in: transcriptURL) + 1
+        } else {
+            minStep = 0
+        }
+        stateLock.withLock { turnMinStepIndex = minStep }
 
         onEvent(.status("Thinking"))
 
@@ -354,6 +403,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         line.append(0x0A)
         do {
             try handle.write(contentsOf: line)
+            ensureTurnPollTimer()
         } catch {
             stopProcessAndCleanUp()
             finishTurn(with: .failure("Failed to write prompt to Antigravity CLI: \(error.localizedDescription)"))
@@ -522,7 +572,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     }
 
     private func finishTurn(with terminalEvent: BackendEvent) {
-        stopSubagentPollTimer()
+        stopTurnPollTimer()
         cancelPendingInputRequests()
         stateLock.lock()
         guard turnInFlight, !turnCompleted else {
@@ -568,7 +618,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     }
 
     private func stopProcessAndCleanUp() {
-        stopSubagentPollTimer()
+        stopTurnPollTimer()
         cancelPendingInputRequests()
         stateLock.lock()
         let process = currentProcess
@@ -631,6 +681,9 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                !cid.isEmpty {
                 stateLock.withLock { sessionID = cid }
             }
+            if let callback = stateLock.withLock({ turnInFlight && !turnCompleted ? turnEventCallback : nil }) {
+                syncRootTranscript(callback: callback)
+            }
 
         case "step_update":
             guard let step = json["step_update"] as? [String: Any] else { return }
@@ -655,6 +708,8 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
             return
         }
 
+        syncRootTranscript(callback: callback)
+
         let state = (step["state"] as? String ?? "").uppercased()
         let stepType = (step["step_type"] as? String ?? "").lowercased()
         let stepIndex = step["step_index"] as? Int
@@ -662,11 +717,31 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         if stepType == "agent_response" {
             if let thinking = (step["thinking_delta"] as? String) ?? (step["thinking"] as? String),
                !thinking.isEmpty {
-                callback(.thinkingDelta(thinking))
+                stateLock.lock()
+                if let stepIndex {
+                    plannerStepsWithThinking.insert(stepIndex)
+                }
+                let prefix = hasEmittedThinking ? "\n\n" : ""
+                hasEmittedThinking = true
+                lastFallbackThinkingTitle = nil
+                stateLock.unlock()
+                callback(.thinkingDelta(prefix + thinking))
             }
             if let delta = step["text_delta"] as? String, !delta.isEmpty {
-                stateLock.withLock { turnStreamedText += delta }
-                callback(.textDelta(delta))
+                var prefix = ""
+                stateLock.lock()
+                if let stepIndex {
+                    if let lastIdx = lastTextStepIndex, lastIdx != stepIndex, !turnStreamedText.isEmpty {
+                        if !turnStreamedText.hasSuffix("\n\n") {
+                            prefix = turnStreamedText.hasSuffix("\n") ? "\n" : "\n\n"
+                        }
+                    }
+                    lastTextStepIndex = stepIndex
+                }
+                let fullDelta = prefix + delta
+                turnStreamedText += fullDelta
+                stateLock.unlock()
+                callback(.textDelta(fullDelta))
             }
             return
         }
@@ -683,23 +758,59 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
             let toolName = (toolInfo?["name"] as? String)
                 ?? (step["tool_name"] as? String)
                 ?? "Tool"
-            let params = toolInfo?["parameters"] as? [String: Any]
             let toolID = stepIndex.map { "step-\($0)" } ?? "tool-\(toolName)"
+
+            var mergedParams = toolInfo?["parameters"] as? [String: Any] ?? [:]
+            stateLock.lock()
+            if let idx = stepIndex, let transcriptArgs = transcriptToolArgs[idx] {
+                for (k, v) in transcriptArgs {
+                    mergedParams[k] = v
+                }
+            } else if let hookArgs = latestHookToolArgs[toolName] {
+                for (k, v) in hookArgs {
+                    if mergedParams[k] == nil {
+                        mergedParams[k] = v
+                    }
+                }
+            }
+            stateLock.unlock()
 
             if state == "ACTIVE" {
                 let activity = ToolActivityFactory.start(
                     id: toolID,
                     toolName: toolName,
-                    arguments: params
+                    arguments: mergedParams
                 )
                 stateLock.withLock { activeTools[toolID] = activity }
+
+                let parentStep = stepIndex.flatMap { idx in
+                    stateLock.withLock { toolParentPlannerStep[idx] ?? (idx > 0 ? idx - 1 : nil) }
+                }
+                let hasParentThinking = parentStep.map { pStep in
+                    stateLock.withLock { plannerStepsWithThinking.contains(pStep) }
+                } ?? false
+
+                if !hasParentThinking && !activity.title.isEmpty {
+                    stateLock.lock()
+                    let shouldEmit = (activity.title != lastFallbackThinkingTitle)
+                    let needsPrefix = hasEmittedThinking
+                    if shouldEmit {
+                        lastFallbackThinkingTitle = activity.title
+                        hasEmittedThinking = true
+                    }
+                    stateLock.unlock()
+                    if shouldEmit {
+                        callback(.thinkingDelta((needsPrefix ? "\n\n" : "") + activity.title))
+                    }
+                }
+
                 callback(.activity(activity))
                 callback(.status(activity.title))
             } else if ["DONE", "ERROR", "CANCELED"].contains(state) {
                 // A call Cantrip refused (or agy stopped) ends in ERROR or CANCELED.
                 let starting: ToolActivity? = stateLock.withLock {
                     activeTools.removeValue(forKey: toolID)
-                } ?? (params != nil ? ToolActivityFactory.start(id: toolID, toolName: toolName, arguments: params) : nil)
+                } ?? ToolActivityFactory.start(id: toolID, toolName: toolName, arguments: mergedParams)
 
                 let errorValue = toolInfo?["error"]
                 let hasError = (errorValue != nil && !(errorValue is NSNull))
@@ -710,7 +821,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                     return errorValue as? String
                 }()
                 let denial = stateLock.withLock {
-                    deniedTools.removeValue(forKey: Self.deniedKey(tool: toolName, arguments: params ?? [:]))
+                    deniedTools.removeValue(forKey: Self.deniedKey(tool: toolName, arguments: mergedParams))
                 }
                 let output: Any? = errorMessage ?? denial ?? toolInfo?["output"]
                 let completed = ToolActivityFactory.complete(
@@ -823,7 +934,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
                 callback(.status("Running \(info.displayName)"))
             }
             if shouldPoll {
-                ensureSubagentPollTimer()
+                ensureTurnPollTimer()
             }
         }
     }
@@ -842,35 +953,45 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         return cid
     }
 
-    private func ensureSubagentPollTimer() {
+    // MARK: - Turn Polling & Root Transcript Sync
+
+    private func ensureTurnPollTimer() {
         stateLock.lock()
-        guard subagentPollTimer == nil, turnInFlight, !turnCompleted, !activeSubagents.isEmpty else {
+        guard turnPollTimer == nil, turnInFlight, !turnCompleted else {
             stateLock.unlock()
             return
         }
         let timer = DispatchSource.makeTimerSource(queue: ioQueue)
-        timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
         timer.setEventHandler { [weak self] in
-            self?.pollActiveSubagents()
+            self?.pollTurn()
         }
-        subagentPollTimer = timer
+        turnPollTimer = timer
         stateLock.unlock()
         timer.resume()
     }
 
-    private func stopSubagentPollTimer() {
+    private func stopTurnPollTimer() {
         let timer: DispatchSourceTimer? = stateLock.withLock {
-            defer { subagentPollTimer = nil }
-            return subagentPollTimer
+            defer { turnPollTimer = nil }
+            return turnPollTimer
         }
         timer?.cancel()
+    }
+
+    private func pollTurn() {
+        guard let callback = stateLock.withLock({ turnInFlight && !turnCompleted ? turnEventCallback : nil }) else {
+            stopTurnPollTimer()
+            return
+        }
+        syncRootTranscript(callback: callback)
+        pollActiveSubagents()
     }
 
     private func pollActiveSubagents() {
         stateLock.lock()
         guard turnInFlight, !turnCompleted, let callback = turnEventCallback, !activeSubagents.isEmpty else {
             stateLock.unlock()
-            stopSubagentPollTimer()
             return
         }
         let currentIDs = Array(activeSubagents.keys)
@@ -905,11 +1026,150 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         for activity in updates {
             callback(.activity(activity))
         }
+    }
 
-        let stillActive = stateLock.withLock { !activeSubagents.isEmpty && turnInFlight && !turnCompleted }
-        if !stillActive {
-            stopSubagentPollTimer()
+    private func syncRootTranscript(callback: (BackendEvent) -> Void) {
+        stateLock.lock()
+        let sid = sessionID ?? outputSessionKey
+        let customURL = customTranscriptURL
+        let minStep = turnMinStepIndex
+        stateLock.unlock()
+
+        guard let url = customURL ?? AntigravitySubagentTranscript.transcriptURL(for: sid) else {
+            return
         }
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? UInt64,
+              let modDate = attrs[.modificationDate] as? Date,
+              size > 0 else {
+            return
+        }
+
+        stateLock.lock()
+        if lastTranscriptSize == size && lastTranscriptModDate == modDate {
+            stateLock.unlock()
+            return
+        }
+        lastTranscriptSize = size
+        lastTranscriptModDate = modDate
+        stateLock.unlock()
+
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else {
+            return
+        }
+
+        let lines = text.split(whereSeparator: { $0.isNewline })
+        var latestUserInputIndex: Int?
+
+        for line in lines {
+            guard let lineData = String(line).data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: lineData)) as? [String: Any] else {
+                continue
+            }
+            let type = (obj["type"] as? String ?? "").uppercased()
+            let stepIndex = obj["step_index"] as? Int ?? -1
+            if type == "USER_INPUT" && stepIndex >= minStep {
+                latestUserInputIndex = stepIndex
+            }
+        }
+
+        let activeMin = max(minStep, latestUserInputIndex.map { $0 + 1 } ?? minStep)
+
+        for line in lines {
+            guard let lineData = String(line).data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: lineData)) as? [String: Any] else {
+                continue
+            }
+            let type = (obj["type"] as? String ?? "").uppercased()
+            guard let stepIndex = obj["step_index"] as? Int, stepIndex >= activeMin else {
+                continue
+            }
+
+            if type == "PLANNER_RESPONSE" {
+                let toolCalls = (obj["tool_calls"] as? [[String: Any]]) ?? []
+                stateLock.lock()
+                for (tIdx, tc) in toolCalls.enumerated() {
+                    let toolStepIndex = stepIndex + 1 + tIdx
+                    toolParentPlannerStep[toolStepIndex] = stepIndex
+                    let rawArgs = (tc["args"] as? [String: Any]) ?? [:]
+                    let cleaned = AntigravitySubagentTranscript.cleanTranscriptArgs(rawArgs)
+                    transcriptToolArgs[toolStepIndex] = cleaned
+                }
+
+                let alreadyEmitted = emittedPlannerSteps.contains(stepIndex)
+                if !alreadyEmitted {
+                    emittedPlannerSteps.insert(stepIndex)
+                }
+                stateLock.unlock()
+
+                if !alreadyEmitted {
+                    var rawThinking = obj["thinking"] as? String ?? ""
+                    let truncated = (obj["truncated_fields"] as? [String]) ?? []
+                    if truncated.contains("thinking") {
+                        if let full = resolveFullField(stepIndex: stepIndex, transcriptURL: url) {
+                            rawThinking = full
+                        }
+                    }
+                    let trimmedThinking = rawThinking.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmedThinking.isEmpty {
+                        stateLock.lock()
+                        plannerStepsWithThinking.insert(stepIndex)
+                        let prefix = hasEmittedThinking ? "\n\n" : ""
+                        hasEmittedThinking = true
+                        lastFallbackThinkingTitle = nil
+                        stateLock.unlock()
+                        callback(.thinkingDelta(prefix + trimmedThinking))
+                    }
+
+                    let inputTokens = (obj["input_tokens"] as? Int) ?? 0
+                    let cachedTokens = (obj["cache_read_tokens"] as? Int) ?? 0
+                    if inputTokens + cachedTokens > 0 {
+                        callback(.context(BackendContextUsage(tokens: inputTokens + cachedTokens)))
+                    }
+                }
+            }
+        }
+    }
+
+    private func resolveFullField(stepIndex: Int, transcriptURL: URL) -> String? {
+        let fullURL = transcriptURL.deletingLastPathComponent().appendingPathComponent("transcript_full.jsonl")
+        guard let data = try? Data(contentsOf: fullURL),
+              let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        for line in text.split(whereSeparator: { $0.isNewline }) {
+            guard let lineData = String(line).data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: lineData)) as? [String: Any],
+                  let idx = obj["step_index"] as? Int, idx == stepIndex else {
+                continue
+            }
+            return obj["thinking"] as? String
+        }
+        return nil
+    }
+
+    static func latestStepIndex(in url: URL) -> Int {
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else {
+            return -1
+        }
+        var maxIndex = -1
+        for line in text.split(whereSeparator: { $0.isNewline }) {
+            guard let lineData = String(line).data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: lineData)) as? [String: Any],
+                  let idx = obj["step_index"] as? Int else {
+                continue
+            }
+            if idx > maxIndex {
+                maxIndex = idx
+            }
+        }
+        return maxIndex
+    }
+
+    func syncRootTranscriptForTesting(callback: (BackendEvent) -> Void) {
+        syncRootTranscript(callback: callback)
     }
 
     fileprivate static func subagentActivity(for info: SubagentInfo, children: [ToolActivity] = []) -> ToolActivity {
@@ -934,6 +1194,9 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         }
 
         let callback = stateLock.withLock { turnInFlight && !turnCompleted ? turnEventCallback : nil }
+        if let callback {
+            syncRootTranscript(callback: callback)
+        }
 
         if let usage = result["usage"] as? [String: Any] {
             let totalInput = (usage["input_tokens"] as? Int) ?? 0
@@ -962,11 +1225,19 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         }
 
         let streamedEmpty = stateLock.withLock { turnStreamedText.isEmpty }
-        if streamedEmpty,
-           let response = result["response"] as? String,
-           !response.isEmpty {
-            stateLock.withLock { turnStreamedText = response }
-            callback?(.textDelta(response))
+        if let response = result["response"] as? String, !response.isEmpty {
+            if streamedEmpty {
+                stateLock.withLock { turnStreamedText = response }
+                callback?(.textDelta(response))
+            } else {
+                let alreadyHas = stateLock.withLock { turnStreamedText.hasSuffix(response) }
+                if !alreadyHas {
+                    let prefix = stateLock.withLock { turnStreamedText.hasSuffix("\n\n") ? "" : (turnStreamedText.hasSuffix("\n") ? "\n" : "\n\n") }
+                    let full = prefix + response
+                    stateLock.withLock { turnStreamedText += full }
+                    callback?(.textDelta(full))
+                }
+            }
         }
 
         let status = (result["status"] as? String ?? "SUCCESS").uppercased()
@@ -1058,7 +1329,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
 
     static func deniedKey(tool: String, arguments: [String: Any]) -> String {
         let target = arguments["CommandLine"] ?? arguments["Path"] ?? arguments["TargetFile"]
-            ?? arguments["AbsolutePath"] ?? ""
+            ?? arguments["AbsolutePath"] ?? arguments["file_path"] ?? arguments["filePath"] ?? ""
         return "\(tool)|\(target)"
     }
 
@@ -1081,10 +1352,11 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
             return
         }
         let args = (toolCall?["args"] as? [String: Any]) ?? [:]
+        let cleanedArgs = AntigravitySubagentTranscript.cleanTranscriptArgs(args)
         // agy reports a refused call as a finished step with no output; remember why it was refused.
         let respond: AntigravityHookServer.Respond = { [weak self] decision, reason in
             if decision == "deny", let self {
-                let key = Self.deniedKey(tool: toolName, arguments: args)
+                let key = Self.deniedKey(tool: toolName, arguments: cleanedArgs)
                 self.stateLock.withLock { self.deniedTools[key] = reason ?? "Cantrip refused this call." }
             }
             reply(decision, reason)
@@ -1092,6 +1364,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
 
         stateLock.lock()
         hookRequestCount += 1
+        latestHookToolArgs[toolName] = cleanedArgs
         let workdir = activeWorkdir
         let callback = turnEventCallback
         stateLock.unlock()
@@ -1386,7 +1659,7 @@ enum AntigravitySubagentTranscript {
         return info != beforeInfo || children != beforeChildren
     }
 
-    private static func transcriptURL(for agentID: String) -> URL? {
+    fileprivate static func transcriptURL(for agentID: String) -> URL? {
         let trimmed = agentID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.contains("/"), !trimmed.contains("..") else { return nil }
         let fm = FileManager.default
@@ -1541,7 +1814,7 @@ enum AntigravitySubagentTranscript {
         return snap
     }
 
-    private static func cleanTranscriptArgs(_ raw: [String: Any]) -> [String: Any] {
+    fileprivate static func cleanTranscriptArgs(_ raw: [String: Any]) -> [String: Any] {
         var cleaned: [String: Any] = [:]
         for (key, value) in raw {
             if let str = value as? String {
