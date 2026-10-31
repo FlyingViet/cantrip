@@ -107,11 +107,16 @@ final class CantripModelSettingsTests: XCTestCase {
             posts.append(try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bytes.prefix(count))) as? [String: Any]))
             return (200, try fallback("Copilot", revision: "f2"))
         }
+        // A Mac from before the chain: one backup, set through `backend`.
         let loaded = try await model.usageFallback()
-        XCTAssertEqual(loaded.selection, "")
+        XCTAssertFalse(loaded.supportsChain)
+        XCTAssertEqual(loaded.chain, [])
+        XCTAssertEqual(loaded.addable.map(\.id), ["Copilot", "Codex"])
         XCTAssertEqual(loaded.status, "At its usage limit: Claude Code until 5:00 AM.")
-        let saved = await model.updateUsageFallback(CantripUsageFallbackChange(revision: loaded.revision, backend: "Copilot"))
-        XCTAssertEqual(saved?.selection, "Copilot")
+        let saved = await model.updateUsageFallback(loaded.change(to: ["Copilot"]))
+        XCTAssertEqual(saved?.chain, ["Copilot"])
+        XCTAssertEqual(saved?.addable.map(\.id), [], "An older Mac takes no second backup")
+        XCTAssertNil(posts.first?["backends"], "Older Macs get only the field they know")
         XCTAssertEqual(posts.first?["backend"] as? String, "Copilot")
         XCTAssertEqual(posts.first?["revision"] as? String, "f1")
         XCTAssertNil(posts.first?["resetLimits"], "Only the changed field is sent")
@@ -124,6 +129,58 @@ final class CantripModelSettingsTests: XCTestCase {
             _ = try await model.usageFallback()
             XCTFail("An older Mac has no fallback endpoint")
         } catch CantripRemoteError.usageFallbackUnsupported {}
+    }
+
+    func testUsageFallbackChainAddsReordersAndRemovesBackups() async throws {
+        let model = try await model()
+        var chain = ["Copilot", "Codex"]
+        var revision = 1
+        var posts: [[String: Any]] = []
+        func fallback() throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "backend": chain.first ?? "", "backends": chain, "primary": "Claude Code", "revision": "r\(revision)",
+                "choices": [["id": "Copilot", "label": "Copilot"], ["id": "Codex", "label": "Codex"],
+                            ["id": "Antigravity", "label": "Antigravity"]],
+                "limited": [],
+            ])
+        }
+        ModelSettingsRequestProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                let stream = try XCTUnwrap(request.httpBodyStream)
+                stream.open()
+                defer { stream.close() }
+                var bytes = [UInt8](repeating: 0, count: 2048)
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bytes.prefix(count))) as? [String: Any])
+                posts.append(body)
+                guard body["revision"] as? String == "r\(revision)" else { return (409, Data(#"{"error":"stale"}"#.utf8)) }
+                chain = try XCTUnwrap(body["backends"] as? [String])
+                revision += 1
+            }
+            return (200, try fallback())
+        }
+        var state = try await model.usageFallback()
+        XCTAssertTrue(state.supportsChain)
+        XCTAssertEqual(state.chain, ["Copilot", "Codex"])
+        XCTAssertEqual(state.addable.map(\.id), ["Antigravity"])
+        XCTAssertEqual(state.label("Claude Code"), "Claude Code (skipped: the Mac's backend)")
+
+        let next1 = await model.updateUsageFallback(state.change(to: state.chain + ["Antigravity"]))
+        state = try XCTUnwrap(next1)
+        XCTAssertEqual(state.chain, ["Copilot", "Codex", "Antigravity"], "Add appends")
+        XCTAssertNil(posts.last?["backend"], "A chain-aware Mac gets the whole chain")
+        let next2 = await model.updateUsageFallback(state.change(to: ["Antigravity", "Copilot", "Codex"]))
+        state = try XCTUnwrap(next2)
+        XCTAssertEqual(state.chain, ["Antigravity", "Copilot", "Codex"], "Reorder")
+        let next3 = await model.updateUsageFallback(state.change(to: ["Antigravity", "Codex"]))
+        state = try XCTUnwrap(next3)
+        XCTAssertEqual(state.chain, ["Antigravity", "Codex"], "Remove")
+        XCTAssertEqual(state.addable.map(\.id), ["Copilot"])
+        let next4 = await model.updateUsageFallback(state.change(to: []))
+        state = try XCTUnwrap(next4)
+        XCTAssertEqual(state.chain, [])
+        XCTAssertEqual(state.status, "Off: a usage limit stops the run with the error.")
+        XCTAssertEqual(posts.map { $0["revision"] as? String }, ["r1", "r2", "r3", "r4"])
     }
 
     func testSavePreflightsOnceAndPinsTheOriginalTabAndRevision() async throws {
