@@ -1,14 +1,15 @@
-// Usage Limits (CopilotUsageView, CopilotUsageView.swift): for Claude Code, Antigravity and Copilot, how
+// Usage Limits (CopilotUsageView, CopilotUsageView.swift): for Claude Code, Antigravity, Codex and Copilot, how
 // much of each limit is used and when it resets. Re-read every 2 s while the Mac refreshes, else every 60 s.
 import type { JSX } from "preact";
 import { useSignal } from "@preact/signals";
 import { api } from "../../api/client";
-import type { AntigravityUsageState, ClaudeUsageState, CopilotUsageSnapshot } from "../../api/types";
+import type { AntigravityUsageState, ClaudeUsageState, CodexUsageState, CopilotUsageSnapshot } from "../../api/types";
 import { FormSection, Sheet } from "../kit";
 import { Caption, Loading, RefreshButton, StatusLabel, Warning, useAlive, usePolling, useTick } from "./common";
 import {
   antigravityBucketTitle, antigravityBucketTone, antigravityBucketUsed, bucketTitle, claudeWindowTitle, claudeWindowTone,
-  copilotBucketTone, copilotDate, errorText, formatDateTime, isAntigravityUsageStale, isClaudeUsageStale, isUnsupported,
+  codexWindowTitle, codexWindowTone, copilotBucketTone, copilotDate, errorText, formatDateTime, isAntigravityUsageStale,
+  isClaudeUsageStale, isCodexUsageStale, isUnsupported,
   isUsageStale, usagePollDelay,
 } from "./sheetLogic";
 
@@ -62,6 +63,7 @@ export function UsageSheet(props: { onClose: () => void }): JSX.Element | null {
       ) : null}
       {value?.claude ? <ClaudeSection state={value.claude} now={now} /> : null}
       {value?.antigravity ? <AntigravitySection state={value.antigravity} now={now} /> : null}
+      {value?.codex ? <CodexSection state={value.codex} now={now} /> : null}
       {value ? (
         <FormSection header="Copilot">
           <div class="form-row">
@@ -156,5 +158,28 @@ function AntigravitySection(props: { state: AntigravityUsageState; now: number }
         </FormSection>
       ))}
     </>
+  );
+}
+
+/** CodexUsageSection: Codex's limits, as the Mac reads them from codex app-server. */
+function CodexSection(props: { state: CodexUsageState; now: number }): JSX.Element {
+  const { state, now } = props;
+  const account = state.account;
+  const plan = account?.plan;
+  return (
+    <FormSection header={plan ? `Codex · ChatGPT ${plan.charAt(0).toUpperCase()}${plan.slice(1)}` : "Codex"}>
+      <div class="form-row">
+        <div class="sh-stack wide grow selectable">
+          {state.error ? <Warning>{state.error}</Warning> : null}
+          {account && isCodexUsageStale(state, now)
+            ? <StatusLabel icon="clock" tone="warning">Last known limits - data is stale</StatusLabel> : null}
+          {!account && !state.error ? <span class="muted">Codex's limits unavailable</span> : null}
+          {(account?.windows ?? []).map((window) => (
+            <LimitRow key={window.id} title={codexWindowTitle(window)} used={window.usedPercent}
+              resetsAt={window.resetsAt} tone={codexWindowTone(window)} />
+          ))}
+        </div>
+      </div>
+    </FormSection>
   );
 }

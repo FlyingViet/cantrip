@@ -1621,6 +1621,8 @@ export interface CopilotUsageSnapshot {
   claude?: ClaudeUsageState;
   /** Antigravity's weekly and 5-hour limits per model group. */
   antigravity?: AntigravityUsageState;
+  /** Codex's 5-hour and weekly (or 30-day) limits for the Mac's ChatGPT account. */
+  codex?: CodexUsageState;
   /** The Mac's backend ("Claude Code", "Copilot", ...) when the snapshot was served. */
   activeBackend?: string;
 }
@@ -1635,6 +1637,22 @@ export interface AntigravityUsageState {
   account?: { groups: AntigravityLimitGroup[] };
   checkedAt?: ISO8601String;
   error?: string;
+}
+
+export interface CodexUsageState {
+  account?: { plan?: string; windows: CodexLimitWindow[] };
+  checkedAt?: ISO8601String;
+  error?: string;
+}
+
+/** "codex/primary", "codex/secondary", or another limit's ID and slot. */
+export interface CodexLimitWindow {
+  id: string;
+  usedPercent: number;
+  windowMinutes?: number;
+  resetsAt?: ISO8601String;
+  /** A limit other than the main Codex one (a model's own quota). */
+  limitName?: string;
 }
 
 /** "Gemini Models", "Claude and GPT models", "Gemini 4 Argon". */

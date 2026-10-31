@@ -8,7 +8,7 @@ import type {
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
   ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackEntry, UsageFallbackRequest, UsageFallbackSnapshot,
-  AntigravityLimitBucket, AntigravityUsageState, ClaudeLimitWindow, ClaudeUsageState,
+  AntigravityLimitBucket, AntigravityUsageState, ClaudeLimitWindow, ClaudeUsageState, CodexLimitWindow, CodexUsageState,
 } from "../../api/types";
 
 // MARK: Errors
@@ -920,6 +920,34 @@ export function isAntigravityUsageStale(state: AntigravityUsageState, now: numbe
     const reset = bucket.resetsAt ? Date.parse(bucket.resetsAt) : NaN;
     return !Number.isNaN(reset) && now >= reset;
   }));
+}
+
+/** CodexLimitWindow.title. */
+export function codexWindowTitle(window: CodexLimitWindow): string {
+  const minutes = window.windowMinutes;
+  let title = "Usage limit";
+  if (minutes === 300) title = "5-hour limit";
+  else if (minutes === 10_080) title = "Weekly limit";
+  else if (minutes !== undefined && minutes >= 40_000) title = "Monthly limit";
+  else if (minutes !== undefined && minutes % 1_440 === 0) title = `${minutes / 1_440}-day limit`;
+  else if (minutes !== undefined && minutes % 60 === 0) title = `${minutes / 60}-hour limit`;
+  return window.limitName ? `${window.limitName} ${title.toLowerCase()}` : title;
+}
+
+/** "warning" from 80% used, "critical" when the window is used up. */
+export function codexWindowTone(window: CodexLimitWindow): "normal" | "warning" | "critical" {
+  if (window.usedPercent >= 100) return "critical";
+  return window.usedPercent >= 80 ? "warning" : "normal";
+}
+
+/** CodexUsageState.isStale: older than ten minutes, or a window reset since it was read. */
+export function isCodexUsageStale(state: CodexUsageState, now: number): boolean {
+  const checked = state.checkedAt ? Date.parse(state.checkedAt) : NaN;
+  if (!state.account || Number.isNaN(checked) || now - checked >= 600_000) return true;
+  return state.account.windows.some((window) => {
+    const reset = window.resetsAt ? Date.parse(window.resetsAt) : NaN;
+    return !Number.isNaN(reset) && now >= reset;
+  });
 }
 
 /** A Copilot bucket's meter: "warning" from 80% used (10% left), "critical" when used up. */
