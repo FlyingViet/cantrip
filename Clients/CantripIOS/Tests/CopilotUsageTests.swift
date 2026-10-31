@@ -199,6 +199,47 @@ final class CopilotUsageTests: XCTestCase {
         XCTAssertFalse(old.leadsWithClaude)
     }
 
+    func testAntigravityLimitsDecodeAndLeadTheHeaderWhenTheMacRunsAntigravity() async throws {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        func data(backend: String?, fiveHourReset: Date = now.addingTimeInterval(3600)) throws -> Data {
+            var object = try JSONSerialization.jsonObject(with: fixture(remaining: 0, amount: 0)) as! [String: Any]
+            object["antigravity"] = ["checkedAt": iso.string(from: now), "account": ["groups": [
+                ["name": "Gemini Models", "models": "Gemini Flash, Gemini Pro", "buckets": [
+                    ["id": "gemini-weekly", "name": "Weekly Limit Remaining", "window": "weekly",
+                     "remainingPercent": 98.9, "resetsAt": iso.string(from: now.addingTimeInterval(86400 * 6))],
+                    ["id": "gemini-5h", "name": "Five Hour Limit Remaining", "window": "5h",
+                     "remainingPercent": 61, "resetsAt": iso.string(from: fiveHourReset)],
+                ]],
+                ["name": "Claude and GPT models", "buckets": [
+                    ["id": "thirdparty-weekly", "name": "Weekly Limit Remaining", "window": "weekly",
+                     "remainingPercent": 100, "resetsAt": iso.string(from: now.addingTimeInterval(86400 * 6))],
+                ]],
+            ]]]
+            if let backend { object["activeBackend"] = backend }
+            return try JSONSerialization.data(withJSONObject: object)
+        }
+        let decoder = JSONDecoder()
+        let snapshot = try decoder.decode(CopilotUsageSnapshot.self, from: data(backend: "Antigravity"))
+        XCTAssertEqual(snapshot.antigravity?.account?.groups.map(\.name), ["Gemini Models", "Claude and GPT models"])
+        XCTAssertEqual(snapshot.antigravity?.account?.primary?.bucket.id, "gemini-5h")
+        XCTAssertFalse(snapshot.antigravity!.isStale(at: now))
+        XCTAssertTrue(snapshot.leadsWithAntigravity)
+        XCTAssertFalse(snapshot.leadsWithClaude)
+
+        let model = CopilotUsageModel()
+        await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: data(backend: "Antigravity")) }
+        XCTAssertEqual(model.headerText(at: now), "5h 39%", "The Mac runs Antigravity: its closest limit leads")
+        XCTAssertEqual(model.accessibilityValue(at: now), "Antigravity Gemini Models 5-hour limit 39% used")
+        await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: data(backend: "Antigravity", fiveHourReset: now.addingTimeInterval(-1))) }
+        XCTAssertEqual(model.headerText(at: now), "Stale", "A window that reset since it was read is stale")
+        await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: data(backend: "Copilot")) }
+        XCTAssertEqual(model.headerText(at: now, locale: Locale(identifier: "en_US")), "1M / 1M",
+                       "On Copilot the allowance leads")
+        let old = try decoder.decode(CopilotUsageSnapshot.self, from: fixture(remaining: 0, amount: 0))
+        XCTAssertNil(old.antigravity, "Macs before Antigravity limits send no field")
+    }
+
     func testCreditAmountsPrecisionMissingValuesAndLegacyUnits() async throws {
         let locale = Locale(identifier: "en_US")
         let model = CopilotUsageModel()
