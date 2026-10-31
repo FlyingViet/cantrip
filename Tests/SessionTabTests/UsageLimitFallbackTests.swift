@@ -13,8 +13,8 @@ private final class LimitBackend: Backend {
 }
 
 extension SessionTabTests {
-    /// A backend at its plan's usage limit hands the run to the fallback backend, and new
-    /// messages start there until the limit lifts. Nothing loops when the fallback is limited too.
+    /// A backend at its plan's usage limit hands the run to the next backup in the chain, and new
+    /// messages start there until the limit lifts. Nothing loops when every backup is limited too.
     @MainActor
     static func testUsageLimitFallback() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -53,23 +53,30 @@ extension SessionTabTests {
         let tracker = BackendLimitTracker()
         tracker.markLimited(.codex, message: "usage limit", now: now)
         precondition(tracker.limitedUntil(.codex, now: now.addingTimeInterval(60)) != nil)
-        precondition(BackendFallback.target(for: .copilot, configured: "", homeRun: false, tracker: tracker, now: now) == nil)
-        precondition(BackendFallback.target(for: .copilot, configured: "Copilot", homeRun: false, tracker: tracker, now: now) == nil)
-        precondition(BackendFallback.target(for: .claudeCode, configured: "Copilot", homeRun: false, tracker: tracker, now: now) == .copilot)
-        precondition(BackendFallback.target(for: .claudeCode, configured: "Codex", homeRun: false, tracker: tracker, now: now) == nil,
+        precondition(BackendFallback.target(for: .copilot, chain: [], homeRun: false, tracker: tracker, now: now) == nil)
+        precondition(BackendFallback.target(for: .copilot, chain: ["Copilot"], homeRun: false, tracker: tracker, now: now) == nil)
+        precondition(BackendFallback.target(for: .claudeCode, chain: ["Copilot"], homeRun: false, tracker: tracker, now: now) == .copilot)
+        precondition(BackendFallback.target(for: .claudeCode, chain: ["Codex"], homeRun: false, tracker: tracker, now: now) == nil,
                      "a limited fallback isn't used")
-        precondition(BackendFallback.target(for: .claudeCode, configured: "Copilot Remote", homeRun: true, tracker: tracker, now: now) == nil,
+        precondition(BackendFallback.target(for: .claudeCode, chain: ["Codex", "Claude Code", "Antigravity", "Copilot"],
+                                            homeRun: false, tracker: tracker, now: now) == .antigravity,
+                     "the chain skips the limited backend and the one being left, in order")
+        precondition(BackendFallback.target(for: .claudeCode, chain: ["Copilot Remote"], homeRun: true, tracker: tracker, now: now) == nil,
                      "unattended Home runs stay on backends Cantrip checks per action")
+        precondition(BackendFallback.target(for: .claudeCode, chain: ["Copilot Remote", "Local Model"], homeRun: true, tracker: tracker, now: now) == .localModel,
+                     "...and move on to the next backup instead")
+        precondition(AppSettings.fallbackChain(["Codex", "Nope", "Copilot", "Codex"]) == ["Codex", "Copilot"],
+                     "the saved chain keeps known backends once, in order")
         precondition(tracker.limitedUntil(.codex, now: now.addingTimeInterval(BackendLimitTracker.defaultCooldown + 1)) == nil)
 
         let settings = AppSettings.shared
         settings.memoryEnabled = false
         settings.voiceMode = false
         settings.backend = .copilot
-        settings.limitFallbackBackend = BackendKind.claudeCode.rawValue
+        settings.limitFallbackBackends = [BackendKind.claudeCode.rawValue, BackendKind.codex.rawValue]
         BackendLimitTracker.shared.clear()
         defer {
-            settings.limitFallbackBackend = ""
+            settings.limitFallbackBackends = []
             BackendLimitTracker.shared.clear()
         }
 
@@ -77,7 +84,8 @@ extension SessionTabTests {
         // report decides; this message's wording matches none of the phrases.
         let copilot = LimitBackend()
         let claude = LimitBackend()
-        let chat = ChatSession(copilotBackend: copilot, backendOverrides: [.claudeCode: claude])
+        let codex = LimitBackend()
+        let chat = ChatSession(copilotBackend: copilot, backendOverrides: [.claudeCode: claude, .codex: codex])
         chat.submitRemote("first task", mode: .queue)
         try await waitForJournalTest { copilot.requests.count == 1 }
         copilot.sink?(.textDelta("partial work"))
@@ -98,32 +106,44 @@ extension SessionTabTests {
         precondition(copilot.requests.count == 1, "the limited backend isn't tried again")
         precondition(chat.deliveryStatus?.contains("usage limit until") == true)
 
-        // The fallback hits its limit too: the run fails instead of bouncing back.
+        // The first backup hits its limit too: the run moves down the chain to the second.
+        claude.sink?(.textDelta("more work"))
         claude.sink?(.failure("Claude AI usage limit reached|\(Int(Date().timeIntervalSince1970) + 3_600)"))
+        try await waitForJournalTest { codex.requests.count == 1 }
+        precondition(codex.requests[0].prompt.contains("second task"), "the task continues on the next backup")
+        precondition(chat.messages.contains { $0.role == .error && $0.text.contains("Continuing this task with Codex") })
+        precondition(copilot.requests.count == 1 && claude.requests.count == 2, "limited backends aren't tried again")
+        codex.sink?(.done)
+        try await waitForJournalTest { !chat.isStreaming }
+
+        // The last backup runs out as well: the run fails instead of bouncing back.
+        chat.submitRemote("third task", mode: .queue)
+        try await waitForJournalTest { codex.requests.count == 2 }
+        codex.sink?(.failure("You've hit your usage limit. Try again in 3 hours."))
         try await waitForJournalTest { !chat.isStreaming && !chat.autoResumePending }
         try await Task.sleep(nanoseconds: 300_000_000)
-        precondition(copilot.requests.count == 1 && claude.requests.count == 2)
+        precondition(copilot.requests.count == 1 && claude.requests.count == 2 && codex.requests.count == 2)
 
         // Off: a limit error ends the run as before.
         BackendLimitTracker.shared.clear()
-        settings.limitFallbackBackend = ""
-        chat.submitRemote("third task", mode: .queue)
+        settings.limitFallbackBackends = []
+        chat.submitRemote("fourth task", mode: .queue)
         try await waitForJournalTest { copilot.requests.count == 2 }
         copilot.sink?(.failure("You have exceeded your premium request allowance."))
         try await waitForJournalTest { !chat.isStreaming && !chat.autoResumePending }
         try await Task.sleep(nanoseconds: 300_000_000)
-        precondition(claude.requests.count == 2 && copilot.requests.count == 2)
+        precondition(claude.requests.count == 2 && copilot.requests.count == 2 && codex.requests.count == 2)
         try await testUsageFallbackAPI()
     }
 
-    /// Paired clients read and set the fallback, and clear limits, through /api/v1/usage-fallback.
+    /// Paired clients read and set the fallbacks, and clear limits, through /api/v1/usage-fallback.
     @MainActor
     private static func testUsageFallbackAPI() async throws {
         let settings = AppSettings.shared
-        let saved = (settings.backend, settings.limitFallbackBackend)
-        defer { (settings.backend, settings.limitFallbackBackend) = saved; BackendLimitTracker.shared.clear() }
+        let saved = (settings.backend, settings.limitFallbackBackends)
+        defer { (settings.backend, settings.limitFallbackBackends) = saved; BackendLimitTracker.shared.clear() }
         settings.backend = .claudeCode
-        settings.limitFallbackBackend = ""
+        settings.limitFallbackBackends = []
         BackendLimitTracker.shared.clear()
         BackendLimitTracker.shared.markLimited(.claudeCode, message: "Claude AI usage limit reached|\(Int(Date().timeIntervalSince1970) + 3_600)")
 
@@ -149,7 +169,8 @@ extension SessionTabTests {
         let loaded = try await call()
         let choices = (loaded.1["choices"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
         let limited = loaded.1["limited"] as? [[String: Any]] ?? []
-        precondition(loaded.0 == 200 && loaded.1["backend"] as? String == "" && loaded.1["primary"] as? String == "Claude Code"
+        precondition(loaded.0 == 200 && loaded.1["backend"] as? String == "" && (loaded.1["backends"] as? [String])?.isEmpty == true
+                     && loaded.1["primary"] as? String == "Claude Code"
                      && !choices.contains("Claude Code") && choices.contains("Copilot")
                      && limited.first?["backend"] as? String == "Claude Code",
                      "GET lists the choices without the Mac's own backend, and who is limited: \(loaded)")
@@ -160,16 +181,29 @@ extension SessionTabTests {
         precondition(anonymous.0 == 401, "Pairing is required")
         precondition(itself.0 == 400, "A backend can't fall back on itself")
         precondition(stale.0 == 409, "A stale revision is refused")
-        let set = try await call("POST", ["revision": revision, "backend": "Copilot"])
-        precondition(set.0 == 200 && set.1["backend"] as? String == "Copilot" && settings.limitFallbackBackend == "Copilot",
-                     "POST saves the fallback: \(set)")
-        let cleared = try await call("POST", ["revision": set.1["revision"] as? String ?? "", "resetLimits": true])
+        let unknown = try await call("POST", ["revision": revision, "backends": ["Copilot", "Nope"]])
+        let twice = try await call("POST", ["revision": revision, "backends": ["Copilot", "Copilot"]])
+        precondition(unknown.0 == 400 && twice.0 == 400, "The chain names known backends, each once")
+        let chain = try await call("POST", ["revision": revision, "backends": ["Codex", "Copilot"]])
+        precondition(chain.0 == 200 && chain.1["backends"] as? [String] == ["Codex", "Copilot"]
+                     && chain.1["backend"] as? String == "Codex" && settings.limitFallbackBackends == ["Codex", "Copilot"],
+                     "POST saves the chain in order: \(chain)")
+        // An older client sends one backend: it replaces the first backup and keeps the rest.
+        let set = try await call("POST", ["revision": chain.1["revision"] as? String ?? "", "backend": "Copilot"])
+        precondition(set.0 == 200 && set.1["backend"] as? String == "Copilot" && settings.limitFallbackBackends == ["Copilot"],
+                     "An older client's pick replaces the first backup and isn't listed twice: \(set)")
+        let two = try await call("POST", ["revision": set.1["revision"] as? String ?? "", "backends": ["Copilot", "Codex"]])
+        let antigravity = try await call("POST", ["revision": two.1["revision"] as? String ?? "", "backend": "Antigravity"])
+        precondition(antigravity.0 == 200 && settings.limitFallbackBackends == ["Antigravity", "Codex"],
+                     "An older client's pick replaces only the first backup: \(antigravity)")
+        let cleared = try await call("POST", ["revision": antigravity.1["revision"] as? String ?? "", "resetLimits": true])
         precondition(cleared.0 == 200 && (cleared.1["limited"] as? [Any])?.isEmpty == true
                      && BackendLimitTracker.shared.limitedUntil(.claudeCode) == nil,
                      "resetLimits lets every backend be tried again: \(cleared)")
         let off = try await call("POST", ["revision": cleared.1["revision"] as? String ?? "", "backend": ""])
-        precondition(off.0 == 200 && settings.limitFallbackBackend == "", "\"\" turns it off")
+        precondition(off.0 == 200 && settings.limitFallbackBackends.isEmpty, "\"\" turns every backup off")
         let ready = try await call()
-        precondition(ready.1["backend"] as? String == "", "Reads back the saved value")
+        precondition(ready.1["backend"] as? String == "" && (ready.1["backends"] as? [String])?.isEmpty == true,
+                     "Reads back the saved value")
     }
 }

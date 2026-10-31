@@ -2732,6 +2732,7 @@ private extension RemoteControlServer {
     #app{min-height:100vh}.workspace{position:sticky;top:0;z-index:4;background:var(--chrome);border-bottom:1px solid var(--line);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
     .prompt-row{display:flex;align-items:center;gap:10px;padding:14px 16px 2px}.prompt-row input{flex:1;min-width:0;height:28px;padding:0;border:0;outline:0;background:transparent;font-size:20px;font-weight:300;line-height:28px}.prompt-row input::placeholder{color:var(--tertiary)}
     .tools{display:flex;align-items:center;gap:8px;min-height:32px;padding:2px 14px 8px}.tools-spacer{flex:1;min-width:8px}.connection{display:flex;align-items:center;gap:5px;color:var(--tertiary);font-size:11px}.connection-dot{width:6px;height:6px;border-radius:50%;background:var(--tertiary)}[data-cantrip-connected=true] .connection-dot{background:var(--green)}
+    .fallback-list{display:grid;gap:4px;margin:6px 0;padding-left:22px}.fallback-list li{display:flex;align-items:center;gap:6px}.fallback-list li span{flex:1;min-width:0;overflow-wrap:anywhere}.fallback-list .control{min-width:32px;min-height:32px}
     .control{min-height:27px;padding:4px 9px;border:1px solid var(--line);border-radius:7px;background:var(--surface)}.control:hover{background:var(--surface-2)}.control.primary{border-color:var(--accent);background:var(--accent);color:white}.control:disabled{opacity:.45;cursor:default}.quiet{border:0;background:transparent;color:var(--secondary);font-size:12px}.quiet:hover{background:var(--surface)}
     .round{display:grid;place-items:center;flex:none;width:27px;height:27px;padding:0;border:0;border-radius:50%;background:var(--surface-2);font-size:17px;font-weight:600;line-height:1}.round:hover{filter:brightness(1.12)}.round.primary{background:var(--accent);color:white}.round.danger{color:var(--red);font-size:12px}
     #sessions{display:flex;gap:5px;min-width:0;overflow-x:auto;scrollbar-width:none}#sessions::-webkit-scrollbar{display:none}.session-tab{display:flex;align-items:center;flex:none;max-width:210px;border-radius:999px;color:var(--secondary)}.session-tab:hover{background:var(--surface);color:var(--text)}.session-tab.active{background:var(--surface-2);color:var(--text)}.session-select{min-width:0;max-width:180px;padding:4px 4px 4px 9px;border:0;background:transparent;color:inherit;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.session-close{display:grid;place-items:center;flex:none;width:22px;height:22px;padding:0 3px 1px 0;border:0;border-radius:50%;background:transparent;color:var(--tertiary);font-size:15px;line-height:1;opacity:.45}.session-tab:hover .session-close,.session-tab.active .session-close,.session-close:focus-visible{opacity:1}.session-close:hover{color:var(--red)}
@@ -2931,8 +2932,9 @@ private extension RemoteControlServer {
     <label>Context window<select id="modelContext"></select></label><span id="modelBudget" class="muted"></span>
     <p class="muted">Only this tab changes. Save while idle; the next prompt uses the new settings and continues the same conversation. Long context may cost more.</p>
     <div id="modelError" role="alert"></div>
-    <fieldset id="fallbackBox" class="hidden"><legend>Usage limit fallback (all tabs)</legend>
-    <label>When the Mac's backend hits its usage limit, continue on<select id="fallbackChoice"></select></label>
+    <fieldset id="fallbackBox" class="hidden"><legend>Usage limit fallbacks (all tabs)</legend>
+    <span class="muted">When a backend hits its usage limit, the task continues on the first backup here that isn't at its limit too.</span>
+    <ol id="fallbackList" class="fallback-list"></ol><label>Add a backup<select id="fallbackAdd"></select></label>
     <span id="fallbackStatus" class="muted"></span><button id="fallbackReset" type="button" class="control hidden">Try every backend again</button>
     <div id="fallbackError" role="alert"></div></fieldset><div class="tab-actions">
     <button id="modelReload" type="button" class="control">Reload settings</button><button id="modelRefresh" type="button" class="control">Refresh models</button>
@@ -3365,19 +3367,32 @@ private extension RemoteControlServer {
         state.data=data;if(replaceDraft){state.draft={...data.selection};state.usesDefaults=data.usesDefaults}state.error="";state.needsReload=false}
       catch(error){if(current()){state.error=`${error.message} Reload settings before saving.`;state.needsReload=true}}
       finally{if(current()){state.loading=false;renderModelSettings()}}}
-    // The Mac-wide fallback saves as soon as it changes, apart from this tab's Save.
-    let fallbackState=null;
+    // The Mac-wide fallbacks save as soon as they change, apart from this tab's Save.
+    let fallbackState=null,fallbackSaving=false,fallbackFocus=null;
     async function loadFallback(){try{fallbackState=await api("/api/v1/usage-fallback");$("fallbackError").textContent=""}catch{fallbackState=null}renderFallback()}
-    function renderFallback(){const data=fallbackState;$("fallbackBox").classList.toggle("hidden",!data);if(!data)return;const select=$("fallbackChoice");
-      select.replaceChildren(new Option("Off — stop and show the error",""),...data.choices.map(choice=>new Option(choice.label,choice.id)));select.value=data.choices.some(choice=>choice.id===data.backend)?data.backend:"";
+    function renderFallback(){const data=fallbackState;$("fallbackBox").classList.toggle("hidden",!data);if(!data)return;
+      const chain=data.backends||(data.backend?[data.backend]:[]),label=id=>data.choices.find(choice=>choice.id===id)?.label||id;
+      $("fallbackList").replaceChildren(...chain.map((id,index)=>{const row=document.createElement("li"),name=document.createElement("span");
+        name.textContent=id===data.primary?`${label(id)} (skipped: the Mac's backend)`:label(id);row.append(name);
+        const moved=offset=>{const next=[...chain];[next[index],next[index+offset]]=[next[index+offset],next[index]];return next},buttons={};
+        for(const [action,text,aria,disabled,next] of [["up","↑",`Try ${label(id)} earlier`,index===0,()=>moved(-1)],
+            ["down","↓",`Try ${label(id)} later`,index===chain.length-1,()=>moved(1)],["remove","Remove",`Remove ${label(id)}`,false,()=>chain.filter(other=>other!==id)]]){
+          const button=document.createElement("button");button.type="button";button.className="control";button.textContent=text;button.setAttribute("aria-label",aria);
+          button.disabled=fallbackSaving||disabled;button.onclick=()=>{fallbackFocus=action==="remove"?null:{id,action};saveFallback({backends:next()})};row.append(button);buttons[action]=button}
+        // Keep focus on the moved backend; at the end of the list, on its other arrow.
+        if(!fallbackSaving&&fallbackFocus?.id===id){const target=[buttons[fallbackFocus.action],buttons.up,buttons.down].find(button=>!button.disabled);fallbackFocus=null;if(target)setTimeout(()=>target.focus?.())}
+        return row}));
+      const add=$("fallbackAdd"),addable=data.choices.filter(choice=>!chain.includes(choice.id));
+      add.replaceChildren(new Option(chain.length?"Choose a backend…":"Off — choose a backend…",""),...addable.map(choice=>new Option(choice.label,choice.id)));add.value="";add.disabled=fallbackSaving||!addable.length;
       const limited=data.limited.map(entry=>`${entry.backend} until ${entry.untilLabel}`);
-      $("fallbackStatus").textContent=limited.length?`At its usage limit: ${limited.join(", ")}.`:"New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch.";
+      $("fallbackStatus").textContent=limited.length?`At its usage limit: ${limited.join(", ")}.`
+        :chain.length?"New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch.":"Off: a usage limit stops the run with the error.";
       $("fallbackReset").classList.toggle("hidden",!limited.length)}
-    async function saveFallback(body){if(!fallbackState)return;$("fallbackChoice").disabled=true;
+    async function saveFallback(body){if(!fallbackState||fallbackSaving)return;fallbackSaving=true;renderFallback();
       try{fallbackState=await api("/api/v1/usage-fallback",{method:"POST",body:JSON.stringify({...body,revision:fallbackState.revision})});$("fallbackError").textContent=""}
       catch(error){$("fallbackError").textContent=error.message;await loadFallback()}
-      finally{$("fallbackChoice").disabled=false;renderFallback()}}
-    $("fallbackChoice").onchange=()=>saveFallback({backend:$("fallbackChoice").value});
+      finally{fallbackSaving=false;renderFallback()}}
+    $("fallbackAdd").onchange=()=>{const id=$("fallbackAdd").value;if(id&&fallbackState)saveFallback({backends:[...(fallbackState.backends||[]),id]})};
     $("fallbackReset").onclick=()=>saveFallback({resetLimits:true});
     $("modelCancel").onclick=()=>{if(modelEditorState?.saving)return;$("modelEditor").close();modelEditorState=null};
     $("modelEditor").addEventListener("cancel",event=>{if(modelEditorState?.saving)event.preventDefault();else modelEditorState=null});

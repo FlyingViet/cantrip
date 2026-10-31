@@ -2091,7 +2091,7 @@ final class ChatSession: ObservableObject {
         // The chosen backend is still at its usage limit: start on the fallback instead of failing first.
         var limitNotice: String?
         if !isLocalPrivate, !isResume, let until = BackendLimitTracker.shared.limitedUntil(backendKind),
-           let fallback = BackendFallback.target(for: backendKind, configured: settings.limitFallbackBackend,
+           let fallback = BackendFallback.target(for: backendKind, chain: settings.limitFallbackBackends,
                                                  homeRun: isCantripHomeRun) {
             limitNotice = "\(backendKind.rawValue) is at its usage limit until \(BackendFallback.untilLabel(until))."
                 + " Using \(settings.backendLabel(fallback))."
@@ -3179,7 +3179,7 @@ final class ChatSession: ObservableObject {
         let fallback = usageLimitFallback(after: errorText)
         recordInterruption(errorText)
         appendRunMessage(ChatMessage(role: .error, text: fallback.map {
-            errorText + "\n\nContinuing this task with \(settings.backendLabel($0)) (Settings ▸ Usage limit fallback)."
+            errorText + "\n\nContinuing this task with \(settings.backendLabel($0)) (Settings ▸ Usage limit fallbacks)."
         } ?? errorText))
         if let fallback {
             Log.write("resume: \(runningBackendKind?.rawValue ?? "backend") hit its usage limit — continuing on \(fallback.rawValue)")
@@ -3270,10 +3270,6 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    /// The backend reported its plan's usage limit: remember that for every tab, and return the
-    /// backend this run continues on (Settings' usage limit fallback), or nil to fail as usual.
-    /// The backend's structured report decides; matching the error's wording is the last resort
-    /// for CLIs that don't send one.
     private func sourceModelName(for kind: BackendKind) -> String? {
         switch kind {
         case .claudeCode:
@@ -3290,6 +3286,10 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    /// The backend reported its plan's usage limit: remember that for every tab, and return the
+    /// backend this run continues on (the next one in Settings' usage limit fallbacks that isn't
+    /// at its limit too), or nil to fail as usual. The backend's structured report decides;
+    /// matching the error's wording is the last resort for CLIs that don't send one.
     private func usageLimitFallback(after errorText: String) -> BackendKind? {
         let report = reportedUsageLimit
         reportedUsageLimit = nil
@@ -3298,7 +3298,7 @@ final class ChatSession: ObservableObject {
         if report == nil { Log.write("usage-limit: \(limited.rawValue) matched by wording only: \(errorText.prefix(120))") }
         BackendLimitTracker.shared.markLimited(limited, message: errorText, report: report)
         guard currentRunPrompt != nil, currentRunMode == .single, !councilMode, journalError == nil else { return nil }
-        return BackendFallback.target(for: limited, configured: settings.limitFallbackBackend,
+        return BackendFallback.target(for: limited, chain: settings.limitFallbackBackends,
                                       homeRun: isCantripHomeRun)
     }
 
