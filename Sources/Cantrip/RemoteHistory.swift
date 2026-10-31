@@ -20,6 +20,7 @@ enum RemoteHistory {
                 ]
                 item["input"] = activity.input
                 item["output"] = activity.output
+                if BrowserPreview.isBrowserTool(activity.toolName) { item["browser"] = true }
                 return item
             },
         ]

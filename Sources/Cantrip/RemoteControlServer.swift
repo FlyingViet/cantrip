@@ -637,6 +637,8 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/mac-access"
                 || request.path.hasPrefix("/api/v1/desktop/")
                 || request.path == "/api/v1/copilot/usage"
+                || request.path == "/api/v1/browser"
+                || request.path == "/api/v1/browser/frame"
                 || request.path == "/api/v1/usage-fallback" else {
             sendError(404, "not found", on: connection)
             return
@@ -778,6 +780,34 @@ final class RemoteControlServer {
                 return
             }
             serveVoiceVocabulary(on: connection)
+            return
+        }
+        if request.path == "/api/v1/browser" || request.path == "/api/v1/browser/frame" {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            if request.path == "/api/v1/browser" {
+                let status = BrowserPreview.status()
+                sendEncoded(on: connection) { try JSONEncoder().encode(status) }
+                return
+            }
+            let width = request.query("width").flatMap(Int.init)
+            let pairingToken = token
+            Task {
+                do {
+                    let frame = try await BrowserPreviewCapture.shared.frame(width: width)
+                    guard self.token == pairingToken, !self.token.isEmpty else {
+                        sendError(401, "Pairing changed during capture.", on: connection)
+                        return
+                    }
+                    sendEncoded(on: connection) { try JSONEncoder().encode(frame) }
+                } catch let error as BrowserPreview.PreviewError {
+                    sendError(error.status, error.message, on: connection)
+                } catch {
+                    sendError(503, "The agent browser preview isn't available.", on: connection)
+                }
+            }
             return
         }
         if request.path == "/api/v1/copilot/usage" {
@@ -2708,6 +2738,12 @@ private extension RemoteControlServer {
     select{height:27px;max-width:90px;padding:0 5px;border:0;border-radius:6px;outline:0;background:transparent;color:var(--secondary);font-size:12px}select:hover,select:focus{background:var(--surface)}
     #messages{width:100%;min-height:calc(100vh - 88px);margin:0;padding:16px;display:flex;flex-direction:column;gap:12px}
     .message{width:100%;overflow-wrap:anywhere}.message.user{color:var(--secondary);font-size:13px;font-weight:600;line-height:1.4}.message.assistant{color:var(--text);line-height:1.5}.message.error{color:var(--orange);padding-left:21px;position:relative}.message.handoff{color:var(--text);line-height:1.45}.message.error:before{content:"!";position:absolute;left:3px;font-weight:800}.author{display:block;margin-bottom:5px;color:var(--tertiary);font-size:11px;font-weight:600}
+    .browser-card{margin:0;width:100%;max-width:520px;display:flex;flex-direction:column;gap:5px}.browser-card button{padding:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#111;cursor:zoom-in;position:relative;aspect-ratio:16/10;display:block;width:100%}
+    .browser-card img{display:block;width:100%;height:100%;object-fit:contain}.browser-card .browser-badge{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.65);color:#fff;font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px}
+    .browser-card .browser-badge.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff453a;margin-right:5px;vertical-align:1px}.browser-card figcaption{color:var(--tertiary);font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .browser-card .browser-empty{color:#bbb;font-size:12px;display:flex;align-items:center;justify-content:center;height:100%}
+    #browserViewer{width:min(96vw,1700px);max-width:none;height:94vh;max-height:none;padding:10px;display:none;flex-direction:column;gap:8px}#browserViewer[open]{display:flex}#browserViewerImage{flex:1;min-height:0;width:100%;object-fit:contain;background:#111;border-radius:8px}
+    #browserViewer .browser-top{display:flex;gap:8px;align-items:center}#browserViewerTitle{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
     .mcp-app{margin:0;width:100%;display:flex;flex-direction:column;gap:5px}.mcp-app figcaption{color:var(--tertiary);font-size:11px;font-weight:600}.mcp-app iframe{display:block;width:100%;border:0;border-radius:10px;background:transparent}.mcp-app-status{color:var(--secondary);font-size:12px}.mcp-app-link{align-self:flex-start;color:var(--accent);font-size:11px}
     .prose p{margin:0 0 8px}.prose p:last-child{margin-bottom:0}.prose h1,.prose h2,.prose h3{margin:12px 0 6px;line-height:1.25}.prose h1:first-child,.prose h2:first-child,.prose h3:first-child{margin-top:0}.prose h1{font-size:17px}.prose h2{font-size:15px}.prose h3{font-size:13.5px}.prose ul,.prose ol{margin:4px 0 8px;padding-left:22px}.prose li{margin:3px 0}.prose blockquote{margin:7px 0;padding-left:10px;border-left:3px solid rgba(107,140,255,.55);color:var(--secondary)}.prose a{color:var(--accent);text-decoration:none}.prose a:hover{text-decoration:underline}.prose code{padding:1px 4px;border-radius:4px;background:var(--surface-2);font:12px ui-monospace,SFMono-Regular,Menlo,monospace}.prose pre{margin:8px 0;padding:8px;border:0;border-radius:6px;background:var(--surface-2);overflow:auto}.prose pre code{padding:0;background:transparent;white-space:pre}.prose hr{margin:10px 0;border:0;border-top:1px solid var(--line)}.prose table{display:block;width:max-content;max-width:100%;margin:8px 0;border-collapse:collapse;border-radius:8px;background:var(--surface);overflow-x:auto;font-size:13px}.prose th,.prose td{padding:6px 10px;border:0;text-align:left;vertical-align:top}.prose th{font-weight:600;border-bottom:1px solid var(--line)}.prose img{display:block;max-width:min(100%,440px);max-height:280px;margin:8px 0;border-radius:8px;object-fit:contain}
     .mac-image{display:block;max-width:min(100%,600px);margin:8px 0;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden;color:var(--secondary);text-align:left;cursor:zoom-in}.mac-image:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.mac-image.failed{cursor:pointer}.preview-link{display:inline;margin:0;padding:0;border:0;border-radius:0;background:none;color:var(--accent);font:inherit;text-align:inherit;cursor:zoom-in}.preview-link:hover{text-decoration:underline}.preview-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -2902,6 +2938,8 @@ private extension RemoteControlServer {
     <button id="modelReload" type="button" class="control">Reload settings</button><button id="modelRefresh" type="button" class="control">Refresh models</button>
     <button id="modelCancel" type="button" class="control">Cancel</button><button id="modelSave" type="submit" class="control primary">Save</button>
     </div></form></dialog>
+    <dialog id="browserViewer" aria-labelledby="browserViewerTitle"><div class="browser-top"><span id="browserViewerTitle">Agent Chrome</span><button id="browserViewerClose" class="control">Close</button></div>
+    <img id="browserViewerImage" alt="Live view of the agent browser"><div id="browserViewerError" role="status"></div></dialog>
     <dialog id="desktopEditor" aria-labelledby="desktopTitle"><strong id="desktopTitle">Mac Permissions &amp; View Mac</strong>
     <p class="muted">Start viewing explicitly. The Mac must first allow paired clients in Cantrip settings. Screen frames and typed text stay out of chat, files and AI models. Protected dialogs may be unavailable. Phone Face ID does not authorize macOS dialogs.</p>
     <div id="desktopError" role="alert"></div><div class="tab-actions">
@@ -3563,6 +3601,7 @@ private extension RemoteControlServer {
       if(close){desktopState=null;$("desktopEditor").close()}
       if(lease&&token===state.token){try{await api("/api/v1/desktop/stop",{method:"POST",body:JSON.stringify({id:lease.id,token:lease.token})})}
         catch(error){$("actionError").textContent="View cleared; the Mac's session may remain until its 60-second idle timeout."}}}
+    $("browserViewerClose").onclick=()=>$("browserViewer").close();$("browserViewer").addEventListener("close",()=>{clearTimeout(browserViewerTimer);$("browserViewerImage").removeAttribute("src")});
     $("desktopStart").onclick=startDesktop;$("desktopEnd").onclick=()=>endDesktop(false);$("desktopDone").onclick=()=>endDesktop();$("desktopReload").onclick=loadDesktopStatus;
     $("desktopEditor").addEventListener("cancel",()=>endDesktop());$("desktopZoom").onchange=()=>{$("desktopImage").style.width=`${Number($("desktopZoom").value)*100}%`};
     $("desktopDisplay").onchange=()=>{if(desktopState)desktopState.frame=null;$("desktopImage").removeAttribute("src");$("desktopText").value=""};
@@ -3600,9 +3639,37 @@ private extension RemoteControlServer {
     // MCP App views (e.g. Mobbin galleries): each runs in a frame sandboxed to an
     // opaque origin (never allow-same-origin: this page holds the pairing token).
     const mcpMaxHeight=640,mcpApps=new Map(),mcpHeights=new Map(),mcpDark=matchMedia("(prefers-color-scheme: dark)"),mcpCoarse=matchMedia("(pointer: coarse)");
+    // Live view of the agent-controlled Chrome under replies that used its browser tools. One shared poll feeds
+    // every live card (only while the page is visible); tapping opens a larger, faster view. View only.
+    const browserCards=new Map();let browserTimer=null,browserViewerTimer=null;
+    function browserSlot(session,message){const slot=document.createElement("div");const last=[...session.messages].reverse().find(item=>(item.activities||[]).some(activity=>activity.browser));
+      slot.dataset.browserMessage=message.id;slot.dataset.browserLive=session.isStreaming&&last?.id===message.id?"1":"0";return slot}
+    function browserCard(messageID,live){let card=browserCards.get(messageID);
+      if(!card){const figure=document.createElement("figure");figure.className="browser-card";const button=document.createElement("button");button.type="button";
+        const img=document.createElement("img");img.alt="Agent browser";img.hidden=true;const empty=document.createElement("div");empty.className="browser-empty";empty.textContent="Loading the agent browser…";
+        const badge=document.createElement("span");badge.className="browser-badge";const caption=document.createElement("figcaption");button.append(img,empty,badge);figure.append(button,caption);
+        card={element:figure,img,empty,badge,caption,button,live:false,loaded:false};button.onclick=()=>openBrowserViewer();browserCards.set(messageID,card)}
+      card.live=live;card.badge.textContent=live?"Live":"Agent Chrome";card.badge.classList.toggle("live",live);
+      card.button.setAttribute("aria-label",live?"Agent browser, live. Open full screen":"Agent browser. Open full screen");
+      if(!browserTimer)browserTimer=setInterval(browserTick,900);return card.element}
+    function browserApply(card,frame,error){if(frame){card.img.src=`data:image/jpeg;base64,${frame.data}`;card.img.hidden=false;card.empty.hidden=true;card.caption.textContent=frame.title||frame.url||"";card.loaded=true}
+      else if(error&&!card.loaded){card.empty.textContent=error;card.empty.hidden=false}}
+    let browserBusy=false;
+    async function browserTick(){for(const [key,card] of browserCards)if(!card.element.isConnected)browserCards.delete(key);
+      if(!browserCards.size){clearInterval(browserTimer);browserTimer=null;return}if(document.hidden||browserBusy||$("browserViewer").open)return;
+      const visible=[...browserCards.values()].filter(card=>{const box=card.element.getBoundingClientRect();return box.bottom>0&&box.top<innerHeight});
+      const want=visible.filter(card=>card.live||!card.loaded);if(!want.length)return;browserBusy=true;
+      try{const frame=await api(`/api/v1/browser/frame?width=${Math.min(960,Math.round(560*(devicePixelRatio||1)))}`);for(const card of want)browserApply(card,frame)}
+      catch(error){for(const card of want)browserApply(card,null,error.message||"The agent browser isn't available.")}finally{browserBusy=false}}
+    function openBrowserViewer(){const viewer=$("browserViewer");if(!viewer.open)viewer.showModal();$("browserViewerError").textContent="";browserViewerTick()}
+    async function browserViewerTick(){clearTimeout(browserViewerTimer);const viewer=$("browserViewer");if(!viewer.open||document.hidden)return;
+      try{const frame=await api(`/api/v1/browser/frame?width=${Math.min(1920,Math.round(innerWidth*(devicePixelRatio||1)))}`);$("browserViewerImage").src=`data:image/jpeg;base64,${frame.data}`;
+        $("browserViewerTitle").textContent=`${frame.active?"● Live · ":""}${frame.title||"Agent Chrome"} — ${frame.url}`;$("browserViewerError").textContent=""}
+      catch(error){$("browserViewerError").textContent=error.message||"The agent browser isn't available."}
+      browserViewerTimer=setTimeout(browserViewerTick,350)}
     function mcpAppSlot(sessionID,app){const slot=document.createElement("div");slot.dataset.mcpSession=sessionID;slot.dataset.mcpApp=JSON.stringify(app);return slot}
     function mcpReconcile(live,staged){
-      const nodes=[...staged.childNodes].map(node=>node.dataset?.mcpApp?mcpAppElement(node.dataset.mcpSession,JSON.parse(node.dataset.mcpApp)):node),keep=new Set(nodes);
+      const nodes=[...staged.childNodes].map(node=>node.dataset?.mcpApp?mcpAppElement(node.dataset.mcpSession,JSON.parse(node.dataset.mcpApp)):node.dataset?.browserMessage?browserCard(node.dataset.browserMessage,node.dataset.browserLive==="1"):node),keep=new Set(nodes);
       for(const child of [...live.childNodes])if(!keep.has(child))child.remove();
       let cursor=live.firstChild;for(const node of nodes){if(node===cursor){cursor=cursor.nextSibling;continue}live.insertBefore(node,cursor)}
       for(const [key,state] of mcpApps)if(!state.element.isConnected){state.stopped=true;mcpApps.delete(key)}}
@@ -3967,7 +4034,7 @@ private extension RemoteControlServer {
             const requestToken=token;button.disabled=true;try{const data=await api(`/api/v1/sessions/${session.id}/messages/${message.id}`);if(token!==requestToken||selected!==session.id)return;
               const full=data.message,parts=[full.text];if(full.thinking)parts.push("Reasoning\\n"+full.thinking);for(const step of full.activities||[])parts.push([step.title,step.input,step.output].filter(Boolean).join("\\n"));readPrompt(parts.join("\\n\\n"));$("promptTitle").textContent="Message details"}
             catch(error){if(token===requestToken)$("historyError").textContent=`Could not load message details: ${error.message}`}finally{button.disabled=false}};row.append(button)}
-          if(line==="start"&&link){const rest=document.createElement("div");rest.className="thread-rest";while(link.nextSibling)rest.append(link.nextSibling);row.append(rest)}box.append(row)}
+          if(line==="start"&&link){const rest=document.createElement("div");rest.className="thread-rest";while(link.nextSibling)rest.append(link.nextSibling);row.append(rest)}box.append(row);if((message.activities||[]).some(activity=>activity.browser))box.append(browserSlot(session,message))}
         appendChatInputs(box,session);
         const queue=queueList(session);if(queue)box.append(queue);
         if(session.deliveryStatus){const note=document.createElement("div");note.className="run-status";note.textContent=session.deliveryStatus;box.append(note)}

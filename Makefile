@@ -16,7 +16,7 @@ all: app
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep
+test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-browser-preview
 
 test-architectures:
 	@bash Tests/ArchitectureTests/run.sh
@@ -60,6 +60,11 @@ test-remote-routing:
 	@BIN="/tmp/cantrip-remote-routing-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc Sources/Cantrip/HTTPRequest.swift Sources/Cantrip/HTTPCompression.swift Sources/Cantrip/RemoteLANProtocol.swift Sources/Cantrip/RemoteRouteClient.swift Sources/Cantrip/RemoteLANClient.swift Tests/RemoteRoutingTests/main.swift -o "$$BIN" && "$$BIN"
+
+test-browser-preview:
+	@BIN="/tmp/cantrip-browser-preview-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/BrowserPreview.swift Tests/BrowserPreviewTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-remote-images:
 	@BIN="/tmp/cantrip-remote-image-tests-$$$$"; \
