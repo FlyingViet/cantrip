@@ -175,6 +175,7 @@ struct SessionTabTests {
         try await testRunContinuity()
         try await testUsageLimitFallback()
         try await testStopPausesTheQueue()
+        try await testMCPSharing()
         try await testRunWatchdog()
         try await testRemoteTerminal()
         try await testMCPAppTranscripts()

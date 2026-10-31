@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""A stdio MCP server that relays to Cantrip, which holds the real server's sign-in.
+
+Backends run `cantrip-mcp NAME [--backend KIND]` as a local MCP server. Each message goes to the
+running Cantrip host over its user-only socket, and the host talks to the real server, adding
+credentials from the Keychain. No token ever reaches this process or the backend's config.
+Usage: cantrip-mcp NAME [--backend KIND] [--tab ID]   (the tab also comes from CANTRIP_TAB_ID)
+"""
+import json
+import os
+import socket
+import sys
+import threading
+
+
+def socket_path():
+    override = os.environ.get("CANTRIP_MCP_SOCKET")
+    if override:
+        return override
+    preferred = os.path.join(os.path.expanduser("~"), ".cache", "Cantrip", "mcp-relay.sock")
+    return preferred if len(preferred.encode()) < 104 else "/tmp/cantrip-%d/mcp-relay.sock" % os.getuid()
+
+
+def option(args, name):
+    if name in args:
+        index = args.index(name)
+        if index + 1 < len(args):
+            return args[index + 1]
+    return None
+
+
+def answer_unavailable(reason):
+    """Without Cantrip, answer every request with a visible error instead of hanging."""
+    out = sys.stdout.buffer
+    for line in sys.stdin.buffer:
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(message, dict) and "id" in message:
+            reply = {"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32001, "message": reason}}
+            out.write(json.dumps(reply).encode() + b"\n")
+            out.flush()
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0].startswith("-"):
+        sys.stderr.write(__doc__)
+        return 2
+    name = args[0]
+    hello = {"server": name, "backend": option(args, "--backend") or "",
+             "tab": option(args, "--tab") or os.environ.get("CANTRIP_TAB_ID", "")}
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        connection.connect(socket_path())
+    except OSError:
+        reason = "Cantrip isn't running, so the MCP server %s (relayed through Cantrip) is unavailable." % name
+        sys.stderr.write(reason + "\n")
+        answer_unavailable(reason)
+        return 1
+    connection.sendall(json.dumps(hello).encode() + b"\n")
+
+    def to_stdout():
+        out = sys.stdout.buffer
+        while True:
+            data = connection.recv(65536)
+            if not data:
+                break
+            out.write(data)
+            out.flush()
+        os._exit(0)
+
+    threading.Thread(target=to_stdout, daemon=True).start()
+    for line in sys.stdin.buffer:
+        connection.sendall(line if line.endswith(b"\n") else line + b"\n")
+    try:
+        connection.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+    threading.Event().wait(5)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
