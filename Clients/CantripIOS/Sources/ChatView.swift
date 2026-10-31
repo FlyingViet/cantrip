@@ -1414,8 +1414,8 @@ struct ChatView: View {
         } persistentRail: {
             duoAppRail
         }
-        // Inside a tab, the same left-edge swipe that opens the drawer in Home drags the tab away to Home
-        // (on the iPhone Duo it opens the tab picker instead).
+        // Inside a tab, the same swipe right (from anywhere) that opens the drawer in Home drags the tab
+        // away to Home (on the iPhone Duo it opens the tab picker instead).
         .cantripTabBackSwipe(
             backTransition,
             isEnabled: vm.activeLane == .cantrip && !vm.sending && !importingImages && !submittingRemote
@@ -1423,6 +1423,8 @@ struct ChatView: View {
             isHomeReady: isHomeLoadedAfterReturn,
             pop: returnHome
         )
+        // Maps and sideways scrollers keep their own sideways drags.
+        .collectsCantripSwipeExemptions()
         .onChange(of: duoSidebarOverlays) { _, _ in duoOverlaySidebarOpen = false }
         .onChange(of: showRemoteTabs) { _, showing in
             if showing {

@@ -265,6 +265,7 @@ struct CantripMentionChips: View {
                     }
                 }
             }
+            .cantripSwipeExempt()
             .scrollBounceBehavior(.basedOnSize)
             .accessibilityIdentifier("chat.mentionChips")
         }

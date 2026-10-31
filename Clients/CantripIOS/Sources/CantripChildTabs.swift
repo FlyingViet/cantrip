@@ -283,6 +283,7 @@ struct CantripChildTabCard: View {
                         .textSelection(.enabled)
                         .padding(8)
                 }
+                .cantripSwipeExempt()
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
                 .accessibilityLabel("Conflicting lines")
                 .accessibilityValue(excerpt)

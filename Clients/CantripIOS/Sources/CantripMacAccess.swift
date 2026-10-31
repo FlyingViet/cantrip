@@ -282,6 +282,7 @@ struct CantripMacAccessView: View {
                     }
                 }
             }
+            .cantripSwipeExempt()
             HStack {
                 Button("Scroll up") { scroll(3) }
                 Button("Scroll down") { scroll(-3) }

@@ -291,6 +291,7 @@ struct CantripPlaceCardView: View {
                 .annotationTitles(.hidden)
             }
         }
+        .cantripSwipeExempt()
         .mapStyle(.standard(elevation: .flat, emphasis: .muted))
         .environment(\.colorScheme, .dark)
         .onMapCameraChange { context in

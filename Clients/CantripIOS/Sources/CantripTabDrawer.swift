@@ -1,15 +1,16 @@
 import SwiftUI
 
 enum CantripDrawerGesture {
+    /// A swipe right that starts anywhere (`start` in global coordinates) opens the drawer, unless
+    /// it starts on content with its own sideways drag.
+    @MainActor
     static func shouldOpen(start: CGPoint, translation: CGSize) -> Bool {
-        (0...24).contains(start.x)
-            && translation.width >= 50
-            && translation.width > abs(translation.height) * 1.5
+        translation.width >= 50 && CantripSwipeZones.isSideways(translation) && !CantripSwipeZones.isExempt(start)
     }
 
+    /// A swipe left anywhere over the drawer or its backdrop puts it away.
     static func shouldClose(translation: CGSize) -> Bool {
-        translation.width <= -50
-            && -translation.width > abs(translation.height) * 1.5
+        translation.width <= -50 && CantripSwipeZones.isSideways(translation)
     }
 
     static func panelWidth(available: CGFloat) -> CGFloat {
@@ -18,6 +19,12 @@ enum CantripDrawerGesture {
 }
 
 extension View {
+    /// A swipe left anywhere over this view calls `dismiss`. Once a drag turns sideways the view's
+    /// controls are disabled until it ends, so a swipe across a row never also counts as a tap on it.
+    func cantripSwipeAwayGesture(_ dismiss: @escaping () -> Void) -> some View {
+        modifier(CantripSwipeAway(dismiss: dismiss))
+    }
+
     func cantripTabDrawer<Panel: View>(
         isPresented: Binding<Bool>,
         isEnabled: Bool,
@@ -26,6 +33,32 @@ extension View {
         modifier(CantripTabDrawer(
             isPresented: isPresented, isEnabled: isEnabled, panel: panel
         ))
+    }
+}
+
+private struct CantripSwipeAway: ViewModifier {
+    let dismiss: () -> Void
+    @State private var swiping = false
+
+    func body(content: Content) -> some View {
+        content
+            .disabled(swiping)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 20)
+                    .onChanged { value in
+                        if !swiping, value.translation.width < 0, CantripSwipeZones.isSideways(value.translation) {
+                            swiping = true
+                        }
+                    }
+                    .onEnded { value in
+                        if CantripDrawerGesture.shouldClose(translation: value.translation) { dismiss() }
+                        // The row under the finger sees the same lift; stay disabled past it.
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(250))
+                            swiping = false
+                        }
+                    }
+            )
     }
 }
 
@@ -41,9 +74,9 @@ private struct CantripTabDrawer<Panel: View>: ViewModifier {
             // The dimmed backdrop takes taps over the chat; the iPhone Duo's vertical bar stays
             // above it, so its Tabs button can put the drawer away again.
             .accessibilityHidden(isPresented)
-            // Observe alongside transcript scrolling; only a horizontal edge swipe opens tabs.
+            // Observe alongside transcript scrolling; a sideways swipe right from anywhere opens tabs.
             .simultaneousGesture(
-                DragGesture(minimumDistance: 20)
+                DragGesture(minimumDistance: 20, coordinateSpace: .global)
                     .onEnded { value in
                         if isEnabled, !isPresented,
                            CantripDrawerGesture.shouldOpen(
@@ -81,6 +114,8 @@ private struct CantripTabDrawer<Panel: View>: ViewModifier {
                                 .accessibilityAddTraits(.isModal)
                                 .accessibilityAction(.escape) { isPresented = false }
                                 .accessibilityIdentifier("cantrip-tab-drawer")
+                                // A swipe left anywhere over the drawer, its tab list included, puts it away.
+                                .cantripSwipeAwayGesture { isPresented = false }
                                 .transition(reduceMotion ? .opacity : .offset(x: -geometry.size.width))
                         }
                     }

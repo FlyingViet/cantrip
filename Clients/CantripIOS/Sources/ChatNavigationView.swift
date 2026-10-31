@@ -113,6 +113,8 @@ struct ChatNavigationView<Sidebar: View, Content: View, PersistentSidebar: View,
                     persistentSidebar()
                     Divider().ignoresSafeArea()
                 }
+                // A swipe left anywhere over the sidebar puts it away, as over the dimmed chat.
+                .cantripSwipeAwayGesture(dismissPersistentSidebar)
                 .accessibilityAddTraits(.isModal)
                 .accessibilityAction(.escape, dismissPersistentSidebar)
                 .transition(reduceMotion ? .opacity : .move(edge: .leading))

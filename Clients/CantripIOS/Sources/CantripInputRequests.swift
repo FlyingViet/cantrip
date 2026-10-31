@@ -241,6 +241,7 @@ struct CantripInputImageRow: View {
                 }
             }
         }
+        .cantripSwipeExempt()
         .scrollIndicators(.hidden)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .accessibilityElement(children: .contain)

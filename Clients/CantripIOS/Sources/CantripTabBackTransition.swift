@@ -9,11 +9,11 @@ enum CantripBackSwipe {
     static let parallaxFraction: CGFloat = 0.3
     static let buttonDuration: TimeInterval = 0.32
 
-    /// A drag that starts at the leading edge and moves mostly sideways becomes a back swipe.
+    /// A drag to the right that starts anywhere (`start` in global coordinates) and moves mostly
+    /// sideways becomes a back swipe, unless it starts on content with its own sideways drag.
+    @MainActor
     static func begins(start: CGPoint, translation: CGSize) -> Bool {
-        (0...edgeWidth).contains(start.x)
-            && translation.width > 0
-            && translation.width > abs(translation.height) * 1.5
+        translation.width > 0 && CantripSwipeZones.isSideways(translation) && !CantripSwipeZones.isExempt(start)
     }
 
     /// Released past about a third of the width, or flicked hard enough to carry past halfway.
@@ -338,7 +338,7 @@ private struct CantripTabBackSwipe: ViewModifier {
     }
 
     private var drag: some Gesture {
-        DragGesture(minimumDistance: 12)
+        DragGesture(minimumDistance: 12, coordinateSpace: .global)
             .updating($isDragging) { _, dragging, _ in dragging = true }
             .onChanged { value in
                 guard !rejected else { return }

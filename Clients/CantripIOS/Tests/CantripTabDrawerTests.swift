@@ -5,26 +5,28 @@ import XCTest
 
 @MainActor
 final class CantripTabDrawerTests: XCTestCase {
-    func testOpeningRequiresDeliberateRightSwipeFromLeftEdge() {
-        for x: CGFloat in [0, 12, 24] {
+    func testASidewaysRightSwipeFromAnywhereOpensTheDrawer() {
+        CantripSwipeZones.exemptFrames = []
+        for x: CGFloat in [0, 24, 160, 350] {
             XCTAssertTrue(CantripDrawerGesture.shouldOpen(
                 start: CGPoint(x: x, y: 300), translation: CGSize(width: 80, height: 10)
-            ))
-        }
-        for x: CGFloat in [-1, 25, 160, 350] {
-            XCTAssertFalse(CantripDrawerGesture.shouldOpen(
-                start: CGPoint(x: x, y: 300), translation: CGSize(width: 150, height: 0)
-            ))
+            ), "A swipe right opens it wherever it starts (x \(x))")
         }
         for translation in [
             CGSize(width: 20, height: 0),
             CGSize(width: -100, height: 0),
             CGSize(width: 60, height: 120),
             CGSize(width: 60, height: -120),
-            CGSize(width: 60, height: 60)
+            CGSize(width: 60, height: 40)
         ] {
-            XCTAssertFalse(CantripDrawerGesture.shouldOpen(start: .zero, translation: translation))
+            XCTAssertFalse(CantripDrawerGesture.shouldOpen(start: .zero, translation: translation),
+                           "Short, leftward or not mostly sideways: \(translation)")
         }
+        // A map or sideways scroller keeps swipes that start on it.
+        CantripSwipeZones.exemptFrames = [CGRect(x: 0, y: 200, width: 390, height: 180)]
+        defer { CantripSwipeZones.exemptFrames = [] }
+        XCTAssertFalse(CantripDrawerGesture.shouldOpen(start: CGPoint(x: 120, y: 250), translation: CGSize(width: 120, height: 0)))
+        XCTAssertTrue(CantripDrawerGesture.shouldOpen(start: CGPoint(x: 120, y: 500), translation: CGSize(width: 120, height: 0)))
     }
 
     func testClosingRequiresLeftSwipeNotVerticalTabScrolling() {

@@ -1360,6 +1360,7 @@ struct CantripMascotCustomizationView: View {
             }
             .padding(.horizontal)
         }
+        .cantripSwipeExempt()
         .accessibilityIdentifier("mascot.moods")
     }
 
