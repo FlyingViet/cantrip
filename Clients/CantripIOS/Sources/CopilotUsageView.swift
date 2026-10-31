@@ -1,17 +1,20 @@
 import SwiftUI
 
 /// `GET /api/v1/copilot/usage`: Copilot's allowance at the top level, Claude Code's limits under
-/// `claude` (Macs with Cantrip 1.1.4+), and the Mac's active backend.
+/// `claude` (Macs with Cantrip 1.1.4+), Antigravity's under `antigravity`, and the Mac's active backend.
 struct CopilotUsageSnapshot: Decodable {
     let account: CopilotAccountUsage?
     let checkedAt: String?
     let isRefreshing: Bool
     let error: String?
     var claude: ClaudeUsageState? = nil
+    var antigravity: AntigravityUsageState? = nil
     var activeBackend: String? = nil
 
     /// The Mac runs Claude Code and has its limits: lead with them.
     var leadsWithClaude: Bool { activeBackend == "Claude Code" && claude?.account != nil }
+    /// The Mac runs Antigravity and has its limits: lead with them.
+    var leadsWithAntigravity: Bool { activeBackend == "Antigravity" && antigravity?.account != nil }
 
     func isStale(at now: Date = Date()) -> Bool {
         guard account != nil, error == nil, let checked = copilotDate(checkedAt),
@@ -74,6 +77,61 @@ struct ClaudeLimitWindow: Decodable, Equatable, Identifiable {
 
     var isExhausted: Bool { lockedReason != nil || percentUsed >= 100 }
     var percentText: String { String(format: "%.0f%%", min(100, max(0, percentUsed))) }
+}
+
+struct AntigravityUsageState: Decodable, Equatable {
+    let account: AntigravityAccountUsage?
+    let checkedAt: String?
+    let error: String?
+
+    /// Older than ten minutes, or a window has reset since it was read.
+    func isStale(at now: Date = Date()) -> Bool {
+        guard account != nil, let checked = copilotDate(checkedAt), now.timeIntervalSince(checked) < 600 else {
+            return true
+        }
+        return account?.groups.contains { $0.buckets.contains { copilotDate($0.resetsAt).map { now >= $0 } ?? false } } ?? true
+    }
+}
+
+/// Antigravity's limits per model group (Gemini, Claude and GPT, Gemini 4 Argon).
+struct AntigravityAccountUsage: Decodable, Equatable {
+    let groups: [AntigravityLimitGroup]
+
+    /// The window closest to its limit.
+    var primary: (group: AntigravityLimitGroup, bucket: AntigravityLimitBucket)? {
+        groups.flatMap { group in group.buckets.map { (group: group, bucket: $0) } }
+            .min { $0.bucket.remainingPercent < $1.bucket.remainingPercent }
+    }
+}
+
+struct AntigravityLimitGroup: Decodable, Equatable, Identifiable {
+    var id: String { name }
+    let name: String
+    let models: String?
+    let buckets: [AntigravityLimitBucket]
+}
+
+struct AntigravityLimitBucket: Decodable, Equatable, Identifiable {
+    let id: String
+    let name: String
+    let window: String?
+    let remainingPercent: Double
+    let resetsAt: String?
+
+    var percentUsed: Double { min(100, max(0, 100 - remainingPercent)) }
+    var isExhausted: Bool { remainingPercent <= 0 }
+    var percentText: String { String(format: "%.0f%%", percentUsed) }
+
+    var title: String {
+        switch window {
+        case "weekly": return "Weekly limit"
+        case "5h", "five_hour": return "5-hour limit"
+        default: return name
+        }
+    }
+
+    /// For the header button: "5h" or "Week".
+    var shortTitle: String { window == "weekly" ? "Week" : window == "5h" ? "5h" : "Limit" }
 }
 
 struct CopilotAccountUsage: Decodable {
@@ -201,6 +259,11 @@ final class CopilotUsageModel: ObservableObject {
     }
 
     func headerText(at date: Date, locale: Locale = .current) -> String {
+        if let snapshot, snapshot.leadsWithAntigravity, let state = snapshot.antigravity,
+           let primary = state.account?.primary {
+            guard error == nil, !state.isStale(at: date) else { return "Stale" }
+            return "\(primary.bucket.shortTitle) \(primary.bucket.percentText)"
+        }
         if let snapshot, snapshot.leadsWithClaude, let state = snapshot.claude,
            let window = state.account?.primary {
             guard error == nil, !state.isStale(at: date) else { return "Stale" }
@@ -216,6 +279,12 @@ final class CopilotUsageModel: ObservableObject {
     }
 
     func accessibilityValue(at date: Date) -> String {
+        if let snapshot, snapshot.leadsWithAntigravity, let state = snapshot.antigravity,
+           let primary = state.account?.primary {
+            let stale = error != nil || state.isStale(at: date)
+            return (stale ? "Stale. Last known: " : "")
+                + "Antigravity \(primary.group.name) \(primary.bucket.title.lowercased()) \(primary.bucket.percentText) used"
+        }
         if let snapshot, snapshot.leadsWithClaude, let state = snapshot.claude,
            let window = state.account?.primary {
             let stale = error != nil || state.isStale(at: date)
@@ -248,7 +317,7 @@ struct CopilotUsageButton: View {
             }
             .accessibilityLabel("Usage limits")
             .accessibilityValue(model.accessibilityValue(at: context.date))
-            .accessibilityHint("Shows Claude Code's limits and the Copilot allowance")
+            .accessibilityHint("Shows Claude Code's and Antigravity's limits and the Copilot allowance")
             .accessibilityIdentifier("copilot-usage-button")
         }
         .sheet(isPresented: $isPresented) {
@@ -344,6 +413,9 @@ struct CopilotUsageView: View {
                     }
                     if let claude = model.snapshot?.claude {
                         ClaudeUsageSection(state: claude, now: context.date)
+                    }
+                    if let antigravity = model.snapshot?.antigravity {
+                        AntigravityUsageSection(state: antigravity, now: context.date)
                     }
                     if let account = model.snapshot?.account {
                         Section("Copilot account") {
@@ -469,6 +541,65 @@ struct ClaudeUsageSection: View {
     private func tint(_ window: ClaudeLimitWindow) -> Color {
         if window.isExhausted || window.severity == "critical" { return .red }
         if window.severity == "warning" || window.percentUsed >= 80 { return .orange }
+        return .accentColor
+    }
+}
+
+/// Antigravity's weekly and 5-hour limits per model group, as the Mac reads them from `agy`.
+struct AntigravityUsageSection: View {
+    let state: AntigravityUsageState
+    let now: Date
+
+    var body: some View {
+        if let error = state.error, state.account == nil {
+            Section("Antigravity") {
+                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+            }
+        }
+        if let account = state.account {
+            ForEach(account.groups) { group in
+                Section {
+                    if group.id == account.groups.first?.id {
+                        if let error = state.error {
+                            Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                        }
+                        if state.isStale(at: now) {
+                            Label("Last known limits - data is stale", systemImage: "clock.badge.exclamationmark")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    ForEach(group.buckets) { bucket in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(bucket.title)
+                                Spacer()
+                                Text("\(bucket.percentText) used").monospacedDigit().foregroundStyle(tint(bucket))
+                            }
+                            ProgressView(value: bucket.percentUsed, total: 100)
+                                .tint(tint(bucket))
+                            if let reset = copilotDate(bucket.resetsAt) {
+                                Text("Resets \(reset.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("usage.antigravity.\(bucket.id)")
+                    }
+                    if group.id == account.groups.last?.id, let checked = copilotDate(state.checkedAt) {
+                        LabeledContent("Checked", value: checked.formatted(date: .abbreviated, time: .shortened))
+                    }
+                } header: {
+                    Text("Antigravity · \(group.name)")
+                } footer: {
+                    if let models = group.models { Text(models) }
+                }
+            }
+        }
+    }
+
+    private func tint(_ bucket: AntigravityLimitBucket) -> Color {
+        if bucket.isExhausted { return .red }
+        if bucket.percentUsed >= 80 { return .orange }
         return .accentColor
     }
 }
