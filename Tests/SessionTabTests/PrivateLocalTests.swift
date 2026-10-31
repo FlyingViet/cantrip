@@ -143,7 +143,7 @@ extension SessionTabTests {
         configuration.baseURL = try await fixture.start()
         configuration.model = "fixture:latest"
         defer { fixture.stop() }
-        for address in ["http://llm.example", "http://192.168.0.94:11434", "http://127.0.0.1.evil",
+        for address in ["http://llm.example", "http://192.168.0.10:11434", "http://127.0.0.1.evil",
                         "http://127.0.0.1@cloud.example", "https://user:password@llm.example",
                         "http://127.0.0.1?url=cloud", "https://llm.example/../other",
                         "https://llm.example/ollama/%2e%2e/other", "https://",

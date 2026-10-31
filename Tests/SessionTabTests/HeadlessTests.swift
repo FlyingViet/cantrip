@@ -48,7 +48,7 @@ extension SessionTabTests {
         }
         precondition(versions.contains(1) && versions.contains(where: { $0 >= 20 }), "Covered versions \(versions.sorted())")
         let link = CantripCLI.pairingLink(name: "mac-mini", token: String(repeating: "Ab3_-", count: 9).prefix(43).description,
-                                          url: "https://mac-mini.example-tailnet.ts.net", direct: "192.168.0.94:8766")
+                                          url: "https://mac-mini.example-tailnet.ts.net", direct: "192.168.0.10:8766")
         let pairing = try QRCode(text: link, correction: .low, maxVersion: 20)
         precondition(decode(pairing) == link)
         let lines = pairing.terminalLines(quietZone: 2, ansi: false)
