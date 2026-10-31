@@ -4321,6 +4321,8 @@ struct SettingsView: View {
             Divider().opacity(0.3)
             StorageUpkeepView()
             Divider().opacity(0.3)
+            MCPServersView()
+            Divider().opacity(0.3)
             CantripVersionView(busySessions: busySessions, onUpdate: onUpdate)
         }
         .padding(16)

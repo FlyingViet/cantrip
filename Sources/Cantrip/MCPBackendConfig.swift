@@ -20,6 +20,12 @@ enum MCPBackendConfig {
         return Set(defaults.stringArray(forKey: tabDisabledKey(tab)) ?? [])
     }
 
+    /// A Copilot run's disabled servers: the run's own (a scheduled task's) plus the tab's switches.
+    static func disabledForRun(_ run: [String]?, tab: UUID?) -> [String]? {
+        let all = Set(run ?? []).union(tabDisabled(tab))
+        return all.isEmpty ? nil : all.sorted()
+    }
+
     /// The servers a backend gets, minus `excluded` (a tab's switches or a scheduled task's limits).
     static func included(_ snapshot: MCPRegistry.Snapshot, backend: BackendKind, excluded: Set<String> = []) -> [MCPServer] {
         snapshot.servers.filter { $0.isEnabled(for: backend.rawValue) && !excluded.contains($0.name) }

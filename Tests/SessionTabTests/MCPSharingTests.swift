@@ -7,6 +7,7 @@ extension SessionTabTests {
         testMCPBackendConfigs()
         try await testMCPOAuth()
         try await testMCPRelay()
+        try testMCPMigration()
         print("MCP sharing: import, backend configs, OAuth with single-flight refresh, and the relay passed")
     }
 
@@ -324,5 +325,70 @@ extension SessionTabTests {
         precondition(((offline.first?["error"] as? [String: Any])?["message"] as? String)?.contains("Cantrip isn't running") == true,
                      "Without the host, the relay answers with a visible error")
         _ = problems
+    }
+
+    /// Runs in the suite's temporary home: real config paths, a fake `claude` and an in-memory keychain.
+    static func testMCPMigration() throws {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        try fm.createDirectory(at: home.appendingPathComponent(".copilot"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: home.appendingPathComponent(".gemini/config"), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: mcpCopilotFixture).write(to: MCPMigration.copilotConfig)
+        try JSONSerialization.data(withJSONObject: ["numStartups": 3, "mcpServers": (mcpClaudeFixture["mcpServers"] as! [String: Any])])
+            .write(to: MCPMigration.claudeConfig)
+        try JSONSerialization.data(withJSONObject: ["mcpServers": ["agy-own": ["command": "own"]]]).write(to: MCPBackendConfig.antigravityFile)
+        let log = home.appendingPathComponent("claude-calls.txt")
+        let fakeClaude = home.appendingPathComponent("fake-claude.sh")
+        try "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '\(log.path)'\n".write(to: fakeClaude, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeClaude.path)
+        defer {
+            // Later tests share this home.
+            for url in [MCPMigration.copilotConfig, MCPMigration.claudeConfig, MCPBackendConfig.antigravityFile,
+                        MCPRegistry.file, MCPMigration.managedFile, log, fakeClaude, CantripPaths.cache("mcp")] {
+                try? fm.removeItem(at: url)
+            }
+            for name in (try? fm.contentsOfDirectory(atPath: home.appendingPathComponent(".copilot").path)) ?? []
+            where name.contains("pre-cantrip") {
+                try? fm.removeItem(at: home.appendingPathComponent(".copilot/\(name)"))
+            }
+        }
+        let secrets = MCPSecrets.Store.memory()
+        let originalCopilot = try Data(contentsOf: MCPMigration.copilotConfig)
+
+        let preview = try MCPMigration.run(dryRun: true, secrets: secrets, claudePath: fakeClaude.path)
+        let afterPreview = try Data(contentsOf: MCPMigration.copilotConfig)
+        precondition(preview.dryRun && MCPRegistry.load() == nil && afterPreview == originalCopilot, "A preview changes nothing")
+        let report = try MCPMigration.run(dryRun: false, secrets: secrets, claudePath: fakeClaude.path)
+        precondition(report.servers == ["errors", "flows", "mobbin", "notes", "vault"] && report.secretsMoved == 2)
+        precondition(MCPRegistry.load()?.importedAt != nil, "The list is saved")
+        let moved = try secrets.string(MCPSecrets.headerAccount("flows", "Authorization"))
+        precondition(moved == "Bearer secret-flows")
+
+        let copilot = String(decoding: try Data(contentsOf: MCPMigration.copilotConfig), as: UTF8.self)
+        precondition(!copilot.contains("secret-") && copilot.contains("cantrip-mcp") && copilot.contains("\"flows\""),
+                     "Copilot gets every server, relayed ones as the relay, with no credentials")
+        let backups = try fm.contentsOfDirectory(atPath: home.appendingPathComponent(".copilot").path).filter { $0.contains("pre-cantrip") }
+        precondition(backups.count == 1, "Copilot's original is backed up")
+        let claudeBackup = try fm.contentsOfDirectory(atPath: CantripPaths.cache("mcp").path).filter { $0.hasPrefix("claude-mcpServers.pre-cantrip") }
+        let redacted = try String(contentsOf: CantripPaths.cache("mcp/\(claudeBackup.first ?? "")"), encoding: .utf8)
+        precondition(!redacted.contains("secret-") && redacted.contains("cantrip mcp restore"), "File backups are redacted")
+        let antigravity = String(decoding: try Data(contentsOf: MCPBackendConfig.antigravityFile), as: UTF8.self)
+        precondition(antigravity.contains("agy-own") && antigravity.contains("mobbin") && !antigravity.contains("secret-"),
+                     "Antigravity keeps its own servers and gets Cantrip's")
+        let calls = try String(contentsOf: log, encoding: .utf8)
+        precondition(calls.contains("mcp add-json -s user flows") && calls.contains("cantrip-mcp") && !calls.contains("secret-"),
+                     "Claude Code's own servers become relay entries through its CLI")
+
+        // A second run (configs now hold relay entries) keeps the list as it is.
+        let again = try MCPMigration.run(dryRun: false, secrets: secrets, claudePath: fakeClaude.path)
+        precondition(again.servers == report.servers && MCPRegistry.load()?.servers.first { $0.name == "vault" }?.tools == ["status", "get"],
+                     "Re-running doesn't lose a server's settings")
+
+        let restored = try MCPMigration.restore(secrets: secrets, claudePath: fakeClaude.path)
+        let restoredCopilot = try Data(contentsOf: MCPMigration.copilotConfig)
+        precondition(restored.count == 2 && restoredCopilot == originalCopilot, "Restore puts Copilot's original back")
+        let finalCalls = try String(contentsOf: log, encoding: .utf8)
+        precondition(finalCalls.contains("secret-flows"), "and Claude Code's, credentials included")
+        precondition(MCPRegistry.load()?.importedAt == nil, "Restoring stops sharing")
     }
 }

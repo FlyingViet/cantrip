@@ -10,6 +10,8 @@ final class CodexBackend: Backend {
     private var process: Process?
     /// The tab this backend serves: its shell commands see `CANTRIP_TAB_ID` (`cantrip tab ask`).
     var tabID: UUID?
+    /// Shared MCP servers this run doesn't get (a scheduled task's limits).
+    var excludedMcpServers: Set<String> = []
     private var askpass: RemoteAskpass?
     /// Per-instance model override (council members run models different
     /// from the session's setting). Nil = use the configured model.
@@ -77,6 +79,9 @@ final class CodexBackend: Backend {
         // MCP servers from enabled+approved plugins, as TOML config
         // overrides (codex has no --mcp-config flag; see Plugins.swift).
         codexArgs += PluginManager.codexMCPOverrides()
+        if let snapshot = MCPRegistry.load(), snapshot.importedAt != nil {
+            codexArgs += MCPBackendConfig.codexArgs(snapshot, excluded: excludedMcpServers.union(MCPBackendConfig.tabDisabled(tabID)))
+        }
         codexArgs.append(prompt)
 
         Log.write("launching \(command) via login shell, workdir=\(workdir)")

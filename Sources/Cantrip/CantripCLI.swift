@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "tab", "tabs", "sim", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "tab", "tabs", "sim", "mcp", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 
@@ -18,6 +18,7 @@ enum CantripCLI {
             case "cleanup": return cleanup(Array(arguments.dropFirst()))
             case "tab", "tabs": return try tab(Array(arguments.dropFirst()))
             case "sim": return try sim(Array(arguments.dropFirst()))
+            case "mcp": return try mcp(Array(arguments.dropFirst()))
             default: print(usage)
             }
             return 0
@@ -63,6 +64,15 @@ enum CantripCLI {
                                   copy is deleted
       cantrip sim list [--json]   The pool's simulators, leases and temporary copies
       cantrip sim adopt UDID      Make an existing simulator the pool's for its device type and iOS version
+      cantrip mcp                 MCP servers Cantrip shares with every backend, and their sign-ins
+      cantrip mcp migrate [--apply]
+                                  Import Copilot's and Claude Code's MCP servers into Cantrip (credentials to the
+                                  keychain) and write every backend's config from it; without --apply, a preview
+      cantrip mcp connect NAME    Sign in to a remote server (opens in the agent Chrome; approve in Cantrip)
+      cantrip mcp approve|decline NAME
+                                  Answer a sign-in page waiting for your OK
+      cantrip mcp enable|disable NAME [--backend B | --tab ID]
+      cantrip mcp signout NAME | restore
       cantrip tab list            Open tabs with their IDs and child tabs (private tabs are never shown)
       cantrip tab read ID         A tab's recent turns, read-only (ID or its first 8 characters)
           --turns N | --all       How many turns (default 3)
@@ -236,6 +246,49 @@ enum CantripCLI {
             print("Add --list to name each one.")
         }
         return report.errors.isEmpty && report.simulators?.errors.isEmpty != false ? 0 : 1
+    }
+
+    // MARK: - mcp
+
+    static func mcp(_ arguments: [String]) throws -> Int32 {
+        var words: [String] = [], backend: String?, tab: String?, apply = false
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--backend":
+                index += 1
+                guard index < arguments.count else { throw Failure(message: "--backend needs a name.", code: 2) }
+                backend = arguments[index]
+            case "--tab":
+                index += 1
+                guard index < arguments.count else { throw Failure(message: "--tab needs a tab ID.", code: 2) }
+                tab = arguments[index]
+            case "--apply": apply = true
+            case "--dry-run": apply = false
+            default: words.append(arguments[index])
+            }
+            index += 1
+        }
+        let action = words.first ?? "list"
+        if action == "serve" {
+            // The relay without the app, in this terminal (debugging, or a Mac where Cantrip isn't running).
+            let relay = MCPRelay(environment: MCPRelay.Environment(
+                server: { name in MCPRegistry.load()?.servers.first { $0.name == name && $0.enabled } }))
+            relay.start()
+            FileHandle.standardError.write(Data("Relaying MCP servers from \(MCPRegistry.file.path) at \(relay.path). Ctrl-C stops.\n".utf8))
+            dispatchMain()
+        }
+        guard ["list", "migrate", "restore", "connect", "approve", "decline", "signout", "enable", "disable"].contains(action) else {
+            throw Failure(message: "Usage: cantrip mcp [list | migrate [--apply] | connect NAME | approve NAME | decline NAME | enable|disable NAME [--backend B | --tab ID] | signout NAME | restore]", code: 2)
+        }
+        var payload: [String: Any] = ["command": "mcp", "action": action, "dryRun": !apply]
+        if words.count > 1 { payload["name"] = words[1] }
+        payload["backend"] = backend
+        payload["tab"] = tab
+        let reply = try request(payload, timeout: 120)
+        if let error = reply["error"] as? String { throw Failure(message: error) }
+        print(reply["text"] as? String ?? "")
+        return 0
     }
 
     // MARK: - sim

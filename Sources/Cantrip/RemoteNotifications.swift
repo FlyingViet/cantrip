@@ -11,7 +11,7 @@ struct RemoteCompletion: Codable, Equatable {
     var expiresAt: Date? = nil
     /// A hidden Cantrip Home background run asked; the app answers it in Home, not as a tab.
     var homeRun: Bool? = nil
-    var isAttention: Bool { kind == "input" || kind == "macAttention" }
+    var isAttention: Bool { kind == "input" || kind == "macAttention" || kind == "mcpSignIn" }
     /// Only updates the app icon's badge: no alert, sound or banner.
     var isBadgeUpdate: Bool { kind == "badge" }
 
@@ -486,7 +486,9 @@ actor RemoteNotifications {
         request.setValue(String(Int((completion.expiresAt ?? completion.completedAt.addingTimeInterval(3600)).timeIntervalSince1970)),
                          forHTTPHeaderField: "apns-expiration")
         let input = completion.isAttention
-        let alert = input ? ["title": completion.kind == "macAttention" ? "Cantrip Mac needs attention"
+        let alert = completion.kind == "mcpSignIn"
+            ? ["title": "An MCP sign-in needs your OK", "body": "Open Cantrip Agent to approve it in MCP Servers."]
+            : input ? ["title": completion.kind == "macAttention" ? "Cantrip Mac needs attention"
                                 : completion.homeRun == true ? "Cantrip Home needs your input" : "Cantrip needs your input",
                              "body": completion.homeRun == true
                                 ? "A background run is waiting. Open Cantrip Agent to answer it in Home."

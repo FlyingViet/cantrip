@@ -220,7 +220,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             allowSubagents: settings.copilotAllowSubagents && excludedTools?.contains("task") != true,
             mcpApps: settings.copilotMCPApps,
             guardrail: guardrail?.rawValue,
-            disabledMcpServers: disabledMcpServers,
+            disabledMcpServers: MCPBackendConfig.disabledForRun(disabledMcpServers, tab: tabID),
             excludedTools: excludedTools,
             toolDeferThreshold: toolDeferThreshold,
             homeProtocol: homeProtocol

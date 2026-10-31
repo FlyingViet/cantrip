@@ -144,13 +144,49 @@ says so.
 
 For most users, prefer a trusted plugin that declares its MCP server.
 Cantrip injects plugin MCP configuration into Claude Code and Codex and can
-connect local models through its own MCP client. Copilot's tools must be
-registered in the Copilot CLI's own configuration instead.
+connect local models through its own MCP client.
 
-For a Copilot MCP server that uses OAuth, sign in once from Terminal with
-`copilot`, then `/mcp auth <server>`. Cantrip's Copilot sessions reuse the
-token that the CLI saved in the macOS Keychain. Tools appear in the next
-Copilot session Cantrip starts.
+### Share MCP servers with every backend
+
+Cantrip can keep one list of MCP servers for Copilot, Claude Code, Codex and
+Antigravity, and sign in to remote servers itself, so a server you connect
+once works whichever backend a tab uses (including after a usage-limit
+fallback). Turn it on in **Settings > MCP Servers > Share with Every Backend**,
+or from Terminal:
+
+```sh
+cantrip mcp migrate            # preview
+cantrip mcp migrate --apply    # do it
+cantrip mcp                    # the servers and their sign-ins
+cantrip mcp connect mobbin     # sign in to a remote server
+```
+
+- The servers in `~/.copilot/mcp-config.json` and Claude Code's user config
+  are imported. Header and environment values that are credentials move to
+  the macOS Keychain, so no config file holds them. The originals stay
+  restorable with `cantrip mcp restore` (the backups on disk are redacted).
+- From then on Cantrip writes each backend's config from the list:
+  Copilot's `mcp-config.json`, a per-tab `--mcp-config` file for Claude Code,
+  `-c mcp_servers…` overrides for Codex and Antigravity's
+  `~/.gemini/config/mcp_config.json`. Change servers in Settings, not in those
+  files.
+- A server that needs a sign-in, a credential or a tool limit reaches the
+  backend through `Scripts/cantrip-mcp`, a small relay to the running
+  Cantrip. Cantrip adds the credential, keeps only the allowed tools, and
+  answers with a clear error when the server is off for that tab or backend,
+  signed out, or the keychain is locked. Plain local servers keep their own
+  command.
+- **Connect** opens the server's sign-in page in the agent Chrome (the Mac's
+  default browser if it isn't running). When the page asks to grant access,
+  Settings > MCP Servers, the browser Remote, Cantrip Agent and Cantrip
+  Gateway show it with **Approve** and **Decline**, and you get an alert;
+  Cantrip presses the page's own button only after you approve. If the site
+  wants you to log in first, finish that in the agent Chrome (Remote shows
+  it). Cantrip refreshes sign-ins before they expire and alerts you when one
+  needs connecting again.
+- Each server can be switched off entirely, per backend or per tab (the tab
+  menu's **MCP Servers**). Scheduled Home tasks still get only the servers in
+  `cantripHomeTaskMCPServers`, on every backend.
 
 ### Start a large MCP server only when it's used
 

@@ -179,11 +179,22 @@ final class MCPServerHub: ObservableObject {
         try MCPRegistry.save(copy)
         snapshot = copy
         revision = UUID()
+        do { try MCPMigration.sync(copy) } catch { Log.write("mcp: couldn't update backend configs: \(error.localizedDescription)") }
+    }
+
+    /// A tab's own switch for one server.
+    func setTab(_ tab: UUID, server name: String, enabled: Bool) {
+        let key = MCPBackendConfig.tabDisabledKey(tab)
+        var off = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        if enabled { off.remove(name) } else { off.insert(name) }
+        UserDefaults.standard.set(off.isEmpty ? nil : off.sorted(), forKey: key)
+        revision = UUID()
     }
 
     private func set(_ name: String, _ state: State) {
         states[name] = state
         revision = UUID()
+        if ![.awaitingApproval, .needsLogin, .needsSignIn, .locked].contains(state.phase) { MCPHost.shared.resolveAlert(name) }
     }
 
     /// Reads each OAuth server's sign-in from the Keychain.
