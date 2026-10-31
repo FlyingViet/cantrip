@@ -421,6 +421,13 @@ enum CantripCLI {
     private static func display(_ value: Any) -> String {
         if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue ? "true" : "false" }
         if let list = value as? [Any] { return list.isEmpty ? "off" : list.map { "\($0)" }.joined(separator: ", ") }
+        if let map = value as? [String: Any] {
+            // limitFallbackModels: "Claude Code = claude-opus-5-5 · high".
+            return map.isEmpty ? "none" : map.keys.sorted().map { key in
+                let fields = (map[key] as? [String: Any]).map { [$0["model"], $0["effort"]].compactMap { $0 as? String }.filter { !$0.isEmpty } } ?? []
+                return "\(key) = \(fields.isEmpty ? "default" : fields.joined(separator: " · "))"
+            }.joined(separator: "; ")
+        }
         return "\(value)"
     }
 

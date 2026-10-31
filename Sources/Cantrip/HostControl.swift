@@ -36,6 +36,7 @@ final class HostControl {
                 guard !values.isEmpty else { return ["error": "Nothing to set."] }
                 let current = settings.dotfileValues
                 var typed: [String: Any] = [:]
+                var fallbackEntries: [[String: Any]]?
                 for (rawKey, value) in values {
                     // The single-backend name from before the chain still works.
                     let key = rawKey == "limitFallbackBackend" ? "limitFallbackBackends" : rawKey
@@ -51,22 +52,45 @@ final class HostControl {
                     }
                     if key == "limitFallbackBackends" {
                         // "codex, copilot" or ["codex", "copilot"]: tried in that order; off clears it.
+                        // "claude:claude-opus-5-5:high" also sets that backup's model and effort
+                        // (either may be empty); a bare name keeps the one saved for it.
                         let names = (value as? [String]) ?? ((value as? String) ?? "").split(separator: ",").map(String.init)
                         let trimmed = names.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
                         if trimmed.isEmpty || (trimmed.count == 1 && ["off", "none"].contains(trimmed[0].lowercased())) {
                             typed[key] = [String](); continue
                         }
-                        let kinds = trimmed.map(Self.backend(named:))
+                        let parts = trimmed.map { $0.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init) }
+                        let kinds = parts.map { Self.backend(named: $0[0]) }
                         guard !kinds.contains(where: { $0 == nil }) else {
-                            return ["error": "limitFallbackBackends must be off or a comma-separated list of: copilot, claude, codex, antigravity, local, copilot-remote."]
+                            return ["error": "limitFallbackBackends must be off or a comma-separated list of: copilot, claude, codex, antigravity, local, copilot-remote (each optionally :model:effort)."]
                         }
                         typed[key] = AppSettings.fallbackChain(kinds.compactMap { $0?.rawValue })
+                        let pinned = zip(parts, kinds).filter { $0.0.count > 1 }
+                        if !pinned.isEmpty {
+                            fallbackEntries = pinned.map { part, kind in
+                                ["backend": kind!.rawValue, "model": part[1], "effort": part.count > 2 ? part[2] : ""]
+                            }
+                        }
                         continue
                     }
                     guard let converted = Self.convert(value, like: existing) else {
                         return ["error": "\(key) expects \(Self.typeName(existing))."]
                     }
                     typed[key] = converted
+                }
+                if let fallbackEntries {
+                    // Checked against each backend's real models before anything is saved.
+                    do {
+                        let entries = try UsageFallbackRemote.validatedEntries(fallbackEntries, settings: settings)
+                        var models = settings.limitFallbackModels
+                        for entry in entries {
+                            models[entry.backend] = entry.model.isEmpty && entry.effort.isEmpty
+                                ? nil : SessionModelSelection(model: entry.model, effort: entry.effort, contextTier: "")
+                        }
+                        settings.limitFallbackModels = models
+                    } catch {
+                        return ["error": "limitFallbackBackends: \(error.localizedDescription)"]
+                    }
                 }
                 let applied = Set(settings.applySettings(typed))
                 if let rejected = typed.keys.sorted().first(where: { !applied.contains($0) }) {
