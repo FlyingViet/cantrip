@@ -7,7 +7,7 @@ import type {
   CopilotQuotaBucket, CopilotUsageSnapshot, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
-  ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackSnapshot,
+  ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackRequest, UsageFallbackSnapshot,
   AntigravityLimitBucket, AntigravityUsageState, ClaudeLimitWindow, ClaudeUsageState,
 } from "../../api/types";
 
@@ -792,16 +792,48 @@ export function normalizedPoint(clientX: number, clientY: number, rect: { left: 
   return { x: clamp((clientX - rect.left) / rect.width), y: clamp((clientY - rect.top) / rect.height) };
 }
 
-/** The fallback picker's value: "" when off or set to a backend that is now the Mac's own. */
-export function usageFallbackSelection(value: UsageFallbackSnapshot): string {
-  return value.choices.some((choice) => choice.id === value.backend) ? value.backend : "";
+/** The backup chain in the order tried (CantripUsageFallback.chain); older Macs send only `backend`. */
+export function usageFallbackChain(value: UsageFallbackSnapshot): string[] {
+  return value.backends ?? (value.backend ? [value.backend] : []);
 }
 
-/** The status line under the fallback picker (CantripUsageFallback.status). */
+/** Backends that could still be added; a Mac from before the chain takes only one. */
+export function usageFallbackAddable(value: UsageFallbackSnapshot): { id: string; label: string }[] {
+  const chain = usageFallbackChain(value);
+  if (!value.backends && chain.length) return [];
+  return value.choices.filter((choice) => !chain.includes(choice.id));
+}
+
+/** A backup's name; the Mac's own backend is skipped while it's the primary. */
+export function usageFallbackLabel(value: UsageFallbackSnapshot, id: string): string {
+  const name = value.choices.find((choice) => choice.id === id)?.label ?? id;
+  return id === value.primary ? `${name} (skipped: the Mac's backend)` : name;
+}
+
+/** The chain moved one step: `offset` -1 tries `index` earlier, 1 later. */
+export function usageFallbackMoved(chain: string[], index: number, offset: -1 | 1): string[] {
+  const next = [...chain];
+  const target = index + offset;
+  if (target < 0 || target >= next.length) return next;
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
+/** The request that sets `chain`; a Mac from before the chain only takes its first entry. */
+export function usageFallbackChange(value: UsageFallbackSnapshot, chain: string[]): UsageFallbackRequest {
+  return value.backends
+    ? { revision: value.revision, backends: chain }
+    : { revision: value.revision, backend: chain[0] ?? "" };
+}
+
+/** The status line under the backups (CantripUsageFallback.status). */
 export function usageFallbackStatus(value: UsageFallbackSnapshot): string {
-  return value.limited.length
-    ? `At its usage limit: ${value.limited.map((entry) => `${entry.backend} until ${entry.untilLabel}`).join(", ")}.`
-    : "New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch.";
+  if (value.limited.length) {
+    return `At its usage limit: ${value.limited.map((entry) => `${entry.backend} until ${entry.untilLabel}`).join(", ")}.`;
+  }
+  return usageFallbackChain(value).length
+    ? "New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch."
+    : "Off: a usage limit stops the run with the error.";
 }
 
 /** ClaudeLimitWindow.title. */

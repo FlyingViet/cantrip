@@ -491,23 +491,45 @@ describe("text helpers", () => {
 });
 
 describe("usage limit fallback", () => {
-  const snapshot = (backend: string, limited = false) => ({
-    backend, primary: "Claude Code", revision: "f1",
-    choices: [{ id: "Copilot", label: "Copilot" }, { id: "Codex", label: "Codex" }],
+  const snapshot = (backend: string, limited = false, backends?: string[]) => ({
+    backend, ...(backends ? { backends } : {}), primary: "Claude Code", revision: "f1",
+    choices: [{ id: "Copilot", label: "Copilot" }, { id: "Codex", label: "Codex" }, { id: "Antigravity", label: "Antigravity" }],
     limited: limited ? [{ backend: "Claude Code", until: "2026-10-28T12:00:00Z", untilLabel: "5:00 AM" }] : [],
   });
 
-  it("shows the saved fallback, or Off when it is the Mac's own backend", async () => {
-    const { usageFallbackSelection } = await import("../src/gateway/ui/sheets/sheetLogic");
-    expect(usageFallbackSelection(snapshot("Copilot"))).toBe("Copilot");
-    expect(usageFallbackSelection(snapshot(""))).toBe("");
-    expect(usageFallbackSelection(snapshot("Claude Code"))).toBe("");
+  it("reads the whole chain, or an older Mac's single backup", async () => {
+    const { usageFallbackChain, usageFallbackAddable } = await import("../src/gateway/ui/sheets/sheetLogic");
+    expect(usageFallbackChain(snapshot("Copilot", false, ["Copilot", "Codex"]))).toEqual(["Copilot", "Codex"]);
+    expect(usageFallbackChain(snapshot("Copilot"))).toEqual(["Copilot"]);
+    expect(usageFallbackChain(snapshot(""))).toEqual([]);
+    expect(usageFallbackAddable(snapshot("Copilot", false, ["Copilot", "Codex"])).map((choice) => choice.id)).toEqual(["Antigravity"]);
+    expect(usageFallbackAddable(snapshot("Copilot")), "an older Mac takes no second backup").toEqual([]);
+    expect(usageFallbackAddable(snapshot("")).map((choice) => choice.id)).toEqual(["Copilot", "Codex", "Antigravity"]);
+  });
+
+  it("adds, reorders and removes through the whole chain, or `backend` for older Macs", async () => {
+    const { usageFallbackChange, usageFallbackMoved } = await import("../src/gateway/ui/sheets/sheetLogic");
+    const chain = ["Copilot", "Codex", "Antigravity"];
+    expect(usageFallbackMoved(chain, 1, -1)).toEqual(["Codex", "Copilot", "Antigravity"]);
+    expect(usageFallbackMoved(chain, 1, 1)).toEqual(["Copilot", "Antigravity", "Codex"]);
+    expect(usageFallbackMoved(chain, 0, -1)).toEqual(chain);
+    expect(usageFallbackChange(snapshot("Copilot", false, ["Copilot"]), ["Copilot", "Codex"]))
+      .toEqual({ revision: "f1", backends: ["Copilot", "Codex"] });
+    expect(usageFallbackChange(snapshot("Copilot"), ["Codex"])).toEqual({ revision: "f1", backend: "Codex" });
+    expect(usageFallbackChange(snapshot("Copilot"), [])).toEqual({ revision: "f1", backend: "" });
+  });
+
+  it("marks the Mac's own backend as skipped", async () => {
+    const { usageFallbackLabel } = await import("../src/gateway/ui/sheets/sheetLogic");
+    expect(usageFallbackLabel(snapshot(""), "Codex")).toBe("Codex");
+    expect(usageFallbackLabel(snapshot(""), "Claude Code")).toBe("Claude Code (skipped: the Mac's backend)");
   });
 
   it("names backends at their limit and when they reset", async () => {
     const { usageFallbackStatus } = await import("../src/gateway/ui/sheets/sheetLogic");
     expect(usageFallbackStatus(snapshot("Copilot", true))).toBe("At its usage limit: Claude Code until 5:00 AM.");
     expect(usageFallbackStatus(snapshot("Copilot"))).toContain("every tab");
+    expect(usageFallbackStatus(snapshot(""))).toBe("Off: a usage limit stops the run with the error.");
   });
 });
 

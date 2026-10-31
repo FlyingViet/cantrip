@@ -16,7 +16,8 @@ import { Loading, StatusLabel, Warning, findSession, sleep, useAlive } from "./c
 import {
   DEFAULT_PRIVATE_CONFIGURATION, MODEL_REFRESH_POLLS, capitalized, contextLabel, errorText, isUnsupported, modelInfo,
   modelSettingsChange, modelValidationError, parseContextTokens, pickerChoices, privateModelChoices, selectModel, tokenLabel,
-  usageFallbackSelection, usageFallbackStatus, writeFailure,
+  usageFallbackAddable, usageFallbackChain, usageFallbackChange, usageFallbackLabel, usageFallbackMoved,
+  usageFallbackStatus, writeFailure,
 } from "./sheetLogic";
 
 export function ModelSettingsSheet(props: { sessionID: string; onClose: () => void }): JSX.Element | null {
@@ -215,7 +216,8 @@ function ModelSettings(props: { session: RemoteSessionSummary; onClose: () => vo
 
 // MARK: Usage limit fallback
 
-/** Mac-wide (CantripUsageFallbackSection), so it saves on change, apart from the tab's Save. Hidden on older Macs. */
+/** Mac-wide (CantripUsageFallbackSection): the backup chain, in order. Each change saves right away, apart
+ * from the tab's Save. Hidden on older Macs. */
 function UsageFallbackSection(): JSX.Element | null {
   const fallback = useSignal<UsageFallbackSnapshot | null>(null);
   const saving = useSignal(false);
@@ -250,19 +252,38 @@ function UsageFallbackSection(): JSX.Element | null {
 
   const value = fallback.value;
   if (!value) return null;
-  const selected = usageFallbackSelection(value);
+  const chain = usageFallbackChain(value);
+  const addable = usageFallbackAddable(value);
   return (
-    <FormSection header="Usage limit fallback (all tabs)"
-      footer={`When the Mac's backend says its plan's usage limit is reached. ${usageFallbackStatus(value)}`}>
-      <FormRow label={<label for={pickerID}>Continue on</label>}>
-        <select id={pickerID} class="select" value={selected} disabled={saving.value}
-          onChange={(event) => void save({ revision: value.revision, backend: event.currentTarget.value })}>
-          <option value="" selected={selected === ""}>Off - stop and show the error</option>
-          {value.choices.map((choice) => (
-            <option key={choice.id} value={choice.id} selected={choice.id === selected}>{choice.label}</option>
-          ))}
-        </select>
-      </FormRow>
+    <FormSection header="Usage limit fallbacks (all tabs)"
+      footer={`When a backend hits its usage limit, the task continues on the first backup here that isn't at its limit too. ${usageFallbackStatus(value)}`}>
+      {chain.map((id, index) => {
+        const name = usageFallbackLabel(value, id);
+        return (
+          <FormRow key={id} label={<span>{index + 1}. {name}</span>}>
+            <span class="sh-buttons">
+              <button type="button" class="btn" aria-label={`Try ${name} earlier`} disabled={saving.value || index === 0}
+                onClick={() => void save(usageFallbackChange(value, usageFallbackMoved(chain, index, -1)))}>↑</button>
+              <button type="button" class="btn" aria-label={`Try ${name} later`} disabled={saving.value || index === chain.length - 1}
+                onClick={() => void save(usageFallbackChange(value, usageFallbackMoved(chain, index, 1)))}>↓</button>
+              <button type="button" class="btn" aria-label={`Remove ${name}`} disabled={saving.value}
+                onClick={() => void save(usageFallbackChange(value, chain.filter((other) => other !== id)))}>Remove</button>
+            </span>
+          </FormRow>
+        );
+      })}
+      {addable.length ? (
+        <FormRow label={<label for={pickerID}>Add a backup</label>}>
+          <select id={pickerID} class="select" value="" disabled={saving.value}
+            onChange={(event) => {
+              const id = event.currentTarget.value;
+              if (id) void save(usageFallbackChange(value, [...chain, id]));
+            }}>
+            <option value="" selected>{chain.length ? "Choose a backend…" : "Off — choose a backend…"}</option>
+            {addable.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+          </select>
+        </FormRow>
+      ) : null}
       {value.limited.length ? (
         <FormRow><button type="button" class="btn" disabled={saving.value}
           onClick={() => void save({ revision: value.revision, resetLimits: true })}>Try every backend again</button></FormRow>

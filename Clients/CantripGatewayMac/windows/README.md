@@ -47,7 +47,7 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 - **Tasks and Artifacts.** Scheduled tasks with runs, workspaces and their records;
   artifacts with thumbnails, the image viewer, Save and Delete.
 - **Sheets.** Background runs (answer a waiting run in place), a tab's background tasks and
-  queue (each message's suggested plan, **Run in child tab**, Send now, Remove), Model Settings (with the Mac-wide usage limit fallback; and Private Local), Rename, Usage Limits (Claude Code and Copilot), Cantrip Memory (formatted
+  queue (each message's suggested plan, **Run in child tab**, Send now, Remove), Model Settings (with the Mac-wide usage limit fallbacks: add, reorder and remove backups; and Private Local), Rename, Usage Limits (Claude Code, Antigravity and Copilot), Cantrip Memory (formatted
   Markdown or its source), GitHub Builds, Update & Rebuild Cantrip, and Mac Permissions & View Mac.
 - **Voice.** Dictation from the composer's microphone and Voice Mode (hold the microphone),
   with speech recognition running on this PC after a one-time model download, and replies
