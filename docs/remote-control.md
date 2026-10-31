@@ -847,27 +847,36 @@ Mac, not other hosts or the iPhone app.
 
 Tap the **usage gauge beside the Local/Remote lane picker (antenna)** in
 Cantrip Agent's top header. It leads with the limit your Mac's backend uses:
-on Claude Code, the Claude window closest to its limit (for example
-`Week 32%`); on Copilot, **AI credits used / total**. **Usage Limits** shows
-both: Claude Code's 5-hour session and weekly limits (and per-model weekly
-limits when the plan has them) with reset times, then the Copilot allowance
-with its reset time, additional usage and account. It is available from every
+on Claude Code or Antigravity, that backend's window closest to its limit (for
+example `Week 32%`); on Copilot, **AI credits used / total**. **Usage Limits**
+shows them all: Claude Code's 5-hour session and weekly limits (and per-model
+weekly limits when the plan has them), Antigravity's weekly and 5-hour limits
+for each model group (Gemini, Claude and GPT, Gemini 4 Argon), each with its
+reset time, then the Copilot allowance with its reset time, additional usage
+and account. It is available from every
 chat lane; it does not switch sessions or change which backend receives your
 messages. Cantrip Gateway (Mac and Windows) has the same sheet.
 
 The Mac reads the limits the way the providers' own tools do, in well under a
 second: Claude's usage API with Claude Code's sign-in from the login keychain
 (read only, never refreshed, so Claude Code's own sign-in is untouched), and
-GitHub's Copilot allowance endpoint with the `gh` sign-in. When `gh` isn't
+GitHub's Copilot allowance endpoint with the `gh` sign-in, and Antigravity's
+own `agy -p /usage` (answered by the CLI without a model call, so checking
+spends no quota). When `gh` isn't
 signed in, it falls back to the Copilot SDK reader (Node.js and a recent
 Copilot CLI). It refreshes every five minutes on its own, and a Claude window
-at 100% sends new messages to the usage limit fallback right away.
+at 100%, or a used-up Antigravity window in the group the Mac's Antigravity
+model runs on (Gemini for Auto), sends new messages to the usage limit fallback
+right away.
 
 Pairing-authenticated, read-only `GET /api/v1/copilot/usage` returns a cached
 snapshot immediately and starts a background lookup at most once a minute:
 Copilot's allowance at the top level, Claude Code's limits under `claude`
 (`account.windows[]`: `id`, `percentUsed`, `resetsAt`, `severity`,
-`lockedReason`; `checkedAt`, `error`), and `activeBackend`. Mac and mobile
+`lockedReason`; `checkedAt`, `error`), Antigravity's under `antigravity`
+(`account.groups[]`: `name`, `models`, `buckets[]` with `id`, `name`,
+`window`, `remainingPercent`, `resetsAt`; `checkedAt`, `error`), and
+`activeBackend`. Mac and mobile
 share that cache. Only these fields leave the Mac, never tokens or
 authentication payloads. The phone polls while foregrounded; pull-to-refresh
 does not bypass the host throttle. Re-pairing clears the phone's old snapshot.

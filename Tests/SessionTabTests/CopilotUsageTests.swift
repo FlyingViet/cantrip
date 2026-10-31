@@ -84,7 +84,7 @@ extension SessionTabTests {
         var claudeCompletion: ((Result<ClaudeAccountUsage, Error>) -> Void)?
         var copilotCompletion: ((Result<CopilotAccountUsage, Error>) -> Void)?
         let tracker = UsageTracker(quotaLoader: { copilotCompletion = $0 }, claudeLoader: { claudeCompletion = $0 },
-                                   quotaClock: { now })
+                                   antigravityLoader: { nil }, quotaClock: { now })
         BackendLimitTracker.shared.clear()
         defer { BackendLimitTracker.shared.clear() }
         tracker.refreshQuotas()
@@ -174,7 +174,7 @@ extension SessionTabTests {
         let tracker = UsageTracker(quotaLoader: {
             calls += 1
             completion = $0
-        }, claudeLoader: nil, quotaClock: { now })
+        }, claudeLoader: nil, antigravityLoader: { nil }, quotaClock: { now })
         tracker.refreshQuotas()
         tracker.refreshQuotas()
         precondition(calls == 1 && tracker.copilotUsage.isRefreshing)

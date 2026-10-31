@@ -127,3 +127,53 @@ struct ClaudeUsageView: View {
         return .primary
     }
 }
+
+/// Antigravity's weekly and 5-hour limits per model group, from `agy -p /usage` (no quota spent).
+struct AntigravityUsageView: View {
+    @ObservedObject var usage: UsageTracker
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Antigravity limits", systemImage: "gauge.with.dots.needle.33percent").font(.headline)
+                if let state = usage.copilotUsage.antigravity, let account = state.account {
+                    if state.isStale(at: context.date) {
+                        Label("Last known limits - data is stale", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
+                    ForEach(account.groups) { group in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(group.name).fontWeight(.semibold)
+                            ForEach(group.buckets) { bucket in
+                                HStack {
+                                    Text(bucket.title).fontWeight(.medium)
+                                    Spacer()
+                                    Text(bucket.summary).foregroundStyle(tint(bucket))
+                                }
+                                ProgressView(value: bucket.percentUsed, total: 100)
+                                    .tint(tint(bucket))
+                                    .accessibilityLabel("\(group.name), \(bucket.title)")
+                                    .accessibilityValue(String(format: "%.0f%% used", bucket.percentUsed))
+                            }
+                        }
+                    }
+                    if let error = state.error { Text(error).foregroundStyle(.orange) }
+                    if let checked = copilotDate(state.checkedAt) {
+                        Text("Checked \(checked.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text(usage.copilotUsage.antigravity?.error
+                         ?? (usage.copilotUsage.isRefreshing ? "Reading Antigravity's limits..." : "Antigravity's limits unavailable"))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption)
+        }
+    }
+
+    private func tint(_ bucket: AntigravityLimitBucket) -> Color {
+        if bucket.isExhausted { return .red }
+        if bucket.percentUsed >= 80 { return .orange }
+        return .primary
+    }
+}
