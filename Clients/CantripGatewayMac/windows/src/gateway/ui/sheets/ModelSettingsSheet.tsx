@@ -16,7 +16,8 @@ import { Loading, StatusLabel, Warning, findSession, sleep, useAlive } from "./c
 import {
   DEFAULT_PRIVATE_CONFIGURATION, MODEL_REFRESH_POLLS, capitalized, contextLabel, errorText, isUnsupported, modelInfo,
   modelSettingsChange, modelValidationError, parseContextTokens, pickerChoices, privateModelChoices, selectModel, tokenLabel,
-  usageFallbackAddable, usageFallbackChain, usageFallbackChange, usageFallbackLabel, usageFallbackMoved,
+  usageFallbackAddable, usageFallbackChain, usageFallbackChange, usageFallbackEfforts, usageFallbackEntry, usageFallbackLabel,
+  usageFallbackModelChange, usageFallbackModels, usageFallbackMoved,
   usageFallbackStatus, writeFailure,
 } from "./sheetLogic";
 
@@ -259,7 +260,31 @@ function UsageFallbackSection(): JSX.Element | null {
       footer={`When a backend hits its usage limit, the task continues on the first backup here that isn't at its limit too. ${usageFallbackStatus(value)}`}>
       {chain.map((id, index) => {
         const name = usageFallbackLabel(value, id);
-        return (
+        const models = usageFallbackModels(value, id);
+        const entry = usageFallbackEntry(value, id);
+        const efforts = usageFallbackEfforts(value, id);
+        const choice = value.choices.find((item) => item.id === id);
+        const pickers = models ? (
+          <FormRow key={`${id}-model`} label={<span class="sh-secondary">Runs</span>}>
+            <span class="sh-buttons">
+              <select class="select" aria-label={`${name} model`} value={entry.model} disabled={saving.value}
+                onChange={(event) => void save(usageFallbackModelChange(value, id, event.currentTarget.value, ""))}>
+                <option value="" selected={entry.model === ""}>{choice?.defaultModel ? `Default (${choice.defaultModel})` : "Default model"}</option>
+                {models.map((item) => <option key={item.id} value={item.id} selected={item.id === entry.model}>{item.label}</option>)}
+                {entry.model && !models.some((item) => item.id === entry.model)
+                  ? <option value={entry.model} selected>{`${entry.model} (not offered now)`}</option> : null}
+              </select>
+              {efforts.length ? (
+                <select class="select" aria-label={`${name} effort`} value={entry.effort} disabled={saving.value}
+                  onChange={(event) => void save(usageFallbackModelChange(value, id, entry.model, event.currentTarget.value))}>
+                  <option value="" selected={entry.effort === ""}>Default effort</option>
+                  {efforts.map((item) => <option key={item} value={item} selected={item === entry.effort}>{item}</option>)}
+                </select>
+              ) : null}
+            </span>
+          </FormRow>
+        ) : null;
+        return [
           <FormRow key={id} label={<span>{index + 1}. {name}</span>}>
             <span class="sh-buttons">
               <button type="button" class="btn" aria-label={`Try ${name} earlier`} disabled={saving.value || index === 0}
@@ -269,8 +294,9 @@ function UsageFallbackSection(): JSX.Element | null {
               <button type="button" class="btn" aria-label={`Remove ${name}`} disabled={saving.value}
                 onClick={() => void save(usageFallbackChange(value, chain.filter((other) => other !== id)))}>Remove</button>
             </span>
-          </FormRow>
-        );
+          </FormRow>,
+          pickers,
+        ];
       })}
       {addable.length ? (
         <FormRow label={<label for={pickerID}>Add a backup</label>}>
