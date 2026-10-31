@@ -114,6 +114,8 @@ struct MacHomeWindow: View {
         }
         .onChange(of: remote.transcriptRevision) { _, _ in vm.syncRemoteTranscript() }
         .onChange(of: remote.selectedSessionID) { _, _ in vm.syncRemoteTranscript() }
+        // Opening a tab here clears its alerts from the app icon badge on paired iPhones.
+        .onChange(of: visibleTabID, initial: true) { _, id in remote.setVisibleTab(id) }
         .onChange(of: remote.selectedServerID) { _, _ in
             vm.leaveVoiceMode()
             vm.remoteDeliveryMode = .auto
@@ -147,6 +149,13 @@ struct MacHomeWindow: View {
 
     /// The lane the chat actually shows; a requested switch waits for an in-flight send.
     private var isTabOpen: Bool { vm.activeLane == .cantrip }
+
+    /// The tab on screen (a project tab, or Home's chat).
+    private var visibleTabID: String? {
+        if navigation.showingDirectLocal { return nil }
+        if isTabOpen { return remote.selectedSessionID }
+        return navigation.section == .chat ? CantripHomeIdentity.sessionID : nil
+    }
 
     /// The open tab, while the menu bar's Start Fresh can run on it.
     private var startFreshTabID: String? {
