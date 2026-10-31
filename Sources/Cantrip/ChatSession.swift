@@ -55,6 +55,11 @@ struct ChatMessage: Identifiable, Equatable, Codable {
 }
 
 extension ChatMessage {
+    /// Link previews to show: none for links this reply's map card already covers.
+    var visibleLinkPreviews: [LinkPreviewCard] {
+        PlaceLinkFilter.visible(linkPreviews, placeCard: placeCard, text: text)
+    }
+
     /// Appends streamed reasoning. Reasoning after a new tool call or answer text is a new block.
     mutating func appendThinking(_ delta: String) {
         defer { thinking += delta }
@@ -3653,13 +3658,17 @@ final class ChatSession: ObservableObject {
         if text != messages[idx].text {
             messages[idx].text = text
         }
-        let linkEnabled = settings.linkPreviewsEnabled
-        let candidateURLs = linkEnabled ? LinkPreviewExtractor.extractURLs(from: text) : []
-        guard proposal != nil || !candidateURLs.isEmpty else { return false }
+        // Every link, not just the first three: links the map card covers are dropped
+        // before picking which ones get a preview.
+        let candidateLinks = settings.linkPreviewsEnabled
+            ? LinkPreviewExtractor.extractLinks(from: text, limit: 64) : []
+        guard proposal != nil || !candidateLinks.isEmpty else { return false }
         Task { @MainActor [weak self] in
             let resolvedPlaces = await (proposal != nil ? PlaceCardResolver.shared.resolve(proposal!) : nil)
-            let resolvedLinks = await (!candidateURLs.isEmpty
-                ? LinkPreviewStore.shared.resolve(forText: text, enabled: linkEnabled)
+            let previewURLs = PlaceLinkFilter.uncovered(candidateLinks, places: resolvedPlaces?.places ?? [])
+                .prefix(LinkPreviewExtractor.maximumLinksPerMessage).map(\.url)
+            let resolvedLinks = await (!previewURLs.isEmpty
+                ? LinkPreviewStore.shared.resolve(urls: Array(previewURLs))
                 : [])
             guard let self,
                   let currentIdx = self.messages.firstIndex(where: { $0.id == messageID }) else { return }
