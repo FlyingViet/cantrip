@@ -178,7 +178,7 @@ final class ChildTabCoordinator {
         }
         let command = TabInsight.command
         lines.append("The parent tab's ID is \(parent.id.uuidString). When you need its context, read its conversation (read-only): `\(command) tab read \(parent.id.uuidString)` (--turns N for more). To ask it something only it can answer: `\(command) tab ask \(parent.id.uuidString) \"question\"`; it waits until the parent's current turn ends, so prefer reading.")
-        lines.append("Leave these to the parent tab, which runs them after your work merges: restarting or deploying Cantrip, TestFlight uploads, releases and installs on devices. Simulator runs wait their turn automatically. If one is needed, say so in your Summary.")
+        lines.append("Leave these to the parent tab, which runs them after your work merges: restarting or deploying Cantrip, TestFlight uploads, releases and installs on devices; if one is needed, say so in your Summary. For Simulator runs, lease your own simulator: `\(command) sim acquire --device 'iPhone 17 Pro' [--os 27.0]` prints its UDID; use it by UDID (`-destination 'id=UDID'`, `simctl boot UDID`) and those runs never wait. Runs on any other simulator wait their turn. Your lease ends with your turn, or with `\(command) sim release`.")
         lines.append("End your final reply with a \"Summary:\" section of one or two sentences.)")
         return lines.joined(separator: "\n")
     }
@@ -562,6 +562,9 @@ final class ChildTabCoordinator {
             Log.write("child-tabs: left \(resource.rawValue) to the parent: \(request.command.prefix(120))")
             return decide(.deny(resource.denial))
         }
+        // A simulator the child leased from the pool is its own: no need to wait for the shared one.
+        let leased = SimulatorPool.leasedUDIDs(tab: childID.uuidString)
+        if leased.contains(where: { request.command.localizedCaseInsensitiveContains($0) }) { return decide(.proceed) }
         let holderTitle: (UUID) -> String? = { [weak self] id in self?.manager?.sessions.first { $0.id == id }?.title }
         resources.acquire(resource, session: childID, holderTitle: holderTitle, status: status) { granted, reason in
             decide(granted ? .proceed : .deny(reason))

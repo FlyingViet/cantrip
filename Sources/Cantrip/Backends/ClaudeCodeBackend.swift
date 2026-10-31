@@ -724,7 +724,10 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         if let sessionID { args += ["--resume", sessionID] }
         // Claude Code has no per-session files folder, so images go to Cantrip's output folder.
         var guidance = RemoteGeneratedImages.agentGuidance(sessionFilesFolder: false) + "\n\n" + ReplyVisibility.guidance
-        if !readOnly { guidance += "\n\n" + Self.subagentGuidance }
+        if !readOnly {
+            guidance += "\n\n" + Self.subagentGuidance
+            guidance += "\n\n" + SimulatorPool.agentGuidance(command: TabInsight.command)
+        }
         if let homeProtocol { guidance += "\n\n" + homeProtocol }
         args += ["--append-system-prompt", guidance]
         // MCP servers from enabled+approved plugins (see Plugins.swift), and the Copilot CLI's own

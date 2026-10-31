@@ -196,6 +196,7 @@ extension SessionTabTests {
         precondition(allowed["mode"] as? String == "append"
                      && allowed["guidance"] as? String
                         == CopilotBackend.previewGuidance + "\n\n" + ReplyVisibility.guidance
+                            + "\n\n" + SimulatorPool.agentGuidance(command: TabInsight.command)
                             + "\n\n" + CopilotBackend.subagentGuidance,
                      "Preview, reply-visibility and subagent guidance belong in the appended system message")
         try await waitForJournalTest { !SessionOutputFolders.shared.roots(for: chat.id).isEmpty }
@@ -214,7 +215,8 @@ extension SessionTabTests {
         precondition(disabled["excluded"] as? [String] == ["task", "read_agent", "write_agent", "list_agents"],
                      "Disabling subagents removes their tools")
         precondition(disabled["guidance"] as? String
-                        == CopilotBackend.previewGuidance + "\n\n" + ReplyVisibility.guidance,
+                        == CopilotBackend.previewGuidance + "\n\n" + ReplyVisibility.guidance
+                            + "\n\n" + SimulatorPool.agentGuidance(command: TabInsight.command),
                      "Disabled subagents get no delegation guidance, but keep reply visibility")
         precondition((disabled["prompt"] as? String)?.contains("Allowed subagents fixture") == true,
                      "Changing the subagent setting must carry recent conversation context")

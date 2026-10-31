@@ -184,8 +184,8 @@ live run.
 - Put fixed instructions (Home's protocol) in the session's system instructions once, and send
   only per-turn data with each message. On Copilot this cut a Home message from about 117K to
   21K characters, and compaction can't drop it (8b3cd70).
-- Add `ReplyVisibility.guidance` and `RemoteGeneratedImages.agentGuidance` to the system
-  message (f3ca958). Check where the model's text before a tool call ends up: through Copilot,
+- Add `ReplyVisibility.guidance`, `RemoteGeneratedImages.agentGuidance` and (for backends
+  that run commands) `SimulatorPool.agentGuidance` to the system message (f3ca958). Check where the model's text before a tool call ends up: through Copilot,
   Claude's "narration" blocks arrived only as reasoning, so 101 notes went missing in one
   session until they were shown as reply text (05b8c08).
 - If the backend runs background agents, add the `watch-`/`side-` conventions in its own terms
@@ -368,9 +368,9 @@ table when you do.
 
 | Backend | Missing |
 |---|---|
-| Antigravity | `ReplyVisibility` and `watch-`/`side-` guidance; `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
+| Antigravity | `ReplyVisibility`, `SimulatorPool` and `watch-`/`side-` guidance; `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
 | Claude Code | Stopping one foreground Task subagent (the CLI can stop only background agents) |
-| Codex | Model discovery; usage screen; structured limit codes; tool-call checks (so no unattended Home); subagents |
+| Codex | `SimulatorPool` guidance; model discovery; usage screen; structured limit codes; tool-call checks (so no unattended Home); subagents |
 | Windows (all) | Structured events, conversation resume and usage fallback (see PARITY.md) |
 
 ## Done checklist

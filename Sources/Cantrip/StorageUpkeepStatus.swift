@@ -93,6 +93,14 @@ struct StorageUpkeepView: View {
                     Text("Keep unused sessions for \(settings.storageSessionRetentionDays) days")
                         .font(.caption)
                 }
+                Toggle("Also remove simulators unused for \(SimulatorPool.SweepOptions().unusedDays) days",
+                       isOn: $settings.storageSimulatorCleanup)
+                    .font(.caption)
+                    .toggleStyle(.checkbox)
+                    .help("Simulators that tabs lease with `cantrip sim acquire` are always tidied: free ones are shut "
+                        + "down and temporary copies deleted. This also deletes other named simulators nobody used for "
+                        + "\(SimulatorPool.SweepOptions().unusedDays) days, empties Xcode's default ones and removes ones "
+                        + "whose iOS runtime is gone. Booted simulators and ones a build or test is using stay.")
             }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(status.statusText)
