@@ -585,6 +585,34 @@ describe("Claude usage limits", () => {
   });
 });
 
+describe("Codex usage limits", () => {
+  const now = Date.parse("2026-10-31T05:00:00Z");
+  const window = (windowMinutes: number | undefined, usedPercent: number, resetsAt = "2026-10-31T07:31:18Z") =>
+    ({ id: `codex/${windowMinutes}`, usedPercent, windowMinutes, resetsAt });
+
+  it("names each window from its length", async () => {
+    const { codexWindowTitle } = await import("../src/gateway/ui/sheets/sheetLogic");
+    expect([300, 10_080, 43_200, 2_880, 120, undefined].map((minutes) => codexWindowTitle(window(minutes, 0))))
+      .toEqual(["5-hour limit", "Weekly limit", "Monthly limit", "2-day limit", "2-hour limit", "Usage limit"]);
+    expect(codexWindowTitle({ ...window(300, 0), limitName: "GPT-6 Luna" })).toBe("GPT-6 Luna 5-hour limit");
+  });
+
+  it("warns from 80% used and is critical when used up", async () => {
+    const { codexWindowTone } = await import("../src/gateway/ui/sheets/sheetLogic");
+    expect([50, 85, 100].map((used) => codexWindowTone(window(300, used)))).toEqual(["normal", "warning", "critical"]);
+  });
+
+  it("is stale after ten minutes or once a window resets", async () => {
+    const { isCodexUsageStale } = await import("../src/gateway/ui/sheets/sheetLogic");
+    const state = (checked: string, resets = "2026-10-31T07:31:18Z") =>
+      ({ checkedAt: checked, account: { windows: [window(300, 10, resets)] } });
+    expect(isCodexUsageStale(state("2026-10-31T04:58:00Z"), now)).toBe(false);
+    expect(isCodexUsageStale(state("2026-10-31T04:49:00Z"), now)).toBe(true);
+    expect(isCodexUsageStale(state("2026-10-31T04:58:00Z", "2026-10-31T04:59:00Z"), now)).toBe(true);
+    expect(isCodexUsageStale({ error: "not installed" }, now)).toBe(true);
+  });
+});
+
 describe("Antigravity usage limits", () => {
   const now = Date.parse("2026-10-31T05:00:00Z");
   const bucket = (window: string, remainingPercent: number, resetsAt = "2026-10-31T07:31:18Z") =>
