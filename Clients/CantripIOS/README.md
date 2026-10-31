@@ -1078,6 +1078,12 @@ name and a brief final-answer excerpt. Tap the notification to reopen the
 correct saved Mac and conversation. Private, stopped and failed runs do not
 generate success notifications. This does not apply to the Hermes gateway.
 
+The app icon's badge counts tabs with an alert you haven't looked at yet,
+finished or asking. Opening a tab (here, in Cantrip Gateway Mac or in the Mac's
+panel) clears it from the badge on every device and from Notification Center.
+If no badge appears, turn on **Badges** under iOS Settings > Notifications >
+Cantrip Agent. Badges need an updated Mac host.
+
 **Cantrip needs your input** alerts contain only a generic notice, not the
 question, command, tab title, password or login code. Tapping opens the original
 Mac/tab's conversation, with the pending question or secure-input button inline;

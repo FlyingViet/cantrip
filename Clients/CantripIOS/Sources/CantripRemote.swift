@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import UserNotifications
 import MarkdownUI
 import Network
 import Security
@@ -1675,6 +1676,13 @@ struct CantripRemoteAPI {
         }
     }
 
+    /// Tells the Mac the tab is on screen; returns the app icon's badge count afterwards.
+    func markSeen(sessionID: String) async throws -> Int {
+        struct Response: Decodable { let badge: Int }
+        let response: Response = try await request(path: "/api/v1/sessions/\(sessionID)/seen", method: "POST")
+        return response.badge
+    }
+
     func liveStatus() async throws -> CantripLiveStatusSnapshot {
         try await request(path: "/api/v1/live-status")
     }
@@ -2839,6 +2847,8 @@ final class CantripRemoteModel: ObservableObject {
     private var baseURL: URL?
     private var token: String?
     private var appIsActive = false
+    /// The tab on screen; while the app is active its alerts stop counting toward the badge.
+    private var visibleTabID: String?
     /// False while the Mac app is visible but another app is frontmost; iOS never sets it.
     private var isFrontmost = true
     /// The revision each Home list came from, with the list as fetched: the revision is sent
@@ -3041,6 +3051,7 @@ final class CantripRemoteModel: ObservableObject {
             startLANDiscovery()
             startPolling()
             refreshCompletionNotificationRegistration(force: true)
+            markVisibleTabSeen()
         } else {
             videoUploadTask?.cancel()
             lanBrowser.stop()
@@ -3050,6 +3061,38 @@ final class CantripRemoteModel: ObservableObject {
 
     func completionNotificationStatus() async throws -> CantripPushStatus {
         try await performAuthenticated(allowFallback: true) { try await $0.completionNotifications() }
+    }
+
+    /// The tab (or Home) on screen, nil when none is. Opening one clears its alerts from the
+    /// app icon's badge on every paired device, and from Notification Center here.
+    func setVisibleTab(_ id: String?) {
+        guard visibleTabID != id else { return }
+        visibleTabID = id
+        markVisibleTabSeen()
+    }
+
+    /// An alert arrived for the tab on screen: it's already seen.
+    func noteAlert(forSessionID id: UUID) {
+        guard visibleTabID?.uppercased() == id.uuidString else { return }
+        markVisibleTabSeen()
+    }
+
+    private func markVisibleTabSeen() {
+        guard appIsActive, isConfigured, let id = visibleTabID else { return }
+        #if os(iOS)
+        // Only devices with alerts on for this Mac have a badge to keep current.
+        guard let serverID = selectedServerID, completionAlerts.hasSubscription(serverID: serverID) else { return }
+        completionAlerts.removeDelivered(sessionID: id, serverID: serverID)
+        #endif
+        Task { [weak self] in
+            // Older Macs don't track badges; the alerts themselves still work.
+            guard let self, let badge = try? await performAuthenticated(allowFallback: true, {
+                try await $0.markSeen(sessionID: id)
+            }) else { return }
+            #if os(iOS)
+            try? await UNUserNotificationCenter.current().setBadgeCount(badge)
+            #endif
+        }
     }
 
     func setCompletionNotifications(enabled: Bool) async throws {

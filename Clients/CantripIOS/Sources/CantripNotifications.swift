@@ -63,6 +63,8 @@ final class CantripNotifications: NSObject, ObservableObject, UNUserNotification
     @Published private(set) var deviceToken: String?
     @Published private(set) var registrationError: String?
     @Published private(set) var pendingTarget: CantripNotificationTarget?
+    /// The last alert shown while the app was open (the tab on screen then counts it as seen).
+    @Published private(set) var presentedTarget: CantripNotificationTarget?
     @Published private(set) var enabledServers: [String: String]
     @Published private(set) var pendingServers: [String: String]
     private let defaults: UserDefaults
@@ -78,7 +80,7 @@ final class CantripNotifications: NSObject, ObservableObject, UNUserNotification
     init(defaults: UserDefaults = .standard,
          installation: CantripInstallationBinding? = nil,
          authorize: @escaping () async throws -> Bool = {
-             try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+             try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
          },
          requestRegistration: @escaping @MainActor () -> Void = { UIApplication.shared.registerForRemoteNotifications() }) {
         self.defaults = defaults
@@ -140,7 +142,23 @@ final class CantripNotifications: NSObject, ObservableObject, UNUserNotification
 
     func install() {
         UNUserNotificationCenter.current().delegate = self
-        if !enabledServers.isEmpty || !pendingServers.isEmpty { UIApplication.shared.registerForRemoteNotifications() }
+        guard !enabledServers.isEmpty || !pendingServers.isEmpty else { return }
+        UIApplication.shared.registerForRemoteNotifications()
+        // Alerts turned on before badges asked only for alerts and sounds. Asking again doesn't
+        // prompt once the person has answered; it adds the Badges switch in iOS Settings.
+        Task { _ = try? await authorize() }
+    }
+
+    /// Clears a tab's alerts from Notification Center once it's opened.
+    func removeDelivered(sessionID: String, serverID: UUID) {
+        UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
+            let ids = notifications.filter {
+                guard let target = CantripNotificationTarget(userInfo: $0.request.content.userInfo) else { return false }
+                return target.serverID == serverID && target.sessionID.uuidString == sessionID.uppercased()
+            }.map(\.request.identifier)
+            guard !ids.isEmpty else { return }
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
+        }
     }
 
     func isEnabled(serverID: UUID?) -> Bool {
@@ -240,6 +258,7 @@ final class CantripNotifications: NSObject, ObservableObject, UNUserNotification
             let seen = defaults.stringArray(forKey: key) ?? []
             guard !seen.contains(id) else { completionHandler([]); return }
             defaults.set(Array((seen + [id]).suffix(256)), forKey: key)
+            presentedTarget = target
             completionHandler([.banner, .sound, .list])
         }
     }
