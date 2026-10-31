@@ -414,6 +414,15 @@ export async function stop(id: string): Promise<void> {
   }
 }
 
+/** Runs a queue that Stop paused, from its first message. */
+export async function resumeQueue(id: string): Promise<void> {
+  try {
+    await mutate(() => sessionAction(id, "resumeQueue"));
+  } finally {
+    schedule();
+  }
+}
+
 export async function resume(id: string): Promise<void> {
   await mutate(() => sessionAction(id, "resume"));
 }

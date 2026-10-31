@@ -27,15 +27,25 @@ export function QueueButton(props: { session: RemoteSessionSummary; onOpen: () =
   const { session } = props;
   if (session.queuedCount <= 0) return null;
   const next = queuedPrompts(session)?.[0];
-  return (
+  const paused = session.queuePaused === true;
+  const open = (
     <button type="button" class="act-queue-button" onClick={props.onOpen} title="View messages waiting to run on your Mac">
       <span class="act-queue-head">
         <Icon name="clock" size={12} />
-        <span class="grow">Queued messages ({session.queuedCount})</span>
+        <span class="grow">{paused ? `Queue paused (${session.queuedCount})` : `Queued messages (${session.queuedCount})`}</span>
         <Icon name="chevron.right" size={12} class="act-chevron" />
       </span>
       {next ? <span class="act-queue-preview">{promptPreview(queuedText(next)).preview}</span> : null}
     </button>
+  );
+  if (!paused) return open;
+  // Stop paused the queue: it runs again, from the first message, when resumed.
+  return (
+    <div class="sh-buttons">
+      {open}
+      <button type="button" class="btn" aria-label="Resume the queue" title="Run the queued messages again, from the first one"
+        disabled={remote.isMutating.value} onClick={() => void remote.resumeQueue(session.id)}>Resume</button>
+    </div>
   );
 }
 
