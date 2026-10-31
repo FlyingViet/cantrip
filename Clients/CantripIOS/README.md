@@ -125,6 +125,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, usage limits (Copilot at the top level, Claude Code under `claude`, plus `activeBackend`), View Mac |
 | `GET/POST /api/v1/usage-fallback` | Usage limit fallbacks in Model Settings (Mac-wide): `{backends, backend, primary, choices, limited, revision}`; the section lists the backups in order with **Add a backup**, up/down and **Remove**, each saving right away with POST `{revision, backends}`, or `{revision, resetLimits: true}` for **Try every backend again**. Macs from before the chain send no `backends`: one backup, set with `{revision, backend}` (`""` = off). `supportsUsageFallback` on session lists; older hosts `404` and the section stays hidden |
 | `GET /api/v1/voice/vocabulary` | Dictation names: project, tab, note, task and tracker terms plus the busiest people (handles, optional names); older hosts reply `404` and the app falls back to tab and task titles |
+| `GET /api/v1/link-previews/image`, `GET /api/v1/map-tile` | Rich cards on assistant messages (`linkPreviews`, `placeCard`): cached Open Graph preview images (`?id=`) and OpenStreetMap raster tiles (`?z=&x=&y=`) |
 
 Responses of 4 KB or more come gzip-compressed when the request sends
 `Accept-Encoding: gzip`: URLSession does this on the Tailscale route, and `CantripLANRequest`
@@ -565,6 +566,24 @@ in Safari. Each view runs isolated in its own web view and can load only the
 domains its server declared. If a view asks to send a message, Cantrip Agent
 shows the exact text for approval first. Views are hidden when **Show
 interactive MCP App views** is off on the Mac.
+
+### Link preview and inline map cards in replies
+
+When an assistant reply links to a public web page (such as an Apple Store
+product page), the Mac fetches and caches its Open Graph metadata without
+cookies and attaches up to three `linkPreviews` cards (`title`, `siteName`,
+`domain`, optional cached `imageID` via `/api/v1/link-previews/image`). Tapping
+a card opens the URL in Safari or the default browser. Private, loopback, LAN,
+`*.ts.net`, and signed/token URLs stay plain links and are never unfurled.
+
+When an assistant reply includes a `cantrip-places` block (or recommends real
+places resolved by the Mac with Apple MapKit and OpenStreetMap Nominatim), the
+message carries a `placeCard` with numbered pins, ratings, categories,
+open/closed status when known, and tap-through actions for **Directions**,
+**Call**, and **Website**. Native iOS and macOS clients render an interactive
+MapKit map with numbered markers — floating a scrollable place card on wide
+layouts (Mac, iPad, and unfolded iPhone Duo) and stacking the list below the
+map on compact widths.
 
 ### Live agent browser preview
 

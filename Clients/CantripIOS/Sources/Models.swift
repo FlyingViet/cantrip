@@ -157,6 +157,8 @@ struct ChatTurn: Identifiable, Codable {
     var thinking: String?
     var author: String?
     var images: [ChatMessageImage]?
+    var linkPreviews: [CantripLinkPreview]? = nil
+    var placeCard: CantripPlaceCard? = nil
     /// A Cantrip error that repeats the one before it; offers Start Fresh and Change Model.
     var isRepeatedError: Bool? = nil
     /// A Cantrip failed run's latest error; offers Continue (`CantripContinue`).
