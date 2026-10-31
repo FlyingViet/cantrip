@@ -4094,7 +4094,7 @@ private extension RemoteControlServer {
         for(;z>3;z--){const xs=places.map(p=>lonToWorldX(p.longitude,z)),ys=places.map(p=>latToWorldY(p.latitude,z));if(Math.max(...xs)-Math.min(...xs)<=w&&Math.max(...ys)-Math.min(...ys)<=h)break}
         const xs=places.map(p=>lonToWorldX(p.longitude,z)),ys=places.map(p=>latToWorldY(p.latitude,z));centreIn(area,width,height,(Math.min(...xs)+Math.max(...xs))/2,(Math.min(...ys)+Math.max(...ys))/2,z)};
       const focusPlace=p=>{state.selectedID=p.id;state.moved=true;const width=viewport.clientWidth||680,height=viewport.clientHeight||390;centreIn(freeArea(),width,height,lonToWorldX(p.longitude,state.zoom),latToWorldY(p.latitude,state.zoom),state.zoom);drawMap()};
-      const drawMap=()=>{wrap.classList.toggle("stacked",wrap.clientWidth>0&&wrap.clientWidth<560);
+      const drawMap=()=>{wrap.classList.toggle("stacked",wrap.clientWidth>0&&wrap.clientWidth<640);
         const width=viewport.clientWidth||680,height=viewport.clientHeight||390,fitKey=`${width}x${height}`;if(!state.moved&&viewport.clientWidth&&state.fitKey!==fitKey){state.fitKey=fitKey;fitPlaces(width,height)}
         const z=state.zoom,maxTile=Math.pow(2,z),centerX=lonToWorldX(state.lon,z),centerY=latToWorldY(state.lat,z);
         const startTileX=Math.floor((centerX-width/2)/256),endTileX=Math.floor((centerX+width/2)/256),startTileY=Math.floor((centerY-height/2)/256),endTileY=Math.floor((centerY+height/2)/256);

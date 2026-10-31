@@ -1616,8 +1616,8 @@ struct PlaceCardView: View {
     @State private var cardWidth: CGFloat = 0
     @State private var mapSize: CGSize = .zero
 
-    /// Below this width the list moves under the map instead of covering part of it.
-    static let stackedBelowWidth: CGFloat = 500
+    /// Below this width the list moves under the map, so the map keeps about 200 pt for pins.
+    static let stackedBelowWidth: CGFloat = 600
     static let listWidth: CGFloat = 248
     static let pinLabelMaxWidth: CGFloat = 150
 
