@@ -22,6 +22,7 @@ import { MCPAppStack } from "./MCPApp";
 import { BrowserCard, usesBrowser } from "./BrowserPreview";
 import { MentionText } from "./TabMentions";
 import { Markdown, type InlineImages } from "./Markdown";
+import { LinkPreviewStack, PlaceCardView } from "./RichCards";
 import { ThreadLaneRow, ThreadQuote, ThreadRepliesButton } from "./ThreadTags";
 
 export type Lane = "home" | "tab";
@@ -510,6 +511,8 @@ export function MessageRow(props: {
           {apps.length ? <MCPAppStack sessionID={session.id} apps={apps} /> : null}
           {usesBrowser(message.activities) ? <BrowserCard live={props.streaming} /> : null}
           {!isError ? <ReplyText message={message} session={session} settled={settled} /> : null}
+          {!isError && message.placeCard ? <PlaceCardView card={message.placeCard} /> : null}
+          {!isError && message.linkPreviews?.length ? <LinkPreviewStack cards={message.linkPreviews} /> : null}
           {handoffs.length ? <div class="handoff-stack">{handoffs.map((handoff) => <HandoffCard key={handoff.id} handoff={plainMentionsDeep(handoff)} />)}</div> : null}
           {thinking ? <ThinkingIndicator class="muted" /> : null}
           {isError ? (
