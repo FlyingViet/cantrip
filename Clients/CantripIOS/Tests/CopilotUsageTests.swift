@@ -330,7 +330,7 @@ final class CopilotUsageTests: XCTestCase {
                     .environment(\.dynamicTypeSize, size))
                 let measured = row.sizeThatFits(in: CGSize(width: width, height: 5000))
                 XCTAssertLessThanOrEqual(measured.width, width + 1)
-                XCTAssertGreaterThan(measured.height, 100)
+                XCTAssertGreaterThan(measured.height, 30)
                 XCTAssertLessThan(measured.height, 4000)
                 if width == 288 && (size == .large || size == .accessibility5) {
                     let renderer = ImageRenderer(content: row.rootView.frame(width: width).padding()
