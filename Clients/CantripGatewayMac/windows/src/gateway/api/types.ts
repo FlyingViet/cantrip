@@ -642,6 +642,8 @@ export interface RemoteSessionSummary {
   canResume: boolean;
   councilMode: boolean;
   queuedCount: Int;
+  /** Stop paused the queue; it waits for POST .../resumeQueue. Missing from Macs whose Stop clears it. */
+  queuePaused?: boolean;
   /** Live status line (statusText), e.g. "Waiting for your input"; omitted when none. */
   status?: string;
   /** Delivery notice for the last sent/queued message; omitted when none. */
