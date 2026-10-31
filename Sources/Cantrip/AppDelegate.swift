@@ -190,6 +190,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self?.remoteControlMenuItem?.state = enabled ? .on : .off
         }
         services.start(recoveryReport: recoveryReport)
+        // The tab on screen in the panel counts as seen for the badge on paired iPhones.
+        services.remoteControlServer?.isOnScreen = { [weak self] id in
+            guard let self else { return false }
+            return !self.usesHomeWindow && self.panel.isVisible && self.manager.active.id == id
+        }
+        manager.$activeIndex
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.markActiveTabSeen() }
+            .store(in: &cancellables)
 
         // Local key monitor: ⌘V image-paste, and ⌘←/⌘→ cursor jumps
         // (borderless panels don't always deliver ⌘-arrows to the editor).
@@ -359,11 +368,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         panel.orderFrontRegardless()
         panel.makeKey()
         manager.active.focusRequested = true
+        markActiveTabSeen()
         Log.write("showPanel: frame=\(panel.frame), visible=\(panel.isVisible), key=\(panel.isKeyWindow), screen=\(NSScreen.main?.visibleFrame ?? .zero)")
     }
 
     private func hidePanel() {
         panel.orderOut(nil)
+    }
+
+    /// The panel shows this tab: its alerts stop counting toward the app icon's badge.
+    private func markActiveTabSeen() {
+        guard !usesHomeWindow, panel.isVisible else { return }
+        services.remoteControlServer?.markSeen(manager.active.id)
     }
 
     // MARK: - Home window (Window interface)

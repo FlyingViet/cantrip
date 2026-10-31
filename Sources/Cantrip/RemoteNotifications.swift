@@ -12,6 +12,8 @@ struct RemoteCompletion: Codable, Equatable {
     /// A hidden Cantrip Home background run asked; the app answers it in Home, not as a tab.
     var homeRun: Bool? = nil
     var isAttention: Bool { kind == "input" || kind == "macAttention" }
+    /// Only updates the app icon's badge: no alert, sound or banner.
+    var isBadgeUpdate: Bool { kind == "badge" }
 
     static func preview(_ text: String) -> String {
         if let summary = summaryPreview(text) { return summary }
@@ -39,6 +41,8 @@ struct RemotePushStatus: Codable {
     let message: String
     let lastDeliveryError: String?
     var supportsInputAlerts = true
+    /// Tabs with an alert nobody has looked at yet (the app icon's badge).
+    var badge: Int? = nil
 }
 
 struct RemotePushRegistration: Codable, Equatable {
@@ -125,6 +129,9 @@ actor RemoteNotifications {
         var subscribers: [Subscriber] = []
         var deliveries: [Delivery] = []
         var completedIDs: [UUID] = []
+        /// Tabs with a finished-run alert nobody has looked at since, oldest first. Optional so
+        /// state saved before badges decodes.
+        var unseenSessions: [UUID]?
     }
 
     private let file: URL
@@ -138,6 +145,9 @@ actor RemoteNotifications {
     private var generation = 0
     private var lastDeliveryError: String?
     private var pendingInputs: Set<UUID> = []
+    /// Questions and approvals still waiting, by request ID, with their tab (Mac-attention
+    /// notices aren't a tab's, so they don't count toward the badge).
+    private var badgeInputs: [UUID: UUID] = [:]
 
     init(file: URL = CantripPaths.cache("notifications/state.json"),
          configuration: @escaping () throws -> RemotePushConfiguration = RemotePushConfiguration.load,
@@ -162,8 +172,10 @@ actor RemoteNotifications {
         do {
             _ = try configuration()
             _ = try load()
-            return RemotePushStatus(configured: true, message: "Apple push is configured on the Mac.",
-                                    lastDeliveryError: lastDeliveryError)
+            var status = RemotePushStatus(configured: true, message: "Apple push is configured on the Mac.",
+                                          lastDeliveryError: lastDeliveryError)
+            status.badge = badge()
+            return status
         } catch {
             return RemotePushStatus(configured: false, message: error.localizedDescription,
                                     lastDeliveryError: lastDeliveryError)
@@ -209,13 +221,19 @@ actor RemoteNotifications {
         sleeper?.cancel()
     }
 
-    func enqueue(_ completion: RemoteCompletion) {
+    /// `seen`: the tab was on screen at the Mac when it finished, so it doesn't count toward the badge.
+    func enqueue(_ completion: RemoteCompletion, seen: Bool = false) {
         guard let fingerprint else { return }
         do {
             var next = try load()
             guard !next.completedIDs.contains(completion.id) else { return }
             next.completedIDs = Array((next.completedIDs + [completion.id]).suffix(512))
             next.subscribers.removeAll { $0.updatedAt < Date().addingTimeInterval(-90 * 86400) || $0.fingerprint != fingerprint }
+            if !completion.isAttention, !seen, !next.subscribers.isEmpty {
+                var unseen = next.unseenSessions ?? []
+                unseen.removeAll { $0 == completion.sessionID }
+                next.unseenSessions = Array((unseen + [completion.sessionID]).suffix(99))
+            }
             for subscriber in next.subscribers {
                 if completion.isAttention && subscriber.registration.inputNeeded != true { continue }
                 next.deliveries.append(Delivery(id: UUID(), subscriberRevision: subscriber.revision,
@@ -236,6 +254,7 @@ actor RemoteNotifications {
     func enqueueInput(id: UUID, sessionID: UUID, expiresAt: Date, kind: String = "input", homeRun: Bool = false) {
         guard expiresAt > Date() else { return }
         pendingInputs.insert(id)
+        if kind == "input" { badgeInputs[id] = sessionID }
         enqueue(RemoteCompletion(id: id, sessionID: sessionID, title: "", summary: "",
                                  completedAt: Date(), kind: kind, expiresAt: expiresAt,
                                  homeRun: homeRun ? true : nil))
@@ -243,11 +262,57 @@ actor RemoteNotifications {
 
     func resolveInput(_ id: UUID) {
         pendingInputs.remove(id)
+        let before = (try? load()).map(badgeCount) ?? 0
+        badgeInputs[id] = nil
         do {
             var next = try load()
             next.deliveries.removeAll { $0.completion.isAttention && $0.completion.id == id }
             try save(next)
             sleeper?.cancel()
+            if badgeCount(next) != before { updateBadges() }
+        } catch { report(error.localizedDescription) }
+    }
+
+    /// Someone opened the tab (on the Mac or any paired device): its alerts no longer count
+    /// toward the badge. Returns the badge count afterwards.
+    @discardableResult
+    func markSeen(_ sessionID: UUID) -> Int {
+        do {
+            var next = try load()
+            let before = badgeCount(next)
+            next.unseenSessions?.removeAll { $0 == sessionID }
+            badgeInputs = badgeInputs.filter { $0.value != sessionID }
+            let after = badgeCount(next)
+            guard after != before else { return after }
+            try save(next)
+            updateBadges()
+            return after
+        } catch {
+            report(error.localizedDescription)
+            return 0
+        }
+    }
+
+    /// The app icon's number: tabs with an alert nobody has looked at yet, finished or asking.
+    func badge() -> Int { (try? load()).map(badgeCount) ?? 0 }
+
+    private func badgeCount(_ state: State) -> Int {
+        Set(state.unseenSessions ?? []).union(badgeInputs.values).count
+    }
+
+    /// Sends every device the new count without an alert (one pending update per device).
+    private func updateBadges() {
+        guard let fingerprint else { return }
+        do {
+            var next = try load()
+            next.deliveries.removeAll { $0.completion.isBadgeUpdate }
+            for subscriber in next.subscribers where subscriber.fingerprint == fingerprint {
+                next.deliveries.append(Delivery(id: UUID(), subscriberRevision: subscriber.revision, completion: RemoteCompletion(
+                    id: UUID(), sessionID: UUID(), title: "", summary: "", completedAt: Date(), kind: "badge")))
+            }
+            try save(next)
+            sleeper?.cancel()
+            startWorker()
         } catch { report(error.localizedDescription) }
     }
 
@@ -315,7 +380,7 @@ actor RemoteNotifications {
                     let authorization = try tokens.value(for: config, now: now)
                     let request = try Self.request(deliveryID: delivery.id, completion: delivery.completion,
                                                    registration: subscriber.registration, fingerprint: fingerprint,
-                                                   authorization: authorization)
+                                                   authorization: authorization, badge: badgeCount(next))
                     let (data, response) = try await send(request)
                     if response.statusCode == 200 {
                         lastDeliveryError = nil
@@ -355,8 +420,9 @@ actor RemoteNotifications {
         }
     }
 
+    /// `badge`: the app icon's count when the alert is sent; nil leaves the badge as it is.
     static func request(deliveryID: UUID, completion: RemoteCompletion, registration: RemotePushRegistration,
-                        fingerprint: String, authorization: String) throws -> URLRequest {
+                        fingerprint: String, authorization: String, badge: Int? = nil) throws -> URLRequest {
         let host = registration.environment == "production" ? "api.push.apple.com" : "api.sandbox.push.apple.com"
         var request = URLRequest(url: URL(string: "https://\(host)/3/device/\(registration.deviceToken)")!)
         request.httpMethod = "POST"
@@ -364,8 +430,17 @@ actor RemoteNotifications {
         request.setValue("bearer \(authorization)", forHTTPHeaderField: "authorization")
         request.setValue("com.itzhoang.hermbot", forHTTPHeaderField: "apns-topic")
         request.setValue("alert", forHTTPHeaderField: "apns-push-type")
-        request.setValue("10", forHTTPHeaderField: "apns-priority")
         request.setValue(deliveryID.uuidString, forHTTPHeaderField: "apns-id")
+        if completion.isBadgeUpdate {
+            // Badge-only: low priority, and a newer count replaces one still waiting at Apple.
+            request.setValue("5", forHTTPHeaderField: "apns-priority")
+            request.setValue("cantrip-badge", forHTTPHeaderField: "apns-collapse-id")
+            request.setValue(String(Int(completion.completedAt.addingTimeInterval(3600).timeIntervalSince1970)),
+                             forHTTPHeaderField: "apns-expiration")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["aps": ["badge": badge ?? 0]])
+            return request
+        }
+        request.setValue("10", forHTTPHeaderField: "apns-priority")
         request.setValue(completion.id.uuidString, forHTTPHeaderField: "apns-collapse-id")
         request.setValue(String(Int((completion.expiresAt ?? completion.completedAt.addingTimeInterval(3600)).timeIntervalSince1970)),
                          forHTTPHeaderField: "apns-expiration")
@@ -376,11 +451,13 @@ actor RemoteNotifications {
                                 ? "A background run is waiting. Open Cantrip Agent to answer it in Home."
                                 : "Open Cantrip Agent to review the request on your Mac."]
             : ["title": "Cantrip finished", "subtitle": String(completion.title.prefix(80)), "body": completion.summary]
+        var aps: [String: Any] = [
+            "alert": alert,
+            "sound": "default", "thread-id": "\(registration.serverID)/\(completion.sessionID)",
+        ]
+        if let badge { aps["badge"] = badge }
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "aps": [
-                "alert": alert,
-                "sound": "default", "thread-id": "\(registration.serverID)/\(completion.sessionID)",
-            ],
+            "aps": aps,
             "cantrip": ["eventID": completion.id.uuidString, "sessionID": completion.sessionID.uuidString,
                         "serverID": registration.serverID.uuidString, "fingerprint": fingerprint,
                         "kind": input ? (completion.kind ?? "input") : "completion"]

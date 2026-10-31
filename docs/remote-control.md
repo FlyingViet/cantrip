@@ -361,6 +361,19 @@ requests in a **Cantrip Home needs your input** panel in the sticky header,
 whichever tab is open, with **Approve once**, **Deny**, choices or a typed
 answer. Answers go to the run's own session and the run continues.
 
+The app icon's badge counts tabs with an alert nobody has looked at yet: a
+finished run, or a question or approval still waiting. A tab counts once however
+many alerts it sends, and a tab that finished while on screen in the Mac panel
+doesn't count. Opening the tab anywhere (the Mac panel, Cantrip Agent, Cantrip
+Gateway Mac) or answering its question lowers the count on every paired device
+with a silent badge-only push; Cantrip Agent also clears that tab's alerts from
+Notification Center. Clients report an open tab with
+`POST /api/v1/sessions/<id>/seen`, which returns `{"badge": <count>}`; `GET
+/api/v1/notifications` reports the same `badge`. **Cantrip Mac needs attention**
+notices aren't a tab's and don't count. Alerts turned on before badges existed
+add the **Badges** switch under iOS Settings > Notifications > Cantrip Agent
+the next time the app opens.
+
 This needs **updated native Cantrip Agent and Mac builds**, plus Apple Push
 Notification service (APNs) configuration on the Mac. Foreground polling cannot
 deliver alerts while iOS suspends the app. Enable the Push Notifications

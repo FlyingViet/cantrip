@@ -10,6 +10,8 @@ final class RemoteControlServer {
     var onError: ((String?) -> Void)?
     /// The encrypted LAN listener's actual port, and whether a pinned port had to fall back.
     var onLANStatus: ((RemoteLANStatus?) -> Void)?
+    /// Whether the Mac is showing this tab right now; its finished alert then doesn't add to the badge.
+    var isOnScreen: (@MainActor (UUID) -> Bool)?
     /// Bonjour advertisement of the encrypted LAN listener. Tests turn it off to prove that
     /// clients reach it through a direct host:port.
     var advertisesLANService = true
@@ -183,13 +185,19 @@ final class RemoteControlServer {
     func notifyCompletion(for session: ChatSession) {
         guard !token.isEmpty, !session.isPrivate, !session.isStreaming, session.queued.isEmpty,
               let completion = session.remoteCompletion else { return }
+        let seen = isOnScreen?(session.id) ?? false
         notificationLifecycleLock.lock()
         let activation = notificationLifecycleTask
         notificationLifecycleLock.unlock()
         Task {
             await activation?.value
-            await notifications.enqueue(completion)
+            await notifications.enqueue(completion, seen: seen)
         }
+    }
+
+    /// The tab is on screen at the Mac: its alerts stop counting toward the app icon's badge.
+    func markSeen(_ sessionID: UUID) {
+        Task { await notifications.markSeen(sessionID) }
     }
 
     /// Pushes a notice that isn't a session's own completion, such as a Home handoff.
@@ -1482,6 +1490,12 @@ final class RemoteControlServer {
         }
 
         switch parts[1] {
+        case "seen":
+            // A client opened the tab: its alerts stop counting toward the app icon's badge.
+            Task {
+                let badge = await notifications.markSeen(session.id)
+                sendJSON(["badge": badge], on: connection)
+            }
         case "metadata":
             guard let body = json,
                   !body.isEmpty,
