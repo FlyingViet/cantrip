@@ -744,6 +744,14 @@ struct PlacePin: Codable, Equatable, Identifiable, Sendable {
     var priceLevel: String?
     var isOpenNow: Bool?
     var hoursSummary: String?
+    /// The name Apple Maps or OpenStreetMap lists it under, when it differs from the reply's.
+    var listedName: String?
+    /// No listing matched the reply's place confidently; the pin is near where it should be.
+    var isApproximate: Bool?
+    /// An SF Symbol for the pin, from the place's category (`PlaceSymbol`).
+    var symbol: String?
+
+    var pinSymbol: String { symbol ?? PlaceSymbol.symbol(category: category, poi: nil) }
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
@@ -775,7 +783,136 @@ struct PlacePin: Codable, Equatable, Identifiable, Sendable {
         if let priceLevel, !priceLevel.isEmpty { result["priceLevel"] = priceLevel }
         if let isOpenNow { result["isOpenNow"] = isOpenNow }
         if let hoursSummary, !hoursSummary.isEmpty { result["hoursSummary"] = hoursSummary }
+        if let listedName, !listedName.isEmpty { result["listedName"] = listedName }
+        if isApproximate == true { result["approximate"] = true }
+        // Clients without SF Symbols (web, Windows) draw the emoji.
+        result["symbol"] = pinSymbol
+        result["glyph"] = PlaceSymbol.glyph(for: pinSymbol)
         return result
+    }
+}
+
+/// A pin's icon from what kind of place it is: the reply's category first, then the map listing's.
+enum PlaceSymbol {
+    static let fallback = "mappin"
+
+    private static let rules: [(symbol: String, words: [String])] = [
+        ("cross.case.fill", ["urgent", "clinic", "hospital", "medical", "doctor", "pharmacy", "dental", "dentist",
+                             "emergency", "health", "physician"]),
+        ("cup.and.saucer.fill", ["cafe", "café", "coffee", "tea", "matcha", "boba", "bubble", "espresso", "teahouse"]),
+        ("birthday.cake.fill", ["bakery", "dessert", "ice cream", "icecream", "donut", "patisserie"]),
+        ("wineglass.fill", ["bar", "brewery", "winery", "pub", "nightlife", "lounge", "distillery"]),
+        ("fork.knife", ["restaurant", "food", "diner", "eatery", "bistro", "grill", "ramen", "sushi", "pizza", "taqueria"]),
+        ("bed.double.fill", ["hotel", "motel", "inn", "lodging", "hostel"]),
+        ("cart.fill", ["grocery", "supermarket", "market"]),
+        ("bag.fill", ["store", "shop", "mall", "boutique", "retail", "outlet"]),
+        ("tree.fill", ["park", "garden", "trail", "beach", "nature", "campground"]),
+        ("building.columns.fill", ["museum", "landmark", "library", "gallery", "monument", "theater", "theatre"]),
+        ("fuelpump.fill", ["gas", "fuel", "charging", "ev charger"]),
+        ("figure.run", ["gym", "fitness", "yoga", "climbing", "sport", "stadium"]),
+        ("graduationcap.fill", ["school", "university", "college", "campus"]),
+        ("airplane", ["airport"]),
+    ]
+
+    private static let glyphs: [String: String] = [
+        "cross.case.fill": "✚", "cup.and.saucer.fill": "☕", "birthday.cake.fill": "🧁", "wineglass.fill": "🍷",
+        "fork.knife": "🍴", "bed.double.fill": "🛏", "cart.fill": "🛒", "bag.fill": "🛍", "tree.fill": "🌳",
+        "building.columns.fill": "🏛", "fuelpump.fill": "⛽", "figure.run": "🏃", "graduationcap.fill": "🎓",
+        "airplane": "✈", "mappin": "📍",
+    ]
+
+    /// `category` is the reply's ("Matcha cafe"); `poi` is a map listing's (`MKPOICategoryCafe`, OSM `cafe`).
+    static func symbol(category: String?, poi: String?) -> String {
+        for text in [category, poi.map(spaced)] {
+            guard let text = text?.lowercased(), !text.isEmpty else { continue }
+            if let rule = rules.first(where: { rule in rule.words.contains { matches(text, $0) } }) { return rule.symbol }
+        }
+        return fallback
+    }
+
+    static func glyph(for symbol: String) -> String { glyphs[symbol] ?? "📍" }
+
+    /// A whole word or phrase: "tea" matches "tea house", not "steak".
+    private static func matches(_ text: String, _ word: String) -> Bool {
+        text.range(of: "(^|[^a-zà-ÿ])\(NSRegularExpression.escapedPattern(for: word))($|[^a-zà-ÿ])",
+                   options: .regularExpression) != nil
+    }
+
+    /// `MKPOICategoryFoodMarket` → "food market".
+    static func spaced(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "MKPOICategory", with: "")
+            .replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression)
+            .replacingOccurrences(of: "_", with: " ").lowercased()
+    }
+}
+
+/// A listing that might be a reply's place: a MapKit result or an OpenStreetMap one.
+struct PlaceCandidate: Codable, Equatable, Sendable {
+    var name: String
+    var latitude: Double
+    var longitude: Double
+    /// `MKPOICategory…` or an OSM type; nil for an address or area result.
+    var poiCategory: String?
+    var address: String?
+    var phone: String?
+    var website: String?
+    var source = "mapkit"
+
+    var coordinate: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: latitude, longitude: longitude) }
+}
+
+/// Picks which listing is the place a reply named: one whose name matches (never a street address
+/// or a mall that happened to come first), at the branch the reply's query points to.
+enum PlaceMatcher {
+    struct Choice: Equatable {
+        var candidate: PlaceCandidate
+        /// The listing's address shares the query's street or city words (or the query gave none).
+        var branchMatched: Bool
+    }
+
+    private static let stateCodes: Set<String> = [
+        "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id", "il", "ia", "ks", "ky", "me", "md",
+        "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri",
+        "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy", "dc", "usa", "us",
+    ]
+
+    static func words(_ text: String?) -> [String] { PlaceLinkFilter.words(text ?? "") }
+
+    /// Whether `listing` names the same place as `proposed`: most words shared, or one name
+    /// inside the other ("Arisan" and "Arisan Tea & Coffee House"), ignoring accents and "&".
+    static func namesMatch(_ proposed: String, _ listing: String) -> Bool {
+        let p = Set(words(proposed)), c = Set(words(listing))
+        guard !p.isEmpty, !c.isEmpty else { return false }
+        let shared = p.intersection(c)
+        func strong(_ set: Set<String>) -> Bool { set.count >= 2 || set.contains { $0.count >= 4 } }
+        if (p.isSubset(of: c) && strong(p)) || (c.isSubset(of: p) && strong(c)) { return true }
+        return Double(2 * shared.count) / Double(p.count + c.count) >= 0.6 && strong(shared)
+    }
+
+    /// The query's words that say where (street, city), not what: the query minus the name and state codes.
+    static func hints(query: String?, name: String) -> [String] {
+        let nameWords = Set(words(name))
+        var seen = Set<String>()
+        return words(query).filter { !nameWords.contains($0) && !stateCodes.contains($0) && seen.insert($0).inserted }
+    }
+
+    /// The share of `hints` the listing's address contains.
+    static func branchScore(_ candidate: PlaceCandidate, hints: [String]) -> Double {
+        guard !hints.isEmpty else { return 1 }
+        let address = Set(words(candidate.address))
+        return Double(hints.filter(address.contains).count) / Double(hints.count)
+    }
+
+    /// The name-matching listing at the best-matching branch; ties go to the earlier listing
+    /// (the search's own ranking). Nil when no listing's name matches.
+    static func choose(_ candidates: [PlaceCandidate], name: String, query: String?) -> Choice? {
+        let hints = hints(query: query, name: name)
+        let named = candidates.enumerated().filter { namesMatch(name, $0.element.name) }
+        guard let best = named.max(by: { a, b in
+            let (sa, sb) = (branchScore(a.element, hints: hints), branchScore(b.element, hints: hints))
+            return sa == sb ? a.offset > b.offset : sa < sb
+        }) else { return nil }
+        return Choice(candidate: best.element, branchMatched: hints.isEmpty || branchScore(best.element, hints: hints) > 0)
     }
 }
 
@@ -863,7 +1000,9 @@ enum PlaceMapFit {
 
 /// When a reply has a map card, its place list already links each place, so a link preview for
 /// one of those places only repeats it. A link is covered when it points at a place's website
-/// domain, or its Markdown label names a place; other links (a form, an article) keep their card.
+/// domain, its Markdown label names a place, or its path spells a place's name; other links (a
+/// form, an article) keep their card. Pins carry the reply's own names, so this holds whatever
+/// listing a place resolved to.
 /// Applied when resolving previews and again when building each message snapshot, so every
 /// client shows the same cards, including for replies saved before this rule.
 enum PlaceLinkFilter {
@@ -903,8 +1042,17 @@ enum PlaceLinkFilter {
         places.contains { place in
             if let website = place.website.flatMap(URL.init(string:)), sameSite(url, website) { return true }
             if let label, labelNames(label, place: place.name) { return true }
-            return false
+            return slugNames(url, place: place.name)
         }
+    }
+
+    /// The link's path spells out the place's name, as listing sites do
+    /// (`/us/california/matcha-cafe-maiko-492809960` for "Matcha Cafe Maiko").
+    static func slugNames(_ url: URL, place: String) -> Bool {
+        let placeWords = Set(words(place))
+        guard placeWords.count >= 2 || placeWords.contains(where: { $0.count >= 5 }) else { return false }
+        let pathWords = Set(url.pathComponents.flatMap { words($0) })
+        return placeWords.isSubset(of: pathWords)
     }
 
     /// Same site: one host is the other or a subdomain of it. On shared hosts, the link must also
@@ -1104,14 +1252,39 @@ actor PlaceCardResolver {
     ```places
     {"near":"Santa Clara, CA","places":[{"name":"Concentra Urgent Care","query":"Concentra Urgent Care Santa Clara CA","category":"Urgent care clinic"}]}
     ```
-    Include only real places you named in your reply (up to 8). Omit fields you do not know; \
-    Cantrip resolves exact coordinates, addresses, hours, phone numbers, and websites via MapKit \
-    and OpenStreetMap. Never invent ratings, price levels, hours, or coordinates.
+    Include only real places you named in your reply (up to 8), each under the name you used in \
+    the reply. Make `query` the place's name and city ("Matcha Cafe Maiko Santa Clara CA"); add \
+    the branch's street only to pick one of several ("Arisan El Camino Real Sunnyvale CA"). Don't \
+    put a mall, a full street address or a zip code in `query`: those match the address or the \
+    mall instead of the place. Give a plain `category` ("Matcha cafe", "Urgent care clinic"); it \
+    sets the pin's icon. Omit fields you do not know; Cantrip resolves exact coordinates, \
+    addresses, hours, phone numbers, and websites via MapKit and OpenStreetMap. Never invent \
+    ratings, price levels, hours, or coordinates.
     """
 
     typealias LookupHandler = @Sendable (PlaceBlockProposal, Date) async -> PlaceCard?
 
     private var customLookup: LookupHandler?
+    /// Where listings come from; nil uses MapKit and OpenStreetMap (tests replay recorded results).
+    private var sources: Sources?
+
+    struct Sources: @unchecked Sendable {
+        var region: @Sendable (String?) async -> MKCoordinateRegion?
+        var search: @Sendable (String, MKCoordinateRegion?) async -> [PlaceCandidate]
+        var searchOSM: @Sendable (String, MKCoordinateRegion?) async -> [PlaceCandidate]
+        var details: @Sendable (PlaceCandidate, Date) async -> OSMPlaceMetadata?
+    }
+
+    static func liveSources(_ resolver: PlaceCardResolver) -> Sources {
+        Sources(
+            region: { await resolver.resolveSearchRegion(near: $0) },
+            search: { query, region in await resolver.searchCandidates(query: query, region: region) },
+            searchOSM: { query, region in await resolver.searchOSM(query: query, region: region) },
+            details: { candidate, now in
+                await resolver.fetchOSMMetadata(name: candidate.name, coordinate: candidate.coordinate, now: now)
+            }
+        )
+    }
     private let osmSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
@@ -1120,8 +1293,9 @@ actor PlaceCardResolver {
         return URLSession(configuration: config)
     }()
 
-    init(lookup: LookupHandler? = nil) {
+    init(lookup: LookupHandler? = nil, sources: Sources? = nil) {
         self.customLookup = lookup
+        self.sources = sources
     }
 
     func setCustomLookup(_ lookup: LookupHandler?) {
@@ -1176,7 +1350,7 @@ actor PlaceCardResolver {
         if let customLookup {
             return await customLookup(proposal, now)
         }
-        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"] != nil {
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"] != nil, sources == nil {
             return nil
         }
         return await resolveLive(proposal, now: now)
@@ -1184,65 +1358,23 @@ actor PlaceCardResolver {
 
     private func resolveLive(_ proposal: PlaceBlockProposal, now: Date) async -> PlaceCard? {
         let nearHint = proposal.near?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let regionHint = await resolveSearchRegion(near: nearHint)
+        let regionHint = sources != nil ? await sources!.region(nearHint) : await resolveSearchRegion(near: nearHint)
         var resolvedPins: [PlacePin] = []
         var seenCoordinates: [CLLocationCoordinate2D] = []
 
         if !proposal.places.isEmpty {
+            let sources = sources ?? Self.liveSources(self)
             for (index, item) in proposal.places.prefix(8).enumerated() {
-                let rawSearch = (item.query ?? item.name).trimmingCharacters(in: .whitespacesAndNewlines)
-                let searchQuery: String
-                if let nearHint, !nearHint.isEmpty,
-                   !rawSearch.localizedCaseInsensitiveContains(nearHint) {
-                    searchQuery = "\(rawSearch) \(nearHint)"
-                } else {
-                    searchQuery = rawSearch
-                }
-                guard let mapItem = await searchFirstMapItem(query: searchQuery, region: regionHint) else {
-                    continue
-                }
-                let coord = Self.coordinate(of: mapItem)
-                guard CLLocationCoordinate2DIsValid(coord),
-                      !(coord.latitude == 0 && coord.longitude == 0) else {
-                    continue
-                }
-                // Deduplicate pins within ~30 meters of each other with the same name.
+                guard let pin = await Self.pin(for: item, index: index, near: nearHint, region: regionHint,
+                                               sources: sources, now: now) else { continue }
+                // One pin per spot: a second place within ~30 meters is the same listing.
                 if seenCoordinates.contains(where: {
-                    abs($0.latitude - coord.latitude) < 0.0003 && abs($0.longitude - coord.longitude) < 0.0003
+                    abs($0.latitude - pin.latitude) < 0.0003 && abs($0.longitude - pin.longitude) < 0.0003
                 }) {
                     continue
                 }
-                seenCoordinates.append(coord)
-
-                let osmMeta = await fetchOSMMetadata(
-                    name: mapItem.name ?? item.name,
-                    coordinate: coord,
-                    now: now
-                )
-                let category = Self.friendlyCategory(mapItem.pointOfInterestCategory)
-                    ?? osmMeta?.category
-                    ?? item.category?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let address = Self.extractAddress(from: mapItem)
-                let website = Self.cleanWebsite(mapItem.url?.absoluteString ?? osmMeta?.website)
-                let phone = mapItem.phoneNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    ?? osmMeta?.phone
-                let pinID = "place-\(index + 1)-\( abs((mapItem.name ?? item.name).hashValue) % 100_000 )"
-
-                resolvedPins.append(PlacePin(
-                    id: pinID,
-                    name: mapItem.name ?? item.name,
-                    latitude: coord.latitude,
-                    longitude: coord.longitude,
-                    category: category?.isEmpty == false ? category : nil,
-                    address: address?.isEmpty == false ? address : nil,
-                    phone: phone?.isEmpty == false ? phone : nil,
-                    website: website,
-                    rating: nil,
-                    reviewCount: nil,
-                    priceLevel: nil,
-                    isOpenNow: osmMeta?.isOpenNow,
-                    hoursSummary: osmMeta?.hoursSummary
-                ))
+                seenCoordinates.append(pin.coordinate)
+                resolvedPins.append(pin)
             }
         } else if let query = proposal.query, !query.isEmpty {
             let fullQuery = (nearHint != nil && !query.localizedCaseInsensitiveContains(nearHint!))
@@ -1283,6 +1415,140 @@ actor PlaceCardResolver {
         )
     }
 
+    /// One proposed place as a pin. Always under the reply's name: a listing whose name matches,
+    /// at the branch the query names (MapKit's results, then OpenStreetMap's when MapKit only
+    /// knows another branch); with no such listing, an approximate pin at what the query found.
+    static func pin(for item: PlaceBlockProposal.Item, index: Int, near: String?, region: MKCoordinateRegion?,
+                    sources: Sources, now: Date) async -> PlacePin? {
+        let name = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = (item.query ?? item.name).trimmingCharacters(in: .whitespacesAndNewlines)
+        func withNear(_ text: String) -> String {
+            guard let near, !near.isEmpty, !text.localizedCaseInsensitiveContains(near) else { return text }
+            return "\(text) \(near)"
+        }
+        func distinct(_ list: [String]) -> [String] {
+            var seen = Set<String>()
+            return list.filter { seen.insert($0.lowercased()).inserted }
+        }
+        func same(_ a: PlaceCandidate, _ b: PlaceCandidate) -> Bool {
+            abs(a.latitude - b.latitude) < 0.0003 && abs(a.longitude - b.longitude) < 0.0003
+        }
+        var candidates: [PlaceCandidate] = []
+        var firstResult: PlaceCandidate?
+        var choice: PlaceMatcher.Choice?
+        // The query as written, then the name with the area, then the bare name (every branch).
+        for search in distinct([withNear(query), withNear(name), name]) {
+            let found = await sources.search(search, region)
+            if firstResult == nil { firstResult = found.first }
+            candidates += found.filter { new in !candidates.contains { same($0, new) } }
+            choice = PlaceMatcher.choose(candidates, name: name, query: query)
+            if choice?.branchMatched == true { break }
+        }
+        if choice?.branchMatched != true {
+            // MapKit doesn't know this branch (or the place): OpenStreetMap may.
+            let strongWord = PlaceMatcher.words(name).first { $0.count >= 4 }
+            for search in distinct([name] + (strongWord.map { [$0] } ?? [])) {
+                let found = await sources.searchOSM(search, region)
+                guard !found.isEmpty else { continue }
+                if let better = PlaceMatcher.choose(candidates + found.filter { new in !candidates.contains { same($0, new) } },
+                                                    name: name, query: query),
+                   choice == nil || (better.branchMatched && better.candidate != choice?.candidate) {
+                    choice = better
+                }
+                break
+            }
+        }
+        let hints = PlaceMatcher.hints(query: query, name: name)
+        if let current = choice, !current.branchMatched, !hints.isEmpty {
+            // Several branches and none on the query's street or in its city: the one nearest the
+            // place the query names (not the reply's `near`).
+            let named = candidates.filter { PlaceMatcher.namesMatch(name, $0.name) }
+            if named.count > 1, let locality = await sources.region(hints.joined(separator: " ")) {
+                let center = MKMapPoint(locality.center)
+                if let nearest = named.min(by: { MKMapPoint($0.coordinate).distance(to: center) < MKMapPoint($1.coordinate).distance(to: center) }) {
+                    choice = PlaceMatcher.Choice(candidate: nearest, branchMatched: false)
+                }
+            }
+        }
+        guard let listing = choice?.candidate ?? firstResult,
+              CLLocationCoordinate2DIsValid(listing.coordinate), !(listing.latitude == 0 && listing.longitude == 0) else {
+            return nil
+        }
+        let matched = choice != nil
+        let details = matched ? await sources.details(listing, now) : nil
+        let given = item.category?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let category = (given?.isEmpty == false ? given : nil)
+            ?? friendlyCategory(raw: matched ? listing.poiCategory : nil) ?? details?.category
+        let listed = matched && PlaceMatcher.words(listing.name) != PlaceMatcher.words(name) ? listing.name : nil
+        let phone = matched ? (listing.phone?.trimmingCharacters(in: .whitespacesAndNewlines) ?? details?.phone) : nil
+        return PlacePin(
+            id: "place-\(index + 1)-\(abs(name.hashValue) % 100_000)",
+            name: name,
+            latitude: listing.latitude,
+            longitude: listing.longitude,
+            category: category,
+            address: listing.address?.isEmpty == false ? listing.address : nil,
+            phone: phone?.isEmpty == false ? phone : nil,
+            website: matched ? cleanWebsite(listing.website ?? details?.website) : nil,
+            rating: nil,
+            reviewCount: nil,
+            priceLevel: nil,
+            isOpenNow: details?.isOpenNow,
+            hoursSummary: details?.hoursSummary,
+            listedName: listed,
+            isApproximate: matched ? nil : true,
+            symbol: PlaceSymbol.symbol(category: given, poi: matched ? (listing.poiCategory ?? details?.category) : nil)
+        )
+    }
+
+    @MainActor
+    private func searchCandidates(query: String, region: MKCoordinateRegion?) async -> [PlaceCandidate] {
+        await searchMapItems(query: query, region: region, limit: 10).map { item in
+            let coordinate = Self.coordinate(of: item)
+            return PlaceCandidate(name: item.name ?? "", latitude: coordinate.latitude, longitude: coordinate.longitude,
+                                  poiCategory: item.pointOfInterestCategory?.rawValue, address: Self.extractAddress(from: item),
+                                  phone: item.phoneNumber, website: item.url?.absoluteString)
+        }
+    }
+
+    /// OpenStreetMap's named places around the search area.
+    private func searchOSM(query: String, region: MKCoordinateRegion?) async -> [PlaceCandidate] {
+        var components = URLComponents(string: "https://nominatim.openstreetmap.org/search")!
+        var items = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "format", value: "jsonv2"),
+                     URLQueryItem(name: "extratags", value: "1"), URLQueryItem(name: "limit", value: "5")]
+        if let region {
+            let lat = max(region.span.latitudeDelta, 0.4), lon = max(region.span.longitudeDelta, 0.4)
+            items.append(URLQueryItem(name: "viewbox", value: String(
+                format: "%.5f,%.5f,%.5f,%.5f", region.center.longitude - lon, region.center.latitude + lat,
+                region.center.longitude + lon, region.center.latitude - lat)))
+            items.append(URLQueryItem(name: "bounded", value: "1"))
+        }
+        components.queryItems = items
+        guard let url = components.url else { return [] }
+        var request = URLRequest(url: url)
+        request.setValue("Cantrip/1.1 (macOS)", forHTTPHeaderField: "User-Agent")
+        guard let (data, response) = try? await osmSession.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return array.compactMap { entry in
+            guard let name = entry["name"] as? String, !name.isEmpty,
+                  let lat = (entry["lat"] as? String).flatMap(Double.init), let lon = (entry["lon"] as? String).flatMap(Double.init) else {
+                return nil
+            }
+            let tags = entry["extratags"] as? [String: Any] ?? [:]
+            let display = (entry["display_name"] as? String)?.components(separatedBy: ", ")
+            // "Arisan, 1082, East El Camino Real, Sunnyvale, Santa Clara County, …" → "1082 East El Camino Real, Sunnyvale"
+            var address: String?
+            if let parts = display, parts.count >= 4 {
+                let rest = Array(parts.dropFirst())
+                address = rest.first.map { Int($0) != nil && rest.count > 1 ? "\($0) \(rest[1]), \(rest[2])" : "\($0), \(rest[1])" }
+            }
+            return PlaceCandidate(name: name, latitude: lat, longitude: lon, poiCategory: entry["type"] as? String,
+                                  address: address, phone: (tags["phone"] ?? tags["contact:phone"]) as? String,
+                                  website: (tags["website"] ?? tags["contact:website"]) as? String, source: "osm")
+        }
+    }
+
     static func buildCard(query: String, regionName: String?, places: [PlacePin]) -> PlaceCard {
         let lats = places.map(\.latitude)
         let lons = places.map(\.longitude)
@@ -1306,7 +1572,7 @@ actor PlaceCardResolver {
     }
 
     @MainActor
-    private func resolveSearchRegion(near: String?) async -> MKCoordinateRegion? {
+    fileprivate func resolveSearchRegion(near: String?) async -> MKCoordinateRegion? {
         if let near, !near.isEmpty {
             let request = MKLocalSearch.Request()
             request.naturalLanguageQuery = near
@@ -1347,7 +1613,7 @@ actor PlaceCardResolver {
         return Array(response.mapItems.prefix(limit))
     }
 
-    private struct OSMPlaceMetadata {
+    struct OSMPlaceMetadata: Sendable {
         var isOpenNow: Bool?
         var hoursSummary: String?
         var category: String?
@@ -1355,7 +1621,7 @@ actor PlaceCardResolver {
         var website: String?
     }
 
-    private func fetchOSMMetadata(name: String, coordinate: CLLocationCoordinate2D, now: Date) async -> OSMPlaceMetadata? {
+    func fetchOSMMetadata(name: String, coordinate: CLLocationCoordinate2D, now: Date) async -> OSMPlaceMetadata? {
         var components = URLComponents(string: "https://nominatim.openstreetmap.org/search")!
         let delta = 0.015
         let viewbox = String(
@@ -1427,6 +1693,13 @@ actor PlaceCardResolver {
             return nil
         }
         return url.absoluteString
+    }
+
+    /// "MKPOICategoryCafe" → "Cafe"; an OSM type ("cafe") → "Cafe".
+    static func friendlyCategory(raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        if raw.hasPrefix("MKPOICategory") { return friendlyCategory(MKPointOfInterestCategory(rawValue: raw)) }
+        return raw.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     private static func friendlyCategory(_ category: MKPointOfInterestCategory?) -> String? {
@@ -1692,7 +1965,7 @@ struct PlaceCardView: View {
                         openDirections(place)
                     } label: {
                         HStack(spacing: 5) {
-                            Image(systemName: "cross.case.fill")
+                            Image(systemName: place.pinSymbol)
                                 .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(.white)
                                 .padding(5)
@@ -1877,6 +2150,16 @@ private struct PlaceListRowView: View {
                             )
                     } else if let address = place.address, !address.isEmpty {
                         Text(address)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .lineLimit(1)
+                    }
+                    if place.isApproximate == true {
+                        Label("Approximate location", systemImage: "location.slash")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Color(red: 0.96, green: 0.72, blue: 0.25))
+                    } else if let listed = place.listedName, !listed.isEmpty {
+                        Text("Listed as \(listed)")
                             .font(.system(size: 10.5))
                             .foregroundStyle(.white.opacity(0.55))
                             .lineLimit(1)
