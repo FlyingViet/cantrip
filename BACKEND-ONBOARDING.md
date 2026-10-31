@@ -200,6 +200,9 @@ live run.
 - Unfinished steps and subagents end when the turn ends (`ToolActivity.finishing`).
 - Give each step a readable title and, for edits, a diff. If the CLI's tool names are new, add
   them to `ToolActivityFactory` (`displayName`, `fileChanges`, `terminalCommand`).
+- Show reasoning and steps while the turn runs, not only at the end. `agy`'s stream-json
+  carries neither, so Cantrip reads the session's `transcript.jsonl` during the turn and on a
+  0.5 s poll (428ce0d).
 
 **Subagents and background work**
 - Show a subagent's card when it is launched, not when it starts. Copilot 1.0.88 queues
