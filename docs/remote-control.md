@@ -1614,7 +1614,9 @@ and attaches a `placeCard` object (`query`, `near`, `places` with `id`, `name`,
 `directionsURL`). Native Apple clients render the card with MapKit; web and
 Windows clients render an interactive slippy map backed by the Mac's cached
 OpenStreetMap tile proxy at `GET /api/v1/map-tile?z=<z>&x=<x>&y=<y>` (or
-`format=json` for base64 JSON).
+`format=json` for base64 JSON). Every client fits the map so each pin and its
+label sit in the area the floating place list doesn't cover; on a narrow card
+the list moves under the map instead. Focusing a place centres it in that area.
 
 A reply with a `placeCard` gets no `linkPreviews` for links the map already
 covers: a link to a place's website (same domain or a subdomain; on shared hosts

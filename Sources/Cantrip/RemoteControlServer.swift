@@ -3092,6 +3092,7 @@ private extension RemoteControlServer {
     .place-zoom button{width:32px;height:32px;border:0;background:transparent;color:#fff;font-size:16px;font-weight:700;cursor:pointer}.place-zoom button+button{border-top:1px solid rgba(255,255,255,.12)}.place-zoom button:hover{background:rgba(255,255,255,.12)}
     .place-attr{position:absolute;right:10px;bottom:8px;z-index:3;padding:2px 7px;border-radius:999px;background:rgba(15,17,21,.78);color:#9ca3af;font-size:10px;text-decoration:none}
     @media(max-width:620px){.place-card{display:flex;flex-direction:column;min-height:460px}.place-map-viewport{position:relative;height:220px;flex:none}.place-list{width:auto;max-height:240px;margin:8px}}
+    .place-card.stacked{display:flex;flex-direction:column;min-height:0}.place-card.stacked .place-map-viewport{position:relative;height:220px;flex:none}.place-card.stacked .place-list{width:auto;max-height:none;margin:8px}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
@@ -4077,13 +4078,25 @@ private extension RemoteControlServer {
     function appendPlaceCard(parent,card,messageID){const places=Array.isArray(card?.places)?card.places:[];if(!places.length)return;
       const key=messageID||card.query||places[0].id;let state=placeCardState.get(key);
       if(!state){const avgLat=places.reduce((s,p)=>s+p.latitude,0)/places.length,avgLon=places.reduce((s,p)=>s+p.longitude,0)/places.length;
-        state={lat:avgLat,lon:avgLon,zoom:initialPlaceZoom(places),selectedID:places[0].id};placeCardState.set(key,state)}
+        state={lat:avgLat,lon:avgLon,zoom:initialPlaceZoom(places),selectedID:places[0].id,fitKey:"",moved:false};placeCardState.set(key,state)}
       const wrap=document.createElement("section");wrap.className="place-card";wrap.setAttribute("role","group");wrap.setAttribute("aria-label",card.query?`Places for ${card.query}`:"Recommended places map");
       const viewport=document.createElement("div"),tileBox=document.createElement("div"),pinBox=document.createElement("div");viewport.className="place-map-viewport";tileBox.className="place-map-tiles";pinBox.className="place-map-pins";viewport.append(tileBox,pinBox);
       const list=document.createElement("div");list.className="place-list";
       if(card.query){const head=document.createElement("div");head.className="place-list-head";head.textContent=card.query;list.append(head)}
       const rowNodes=new Map(),pinNodes=new Map();
-      const drawMap=()=>{const width=viewport.clientWidth||680,height=viewport.clientHeight||390,z=state.zoom,maxTile=Math.pow(2,z),centerX=lonToWorldX(state.lon,z),centerY=latToWorldY(state.lat,z);
+      // The part of the map no overlay covers, as insets that include room for half a pin.
+      const freeArea=()=>{const vp=viewport.getBoundingClientRect(),lr=list.getBoundingClientRect();let halfW=0,halfH=0;for(const pin of pinNodes.values()){halfW=Math.max(halfW,pin.offsetWidth/2);halfH=Math.max(halfH,pin.offsetHeight/2)}
+        const overlaid=lr.width>0&&lr.top<vp.bottom&&lr.bottom>vp.top&&lr.left<vp.right;
+        return{left:(overlaid?lr.right-vp.left+8:10)+halfW,right:12+halfW,top:10+halfH,bottom:30+halfH}};
+      // Centre a world-pixel point (at zoom z) in the free area.
+      const centreIn=(area,width,height,x,y,z)=>{const cx=x-((area.left+width-area.right)/2-width/2),cy=y-((area.top+height-area.bottom)/2-height/2);state.lon=worldXToLon(cx,z);state.lat=worldYToLat(cy,z);state.zoom=z};
+      const fitPlaces=(width,height)=>{const area=freeArea(),w=Math.max(40,width-area.left-area.right),h=Math.max(40,height-area.top-area.bottom);let z=places.length>1?16:14;
+        for(;z>3;z--){const xs=places.map(p=>lonToWorldX(p.longitude,z)),ys=places.map(p=>latToWorldY(p.latitude,z));if(Math.max(...xs)-Math.min(...xs)<=w&&Math.max(...ys)-Math.min(...ys)<=h)break}
+        const xs=places.map(p=>lonToWorldX(p.longitude,z)),ys=places.map(p=>latToWorldY(p.latitude,z));centreIn(area,width,height,(Math.min(...xs)+Math.max(...xs))/2,(Math.min(...ys)+Math.max(...ys))/2,z)};
+      const focusPlace=p=>{state.selectedID=p.id;state.moved=true;const width=viewport.clientWidth||680,height=viewport.clientHeight||390;centreIn(freeArea(),width,height,lonToWorldX(p.longitude,state.zoom),latToWorldY(p.latitude,state.zoom),state.zoom);drawMap()};
+      const drawMap=()=>{wrap.classList.toggle("stacked",wrap.clientWidth>0&&wrap.clientWidth<560);
+        const width=viewport.clientWidth||680,height=viewport.clientHeight||390,fitKey=`${width}x${height}`;if(!state.moved&&viewport.clientWidth&&state.fitKey!==fitKey){state.fitKey=fitKey;fitPlaces(width,height)}
+        const z=state.zoom,maxTile=Math.pow(2,z),centerX=lonToWorldX(state.lon,z),centerY=latToWorldY(state.lat,z);
         const startTileX=Math.floor((centerX-width/2)/256),endTileX=Math.floor((centerX+width/2)/256),startTileY=Math.floor((centerY-height/2)/256),endTileY=Math.floor((centerY+height/2)/256);
         tileBox.replaceChildren();
         for(let tx=startTileX;tx<=endTileX;tx++){for(let ty=startTileY;ty<=endTileY;ty++){if(ty<0||ty>=maxTile)continue;const normX=((tx%maxTile)+maxTile)%maxTile,img=document.createElement("img");
@@ -4093,7 +4106,7 @@ private extension RemoteControlServer {
         for(const [id,node] of rowNodes)node.classList.toggle("selected",id===state.selectedID)};
       for(const p of places){const pin=document.createElement("button");pin.type="button";pin.className="place-pin";pin.setAttribute("aria-label",`Pin for ${p.name}`);
         const dot=document.createElement("span"),lbl=document.createElement("span");dot.className="place-pin-dot";dot.textContent="•";lbl.className="place-pin-label";lbl.textContent=p.name;pin.append(dot,lbl);
-        pin.onclick=event=>{event.stopPropagation();state.selectedID=p.id;state.lat=p.latitude;state.lon=p.longitude;drawMap()};pinBox.append(pin);pinNodes.set(p.id,pin);
+        pin.onclick=event=>{event.stopPropagation();focusPlace(p)};pinBox.append(pin);pinNodes.set(p.id,pin);
         const item=document.createElement("div"),name=document.createElement("div"),meta=document.createElement("div");item.className="place-item";name.className="place-item-name";name.textContent=p.name;meta.className="place-item-meta";
         const metaParts=[];if(typeof p.rating==="number")metaParts.push(`${p.rating.toFixed(1)} ★${p.reviewCount?` (${p.reviewCount})`:""}`);if(p.priceDisplay)metaParts.push(p.priceDisplay);if(p.category)metaParts.push(p.category);
         if(metaParts.length){const span=document.createElement("span");span.textContent=metaParts.join(" · ");meta.append(span)}
@@ -4104,17 +4117,19 @@ private extension RemoteControlServer {
         const dir=document.createElement("a");dir.className="place-action";dir.href=p.directionsURL||`https://maps.apple.com/?q=${encodeURIComponent(p.name)}&ll=${p.latitude},${p.longitude}`;dir.target="_blank";dir.rel="noopener noreferrer";dir.textContent="Directions";dir.onclick=e=>e.stopPropagation();actions.append(dir);
         if(p.phone){const digits=p.phone.replace(/[^0-9+*#]/g,"");if(digits){const call=document.createElement("a");call.className="place-action";call.href=`tel:${digits}`;call.textContent="Call";call.onclick=e=>e.stopPropagation();actions.append(call)}}
         if(p.website&&/^https?:\\/\\//i.test(p.website)){const web=document.createElement("a");web.className="place-action";web.href=p.website;web.target="_blank";web.rel="noopener noreferrer";web.textContent="Website";web.onclick=e=>e.stopPropagation();actions.append(web)}
-        item.append(actions);item.onclick=()=>{state.selectedID=p.id;state.lat=p.latitude;state.lon=p.longitude;drawMap()};list.append(item);rowNodes.set(p.id,item)}
+        item.append(actions);item.onclick=()=>focusPlace(p);list.append(item);rowNodes.set(p.id,item)}
       let dragStart=null;
-      viewport.addEventListener("pointerdown",e=>{if(e.target.closest(".place-pin"))return;dragStart={x:e.clientX,y:e.clientY,worldX:lonToWorldX(state.lon,state.zoom),worldY:latToWorldY(state.lat,state.zoom)};viewport.setPointerCapture(e.pointerId)});
+      viewport.addEventListener("pointerdown",e=>{if(e.target.closest(".place-pin"))return;state.moved=true;dragStart={x:e.clientX,y:e.clientY,worldX:lonToWorldX(state.lon,state.zoom),worldY:latToWorldY(state.lat,state.zoom)};viewport.setPointerCapture(e.pointerId)});
       viewport.addEventListener("pointermove",e=>{if(!dragStart)return;const nx=dragStart.worldX-(e.clientX-dragStart.x),ny=dragStart.worldY-(e.clientY-dragStart.y);state.lon=worldXToLon(nx,state.zoom);state.lat=worldYToLat(ny,state.zoom);drawMap()});
       viewport.addEventListener("pointerup",()=>{dragStart=null});viewport.addEventListener("pointercancel",()=>{dragStart=null});
       const zoomCtrl=document.createElement("div"),zoomIn=document.createElement("button"),zoomOut=document.createElement("button");zoomCtrl.className="place-zoom";
-      zoomIn.type="button";zoomIn.textContent="+";zoomIn.setAttribute("aria-label","Zoom in");zoomIn.onclick=()=>{state.zoom=Math.min(18,state.zoom+1);drawMap()};
-      zoomOut.type="button";zoomOut.textContent="−";zoomOut.setAttribute("aria-label","Zoom out");zoomOut.onclick=()=>{state.zoom=Math.max(3,state.zoom-1);drawMap()};
+      zoomIn.type="button";zoomIn.textContent="+";zoomIn.setAttribute("aria-label","Zoom in");zoomIn.onclick=()=>{state.moved=true;state.zoom=Math.min(18,state.zoom+1);drawMap()};
+      zoomOut.type="button";zoomOut.textContent="−";zoomOut.setAttribute("aria-label","Zoom out");zoomOut.onclick=()=>{state.moved=true;state.zoom=Math.max(3,state.zoom-1);drawMap()};
       zoomCtrl.append(zoomIn,zoomOut);
       const attr=document.createElement("a");attr.className="place-attr";attr.href="https://www.openstreetmap.org/copyright";attr.target="_blank";attr.rel="noopener noreferrer";attr.textContent="© OpenStreetMap";
-      wrap.append(viewport,list,zoomCtrl,attr);parent.append(wrap);requestAnimationFrame(drawMap)}
+      wrap.append(viewport,list,zoomCtrl,attr);parent.append(wrap);requestAnimationFrame(drawMap);
+      // Refit when the card changes size (a rotated phone, a resized window) until the user moves the map.
+      if(window.ResizeObserver){let last=0;new ResizeObserver(()=>{if(!wrap.isConnected||wrap.clientWidth===last)return;last=wrap.clientWidth;drawMap()}).observe(wrap)}}
     function appendReply(row,message,settled,session){const images=message.images||[],text=(images.length&&message.displayText)||message.text||"";inlineImages=images.length&&!session.isLocalPrivate?{sessionID:session.id,images:new Map(images.map(image=>[image.id,image]))}:null;try{appendReplyText(row,message,text,settled,session)}finally{inlineImages=null}if(!session.isLocalPrivate){if(message.placeCard)appendPlaceCard(row,message.placeCard,message.id);if(message.linkPreviews?.length)appendLinkPreviews(row,message.linkPreviews)}}
     function appendReplyText(row,message,text,settled,session){const appendText=part=>{if(!part)return;if(session.isLocalPrivate){const pre=document.createElement("pre");pre.textContent=part;row.append(pre)}else appendProse(row,part)};
       if(!settled.length){appendText(text);return}const groups=new Map();for(const agent of settled){const block=Math.max(0,agent.textBlock??0);if(!groups.has(block))groups.set(block,[]);groups.get(block).push(agent)}
