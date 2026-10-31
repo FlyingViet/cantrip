@@ -1076,6 +1076,7 @@ enum CantripRemoteError: LocalizedError {
     case maintenanceUnsupported
     case copilotUsageUnsupported
     case usageFallbackUnsupported
+    case mcpUnsupported
     case modelSettingsUnsupported
     case privateLocalUnsupported
 
@@ -1140,6 +1141,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to view Copilot account usage."
         case .usageFallbackUnsupported:
             return "Update and reopen Cantrip on your Mac to choose a usage limit fallback."
+        case .mcpUnsupported:
+            return "Update and reopen Cantrip on your Mac to manage its shared MCP servers."
         case .modelSettingsUnsupported:
             return "Update and reopen Cantrip on your Mac to change a tab's model, effort and context window."
         case .privateLocalUnsupported:
@@ -1734,6 +1737,18 @@ struct CantripRemoteAPI {
 
     fileprivate func updateUsageFallback(body: Data) async throws -> CantripUsageFallback {
         try await request(path: "/api/v1/usage-fallback", method: "POST", body: body)
+    }
+
+    func mcpServers(tab: String?) async throws -> CantripMCPSnapshot {
+        do {
+            return try await request(path: "/api/v1/mcp" + (tab.map { "?tab=\($0)" } ?? ""))
+        } catch CantripRemoteError.http(let status, _) where status == 404 || status == 405 {
+            throw CantripRemoteError.mcpUnsupported
+        }
+    }
+
+    fileprivate func mcpAction(body: Data) async throws -> CantripMCPSnapshot {
+        try await request(path: "/api/v1/mcp", method: "POST", body: body)
     }
 
     func copilotUsage() async throws -> CopilotUsageSnapshot {
@@ -2734,6 +2749,9 @@ final class CantripRemoteModel: ObservableObject {
     @Published var inputContext: CantripInputContext?
     @Published var inputReplyID: UUID?
     @Published var showingMacAccess = false
+    /// The MCP Servers sheet, and the tab it was opened from.
+    @Published var showingMCPServers = false
+    var mcpServersTab: String?
     /// Sections the Mac groups its tabs into, in order (empty: one flat list).
     @Published private(set) var tabSections: [CantripTabSection] = []
     @Published private(set) var supportsTabSections = false
@@ -3249,6 +3267,11 @@ final class CantripRemoteModel: ObservableObject {
             if target.kind == "macAttention" {
                 inputRequestsSession = nil
                 showingMacAccess = true
+            }
+            if target.kind == "mcpSignIn" {
+                inputRequestsSession = nil
+                mcpServersTab = nil
+                showingMCPServers = true
             }
             notificationNavigationID = UUID()
         } catch {
@@ -4097,6 +4120,18 @@ final class CantripRemoteModel: ObservableObject {
     /// The Mac-wide backend runs move to when the Mac's backend reports its usage limit.
     func usageFallback() async throws -> CantripUsageFallback {
         try await performHistoryRead { try await $0.usageFallback() }
+    }
+
+    /// The Mac's shared MCP servers and their sign-ins (with `tab`'s own switches).
+    func mcpServers(tab: String?) async throws -> CantripMCPSnapshot {
+        try await performHistoryRead { try await $0.mcpServers(tab: tab) }
+    }
+
+    /// Connect, approve, switch…; nil when it didn't go through (`errorMessage` says why).
+    func mcpAction(_ action: [String: Any]) async -> CantripMCPSnapshot? {
+        await mutate(prepare: { _ in try JSONSerialization.data(withJSONObject: action) }, { api, body in
+            try await api.mcpAction(body: body)
+        })
     }
 
     /// Saves the fallback (or clears every backend's limit); nil when it didn't save.
@@ -5295,6 +5330,9 @@ struct CantripRemoteView: View {
             }
             .sheet(item: $model.inputRequestsSession) { session in
                 CantripInputRequestsView(model: model, session: session)
+            }
+            .sheet(isPresented: $model.showingMCPServers) {
+                CantripMCPServersView(remote: model, tabID: model.mcpServersTab)
             }
             .sheet(isPresented: $model.showingMacAccess) {
                 NavigationStack { CantripMacAccessView(remote: model) }
