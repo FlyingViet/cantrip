@@ -3,7 +3,7 @@ import { useEffect, useState } from "preact/hooks";
 import { cachedImage, loadLinkPreviewImage, loadMapTile } from "../../api/client";
 import type { RemoteLinkPreview, RemotePlaceCard, RemotePlacePin } from "../../api/types";
 import { bridge } from "../../bridge";
-import { initialZoomForDelta, isSafePublicUrl, latToTileY, lonToTileX, placeDirectionsUrl, placeGlyph, placeNote } from "./richCardLogic";
+import { initialZoomForDelta, isSafePublicUrl, latToTileY, lonToTileX, placeDirectionsUrl, placeGlyph, placeNote, pinOffsets, pinWidth } from "./richCardLogic";
 
 export function LinkPreviewStack(props: { cards: RemoteLinkPreview[] | undefined }): JSX.Element | null {
   const cards = (props.cards ?? []).filter((c) => isSafePublicUrl(c.url));
@@ -129,21 +129,32 @@ export function PlaceCardView(props: { card: RemotePlaceCard | undefined }): JSX
     }
   }
 
+  // Close places: later pins move to the nearest free spot so every name stays readable.
+  const points = card.places.map((place) => ({
+    x: mapW / 2 + (lonToTileX(place.longitude, zoom) - centerTX) * 256,
+    y: mapH / 2 + (latToTileY(place.latitude, zoom) - centerTY) * 256,
+  }));
+  const moves = pinOffsets(points.map((point, index) => ({ ...point, w: pinWidth(card.places[index].name), h: 24 })), mapW, mapH);
+
   return (
     <section class="place-card" aria-label={card.query || "Recommended places"}>
       <div class="place-map-surface">
         {tiles.map((t) => (
           <MapTileImg key={`${zoom}:${t.tx}:${t.ty}`} z={zoom} x={t.tx} y={t.ty} left={t.left} top={t.top} />
         ))}
-        {card.places.map((place) => {
-          const px = mapW / 2 + (lonToTileX(place.longitude, zoom) - centerTX) * 256;
-          const py = mapH / 2 + (latToTileY(place.latitude, zoom) - centerTY) * 256;
+        {card.places.map((place, index) => {
+          const px = points[index].x;
+          const py = points[index].y;
+          const [moveX, moveY] = moves[index];
           return (
             <button
               key={place.id}
               type="button"
               class={`place-pin${selectedID === place.id ? " active" : ""}`}
-              style={{ left: `${Math.round(px)}px`, top: `${Math.round(py)}px` }}
+              style={{
+                left: `${Math.round(px)}px`, top: `${Math.round(py)}px`,
+                ...(moveX || moveY ? { transform: `translate(calc(-50% + ${moveX}px), calc(-50% + ${moveY}px))` } : {}),
+              }}
               onClick={() => {
                 setSelectedID(place.id);
                 bridge.openExternal(placeDirectionsUrl(place));

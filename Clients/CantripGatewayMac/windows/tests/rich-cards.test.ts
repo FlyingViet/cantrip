@@ -52,3 +52,20 @@ describe("place pin icons and notes", () => {
     expect(placeNote(pin({}))).toBeNull();
   });
 });
+
+describe("close pins", () => {
+  it("move to free spots so no two overlap, inside the map", async () => {
+    const { pinOffsets, pinWidth } = await import("../src/gateway/ui/transcript/richCardLogic");
+    const names = ["Matsu Matcha", "Matcha Cafe Maiko", "Arisan Tea & Coffee House", "Cere Tea", "Izumi Matcha"];
+    const points = [[300, 50], [330, 95], [250, 30], [290, 150], [260, 98]];
+    const pins = points.map(([x, y], i) => ({ x, y, w: pinWidth(names[i]), h: 24 }));
+    const moves = pinOffsets(pins, 580, 210);
+    expect(moves[0]).toEqual([0, 0]);
+    const rects = pins.map((p, i) => ({ l: p.x - p.w / 2 + moves[i][0], t: p.y - 12 + moves[i][1], r: p.x + p.w / 2 + moves[i][0], b: p.y + 12 + moves[i][1] }));
+    for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) {
+      const overlap = Math.min(rects[i].r, rects[j].r) > Math.max(rects[i].l, rects[j].l) && Math.min(rects[i].b, rects[j].b) > Math.max(rects[i].t, rects[j].t);
+      expect(overlap, `pins ${i} and ${j}`).toBe(false);
+    }
+    for (const r of rects) expect(r.l >= -1 && r.t >= -1 && r.r <= 581 && r.b <= 211).toBe(true);
+  });
+});
