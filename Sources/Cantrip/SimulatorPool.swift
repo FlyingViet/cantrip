@@ -1,0 +1,553 @@
+import Darwin
+import Foundation
+
+/// Simulators shared by agent tabs, so tabs testing at the same time never drive the same one and
+/// per-task simulators don't pile up. The pool keeps one simulator per device type and OS version.
+/// `cantrip sim acquire` leases it to a tab, or makes a temporary copy when another tab holds it.
+/// Releasing (or the tab's turn ending) shuts it down and deletes a temporary copy. `sweep`, run by
+/// `StorageUpkeep`, cleans up what was left behind.
+enum SimulatorPool {
+    /// Names of simulators the pool makes. Adopted ones keep their names.
+    static let poolPrefix = "Cantrip Pool"
+    static let temporaryPrefix = "Cantrip Temp"
+    /// A tab's lease ends with its turn; this only bounds one whose host stopped watching.
+    static let tabLeaseHours = 12.0
+    static let defaultLeaseHours = 4.0
+
+    struct Failure: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    // MARK: - Simulators
+
+    struct Device: Equatable {
+        var udid: String
+        var name: String
+        var state: String
+        var typeIdentifier: String
+        var runtimeIdentifier: String
+        var isAvailable: Bool
+        var dataBytes: Int64
+        /// When it was last booted or shut down; for one never booted, when it was made.
+        var lastUsed: Date?
+
+        var isBooted: Bool { state == "Booted" }
+    }
+
+    struct DeviceType: Equatable {
+        var identifier: String
+        var name: String
+    }
+
+    struct Runtime: Equatable {
+        var identifier: String
+        /// "27.2"
+        var version: String
+        /// "iOS 27.2"
+        var name: String
+        var isAvailable: Bool
+        var supportedTypes: Set<String>
+    }
+
+    /// `xcrun simctl`, replaceable in tests.
+    struct Simctl {
+        var run: ([String]) throws -> Data
+
+        static let system = Simctl { arguments in
+            let result = try ProcessRunner.run("/usr/bin/xcrun", ["simctl"] + arguments, timeout: 600)
+            guard result.succeeded else {
+                let detail = result.errorText.isEmpty ? (result.timedOut ? "timed out" : "failed") : result.errorText
+                throw Failure(message: "simctl \(arguments.prefix(2).joined(separator: " ")): \(detail)")
+            }
+            return result.output
+        }
+
+        private func json(_ arguments: [String]) throws -> [String: Any] {
+            guard let object = try JSONSerialization.jsonObject(with: try run(arguments)) as? [String: Any] else {
+                throw Failure(message: "simctl \(arguments.joined(separator: " ")) returned no JSON.")
+            }
+            return object
+        }
+
+        func devices() throws -> [Device] {
+            let lists = try json(["list", "devices", "-j"])["devices"] as? [String: [[String: Any]]] ?? [:]
+            return lists.flatMap { runtime, devices in
+                devices.compactMap { entry -> Device? in
+                    guard let udid = entry["udid"] as? String, let name = entry["name"] as? String else { return nil }
+                    var lastUsed = (entry["lastUsedAt"] as? String).flatMap { ISODate.date(from: $0) }
+                    if lastUsed == nil, let data = entry["dataPath"] as? String {
+                        let folder = (data as NSString).deletingLastPathComponent
+                        lastUsed = (try? FileManager.default.attributesOfItem(atPath: folder))?[.creationDate] as? Date
+                    }
+                    return Device(udid: udid, name: name, state: entry["state"] as? String ?? "",
+                                  typeIdentifier: entry["deviceTypeIdentifier"] as? String ?? "",
+                                  runtimeIdentifier: runtime,
+                                  isAvailable: entry["isAvailable"] as? Bool ?? false,
+                                  dataBytes: (entry["dataPathSize"] as? NSNumber)?.int64Value ?? 0,
+                                  lastUsed: lastUsed)
+                }
+            }
+            .sorted { $0.udid < $1.udid }
+        }
+
+        func deviceTypes() throws -> [DeviceType] {
+            (try json(["list", "devicetypes", "-j"])["devicetypes"] as? [[String: Any]] ?? []).compactMap {
+                guard let identifier = $0["identifier"] as? String, let name = $0["name"] as? String else { return nil }
+                return DeviceType(identifier: identifier, name: name)
+            }
+        }
+
+        func runtimes() throws -> [Runtime] {
+            (try json(["list", "runtimes", "-j"])["runtimes"] as? [[String: Any]] ?? []).compactMap {
+                guard let identifier = $0["identifier"] as? String, let version = $0["version"] as? String else { return nil }
+                let types = ($0["supportedDeviceTypes"] as? [[String: Any]] ?? []).compactMap { $0["identifier"] as? String }
+                return Runtime(identifier: identifier, version: version, name: $0["name"] as? String ?? version,
+                               isAvailable: $0["isAvailable"] as? Bool ?? false, supportedTypes: Set(types))
+            }
+        }
+
+        func create(_ name: String, type: String, runtime: String) throws -> String {
+            String(decoding: try run(["create", name, type, runtime]), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        func clone(_ udid: String, name: String) throws -> String {
+            String(decoding: try run(["clone", udid, name]), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        /// Shutting down one that isn't booted fails harmlessly.
+        func shutdown(_ udid: String) { _ = try? run(["shutdown", udid]) }
+        func delete(_ udid: String) throws { _ = try run(["delete", udid]) }
+        func erase(_ udid: String) throws { _ = try run(["erase", udid]) }
+        func rename(_ udid: String, to name: String) throws { _ = try run(["rename", udid, name]) }
+        func deleteUnavailable() throws { _ = try run(["delete", "unavailable"]) }
+    }
+
+    // MARK: - Pool and leases
+
+    /// The pool's simulator for one device type and OS version ("iPhone Duo|27.2").
+    struct Member: Codable, Equatable {
+        var key: String
+        var udid: String
+    }
+
+    struct Lease: Codable, Equatable {
+        var id: String
+        var udid: String
+        var key: String
+        /// A copy made because the pool's simulator was busy; deleted on release.
+        var temporary: Bool
+        /// The Cantrip tab holding it (`CANTRIP_TAB_ID`): its turn ending releases it.
+        var tab: String?
+        var acquiredAt: Date
+        var expiresAt: Date
+
+        var shortID: String { String(id.prefix(8)) }
+    }
+
+    struct State: Codable, Equatable {
+        var pool: [Member] = []
+        var leases: [Lease] = []
+        /// Temporary copies the pool made, by UDID, with when.
+        var temporaries: [String: Date] = [:]
+
+        func isTemporary(_ device: Device) -> Bool {
+            temporaries[device.udid] != nil || device.name.hasPrefix(SimulatorPool.temporaryPrefix)
+        }
+
+        func member(_ udid: String) -> Member? { pool.first { $0.udid == udid } }
+    }
+
+    /// `~/.cache/Cantrip/simulators/pool.json`, shared by the host and `cantrip` commands under a lock.
+    struct Store {
+        var directory: URL
+
+        static var standard: Store { Store(directory: CantripPaths.cache("simulators", isDirectory: true)) }
+
+        var file: URL { directory.appendingPathComponent("pool.json") }
+
+        func read() -> State {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return (try? Data(contentsOf: file)).flatMap { try? decoder.decode(State.self, from: $0) } ?? State()
+        }
+
+        /// Runs `body` holding the lock and saves the state it leaves, even when it throws.
+        func locked<T>(_ body: (inout State) throws -> T) throws -> T {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let lock = open(directory.appendingPathComponent("pool.lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+            guard lock >= 0 else { throw Failure(message: "Couldn't open the simulator pool's lock in \(directory.path).") }
+            defer { close(lock) }
+            guard flock(lock, LOCK_EX) == 0 else { throw Failure(message: "Couldn't lock the simulator pool.") }
+            defer { flock(lock, LOCK_UN) }
+            var state = read()
+            let original = state
+            defer {
+                if state != original {
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                    encoder.dateEncodingStrategy = .iso8601
+                    try? encoder.encode(state).write(to: file, options: .atomic)
+                }
+            }
+            return try body(&state)
+        }
+    }
+
+    /// What the pool works with; tests replace each part.
+    struct Context {
+        var store = Store.standard
+        var simctl = Simctl.system
+        /// Every running process's command line: one naming a simulator's UDID (xcodebuild,
+        /// Maestro, simctl) is using it.
+        var commandLines: () -> [String] = { StorageUpkeep.ProcessSnapshot.current().commandLines }
+        var now: () -> Date = Date.init
+    }
+
+    /// For agents' system instructions: lease simulators instead of making them.
+    static func agentGuidance(command: String) -> String {
+        """
+        Simulators on this Mac are shared. To run an app or tests in one, lease it: \
+        `\(command) sim acquire --device 'iPhone 17 Pro' [--os 27.0]` prints a UDID that's yours \
+        until your turn ends (a temporary copy when another tab has the pool's). Use it only by \
+        UDID: `xcodebuild -destination 'id=UDID'`, `xcrun simctl boot UDID`, `maestro --device UDID`. \
+        Never make simulators with `simctl create` or `simctl clone`, and never delete or erase \
+        them. When you're done, `\(command) sim release` shuts it down (and deletes a temporary \
+        copy); Cantrip also does this when your turn ends.
+        """
+    }
+
+    static func key(type: DeviceType, runtime: Runtime) -> String { "\(type.name)|\(runtime.version)" }
+
+    /// "iPhone Duo|27.2" → "iPhone Duo, iOS 27.2" given the runtime's name.
+    static func describe(_ key: String, platform: String = "iOS") -> String {
+        let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return key }
+        return "\(parts[0]), \(platform) \(parts[1])"
+    }
+
+    static func resolveType(_ name: String, in types: [DeviceType]) throws -> DeviceType {
+        let wanted = name.trimmingCharacters(in: .whitespaces).lowercased()
+        if let exact = types.first(where: { $0.name.lowercased() == wanted || $0.identifier.lowercased() == wanted }) {
+            return exact
+        }
+        let close = types.filter { $0.name.lowercased().contains(wanted) }
+        if close.count == 1 { return close[0] }
+        let suggestions = (close.isEmpty ? types.filter { $0.name.hasPrefix("iPhone") || $0.name.hasPrefix("iPad") } : close)
+            .prefix(12).map(\.name).joined(separator: ", ")
+        throw Failure(message: "No single simulator device type is called “\(name)”. Try one of: \(suggestions).")
+    }
+
+    /// The installed runtime for `os` ("27.2", "iOS 27.2"), or the newest one that runs the device type.
+    static func resolveRuntime(_ os: String?, for type: DeviceType, in runtimes: [Runtime]) throws -> Runtime {
+        let usable = runtimes.filter { $0.isAvailable && $0.supportedTypes.contains(type.identifier) }
+        guard let os = os?.trimmingCharacters(in: .whitespaces), !os.isEmpty else {
+            guard let newest = usable.max(by: { $0.version.compare($1.version, options: .numeric) == .orderedAscending }) else {
+                throw Failure(message: "No installed simulator runtime runs \(type.name).")
+            }
+            return newest
+        }
+        let version = os.split(separator: " ").last.map(String.init) ?? os
+        if let match = usable.first(where: { $0.version == version || $0.name.lowercased() == os.lowercased() })
+            ?? usable.filter({ $0.version.hasPrefix(version + ".") })
+                .max(by: { $0.version.compare($1.version, options: .numeric) == .orderedAscending }) {
+            return match
+        }
+        let installed = usable.map(\.version).sorted { $0.compare($1, options: .numeric) == .orderedAscending }
+        throw Failure(message: "\(type.name) has no installed runtime for \(os). Installed: \(installed.joined(separator: ", ")).")
+    }
+
+    struct Acquired: Codable {
+        var lease: Lease
+        var name: String
+        /// "iPhone Duo, iOS 27.2"
+        var description: String
+        /// The tab already held this lease; it was renewed.
+        var renewed = false
+    }
+
+    /// Leases a simulator for `device` on `os` (newest when nil). The pool's own when it's free,
+    /// otherwise a temporary copy. A tab asking again for the same kind gets its lease back.
+    static func acquire(device: String, os: String?, tab: String?, hours: Double? = nil,
+                        context c: Context = Context()) throws -> Acquired {
+        let type = try resolveType(device, in: try c.simctl.deviceTypes())
+        let runtime = try resolveRuntime(os, for: type, in: try c.simctl.runtimes())
+        let key = key(type: type, runtime: runtime)
+        let description = "\(type.name), \(runtime.name)"
+        return try c.store.locked { state in
+            let now = c.now()
+            var devices = try c.simctl.devices()
+            reap(&state, now: now, simctl: c.simctl)
+            let lifetime = (hours ?? (tab == nil ? defaultLeaseHours : tabLeaseHours)) * 3_600
+            if let tab, let index = state.leases.firstIndex(where: { $0.tab == tab && $0.key == key }),
+               devices.contains(where: { $0.udid == state.leases[index].udid }) {
+                state.leases[index].expiresAt = now.addingTimeInterval(lifetime)
+                let lease = state.leases[index]
+                return Acquired(lease: lease, name: devices.first { $0.udid == lease.udid }?.name ?? "", description: description,
+                                renewed: true)
+            }
+            let member = try poolMember(key: key, type: type, runtime: runtime, state: &state, devices: &devices, simctl: c.simctl)
+            let lines = c.commandLines()
+            let busy = state.leases.contains { $0.udid == member.udid } || lines.contains { $0.contains(member.udid) }
+            var udid = member.udid
+            var name = devices.first { $0.udid == member.udid }?.name ?? ""
+            let id = UUID().uuidString.lowercased()
+            if busy {
+                // A copy of a shut-down pool simulator keeps its apps; a booted one can't be copied.
+                name = "\(temporaryPrefix) · \(type.name) · \(runtime.name) · \(id.prefix(4))"
+                let source = devices.first { $0.udid == member.udid }
+                if source?.isBooted == false, let copy = try? c.simctl.clone(member.udid, name: name), !copy.isEmpty {
+                    udid = copy
+                } else {
+                    udid = try c.simctl.create(name, type: type.identifier, runtime: runtime.identifier)
+                }
+                state.temporaries[udid] = now
+            }
+            let lease = Lease(id: id, udid: udid, key: key, temporary: busy, tab: tab,
+                              acquiredAt: now, expiresAt: now.addingTimeInterval(lifetime))
+            state.leases.append(lease)
+            return Acquired(lease: lease, name: name, description: description)
+        }
+    }
+
+    /// The pool's simulator for `key`: the recorded one, else the most recently used existing one
+    /// of that kind (adopted), else a new one.
+    private static func poolMember(key: String, type: DeviceType, runtime: Runtime, state: inout State,
+                                   devices: inout [Device], simctl: Simctl) throws -> Member {
+        if let member = state.pool.first(where: { $0.key == key }),
+           devices.contains(where: { $0.udid == member.udid && $0.isAvailable }) {
+            return member
+        }
+        state.pool.removeAll { $0.key == key }
+        let leased = Set(state.leases.map(\.udid))
+        let snapshot = state
+        let candidates = devices.filter {
+            $0.typeIdentifier == type.identifier && $0.runtimeIdentifier == runtime.identifier && $0.isAvailable
+                && !snapshot.isTemporary($0) && !leased.contains($0.udid) && snapshot.member($0.udid) == nil
+        }
+        let udid: String
+        if let best = candidates.max(by: { ($0.lastUsed ?? .distantPast) < ($1.lastUsed ?? .distantPast) }) {
+            udid = best.udid
+            if let name = renameOnAdopting(best, type: type, runtime: runtime, simctl: simctl),
+               let index = devices.firstIndex(where: { $0.udid == udid }) {
+                devices[index].name = name
+            }
+        } else {
+            let name = poolName(type: type, runtime: runtime)
+            udid = try simctl.create(name, type: type.identifier, runtime: runtime.identifier)
+            devices.append(Device(udid: udid, name: name, state: "Shutdown", typeIdentifier: type.identifier,
+                                  runtimeIdentifier: runtime.identifier, isAvailable: true, dataBytes: 0, lastUsed: nil))
+        }
+        let member = Member(key: key, udid: udid)
+        state.pool.append(member)
+        return member
+    }
+
+    static func poolName(type: DeviceType, runtime: Runtime) -> String {
+        "\(poolPrefix) · \(type.name) · \(runtime.name)"
+    }
+
+    /// A project's own simulator ("Maps-Duo-QA") takes the pool's name when adopted; Xcode's
+    /// default ones keep theirs, since scripts pick them by name. Returns the new name.
+    private static func renameOnAdopting(_ device: Device, type: DeviceType, runtime: Runtime, simctl: Simctl) -> String? {
+        guard device.name != type.name, !device.name.hasPrefix(poolPrefix) else { return nil }
+        let name = poolName(type: type, runtime: runtime)
+        return (try? simctl.rename(device.udid, to: name)) == nil ? nil : name
+    }
+
+    /// Makes an existing simulator the pool's for its device type and OS version.
+    @discardableResult
+    static func adopt(_ udid: String, context c: Context = Context()) throws -> Member {
+        let devices = try c.simctl.devices()
+        guard let device = devices.first(where: { $0.udid.caseInsensitiveCompare(udid) == .orderedSame }), device.isAvailable else {
+            throw Failure(message: "No available simulator has the UDID \(udid).")
+        }
+        guard let type = try c.simctl.deviceTypes().first(where: { $0.identifier == device.typeIdentifier }),
+              let runtime = try c.simctl.runtimes().first(where: { $0.identifier == device.runtimeIdentifier }) else {
+            throw Failure(message: "\(device.name)'s device type or runtime isn't installed.")
+        }
+        return try c.store.locked { state in
+            guard !state.isTemporary(device) else { throw Failure(message: "\(device.name) is a temporary copy.") }
+            let member = Member(key: key(type: type, runtime: runtime), udid: device.udid)
+            _ = renameOnAdopting(device, type: type, runtime: runtime, simctl: c.simctl)
+            state.pool.removeAll { $0.key == member.key || $0.udid == member.udid }
+            state.pool.append(member)
+            state.pool.sort { $0.key < $1.key }
+            return member
+        }
+    }
+
+    /// Ends leases: the one named by lease ID (or its first 8 characters) or UDID, all of `tab`'s,
+    /// or every lease. Each simulator no other lease holds is shut down; a temporary one is deleted.
+    @discardableResult
+    static func release(_ target: String? = nil, tab: String? = nil, all: Bool = false,
+                        context c: Context = Context()) throws -> [Lease] {
+        try c.store.locked { state in
+            let wanted = target?.trimmingCharacters(in: .whitespaces).lowercased()
+            let ending = state.leases.filter { lease in
+                if all { return true }
+                if let wanted, !wanted.isEmpty {
+                    return lease.id == wanted || (wanted.count >= 8 && lease.id.hasPrefix(wanted)) || lease.udid.lowercased() == wanted
+                }
+                return tab != nil && lease.tab == tab
+            }
+            end(ending, in: &state, simctl: c.simctl)
+            return ending
+        }
+    }
+
+    /// Whether `tab` holds any lease, read without the lock (for skipping work).
+    static func hasLeases(tab: String, store: Store = .standard) -> Bool {
+        store.read().leases.contains { $0.tab == tab }
+    }
+
+    /// The UDIDs `tab` holds.
+    static func leasedUDIDs(tab: String, store: Store = .standard) -> [String] {
+        store.read().leases.filter { $0.tab == tab }.map(\.udid)
+    }
+
+    private static func end(_ leases: [Lease], in state: inout State, simctl: Simctl) {
+        let ids = Set(leases.map(\.id))
+        state.leases.removeAll { ids.contains($0.id) }
+        for udid in Set(leases.map(\.udid)) where !state.leases.contains(where: { $0.udid == udid }) {
+            simctl.shutdown(udid)
+            if leases.contains(where: { $0.udid == udid && $0.temporary }) {
+                if (try? simctl.delete(udid)) != nil { state.temporaries[udid] = nil }
+            }
+        }
+    }
+
+    /// Ends leases past their time.
+    private static func reap(_ state: inout State, now: Date, simctl: Simctl) {
+        end(state.leases.filter { $0.expiresAt <= now }, in: &state, simctl: simctl)
+    }
+
+    // MARK: - Cleanup
+
+    struct SweepOptions {
+        /// Also clean up simulators the pool didn't make: delete named ones unused for
+        /// `unusedDays`, erase Xcode's default ones that hold data, and delete ones whose runtime
+        /// is gone. Off by default: they may be someone's.
+        var includeUnmanaged = false
+        var unusedDays = 3
+        var temporaryHours = 24
+        /// A pool simulator holding more data than this is erased while it's free.
+        var poolSizeCap: Int64 = 10_000_000_000
+        /// A free pool simulator booted longer than this is shut down.
+        var idleBootMinutes = 60
+    }
+
+    struct Action: Codable, Equatable {
+        enum Kind: String, Codable { case deleted, erased, shutDown }
+        var udid: String
+        var name: String
+        var kind: Kind
+        var bytes: Int64
+        var reason: String
+    }
+
+    struct SweepReport: Codable, Equatable {
+        var actions: [Action] = []
+        var errors: [String] = []
+        var simulators = 0
+        var totalBytes: Int64 = 0
+        var poolBytes: Int64 = 0
+        var leased = 0
+
+        /// Space freed (deleted and erased simulators' data).
+        var bytesRemoved: Int64 { actions.filter { $0.kind != .shutDown }.reduce(0) { $0 + $1.bytes } }
+        var removedCount: Int { actions.filter { $0.kind != .shutDown }.count }
+    }
+
+    /// Cleans up simulators: never one with a live lease or a process using it, and never a
+    /// booted one the pool didn't make. Pool simulators stay (erased past the size cap).
+    static func sweep(_ o: SweepOptions, dryRun: Bool, context c: Context = Context(),
+                      log: (String) -> Void = { _ in }) -> SweepReport {
+        var report = SweepReport()
+        do {
+            let devices = try c.simctl.devices()
+            let typeNames = Dictionary((try c.simctl.deviceTypes()).map { ($0.identifier, $0.name) }, uniquingKeysWith: { a, _ in a })
+            let lines = c.commandLines()
+            let now = c.now()
+            func work(_ state: inout State) {
+                if !dryRun { reap(&state, now: now, simctl: c.simctl) }
+                let live = Set(state.leases.filter { $0.expiresAt > now }.map(\.udid))
+                report.leased = live.count
+                report.simulators = devices.count
+                report.totalBytes = devices.reduce(0) { $0 + $1.dataBytes }
+                report.poolBytes = devices.filter { state.member($0.udid) != nil }.reduce(0) { $0 + $1.dataBytes }
+                var deletesUnavailable = false
+                for device in devices {
+                    guard !live.contains(device.udid), !lines.contains(where: { $0.contains(device.udid) }) else { continue }
+                    let age = now.timeIntervalSince(device.lastUsed ?? .distantPast)
+                    if state.isTemporary(device) {
+                        let made = state.temporaries[device.udid] ?? device.lastUsed ?? .distantPast
+                        guard now.timeIntervalSince(made) >= Double(o.temporaryHours) * 3_600 else { continue }
+                        act(.deleted, device, reason: "temporary copy without a lease for \(o.temporaryHours) hours")
+                        if !dryRun { state.temporaries[device.udid] = nil }
+                    } else if state.member(device.udid) != nil {
+                        var shutDown = !device.isBooted
+                        if device.isBooted, age >= Double(o.idleBootMinutes) * 60 {
+                            act(.shutDown, device, reason: "pool simulator booted without a lease")
+                            shutDown = true
+                        }
+                        if shutDown, device.dataBytes > o.poolSizeCap {
+                            act(.erased, device, reason: "pool simulator over \(StorageUpkeep.format(o.poolSizeCap))")
+                        }
+                    } else if o.includeUnmanaged, !device.isBooted {
+                        if !device.isAvailable {
+                            act(.deleted, device, reason: "its runtime isn't installed", run: false)
+                            deletesUnavailable = true
+                            continue
+                        }
+                        guard age >= Double(o.unusedDays) * 86_400 else { continue }
+                        let days = age > 365 * 86_400 ? "ever" : "\(Int(age / 86_400)) days"
+                        if device.name == typeNames[device.typeIdentifier] {
+                            // Xcode's own default simulators stay in its device list, emptied.
+                            if device.dataBytes >= 100_000_000 { act(.erased, device, reason: "unused for \(days)") }
+                        } else {
+                            act(.deleted, device, reason: "not in the pool, unused for \(days)")
+                        }
+                    }
+                }
+                if deletesUnavailable, !dryRun {
+                    do { try c.simctl.deleteUnavailable() } catch { report.errors.append(error.localizedDescription) }
+                }
+            }
+            func act(_ kind: Action.Kind, _ device: Device, reason: String, run: Bool = true) {
+                if !dryRun, run {
+                    do {
+                        switch kind {
+                        case .shutDown: c.simctl.shutdown(device.udid)
+                        case .erased: c.simctl.shutdown(device.udid); try c.simctl.erase(device.udid)
+                        case .deleted: c.simctl.shutdown(device.udid); try c.simctl.delete(device.udid)
+                        }
+                    } catch {
+                        report.errors.append("Simulator \(device.name) (\(device.udid)): \(error.localizedDescription)")
+                        return
+                    }
+                }
+                let verb: String
+                switch kind {
+                case .deleted: verb = dryRun ? "would delete" : "deleted"
+                case .erased: verb = dryRun ? "would erase" : "erased"
+                case .shutDown: verb = dryRun ? "would shut down" : "shut down"
+                }
+                let bytes = kind == .shutDown ? 0 : device.dataBytes
+                report.actions.append(Action(udid: device.udid, name: device.name, kind: kind, bytes: bytes, reason: reason))
+                log("simulator \(device.name) (\(device.udid)) \(verb): \(StorageUpkeep.format(device.dataBytes)), \(reason)")
+            }
+            if dryRun {
+                var state = c.store.read()
+                work(&state)
+            } else {
+                try c.store.locked { state in work(&state) }
+            }
+        } catch {
+            report.errors.append("Simulators: \(error.localizedDescription)")
+        }
+        return report
+    }
+}

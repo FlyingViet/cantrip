@@ -74,6 +74,10 @@ final class AppSettings: ObservableObject {
     @Published var storageUpkeepEnabled: Bool {
         didSet { d.set(storageUpkeepEnabled, forKey: "storageUpkeepEnabled") }
     }
+    /// The daily cleanup also removes simulators the pool didn't make (`SimulatorPool.sweep`).
+    @Published var storageSimulatorCleanup: Bool {
+        didSet { d.set(storageSimulatorCleanup, forKey: "storageSimulatorCleanup") }
+    }
     /// Days an unused Copilot session folder is kept before the cleanup removes it.
     @Published var storageSessionRetentionDays: Int {
         didSet {
@@ -641,6 +645,7 @@ final class AppSettings: ObservableObject {
             "copilotIdleReleaseMinutes": copilotIdleReleaseMinutes,
             "storageUpkeepEnabled": storageUpkeepEnabled,
             "storageSessionRetentionDays": storageSessionRetentionDays,
+            "storageSimulatorCleanup": storageSimulatorCleanup,
         ]
     }
 
@@ -745,6 +750,7 @@ final class AppSettings: ObservableObject {
         int("storageSessionRetentionDays", StorageUpkeep.sessionRetentionDays) {
             self.storageSessionRetentionDays = $0
         }
+        bool("storageSimulatorCleanup") { self.storageSimulatorCleanup = $0 }
         int("remoteControlPort", 1...65535) { self.remoteControlPort = $0 }
         int("remoteLANPort", 0...65535) { self.remoteLANPort = $0 }
         if let opacity = dict["panelOpacity"] as? NSNumber, CFGetTypeID(opacity) != CFBooleanGetTypeID(),
@@ -826,6 +832,7 @@ final class AppSettings: ObservableObject {
         cantripHomeEnabled = d.bool(forKey: "cantripHomeEnabled")
         storageUpkeepEnabled = d.object(forKey: "storageUpkeepEnabled") == nil ? true : d.bool(forKey: "storageUpkeepEnabled")
         storageSessionRetentionDays = StorageUpkeep.Configuration.retentionDays(d)
+        storageSimulatorCleanup = d.bool(forKey: "storageSimulatorCleanup")
         let storedParallelRuns = d.integer(forKey: "cantripHomeParallelRuns")
         cantripHomeParallelRuns = storedParallelRuns == 0
             ? CantripHomeBackgroundRunner.defaultParallelRuns

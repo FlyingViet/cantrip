@@ -178,7 +178,9 @@ final class ChatSession: ObservableObject {
     }
     private(set) var remoteMessageRevision = UUID()
     private(set) var remoteQueueRevision = UUID()
-    @Published var isStreaming = false
+    @Published var isStreaming = false {
+        didSet { if oldValue, !isStreaming { releaseSimulatorsWhenIdle() } }
+    }
     @Published private(set) var isWaitingOnBackgroundWatchers = false
     @Published var statusText: String?
     @Published var focusRequested = false
@@ -3772,6 +3774,24 @@ final class ChatSession: ObservableObject {
                 SpeechSynth.shared.speak(reply.text)
             }
             onRunFinished?()
+        }
+    }
+
+    /// A tab's simulator leases (`cantrip sim acquire`) end with its turn: a few seconds after it
+    /// stops with nothing queued, its simulators shut down and temporary copies are deleted.
+    private func releaseSimulatorsWhenIdle() {
+        let tab = id.uuidString
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self, !self.isStreaming, self.queued.isEmpty else { return }
+            DispatchQueue.global(qos: .utility).async {
+                guard SimulatorPool.hasLeases(tab: tab) else { return }
+                do {
+                    let ended = try SimulatorPool.release(tab: tab)
+                    Log.write("simulators: released \(ended.map { "\($0.shortID) (\($0.key))" }.joined(separator: ", ")) when tab \(tab.prefix(8)) went idle")
+                } catch {
+                    Log.write("simulators: couldn't release tab \(tab.prefix(8))'s leases: \(error.localizedDescription)")
+                }
+            }
         }
     }
 

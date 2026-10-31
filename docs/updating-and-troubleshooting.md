@@ -329,17 +329,52 @@ Clean up unused agent sessions and worktrees daily**.
   on a branch (which is kept) or, for a detached worktree, on another branch,
   tag or remote. Checkouts in your own folders, such as `~/Coding`, are never
   touched. Records of agent worktrees that were already deleted are pruned.
+- **Simulators** from the [shared pool](#shared-simulators): a free pool
+  simulator that's been booted for an hour is shut down, one holding more than
+  10 GB of data is erased, and a temporary copy without a lease for 24 hours is
+  deleted. With **Also remove simulators unused for 3 days** (the
+  `storageSimulatorCleanup` setting, off by default), other simulators go too:
+  named ones nobody used for 3 days are deleted, Xcode's default ones are
+  erased instead (they stay in Xcode's list) and ones whose iOS runtime is gone
+  are deleted. A booted simulator the pool didn't make, one with a lease and
+  one a running build or test names (xcodebuild, Maestro, simctl) are never
+  touched, and runtimes are never removed.
 
-To see what would go, or to clean up now:
+To see what would go, or to clean up now (`--simulators` includes the other
+simulators for this run):
 
 ```sh
-cantrip cleanup --dry-run --list
+cantrip cleanup --dry-run --list --simulators
 cantrip cleanup
 ```
 
 Each removal is listed in `~/.cache/Cantrip/storage-upkeep.log`, and the last
 result in Settings and `~/.cache/Cantrip/storage-upkeep.json`. Copilot's own
 search index (`~/.copilot/session-store.db`) is left alone.
+
+## Shared simulators
+
+Tabs that test iOS apps share a small pool of simulators, one per device type
+and iOS version, instead of making their own:
+
+```sh
+UDID=$(cantrip sim acquire --device 'iPhone 17 Pro' --os 27.0)
+xcodebuild test -scheme App -destination "id=$UDID"
+cantrip sim release
+```
+
+`acquire` prints the UDID of the pool's simulator for that kind, leased to the
+tab (`CANTRIP_TAB_ID`). The first time, it adopts the most recently used
+existing simulator of that kind (a project's own one takes the name
+`Cantrip Pool · …`) or makes one. While another tab holds it, you get a
+temporary copy (`Cantrip Temp · …`), cloned from the pool's when it's shut
+down so it keeps its apps. A lease ends when the tab's turn ends or with
+`cantrip sim release`: the simulator is shut down and a temporary copy is
+deleted. Outside a tab, a lease lasts 4 hours (`--hours N`). `cantrip sim list`
+shows the pool and its leases, and `cantrip sim adopt UDID` makes an existing
+simulator the pool's for its kind. Agents in Copilot and Claude Code tabs are
+told to lease simulators this way, and a child tab's runs on its own leased
+simulator don't wait for other tabs' tests.
 
 ## Find diagnostics for a bug report
 

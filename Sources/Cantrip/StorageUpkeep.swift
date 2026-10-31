@@ -34,6 +34,9 @@ enum StorageUpkeep {
         var now = Date()
         var git = "/usr/bin/git"
         var processes: () -> ProcessSnapshot = ProcessSnapshot.current
+        /// Simulator cleanup (`SimulatorPool.sweep`); nil skips it (no Xcode, or tests).
+        var simulators: SimulatorPool.SweepOptions?
+        var simulatorPool = SimulatorPool.Context()
 
         static func standard(defaults: UserDefaults = .standard, now: Date = Date()) -> Configuration {
             let home = FileManager.default.homeDirectoryForCurrentUser
@@ -47,6 +50,10 @@ enum StorageUpkeep {
             let memoryOn = defaults.object(forKey: "memoryEnabled") == nil || defaults.bool(forKey: "memoryEnabled")
             // With memory on, a vault that can't be read stops the session sweep (`noteTokens`).
             let checkedVault = memoryOn || FileManager.default.fileExists(atPath: vault.path) ? vault : nil
+            let hasSimulators = (try? ProcessRunner.run("/usr/bin/xcrun", ["--find", "simctl"], errorOutput: .discard,
+                                                        timeout: 20))?.succeeded == true
+            var simulators = SimulatorPool.SweepOptions()
+            simulators.includeUnmanaged = defaults.bool(forKey: "storageSimulatorCleanup")
             return Configuration(
                 sessionRoot: sessions,
                 outputFolders: cache.appendingPathComponent("session-output-folders.json"),
@@ -57,7 +64,8 @@ enum StorageUpkeep {
                 agentRoots: [sessions, cache, URL(fileURLWithPath: "/private/var/folders")] + temporary,
                 stateDirectory: cache,
                 sessionRetention: TimeInterval(retentionDays(defaults)) * 86_400,
-                now: now
+                now: now,
+                simulators: hasSimulators ? simulators : nil
             )
         }
 
@@ -106,9 +114,10 @@ enum StorageUpkeep {
         var errors: [String] = []
         var freeBytesBefore: Int64?
         var freeBytesAfter: Int64?
+        var simulators: SimulatorPool.SweepReport?
 
         var worktreeBytesRemoved: Int64 { worktreesRemoved.reduce(0) { $0 + $1.bytes } }
-        var bytesRemoved: Int64 { sessionBytesRemoved + worktreeBytesRemoved }
+        var bytesRemoved: Int64 { sessionBytesRemoved + worktreeBytesRemoved + (simulators?.bytesRemoved ?? 0) }
 
         /// One sentence for Settings, the log and the terminal.
         var summary: String {
@@ -117,10 +126,15 @@ enum StorageUpkeep {
             var parts: [String] = []
             if sessionsRemoved > 0 { parts.append("\(sessions) (\(StorageUpkeep.format(sessionBytesRemoved)))") }
             if !worktreesRemoved.isEmpty { parts.append("\(worktrees) (\(StorageUpkeep.format(worktreeBytesRemoved)))") }
+            if let simulators, simulators.removedCount > 0 {
+                let count = simulators.removedCount == 1 ? "1 simulator's data" : "\(simulators.removedCount) simulators' data"
+                parts.append("\(count) (\(StorageUpkeep.format(simulators.bytesRemoved)))")
+            }
             var text = parts.isEmpty
                 ? (dryRun ? "Nothing to clean up right now." : "Nothing needed cleaning up.")
                 : (dryRun ? "Would remove " : "Removed ") + parts.joined(separator: " and ") + "."
-            if !errors.isEmpty { text += " \(errors.count) could not be removed." }
+            let failed = errors.count + (simulators?.errors.count ?? 0)
+            if failed > 0 { text += " \(failed) could not be removed." }
             return text
         }
 
@@ -192,6 +206,12 @@ enum StorageUpkeep {
         }
         sweepWorktrees(c, processes: processes, protections: protections, dryRun: dryRun, report: &report, log: log)
         sweepSessions(c, processes: processes, protections: protections, dryRun: dryRun, report: &report, log: log)
+        if let options = c.simulators {
+            var pool = c.simulatorPool
+            pool.commandLines = { processes.commandLines }
+            pool.now = { c.now }
+            report.simulators = SimulatorPool.sweep(options, dryRun: dryRun, context: pool, log: log)
+        }
         report.freeBytesAfter = freeBytes(c.sessionRoot)
         report.finishedAt = Date()
         return report
