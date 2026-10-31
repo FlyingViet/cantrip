@@ -3401,7 +3401,7 @@ final class CantripRemoteModel: ObservableObject {
 
     func copilotUsage() async throws -> CopilotUsageSnapshot {
         guard isConfigured else {
-            throw CantripRemoteError.transport("Configure Cantrip Remote in Settings and connect to your Mac to view Copilot usage.")
+            throw CantripRemoteError.transport("Configure Cantrip Remote in Settings and connect to your Mac to view usage limits.")
         }
         return try await performAuthenticated(allowFallback: true) { api in
             try await api.copilotUsage()
