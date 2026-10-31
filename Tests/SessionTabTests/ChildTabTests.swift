@@ -62,7 +62,7 @@ extension SessionTabTests {
         let items = ["Make tab sections reorderable and editable", "Tab sections: create empty sections + delete",
                      "Remove hamburger drag handles; hold-to-drag"]
             .map { QueuedPrompt(text: $0, includesAmbientContext: false) }
-        let plans = QueuePlanningPolicy.plans(sections, items: items, repositories: ["Cantrip", "Hermes"], childTitles: [])
+        let plans = QueuePlanningPolicy.plans(sections, items: items, repositories: ["Cantrip", "Hermes"], children: [])
         precondition(items.map { plans[$0.id]?.kind } == [.batch, .batch, .batch], "\(plans)")
         precondition(plans[items[0].id]?.reason == "Batched: same tab-list code")
         precondition(plans[items[1].id]?.reason == "Batched with #1: same tab-list code")
@@ -72,10 +72,13 @@ extension SessionTabTests {
         precondition(plans[items[2].id]?.title == "Remove hamburger drag handles; hold-to-drag",
                      "a blank title falls back to the message")
         precondition(plans[items[0].id]?.touches == ["TabSections.swift"])
+        precondition(plans[items[1].id]?.after == items[0].id && plans[items[2].id]?.after == items[0].id
+                     && plans[items[0].id]?.after == nil, "a batch runs after its first message")
 
         func decide(_ json: String, number: Int = 1, children: [String] = []) throws -> (QueuePlan.Kind, String) {
             let entry = try JSONDecoder().decode(QueuePlanningDecision.Item.self, from: Data(json.utf8))
-            return QueuePlanningPolicy.decide(entry, number: number, childTitles: children)
+            let decision = QueuePlanningPolicy.decide(entry, number: number, childTitles: children)
+            return (decision.kind, decision.reason)
         }
         func check(_ json: String, _ kind: QueuePlan.Kind, _ reason: String, number: Int = 1,
                    children: [String] = [], line: UInt = #line) throws {
@@ -88,12 +91,31 @@ extension SessionTabTests {
                   .fork, "Independent: can run in a child tab", number: 1)
         try check(#"{"number":1,"dependsOnCurrent":0.8,"overlaps":[]}"#, .queue, "Needs the current task's result")
         try check(#"{"number":1,"dependsOnCurrent":0.35,"overlaps":[]}"#, .queue, "Runs after the current task")
+        // The first of a group may run in a child tab; the later ones follow it.
         try check(#"{"number":2,"dependsOnCurrent":0.0,"overlaps":["3"],"shared":""}"#,
+                  .fork, "Independent: can run in a child tab", number: 2)
+        try check(#"{"number":2,"dependsOnCurrent":0.35,"overlaps":["3"],"shared":""}"#,
                   .batch, "Batched with #3: same files", number: 2)
+        try check(#"{"number":3,"dependsOnCurrent":0.0,"overlaps":["2"],"shared":"fallback code"}"#,
+                  .batch, "Batched with #2: same fallback code", number: 3)
+        // An explicit dependency: on an earlier message, or on a running child tab.
+        try check(#"{"number":4,"dependsOnCurrent":0.1,"overlaps":[],"after":"2"}"#,
+                  .batch, "After #2: needs its result", number: 4)
+        try check(#"{"number":4,"dependsOnCurrent":0.1,"overlaps":[],"after":2}"#,
+                  .batch, "After #2: needs its result", number: 4)
+        try check(#"{"number":2,"dependsOnCurrent":0.1,"overlaps":[],"after":"5"}"#,
+                  .fork, "Independent: can run in a child tab", number: 2)
+        try check(#"{"number":1,"dependsOnCurrent":0.0,"overlaps":[],"after":"child:1"}"#,
+                  .queue, "Waits for child tab “Codex onboarding”: needs its result", children: ["Codex onboarding"])
         try check(#"{"number":1,"dependsOnCurrent":0.0,"overlaps":["child:1"],"shared":"the README"}"#,
                   .queue, "Waits for child tab “Update docs”: same README", children: ["Update docs"])
         try check(#"{"number":1,"dependsOnCurrent":0.0,"overlaps":["child:4"]}"#,
                   .fork, "Independent: can run in a child tab", children: ["Update docs"])
+        // Read-only work isn't held by what it would only read.
+        try check(#"{"number":5,"dependsOnCurrent":0.1,"overlaps":["current","2"],"readOnly":true}"#,
+                  .fork, "Independent: can run in a child tab", number: 5)
+        try check(#"{"number":5,"dependsOnCurrent":0.1,"overlaps":["2"],"readOnly":true,"after":"2"}"#,
+                  .batch, "After #2: needs its result", number: 5)
         try check(#"{"number":1,"dependsOnCurrent":0.0,"overlaps":[],"exclusive":"release"}"#,
                   .wait, "Waits: releases run one at a time")
         try check(#"{"number":1,"dependsOnCurrent":0.0,"overlaps":["current"],"exclusive":"TestFlight"}"#,
@@ -105,7 +127,36 @@ extension SessionTabTests {
             } catch MessageRoutingError.invalidResponse {}
         }
         let plan = QueuePlan(kind: .fork, reason: "Independent: can run in a child tab", title: "Notes", repo: nil, touches: [])
-        precondition(plan.snapshot["kind"] as? String == "fork" && plan.snapshot["repo"] == nil)
+        precondition(plan.snapshot["kind"] as? String == "fork" && plan.snapshot["repo"] == nil
+                     && plan.snapshot["autoFork"] == nil && plan.snapshot["readOnly"] == nil)
+        let waiting = plan.explained("Auto-forks when a child tab finishes (3 of 3 running for this tab)", autoFork: .waiting)
+        precondition(waiting.snapshot["autoFork"] as? String == "waiting" && waiting.kind == .fork && waiting.samePlan(as: plan))
+
+        // Read-only work, a dependency on a child tab, and the plans that carry them.
+        let audit = try QueuePlanningDecision.parse(#"""
+        {"plans":[
+         {"number":1,"title":"Settings audit","dependsOnCurrent":0.0,"overlaps":[],"readOnly":true,"touches":[]},
+         {"number":2,"title":"Skills","dependsOnCurrent":0.1,"overlaps":[],"after":"child:1","touches":["skills/"]},
+         {"number":3,"title":"Odd","dependsOnCurrent":0.1,"readOnly":"yes","after":["x"]}]}
+        """#)
+        let auditItems = ["Audit the settings screens", "Share skills once Codex works", "Something"]
+            .map { QueuedPrompt(text: $0, includesAmbientContext: false) }
+        let codex = UUID()
+        let auditPlans = QueuePlanningPolicy.plans(audit, items: auditItems, repositories: [],
+                                                   children: [.init(id: codex, title: "Codex onboarding")])
+        precondition(auditPlans[auditItems[0].id]?.readOnly == true && auditPlans[auditItems[0].id]?.kind == .fork)
+        precondition(auditPlans[auditItems[1].id]?.afterChild == codex && auditPlans[auditItems[1].id]?.kind == .queue)
+        precondition(auditPlans[auditItems[2].id]?.readOnly == false && auditPlans[auditItems[2].id]?.kind == .fork,
+                     "fields of the wrong type are ignored")
+        // A brief that says "Plan first" is plan-only even when the planner missed it, so what it
+        // would only read doesn't hold it.
+        let briefed = try QueuePlanningDecision.parse(#"""
+        {"plans":[{"number":1,"dependsOnCurrent":0.0,"overlaps":["current"],"readOnly":false,"touches":["Settings.swift"]}]}
+        """#)
+        let brief = QueuedPrompt(text: "Goal: a secrets broker.\n\nConstraints:\n- Plan first. Build after the user approves.",
+                                 includesAmbientContext: false)
+        let briefPlan = QueuePlanningPolicy.plans(briefed, items: [brief], repositories: [], children: [])[brief.id]
+        precondition(briefPlan?.readOnly == true && briefPlan?.kind == .fork, "\(String(describing: briefPlan))")
     }
 
     static func testChildTabResources() {
@@ -254,11 +305,18 @@ extension SessionTabTests {
     @MainActor
     static func testChildTabLifecycle() async throws {
         let settings = AppSettings.shared
-        let saved = (settings.backend, settings.memoryEnabled, settings.voiceMode)
+        let saved = (settings.backend, settings.memoryEnabled, settings.voiceMode,
+                     settings.childTabsPerParentLimit, settings.childTabsOverallLimit)
         settings.backend = .copilot
         settings.memoryEnabled = false
         settings.voiceMode = false
-        defer { (settings.backend, settings.memoryEnabled, settings.voiceMode) = saved }
+        // The caps are settings; these steps use 2 per tab and 3 overall.
+        settings.childTabsPerParentLimit = 2
+        settings.childTabsOverallLimit = 3
+        defer {
+            (settings.backend, settings.memoryEnabled, settings.voiceMode,
+             settings.childTabsPerParentLimit, settings.childTabsOverallLimit) = saved
+        }
         let files = FileManager.default
         let repoURL = files.homeDirectoryForCurrentUser.appendingPathComponent("Coding/child-demo", isDirectory: true)
         let scratch = files.temporaryDirectory.appendingPathComponent("cantrip-child-tabs-\(UUID().uuidString)", isDirectory: true)
@@ -574,7 +632,7 @@ extension SessionTabTests {
         precondition(current.statusLine == "Done · no code changes" && !ChildTabGit.branchExists(repo, current.branch ?? "")
                      && !files.fileExists(atPath: lookTree) && !isOpen(look))
 
-        // 7. Caps (2 per tab, 3 overall) and Discard.
+        // 7. Caps (here 2 per tab, 3 overall) and Discard.
         asked = parentBackend.prompts.count
         parent.submitRemote("Plan the release", mode: .queue)
         try await waitForJournalTest { parentBackend.prompts.count == asked + 1 }
@@ -706,8 +764,9 @@ extension SessionTabTests {
         let plan = queued.first?["plan"] as? [String: Any]
         precondition(status == 200 && summary["supportsChildTabs"] as? Bool == true && summary["supportsQueuePlans"] as? Bool == true
                      && summary["childTabsUnavailableReason"] == nil, "\(summary)")
-        precondition(plan?["kind"] as? String == "fork" && plan?["reason"] as? String == "Independent: can run in a child tab"
-                     && plan?["title"] as? String == "Changelog", "\(queued)")
+        // Queued with Queue on the Mac: independent, but it waits for Run in Child Tab, and says so.
+        precondition(plan?["kind"] as? String == "fork" && plan?["reason"] as? String == ChildTabCoordinator.manualReason
+                     && plan?["title"] as? String == "Changelog" && plan?["autoFork"] == nil, "\(queued)")
 
         (status, body) = try await call("\(base)/queue/not-a-uuid/fork", "POST")
         precondition(status == 400, "\(status) \(body)")

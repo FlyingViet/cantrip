@@ -242,6 +242,7 @@ struct CantripHomeDelegationProposal: Decodable {
     var context: [String]?
     var constraints: [String]?
     var doneWhen: String?
+    var dependsOn: String?
 
     init(tabID: UUID, summary: String?, prompt: String?) {
         self.tabID = tabID
@@ -250,7 +251,7 @@ struct CantripHomeDelegationProposal: Decodable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case tabID, summary, prompt, goal, context, constraints, doneWhen
+        case tabID, summary, prompt, goal, context, constraints, doneWhen, dependsOn
     }
 
     init(from decoder: Decoder) throws {
@@ -262,6 +263,8 @@ struct CantripHomeDelegationProposal: Decodable {
         context = try Self.list(container, .context)
         constraints = try Self.list(container, .constraints)
         doneWhen = try container.decodeIfPresent(String.self, forKey: .doneWhen)
+        // A model may write a list of what it waits for.
+        dependsOn = try Self.list(container, .dependsOn)?.joined(separator: "; ")
     }
 
     /// Lists may arrive as one string from models that ignore the array form.
@@ -274,7 +277,7 @@ struct CantripHomeDelegationProposal: Decodable {
 
     var brief: CantripHomeHandoffBrief {
         .init(goal: goal, prompt: prompt, context: context ?? [], constraints: constraints ?? [],
-              doneWhen: doneWhen)
+              doneWhen: doneWhen, dependsOn: dependsOn)
     }
 }
 
@@ -373,7 +376,7 @@ final class CantripHomeDelegations {
         var activeTabs = Set<UUID>()
         var statusChanged = false
         var updated: [CantripHomeDelegation] = []
-        var claimed = Set(allHandoffs.filter(\.isInChildTab).map(\.tabID))
+        var claimed = claimedChildren
         for messageIndex in home.messages.indices
         where home.messages[messageIndex].delegations.contains(where: { $0.isActive || $0.followsChild }) {
             for index in home.messages[messageIndex].delegations.indices {
@@ -508,6 +511,19 @@ final class CantripHomeDelegations {
 
     nonisolated static let removedBeforeRunning = "The tab removed this request before it ran."
 
+    /// Child tabs a handoff's request started (one per child; a request that joined a child's
+    /// queue after it doesn't claim it).
+    private var claimedChildren: Set<UUID> {
+        Set(allHandoffs.filter { $0.isInChildTab && Self.startedChild($0, childStore.record($0.tabID)) }.map(\.tabID))
+    }
+
+    /// Whether `handoff`'s request is the one `child` started with (true without a record).
+    static func startedChild(_ handoff: CantripHomeDelegation, _ child: ChildTab?) -> Bool {
+        guard let child else { return true }
+        return child.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            == handoff.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var childStore: ChildTabStore { manager?.childTabs?.store ?? .shared }
 
     /// One handoff brought up to date: an active one follows its request into a child tab (or
@@ -526,7 +542,7 @@ final class CantripHomeDelegations {
         }
         let moved = Self.followingChildTab(recovered(current), children: Array(children.values), claimed: claimed)
         if moved.isInChildTab, !current.isInChildTab {
-            claimed.insert(moved.tabID)
+            if Self.startedChild(moved, children[moved.tabID]) { claimed.insert(moved.tabID) }
             Log.write("home: handoff \(moved.id) follows its request into child tab \(moved.tabID)")
         } else if current.isInChildTab, !moved.isInChildTab {
             Log.write("home: handoff \(moved.id) went back to its tab's queue with its request")
@@ -569,10 +585,12 @@ final class CantripHomeDelegations {
         let removed = handoff.status == .cancelled && handoff.error == removedBeforeRunning
         guard handoff.tabMessageID == nil, handoff.isActive || removed else { return handoff }
         let prompt = handoff.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        // Its own child, or the child of a request it depends on, whose queue it joined.
         guard let child = children.filter({
-            $0.parentID == handoff.tabID && $0.state != .requeued && !claimed.contains($0.id)
-                && $0.createdAt >= handoff.createdAt
-                && $0.prompt.trimmingCharacters(in: .whitespacesAndNewlines) == prompt
+            $0.parentID == handoff.tabID && $0.state != .requeued
+                && ((!claimed.contains($0.id) && $0.createdAt >= handoff.createdAt && trimmed($0.prompt) == prompt)
+                    || ($0.followUps ?? []).contains { trimmed($0) == prompt })
         }).min(by: { $0.createdAt < $1.createdAt }) else { return handoff }
         next.parentTabID = handoff.tabID
         next.parentTabTitle = handoff.tabTitle
@@ -618,7 +636,7 @@ final class CantripHomeDelegations {
             let prompt = next.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
             guard next.tabMessageID != nil || target.messages.contains(where: {
                 $0.role == .user && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == prompt
-            }) else {
+            }) || target.queued.contains(where: { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == prompt }) else {
                 // The child opens with the request a moment after it's set up.
                 next.status = .running
                 next.latestStatus = "Starting in the child tab…"
@@ -655,12 +673,12 @@ final class CantripHomeDelegations {
         guard let manager else { return }
         let children = Array(childStore.records.values)
         guard !children.isEmpty else { return }
-        var claimed = Set(allHandoffs.filter(\.isInChildTab).map(\.tabID))
+        var claimed = claimedChildren
         func revive(_ handoff: CantripHomeDelegation) -> CantripHomeDelegation? {
             guard handoff.status == .cancelled, handoff.error == Self.removedBeforeRunning else { return nil }
             let next = Self.followingChildTab(handoff, children: children, claimed: claimed)
             guard next.isInChildTab else { return nil }
-            claimed.insert(next.tabID)
+            if Self.startedChild(next, childStore.record(next.tabID)) { claimed.insert(next.tabID) }
             Log.write("home: handoff \(next.id) was reported removed; it follows child tab \(next.tabID)")
             return next
         }
@@ -1002,15 +1020,18 @@ final class CantripHomeDelegations {
         components, backends and companion clients, unless a tab with a more specific title or
         projects exists for that part; a tab whose recent requests discuss the same feature is
         the strongest match. If several tabs fit equally, pick the most recently discussed one.
-        Busy tabs are fine; the handoff waits in that tab's queue. Reply with one short sentence
-        naming the tab that is taking it, then end the reply with one fenced `cantrip-delegate`
-        JSON object per tab (at most 3). Write it as a brief: Cantrip turns it into the tab's
-        prompt and adds the user's own message.
+        Busy tabs are fine: an independent handoff starts in its own child tab of that tab when
+        one is free, and otherwise waits in its queue. Set dependsOn only when the work truly needs
+        another item in that tab finished first (its result, or the same code); never just to
+        order work ("queue after X"). Reply with one short sentence naming the tab that is taking
+        it, then end the reply with one fenced `cantrip-delegate` JSON object per tab (at most 3).
+        Write it as a brief: Cantrip turns it into the tab's prompt and adds the user's own message.
         {"tabID":"tab UUID from the list","summary":"short label under 80 characters",
         "goal":"the outcome the user wants from that tab",
         "context":["each relevant fact from this conversation: names, paths, IDs, errors, findings, decisions"],
         "constraints":["limits the user stated or that clearly apply"],
-        "doneWhen":"what finished and verified looks like","prompt":"extra instructions or null"}
+        "doneWhen":"what finished and verified looks like",
+        "dependsOn":"the queued or running work it must wait for, or null","prompt":"extra instructions or null"}
         Stay in Home and answer directly, without this block, when the user only mentions,
         references, asks about, compares, or wants status, metrics, explanations or analysis of a
         project, or explicitly asks you to handle it here. If checking something reveals that a
