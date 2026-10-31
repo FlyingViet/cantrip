@@ -1002,13 +1002,29 @@ export interface UsageFallbackSnapshot {
   backend: string;
   /** The whole chain in the order tried; missing from Macs before the chain. */
   backends?: string[];
+  /** The chain with each backup's model and effort ("" = default); missing from Macs before backup models. */
+  entries?: UsageFallbackEntry[];
   primary: string;
-  choices: { id: string; label: string }[];
+  choices: UsageFallbackChoice[];
   limited: { backend: string; until: string; untilLabel: string }[];
   revision: string;
 }
 
+export interface UsageFallbackEntry { backend: string; model: string; effort: string }
+
+export interface UsageFallbackChoice {
+  id: string;
+  label: string;
+  /** Models a backup on this backend can use; missing when it always runs its default. */
+  models?: { id: string; label: string; efforts?: string[] }[];
+  /** Efforts for its default model. */
+  defaultEfforts?: string[];
+  /** The Mac's own model for this backend, which "Default" means. */
+  defaultModel?: string;
+}
+
 export type UsageFallbackRequest =
+  | { revision: string; entries: UsageFallbackEntry[] }
   | { revision: string; backends: string[] }
   | { revision: string; backend: string }
   | { revision: string; resetLimits: true };

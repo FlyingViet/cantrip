@@ -519,6 +519,27 @@ describe("usage limit fallback", () => {
     expect(usageFallbackChange(snapshot("Copilot"), [])).toEqual({ revision: "f1", backend: "" });
   });
 
+  it("offers each backup's own models and efforts and saves them through entries", async () => {
+    const { usageFallbackModels, usageFallbackEfforts, usageFallbackModelChange, usageFallbackEntry } = await import("../src/gateway/ui/sheets/sheetLogic");
+    const withModels = {
+      ...snapshot("Claude Code", false, ["Claude Code", "Codex"]),
+      entries: [{ backend: "Claude Code", model: "claude-opus-5-5", effort: "high" }, { backend: "Codex", model: "", effort: "" }],
+      choices: [
+        { id: "Claude Code", label: "Claude Code", defaultEfforts: ["low", "high"],
+          models: [{ id: "claude-opus-5-5", label: "claude-opus-5-5", efforts: ["low", "medium", "high"] }] },
+        { id: "Codex", label: "Codex" },
+      ],
+    };
+    expect(usageFallbackModels(withModels, "Claude Code")?.map((item) => item.id)).toEqual(["claude-opus-5-5"]);
+    expect(usageFallbackModels(withModels, "Codex")).toBeUndefined();
+    expect(usageFallbackModels(snapshot("Codex", false, ["Codex"]), "Claude Code")).toBeUndefined();
+    expect(usageFallbackEfforts(withModels, "Claude Code")).toEqual(["low", "medium", "high"]);
+    expect(usageFallbackEntry(withModels, "Codex")).toEqual({ backend: "Codex", model: "", effort: "" });
+    expect(usageFallbackModelChange(withModels, "Codex", "", "")).toEqual({ revision: "f1", entries: withModels.entries });
+    expect(usageFallbackModelChange(withModels, "Claude Code", "", "low")).toEqual({
+      revision: "f1", entries: [{ backend: "Claude Code", model: "", effort: "low" }, { backend: "Codex", model: "", effort: "" }] });
+  });
+
   it("marks the Mac's own backend as skipped", async () => {
     const { usageFallbackLabel } = await import("../src/gateway/ui/sheets/sheetLogic");
     expect(usageFallbackLabel(snapshot(""), "Codex")).toBe("Codex");

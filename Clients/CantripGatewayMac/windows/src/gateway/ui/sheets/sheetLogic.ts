@@ -7,7 +7,7 @@ import type {
   CopilotQuotaBucket, CopilotUsageSnapshot, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
-  ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackRequest, UsageFallbackSnapshot,
+  ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackEntry, UsageFallbackRequest, UsageFallbackSnapshot,
   AntigravityLimitBucket, AntigravityUsageState, ClaudeLimitWindow, ClaudeUsageState,
 } from "../../api/types";
 
@@ -824,6 +824,31 @@ export function usageFallbackChange(value: UsageFallbackSnapshot, chain: string[
   return value.backends
     ? { revision: value.revision, backends: chain }
     : { revision: value.revision, backend: chain[0] ?? "" };
+}
+
+/** A backup's model and effort ("" = its default). */
+export function usageFallbackEntry(value: UsageFallbackSnapshot, backend: string): UsageFallbackEntry {
+  return value.entries?.find((entry) => entry.backend === backend) ?? { backend, model: "", effort: "" };
+}
+
+/** Models offered for a backup; undefined when the Mac doesn't take backup models or the backend has no picker. */
+export function usageFallbackModels(value: UsageFallbackSnapshot, backend: string): { id: string; label: string; efforts?: string[] }[] | undefined {
+  return value.entries ? value.choices.find((choice) => choice.id === backend)?.models : undefined;
+}
+
+/** Efforts for the backup's chosen model, or its default model's. */
+export function usageFallbackEfforts(value: UsageFallbackSnapshot, backend: string): string[] {
+  const choice = value.choices.find((item) => item.id === backend);
+  const model = usageFallbackEntry(value, backend).model;
+  return (model ? choice?.models?.find((item) => item.id === model)?.efforts : choice?.defaultEfforts) ?? [];
+}
+
+/** The request that sets one backup's model and effort, keeping the others. */
+export function usageFallbackModelChange(value: UsageFallbackSnapshot, backend: string, model: string, effort: string): UsageFallbackRequest {
+  return {
+    revision: value.revision,
+    entries: usageFallbackChain(value).map((id) => (id === backend ? { backend, model, effort } : usageFallbackEntry(value, id))),
+  };
 }
 
 /** The status line under the backups (CantripUsageFallback.status). */
