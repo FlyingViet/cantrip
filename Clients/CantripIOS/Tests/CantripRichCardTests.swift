@@ -1,4 +1,5 @@
 import Foundation
+import MapKit
 import XCTest
 @testable import Hermes
 
@@ -140,4 +141,27 @@ final class CantripRichCardTests: XCTestCase {
         let fetched = try await client.linkPreviewImageData(id: sampleImageID)
         XCTAssertEqual(fetched, sampleBytes)
     }
+
+    func testPlaceMapFitKeepsEveryPinRightOfTheList() throws {
+        let pins = [
+            CLLocationCoordinate2D(latitude: 37.3692, longitude: -121.9512),
+            CLLocationCoordinate2D(latitude: 37.3535, longitude: -121.9399),
+            CLLocationCoordinate2D(latitude: 37.3816, longitude: -121.9751),
+        ]
+        let size = CGSize(width: 680, height: 310)
+        // A 244 pt list floating 12 pt from the left edge, plus room for pin labels.
+        let insets = CantripPlaceMapFit.Insets(top: 40, left: 264 + 80, bottom: 34, right: 12 + 80)
+        let rect = try XCTUnwrap(CantripPlaceMapFit.rect(for: pins, size: size, insets: insets))
+        XCTAssertEqual(rect.size.width / rect.size.height, size.width / size.height, accuracy: 0.0001)
+        let area = CGRect(x: insets.left, y: insets.top, width: size.width - insets.left - insets.right,
+                          height: size.height - insets.top - insets.bottom).insetBy(dx: -0.5, dy: -0.5)
+        for pin in pins {
+            let point = MKMapPoint(pin)
+            let screen = CGPoint(x: (point.x - rect.origin.x) / rect.size.width * size.width,
+                                 y: (point.y - rect.origin.y) / rect.size.height * size.height)
+            XCTAssertTrue(area.contains(screen), "\(screen) outside \(area)")
+        }
+        XCTAssertNil(CantripPlaceMapFit.rect(for: [], size: size, insets: insets))
+    }
 }
+
