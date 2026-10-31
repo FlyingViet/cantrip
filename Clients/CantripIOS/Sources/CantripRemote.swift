@@ -668,6 +668,8 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsQueueRemoval: Bool? = nil
     /// The Mac can deliver a queued message now; absent from older hosts.
     var supportsQueueSendNow: Bool? = nil
+    /// Stop paused the queue: it waits for Resume. Absent from Macs whose Stop clears the queue.
+    var queuePaused: Bool? = nil
     var customTitle: String? = nil
     var isLocked: Bool? = nil
     var supportsTabMetadata: Bool? = nil
@@ -4415,6 +4417,16 @@ final class CantripRemoteModel: ObservableObject {
         stoppingSessionID = sessionID
         defer { stoppingSessionID = nil }
         return await sessionAction("cancel", sessionID: sessionID)
+    }
+
+    /// Runs a queue that Stop paused, from its first message.
+    @discardableResult
+    func resumeQueue(sessionID: String) async -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish, then try resuming the queue again."
+            return false
+        }
+        return await sessionAction("resumeQueue", sessionID: sessionID)
     }
 
     @discardableResult

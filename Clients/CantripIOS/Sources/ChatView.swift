@@ -2158,6 +2158,28 @@ struct ChatView: View {
     }
 
     /// Sends the next queued message now; failures show in the remote notices like other chat actions.
+    /// The queued-messages row above the composer, with Send now and (when Stop paused it) Resume.
+    private func queueButton(_ session: CantripRemoteSession) -> some View {
+        let nextID = session.queued?.first?.id
+        return CantripQueueButton(
+            session: session,
+            sendNow: nextID.map { id in { sendQueuedPromptNow(id, sessionID: session.id) } },
+            resume: queueResume(for: session),
+            isSendingNow: remote.sendingQueuedPromptID != nil && remote.sendingQueuedPromptID == nextID,
+            canSendNow: remote.isConnected && !remote.isMutating
+        ) {
+            composerFocused = false
+            showQueue = true
+        }
+    }
+
+    /// Resume for a queue Stop paused; nil otherwise.
+    private func queueResume(for session: CantripRemoteSession) -> (() -> Void)? {
+        guard session.queuePaused == true else { return nil }
+        let id = session.id
+        return { Task { await remote.resumeQueue(sessionID: id) } }
+    }
+
     private func sendQueuedPromptNow(_ id: String, sessionID: String) {
         Task {
             _ = await remote.sendQueuedPromptNow(id, sessionID: sessionID)
@@ -2352,17 +2374,7 @@ struct ChatView: View {
                let session = remote.selectedSession,
                session.id == remote.selectedSessionID,
                session.queuedCount > 0 {
-                let nextID = session.queued?.first?.id
-                CantripQueueButton(
-                    session: session,
-                    sendNow: nextID.map { id in { sendQueuedPromptNow(id, sessionID: session.id) } },
-                    isSendingNow: remote.sendingQueuedPromptID != nil
-                        && remote.sendingQueuedPromptID == nextID,
-                    canSendNow: remote.isConnected && !remote.isMutating
-                ) {
-                    composerFocused = false
-                    showQueue = true
-                }
+                queueButton(session)
             }
             if paused {
                 pausedBar

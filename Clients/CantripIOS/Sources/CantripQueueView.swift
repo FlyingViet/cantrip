@@ -4,6 +4,8 @@ struct CantripQueueButton: View {
     let session: CantripRemoteSession
     /// Sends the next queued message now. Nil keeps the plain row.
     var sendNow: (() -> Void)? = nil
+    /// Runs a queue Stop paused. Nil when there's nothing to resume.
+    var resume: (() -> Void)? = nil
     var isSendingNow = false
     var canSendNow = true
     let action: () -> Void
@@ -15,9 +17,17 @@ struct CantripQueueButton: View {
         sendNow != nil && session.supportsQueueSendNow == true && next != nil
     }
 
+    private var isPaused: Bool { session.queuePaused == true && resume != nil }
+
     var body: some View {
         Group {
-            if !showsSendNow {
+            if isPaused {
+                HStack(spacing: 0) {
+                    openButton
+                    resumeButton
+                        .padding(.trailing, 10)
+                }
+            } else if !showsSendNow {
                 openButton
             } else if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 0) {
@@ -40,7 +50,9 @@ struct CantripQueueButton: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Label("Queued messages (\(session.queuedCount))", systemImage: "clock")
+                    Label(session.queuePaused == true ? "Queue paused (\(session.queuedCount))"
+                          : "Queued messages (\(session.queuedCount))",
+                          systemImage: session.queuePaused == true ? "pause.circle" : "clock")
                         .font(.caption.weight(.semibold))
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right")
@@ -60,6 +72,21 @@ struct CantripQueueButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint("View messages waiting to run on your Mac")
+    }
+
+    private var resumeButton: some View {
+        Button {
+            resume?()
+        } label: {
+            Label("Resume", systemImage: "play.circle")
+                .font(.caption.weight(.semibold))
+                .frame(minWidth: 44, minHeight: 44)
+        }
+        .buttonStyle(.bordered)
+        .disabled(!canSendNow)
+        .accessibilityLabel("Resume the queue")
+        .accessibilityHint("Runs the queued messages again, from the first one")
+        .accessibilityIdentifier("queue.resume")
     }
 
     @ViewBuilder
@@ -337,6 +364,17 @@ struct CantripQueueView: View {
     private func queueContents(_ session: CantripRemoteSession) -> some View {
         if let queued = session.queued {
             List {
+                if session.queuePaused == true {
+                    Section {
+                        Button("Resume queue", systemImage: "play.circle") {
+                            Task { await remote.resumeQueue(sessionID: session.id) }
+                        }
+                        .disabled(!canMutate)
+                        .accessibilityIdentifier("queue.resumeAll")
+                    } footer: {
+                        Text("Stop paused the queue. It runs again from the first message when you resume, or send one now.")
+                    }
+                }
                 Section {
                     ForEach(Array(queued.enumerated()), id: \.element.id) { index, prompt in
                         queueRow(prompt, index: index)
