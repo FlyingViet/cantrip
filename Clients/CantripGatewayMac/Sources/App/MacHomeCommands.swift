@@ -49,7 +49,7 @@ struct MacHomeCommands: Commands {
             .disabled(startFreshTabID == nil)
             Button("Toggle Terminal") { navigation.showingTerminal.toggle() }
             .keyboardShortcut("`", modifiers: .control)
-            Button("Copilot Usage") { navigation.sheet = .usage }
+            Button("Usage Limits") { navigation.sheet = .usage }
             Button("Cantrip Memory") { navigation.sheet = .memory }
             Button("GitHub Builds") { navigation.sheet = .builds }
             Button("Customize Mascot…") { navigation.sheet = .mascot }

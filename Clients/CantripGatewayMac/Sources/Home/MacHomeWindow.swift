@@ -273,7 +273,7 @@ struct MacHomeWindow: View {
             }
             Button("Refresh", systemImage: "arrow.clockwise") { Task { await remote.refreshNow() } }
                 .disabled(!remote.isConfigured || remote.isRefreshing)
-            Button("Copilot Usage", systemImage: "gauge.with.dots.needle.33percent") {
+            Button("Usage Limits", systemImage: "gauge.with.dots.needle.33percent") {
                 navigation.sheet = .usage
             }
             .disabled(!remote.isConfigured)
@@ -324,7 +324,7 @@ struct MacHomeWindow: View {
                     isDisabled: remote.isMutating || CantripStartFresh.isBusy(session)
                 )
             }
-            Button("Copilot Usage", systemImage: "gauge.with.dots.needle.33percent") {
+            Button("Usage Limits", systemImage: "gauge.with.dots.needle.33percent") {
                 navigation.sheet = .usage
             }
             .disabled(!remote.isConfigured)
