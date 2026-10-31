@@ -90,6 +90,7 @@ final class HostServices {
             }
         }
         self.remoteControlServer = remoteControlServer
+        MCPHost.shared.start(remote: remoteControlServer, postsMacNotifications: postsMacNotifications)
         CantripHomeStore.shared.onHandoff = { [weak self] run, handoff in
             guard let self else { return }
             let title = "Handed to \(handoff.tabTitle)"

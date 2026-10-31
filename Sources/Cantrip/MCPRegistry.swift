@@ -134,7 +134,10 @@ enum MCPSecrets {
 }
 
 enum MCPRegistry {
-    static var file: URL { CantripPaths.cache("mcp/servers.json") }
+    static var file: URL {
+        ProcessInfo.processInfo.environment["CANTRIP_MCP_REGISTRY"].map { URL(fileURLWithPath: $0) }
+            ?? CantripPaths.cache("mcp/servers.json")
+    }
 
     struct Snapshot: Codable, Equatable {
         var servers: [MCPServer] = []

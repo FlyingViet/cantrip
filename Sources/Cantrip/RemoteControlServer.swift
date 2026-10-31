@@ -254,6 +254,78 @@ final class RemoteControlServer {
     }
 
     @MainActor
+    func notifyMCPSignIn(id: UUID) {
+        guard !token.isEmpty else { return }
+        notificationLifecycleLock.lock()
+        let activation = notificationLifecycleTask
+        notificationLifecycleLock.unlock()
+        Task {
+            await activation?.value
+            // No tab: clients open their MCP Servers screen for this kind.
+            await notifications.enqueueInput(id: id, sessionID: UUID(uuid: UUID_NULL),
+                                            expiresAt: Date().addingTimeInterval(15 * 60), kind: "mcpSignIn")
+        }
+    }
+
+    /// Shared MCP servers: the list and sign-in states (never a token), and actions on them.
+    /// Approving presses the consent page's own button in the agent Chrome.
+    @MainActor
+    private func handleMCP(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
+        let hub = MCPServerHub.shared
+        switch request.method {
+        case "GET":
+            var payload = hub.remotePayload()
+            if let tab = request.query("tab").flatMap(UUID.init(uuidString:)) {
+                payload["tabDisabled"] = MCPBackendConfig.tabDisabled(tab).sorted()
+            }
+            sendJSON(payload, on: connection)
+        case "POST":
+            guard request.body.count <= 4096,
+                  let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+                  let action = body["action"] as? String, let name = body["name"] as? String,
+                  hub.server(name) != nil else {
+                sendError(400, "Send an action and the name of a server Cantrip knows.", on: connection)
+                return
+            }
+            let enabled = body["enabled"] as? Bool
+            do {
+                switch action {
+                case "connect": hub.connect(name)
+                case "approve", "decline": hub.respond(name, approve: action == "approve")
+                case "cancel": hub.cancel(name)
+                case "signOut": Task { await hub.signOut(name) }
+                case "setEnabled":
+                    guard let enabled else { throw URLError(.badURL) }
+                    try hub.update { snapshot in
+                        if let index = snapshot.servers.firstIndex(where: { $0.name == name }) { snapshot.servers[index].enabled = enabled }
+                    }
+                case "setBackend":
+                    guard let enabled, let backend = (body["backend"] as? String).flatMap(BackendKind.init(rawValue:)) else {
+                        throw URLError(.badURL)
+                    }
+                    try hub.update { snapshot in
+                        guard let index = snapshot.servers.firstIndex(where: { $0.name == name }) else { return }
+                        var off = Set(snapshot.servers[index].disabledBackends)
+                        if enabled { off.remove(backend.rawValue) } else { off.insert(backend.rawValue) }
+                        snapshot.servers[index].disabledBackends = off.sorted()
+                    }
+                case "setTab":
+                    guard let enabled, let tab = (body["tab"] as? String).flatMap(UUID.init(uuidString:)) else { throw URLError(.badURL) }
+                    hub.setTab(tab, server: name, enabled: enabled)
+                default:
+                    sendError(400, "Unknown MCP action \(action).", on: connection)
+                    return
+                }
+                sendJSON(hub.remotePayload(), on: connection)
+            } catch {
+                sendError(400, "That MCP change needs a server name and on or off (and a backend or tab).", on: connection)
+            }
+        default:
+            sendError(405, "method not allowed", on: connection)
+        }
+    }
+
+    @MainActor
     private func handleMacAccess(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
         guard request.body.count <= 24000 else { sendError(413, "Mac access request is too large.", on: connection); return }
         let desktop = desktopOverride ?? RemoteDesktop.shared
@@ -641,6 +713,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/browser"
                 || request.path == "/api/v1/browser/frame"
                 || request.path == "/api/v1/usage-fallback"
+                || request.path == "/api/v1/mcp"
                 || request.path == "/api/v1/link-previews/image"
                 || request.path.hasPrefix("/api/v1/link-previews/image/")
                 || request.path == "/api/v1/map-tile" else {
@@ -653,6 +726,10 @@ final class RemoteControlServer {
         }
         if request.path == "/api/v1/mac-access" || request.path.hasPrefix("/api/v1/desktop/") {
             handleMacAccess(request, on: connection)
+            return
+        }
+        if request.path == "/api/v1/mcp" {
+            handleMCP(request, on: connection)
             return
         }
         if request.path == "/api/v1/maintenance" {
@@ -2936,6 +3013,9 @@ private extension RemoteControlServer {
     #inputEditor{width:min(calc(100% - 24px),580px);max-height:90vh;overflow:auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
     #inputEditor::backdrop{background:rgba(0,0,0,.35)}.input-card{display:grid;gap:12px;margin:16px 0;padding:12px;border:1px solid var(--line);border-radius:10px}
     #desktopEditor{width:min(calc(100% - 24px),1000px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
+    #mcpEditor{width:min(calc(100% - 24px),760px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#mcpEditor::backdrop{background:rgba(0,0,0,.35)}
+    .mcp-row{border-top:1px solid var(--line);padding:10px 0;display:flex;flex-direction:column;gap:6px}.mcp-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.mcp-head strong{flex:1}.mcp-status{font-size:13px}.mcp-status.attn{color:var(--accent,#0a84ff)}.mcp-status.warn{color:#c76a00}
+    .mcp-switches{display:flex;gap:12px;flex-wrap:wrap;font-size:13px}.mcp-page img{max-width:100%;max-height:340px;border:1px solid var(--line);border-radius:8px}#mcpEditor button{min-height:44px}
     #desktopEditor::backdrop{background:rgba(0,0,0,.35)}#desktopEditor .tab-actions{flex-wrap:wrap}#desktopEditor button,#desktopEditor select{min-height:44px}
     #desktopViewport{height:380px;overflow:auto;border:1px solid var(--line)}#desktopImage{display:block;max-width:none;height:auto;width:100%}
     #desktopText{width:100%;box-sizing:border-box;min-height:44px}#desktopPermissions>div{margin:12px 0}
@@ -3033,7 +3113,7 @@ private extension RemoteControlServer {
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
     <label id="tabSectionLabel" class="hidden">Section<select id="tabSection"></select></label><input id="tabNewSection" class="hidden" maxlength="40" autocomplete="off" placeholder="New section name" aria-label="New section name">
-    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button>
+    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
@@ -3060,6 +3140,8 @@ private extension RemoteControlServer {
     </div></form></dialog>
     <dialog id="browserViewer" aria-labelledby="browserViewerTitle"><div class="browser-top"><span id="browserViewerTitle">Agent Chrome</span><button id="browserViewerClose" class="control">Close</button></div>
     <img id="browserViewerImage" alt="Live view of the agent browser"><div id="browserViewerError" role="status"></div></dialog>
+    <dialog id="mcpEditor" aria-labelledby="mcpTitle"><div class="tasks-bar"><strong id="mcpTitle" class="grow">MCP Servers</strong><button id="mcpDone" type="button" class="control">Done</button></div>
+    <p class="muted">Every backend shares these. Sign-ins open in the agent Chrome; approve them here.</p><div id="mcpError" role="alert"></div><div id="mcpList"></div></dialog>
     <dialog id="desktopEditor" aria-labelledby="desktopTitle"><strong id="desktopTitle">Mac Permissions &amp; View Mac</strong>
     <p class="muted">Start viewing explicitly. The Mac must first allow paired clients in Cantrip settings. Screen frames and typed text stay out of chat, files and AI models. Protected dialogs may be unavailable. Phone Face ID does not authorize macOS dialogs.</p>
     <div id="desktopError" role="alert"></div><div class="tab-actions">
@@ -3696,6 +3778,28 @@ private extension RemoteControlServer {
     let desktopState=null;
     const desktopBytes=value=>Uint8Array.from(atob(value),c=>c.charCodeAt(0));
     function desktopBase64(bytes){let result="";for(let i=0;i<bytes.length;i+=8192)result+=String.fromCharCode(...bytes.subarray(i,i+8192));return btoa(result)}
+    let mcpState=null,mcpTab=null,mcpTimer=null;
+    function el(tag,cls="",text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n}
+    $("tabMCP").onclick=()=>{if(tabSaving||movingTab)return;mcpTab=editingTab;$("tabEditor").close();editingTab=null;$("mcpError").textContent="";$("mcpEditor").showModal();loadMCP()};
+    $("mcpDone").onclick=()=>$("mcpEditor").close();$("mcpEditor").addEventListener("close",()=>{clearTimeout(mcpTimer);mcpState=null});
+    async function loadMCP(){clearTimeout(mcpTimer);if(!$("mcpEditor").open)return;try{mcpState=await api("/api/v1/mcp"+(mcpTab?`?tab=${encodeURIComponent(mcpTab)}`:""));$("mcpError").textContent="";renderMCP()}catch(e){$("mcpError").textContent=e.message||"MCP servers aren't available on this Mac."}
+      const busy=(mcpState?.servers||[]).some(s=>["connecting","awaitingApproval","needsLogin"].includes(s.state?.phase));mcpTimer=setTimeout(loadMCP,busy?1500:8000)}
+    async function mcpAction(body){try{mcpState=await api("/api/v1/mcp",{method:"POST",body:JSON.stringify(body)});$("mcpError").textContent="";renderMCP();setTimeout(loadMCP,600)}catch(e){$("mcpError").textContent=e.message||"That didn't work."}}
+    function mcpStatus(s){if(!s.enabled)return["Off",""];const p=s.state?.phase;if(!s.oauth)return["Ready",""];
+      return({ready:[s.state?.expiresAt?`Signed in · token until ${new Date(s.state.expiresAt).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}`:"Signed in",""],connecting:["Signing in…",""],awaitingApproval:["Waiting for your OK","attn"],needsLogin:["Log in to finish","attn"],locked:["Keychain locked","warn"],failed:["Sign-in failed","warn"]})[p]||["Not signed in","warn"]}
+    function renderMCP(){const list=$("mcpList");list.replaceChildren();const backends=["Copilot","Claude Code","Codex","Antigravity"];const tabOff=new Set(mcpState?.tabDisabled||[]);
+      if(!(mcpState?.servers||[]).length){list.append(el("p","muted","Cantrip isn't sharing MCP servers yet. Turn it on in Settings > MCP Servers on the Mac."));return}
+      for(const s of mcpState.servers){const row=el("div","mcp-row"),head=el("div","mcp-head");head.append(el("strong","",s.name),el("span","muted",`${s.remote?"remote":"local"}${s.relayed?" · via Cantrip":""}`));
+        const[st,cls]=mcpStatus(s);head.append(el("span",`mcp-status ${cls}`,st));const phase=s.state?.phase;
+        const button=(label,action,primary)=>{const b=el("button",`control${primary?" primary":""}`,label);b.type="button";b.onclick=()=>mcpAction({action,name:s.name});return b};
+        if(s.oauth&&s.enabled){if(["connecting","awaitingApproval","needsLogin"].includes(phase))head.append(button("Cancel","cancel"));else if(phase==="ready")head.append(button("Sign Out","signOut"));else head.append(button("Connect","connect",true))}
+        row.append(head);
+        const sw=el("div","mcp-switches");const check=(label,on,body)=>{const l=el("label");const c=document.createElement("input");c.type="checkbox";c.checked=on;c.onchange=()=>mcpAction({...body,name:s.name,enabled:c.checked});l.append(c," "+label);return l};
+        sw.append(check("On",s.enabled,{action:"setEnabled"}));for(const b of backends)sw.append(check(b,!(s.disabledBackends||[]).includes(b),{action:"setBackend",backend:b}));if(mcpTab)sw.append(check("This tab",!tabOff.has(s.name),{action:"setTab",tab:mcpTab}));row.append(sw);
+        if(s.state&&["awaitingApproval","needsLogin","connecting","failed","locked"].includes(phase)){const page=el("div","mcp-page");if(s.state.message)page.append(el("p","muted",s.state.message));
+          if(s.state.screenshot){const img=document.createElement("img");img.alt=`The sign-in page for ${s.name}`;img.src=`data:image/jpeg;base64,${s.state.screenshot}`;page.append(img)}
+          if(phase==="awaitingApproval"){const a=el("div","tab-actions");a.append(button("Decline","decline"),button("Approve","approve",true));page.append(a)}row.append(page)}
+        list.append(row)}}
     function openDesktop(){desktopState={token,lease:null,frame:null,sequence:0,timer:null,saving:false,starting:false,generation:0};$("desktopError").textContent="";$("desktopEditor").showModal();loadDesktopStatus()}
     async function loadDesktopStatus(){const state=desktopState;if(!state)return;
       try{const data=await api("/api/v1/mac-access");if(desktopState!==state||token!==state.token)return;

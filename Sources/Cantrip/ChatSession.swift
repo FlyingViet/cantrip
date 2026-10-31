@@ -2110,6 +2110,10 @@ final class ChatSession: ObservableObject {
             if let backend = copilot as? CopilotBackend {
                 CantripHomeTaskTools.configure(backend, taskRun: cantripHomeTask != nil)
             }
+            let excluded = cantripHomeTask != nil ? Set(CantripHomeTaskTools.disabledServers()) : []
+            claudeCode.excludedMcpServers = excluded
+            codex.excludedMcpServers = excluded
+            if cantripHomeTask != nil { MCPHost.taskRunTabs.insert(id.uuidString) } else { MCPHost.taskRunTabs.remove(id.uuidString) }
             resetBackendConversations()
         }
 

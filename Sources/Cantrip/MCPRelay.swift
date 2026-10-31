@@ -8,6 +8,7 @@ import Network
 /// JSON-RPC both ways.
 final class MCPRelay: @unchecked Sendable {
     static var socketPath: String {
+        if let override = ProcessInfo.processInfo.environment["CANTRIP_MCP_SOCKET"], !override.isEmpty { return override }
         let preferred = CantripPaths.cache("mcp-relay.sock").path
         return preferred.utf8.count < 104 ? preferred : "/tmp/cantrip-\(getuid())/mcp-relay.sock"
     }

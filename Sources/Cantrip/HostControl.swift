@@ -17,6 +17,8 @@ final class HostControl {
             return status()
         case "tab":
             return TabInsight.handle(request, manager: manager)
+        case "mcp":
+            return mcp(request)
         case "pair":
             guard settings.remoteControlEnabled || HostMode.isHeadless else {
                 return ["error": "Remote control is off. Turn it on with `cantrip config set remoteControlEnabled true`."]
@@ -200,5 +202,100 @@ final class HostControl {
         case is String: return "text"
         default: return "a number"
         }
+    }
+
+    // MARK: - mcp
+
+    private func mcp(_ request: [String: Any]) -> [String: Any] {
+        let hub = MCPServerHub.shared
+        let name = request["name"] as? String ?? ""
+        func known() -> String? { hub.server(name) == nil ? "Cantrip has no MCP server called \(name). `cantrip mcp` lists them." : nil }
+        switch request["action"] as? String {
+        case "list", nil:
+            return ["text": Self.describe(hub)]
+        case "migrate":
+            let dryRun = request["dryRun"] as? Bool ?? true
+            do {
+                let report = try MCPMigration.run(dryRun: dryRun)
+                hub.reload()
+                Task { await hub.refreshStates() }
+                var lines = [dryRun ? "Would share \(report.servers.count) servers with every backend:" : "Shared \(report.servers.count) servers with every backend:"]
+                lines.append("  " + report.servers.joined(separator: ", "))
+                lines.append("Through Cantrip's relay (sign-in, credential or tool limit): " + report.relayed.joined(separator: ", "))
+                lines.append("\(report.secretsMoved) credential(s) \(dryRun ? "would move" : "moved") to the keychain.")
+                lines += report.notes
+                if !report.written.isEmpty { lines.append("Updated: " + report.written.joined(separator: "; ")) }
+                if dryRun { lines.append("Run `cantrip mcp migrate --apply` to do it (originals stay restorable with `cantrip mcp restore`).") }
+                return ["text": lines.joined(separator: "\n")]
+            } catch {
+                return ["error": "Nothing changed: \(error.localizedDescription)"]
+            }
+        case "restore":
+            do {
+                let restored = try MCPMigration.restore()
+                hub.reload()
+                return ["text": restored.isEmpty ? "No backup to restore." : "Restored " + restored.joined(separator: " and ") + "."]
+            } catch {
+                return ["error": error.localizedDescription]
+            }
+        case "connect":
+            if let problem = known() { return ["error": problem] }
+            guard hub.server(name)?.oauth == true else { return ["error": "\(name) doesn't sign in with OAuth."] }
+            hub.connect(name)
+            return ["text": "Signing in to \(name). Approve the page in Cantrip (Settings > MCP Servers, or Cantrip Agent) when it asks; `cantrip mcp` shows progress."]
+        case "approve", "decline":
+            if let problem = known() { return ["error": problem] }
+            guard hub.states[name]?.phase == .awaitingApproval else { return ["error": "\(name) isn't waiting for approval."] }
+            hub.respond(name, approve: request["action"] as? String == "approve")
+            return ["text": request["action"] as? String == "approve" ? "Approved. Finishing the sign-in…" : "Declined."]
+        case "signout":
+            if let problem = known() { return ["error": problem] }
+            Task { await hub.signOut(name) }
+            return ["text": "Signed out of \(name)."]
+        case "enable", "disable":
+            if let problem = known() { return ["error": problem] }
+            let on = request["action"] as? String == "enable"
+            if let tab = (request["tab"] as? String).flatMap(UUID.init(uuidString:)) {
+                hub.setTab(tab, server: name, enabled: on)
+                return ["text": "\(name) is \(on ? "on" : "off") for that tab."]
+            }
+            let backend = (request["backend"] as? String).flatMap(Self.backend(named:))
+            do {
+                try hub.update { snapshot in
+                    guard let index = snapshot.servers.firstIndex(where: { $0.name == name }) else { return }
+                    if let backend {
+                        var off = Set(snapshot.servers[index].disabledBackends)
+                        if on { off.remove(backend.rawValue) } else { off.insert(backend.rawValue) }
+                        snapshot.servers[index].disabledBackends = off.sorted()
+                    } else {
+                        snapshot.servers[index].enabled = on
+                    }
+                }
+            } catch {
+                return ["error": error.localizedDescription]
+            }
+            return ["text": "\(name) is \(on ? "on" : "off")\(backend.map { " for \($0.rawValue)" } ?? "")."]
+        default:
+            return ["error": "Unknown mcp action."]
+        }
+    }
+
+    static func describe(_ hub: MCPServerHub) -> String {
+        guard !hub.snapshot.servers.isEmpty else {
+            return "Cantrip isn't managing MCP servers yet. `cantrip mcp migrate` shows what sharing them would do."
+        }
+        var lines: [String] = []
+        if hub.snapshot.importedAt == nil { lines.append("(Not shared yet: `cantrip mcp migrate --apply`.)") }
+        for server in hub.snapshot.servers {
+            let state = hub.states[server.name]
+            var status = server.enabled ? (state?.phase.rawValue ?? (server.oauth ? "needsSignIn" : "ready")) : "off"
+            if let expires = state?.expiresAt, state?.phase == .ready { status += ", token until \(expires.formatted(date: .omitted, time: .shortened))" }
+            let kind = server.isRemote ? "remote" : "local"
+            let relay = server.isRelayed ? ", via relay" : ""
+            let off = server.disabledBackends.isEmpty ? "" : ", off for \(server.disabledBackends.joined(separator: ", "))"
+            lines.append("\(server.name): \(kind)\(relay), \(status)\(off)")
+            if let message = state?.message, state?.phase != .ready { lines.append("    \(message)") }
+        }
+        return lines.joined(separator: "\n")
     }
 }

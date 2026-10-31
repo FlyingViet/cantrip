@@ -188,6 +188,10 @@ live run.
   that run commands) `SimulatorPool.agentGuidance` to the system message (f3ca958). Check where the model's text before a tool call ends up: through Copilot,
   Claude's "narration" blocks arrived only as reasoning, so 101 notes went missing in one
   session until they were shown as reply text (05b8c08).
+- MCP servers come from Cantrip's shared list (`MCPBackendConfig`), never from a list of the
+  backend's own: add the backend's config writer there, pass `CANTRIP_TAB_ID` to its MCP
+  servers (the relay enforces tab switches with it) and honor a scheduled task's limits.
+  Credentials stay in the Keychain; a backend config only ever names `Scripts/cantrip-mcp`.
 - If the backend runs background agents, add the `watch-`/`side-` conventions in its own terms
   (see `ClaudeCodeBackend` and `CopilotBackend`).
 - Slash commands reach the backend exactly as typed, with no memory or context added. Refuse
@@ -368,9 +372,9 @@ table when you do.
 
 | Backend | Missing |
 |---|---|
-| Antigravity | `ReplyVisibility`, `SimulatorPool` and `watch-`/`side-` guidance; `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
+| Antigravity | `ReplyVisibility`, `SimulatorPool` and `watch-`/`side-` guidance; per-tab MCP switches for local servers (agy reads MCP servers only from `~/.gemini/config/mcp_config.json`, which Cantrip writes); `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
 | Claude Code | Stopping one foreground Task subagent (the CLI can stop only background agents) |
-| Codex | `SimulatorPool` guidance; model discovery; usage screen; structured limit codes; tool-call checks (so no unattended Home); subagents |
+| Codex | `SimulatorPool` guidance; shared MCP servers checked only in tests (not against an installed CLI); model discovery; usage screen; structured limit codes; tool-call checks (so no unattended Home); subagents |
 | Windows (all) | Structured events, conversation resume and usage fallback (see PARITY.md) |
 
 ## Done checklist

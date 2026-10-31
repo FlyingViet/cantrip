@@ -82,6 +82,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     var effortOverride: String?
     /// Attended Home's static protocol, kept in the system prompt instead of every message.
     var homeProtocol: String?
+    /// Shared MCP servers this run doesn't get (a scheduled task's limits).
+    var excludedMcpServers: Set<String> = []
     /// Seconds an idle process is kept before it's stopped to free memory; nil = the setting.
     var idleReleaseDelay: TimeInterval?
     static var wakeGrace: TimeInterval = 5
@@ -730,9 +732,13 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         }
         if let homeProtocol { guidance += "\n\n" + homeProtocol }
         args += ["--append-system-prompt", guidance]
-        // MCP servers from enabled+approved plugins (see Plugins.swift), and the Copilot CLI's own
-        // local servers, so a Claude tab reaches the same tools as a Copilot one.
-        let mcpConfigs = [PluginManager.claudeMCPConfigPath(), ClaudeSharedMCP.configPath()].compactMap { $0 }
+        // MCP servers from enabled+approved plugins (see Plugins.swift), and Cantrip's shared list
+        // (before it exists, the Copilot CLI's own local servers), so every backend reaches the same tools.
+        let shared = MCPRegistry.load().flatMap { $0.importedAt == nil ? nil : $0 }.map {
+            MCPBackendConfig.claudeConfigPath(tab: tabID, excluded: excludedMcpServers.union(MCPBackendConfig.tabDisabled(tabID)),
+                                              snapshot: $0)
+        } ?? ClaudeSharedMCP.configPath()
+        let mcpConfigs = [PluginManager.claudeMCPConfigPath(), shared].compactMap { $0 }
         if !mcpConfigs.isEmpty {
             args += ["--mcp-config"] + mcpConfigs
         }
