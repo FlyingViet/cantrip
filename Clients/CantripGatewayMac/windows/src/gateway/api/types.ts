@@ -449,6 +449,46 @@ export interface MCPAppSummary {
   prefersBorder?: boolean;
 }
 
+/** Public web link preview card attached to an assistant reply (`LinkPreviewCard.snapshot`). */
+export interface RemoteLinkPreview {
+  id: string;
+  url: string;
+  title: string;
+  domain: string;
+  siteName?: string;
+  /** 64-hex SHA-256 image ID for `GET /api/v1/link-previews/image?id=<imageID>`. */
+  imageID?: HexSHA256;
+}
+
+/** One resolved place pin on an inline map card (`PlacePin.snapshot`). */
+export interface RemotePlacePin {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  category?: string;
+  address?: string;
+  phone?: string;
+  website?: string;
+  rating?: number;
+  reviewCount?: Int;
+  priceLevel?: string;
+  isOpenNow?: boolean;
+  hoursSummary?: string;
+  appleMapsURL?: string;
+}
+
+/** Inline map card with resolved place pins (`PlaceCard.snapshot`). */
+export interface RemotePlaceCard {
+  query: string;
+  regionName?: string;
+  centerLatitude: number;
+  centerLongitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
+  places: RemotePlacePin[];
+}
+
 /** One transcript message (`RemoteHistory.message` + `messageSnapshot`). */
 export interface RemoteMessage {
   id: UUIDString;
@@ -488,6 +528,10 @@ export interface RemoteMessage {
    * message just above it). Show the tag when present, except on role `user`.
    */
   thread?: RemoteThreadTag;
+  /** Public web link preview cards resolved on the Mac; omitted when none or disabled. */
+  linkPreviews?: RemoteLinkPreview[];
+  /** Interactive map card with place pins resolved on the Mac; omitted when none. */
+  placeCard?: RemotePlaceCard;
 }
 
 /** A Home message's thread tag: the prompt that started its thread. */

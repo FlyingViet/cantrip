@@ -417,3 +417,74 @@ button.mention:hover { text-decoration: underline; }
 .browser-viewer-stage img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
 .browser-viewer-bottom .browser-badge { position: static; }
 .browser-viewer-url { color: rgba(255, 255, 255, 0.7); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Rich Link Preview & Inline Map Cards (RichCards.tsx) */
+.link-preview-stack { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 420px; margin-top: 2px; }
+.link-preview-card {
+  display: flex; flex-direction: column; width: 100%; padding: 0; border-radius: 14px; overflow: hidden; text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.14); background: #1e2024; color: #f5f5f7; cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.12s ease;
+}
+.link-preview-card:hover { border-color: rgba(255, 255, 255, 0.28); }
+.link-preview-card:focus-visible { outline: 2px solid #4c9dff; outline-offset: 2px; }
+.link-preview-hero { width: 100%; height: 184px; background: #fff; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.link-preview-hero img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.link-preview-meta { padding: 11px 14px; display: flex; flex-direction: column; gap: 3px; width: 100%; }
+.link-preview-title { font-size: 14px; font-weight: 600; color: #f5f5f7; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.link-preview-domain { font-size: 12px; color: rgba(235, 235, 245, 0.62); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.place-card {
+  position: relative; width: 100%; max-width: 580px; height: 310px; border-radius: 16px; overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14); background: #181a1f; margin-top: 2px; user-select: none;
+}
+.place-map-surface { position: absolute; inset: 0; overflow: hidden; background: #16181d; }
+.place-map-tile {
+  position: absolute; width: 256px; height: 256px;
+  filter: brightness(0.76) invert(0.92) contrast(1.08) hue-rotate(195deg) saturate(0.45);
+  pointer-events: none;
+}
+.place-pin {
+  position: absolute; transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px 3px 3px; border-radius: 999px; background: rgba(14, 15, 18, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.25); color: #fff; font-size: 11px; font-weight: 600; white-space: nowrap;
+  cursor: pointer; z-index: 3; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+.place-pin.active { background: rgba(14, 15, 18, 0.95); border-color: rgba(255, 255, 255, 0.65); z-index: 4; }
+.place-pin-dot {
+  width: 18px; height: 18px; border-radius: 50%; background: #e65959; display: inline-flex;
+  align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff;
+}
+.place-list-overlay {
+  position: absolute; top: 12px; left: 12px; width: 248px; max-height: calc(100% - 24px); overflow-y: auto;
+  border-radius: 12px; background: rgba(24, 26, 31, 0.94); border: 1px solid rgba(255, 255, 255, 0.12);
+  z-index: 5; backdrop-filter: blur(12px);
+}
+.place-row { padding: 8px 11px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.place-row:last-child { border-bottom: none; }
+.place-row:hover, .place-row.selected { background: rgba(255, 255, 255, 0.06); }
+.place-row-name { font-size: 13px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.place-row-meta { font-size: 11px; color: rgba(255, 255, 255, 0.72); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.place-row-status { font-size: 11px; font-weight: 600; }
+.place-row-status.open { color: #4cd473; }
+.place-row-status.closed { color: #f26b66; }
+.place-row-actions { display: flex; gap: 8px; margin-top: 3px; flex-wrap: wrap; }
+.place-action-link {
+  border: 0; background: none; padding: 0; font-size: 10.5px; font-weight: 500;
+  color: #7aadff; text-decoration: none; cursor: pointer;
+}
+.place-action-link:hover { text-decoration: underline; }
+.place-zoom-controls {
+  position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column;
+  border-radius: 8px; overflow: hidden; background: rgba(24, 26, 31, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14); z-index: 5;
+}
+.place-zoom-controls button {
+  width: 30px; height: 30px; border: none; background: transparent; color: #fff;
+  font-size: 15px; font-weight: 700; cursor: pointer; padding: 0; line-height: 1;
+}
+.place-zoom-controls button:hover { background: rgba(255, 255, 255, 0.1); }
+.place-zoom-controls button + button { border-top: 1px solid rgba(255, 255, 255, 0.14); }
+.place-attribution {
+  position: absolute; right: 10px; bottom: 10px; padding: 3px 8px; border-radius: 999px;
+  background: rgba(0, 0, 0, 0.65); color: rgba(255, 255, 255, 0.75); font-size: 10px; z-index: 5;
+}

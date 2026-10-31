@@ -35,7 +35,7 @@ export function onWritesChanged(listener: (count: number) => void): () => void {
 function defaultTimeout(path: string, method: string, bytes: number): number {
   if (method !== "GET") return bytes > 256 * 1024 ? 60000 : 30000;
   const bare = path.split("?")[0];
-  if (/^\/api\/v1\/(maintenance|home|memory)/.test(bare)) return 25000;
+  if (/^\/api\/v1\/(maintenance|home|memory|link-previews\/image|map-tile)/.test(bare)) return 25000;
   if (/^\/api\/v1\/sessions\/[^/]+(\/messages\/[^/]+|\/threads\/[^/]+|\/apps\/[^/]+|\/attachments\/.+|\/previews\/.+)?$/.test(bare)) return 25000;
   return 15000;
 }
@@ -146,6 +146,46 @@ export function loadImage(sessionID: string, imageID: string, full = false): Pro
 /** A frame of the agent-only Chrome on the Mac (view only; never cached). */
 export function browserFrame(width: number): Promise<BrowserFrame> {
   return api<BrowserFrame>(`/api/v1/browser/frame?width=${Math.min(1920, Math.max(240, Math.round(width)))}`);
+}
+
+/** Loads a cached public link preview image (`GET /api/v1/link-previews/image?id=...`) as a data URL. */
+export function loadLinkPreviewImage(imageID: string): Promise<string> {
+  const key = `link-preview:${imageID}`;
+  const cached = imageCache.get(key);
+  if (cached) return Promise.resolve(cached);
+  const pending = imageLoads.get(key);
+  if (pending) return pending;
+  const load = api<ImageDataResponse>(`/api/v1/link-previews/image?id=${encodeURIComponent(imageID)}`)
+    .then((data) => {
+      const url = `data:image/jpeg;base64,${data.data}`;
+      imageCache.delete(key);
+      imageCache.set(key, url);
+      while (imageCache.size > 60) imageCache.delete(imageCache.keys().next().value!);
+      return url;
+    })
+    .finally(() => imageLoads.delete(key));
+  imageLoads.set(key, load);
+  return load;
+}
+
+/** Loads a cached OpenStreetMap raster tile (`GET /api/v1/map-tile?z=...&x=...&y=...&format=json`) as a data URL. */
+export function loadMapTile(z: number, x: number, y: number): Promise<string> {
+  const key = `map-tile:${z}/${x}/${y}`;
+  const cached = imageCache.get(key);
+  if (cached) return Promise.resolve(cached);
+  const pending = imageLoads.get(key);
+  if (pending) return pending;
+  const load = api<ImageDataResponse>(`/api/v1/map-tile?z=${z}&x=${x}&y=${y}&format=json`)
+    .then((data) => {
+      const url = `data:image/png;base64,${data.data}`;
+      imageCache.delete(key);
+      imageCache.set(key, url);
+      while (imageCache.size > 80) imageCache.delete(imageCache.keys().next().value!);
+      return url;
+    })
+    .finally(() => imageLoads.delete(key));
+  imageLoads.set(key, load);
+  return load;
 }
 
 export function clearImageCache(): void {
