@@ -647,10 +647,15 @@ final class ChatSession: ObservableObject {
         applyModelSelection()
     }
 
+    /// The backup this run moved to and the model and effort chosen for it in the chain; nil
+    /// while the run is on the Mac's own backend.
+    private(set) var fallbackModel: FallbackRun?
+
     private func applyModelSelection() {
         // Background runs use their task's model, or whatever the user picked for Home.
         func selection(for kind: BackendKind) -> SessionModelSelection? {
-            isCantripHomeBackground
+            if let fallbackModel, fallbackModel.backend == kind, let pinned = fallbackModel.selection { return pinned }
+            return isCantripHomeBackground
                 ? (kind == modelSettingsBackend ? cantripHomeModelOverride : nil)
                     ?? SessionTabMetadata.load(id: Self.cantripHomeID).modelSettings(for: kind)
                 : tabMetadata.modelSettings(for: kind)
@@ -2102,13 +2107,19 @@ final class ChatSession: ObservableObject {
            let fallback = BackendFallback.target(for: backendKind, chain: settings.limitFallbackBackends,
                                                  homeRun: isCantripHomeRun) {
             limitNotice = "\(backendKind.rawValue) is at its usage limit until \(BackendFallback.untilLabel(until))."
-                + " Using \(settings.backendLabel(fallback))."
+                + " Using \(settings.fallbackRun(for: fallback).label)."
             if fallback == .antigravity {
                 antigravity.fallbackSourceModel = sourceModelName(for: requestedBackend)
             }
             backendKind = fallback
         }
-        if !isLocalPrivate { Log.write("send: \"\(prompt.prefix(80))\" via \(backendKind.rawValue)") }
+        // On a backup, use the model and effort chosen for it in the chain.
+        let backup = !isLocalPrivate && backendKind != settings.backend ? settings.fallbackRun(for: backendKind) : nil
+        if backup != fallbackModel {
+            fallbackModel = backup
+            applyModelSelection()
+        }
+        if !isLocalPrivate { Log.write("send: \"\(prompt.prefix(80))\" via \(backup?.label ?? backendKind.rawValue)") }
         canResume = false
         if !isResume {
             // Fresh run: remember the prompt so an interrupted run can be
@@ -3187,7 +3198,7 @@ final class ChatSession: ObservableObject {
         let fallback = usageLimitFallback(after: errorText)
         recordInterruption(errorText)
         appendRunMessage(ChatMessage(role: .error, text: fallback.map {
-            errorText + "\n\nContinuing this task with \(settings.backendLabel($0)) (Settings ▸ Usage limit fallbacks)."
+            errorText + "\n\nContinuing this task with \(settings.fallbackRun(for: $0).label) (Settings ▸ Usage limit fallbacks)."
         } ?? errorText))
         if let fallback {
             Log.write("resume: \(runningBackendKind?.rawValue ?? "backend") hit its usage limit — continuing on \(fallback.rawValue)")

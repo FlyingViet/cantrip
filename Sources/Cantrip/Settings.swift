@@ -338,6 +338,15 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// The model and effort each backup runs with, by BackendKind rawValue; a backend with none
+    /// (or empty fields) uses its default. Kept apart from the chain so clients that only edit the
+    /// order can't drop them.
+    @Published var limitFallbackModels: [String: SessionModelSelection] {
+        didSet {
+            if let data = try? JSONEncoder().encode(limitFallbackModels) { d.set(data, forKey: "limitFallbackModels") }
+        }
+    }
+
     /// Known backends only, each once, in the order given.
     static func fallbackChain(_ raw: [String]) -> [String] {
         var seen = Set<String>()
@@ -847,6 +856,8 @@ final class AppSettings: ObservableObject {
             .flatMap { try? JSONDecoder().decode([CouncilMember].self, from: $0) }) ?? []
         councilScope = d.string(forKey: "councilScope") ?? "planReview"
         // Before the chain, one backend was saved under limitFallbackBackend.
+        limitFallbackModels = d.data(forKey: "limitFallbackModels")
+            .flatMap { try? JSONDecoder().decode([String: SessionModelSelection].self, from: $0) } ?? [:]
         limitFallbackBackends = Self.fallbackChain(d.stringArray(forKey: "limitFallbackBackends")
             ?? [d.string(forKey: "limitFallbackBackend") ?? ""])
         codexPath = d.string(forKey: "codexPath") ?? ""

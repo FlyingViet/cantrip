@@ -74,11 +74,29 @@ extension SessionTabTests {
         settings.voiceMode = false
         settings.backend = .copilot
         settings.limitFallbackBackends = [BackendKind.claudeCode.rawValue, BackendKind.codex.rawValue]
+        // The Claude backup is pinned to a model and effort Claude Code offers.
+        let savedCatalog = settings.claudeModelCatalog
+        settings.claudeModelCatalog = [
+            CopilotModelInfo(id: "claude-opus-5-5", reasoningEfforts: ["low", "medium", "high"]),
+            CopilotModelInfo(id: "claude-sonnet-5-5", reasoningEfforts: ["low", "high"]),
+        ]
+        settings.limitFallbackModels = ["Claude Code": SessionModelSelection(model: "claude-opus-5-5", effort: "high", contextTier: "")]
         BackendLimitTracker.shared.clear()
         defer {
             settings.limitFallbackBackends = []
+            settings.limitFallbackModels = [:]
+            settings.claudeModelCatalog = savedCatalog
             BackendLimitTracker.shared.clear()
         }
+        let pinned = settings.fallbackRun(for: .claudeCode)
+        precondition(pinned.selection?.model == "claude-opus-5-5" && pinned.selection?.effort == "high"
+                     && pinned.label == "Claude Code · claude-opus-5-5 · high", "\(pinned)")
+        settings.limitFallbackModels["Claude Code"] = SessionModelSelection(model: "claude-gone-4", effort: "high", contextTier: "")
+        let gone = settings.fallbackRun(for: .claudeCode)
+        precondition(gone.selection?.model == settings.claudeModel && gone.label.contains("claude-gone-4 isn't available now"),
+                     "A model that's no longer offered runs the default, and the note says so: \(gone)")
+        settings.limitFallbackModels["Claude Code"] = SessionModelSelection(model: "claude-opus-5-5", effort: "high", contextTier: "")
+        precondition(settings.fallbackRun(for: .codex).selection == nil, "A backup with no choice runs as it would on its own")
 
         // The limit stops a run partway: the same run continues on the fallback. Copilot's own
         // report decides; this message's wording matches none of the phrases.
@@ -96,7 +114,9 @@ extension SessionTabTests {
         precondition(BackendLimitTracker.shared.limitedUntil(.copilot) == UsageLimit.startOfNextMonthUTC(after: Date()),
                      "Copilot is skipped until its monthly allowance resets")
         precondition(claude.requests[0].prompt.contains("first task"), "the interrupted task continues on the fallback")
-        precondition(chat.messages.contains { $0.role == .error && $0.text.contains("Continuing this task with Claude Code") })
+        precondition(chat.messages.contains { $0.role == .error && $0.text.contains("Continuing this task with Claude Code · claude-opus-5-5 · high") },
+                     "The note names the backup's model and effort")
+        precondition(chat.fallbackModel == pinned, "The run on the backup uses its chosen model and effort")
         claude.sink?(.done)
         try await waitForJournalTest { !chat.isStreaming }
 
@@ -124,15 +144,24 @@ extension SessionTabTests {
         try await Task.sleep(nanoseconds: 300_000_000)
         precondition(copilot.requests.count == 1 && claude.requests.count == 2 && codex.requests.count == 2)
 
+        // Back on the Mac's own backend, the backup's model no longer applies.
+        BackendLimitTracker.shared.clear()
+        settings.limitFallbackBackends = [BackendKind.claudeCode.rawValue]
+        chat.submitRemote("own backend task", mode: .queue)
+        try await waitForJournalTest { copilot.requests.count == 2 }
+        precondition(chat.fallbackModel == nil, "The tab's own model returns with its own backend")
+        copilot.sink?(.done)
+        try await waitForJournalTest { !chat.isStreaming }
+
         // Off: a limit error ends the run as before.
         BackendLimitTracker.shared.clear()
         settings.limitFallbackBackends = []
         chat.submitRemote("fourth task", mode: .queue)
-        try await waitForJournalTest { copilot.requests.count == 2 }
+        try await waitForJournalTest { copilot.requests.count == 3 }
         copilot.sink?(.failure("You have exceeded your premium request allowance."))
         try await waitForJournalTest { !chat.isStreaming && !chat.autoResumePending }
         try await Task.sleep(nanoseconds: 300_000_000)
-        precondition(claude.requests.count == 2 && copilot.requests.count == 2 && codex.requests.count == 2)
+        precondition(claude.requests.count == 2 && copilot.requests.count == 3 && codex.requests.count == 2)
         try await testUsageFallbackAPI()
     }
 
@@ -200,7 +229,47 @@ extension SessionTabTests {
         precondition(cleared.0 == 200 && (cleared.1["limited"] as? [Any])?.isEmpty == true
                      && BackendLimitTracker.shared.limitedUntil(.claudeCode) == nil,
                      "resetLimits lets every backend be tried again: \(cleared)")
-        let off = try await call("POST", ["revision": cleared.1["revision"] as? String ?? "", "backend": ""])
+        // Each backup's model and effort, from the backend's real lists.
+        let savedCatalog = settings.claudeModelCatalog
+        let savedModels = settings.limitFallbackModels
+        defer { settings.claudeModelCatalog = savedCatalog; settings.limitFallbackModels = savedModels }
+        settings.backend = .copilot
+        settings.claudeModelCatalog = [CopilotModelInfo(id: "claude-opus-5-5", reasoningEfforts: ["low", "high"])]
+        let offered = try await call()
+        let claudeChoice = (offered.1["choices"] as? [[String: Any]] ?? []).first { $0["id"] as? String == "Claude Code" }
+        let codexChoice = (offered.1["choices"] as? [[String: Any]] ?? []).first { $0["id"] as? String == "Codex" }
+        let claudeModels = claudeChoice?["models"] as? [[String: Any]]
+        precondition(claudeModels?.first?["id"] as? String == "claude-opus-5-5"
+                     && claudeModels?.first?["efforts"] as? [String] == ["low", "high"] && codexChoice?["models"] == nil,
+                     "Choices list each backend's real models and efforts, none for a backend without a picker: \(offered.1)")
+        var rev = offered.1["revision"] as? String ?? ""
+        let fake = try await call("POST", ["revision": rev, "entries": [["backend": "Claude Code", "model": "claude-fake-9"]]])
+        let badEffort = try await call("POST", ["revision": rev, "entries": [["backend": "Claude Code", "model": "claude-opus-5-5", "effort": "medium"]]])
+        let codexModel = try await call("POST", ["revision": rev, "entries": [["backend": "Codex", "model": "gpt-5"]]])
+        precondition(fake.0 == 400 && badEffort.0 == 400 && codexModel.0 == 400,
+                     "Only models and efforts the backend offers are accepted")
+        let entries = try await call("POST", ["revision": rev, "entries": [
+            ["backend": "Claude Code", "model": "claude-opus-5-5", "effort": "high"], ["backend": "Codex"]]])
+        let savedEntries = entries.1["entries"] as? [[String: Any]]
+        precondition(entries.0 == 200 && settings.limitFallbackBackends == ["Claude Code", "Codex"]
+                     && settings.limitFallbackModels["Claude Code"] == SessionModelSelection(model: "claude-opus-5-5", effort: "high", contextTier: "")
+                     && savedEntries?.first?["model"] as? String == "claude-opus-5-5"
+                     && savedEntries?.first?["effort"] as? String == "high" && savedEntries?.last?["model"] as? String == "",
+                     "POST entries saves the chain with each backup's model and effort: \(entries)")
+        // A client that only edits the order keeps the chosen models.
+        rev = entries.1["revision"] as? String ?? ""
+        let reordered = try await call("POST", ["revision": rev, "backends": ["Codex", "Claude Code"]])
+        let kept = (reordered.1["entries"] as? [[String: Any]])?.last
+        precondition(reordered.0 == 200 && kept?["backend"] as? String == "Claude Code" && kept?["model"] as? String == "claude-opus-5-5",
+                     "Reordering through backends keeps each backup's model: \(reordered)")
+        rev = reordered.1["revision"] as? String ?? ""
+        let older = try await call("POST", ["revision": rev, "backend": "Claude Code"])
+        precondition(older.0 == 200 && settings.limitFallbackModels["Claude Code"]?.model == "claude-opus-5-5",
+                     "An older client's single pick keeps the model too")
+        settings.backend = .claudeCode
+        let current = try await call()
+
+        let off = try await call("POST", ["revision": current.1["revision"] as? String ?? "", "backend": ""])
         precondition(off.0 == 200 && settings.limitFallbackBackends.isEmpty, "\"\" turns every backup off")
         let ready = try await call()
         precondition(ready.1["backend"] as? String == "" && (ready.1["backends"] as? [String])?.isEmpty == true,
