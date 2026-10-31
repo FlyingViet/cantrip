@@ -142,6 +142,22 @@ final class CantripRichCardTests: XCTestCase {
         XCTAssertEqual(fetched, sampleBytes)
     }
 
+    func testPlacePinsUseTheMacsNameIconAndNotes() throws {
+        let json = #"""
+        [{"id":"p1","name":"Arisan Tea & Coffee House","latitude":37.35,"longitude":-122.0,"category":"Tea house",
+          "listedName":"Arisan","symbol":"cup.and.saucer.fill","glyph":"☕"},
+         {"id":"p2","name":"Matcha Cafe Maiko","latitude":37.32,"longitude":-121.94,"approximate":true,"symbol":"mappin"},
+         {"id":"p3","name":"Old card","latitude":37.3,"longitude":-121.9,"category":"Cafe"},
+         {"id":"p4","name":"Odd","latitude":37.3,"longitude":-121.9,"symbol":"not.a.cantrip.symbol","category":"Urgent care"}]
+        """#
+        let pins = try JSONDecoder().decode([CantripPlacePin].self, from: Data(json.utf8))
+        XCTAssertEqual(pins[0].listedName, "Arisan")
+        XCTAssertEqual(pins[0].pinSymbol, "cup.and.saucer.fill")
+        XCTAssertEqual(pins[1].approximate, true)
+        XCTAssertEqual(pins[2].pinSymbol, "cup.and.saucer.fill", "Cards from older Macs get an icon from their category")
+        XCTAssertEqual(pins[3].pinSymbol, "cross.case.fill", "Only symbols Cantrip uses are drawn")
+    }
+
     func testPlaceMapFitKeepsEveryPinRightOfTheList() throws {
         let pins = [
             CLLocationCoordinate2D(latitude: 37.3692, longitude: -121.9512),
