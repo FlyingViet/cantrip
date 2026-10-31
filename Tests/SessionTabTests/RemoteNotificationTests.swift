@@ -196,6 +196,21 @@ extension SessionTabTests {
         try await Task.sleep(for: .milliseconds(50))
         let sentCount = await recorder.count()
         precondition(sentCount == 1)
+        let sentBadge = try (JSONSerialization.jsonObject(with: sent!.httpBody!) as! [String: Any])["aps"] as! [String: Any]
+        precondition(sentBadge["badge"] as? Int == 1, "The alert carries the unseen-tab count")
+        var seen = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/v1/sessions/\(chat.id)/seen")!)
+        seen.httpMethod = "POST"
+        seen.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (seenBody, seenResponse) = try await client.data(for: seen)
+        let seenBadge = try (JSONSerialization.jsonObject(with: seenBody) as? [String: Any])?["badge"] as? Int
+        precondition((seenResponse as! HTTPURLResponse).statusCode == 200 && seenBadge == 0,
+                     "Opening the tab on a device clears it from the badge")
+        for _ in 0..<100 {
+            if await recorder.count() == 2 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let badgeUpdate = await recorder.count()
+        precondition(badgeUpdate == 2, "Every device gets the lower count")
         let removal = try JSONSerialization.data(withJSONObject: [
             "installationID": registration.installationID.uuidString, "serverID": registration.serverID.uuidString
         ])
@@ -205,7 +220,7 @@ extension SessionTabTests {
         try await waitForJournalTest { !chat.isStreaming }
         try await Task.sleep(for: .milliseconds(50))
         let finalCount = await recorder.count()
-        precondition(finalCount == 1, "Opt-out stops subsequent completions")
+        precondition(finalCount == 2, "Opt-out stops subsequent completions")
         chat.onRunFinished = nil
     }
 }
