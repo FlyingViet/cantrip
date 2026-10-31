@@ -474,7 +474,7 @@ struct LauncherView: View {
                     }
 
                 if session.isStreaming {
-                    Button(action: session.cancel) {
+                    Button(action: session.stop) {
                         Image(systemName: "stop.circle.fill")
                             .font(.system(size: 18))
                             .foregroundStyle(.red.opacity(0.8))
@@ -1550,6 +1550,16 @@ struct LauncherView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if session.queuePaused {
+                // Stop paused the queue; it runs again only when asked.
+                Button {
+                    session.resumeQueue()
+                } label: {
+                    Label("Resume queue", systemImage: "play.circle")
+                }
+                .font(.caption)
+                .help("Run the queued messages again, from the first one")
             }
             ForEach(Array(session.queued.enumerated()), id: \.offset) { index, item in
                 HStack(spacing: 6) {

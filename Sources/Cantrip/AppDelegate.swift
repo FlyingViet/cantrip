@@ -249,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc func stopRequest() {
         guard !manager.showingRemote else { return }
-        manager.active.cancel()
+        manager.active.stop()
     }
 
     @objc func toggleRemoteControlDaemon() {

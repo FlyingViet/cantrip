@@ -184,10 +184,20 @@ final class ChatSession: ObservableObject {
     @Published var focusRequested = false
     /// Image file paths pasted (⌘V) to attach to the next query.
     @Published var attachments: [String] = []
+    /// Stop paused the queue: its messages stay, and run again only after Resume (or Send now on
+    /// one). Saved per tab, so a paused queue stays paused across a restart.
+    @Published private(set) var queuePaused = false {
+        didSet {
+            guard queuePaused != oldValue else { return }
+            remoteQueueRevision = UUID()
+            UserDefaults.standard.set(queuePaused, forKey: TabDefaults.queuePaused(id))
+        }
+    }
     /// Messages queued while a response is streaming (run in order after).
     @Published private(set) var queued: [QueuedPrompt] = [] {
         didSet {
             remoteQueueRevision = UUID()
+            if queued.isEmpty, queuePaused { queuePaused = false }
             if !autoDeliveredItemIDs.isEmpty { autoDeliveredItemIDs.formIntersection(queued.map(\.id)) }
             scheduleQueueGrouping()
             scheduleQueuePlanning()
@@ -492,6 +502,8 @@ final class ChatSession: ObservableObject {
         tabMetadata = SessionTabMetadata.load(id: id)
         applyModelSelection()
         restoreDurableState()
+        // A queue paused by Stop stays paused after a restart (it was restored just above).
+        queuePaused = UserDefaults.standard.bool(forKey: TabDefaults.queuePaused(id)) && !queued.isEmpty
         if isLocalPrivate, !FileManager.default.fileExists(atPath: transcriptURL.path) { persistTranscript() }
         // Home's safety rules are enforced by Cantrip for whichever backend runs it.
         let guardrail: CantripHomeGuardrail? = isCantripHome ? .attended
@@ -1688,7 +1700,8 @@ final class ChatSession: ObservableObject {
         guard isStreaming else {
             // Messages wait behind an interrupted run that is about to continue, unless redirected,
             // and behind a child tab's merge into this checkout (a few seconds).
-            if !queued.isEmpty || (autoResumePending && !interrupt) || childMergeHold {
+            // A paused queue stays put: a new message runs now instead of waiting behind it.
+            if (!queued.isEmpty && !queuePaused) || (autoResumePending && !interrupt) || childMergeHold {
                 enqueue(prompt, includesAmbientContext: includesAmbientContext)
                 if autoResumePending {
                     deliveryStatus = "Queued: Cantrip finishes the interrupted task first."
@@ -3861,6 +3874,10 @@ final class ChatSession: ObservableObject {
             deliveryStatus = Self.pausedQueueStatus
             return
         }
+        guard !queuePaused else {
+            deliveryStatus = Self.stoppedQueueStatus
+            return
+        }
         // Sending while offline would fail each queued message in turn; wait for the network.
         if !isLocalPrivate, settings.backend != .localModel, !NetworkMonitor.shared.isOnline {
             deliveryStatus = "Offline. Queued messages are sent when the network is back."
@@ -3919,6 +3936,26 @@ final class ChatSession: ObservableObject {
     func cancel() {
         cancel(keepQueue: false)
     }
+
+    /// Stop: ends the running turn and pauses the queue instead of discarding it.
+    func stop() {
+        let hadQueue = !queued.isEmpty
+        cancel(keepQueue: true)
+        if hadQueue, !queued.isEmpty {
+            queuePaused = true
+            deliveryStatus = Self.stoppedQueueStatus
+        }
+    }
+
+    /// Runs the paused queue again, from its first message.
+    func resumeQueue() {
+        guard queuePaused else { return }
+        queuePaused = false
+        deliveryStatus = nil
+        drainQueue()
+    }
+
+    static let stoppedQueueStatus = "Queue paused. Resume to run the queued messages, or Send now on one."
 
     /// Stops only the running turn; queued prompts (other handoffs) still run after it.
     func stopCurrentRun() {

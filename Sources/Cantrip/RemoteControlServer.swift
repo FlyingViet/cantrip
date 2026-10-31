@@ -1762,7 +1762,11 @@ final class RemoteControlServer {
             }
             sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
         case "cancel":
-            session.cancel()
+            // Stop: the running turn ends and the queue waits, paused, for resumeQueue.
+            session.stop()
+            sendSession(session, recentExchanges: recentExchanges, on: connection)
+        case "resumeQueue":
+            session.resumeQueue()
             sendSession(session, recentExchanges: recentExchanges, on: connection)
         case "resume":
             // Continue on a failed run's message: {"messageID": …} from `continuableMessageIDs`.
@@ -2297,6 +2301,9 @@ final class RemoteControlServer {
             "canResume": session.canResume,
             "councilMode": session.councilMode,
             "queuedCount": session.queued.count,
+            // Stop pauses the queue (Macs before this cleared it); resumeQueue runs it again.
+            "queuePaused": session.queuePaused,
+            "supportsQueuePause": true,
             "supportsImageAttachments": session.supportsRemoteImages,
             "supportsVideoAttachments": session.supportsRemoteImages,
             "supportsFileAttachments": session.supportsRemoteImages,
@@ -4206,6 +4213,8 @@ private extension RemoteControlServer {
     function queueList(session){const items=session.queued||[];if(!items.length||session.isCantripHome)return null;
       const list=document.createElement("section"),head=document.createElement("h3"),reason=session.supportsChildTabs?session.childTabsUnavailableReason:null;list.className="queue-list";head.id=`queue-${session.id}`;head.textContent=`Queue · ${items.length}`;list.setAttribute("aria-labelledby",head.id);list.append(head);
       if(reason){const note=document.createElement("p");note.className="queue-note";note.textContent=reason;list.append(note)}
+      // Stop paused the queue: it waits for Resume (or Send now on one message).
+      if(session.queuePaused){head.textContent=`Queue · ${items.length} · paused`;const resume=document.createElement("button");resume.type="button";resume.className="control";resume.textContent="Resume queue";resume.setAttribute("aria-label","Resume the queue");resume.onclick=()=>action("resumeQueue");list.append(resume)}
       for(const item of items){const row=document.createElement("div"),text=document.createElement("span"),label=item.displayText??item.text;row.className="queue-row";text.className="queue-text";text.textContent=label;text.title=label;row.append(text);
         if(item.plan){const chip=document.createElement("span");chip.className=`plan-chip ${item.plan.kind}`;chip.textContent=item.plan.reason;chip.title=item.plan.reason;row.append(chip)}
         if(session.supportsChildTabs){const fork=document.createElement("button");fork.type="button";fork.className="control quiet queue-action";fork.textContent="Run in child tab";fork.disabled=Boolean(reason);fork.setAttribute("aria-label",`Run “${label.slice(0,80)}” in a child tab`);fork.onclick=()=>queueAction(session.id,item,"fork",fork);row.append(fork)}

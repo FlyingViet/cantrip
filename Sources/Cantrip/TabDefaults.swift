@@ -8,6 +8,7 @@ enum TabDefaults {
     static func codexSession(_ id: UUID) -> String { "codexSessionID-\(id.uuidString)" }
     static func antigravitySession(_ id: UUID) -> String { "agySessionID-\(id.uuidString)" }
     static func lastRunOutcome(_ id: UUID) -> String { "lastRunOutcome-\(id.uuidString)" }
+    static func queuePaused(_ id: UUID) -> String { "queuePaused-\(id.uuidString)" }
 
     /// A council seat's native session, by seat and model so replacing a seat never resumes a
     /// different model's session.
