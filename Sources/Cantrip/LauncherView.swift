@@ -4449,6 +4449,7 @@ struct SettingsView: View {
                         .help("Remove \(kind.rawValue)")
                 }
                 .buttonStyle(.borderless)
+                fallbackModelPickers(kind)
             }
             let addable = BackendKind.allCases.filter { $0 != settings.backend && !chain.contains($0) }
             Menu(chain.isEmpty ? "Off — add a backup backend" : "Add a backup backend") {
@@ -4466,6 +4467,46 @@ struct SettingsView: View {
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// The model and effort a backup runs with, from the backend's own lists ("Default" = the
+    /// Mac's setting for that backend). Backends without a model picker always run their default.
+    @ViewBuilder
+    private func fallbackModelPickers(_ kind: BackendKind) -> some View {
+        if AppSettings.fallbackModelBackends.contains(kind) {
+            let catalog = settings.tabModelCatalog(for: kind)
+            let defaults = settings.tabModelDefaults(for: kind)
+            let chosen = settings.limitFallbackModels[kind.rawValue] ?? SessionModelSelection(model: "", effort: "", contextTier: "")
+            let efforts = catalog.info(chosen.model.isEmpty ? defaults.model : chosen.model)?.reasoningEfforts ?? []
+            HStack(spacing: 8) {
+                Picker("Model", selection: Binding(get: { chosen.model }, set: { setFallbackModel(kind, model: $0, effort: "") })) {
+                    Text(defaults.model.isEmpty ? "Default model" : "Default (\(settings.fallbackModelLabel(kind, defaults.model)))").tag("")
+                    ForEach(catalog.models) { Text(settings.fallbackModelLabel(kind, $0.id)).tag($0.id) }
+                    if !chosen.model.isEmpty, !catalog.models.contains(where: { $0.id == chosen.model }) {
+                        Text("\(chosen.model) (not offered now)").tag(chosen.model)
+                    }
+                }
+                .help("The model \(kind.rawValue) runs as a backup")
+                if !efforts.isEmpty {
+                    Picker("Effort", selection: Binding(get: { chosen.effort }, set: { setFallbackModel(kind, model: chosen.model, effort: $0) })) {
+                        Text("Default effort").tag("")
+                        ForEach(efforts, id: \.self) { Text($0).tag($0) }
+                    }
+                    .help("The reasoning effort it runs with")
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .font(.caption)
+            .padding(.leading, 18)
+            .onAppear { settings.refreshTabModelsIfNeeded(for: kind) }
+        }
+    }
+
+    private func setFallbackModel(_ kind: BackendKind, model: String, effort: String) {
+        settings.limitFallbackModels[kind.rawValue] = model.isEmpty && effort.isEmpty
+            ? nil : SessionModelSelection(model: model, effort: effort, contextTier: "")
     }
 
     private func moveFallback(at index: Int, by offset: Int) {
