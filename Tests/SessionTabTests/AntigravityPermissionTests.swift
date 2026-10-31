@@ -263,4 +263,143 @@ extension SessionTabTests {
         try await waitForJournalTest { finished }
         return (text, failure, prompts)
     }
+
+    /// Verifies that Antigravity streams intermediate thinking, tool activity with descriptive titles
+    /// and file diffs from root transcript.jsonl, context token usage, and handles turn resumption without replay.
+    @MainActor
+    static func testAntigravityIntermediateSteps() async throws {
+        let fm = FileManager.default
+        let directory = fm.temporaryDirectory.appendingPathComponent("agy-steps-\(UUID())")
+        let workdir = directory.appendingPathComponent("workspace")
+        try fm.createDirectory(at: workdir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: directory) }
+
+        let brainDir = directory.appendingPathComponent("brain/conv-steps-1/.system_generated/logs")
+        try fm.createDirectory(at: brainDir, withIntermediateDirectories: true)
+        let transcriptFile = brainDir.appendingPathComponent("transcript.jsonl")
+
+        let script = directory.appendingPathComponent("agy-mock")
+        try Data(#"""
+        #!/usr/bin/env python3
+        import json, os, sys, time
+
+        transcript_path = os.environ['AGY_TEST_TRANSCRIPT']
+
+        def append_transcript(lines):
+            with open(transcript_path, 'a', encoding='utf-8') as f:
+                for line in lines:
+                    f.write(json.dumps(line) + '\n')
+                f.flush()
+
+        def emit(obj):
+            sys.stdout.write(json.dumps(obj) + '\n')
+            sys.stdout.flush()
+
+        turn = 0
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            turn += 1
+            if turn == 1:
+                emit({'event': 'init', 'conversation_id': 'conv-steps-1', 'init': {'model': 'gemini-3.1-pro-high'}})
+                # Write Step 0 and 1
+                append_transcript([
+                    {'step_index': 0, 'type': 'USER_INPUT', 'status': 'DONE', 'content': 'Update README'},
+                    {'step_index': 1, 'type': 'PLANNER_RESPONSE', 'status': 'DONE', 'thinking': 'Inspect git status first.', 'tool_calls': [{'name': 'run_command', 'args': {'toolSummary': '"Inspect git status"', 'CommandLine': 'git status'}}], 'input_tokens': 150, 'cache_read_tokens': 50}
+                ])
+                time.sleep(0.05)
+                # Step 2: run_command
+                emit({'event': 'step_update', 'step_update': {'step_index': 2, 'state': 'ACTIVE', 'step_type': 'tool', 'tool_name': 'run_command', 'tool_info': {'name': 'run_command', 'parameters': {'CommandLine': 'git status'}}}})
+                time.sleep(0.05)
+                emit({'event': 'step_update', 'step_update': {'step_index': 2, 'state': 'DONE', 'step_type': 'tool', 'tool_name': 'run_command', 'tool_info': {'name': 'run_command', 'parameters': {'CommandLine': 'git status'}, 'output': 'nothing to commit'}}})
+                time.sleep(0.05)
+                # Write Step 3 (empty thinking)
+                append_transcript([
+                    {'step_index': 3, 'type': 'PLANNER_RESPONSE', 'status': 'DONE', 'thinking': '', 'tool_calls': [{'name': 'edit_file', 'args': {'Path': '/tmp/workspace/README.md', 'Target': 'OldHeader', 'Replacement': 'NewHeader'}}]}
+                ])
+                time.sleep(0.05)
+                # Step 4: edit_file
+                emit({'event': 'step_update', 'step_update': {'step_index': 4, 'state': 'ACTIVE', 'step_type': 'tool', 'tool_name': 'edit_file', 'tool_info': {'name': 'edit_file', 'parameters': {'Path': '/tmp/workspace/README.md'}}}})
+                time.sleep(0.05)
+                emit({'event': 'step_update', 'step_update': {'step_index': 4, 'state': 'DONE', 'step_type': 'tool', 'tool_name': 'edit_file', 'tool_info': {'name': 'edit_file', 'parameters': {'Path': '/tmp/workspace/README.md'}, 'output': 'ok'}}})
+                time.sleep(0.05)
+                # Write Step 5
+                append_transcript([
+                    {'step_index': 5, 'type': 'PLANNER_RESPONSE', 'status': 'DONE', 'thinking': 'Now reviewing the changes.', 'tool_calls': [{'name': 'read_file', 'args': {'Path': '/tmp/workspace/README.md'}}]}
+                ])
+                time.sleep(0.05)
+                # Step 6: read_file
+                emit({'event': 'step_update', 'step_update': {'step_index': 6, 'state': 'ACTIVE', 'step_type': 'tool', 'tool_name': 'read_file', 'tool_info': {'name': 'read_file', 'parameters': {'Path': '/tmp/workspace/README.md'}}}})
+                time.sleep(0.05)
+                emit({'event': 'step_update', 'step_update': {'step_index': 6, 'state': 'DONE', 'step_type': 'tool', 'tool_name': 'read_file', 'tool_info': {'name': 'read_file', 'parameters': {'Path': '/tmp/workspace/README.md'}, 'output': 'content'}}})
+                time.sleep(0.05)
+                # Step 7: agent_response deltas
+                emit({'event': 'step_update', 'step_update': {'step_index': 7, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'Updated '}})
+                emit({'event': 'step_update', 'step_update': {'step_index': 7, 'state': 'DONE', 'step_type': 'agent_response', 'text_delta': 'README.'}})
+                emit({'event': 'result', 'conversation_id': 'conv-steps-1', 'result': {'status': 'SUCCESS', 'response': 'Updated README.', 'usage': {'input_tokens': 150, 'output_tokens': 30, 'cache_read_tokens': 50}}})
+            elif turn == 2:
+                append_transcript([
+                    {'step_index': 8, 'type': 'USER_INPUT', 'status': 'DONE', 'content': 'Second turn'},
+                    {'step_index': 9, 'type': 'PLANNER_RESPONSE', 'status': 'DONE', 'thinking': 'Thinking for turn 2.', 'tool_calls': []}
+                ])
+                time.sleep(0.05)
+                emit({'event': 'step_update', 'step_update': {'step_index': 11, 'state': 'DONE', 'step_type': 'agent_response', 'text_delta': 'Turn 2 done.'}})
+                emit({'event': 'result', 'conversation_id': 'conv-steps-1', 'result': {'status': 'SUCCESS', 'response': 'Turn 2 done.', 'usage': {'input_tokens': 300, 'output_tokens': 60, 'cache_read_tokens': 80}}})
+        """#.utf8).write(to: script)
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        setenv("AGY_TEST_TRANSCRIPT", transcriptFile.path, 1)
+        defer { unsetenv("AGY_TEST_TRANSCRIPT") }
+
+        let settings = AppSettings.shared
+        let saved = (settings.agyPath, settings.allowActions, settings.agyPermissionMode)
+        defer { (settings.agyPath, settings.allowActions, settings.agyPermissionMode) = saved }
+        settings.agyPath = script.path
+        settings.allowActions = true
+        settings.agyPermissionMode = "default"
+
+        let backend = AntigravityBackend(persistKey: "test-agy-intermediate-steps")
+        backend.reset()
+        backend.customTranscriptURL = transcriptFile
+        defer { backend.cancel() }
+
+        var events: [BackendEvent] = []
+        var turn1Done = false
+        backend.send(BackendRequest(prompt: "Update README", userMessage: "Update README", previousTurns: []), workdir: workdir.path) { event in
+            DispatchQueue.main.async {
+                events.append(event)
+                if case .done = event { turn1Done = true }
+            }
+        }
+        try await waitForJournalTest { turn1Done }
+
+        let thinkingDeltas = events.compactMap { if case .thinkingDelta(let t) = $0 { return t } else { return nil } }
+        let activities = events.compactMap { if case .activity(let a) = $0 { return a } else { return nil } }
+        let textDeltas = events.compactMap { if case .textDelta(let t) = $0 { return t } else { return nil } }
+        let contexts = events.compactMap { if case .context(let c) = $0 { return c } else { return nil } }
+
+        precondition(thinkingDeltas.contains("Inspect git status first."), "Planner thinking is streamed: \(thinkingDeltas)")
+        precondition(thinkingDeltas.contains { $0.contains("Editing README.md") }, "Empty-thinking tool fallback is streamed as thinking delta: \(thinkingDeltas)")
+        precondition(thinkingDeltas.contains { $0.contains("Now reviewing the changes.") }, "Subsequent planner thinking is streamed: \(thinkingDeltas)")
+
+        precondition(activities.contains { $0.toolName == "Shell" && $0.title == "Inspect git status" }, "Tool title uses toolSummary from transcript: \(activities.map(\.title))")
+        precondition(activities.contains { $0.toolName == "Edit" && $0.title == "Editing README.md" && $0.fileChanges.first?.diff.contains("+NewHeader") == true }, "Edit activity has parsed file diff: \(activities)")
+        precondition(activities.contains { $0.toolName == "Read" && $0.title == "Reading README.md" }, "Read activity has filename in title: \(activities.map(\.title))")
+        precondition(textDeltas.joined() == "Updated README.", "Streamed text is assembled: \(textDeltas.joined())")
+        precondition(contexts.contains { $0.tokens == 200 }, "Mid-turn context tokens emitted: \(contexts)")
+
+        var turn2Events: [BackendEvent] = []
+        var turn2Done = false
+        backend.send(BackendRequest(prompt: "Second turn", userMessage: "Second turn", previousTurns: []), workdir: workdir.path) { event in
+            DispatchQueue.main.async {
+                turn2Events.append(event)
+                if case .done = event { turn2Done = true }
+            }
+        }
+        try await waitForJournalTest { turn2Done }
+
+        let turn2Thinking = turn2Events.compactMap { if case .thinkingDelta(let t) = $0 { return t } else { return nil } }
+        precondition(turn2Thinking == ["Thinking for turn 2."], "Turn 2 only streams its own thinking, never replaying Turn 1: \(turn2Thinking)")
+        print("Antigravity intermediate steps & root transcript streaming passed")
+    }
 }
