@@ -631,6 +631,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/memory/document"
                 || request.path == "/api/v1/voice/vocabulary"
                 || request.path == "/api/v1/notifications"
+                || request.path == "/api/v1/notifications/opened"
                 || request.path == "/api/v1/live-status"
                 || request.path == "/api/v1/live-status/subscription"
                 || request.path == "/api/v1/maintenance"
@@ -683,6 +684,32 @@ final class RemoteControlServer {
             } catch {
                 Log.write("remote-maintenance: request failed: \(error.localizedDescription)")
                 sendError(500, "Could not save maintenance state on the Mac. No new operation was started.", on: connection)
+            }
+            return
+        }
+        if request.path == "/api/v1/notifications/opened" {
+            // The device opened the app and cleared its icon badge; later pushes count only newer alerts.
+            let fingerprint = RemoteLANProtocol.tokenFingerprint(token)
+            struct Opened: Decodable { let installationID: UUID; let serverID: UUID }
+            guard request.method == "POST" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            guard request.body.count <= 1024,
+                  let opened = try? JSONDecoder().decode(Opened.self, from: request.body) else {
+                sendError(400, "Provide installationID and serverID (UUIDs).", on: connection)
+                return
+            }
+            Task {
+                do {
+                    let badge = try await notifications.appOpened(installationID: opened.installationID,
+                                                                  serverID: opened.serverID, fingerprint: fingerprint)
+                    sendJSON(["badge": badge], on: connection)
+                } catch let error as RemotePushError {
+                    sendError(error.status, error.message, on: connection)
+                } catch {
+                    sendError(500, "Could not update notifications on the Mac.", on: connection)
+                }
             }
             return
         }

@@ -88,6 +88,46 @@ extension SessionTabTests {
         precondition(restoredBadge == 1, "Unseen tabs survive a Mac restart")
         _ = await service.markSeen(second)
         try await expectBadge(0, after: 9, "Seeing the last tab clears the badge")
-        print("Remote badges: unseen tabs, per-tab dedup, seen updates, on-screen, questions, Mac attention and restart passed")
+        // Opening the app clears that device's badge; its next alert counts only tabs alerted since.
+        let phone = RemotePushRegistration(installationID: UUID(), serverID: UUID(),
+                                           deviceToken: String(repeating: "d", count: 64),
+                                           environment: "production", inputNeeded: true)
+        try await service.register(phone, fingerprint: "paired")
+        let sentBefore = await recorder.count()
+        func expectFor(_ token: String, after count: Int, badge: Int, _ message: String) async throws {
+            _ = try await waitForRequests(count)
+            let requests = await recorder.requests.suffix(count - sentBefore)
+            let sent = requests.last { $0.url?.lastPathComponent == token }
+            precondition(sent.map { aps($0)["badge"] as? Int } == badge,
+                         "\(message): \(sent.map { aps($0)["badge"] as? Int ?? -1 } ?? -1)")
+        }
+        let old = UUID(), new = UUID()
+        await service.enqueue(RemoteCompletion(id: UUID(), sessionID: old, title: "Old", summary: "Done", completedAt: Date()))
+        try await expectFor(phone.deviceToken, after: sentBefore + 2, badge: 1, "Before an open, every unseen tab counts")
+        let opened = try await service.appOpened(installationID: phone.installationID, serverID: phone.serverID,
+                                                 fingerprint: "paired")
+        precondition(opened == 0, "Opening the app reports a cleared badge")
+        try await service.register(phone, fingerprint: "paired")
+        try await Task.sleep(for: .milliseconds(20))
+        await service.enqueue(RemoteCompletion(id: UUID(), sessionID: new, title: "New", summary: "Done", completedAt: Date()))
+        try await expectFor(phone.deviceToken, after: sentBefore + 4, badge: 1,
+                            "After an open only the new tab counts, even after re-registering")
+        try await expectFor(registration.deviceToken, after: sentBefore + 4, badge: 2,
+                            "A device that never reports opening keeps counting every unseen tab")
+        await service.enqueue(RemoteCompletion(id: UUID(), sessionID: old, title: "Old again", summary: "Done", completedAt: Date()))
+        try await expectFor(phone.deviceToken, after: sentBefore + 6, badge: 2, "A tab alerted again after the open counts again")
+        let unknown = try await service.appOpened(installationID: UUID(), serverID: UUID(), fingerprint: "paired")
+        precondition(unknown == 0, "An unregistered device just gets 0")
+
+        // State saved by Macs from before alert times still counts its unseen tabs.
+        let legacyFile = directory.appendingPathComponent("legacy.json")
+        try JSONSerialization.data(withJSONObject: ["subscribers": [], "deliveries": [], "completedIDs": [],
+                                                    "unseenSessions": [UUID().uuidString, UUID().uuidString]])
+            .write(to: legacyFile)
+        let legacy = RemoteNotifications(file: legacyFile, configuration: { configuration }, send: { await recorder.respond($0) })
+        let legacyBadge = await legacy.badge()
+        precondition(legacyBadge == 2, "Older saved state keeps its unseen tabs")
+
+        print("Remote badges: opening the app resets that device's badge to new activity only; unseen tabs, per-tab dedup, seen updates, on-screen, questions, Mac attention and restart passed")
     }
 }

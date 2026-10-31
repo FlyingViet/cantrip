@@ -117,6 +117,14 @@ actor RemoteNotifications {
         let fingerprint: String
         let revision: UUID
         let updatedAt: Date
+        /// When this device last opened the app: its badge counts only alerts after it. Nil (apps
+        /// before this, which never report opening) counts every unseen tab.
+        var badgeClearedAt: Date? = nil
+    }
+    /// A tab with an alert nobody has looked at, and when the latest one was sent.
+    private struct UnseenTab: Codable, Equatable {
+        let sessionID: UUID
+        var alertedAt: Date
     }
     private struct Delivery: Codable {
         let id: UUID
@@ -129,9 +137,11 @@ actor RemoteNotifications {
         var subscribers: [Subscriber] = []
         var deliveries: [Delivery] = []
         var completedIDs: [UUID] = []
+        /// Tabs from before alert times were kept (read once, then folded into `unseenTabs`).
+        var unseenSessions: [UUID]?
         /// Tabs with a finished-run alert nobody has looked at since, oldest first. Optional so
         /// state saved before badges decodes.
-        var unseenSessions: [UUID]?
+        var unseenTabs: [UnseenTab]?
     }
 
     private let file: URL
@@ -147,7 +157,7 @@ actor RemoteNotifications {
     private var pendingInputs: Set<UUID> = []
     /// Questions and approvals still waiting, by request ID, with their tab (Mac-attention
     /// notices aren't a tab's, so they don't count toward the badge).
-    private var badgeInputs: [UUID: UUID] = [:]
+    private var badgeInputs: [UUID: (sessionID: UUID, askedAt: Date)] = [:]
 
     init(file: URL = CantripPaths.cache("notifications/state.json"),
          configuration: @escaping () throws -> RemotePushConfiguration = RemotePushConfiguration.load,
@@ -201,7 +211,8 @@ actor RemoteNotifications {
             throw RemotePushError(status: 409, message: "This Mac has reached its notification device limit.")
         }
         next.subscribers.append(Subscriber(registration: registration, fingerprint: fingerprint,
-                                          revision: revision, updatedAt: Date()))
+                                          revision: revision, updatedAt: Date(),
+                                          badgeClearedAt: existing?.badgeClearedAt))
         let revisions = Set(next.subscribers.map(\.revision))
         next.deliveries.removeAll { !revisions.contains($0.subscriberRevision) }
         try save(next)
@@ -230,9 +241,9 @@ actor RemoteNotifications {
             next.completedIDs = Array((next.completedIDs + [completion.id]).suffix(512))
             next.subscribers.removeAll { $0.updatedAt < Date().addingTimeInterval(-90 * 86400) || $0.fingerprint != fingerprint }
             if !completion.isAttention, !seen, !next.subscribers.isEmpty {
-                var unseen = next.unseenSessions ?? []
-                unseen.removeAll { $0 == completion.sessionID }
-                next.unseenSessions = Array((unseen + [completion.sessionID]).suffix(99))
+                var unseen = next.unseenTabs ?? []
+                unseen.removeAll { $0.sessionID == completion.sessionID }
+                next.unseenTabs = Array((unseen + [UnseenTab(sessionID: completion.sessionID, alertedAt: Date())]).suffix(99))
             }
             for subscriber in next.subscribers {
                 if completion.isAttention && subscriber.registration.inputNeeded != true { continue }
@@ -254,7 +265,7 @@ actor RemoteNotifications {
     func enqueueInput(id: UUID, sessionID: UUID, expiresAt: Date, kind: String = "input", homeRun: Bool = false) {
         guard expiresAt > Date() else { return }
         pendingInputs.insert(id)
-        if kind == "input" { badgeInputs[id] = sessionID }
+        if kind == "input" { badgeInputs[id] = (sessionID, Date()) }
         enqueue(RemoteCompletion(id: id, sessionID: sessionID, title: "", summary: "",
                                  completedAt: Date(), kind: kind, expiresAt: expiresAt,
                                  homeRun: homeRun ? true : nil))
@@ -262,7 +273,7 @@ actor RemoteNotifications {
 
     func resolveInput(_ id: UUID) {
         pendingInputs.remove(id)
-        let before = (try? load()).map(badgeCount) ?? 0
+        let before = (try? load()).map { badgeCount($0) } ?? 0
         badgeInputs[id] = nil
         do {
             var next = try load()
@@ -280,8 +291,8 @@ actor RemoteNotifications {
         do {
             var next = try load()
             let before = badgeCount(next)
-            next.unseenSessions?.removeAll { $0 == sessionID }
-            badgeInputs = badgeInputs.filter { $0.value != sessionID }
+            next.unseenTabs?.removeAll { $0.sessionID == sessionID }
+            badgeInputs = badgeInputs.filter { $0.value.sessionID != sessionID }
             let after = badgeCount(next)
             guard after != before else { return after }
             try save(next)
@@ -293,11 +304,32 @@ actor RemoteNotifications {
         }
     }
 
-    /// The app icon's number: tabs with an alert nobody has looked at yet, finished or asking.
-    func badge() -> Int { (try? load()).map(badgeCount) ?? 0 }
+    /// The device opened the app, which clears its icon badge: from now on its badge counts only
+    /// tabs alerted after this. Other devices keep theirs. Returns the device's badge (0).
+    @discardableResult
+    func appOpened(installationID: UUID, serverID: UUID, fingerprint: String) throws -> Int {
+        var next = try load()
+        guard let index = next.subscribers.firstIndex(where: {
+            $0.registration.installationID == installationID && $0.registration.serverID == serverID
+                && $0.fingerprint == fingerprint
+        }) else { return 0 }
+        let now = Date()
+        next.subscribers[index].badgeClearedAt = now
+        // A count still waiting to go out predates the open.
+        let revision = next.subscribers[index].revision
+        next.deliveries.removeAll { $0.completion.isBadgeUpdate && $0.subscriberRevision == revision }
+        try save(next)
+        return badgeCount(next, since: now)
+    }
 
-    private func badgeCount(_ state: State) -> Int {
-        Set(state.unseenSessions ?? []).union(badgeInputs.values).count
+    /// The app icon's number: tabs with an alert nobody has looked at yet, finished or asking.
+    func badge() -> Int { (try? load()).map { badgeCount($0) } ?? 0 }
+
+    /// Tabs with an unseen alert, or only those alerted after `since` (a device's last open).
+    private func badgeCount(_ state: State, since: Date? = nil) -> Int {
+        let tabs = (state.unseenTabs ?? []).filter { since == nil || $0.alertedAt > since! }.map(\.sessionID)
+        let inputs = badgeInputs.values.filter { since == nil || $0.askedAt > since! }.map(\.sessionID)
+        return Set(tabs).union(inputs).count
     }
 
     /// Sends every device the new count without an alert (one pending update per device).
@@ -318,7 +350,15 @@ actor RemoteNotifications {
 
     private func load() throws -> State {
         if let state { return state }
-        do { state = try PrivateFile.read(State.self, from: file) ?? State() }
+        do {
+            var loaded = try PrivateFile.read(State.self, from: file) ?? State()
+            if let legacy = loaded.unseenSessions {
+                // Saved before alert times: they predate any device's open.
+                loaded.unseenTabs = legacy.map { UnseenTab(sessionID: $0, alertedAt: .distantPast) } + (loaded.unseenTabs ?? [])
+                loaded.unseenSessions = nil
+            }
+            state = loaded
+        }
         catch { throw RemotePushError(status: 503, message: "Could not read the Mac's saved notification registrations.") }
         return state!
     }
@@ -380,7 +420,8 @@ actor RemoteNotifications {
                     let authorization = try tokens.value(for: config, now: now)
                     let request = try Self.request(deliveryID: delivery.id, completion: delivery.completion,
                                                    registration: subscriber.registration, fingerprint: fingerprint,
-                                                   authorization: authorization, badge: badgeCount(next))
+                                                   authorization: authorization,
+                                                   badge: badgeCount(next, since: subscriber.badgeClearedAt))
                     let (data, response) = try await send(request)
                     if response.statusCode == 200 {
                         lastDeliveryError = nil
