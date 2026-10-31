@@ -820,6 +820,45 @@ struct PlaceBlockProposal: Codable, Equatable, Sendable {
     var places: [Item]
 }
 
+// MARK: - Map Camera Fitting
+
+/// Fits a map card's camera so every pin and its label sit in the part of the map nothing
+/// covers: right of the floating place list, clear of the card's edges.
+enum PlaceMapFit {
+    struct Insets: Equatable {
+        var top: Double
+        var left: Double
+        var bottom: Double
+        var right: Double
+    }
+
+    /// The map rect to show in a `size` view so every pin lands inside `size` minus `insets`.
+    /// `insets` already include the room each pin's own annotation needs around its coordinate.
+    /// A lone pin, or pins very close together, get at least `minimumMeters` across that area.
+    static func rect(for coordinates: [CLLocationCoordinate2D], size: CGSize, insets: Insets,
+                     minimumMeters: Double = 2_000) -> MKMapRect? {
+        guard !coordinates.isEmpty, size.width > 0, size.height > 0 else { return nil }
+        let points = coordinates.map(MKMapPoint.init)
+        let minX = points.map(\.x).min()!, maxX = points.map(\.x).max()!
+        let minY = points.map(\.y).min()!, maxY = points.map(\.y).max()!
+        // Too little room left (a very small card): fall back to the whole view.
+        var area = CGRect(x: insets.left, y: insets.top,
+                          width: size.width - insets.left - insets.right,
+                          height: size.height - insets.top - insets.bottom)
+        if area.width < 40 || area.height < 40 { area = CGRect(origin: .zero, size: size) }
+        let centerLatitude = (coordinates.map(\.latitude).min()! + coordinates.map(\.latitude).max()!) / 2
+        let minimumWidth = minimumMeters * MKMapPointsPerMeterAtLatitude(centerLatitude)
+        // Map points per screen point.
+        let scale = max((maxX - minX) / area.width, (maxY - minY) / area.height, minimumWidth / area.width)
+        return MKMapRect(
+            x: (minX + maxX) / 2 - area.midX * scale,
+            y: (minY + maxY) / 2 - area.midY * scale,
+            width: size.width * scale,
+            height: size.height * scale
+        )
+    }
+}
+
 // MARK: - Links a Map Card Already Covers
 
 /// When a reply has a map card, its place list already links each place, so a link preview for
@@ -1574,6 +1613,13 @@ struct PlaceCardView: View {
     @State private var position: MapCameraPosition
     @State private var currentRegion: MKCoordinateRegion
     @State private var selectedPlaceID: String?
+    @State private var cardWidth: CGFloat = 0
+    @State private var mapSize: CGSize = .zero
+
+    /// Below this width the list moves under the map instead of covering part of it.
+    static let stackedBelowWidth: CGFloat = 500
+    static let listWidth: CGFloat = 248
+    static let pinLabelMaxWidth: CGFloat = 150
 
     init(card: PlaceCard) {
         self.card = card
@@ -1586,117 +1632,50 @@ struct PlaceCardView: View {
         _selectedPlaceID = State(initialValue: card.places.first?.id)
     }
 
+    private var stacked: Bool { cardWidth > 0 && cardWidth < Self.stackedBelowWidth }
+
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            Map(position: $position) {
-                ForEach(card.places) { place in
-                    Annotation(place.name, coordinate: place.coordinate, anchor: .bottom) {
-                        Button {
-                            selectedPlaceID = place.id
-                            openDirections(place)
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "cross.case.fill")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .padding(5)
-                                    .background(Color(red: 0.90, green: 0.35, blue: 0.35), in: Circle())
-                                Text(place.name)
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .lineLimit(1)
-                            }
-                            .padding(.leading, 3)
-                            .padding(.trailing, 8)
-                            .padding(.vertical, 3)
-                            .background(
-                                Capsule()
-                                    .fill(Color.black.opacity(selectedPlaceID == place.id ? 0.88 : 0.72))
-                            )
-                            .overlay(
-                                Capsule()
-                                    .strokeBorder(Color.white.opacity(selectedPlaceID == place.id ? 0.55 : 0.2), lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
+        Group {
+            if stacked {
+                VStack(alignment: .leading, spacing: 0) {
+                    ZStack(alignment: .topLeading) {
+                        mapSurface
+                        zoomButtons.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(10)
+                        attributionPill.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(8)
                     }
-                    .annotationTitles(.hidden)
+                    .frame(height: 220)
+                    .clipped()
+                    Divider().overlay(Color.white.opacity(0.12))
+                    placeList
+                        .background(Color(red: 0.11, green: 0.12, blue: 0.14))
                 }
-            }
-            .mapStyle(.standard(elevation: .flat, emphasis: .muted))
-            .environment(\.colorScheme, .dark)
-            .onMapCameraChange { context in
-                currentRegion = context.region
-            }
-
-            // Floating place list overlay (top-left, matching the Muse reference card)
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(card.places.enumerated()), id: \.element.id) { index, place in
-                    if index > 0 {
-                        Divider().overlay(Color.white.opacity(0.1))
+            } else {
+                ZStack(alignment: .topLeading) {
+                    mapSurface
+                    // Floating place list overlay (top-left); it scrolls when it's taller than the map.
+                    ViewThatFits(in: .vertical) {
+                        placeList
+                        ScrollView { placeList }
                     }
-                    PlaceListRowView(
-                        place: place,
-                        isSelected: selectedPlaceID == place.id,
-                        onFocus: { focus(on: place) },
-                        onDirections: { openDirections(place) }
+                    .frame(width: Self.listWidth)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(red: 0.11, green: 0.12, blue: 0.14).opacity(0.94))
                     )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(12)
+                    zoomButtons.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(12)
+                    attributionPill.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(10)
                 }
+                .frame(height: 310)
             }
-            .frame(width: 248)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(red: 0.11, green: 0.12, blue: 0.14).opacity(0.94))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-            )
-            .padding(12)
-
-            // Zoom +/- buttons (top-right)
-            VStack(spacing: 1) {
-                Button { zoom(by: 0.5) } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Zoom in")
-                Divider().frame(width: 22).overlay(Color.white.opacity(0.16))
-                Button { zoom(by: 2.0) } label: {
-                    Image(systemName: "minus")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Zoom out")
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(red: 0.11, green: 0.12, blue: 0.14).opacity(0.92))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .padding(12)
-
-            // Attribution badge (bottom-right)
-            Text("© OpenStreetMap · Apple Maps")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.75))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(Color.black.opacity(0.65)))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                .padding(10)
         }
-        .frame(maxWidth: 580)
-        .frame(height: 310)
+        .frame(maxWidth: 680)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { cardWidth = $0 }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1704,17 +1683,132 @@ struct PlaceCardView: View {
         )
     }
 
+    private var mapSurface: some View {
+        Map(position: $position) {
+            ForEach(card.places) { place in
+                Annotation(place.name, coordinate: place.coordinate, anchor: .bottom) {
+                    Button {
+                        selectedPlaceID = place.id
+                        openDirections(place)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "cross.case.fill")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(5)
+                                .background(Color(red: 0.90, green: 0.35, blue: 0.35), in: Circle())
+                            Text(place.name)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .frame(maxWidth: Self.pinLabelMaxWidth)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .padding(.leading, 3)
+                        .padding(.trailing, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule()
+                                .fill(Color.black.opacity(selectedPlaceID == place.id ? 0.88 : 0.72))
+                        )
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(Color.white.opacity(selectedPlaceID == place.id ? 0.55 : 0.2), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help(place.name)
+                }
+                .annotationTitles(.hidden)
+            }
+        }
+        .mapStyle(.standard(elevation: .flat, emphasis: .muted))
+        .environment(\.colorScheme, .dark)
+        .onMapCameraChange { context in
+            currentRegion = context.region
+        }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            mapSize = size
+            fit(card.places)
+        }
+    }
+
+    private var placeList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(card.places.enumerated()), id: \.element.id) { index, place in
+                if index > 0 {
+                    Divider().overlay(Color.white.opacity(0.1))
+                }
+                PlaceListRowView(
+                    place: place,
+                    isSelected: selectedPlaceID == place.id,
+                    onFocus: { focus(on: place) },
+                    onDirections: { openDirections(place) }
+                )
+            }
+        }
+    }
+
+    private var zoomButtons: some View {
+        VStack(spacing: 1) {
+            Button { zoom(by: 0.5) } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Zoom in")
+            Divider().frame(width: 22).overlay(Color.white.opacity(0.16))
+            Button { zoom(by: 2.0) } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Zoom out")
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(red: 0.11, green: 0.12, blue: 0.14).opacity(0.92))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+        )
+    }
+
+    private var attributionPill: some View {
+        Text("© OpenStreetMap · Apple Maps")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.white.opacity(0.75))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.black.opacity(0.65)))
+    }
+
+    /// The map area pins may use: right of the floating list, below the map's top edge by a
+    /// pin's height (pins hang above their coordinate), and clear of the attribution.
+    private var pinInsets: PlaceMapFit.Insets {
+        // Half the widest pin label, as an annotation is centred on its coordinate.
+        let longest = card.places.map(\.name.count).max() ?? 0
+        let halfPin = (min(Double(longest) * 6.4, Double(Self.pinLabelMaxWidth)) + 36) / 2
+        let left = stacked ? 10 : 12 + Double(Self.listWidth) + 8
+        return PlaceMapFit.Insets(top: 12 + 28, left: left + halfPin, bottom: 12 + 22, right: 12 + halfPin)
+    }
+
+    /// Shows `places` in the uncovered map area; a single place keeps a street-level zoom.
+    private func fit(_ places: [PlacePin], minimumMeters: Double = 2_000) {
+        guard let rect = PlaceMapFit.rect(for: places.map(\.coordinate), size: mapSize,
+                                          insets: pinInsets, minimumMeters: minimumMeters) else { return }
+        position = .rect(rect)
+    }
+
     private func focus(on place: PlacePin) {
         selectedPlaceID = place.id
-        let next = MKCoordinateRegion(
-            center: place.coordinate,
-            span: MKCoordinateSpan(
-                latitudeDelta: min(currentRegion.span.latitudeDelta, 0.03),
-                longitudeDelta: min(currentRegion.span.longitudeDelta, 0.03)
-            )
-        )
-        currentRegion = next
-        position = .region(next)
+        guard mapSize != .zero else { return }
+        fit([place], minimumMeters: 3_000)
     }
 
     private func zoom(by factor: Double) {

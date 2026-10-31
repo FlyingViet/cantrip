@@ -1,4 +1,5 @@
 import Foundation
+import MapKit
 
 @main
 struct RichCardTests {
@@ -10,6 +11,7 @@ struct RichCardTests {
         testOSMOpeningHours()
         testPlaceBlockExtraction()
         testPlaceLinkFilter()
+        testPlaceMapFit()
         print("Rich card unit tests passed")
     }
 
@@ -237,5 +239,41 @@ struct RichCardTests {
         let shown = PlaceLinkFilter.visible(saved, placeCard: map, text: reply).map(\.url)
         precondition(shown == ["https://www.dol.example.gov/forms/leave-cert.pdf"], "Shown: \(shown)")
         precondition(PlaceLinkFilter.visible(saved, placeCard: nil, text: reply) == saved)
+    }
+
+    static func testPlaceMapFit() {
+        let pins = [
+            CLLocationCoordinate2D(latitude: 37.3692, longitude: -121.9512),
+            CLLocationCoordinate2D(latitude: 37.3535, longitude: -121.9399),
+            CLLocationCoordinate2D(latitude: 37.3816, longitude: -121.9751),
+        ]
+        let size = CGSize(width: 680, height: 310)
+        // A 248 pt list floating 12 pt from the left edge, plus room for pin labels.
+        let insets = PlaceMapFit.Insets(top: 40, left: 268 + 80, bottom: 34, right: 12 + 80)
+        guard let rect = PlaceMapFit.rect(for: pins, size: size, insets: insets) else {
+            preconditionFailure("Expected a fitted rect")
+        }
+        precondition(abs(rect.size.width / rect.size.height - size.width / size.height) < 0.0001,
+                     "The rect keeps the view's aspect ratio, so MapKit shows it exactly")
+        func screen(_ coordinate: CLLocationCoordinate2D) -> CGPoint {
+            let point = MKMapPoint(coordinate)
+            return CGPoint(x: (point.x - rect.origin.x) / rect.size.width * size.width,
+                           y: (point.y - rect.origin.y) / rect.size.height * size.height)
+        }
+        let area = CGRect(x: insets.left, y: insets.top, width: size.width - insets.left - insets.right,
+                          height: size.height - insets.top - insets.bottom)
+        for pin in pins {
+            let p = screen(pin)
+            precondition(area.insetBy(dx: -0.5, dy: -0.5).contains(p), "Pin \(p) must sit in \(area)")
+        }
+        // The pins span the free area in at least one direction: fitted, not just shrunk.
+        let xs = pins.map { screen($0).x }, ys = pins.map { screen($0).y }
+        precondition(abs((xs.max()! - xs.min()!) - area.width) < 1 || abs((ys.max()! - ys.min()!) - area.height) < 1)
+
+        // One place: centred in the free area at the minimum width, never a world-scale zoom.
+        let single = PlaceMapFit.rect(for: [pins[0]], size: size, insets: insets, minimumMeters: 2_000)!
+        let meters = single.size.width / size.width * area.width / MKMapPointsPerMeterAtLatitude(pins[0].latitude)
+        precondition(abs(meters - 2_000) < 1, "Single pin spans \(meters) m")
+        precondition(PlaceMapFit.rect(for: [], size: size, insets: insets) == nil)
     }
 }
