@@ -18,7 +18,7 @@ final class PairingMacRenderTests: XCTestCase {
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let model = try StartFreshFixture.model(for: self)
         let url = try XCTUnwrap(URL(string: "cantripagent://pair?v=1&name=codespaces-abc123&token=\(token)"
-            + "&url=https%3A%2F%2Fcodespaces-abc123-8765.app.github.dev&direct=192.168.0.94%3A8766"))
+            + "&url=https%3A%2F%2Fcodespaces-abc123-8765.app.github.dev&direct=192.168.0.10%3A8766"))
         let link = try XCTUnwrap(CantripPairingLink.parse(url))
         for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
             try await capture(link, model, "mac-pair-\(name)", appearance, output)

@@ -12,8 +12,8 @@ describe("rich cards logic", () => {
     expect(isSafePublicUrl("https://www.apple.com/shop/buy-mac/mac-studio")).toBe(true);
     expect(isSafePublicUrl("http://localhost:8080/status")).toBe(false);
     expect(isSafePublicUrl("https://host.example-tailnet.ts.net/api")).toBe(false);
-    expect(isSafePublicUrl("http://fixer.example-home.com")).toBe(false);
-    expect(isSafePublicUrl("http://192.168.0.94:8092")).toBe(false);
+    expect(isSafePublicUrl("http://printer.local")).toBe(false);
+    expect(isSafePublicUrl("http://192.168.0.10:8092")).toBe(false);
     expect(isSafePublicUrl("http://100.101.102.103:443")).toBe(false);
     expect(isSafePublicUrl("file:///etc/hosts")).toBe(false);
     expect(isSafePublicUrl("https://user:pass@example.com")).toBe(false);

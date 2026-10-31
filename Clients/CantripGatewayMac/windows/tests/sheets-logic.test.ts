@@ -410,7 +410,7 @@ describe("maintenance", () => {
     expect(isMaintenanceRequest({ id: "a", action: "reboot", revision: "R" })).toBe(false);
     expect(isMaintenanceRequest(null)).toBe(false);
     expect(endpointHost("HTTPS (mac.example.ts.net)", "Studio")).toBe("mac.example.ts.net");
-    expect(endpointHost("Direct, encrypted (192.168.0.94:55331)", "")).toBe("192.168.0.94:55331");
+    expect(endpointHost("Direct, encrypted (192.168.0.10:55331)", "")).toBe("192.168.0.10:55331");
     expect(endpointHost("", "Studio")).toBe("Studio");
     expect(endpointHost("", "")).toBe("Not configured");
   });
