@@ -45,6 +45,7 @@ struct HermesApp: App {
         }
         #if DEBUG
         .task { await CantripUITestFixtures.pairRemoteIfRequested(remoteModel, env: env) }
+        .task { await CantripUITestFixtures.requestBadgesIfAsked() }
         #endif
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { notifications.clearBadge() }

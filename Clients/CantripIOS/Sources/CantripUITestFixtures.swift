@@ -1,5 +1,6 @@
 #if DEBUG
 import SwiftUI
+import UserNotifications
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -9,6 +10,13 @@ import UIKit
 enum CantripUITestFixtures {
     static var showsImageViewer: Bool {
         ProcessInfo.processInfo.arguments.contains("-CantripUITestImageViewer")
+    }
+
+    /// `-CantripUITestRequestBadges` asks for alert and badge permission at launch, as turning on
+    /// Cantrip alerts would, so badge tests run without a paired Mac's push setup.
+    static func requestBadgesIfAsked() async {
+        guard ProcessInfo.processInfo.arguments.contains("-CantripUITestRequestBadges") else { return }
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
     }
 
     static var pairsWithFixtureHost: Bool {
