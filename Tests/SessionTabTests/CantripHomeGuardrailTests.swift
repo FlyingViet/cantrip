@@ -15,6 +15,7 @@ extension SessionTabTests {
         try await testCantripHomeAntigravityHook()
         try await testAntigravityBackendStream()
         try await testAntigravityRestartKeepsNextTurn()
+        try await testAntigravityWorkdirAndToolStates()
         try await testAntigravityPermissionModes()
         try await testCantripHomeCodexFailsClosed()
         print("Cantrip Home guardrails: action policy, forgiving block parsing, prompt briefs and one-shot corrections passed")
