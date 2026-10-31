@@ -1063,7 +1063,7 @@ actor PlaceCardResolver {
                 guard let mapItem = await searchFirstMapItem(query: searchQuery, region: regionHint) else {
                     continue
                 }
-                let coord = mapItem.location.coordinate
+                let coord = Self.coordinate(of: mapItem)
                 guard CLLocationCoordinate2DIsValid(coord),
                       !(coord.latitude == 0 && coord.longitude == 0) else {
                     continue
@@ -1111,7 +1111,7 @@ actor PlaceCardResolver {
                 ? "\(query) \(nearHint!)" : query
             let items = await searchMapItems(query: fullQuery, region: regionHint, limit: 5)
             for (index, mapItem) in items.enumerated() {
-                let coord = mapItem.location.coordinate
+                let coord = Self.coordinate(of: mapItem)
                 guard CLLocationCoordinate2DIsValid(coord),
                       !(coord.latitude == 0 && coord.longitude == 0),
                       let name = mapItem.name, !name.isEmpty else {
@@ -1261,14 +1261,24 @@ actor PlaceCardResolver {
         )
     }
 
+    /// MapKit's `location` and `address` are macOS 26+; older Macs read the placemark.
+    private static func coordinate(of item: MKMapItem) -> CLLocationCoordinate2D {
+        if #available(macOS 26.0, *) { return item.location.coordinate }
+        return item.placemark.coordinate
+    }
+
     private static func extractAddress(from item: MKMapItem) -> String? {
-        if let full = item.address?.fullAddress, !full.isEmpty {
-            return full.replacingOccurrences(of: "\n", with: ", ")
+        if #available(macOS 26.0, *) {
+            if let full = item.address?.fullAddress, !full.isEmpty {
+                return full.replacingOccurrences(of: "\n", with: ", ")
+            }
+            if let short = item.address?.shortAddress, !short.isEmpty {
+                return short
+            }
+            return nil
         }
-        if let short = item.address?.shortAddress, !short.isEmpty {
-            return short
-        }
-        return nil
+        guard let title = item.placemark.title, !title.isEmpty else { return nil }
+        return title
     }
 
     private static func cleanWebsite(_ raw: String?) -> String? {
