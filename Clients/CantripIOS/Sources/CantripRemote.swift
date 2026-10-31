@@ -40,6 +40,8 @@ struct CantripRemoteActivity: Decodable, Equatable, Identifiable {
     let state: String
     var input: String? = nil
     var output: String? = nil
+    /// From the Mac's `browser` MCP server (agent-only Chrome): the reply shows a live preview card.
+    var browser: Bool? = nil
 }
 
 enum CantripRemoteSubagentStatus: Equatable {
@@ -1764,6 +1766,15 @@ struct CantripRemoteAPI {
         }
     }
 
+    /// A JPEG of the tab the Mac's agent-only Chrome is working in (`GET /api/v1/browser/frame`).
+    func browserFrame(width: Int) async throws -> CantripBrowserFrame {
+        let frame: CantripBrowserFrame = try await request(
+            path: "/api/v1/browser/frame?width=\(min(max(width, 240), 1920))"
+        )
+        guard !frame.data.isEmpty, frame.data.count <= 8_000_000 else { throw CantripRemoteError.invalidResponse }
+        return frame
+    }
+
     func imageData(sessionID: String, imageID: String, thumbnail: Bool) async throws -> Data {
         guard UUID(uuidString: sessionID) != nil, ChatMessageImage.validRemoteID(imageID) else {
             throw CantripRemoteError.invalidResponse
@@ -3395,6 +3406,16 @@ final class CantripRemoteModel: ObservableObject {
         return try await performAuthenticated(allowFallback: true) { api in
             try await api.copilotUsage()
         }
+    }
+
+    func browserFrame(width: Int) async throws -> (frame: CantripBrowserFrame, image: UIImage) {
+        let frame = try await performAuthenticated(allowFallback: true) { api in
+            try await api.browserFrame(width: width)
+        }
+        let image = try await Task.detached(priority: .userInitiated) {
+            try ChatImageDecoder.decode(frame.data, maximumDimension: 1920)
+        }.value
+        return (frame, image)
     }
 
     func image(sessionID: String, imageID: String, thumbnail: Bool) async throws -> UIImage {
