@@ -2734,6 +2734,7 @@ struct LauncherView: View {
     private var usageView: some View {
         VStack(alignment: .leading, spacing: 12) {
             ClaudeUsageView(usage: usage)
+            if usage.copilotUsage.antigravity != nil { AntigravityUsageView(usage: usage) }
             CopilotUsageView(usage: usage)
             if claudeMonthSpend > 0 {
                 HStack(spacing: 6) {

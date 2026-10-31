@@ -29,6 +29,8 @@ final class UsageTracker: ObservableObject {
     private var lastQuotaRefresh = Date.distantPast
     private let quotaLoader: (@escaping (Result<CopilotAccountUsage, Error>) -> Void) -> Void
     private let claudeLoader: ((@escaping (Result<ClaudeAccountUsage, Error>) -> Void) -> Void)?
+    /// Asked on every refresh, so Antigravity installed after launch shows up without a restart.
+    private let antigravityLoader: () -> ((@escaping (Result<AntigravityAccountUsage, Error>) -> Void) -> Void)?
     private let quotaClock: () -> Date
     private var autoRefresh: Timer?
 
@@ -66,7 +68,39 @@ final class UsageTracker: ObservableObject {
                 }
             }
         }
+        if let antigravityLoader = antigravityLoader() {
+            group.enter()
+            antigravityLoader { [weak self] result in
+                DispatchQueue.main.async {
+                    defer { group.leave() }
+                    self?.apply(antigravity: result)
+                }
+            }
+        }
         group.notify(queue: .main) { [weak self] in self?.copilotUsage.isRefreshing = false }
+    }
+
+    private func apply(antigravity result: Result<AntigravityAccountUsage, Error>) {
+        var state = copilotUsage.antigravity ?? AntigravityUsageState()
+        switch result {
+        case .success(let account):
+            state = AntigravityUsageState(account: account, checkedAt: ISODate.string(from: quotaClock()), error: nil)
+            // The model group Antigravity runs on (Gemini for Auto) at its limit sends new messages to
+            // the fallback backend before agy refuses one.
+            let model = AppSettings.shared.agyModel.trimmingCharacters(in: .whitespaces)
+            if let group = account.group(forModel: model),
+               let full = group.buckets.filter(\.isExhausted)
+                .max(by: { (copilotDate($0.resetsAt) ?? .distantPast) < (copilotDate($1.resetsAt) ?? .distantPast) }) {
+                BackendLimitTracker.shared.markLimited(
+                    .antigravity, message: "Antigravity \(group.name) \(full.title.lowercased()) reached",
+                    report: UsageLimitReport(code: "usage/\(full.id)", resetsAt: copilotDate(full.resetsAt)),
+                    now: quotaClock()
+                )
+            }
+        case .failure(let error):
+            state.error = ((error as? AntigravityUsageError) ?? .response).localizedDescription
+        }
+        copilotUsage.antigravity = state
     }
 
     private func apply(claude result: Result<ClaudeAccountUsage, Error>) {
@@ -111,10 +145,13 @@ final class UsageTracker: ObservableObject {
     init(
         quotaLoader: @escaping (@escaping (Result<CopilotAccountUsage, Error>) -> Void) -> Void = QuotaFetcher.fetchCopilotQuota,
         claudeLoader: ((@escaping (Result<ClaudeAccountUsage, Error>) -> Void) -> Void)? = UsageTracker.defaultClaudeLoader,
+        antigravityLoader: @escaping () -> ((@escaping (Result<AntigravityAccountUsage, Error>) -> Void) -> Void)?
+            = UsageTracker.defaultAntigravityLoader,
         quotaClock: @escaping () -> Date = Date.init
     ) {
         self.quotaLoader = quotaLoader
         self.claudeLoader = claudeLoader
+        self.antigravityLoader = antigravityLoader
         self.quotaClock = quotaClock
         if let data = d.data(forKey: rateLimitKey),
            let saved = try? JSONDecoder().decode(RateLimit.self, from: data) {
@@ -125,6 +162,12 @@ final class UsageTracker: ObservableObject {
     /// Claude's limits when Claude Code is installed; nil leaves them out.
     static var defaultClaudeLoader: ((@escaping (Result<ClaudeAccountUsage, Error>) -> Void) -> Void)? {
         ToolLocator.shared.claude(configured: AppSettings.shared.claudePath) == nil ? nil : ClaudeUsageFetcher.fetch
+    }
+
+    /// Antigravity's limits when `agy` is installed; nil leaves them out.
+    static func defaultAntigravityLoader() -> ((@escaping (Result<AntigravityAccountUsage, Error>) -> Void) -> Void)? {
+        guard let command = AntigravityBackend.resolveExecutable(customPath: AppSettings.shared.agyPath) else { return nil }
+        return { AntigravityUsageFetcher.fetch(command: command, completion: $0) }
     }
 
     // MARK: - Recording
