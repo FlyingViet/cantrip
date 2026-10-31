@@ -8,7 +8,7 @@ import type {
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
   ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackSnapshot,
-  ClaudeLimitWindow, ClaudeUsageState,
+  AntigravityLimitBucket, AntigravityUsageState, ClaudeLimitWindow, ClaudeUsageState,
 } from "../../api/types";
 
 // MARK: Errors
@@ -834,4 +834,33 @@ export function isClaudeUsageStale(state: ClaudeUsageState, now: number): boolea
     const reset = window.resetsAt ? Date.parse(window.resetsAt) : NaN;
     return !Number.isNaN(reset) && now >= reset;
   });
+}
+
+/** AntigravityLimitBucket.title. */
+export function antigravityBucketTitle(bucket: AntigravityLimitBucket): string {
+  switch (bucket.window) {
+    case "weekly": return "Weekly limit";
+    case "5h": case "five_hour": return "5-hour limit";
+    default: return bucket.name;
+  }
+}
+
+export function antigravityBucketUsed(bucket: AntigravityLimitBucket): number {
+  return Math.min(100, Math.max(0, 100 - bucket.remainingPercent));
+}
+
+/** "warning" from 80% used, "critical" when the window is used up. */
+export function antigravityBucketTone(bucket: AntigravityLimitBucket): "normal" | "warning" | "critical" {
+  if (bucket.remainingPercent <= 0) return "critical";
+  return antigravityBucketUsed(bucket) >= 80 ? "warning" : "normal";
+}
+
+/** AntigravityUsageState.isStale: older than ten minutes, or a window reset since it was read. */
+export function isAntigravityUsageStale(state: AntigravityUsageState, now: number): boolean {
+  const checked = state.checkedAt ? Date.parse(state.checkedAt) : NaN;
+  if (!state.account || Number.isNaN(checked) || now - checked >= 600_000) return true;
+  return state.account.groups.some((group) => group.buckets.some((bucket) => {
+    const reset = bucket.resetsAt ? Date.parse(bucket.resetsAt) : NaN;
+    return !Number.isNaN(reset) && now >= reset;
+  }));
 }
