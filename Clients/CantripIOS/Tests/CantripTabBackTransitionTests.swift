@@ -56,14 +56,18 @@ final class CantripTabBackTransitionTests: XCTestCase {
         return (transition, scheduler)
     }
 
-    func testOnlyASidewaysDragFromTheLeadingEdgeStartsTheBackSwipe() {
+    func testASidewaysDragRightFromAnywhereStartsTheBackSwipe() {
+        CantripSwipeZones.exemptFrames = []
         XCTAssertTrue(CantripBackSwipe.begins(start: CGPoint(x: 6, y: 300), translation: CGSize(width: 14, height: 3)))
-        XCTAssertTrue(CantripBackSwipe.begins(start: CGPoint(x: 24, y: 300), translation: CGSize(width: 30, height: -12)))
-        XCTAssertFalse(CantripBackSwipe.begins(start: CGPoint(x: 40, y: 300), translation: CGSize(width: 60, height: 0)),
-                       "Away from the edge the drag belongs to the transcript")
+        XCTAssertTrue(CantripBackSwipe.begins(start: CGPoint(x: 200, y: 300), translation: CGSize(width: 30, height: -12)),
+                      "It starts anywhere, not just at the edge")
         XCTAssertFalse(CantripBackSwipe.begins(start: CGPoint(x: 4, y: 300), translation: CGSize(width: 12, height: 20)),
                        "Mostly vertical: a scroll")
         XCTAssertFalse(CantripBackSwipe.begins(start: CGPoint(x: 4, y: 300), translation: CGSize(width: -20, height: 0)))
+        CantripSwipeZones.exemptFrames = [CGRect(x: 0, y: 280, width: 390, height: 60)]
+        defer { CantripSwipeZones.exemptFrames = [] }
+        XCTAssertFalse(CantripBackSwipe.begins(start: CGPoint(x: 200, y: 300), translation: CGSize(width: 40, height: 0)),
+                       "A sideways scroller keeps its own drag")
     }
 
     func testReleaseFinishesPastAThirdOrOnAFlick() {
