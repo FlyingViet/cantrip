@@ -92,3 +92,13 @@ details.sh-output .sh-pre { max-height: 260px; overflow: auto; padding: 8px 10px
 .sh-reader-text .segmented { align-self: flex-start; }
 /* The row's `grow` widens it in the list; in the reader's column it must not stretch vertically. */
 .sh-reader-text > .sh-stack.grow { flex-grow: 0; }
+
+/* MCP Servers */
+.mcp-server { border-top: 1px solid var(--separator, rgba(128,128,128,.25)); padding: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.mcp-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mcp-head strong { flex: 1; }
+.mcp-status.attention { color: var(--accent); }
+.mcp-status.warning { color: var(--orange); }
+.mcp-switches { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; }
+.mcp-page img { max-width: 100%; max-height: 340px; border-radius: 8px; border: 1px solid var(--separator, rgba(128,128,128,.25)); }
+.mcp-actions { display: flex; gap: 8px; justify-content: flex-end; }

@@ -4,7 +4,7 @@
 // (GitHubBuildsView.swift), maintenance (CantripMaintenanceView.swift) and View Mac's AES-GCM framing
 // (CantripMacAccess.swift). No DOM or API client imports, so it runs under Node.
 import type {
-  CopilotQuotaBucket, CopilotUsageSnapshot, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
+  CopilotQuotaBucket, CopilotUsageSnapshot, MCPServer, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
   ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackEntry, UsageFallbackRequest, UsageFallbackSnapshot,
@@ -927,4 +927,19 @@ export function copilotBucketTone(bucket: CopilotQuotaBucket): "normal" | "warni
   const remaining = bucket.remainingPercent ?? 100;
   if (remaining <= 0) return "critical";
   return remaining <= 20 ? "warning" : "normal";
+}
+
+/** An MCP server's status line (CantripMCPServersView.status). */
+export function mcpStatus(server: MCPServer): { text: string; tone: "" | "attention" | "warning" } {
+  if (!server.enabled) return { text: "Off", tone: "" };
+  if (!server.oauth) return { text: "Ready", tone: "" };
+  switch (server.state?.phase) {
+    case "ready": return { text: "Signed in", tone: "" };
+    case "connecting": return { text: "Signing in…", tone: "" };
+    case "awaitingApproval": return { text: "Waiting for your OK", tone: "attention" };
+    case "needsLogin": return { text: "Log in to finish", tone: "attention" };
+    case "locked": return { text: "Mac keychain locked", tone: "warning" };
+    case "failed": return { text: "Sign-in failed", tone: "warning" };
+    default: return { text: "Not signed in", tone: "warning" };
+  }
 }

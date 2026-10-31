@@ -20,6 +20,7 @@ export type SheetState =
   | { kind: "modelSettings"; sessionID: string }
   | { kind: "inputRequests"; sessionID: string }
   | { kind: "macAccess" }
+  | { kind: "mcpServers"; tabID?: string }
   | { kind: "usage" }
   | { kind: "memory" }
   | { kind: "builds" }

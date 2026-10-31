@@ -15,6 +15,7 @@ import { ConfirmLayer, MenuLayer, Sheet, ToastLayer, toast } from "./kit";
 import { MascotCustomization } from "./pip/MascotCustomization";
 import { BuildsSheet } from "./sheets/BuildsSheet";
 import { MacAccessSheet } from "./sheets/MacAccessSheet";
+import { MCPServersSheet } from "./sheets/MCPServersSheet";
 import { MaintenanceSheet } from "./sheets/MaintenanceSheet";
 import { MemorySheet } from "./sheets/MemorySheet";
 import { ModelSettingsSheet } from "./sheets/ModelSettingsSheet";
@@ -126,6 +127,7 @@ function SheetHost(): JSX.Element | null {
     case "modelSettings": return <ModelSettingsSheet sessionID={sheet.sessionID} onClose={close} />;
     case "inputRequests": return <InputRequestsSheet sessionID={sheet.sessionID} onClose={close} />;
     case "macAccess": return <MacAccessSheet onClose={close} />;
+    case "mcpServers": return <MCPServersSheet tabID={sheet.tabID} onClose={close} />;
     case "usage": return <UsageSheet onClose={close} />;
     case "memory": return <MemorySheet onClose={close} />;
     case "builds": return <BuildsSheet onClose={close} />;
