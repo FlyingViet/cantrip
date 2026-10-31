@@ -74,7 +74,8 @@ final class UpdateChecker: ObservableObject {
                 }
             }
 
-            let fetched = Self.git(["fetch", "--quiet", "origin"], in: repoPath) != nil
+            // Forced tags: a rewritten history moves release tags, which a plain fetch refuses to clobber.
+            let fetched = Self.git(["fetch", "--quiet", "--force", "--tags", "origin"], in: repoPath) != nil
             report.fetchFailed = !fetched
             // After a failed fetch the last fetched origin/main still says
             // what was latest then; Settings labels it as such.
