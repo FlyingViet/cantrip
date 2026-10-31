@@ -230,11 +230,15 @@ private final class RouterProcess: @unchecked Sendable {
                 ]
             case .antigravity(let executable, let model):
                 command = executable
+                // agy has no tool-free mode. Headless, a shell command it reaches for is refused and
+                // the run then prints nothing, so deny commands outright (the model is told and
+                // answers) and say up front that no tools are needed.
                 arguments = [
-                    "-p", instructions + "\n\n" + input,
+                    "-p", "Answer from the text below alone; don't use any tools.\n\n" + instructions + "\n\n" + input,
                     "--model", model,
                     "--output-format", "text",
                     "--disable-slash-commands",
+                    "--settings", #"{"permissions":{"deny":["command(*)"]}}"#,
                 ]
             default:
                 throw MessageRoutingError.unavailable("no tool-free router is configured for this backend.")
@@ -297,7 +301,10 @@ private final class RouterProcess: @unchecked Sendable {
             }
             process = p
             try p.run()
-            queue.asyncAfter(deadline: .now() + timeout) {
+            // agy starts a language server per call: 5-11 s where the other CLIs take 2-4.
+            let limit: TimeInterval
+            if case .antigravity = provider { limit = max(timeout, 25) } else { limit = timeout }
+            queue.asyncAfter(deadline: .now() + limit) {
                 guard self.continuation != nil else { return }
                 self.finish(.failure(MessageRoutingError.timeout))
             }
