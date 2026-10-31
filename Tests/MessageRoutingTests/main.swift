@@ -38,9 +38,13 @@ struct MessageRoutingTests {
                 guard let modelIndex = args.firstIndex(of: "--model"),
                       args[modelIndex + 1] == "gemini-3.8-flash-medium",
                       let fmtIndex = args.firstIndex(of: "--output-format"),
-                      args[fmtIndex + 1] == "text"
+                      args[fmtIndex + 1] == "text",
+                      // Headless agy prints nothing after refusing a command, so routing denies them.
+                      let settingsIndex = args.firstIndex(of: "--settings"),
+                      args[settingsIndex + 1] == #"{"permissions":{"deny":["command(*)"]}}"#,
+                      args[2].hasPrefix("Answer from the text below alone; don't use any tools.")
                 else { exit(6) }
-                let grouping = args[2].hasPrefix("You group queued chat messages")
+                let grouping = args[2].contains("You group queued chat messages")
                 print(grouping
                     ? #"{"combine":[3],"confidence":0.9}"#
                     : #"{"intent":"context","confidence":0.99,"evidence":"The config lives in /config"}"#)
