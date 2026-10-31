@@ -3,7 +3,7 @@ import Foundation
 extension SessionTabTests {
     /// agy keeps a conversation in the folder it started in: a tab moved to another folder starts a
     /// fresh conversation there instead of resuming one whose commands run in the old (perhaps
-    /// deleted) folder.
+    /// deleted) folder. Shell steps agy reports as failed, and calls Cantrip refused, show as failed.
     @MainActor
     static func testAntigravityWorkdirAndToolStates() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agy-workdir-\(UUID())")
@@ -56,6 +56,14 @@ extension SessionTabTests {
                      "Same folder resumes; a moved tab starts fresh in its new folder: \(launches)")
         precondition(backend.conversationID == "conv-second")
 
-        print("Antigravity: a moved tab starts a fresh conversation")
+        precondition(AntigravityBackend.commandFailed(toolName: "run_command", output: "Command failed to run: /gone: no such directory."))
+        precondition(AntigravityBackend.commandFailed(toolName: "run_command", output: "Command exited with code 1.\n\nCommand output:\nnope"))
+        precondition(AntigravityBackend.commandFailed(toolName: "run_command", output: "Command exited with code 10."))
+        precondition(!AntigravityBackend.commandFailed(toolName: "run_command", output: "Command exited with code 0.\n\nCommand output:\nok"))
+        precondition(!AntigravityBackend.commandFailed(toolName: "read_file", output: "Command failed to run"))
+        precondition(AntigravityBackend.deniedKey(tool: "run_command", arguments: ["CommandLine": "sudo -n true", "Cwd": "/a"])
+                     == AntigravityBackend.deniedKey(tool: "run_command", arguments: ["CommandLine": "sudo -n true"]),
+                     "A refusal is matched to its step by tool and command")
+        print("Antigravity: a moved tab starts a fresh conversation; failed and refused commands show as failed")
     }
 }
