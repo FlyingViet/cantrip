@@ -996,6 +996,63 @@ enum PlaceMapFit {
     }
 }
 
+extension PlaceMapFit {
+    /// Where each coordinate lands in a `size` view showing `region`.
+    static func screenPoints(_ coordinates: [CLLocationCoordinate2D], region: MKCoordinateRegion, size: CGSize) -> [CGPoint] {
+        let topLeft = MKMapPoint(CLLocationCoordinate2D(latitude: region.center.latitude + region.span.latitudeDelta / 2,
+                                                        longitude: region.center.longitude - region.span.longitudeDelta / 2))
+        let bottomRight = MKMapPoint(CLLocationCoordinate2D(latitude: region.center.latitude - region.span.latitudeDelta / 2,
+                                                            longitude: region.center.longitude + region.span.longitudeDelta / 2))
+        let width = max(bottomRight.x - topLeft.x, 1), height = max(bottomRight.y - topLeft.y, 1)
+        return coordinates.map {
+            let point = MKMapPoint($0)
+            return CGPoint(x: (point.x - topLeft.x) / width * size.width, y: (point.y - topLeft.y) / height * size.height)
+        }
+    }
+
+    /// The width of a pin's capsule (icon, padding and its capped label) for `name`.
+    static func pinWidth(_ name: String, labelMaxWidth: CGFloat = 150) -> CGFloat {
+        min(CGFloat(name.count) * 6.4, labelMaxWidth) + 36
+    }
+
+    /// How far to move each pin's capsule up (negative) or down so no two overlap: each pin
+    /// keeps its spot unless an earlier one is there, then takes the nearest free row. Capsules
+    /// sit centered above their point, `height` tall. With `bounds`, a move never pushes a
+    /// capsule out of the map (it goes the other way instead).
+    static func labelOffsets(points: [CGPoint], widths: [CGFloat], height: CGFloat = 24, gap: CGFloat = 2,
+                             bounds: CGRect? = nil) -> [CGSize] {
+        var placed: [CGRect] = []
+        var offsets: [CGSize] = []
+        let step = height + gap
+        for (point, width) in zip(points, widths) {
+            let base = CGRect(x: point.x - width / 2, y: point.y - height, width: width, height: height)
+            // The nearest free spot: rows above and below, then sideways by half or a whole capsule.
+            var moves: [CGSize] = []
+            for row in -3...3 {
+                for shift in [0.0, -0.5, 0.5, -1.0, 1.0] {
+                    moves.append(CGSize(width: shift * (width + gap), height: CGFloat(row) * step))
+                }
+            }
+            moves.sort { abs($0.width) / max(width, 1) * 2 + abs($0.height) / step < abs($1.width) / max(width, 1) * 2 + abs($1.height) / step }
+            func overlap(_ move: CGSize) -> CGFloat? {
+                let shifted = base.offsetBy(dx: move.width, dy: move.height)
+                if move != .zero, let bounds, !bounds.contains(shifted) { return nil }
+                let padded = shifted.insetBy(dx: -gap / 2, dy: -gap / 2)
+                return placed.reduce(0) { total, other in
+                    let common = other.intersection(padded)
+                    return total + (common.isNull ? 0 : common.width * common.height)
+                }
+            }
+            let scored = moves.compactMap { move in overlap(move).map { (move, $0) } }
+            // The first free spot, else the one that overlaps least.
+            let choice = scored.first { $0.1 == 0 }?.0 ?? scored.min { $0.1 < $1.1 }?.0 ?? .zero
+            placed.append(base.offsetBy(dx: choice.width, dy: choice.height))
+            offsets.append(choice)
+        }
+        return offsets
+    }
+}
+
 // MARK: - Links a Map Card Already Covers
 
 /// When a reply has a map card, its place list already links each place, so a link preview for
@@ -1956,8 +2013,18 @@ struct PlaceCardView: View {
         )
     }
 
+    /// Vertical nudges that keep pins whose capsules would overlap (close places) readable.
+    private var pinOffsets: [String: CGSize] {
+        guard mapSize != .zero else { return [:] }
+        let points = PlaceMapFit.screenPoints(card.places.map(\.coordinate), region: currentRegion, size: mapSize)
+        let offsets = PlaceMapFit.labelOffsets(points: points, widths: card.places.map { PlaceMapFit.pinWidth($0.name) },
+                                               bounds: CGRect(origin: .zero, size: mapSize))
+        return Dictionary(uniqueKeysWithValues: zip(card.places.map(\.id), offsets))
+    }
+
     private var mapSurface: some View {
-        Map(position: $position) {
+        let offsets = pinOffsets
+        return Map(position: $position) {
             ForEach(card.places) { place in
                 Annotation(place.name, coordinate: place.coordinate, anchor: .bottom) {
                     Button {
@@ -1991,6 +2058,7 @@ struct PlaceCardView: View {
                     }
                     .buttonStyle(.plain)
                     .help(place.name)
+                    .offset(offsets[place.id] ?? .zero)
                 }
                 .annotationTitles(.hidden)
             }

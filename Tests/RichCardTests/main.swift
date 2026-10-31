@@ -13,6 +13,7 @@ struct RichCardTests {
         testPlaceLinkFilter()
         testPlaceMapFit()
         testPlaceMatching()
+        testPinLabelOffsets()
         try await testMatchaPlacesResolve()
         print("Rich card unit tests passed")
     }
@@ -376,6 +377,34 @@ struct RichCardTests {
                      && approximate[0].listedName == nil && approximate[0].pinSymbol == "mappin",
                      "Never renamed to an address: \(approximate)")
         precondition((approximate[0].snapshot["approximate"] as? Bool) == true && approximate[0].snapshot["glyph"] as? String == "📍")
+    }
+
+    static func testPinLabelOffsets() {
+        // Two places on the same row 60 pt apart (Arisan's Sunnyvale branch and Matsu): the second moves a row.
+        let points = [CGPoint(x: 300, y: 100), CGPoint(x: 240, y: 101), CGPoint(x: 500, y: 300)]
+        let widths = ["Matsu Matcha", "Arisan Tea & Coffee House", "Cere Tea"].map { PlaceMapFit.pinWidth($0) }
+        let offsets = PlaceMapFit.labelOffsets(points: points, widths: widths)
+        precondition(offsets[0] == .zero && offsets[1] != .zero && offsets[2] == .zero, "Only the colliding pin moves: \(offsets)")
+        let first = CGRect(x: 300 - widths[0] / 2, y: 76, width: widths[0], height: 24)
+        let second = CGRect(x: 240 - widths[1] / 2 + offsets[1].width, y: 77 + offsets[1].height, width: widths[1], height: 24)
+        precondition(!first.intersects(second), "The moved capsule no longer overlaps")
+        let nearTop = PlaceMapFit.labelOffsets(points: [CGPoint(x: 300, y: 30), CGPoint(x: 240, y: 31)], widths: Array(widths.prefix(2)),
+                                               bounds: CGRect(x: 0, y: 0, width: 600, height: 300))
+        precondition(nearTop[1].height > 0, "At the top edge the pin moves down, not out of the map: \(nearTop)")
+        // A crowded map (the unfolded Duo's five pins): no two capsules overlap.
+        let crowded = [CGPoint(x: 300, y: 50), CGPoint(x: 330, y: 95), CGPoint(x: 250, y: 30), CGPoint(x: 290, y: 150), CGPoint(x: 260, y: 98)]
+        let crowdedWidths = ["Matsu Matcha", "Matcha Cafe Maiko", "Arisan Tea & Coffee House", "Cere Tea", "Izumi Matcha"].map { PlaceMapFit.pinWidth($0) }
+        let moves = PlaceMapFit.labelOffsets(points: crowded, widths: crowdedWidths, bounds: CGRect(x: 0, y: 0, width: 580, height: 210))
+        let rects = zip(zip(crowded, crowdedWidths), moves).map { pair, move in
+            CGRect(x: pair.0.x - pair.1 / 2 + move.width, y: pair.0.y - 24 + move.height, width: pair.1, height: 24)
+        }
+        for i in rects.indices { for j in rects.indices where j > i {
+            precondition(!rects[i].intersects(rects[j]), "Pins \(i) and \(j) overlap: \(moves)")
+        } }
+        let region = MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 37.35, longitude: -121.98),
+                                        span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1))
+        let center = PlaceMapFit.screenPoints([region.center], region: region, size: CGSize(width: 400, height: 300))[0]
+        precondition(abs(center.x - 200) < 1 && abs(center.y - 150) < 2, "The region's center is the view's center: \(center)")
     }
 
     struct Missing: Error {}
