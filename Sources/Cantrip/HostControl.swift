@@ -36,7 +36,9 @@ final class HostControl {
                 guard !values.isEmpty else { return ["error": "Nothing to set."] }
                 let current = settings.dotfileValues
                 var typed: [String: Any] = [:]
-                for (key, value) in values {
+                for (rawKey, value) in values {
+                    // The single-backend name from before the chain still works.
+                    let key = rawKey == "limitFallbackBackend" ? "limitFallbackBackends" : rawKey
                     guard let existing = current[key] else {
                         return ["error": "Unknown setting \(key). Run `cantrip config` to list them."]
                     }
@@ -47,13 +49,18 @@ final class HostControl {
                         typed[key] = kind.rawValue
                         continue
                     }
-                    if key == "limitFallbackBackend" {
-                        let name = (value as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
-                        if ["", "off", "none"].contains(name.lowercased()) { typed[key] = ""; continue }
-                        guard let kind = Self.backend(named: name) else {
-                            return ["error": "limitFallbackBackend must be off or one of: copilot, claude, codex, antigravity, local, copilot-remote."]
+                    if key == "limitFallbackBackends" {
+                        // "codex, copilot" or ["codex", "copilot"]: tried in that order; off clears it.
+                        let names = (value as? [String]) ?? ((value as? String) ?? "").split(separator: ",").map(String.init)
+                        let trimmed = names.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                        if trimmed.isEmpty || (trimmed.count == 1 && ["off", "none"].contains(trimmed[0].lowercased())) {
+                            typed[key] = [String](); continue
                         }
-                        typed[key] = kind.rawValue
+                        let kinds = trimmed.map(Self.backend(named:))
+                        guard !kinds.contains(where: { $0 == nil }) else {
+                            return ["error": "limitFallbackBackends must be off or a comma-separated list of: copilot, claude, codex, antigravity, local, copilot-remote."]
+                        }
+                        typed[key] = AppSettings.fallbackChain(kinds.compactMap { $0?.rawValue })
                         continue
                     }
                     guard let converted = Self.convert(value, like: existing) else {
