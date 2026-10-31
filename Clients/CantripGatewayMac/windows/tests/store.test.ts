@@ -20,7 +20,7 @@ const file = () => join(mkdtempSync(join(tmpdir(), "gw-store-")), "settings.json
 describe("saved Macs", () => {
   it("migrates a version 1 pairing to the selected server", () => {
     const path = file();
-    writeFileSync(path, JSON.stringify({ version: 1, server: server("192.168.0.94:55331", "Mini"), token: Buffer.from(`enc:${token("a")}`).toString("base64") }));
+    writeFileSync(path, JSON.stringify({ version: 1, server: server("192.168.0.10:55331", "Mini"), token: Buffer.from(`enc:${token("a")}`).toString("base64") }));
     const store = new SettingsStore(path, box);
     const list = store.list();
     expect(list.servers).toHaveLength(1);
@@ -30,7 +30,7 @@ describe("saved Macs", () => {
 
   it("keeps a migrated pairing's ID so Remove and Select work on it", () => {
     const path = file();
-    writeFileSync(path, JSON.stringify({ version: 1, server: server("192.168.0.94:55331", "Mini"), token: Buffer.from(`enc:${token("a")}`).toString("base64") }));
+    writeFileSync(path, JSON.stringify({ version: 1, server: server("192.168.0.10:55331", "Mini"), token: Buffer.from(`enc:${token("a")}`).toString("base64") }));
     const store = new SettingsStore(path, box);
     const shown = store.list().servers[0].id;
     expect(store.list().servers[0].id).toBe(shown);

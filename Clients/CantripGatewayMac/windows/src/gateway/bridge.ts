@@ -1,7 +1,7 @@
 // The preload's `cantripGateway` object (see src/preload/gateway.ts).
 export interface HostStatus {
   connected: boolean;
-  /** "Direct, encrypted (192.168.0.94:55331)" or "HTTPS (host)". */
+  /** "Direct, encrypted (192.168.0.10:55331)" or "HTTPS (host)". */
   route: string;
   message: string;
   server: string;

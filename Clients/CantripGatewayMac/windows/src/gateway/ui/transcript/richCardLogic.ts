@@ -8,7 +8,7 @@ export function isSafePublicUrl(raw: string | undefined): boolean {
     if (parsed.username || parsed.password) return false;
     const host = parsed.hostname.toLowerCase();
     if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return false;
-    if (host.endsWith(".ts.net") || host.endsWith(".example-home.com")) return false;
+    if (host.endsWith(".ts.net")) return false;
     if (/^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(host)) {
       return false;
     }
