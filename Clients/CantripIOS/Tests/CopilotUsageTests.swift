@@ -240,6 +240,37 @@ final class CopilotUsageTests: XCTestCase {
         XCTAssertNil(old.antigravity, "Macs before Antigravity limits send no field")
     }
 
+    func testCodexLimitsDecodeAndLeadTheHeaderWhenTheMacRunsCodex() async throws {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        func data(backend: String?, weeklyReset: Date = now.addingTimeInterval(86400 * 3)) throws -> Data {
+            var object = try JSONSerialization.jsonObject(with: fixture(remaining: 0, amount: 0)) as! [String: Any]
+            object["codex"] = ["checkedAt": iso.string(from: now), "account": ["plan": "plus", "windows": [
+                ["id": "codex/primary", "usedPercent": 12, "windowMinutes": 300,
+                 "resetsAt": iso.string(from: now.addingTimeInterval(3600))],
+                ["id": "codex/secondary", "usedPercent": 47, "windowMinutes": 10080,
+                 "resetsAt": iso.string(from: weeklyReset)],
+            ]]]
+            if let backend { object["activeBackend"] = backend }
+            return try JSONSerialization.data(withJSONObject: object)
+        }
+        let decoder = JSONDecoder()
+        let snapshot = try decoder.decode(CopilotUsageSnapshot.self, from: data(backend: "Codex"))
+        XCTAssertEqual(snapshot.codex?.account?.windows.map(\.title), ["5-hour limit", "Weekly limit"])
+        XCTAssertEqual(snapshot.codex?.account?.primary?.id, "codex/secondary")
+        XCTAssertTrue(snapshot.leadsWithCodex)
+        XCTAssertFalse(snapshot.leadsWithAntigravity)
+
+        let model = CopilotUsageModel()
+        await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: data(backend: "Codex")) }
+        XCTAssertEqual(model.headerText(at: now), "Week 47%", "The Mac runs Codex: its closest limit leads")
+        XCTAssertEqual(model.accessibilityValue(at: now), "Codex weekly limit 47% used")
+        await model.refresh { try decoder.decode(CopilotUsageSnapshot.self, from: data(backend: "Codex", weeklyReset: now.addingTimeInterval(-1))) }
+        XCTAssertEqual(model.headerText(at: now), "Stale", "A window that reset since it was read is stale")
+        let old = try decoder.decode(CopilotUsageSnapshot.self, from: fixture(remaining: 0, amount: 0))
+        XCTAssertNil(old.codex, "Macs before Codex limits send no field")
+    }
+
     func testCreditAmountsPrecisionMissingValuesAndLegacyUnits() async throws {
         let locale = Locale(identifier: "en_US")
         let model = CopilotUsageModel()

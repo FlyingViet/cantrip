@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// `GET /api/v1/copilot/usage`: Copilot's allowance at the top level, Claude Code's limits under
-/// `claude` (Macs with Cantrip 1.1.4+), Antigravity's under `antigravity`, and the Mac's active backend.
+/// `claude` (Macs with Cantrip 1.1.4+), Antigravity's under `antigravity`, Codex's under `codex`,
+/// and the Mac's active backend.
 struct CopilotUsageSnapshot: Decodable {
     let account: CopilotAccountUsage?
     let checkedAt: String?
@@ -9,12 +10,15 @@ struct CopilotUsageSnapshot: Decodable {
     let error: String?
     var claude: ClaudeUsageState? = nil
     var antigravity: AntigravityUsageState? = nil
+    var codex: CodexUsageState? = nil
     var activeBackend: String? = nil
 
     /// The Mac runs Claude Code and has its limits: lead with them.
     var leadsWithClaude: Bool { activeBackend == "Claude Code" && claude?.account != nil }
     /// The Mac runs Antigravity and has its limits: lead with them.
     var leadsWithAntigravity: Bool { activeBackend == "Antigravity" && antigravity?.account != nil }
+    /// The Mac runs Codex and has its limits: lead with them.
+    var leadsWithCodex: Bool { activeBackend == "Codex" && codex?.account?.primary != nil }
 
     func isStale(at now: Date = Date()) -> Bool {
         guard account != nil, error == nil, let checked = copilotDate(checkedAt),
@@ -90,6 +94,64 @@ struct AntigravityUsageState: Decodable, Equatable {
             return true
         }
         return account?.groups.contains { $0.buckets.contains { copilotDate($0.resetsAt).map { now >= $0 } ?? false } } ?? true
+    }
+}
+
+struct CodexUsageState: Decodable, Equatable {
+    let account: CodexAccountUsage?
+    let checkedAt: String?
+    let error: String?
+
+    /// Older than ten minutes, or a window has reset since it was read.
+    func isStale(at now: Date = Date()) -> Bool {
+        guard account != nil, let checked = copilotDate(checkedAt), now.timeIntervalSince(checked) < 600 else {
+            return true
+        }
+        return account?.windows.contains { copilotDate($0.resetsAt).map { now >= $0 } ?? false } ?? true
+    }
+}
+
+/// Codex's limits for the Mac's signed-in ChatGPT account: a 5-hour and a weekly window on paid
+/// plans, a 30-day one on the free plan, and any model's own quota.
+struct CodexAccountUsage: Decodable, Equatable {
+    let plan: String?
+    let windows: [CodexLimitWindow]
+
+    /// The window closest to its limit.
+    var primary: CodexLimitWindow? { windows.max { $0.usedPercent < $1.usedPercent } }
+}
+
+struct CodexLimitWindow: Decodable, Equatable, Identifiable {
+    let id: String
+    let usedPercent: Double
+    let windowMinutes: Int?
+    let resetsAt: String?
+    let limitName: String?
+
+    var isExhausted: Bool { usedPercent >= 100 }
+    var percentText: String { String(format: "%.0f%%", usedPercent) }
+
+    var title: String {
+        let window: String
+        switch windowMinutes {
+        case 300?: window = "5-hour limit"
+        case 10_080?: window = "Weekly limit"
+        case let minutes? where minutes >= 40_000: window = "Monthly limit"
+        case let minutes? where minutes % 1_440 == 0: window = "\(minutes / 1_440)-day limit"
+        case let minutes? where minutes % 60 == 0: window = "\(minutes / 60)-hour limit"
+        default: window = "Usage limit"
+        }
+        return limitName.map { "\($0) \(window.lowercased())" } ?? window
+    }
+
+    /// For the header button: "5h", "Week", "Month" or "Limit".
+    var shortTitle: String {
+        switch windowMinutes {
+        case 300?: return "5h"
+        case 10_080?: return "Week"
+        case let minutes? where minutes >= 40_000: return "Month"
+        default: return "Limit"
+        }
     }
 }
 
@@ -259,6 +321,10 @@ final class CopilotUsageModel: ObservableObject {
     }
 
     func headerText(at date: Date, locale: Locale = .current) -> String {
+        if let snapshot, snapshot.leadsWithCodex, let state = snapshot.codex, let window = state.account?.primary {
+            guard error == nil, !state.isStale(at: date) else { return "Stale" }
+            return "\(window.shortTitle) \(window.percentText)"
+        }
         if let snapshot, snapshot.leadsWithAntigravity, let state = snapshot.antigravity,
            let primary = state.account?.primary {
             guard error == nil, !state.isStale(at: date) else { return "Stale" }
@@ -279,6 +345,10 @@ final class CopilotUsageModel: ObservableObject {
     }
 
     func accessibilityValue(at date: Date) -> String {
+        if let snapshot, snapshot.leadsWithCodex, let state = snapshot.codex, let window = state.account?.primary {
+            let stale = error != nil || state.isStale(at: date)
+            return (stale ? "Stale. Last known: " : "") + "Codex \(window.title.lowercased()) \(window.percentText) used"
+        }
         if let snapshot, snapshot.leadsWithAntigravity, let state = snapshot.antigravity,
            let primary = state.account?.primary {
             let stale = error != nil || state.isStale(at: date)
@@ -317,7 +387,7 @@ struct CopilotUsageButton: View {
             }
             .accessibilityLabel("Usage limits")
             .accessibilityValue(model.accessibilityValue(at: context.date))
-            .accessibilityHint("Shows Claude Code's and Antigravity's limits and the Copilot allowance")
+            .accessibilityHint("Shows Claude Code's, Antigravity's and Codex's limits and the Copilot allowance")
             .accessibilityIdentifier("copilot-usage-button")
         }
         .sheet(isPresented: $isPresented) {
@@ -406,6 +476,9 @@ struct CopilotUsageView: View {
                     }
                     if let antigravity = model.snapshot?.antigravity {
                         AntigravityUsageSection(state: antigravity, now: context.date)
+                    }
+                    if let codex = model.snapshot?.codex {
+                        CodexUsageSection(state: codex, now: context.date)
                     }
                     if let snapshot = model.snapshot {
                         CopilotUsageSection(snapshot: snapshot, stale: model.error != nil || snapshot.isStale(at: context.date))
@@ -569,6 +642,33 @@ struct AntigravityUsageSection: View {
                 } else {
                     Text("Antigravity's limits unavailable").foregroundStyle(.secondary)
                 }
+            }
+        }
+    }
+}
+
+/// Codex's limits, as the Mac reads them from `codex app-server`.
+struct CodexUsageSection: View {
+    let state: CodexUsageState
+    let now: Date
+
+    var body: some View {
+        Section(state.account?.plan.map { "Codex · ChatGPT \($0.capitalized)" } ?? "Codex") {
+            if let error = state.error {
+                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+            }
+            if let account = state.account {
+                if state.isStale(at: now) {
+                    Label("Last known limits - data is stale", systemImage: "clock.badge.exclamationmark")
+                        .foregroundStyle(.orange)
+                }
+                ForEach(account.windows) { window in
+                    UsageLimitRow(title: window.title, percentUsed: window.usedPercent,
+                                  resetsAt: copilotDate(window.resetsAt), critical: window.isExhausted)
+                        .accessibilityIdentifier("usage.codex.\(window.id)")
+                }
+            } else if state.error == nil {
+                Text("Codex's limits unavailable").foregroundStyle(.secondary)
             }
         }
     }
