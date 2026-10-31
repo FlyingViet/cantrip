@@ -624,6 +624,7 @@ final class AppSettings: ObservableObject {
             "localBaseURL": localBaseURL, "localModel": localModel,
             "localSystemPrompt": localSystemPrompt,
             "councilScope": councilScope, "limitFallbackBackends": limitFallbackBackends,
+            "limitFallbackModels": limitFallbackModels.mapValues { ["model": $0.model, "effort": $0.effort] },
             "allowActions": allowActions, "shareLocation": shareLocation,
             "shareCalendar": shareCalendar, "attachScreen": attachScreen,
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
@@ -706,6 +707,14 @@ final class AppSettings: ObservableObject {
         str("localModel") { self.localModel = $0 }
         str("localSystemPrompt") { self.localSystemPrompt = $0 }
         str("councilScope") { self.councilScope = $0 }
+        if let raw = dict["limitFallbackModels"] as? [String: [String: String]],
+           raw.keys.allSatisfy({ BackendKind(rawValue: $0) != nil }) {
+            limitFallbackModels = raw.compactMapValues {
+                let selection = SessionModelSelection(model: $0["model"] ?? "", effort: $0["effort"] ?? "", contextTier: "")
+                return selection.model.isEmpty && selection.effort.isEmpty ? nil : selection
+            }
+            applied.append("limitFallbackModels")
+        }
         if let raw = dict["limitFallbackBackends"] as? [String], raw.allSatisfy({ BackendKind(rawValue: $0) != nil }) {
             limitFallbackBackends = raw
             applied.append("limitFallbackBackends")

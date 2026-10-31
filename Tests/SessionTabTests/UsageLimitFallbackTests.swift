@@ -266,6 +266,19 @@ extension SessionTabTests {
         let older = try await call("POST", ["revision": rev, "backend": "Claude Code"])
         precondition(older.0 == 200 && settings.limitFallbackModels["Claude Code"]?.model == "claude-opus-5-5",
                      "An older client's single pick keeps the model too")
+        // `cantrip config`: name:model:effort sets a backup's model and effort; a bare name keeps it.
+        let host = HostControl(manager: manager)
+        let configured = host.handle(["command": "config", "set": ["limitFallbackBackends": "claude:claude-opus-5-5:low, codex"]])
+        precondition(configured["error"] == nil && settings.limitFallbackBackends == ["Claude Code", "Codex"]
+                     && settings.limitFallbackModels["Claude Code"] == SessionModelSelection(model: "claude-opus-5-5", effort: "low", contextTier: ""),
+                     "cantrip config sets the chain with a backup's model and effort: \(configured)")
+        let listed = (configured["settings"] as? [String: Any])?["limitFallbackModels"] as? [String: [String: String]]
+        precondition(listed?["Claude Code"]?["effort"] == "low", "config lists the chosen models")
+        _ = host.handle(["command": "config", "set": ["limitFallbackBackends": "codex, claude"]])
+        precondition(settings.limitFallbackModels["Claude Code"]?.model == "claude-opus-5-5", "A bare name keeps the saved model")
+        let wrong = host.handle(["command": "config", "set": ["limitFallbackBackends": "claude:claude-fake-1"]])
+        precondition((wrong["error"] as? String)?.contains("doesn't offer claude-fake-1") == true,
+                     "config refuses a model the backend doesn't offer: \(wrong)")
         settings.backend = .claudeCode
         let current = try await call()
 
