@@ -33,3 +33,5 @@ Requires Windows 10/11 and Node.js 20.19+.
 - Never weaken renderer/plugin sandboxing or expose Node APIs to web content.
 - Validate all privileged IPC in the platform host process.
 - Update the relevant platform README and `windows/PARITY.md` when behavior changes.
+- Before adding an AI backend or changing how one integrates, read and follow
+  `BACKEND-ONBOARDING.md`, and keep its known-gaps table current.

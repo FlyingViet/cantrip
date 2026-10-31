@@ -152,5 +152,5 @@ the phone apps, [approvals and secure input](docs/remote-control.md#remote-appro
 | [Cantrip Agent](https://github.com/FlyingViet/CantripIOS) | XcodeGen iOS project; see its README |
 | [Cantrip Gateway Mac](https://github.com/FlyingViet/CantripGatewayMac) | XcodeGen Mac project with Hermes as a submodule; see its README |
 
-See the [plugin reference](PLUGINS.md), [Windows parity checklist](windows/PARITY.md)
-and [app artwork](Resources/README.md).
+See the [plugin reference](PLUGINS.md), [backend onboarding guide](BACKEND-ONBOARDING.md),
+[Windows parity checklist](windows/PARITY.md) and [app artwork](Resources/README.md).
