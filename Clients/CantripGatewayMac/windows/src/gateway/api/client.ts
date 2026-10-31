@@ -1,7 +1,7 @@
 // Calls to the paired Mac's API. The main process adds the pairing token and picks the route
 // (encrypted direct, then HTTPS); this page only proves it is the Gateway window (bridge.key).
 import { bridge } from "../bridge";
-import type { ImageDataResponse, RemoteThread, ThreadResponse } from "./types";
+import type { BrowserFrame, ImageDataResponse, RemoteThread, ThreadResponse } from "./types";
 
 export class APIError extends Error {
   constructor(message: string, readonly status: number) {
@@ -141,6 +141,11 @@ export function loadImage(sessionID: string, imageID: string, full = false): Pro
     .finally(() => imageLoads.delete(key));
   imageLoads.set(key, load);
   return load;
+}
+
+/** A frame of the agent-only Chrome on the Mac (view only; never cached). */
+export function browserFrame(width: number): Promise<BrowserFrame> {
+  return api<BrowserFrame>(`/api/v1/browser/frame?width=${Math.min(1920, Math.max(240, Math.round(width)))}`);
 }
 
 export function clearImageCache(): void {

@@ -19,6 +19,7 @@ import { Spinner, toast } from "../kit";
 import { openViewer } from "../viewer";
 import { ChildResultCard } from "./ChildTabs";
 import { MCPAppStack } from "./MCPApp";
+import { BrowserCard, usesBrowser } from "./BrowserPreview";
 import { MentionText } from "./TabMentions";
 import { Markdown, type InlineImages } from "./Markdown";
 import { ThreadLaneRow, ThreadQuote, ThreadRepliesButton } from "./ThreadTags";
@@ -507,6 +508,7 @@ export function MessageRow(props: {
           {message.author ? <div class="author">{message.author}</div> : null}
           {steps.length ? <ReasoningSteps steps={steps} streaming={props.streaming} /> : null}
           {apps.length ? <MCPAppStack sessionID={session.id} apps={apps} /> : null}
+          {usesBrowser(message.activities) ? <BrowserCard live={props.streaming} /> : null}
           {!isError ? <ReplyText message={message} session={session} settled={settled} /> : null}
           {handoffs.length ? <div class="handoff-stack">{handoffs.map((handoff) => <HandoffCard key={handoff.id} handoff={plainMentionsDeep(handoff)} />)}</div> : null}
           {thinking ? <ThinkingIndicator class="muted" /> : null}
