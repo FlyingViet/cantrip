@@ -60,6 +60,8 @@ struct ChildTab: Codable, Equatable, Identifiable {
     var reportedState: State?
     /// Started by auto-fork rather than Run in Child Tab (optional: older records lack it).
     var autoStarted: Bool?
+    /// Queued requests that depend on this one, moved from the parent's queue to run after it here.
+    var followUps: [String]?
     let createdAt: Date
     var updatedAt: Date
     var finishedAt: Date?
@@ -518,34 +520,98 @@ enum ChildTabGit {
 
 /// Auto-fork (Phase 3): whether a queued message the planner rated independent starts in a child
 /// tab on its own. The planner's judgment is checked against what is known for sure: the message's
-/// likely files must not be ones the parent has uncommitted or just edited, or that a running child
-/// tab expects to change, and there must be a repository for the child's own branch.
+/// likely files must not be ones the parent has uncommitted or just edited, and there must be a
+/// repository for the child's own branch. One that only reads or plans needs neither. One whose
+/// files a running child tab expects to change follows that child instead, in its queue.
 enum ChildTabAutoFork {
     enum Verdict: Equatable {
         case fork
+        /// It runs after a running child tab, queued there; the reason is logged.
+        case follow(UUID, String)
         /// It stays queued; the reason replaces the plan chip's text.
         case stay(String)
     }
 
-    static func verdict(touches: [String], hasRepository: Bool, changedFiles: [String],
-                        activity: [String], childTouches: [String]) -> Verdict {
+    struct RunningChild: Equatable {
+        let id: UUID
+        let title: String
+        let touches: [String]
+    }
+
+    static let unclearFiles = "Independent; its files are unclear, so it waits for Run in Child Tab"
+
+    static func verdict(touches: [String], readOnly: Bool = false, hasRepository: Bool, changedFiles: [String],
+                        activity: [String], children: [RunningChild] = []) -> Verdict {
+        // Reviews, audits and plans change nothing, so nothing can overlap.
+        if readOnly { return .fork }
         guard hasRepository else { return .stay("Independent; outside a repository it waits for Run in Child Tab") }
         let wanted = touches.compactMap { touch -> (shown: String, key: String)? in
             let key = normalized(touch)
             return key.isEmpty ? nil : (touch, key)
         }
-        guard !wanted.isEmpty else { return .stay("Independent; its files are unclear, so it waits for Run in Child Tab") }
+        guard !wanted.isEmpty else { return .stay(unclearFiles) }
         let changed = changedFiles.map(normalized)
         if let hit = wanted.first(where: { touch in
             changed.contains { overlaps(touch.key, $0) } || activity.contains { mentions($0, touch.key) }
         }) {
             return .stay("Runs after the current task: it also changes \(display(hit.shown))")
         }
-        let children = childTouches.map(normalized).filter { !$0.isEmpty }
-        if let hit = wanted.first(where: { touch in children.contains { overlaps(touch.key, $0) } }) {
-            return .stay("Runs after the current task: a child tab is changing \(display(hit.shown))")
+        for child in children {
+            let theirs = child.touches.map(normalized).filter { !$0.isEmpty }
+            if let hit = wanted.first(where: { touch in theirs.contains { overlaps(touch.key, $0) } }) {
+                return .follow(child.id, "Follows child tab “\(child.title)”: it's changing \(display(hit.shown))")
+            }
         }
         return .fork
+    }
+
+    /// A brief that asks for a plan, proposal or audit before any change ("Plan first. Build after
+    /// the user approves.", "Audit only, no implementation").
+    static func isPlanOnly(_ text: String) -> Bool {
+        text.range(of: #"\bplan first\b|\bplan only\b|\baudit only\b|\bno implementation\b|\bbuild (it )?after (the user|you|they|\w+) approves?\b"#,
+                   options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static let notFileExtensions: Set<String> = ["com", "net", "org", "io", "ai", "co", "me", "us", "dev",
+                                                         "gov", "edu", "local", "app"]
+
+    /// Files and folders a request names (`Sources/Cantrip/Foo.swift`, `windows/src/`), relative to
+    /// `root` when they're inside it. With a `root`, a path with folders counts only when its first
+    /// folder is there, so "allow/ask/deny" or another project's paths don't. Paths elsewhere, URLs
+    /// and host names are left out, and so are Markdown files: briefs name READMEs and checklists
+    /// to keep current, which nearly every change edits in separate sections (the plan's own
+    /// touches still count).
+    static func mentionedPaths(in text: String, root: String? = nil) -> [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let pattern = #"(?<![\w@:/.-])[~/]?[\w.-]+(?:/[\w.*-]+)*/?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        var paths: [String] = []
+        let range = NSRange(text.startIndex..., in: text)
+        for match in regex.matches(in: text, range: range) {
+            guard let tokenRange = Range(match.range, in: text) else { continue }
+            var token = String(text[tokenRange]).trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
+            // Part of a URL.
+            if text[tokenRange.upperBound...].hasPrefix("://") { continue }
+            if token.hasPrefix("~/") { token = home + token.dropFirst(1) }
+            if token.hasPrefix("/") {
+                guard let root, token.hasPrefix(root + "/") else { continue }
+                token.removeFirst(root.count + 1)
+            }
+            let parts = token.split(separator: "/")
+            let name = (token as NSString).lastPathComponent
+            let ext = (name as NSString).pathExtension.lowercased()
+            let base = (name as NSString).deletingPathExtension
+            let isFile = !ext.isEmpty && ext.count <= 6 && ext.first?.isLetter == true && base.count >= 2
+                && !notFileExtensions.contains(ext) && ext != "md"
+            let isFolder = ext.isEmpty && token.count > 3 && (token.hasSuffix("/") || (root != nil && parts.count >= 2))
+            guard isFile || isFolder, !paths.contains(token) else { continue }
+            if let root, parts.count >= 2 || isFolder, let first = parts.first,
+               !FileManager.default.fileExists(atPath: (root as NSString).appendingPathComponent(String(first))) {
+                continue
+            }
+            paths.append(token)
+        }
+        return Array(paths.prefix(8))
     }
 
     static func normalized(_ path: String) -> String {
