@@ -29,6 +29,8 @@ else
     [ "$STASHED" = "1" ] && echo "Your local changes are in 'git stash list'."
     exit 1
 fi
+# Moves checked-out submodules to the new pins, so they don't show as local changes.
+git submodule update --recursive --quiet || echo "NOTE: a submodule couldn't be updated; run 'git submodule update' in $PWD."
 if [ "$STASHED" = "1" ]; then
     echo "— restoring local changes…"
     git stash pop || echo "NOTE: stash pop conflicted — your changes are safe in 'git stash list'."
