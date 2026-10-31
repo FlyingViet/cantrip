@@ -178,6 +178,7 @@ struct SessionTabTests {
         try await testRemoteTerminal()
         try await testMCPAppTranscripts()
         try await testMCPAppRemote()
+        try await testRichCardsRemote()
         try testCantripHomeSchedules()
         try await testCantripHome()
         try await testCantripHomeArtifactThumbnails()

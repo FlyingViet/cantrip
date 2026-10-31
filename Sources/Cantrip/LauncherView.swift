@@ -3456,8 +3456,10 @@ struct MessageRow: View {
             // Tool steps render in the progress sidebar, not inline; MCP App
             // views (e.g. galleries) are part of the reply.
             let placed = placedSubagents
+            let visibleLinks = (!localOnly && AppSettings.shared.linkPreviewsEnabled) ? message.linkPreviews : []
+            let visiblePlaceCard = localOnly ? nil : message.placeCard
             if message.text.isEmpty && message.thinking.isEmpty && message.author == nil
-                && visibleApps.isEmpty && placed.isEmpty {
+                && visibleApps.isEmpty && placed.isEmpty && visibleLinks.isEmpty && visiblePlaceCard == nil {
                 EmptyView()
             } else {
                 let parts = ReplyBlocks.split(message.text, before: placed.map(\.block))
@@ -3492,6 +3494,14 @@ struct MessageRow: View {
                                     .textSelection(.enabled)
                             }
                         }
+                    }
+                    if let placeCard = visiblePlaceCard {
+                        PlaceCardView(card: placeCard)
+                            .padding(.top, 2)
+                    }
+                    if !visibleLinks.isEmpty {
+                        LinkPreviewCardStack(cards: visibleLinks)
+                            .padding(.top, 2)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -4275,6 +4285,9 @@ struct SettingsView: View {
                     .font(.caption2)
                     .foregroundStyle(.red)
             }
+            Toggle("Show web link preview cards under replies", isOn: $settings.linkPreviewsEnabled)
+                .font(.caption)
+                .toggleStyle(.checkbox)
             Toggle("Search my documents' contents as context (Spotlight index)", isOn: $settings.fileRAGEnabled)
                 .font(.caption)
                 .toggleStyle(.checkbox)

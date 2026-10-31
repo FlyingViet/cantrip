@@ -36,6 +36,10 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var threadID: UUID?
     /// A Continue prompt: the earlier failed run it picks up (Continue on that run's message).
     var continuesRunID: UUID?
+    /// Rich web link preview cards resolved for URLs in this assistant reply.
+    var linkPreviews: [LinkPreviewCard] = []
+    /// Interactive map card with place pins resolved from this assistant reply.
+    var placeCard: PlaceCard?
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
     /// `freshStart`: the Start Fresh divider; turns above it are never sent to the model.
     enum Role: String, Codable { case user, assistant, error, handoff, freshStart }
@@ -46,7 +50,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
-        case threadID, continuesRunID
+        case threadID, continuesRunID, linkPreviews, placeCard
     }
 }
 
@@ -113,6 +117,8 @@ extension ChatMessage {
         childResult = try? container.decodeIfPresent(ChildTab.self, forKey: .childResult)
         threadID = try? container.decodeIfPresent(UUID.self, forKey: .threadID)
         continuesRunID = try? container.decodeIfPresent(UUID.self, forKey: .continuesRunID)
+        linkPreviews = (try? container.decodeIfPresent([LinkPreviewCard].self, forKey: .linkPreviews)) ?? []
+        placeCard = try? container.decodeIfPresent(PlaceCard.self, forKey: .placeCard)
         if (try? container.decodeIfPresent(Bool.self, forKey: .freshStart)) == true {
             role = .freshStart
         } else {
@@ -146,6 +152,8 @@ extension ChatMessage {
         try container.encodeIfPresent(childResult, forKey: .childResult)
         try container.encodeIfPresent(threadID, forKey: .threadID)
         try container.encodeIfPresent(continuesRunID, forKey: .continuesRunID)
+        if !linkPreviews.isEmpty { try container.encode(linkPreviews, forKey: .linkPreviews) }
+        try container.encodeIfPresent(placeCard, forKey: .placeCard)
     }
 }
 
@@ -3600,6 +3608,47 @@ final class ChatSession: ObservableObject {
         if let hints { OverlayController.shared.show(hints) }
     }
 
+    /// Strips any fenced `places` / `cantrip-places` block from the latest assistant message and
+    /// resolves place cards and web link previews asynchronously without blocking the turn.
+    @discardableResult
+    func processRichCards() -> Bool {
+        guard !isLocalPrivate, !isCantripHomeBackground,
+              let idx = messages.lastIndex(where: { $0.role == .assistant }) else { return false }
+        if PlaceCardResolver.locationContextProvider == nil {
+            PlaceCardResolver.locationContextProvider = { LocationProvider.shared.contextLine }
+        }
+        let messageID = messages[idx].id
+        var text = messages[idx].text
+        let proposal = PlaceCardResolver.extractProposal(from: &text)
+        if text != messages[idx].text {
+            messages[idx].text = text
+        }
+        let linkEnabled = settings.linkPreviewsEnabled
+        let candidateURLs = linkEnabled ? LinkPreviewExtractor.extractURLs(from: text) : []
+        guard proposal != nil || !candidateURLs.isEmpty else { return false }
+        Task { @MainActor [weak self] in
+            let resolvedPlaces = await (proposal != nil ? PlaceCardResolver.shared.resolve(proposal!) : nil)
+            let resolvedLinks = await (!candidateURLs.isEmpty
+                ? LinkPreviewStore.shared.resolve(forText: text, enabled: linkEnabled)
+                : [])
+            guard let self,
+                  let currentIdx = self.messages.firstIndex(where: { $0.id == messageID }) else { return }
+            var changed = false
+            if let resolvedPlaces, self.messages[currentIdx].placeCard != resolvedPlaces {
+                self.messages[currentIdx].placeCard = resolvedPlaces
+                changed = true
+            }
+            if !resolvedLinks.isEmpty, self.messages[currentIdx].linkPreviews != resolvedLinks {
+                self.messages[currentIdx].linkPreviews = resolvedLinks
+                changed = true
+            }
+            if changed {
+                self.persistTranscript()
+            }
+        }
+        return proposal != nil
+    }
+
     private func finishStream(dequeue: Bool = true, notify: Bool = true,
                               waitForJournal: Bool = true, then: (() -> Void)? = nil) {
         watchdog?.invalidate()
@@ -3639,6 +3688,7 @@ final class ChatSession: ObservableObject {
         councilSynthesizing = false
         if !isLocalPrivate { processOverlayBlock() }
         let reply = processCantripHomeBlocks()
+        let hasPendingRichCard = !isLocalPrivate ? processRichCards() : false
         if let completion = pendingTurnCompletion {
             var visibleSummary = messages.last(where: { $0.role == .assistant })?.text
                 ?? completion.summary
@@ -3677,7 +3727,10 @@ final class ChatSession: ObservableObject {
            messages[idx].text.isEmpty,
            messages[idx].activities.isEmpty,
            messages[idx].thinking.isEmpty,
-           messages[idx].delegations.isEmpty {
+           messages[idx].delegations.isEmpty,
+           messages[idx].placeCard == nil,
+           messages[idx].linkPreviews.isEmpty,
+           !hasPendingRichCard {
             messages.remove(at: idx)
         }
         persistTranscript()
@@ -4125,7 +4178,10 @@ final class ChatSession: ObservableObject {
         guard isCantripHome || thread != nil && thread != open else { return }
         // The end of the run reads only the last reply: settle the closed one's blocks now.
         if isCantripHome { cantripHomeNotices += runCantripHomeBlockPass(lintBlocking: false).map(\.notice) }
-        if !isLocalPrivate { processOverlayBlock() }
+        if !isLocalPrivate {
+            processOverlayBlock()
+            processRichCards()
+        }
         Log.write("thread: background result opens its own bubble (\(ids.joined(separator: ", ").prefix(80)))")
         appendRunMessage(ChatMessage(role: .assistant, text: "", threadID: thread ?? currentThreadID))
     }

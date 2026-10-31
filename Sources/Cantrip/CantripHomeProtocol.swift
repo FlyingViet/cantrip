@@ -110,6 +110,9 @@ enum CantripHomeProtocol {
            !extractBlocks(from: &visible).isEmpty {
             visible = visible.trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        if visible.range(of: "places", options: .caseInsensitive) != nil {
+            _ = PlaceCardResolver.extractProposal(from: &visible)
+        }
         return streaming ? trimmingPendingFence(visible) : visible
     }
 
@@ -129,7 +132,8 @@ enum CantripHomeProtocol {
             .lowercased().replacingOccurrences(of: "_", with: "-")
         var tag = Substring(info)
         if tag.hasPrefix("json") { tag = tag.dropFirst(4).drop { $0 == " " || $0 == "\t" } }
-        guard "json".hasPrefix(info) || "cantrip".hasPrefix(tag) || tag.hasPrefix("cantrip") else {
+        guard "json".hasPrefix(info) || "cantrip".hasPrefix(tag) || tag.hasPrefix("cantrip")
+                || "places".hasPrefix(tag) || tag.hasPrefix("places") else {
             return text
         }
         return String(text[..<start]).replacingOccurrences(

@@ -640,7 +640,10 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/copilot/usage"
                 || request.path == "/api/v1/browser"
                 || request.path == "/api/v1/browser/frame"
-                || request.path == "/api/v1/usage-fallback" else {
+                || request.path == "/api/v1/usage-fallback"
+                || request.path == "/api/v1/link-previews/image"
+                || request.path.hasPrefix("/api/v1/link-previews/image/")
+                || request.path == "/api/v1/map-tile" else {
             sendError(404, "not found", on: connection)
             return
         }
@@ -876,6 +879,57 @@ final class RemoteControlServer {
             Task {
                 let snapshot = await buildMonitor.snapshot()
                 sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
+            }
+            return
+        }
+        if request.path == "/api/v1/link-previews/image" || request.path.hasPrefix("/api/v1/link-previews/image/") {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            let rawID = request.query("id") ?? String(request.path.dropFirst("/api/v1/link-previews/image/".count))
+            guard LinkPreviewSecurity.isValidImageID(rawID) else {
+                sendError(400, "Invalid preview image ID.", on: connection)
+                return
+            }
+            let wantsRaw = request.query("raw") == "1" || request.query("format") == "raw"
+            Task {
+                guard let data = await LinkPreviewStore.shared.imageData(id: rawID) else {
+                    self.sendError(404, "Preview image not found.", on: connection)
+                    return
+                }
+                if wantsRaw {
+                    self.send(status: 200, contentType: "image/jpeg", body: data, on: connection)
+                } else {
+                    self.sendJSON(["data": data.base64EncodedString()], on: connection)
+                }
+            }
+            return
+        }
+        if request.path == "/api/v1/map-tile" {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            guard let z = request.query("z").flatMap(Int.init),
+                  let x = request.query("x").flatMap(Int.init),
+                  let y = request.query("y").flatMap(Int.init),
+                  MapTileProxy.isValidTile(z: z, x: x, y: y) else {
+                sendError(400, "Provide valid z, x, and y tile coordinates.", on: connection)
+                return
+            }
+            let wantsJSON = request.query("format") == "json"
+            Task {
+                do {
+                    let data = try await MapTileProxy.shared.tile(z: z, x: x, y: y)
+                    if wantsJSON {
+                        self.sendJSON(["data": data.base64EncodedString()], on: connection)
+                    } else {
+                        self.send(status: 200, contentType: "image/png", body: data, on: connection)
+                    }
+                } catch {
+                    self.sendError(502, "Map tile unavailable.", on: connection)
+                }
             }
             return
         }
@@ -2921,6 +2975,36 @@ private extension RemoteControlServer {
     .mention-row{grid-template-columns:minmax(0,1fr);grid-template-areas:"cmd" "desc"}.mention-row .slash-cmd{font:inherit;font-size:13.5px}.mention-row .slash-desc{white-space:normal;overflow-wrap:anywhere}
     .mention{color:var(--accent);font-weight:650}button.mention{display:inline;padding:0;border:0;background:none;font:inherit;font-weight:650;color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}button.mention:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
     .mention-chips{display:flex;flex-wrap:wrap;gap:6px;padding:6px 10px 0}.mention-chips:empty{display:none}.mention-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:1px 2px 1px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface-2);color:var(--accent);font-size:12.5px;font-weight:650}.mention-chip>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mention-chip>button{flex:none;width:24px;height:24px;border:0;border-radius:50%;background:transparent;color:var(--secondary);font-size:15px;line-height:1}.mention-chip>button:hover{background:var(--surface)}.mention-chip>button:focus-visible{outline:2px solid var(--accent)}@media(pointer:coarse){.mention-chip>button{width:36px;height:36px}}
+    .link-card-stack{display:grid;gap:10px;margin-top:10px;max-width:420px}
+    .link-card{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--line);border-radius:16px;background:var(--surface);color:var(--text);text-decoration:none;transition:transform .12s,background .12s}
+    .link-card:hover{background:var(--surface-2)}.link-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .link-card-hero{display:grid;place-items:center;width:100%;height:190px;background:#fff;overflow:hidden}.link-card-hero img{width:100%;height:100%;object-fit:contain}
+    .link-card-body{display:grid;gap:3px;padding:12px 14px}.link-card-title{font-size:15px;font-weight:700;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+    .link-card-domain{color:var(--secondary);font-size:13px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .link-card.compact{flex-direction:row;align-items:center;gap:12px;padding:10px 14px}.link-card.compact .link-card-body{padding:0;min-width:0;flex:1}
+    .link-card-icon{display:grid;place-items:center;width:36px;height:36px;border-radius:10px;background:var(--surface-2);color:var(--secondary);font-size:16px;flex:none}
+    .place-card{position:relative;margin-top:10px;max-width:760px;min-height:390px;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#1c232d;user-select:none}
+    .place-map-viewport{position:absolute;inset:0;overflow:hidden;cursor:grab;touch-action:none}.place-map-viewport:active{cursor:grabbing}
+    .place-map-tiles{position:absolute;inset:0;filter:brightness(.82) contrast(1.08) saturate(.88)}
+    .place-map-tile{position:absolute;width:256px;height:256px;pointer-events:none;image-rendering:auto}
+    .place-map-pins{position:absolute;inset:0;pointer-events:none}
+    .place-pin{position:absolute;transform:translate(-50%,-50%);display:inline-flex;align-items:center;gap:4px;padding:3px 8px 3px 4px;border-radius:999px;background:rgba(20,24,30,.88);border:1px solid rgba(255,255,255,.18);color:#fff;font-size:11.5px;font-weight:700;white-space:nowrap;cursor:pointer;pointer-events:auto;box-shadow:0 3px 10px rgba(0,0,0,.4)}
+    .place-pin.selected{background:#e04f44;border-color:#fff;z-index:2}.place-pin-dot{display:grid;place-items:center;width:18px;height:18px;border-radius:50%;background:#e04f44;color:#fff;font-size:10px}
+    .place-pin.selected .place-pin-dot{background:#fff;color:#e04f44}.place-pin-label{max-width:130px;overflow:hidden;text-overflow:ellipsis}
+    .place-list{position:relative;z-index:3;width:min(305px,calc(100% - 24px));max-height:360px;overflow-y:auto;margin:12px;border:1px solid rgba(255,255,255,.12);border-radius:13px;background:rgba(24,26,31,.92);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);color:#f3f4f6;box-shadow:0 8px 28px rgba(0,0,0,.42)}
+    .place-list-head{padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#9ca3af}
+    .place-item{display:grid;gap:4px;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.08);cursor:pointer}.place-item:last-child{border-bottom:0}.place-item:hover,.place-item.selected{background:rgba(255,255,255,.07)}
+    .place-item-name{font-size:14px;font-weight:700;color:#fff;line-height:1.3}
+    .place-item-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:12px;color:#9ca3af}
+    .place-open{color:#34d399;font-weight:650}.place-closed{color:#f87171;font-weight:650}
+    .place-item-addr{font-size:11.5px;color:#9ca3af;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .place-item-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:3px}
+    .place-action{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.1);color:#e5e7eb;font-size:11.5px;font-weight:600;text-decoration:none}
+    .place-action:hover{background:rgba(255,255,255,.18);color:#fff}
+    .place-zoom{position:absolute;top:12px;right:12px;z-index:3;display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(255,255,255,.14);border-radius:9px;background:rgba(24,26,31,.9);backdrop-filter:blur(12px)}
+    .place-zoom button{width:32px;height:32px;border:0;background:transparent;color:#fff;font-size:16px;font-weight:700;cursor:pointer}.place-zoom button+button{border-top:1px solid rgba(255,255,255,.12)}.place-zoom button:hover{background:rgba(255,255,255,.12)}
+    .place-attr{position:absolute;right:10px;bottom:8px;z-index:3;padding:2px 7px;border-radius:999px;background:rgba(15,17,21,.78);color:#9ca3af;font-size:10px;text-decoration:none}
+    @media(max-width:620px){.place-card{display:flex;flex-direction:column;min-height:460px}.place-map-viewport{position:relative;height:220px;flex:none}.place-list{width:auto;max-height:240px;margin:8px}}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
@@ -3848,7 +3932,68 @@ private extension RemoteControlServer {
       parent.append(box)}
     // A finished card follows the reply block that was streaming when its agent ended (split as in ReplyBlocks.swift).
     function replyBlockStarts(text){const starts=[];let offset=0,fence="",afterBlank=true;for(const line of text.split("\\n")){const trimmed=line.trim();if(fence){if(trimmed.startsWith(fence))fence="";afterBlank=false}else if(!trimmed)afterBlank=true;else{if(afterBlank)starts.push(offset);afterBlank=false;if(trimmed.startsWith("```")||trimmed.startsWith("~~~"))fence=trimmed.slice(0,3)}offset+=line.length+1}return starts}
-    function appendReply(row,message,settled,session){const images=message.images||[],text=(images.length&&message.displayText)||message.text||"";inlineImages=images.length&&!session.isLocalPrivate?{sessionID:session.id,images:new Map(images.map(image=>[image.id,image]))}:null;try{appendReplyText(row,message,text,settled,session)}finally{inlineImages=null}}
+    const linkImageCache=new Map(),mapTileCache=new Map(),placeCardState=new Map();
+    async function loadLinkPreviewImage(id,img){if(!id)return;const cached=linkImageCache.get(id);if(cached){img.src=cached;return}const requestToken=token;
+      try{const data=await api(`/api/v1/link-previews/image?id=${encodeURIComponent(id)}`);if(token!==requestToken||!data?.data)return;const src=`data:image/jpeg;base64,${data.data}`;linkImageCache.set(id,src);if(img.isConnected)img.src=src}catch{}}
+    function appendLinkPreviews(parent,previews){if(!Array.isArray(previews)||!previews.length)return;const stack=document.createElement("div");stack.className="link-card-stack";
+      for(const item of previews){if(!item||typeof item.url!=="string"||!/^https?:\\/\\//i.test(item.url))continue;
+        const card=document.createElement("a");card.href=item.url;card.target="_blank";card.rel="noopener noreferrer";const hasImg=Boolean(item.imageID);card.className=`link-card${hasImg?"":" compact"}`;
+        const domainText=item.domain||item.siteName||item.url;card.setAttribute("aria-label",`${item.title||domainText}, ${domainText}, opens web page`);
+        if(hasImg){const hero=document.createElement("div"),img=document.createElement("img");hero.className="link-card-hero";img.alt="";img.decoding="async";hero.append(img);card.append(hero);loadLinkPreviewImage(item.imageID,img)}
+        else{const icon=document.createElement("span");icon.className="link-card-icon";icon.setAttribute("aria-hidden","true");icon.textContent="🌐";card.append(icon)}
+        const body=document.createElement("div"),title=document.createElement("div"),domain=document.createElement("div");body.className="link-card-body";title.className="link-card-title";title.textContent=item.title||domainText;domain.className="link-card-domain";domain.textContent=domainText;body.append(title,domain);card.append(body);stack.append(card)}
+      if(stack.children.length)parent.append(stack)}
+    function lonToWorldX(lon,z){return((lon+180)/360)*256*Math.pow(2,z)}
+    function latToWorldY(lat,z){const clamped=Math.max(-85.0511,Math.min(85.0511,lat)),rad=clamped*Math.PI/180;return((1-Math.log(Math.tan(rad)+1/Math.cos(rad))/Math.PI)/2)*256*Math.pow(2,z)}
+    function worldXToLon(x,z){return(x/(256*Math.pow(2,z)))*360-180}
+    function worldYToLat(y,z){const n=Math.PI-2*Math.PI*y/(256*Math.pow(2,z));return(180/Math.PI)*Math.atan(0.5*(Math.exp(n)-Math.exp(-n)))}
+    async function loadMapTile(z,x,y,img){const key=`${z}/${x}/${y}`,cached=mapTileCache.get(key);if(cached){img.src=cached;return}const requestToken=token;
+      try{const data=await api(`/api/v1/map-tile?format=json&z=${z}&x=${x}&y=${y}`);if(token!==requestToken||!data?.data)return;const src=`data:image/png;base64,${data.data}`;mapTileCache.set(key,src);if(img.isConnected)img.src=src}catch{}}
+    function initialPlaceZoom(places){if(!places||places.length<=1)return 14;let minLat=90,maxLat=-90,minLon=180,maxLon=-180;
+      for(const p of places){minLat=Math.min(minLat,p.latitude);maxLat=Math.max(maxLat,p.latitude);minLon=Math.min(minLon,p.longitude);maxLon=Math.max(maxLon,p.longitude)}
+      const span=Math.max(maxLat-minLat,maxLon-minLon);if(span>0.5)return 10;if(span>0.2)return 11;if(span>0.08)return 12;if(span>0.03)return 13;return 14}
+    function appendPlaceCard(parent,card,messageID){const places=Array.isArray(card?.places)?card.places:[];if(!places.length)return;
+      const key=messageID||card.query||places[0].id;let state=placeCardState.get(key);
+      if(!state){const avgLat=places.reduce((s,p)=>s+p.latitude,0)/places.length,avgLon=places.reduce((s,p)=>s+p.longitude,0)/places.length;
+        state={lat:avgLat,lon:avgLon,zoom:initialPlaceZoom(places),selectedID:places[0].id};placeCardState.set(key,state)}
+      const wrap=document.createElement("section");wrap.className="place-card";wrap.setAttribute("role","group");wrap.setAttribute("aria-label",card.query?`Places for ${card.query}`:"Recommended places map");
+      const viewport=document.createElement("div"),tileBox=document.createElement("div"),pinBox=document.createElement("div");viewport.className="place-map-viewport";tileBox.className="place-map-tiles";pinBox.className="place-map-pins";viewport.append(tileBox,pinBox);
+      const list=document.createElement("div");list.className="place-list";
+      if(card.query){const head=document.createElement("div");head.className="place-list-head";head.textContent=card.query;list.append(head)}
+      const rowNodes=new Map(),pinNodes=new Map();
+      const drawMap=()=>{const width=viewport.clientWidth||680,height=viewport.clientHeight||390,z=state.zoom,maxTile=Math.pow(2,z),centerX=lonToWorldX(state.lon,z),centerY=latToWorldY(state.lat,z);
+        const startTileX=Math.floor((centerX-width/2)/256),endTileX=Math.floor((centerX+width/2)/256),startTileY=Math.floor((centerY-height/2)/256),endTileY=Math.floor((centerY+height/2)/256);
+        tileBox.replaceChildren();
+        for(let tx=startTileX;tx<=endTileX;tx++){for(let ty=startTileY;ty<=endTileY;ty++){if(ty<0||ty>=maxTile)continue;const normX=((tx%maxTile)+maxTile)%maxTile,img=document.createElement("img");
+          img.className="place-map-tile";img.alt="";img.style.left=`${Math.round(tx*256-centerX+width/2)}px`;img.style.top=`${Math.round(ty*256-centerY+height/2)}px`;tileBox.append(img);loadMapTile(z,normX,ty,img)}}
+        for(const p of places){const pin=pinNodes.get(p.id);if(!pin)continue;const px=lonToWorldX(p.longitude,z)-centerX+width/2,py=latToWorldY(p.latitude,z)-centerY+height/2;
+          pin.style.left=`${Math.round(px)}px`;pin.style.top=`${Math.round(py)}px`;pin.classList.toggle("selected",p.id===state.selectedID)}
+        for(const [id,node] of rowNodes)node.classList.toggle("selected",id===state.selectedID)};
+      for(const p of places){const pin=document.createElement("button");pin.type="button";pin.className="place-pin";pin.setAttribute("aria-label",`Pin for ${p.name}`);
+        const dot=document.createElement("span"),lbl=document.createElement("span");dot.className="place-pin-dot";dot.textContent="•";lbl.className="place-pin-label";lbl.textContent=p.name;pin.append(dot,lbl);
+        pin.onclick=event=>{event.stopPropagation();state.selectedID=p.id;state.lat=p.latitude;state.lon=p.longitude;drawMap()};pinBox.append(pin);pinNodes.set(p.id,pin);
+        const item=document.createElement("div"),name=document.createElement("div"),meta=document.createElement("div");item.className="place-item";name.className="place-item-name";name.textContent=p.name;meta.className="place-item-meta";
+        const metaParts=[];if(typeof p.rating==="number")metaParts.push(`${p.rating.toFixed(1)} ★${p.reviewCount?` (${p.reviewCount})`:""}`);if(p.priceDisplay)metaParts.push(p.priceDisplay);if(p.category)metaParts.push(p.category);
+        if(metaParts.length){const span=document.createElement("span");span.textContent=metaParts.join(" · ");meta.append(span)}
+        if(typeof p.isOpenNow==="boolean"){if(metaParts.length){const dotSep=document.createElement("span");dotSep.textContent="·";meta.append(dotSep)}const status=document.createElement("span");status.className=p.isOpenNow?"place-open":"place-closed";status.textContent=p.isOpenNow?"Open":"Closed";meta.append(status)}
+        item.append(name);if(meta.children.length)item.append(meta);
+        if(p.address){const addr=document.createElement("div");addr.className="place-item-addr";addr.textContent=p.address;item.append(addr)}
+        const actions=document.createElement("div");actions.className="place-item-actions";
+        const dir=document.createElement("a");dir.className="place-action";dir.href=p.directionsURL||`https://maps.apple.com/?q=${encodeURIComponent(p.name)}&ll=${p.latitude},${p.longitude}`;dir.target="_blank";dir.rel="noopener noreferrer";dir.textContent="Directions";dir.onclick=e=>e.stopPropagation();actions.append(dir);
+        if(p.phone){const digits=p.phone.replace(/[^0-9+*#]/g,"");if(digits){const call=document.createElement("a");call.className="place-action";call.href=`tel:${digits}`;call.textContent="Call";call.onclick=e=>e.stopPropagation();actions.append(call)}}
+        if(p.website&&/^https?:\\/\\//i.test(p.website)){const web=document.createElement("a");web.className="place-action";web.href=p.website;web.target="_blank";web.rel="noopener noreferrer";web.textContent="Website";web.onclick=e=>e.stopPropagation();actions.append(web)}
+        item.append(actions);item.onclick=()=>{state.selectedID=p.id;state.lat=p.latitude;state.lon=p.longitude;drawMap()};list.append(item);rowNodes.set(p.id,item)}
+      let dragStart=null;
+      viewport.addEventListener("pointerdown",e=>{if(e.target.closest(".place-pin"))return;dragStart={x:e.clientX,y:e.clientY,worldX:lonToWorldX(state.lon,state.zoom),worldY:latToWorldY(state.lat,state.zoom)};viewport.setPointerCapture(e.pointerId)});
+      viewport.addEventListener("pointermove",e=>{if(!dragStart)return;const nx=dragStart.worldX-(e.clientX-dragStart.x),ny=dragStart.worldY-(e.clientY-dragStart.y);state.lon=worldXToLon(nx,state.zoom);state.lat=worldYToLat(ny,state.zoom);drawMap()});
+      viewport.addEventListener("pointerup",()=>{dragStart=null});viewport.addEventListener("pointercancel",()=>{dragStart=null});
+      const zoomCtrl=document.createElement("div"),zoomIn=document.createElement("button"),zoomOut=document.createElement("button");zoomCtrl.className="place-zoom";
+      zoomIn.type="button";zoomIn.textContent="+";zoomIn.setAttribute("aria-label","Zoom in");zoomIn.onclick=()=>{state.zoom=Math.min(18,state.zoom+1);drawMap()};
+      zoomOut.type="button";zoomOut.textContent="−";zoomOut.setAttribute("aria-label","Zoom out");zoomOut.onclick=()=>{state.zoom=Math.max(3,state.zoom-1);drawMap()};
+      zoomCtrl.append(zoomIn,zoomOut);
+      const attr=document.createElement("a");attr.className="place-attr";attr.href="https://www.openstreetmap.org/copyright";attr.target="_blank";attr.rel="noopener noreferrer";attr.textContent="© OpenStreetMap";
+      wrap.append(viewport,list,zoomCtrl,attr);parent.append(wrap);requestAnimationFrame(drawMap)}
+    function appendReply(row,message,settled,session){const images=message.images||[],text=(images.length&&message.displayText)||message.text||"";inlineImages=images.length&&!session.isLocalPrivate?{sessionID:session.id,images:new Map(images.map(image=>[image.id,image]))}:null;try{appendReplyText(row,message,text,settled,session)}finally{inlineImages=null}if(!session.isLocalPrivate){if(message.placeCard)appendPlaceCard(row,message.placeCard,message.id);if(message.linkPreviews?.length)appendLinkPreviews(row,message.linkPreviews)}}
     function appendReplyText(row,message,text,settled,session){const appendText=part=>{if(!part)return;if(session.isLocalPrivate){const pre=document.createElement("pre");pre.textContent=part;row.append(pre)}else appendProse(row,part)};
       if(!settled.length){appendText(text);return}const groups=new Map();for(const agent of settled){const block=Math.max(0,agent.textBlock??0);if(!groups.has(block))groups.set(block,[]);groups.get(block).push(agent)}
       const starts=replyBlockStarts(text);let from=0;for(const block of [...groups.keys()].sort((a,b)=>a-b)){const to=Math.max(from,block===0?0:block<starts.length?starts[block]:text.length);appendText(text.slice(from,to).replace(/\\s+$/,""));from=to;appendSubagents(row,groups.get(block),session.id,message.id,block)}appendText(text.slice(from))}
@@ -3994,7 +4139,7 @@ private extension RemoteControlServer {
       button.onclick=()=>openThread({sessionID,threadID:message.id,prompt:message.displayText??message.text,messageID:null,opener:button});return button}
     // Whether render() draws a row for a message.
     function drawsRow(message,answered){const subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id));
-      return Boolean(message.text||message.thinking||(message.activities||[]).some(activity=>!subagentIDs.has(activity.id))||subagents.some(agent=>!subagentActive(agent))||(message.delegations||[]).some(handoff=>!answered.has(handoff.id)))}
+      return Boolean(message.text||message.thinking||message.placeCard||(message.linkPreviews||[]).length||(message.activities||[]).some(activity=>!subagentIDs.has(activity.id))||subagents.some(agent=>!subagentActive(agent))||(message.delegations||[]).some(handoff=>!answered.has(handoff.id)))}
     // Rows after a quoted reply that stay in its thread share its line, as in Messages: it runs from the quote down the
     // margin past them ("start", "through") and turns into the last reply ("end"). Answers in the thread and empty replies
     // (which the Mac skips when placing quotes) stay in a run, but the line never ends on one.
