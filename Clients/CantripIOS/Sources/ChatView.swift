@@ -3887,6 +3887,9 @@ struct TurnView: View {
                 if !cantripApps.isEmpty {
                     CantripMCPAppStack(remote: remote, sessionID: cantripSessionID, apps: cantripApps)
                 }
+                if remoteMessage?.activities.contains(where: { $0.browser == true }) == true {
+                    CantripBrowserPreviewCard(remote: remote, live: turn.streaming)
+                }
                 // Each finished subagent's card sits where the reply had got to when it ended.
                 let placed = CantripReplyBlocks.placed(cantripSubagents)
                 let parts = CantripReplyBlocks.split(turn.text, before: placed.map(\.block))

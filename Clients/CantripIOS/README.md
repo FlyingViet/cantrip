@@ -566,6 +566,18 @@ domains its server declared. If a view asks to send a message, Cantrip Agent
 shows the exact text for approval first. Views are hidden when **Show
 interactive MCP App views** is off on the Mac.
 
+### Live agent browser preview
+
+When the Mac has an agent-only Chrome driven by an MCP server named `browser`,
+replies that used it show a card with a live picture of the tab the agent is
+working in. While the reply is running the card is marked **Live** and
+refreshes about once a second while it's on screen; afterwards it shows the
+latest view. Tap it for a full-screen view (about three frames a second) with
+the page title and address; pinch or double-tap to zoom, **Done** to return.
+It's view only, and the Mac never shows browser-internal pages such as a
+password manager's popup. Needs an updated Mac Cantrip host
+(`GET /api/v1/browser/frame`).
+
 ### Subagent monitors in replies
 
 With **both Cantrip Agent and the Mac Cantrip host updated**, replies that spawn
