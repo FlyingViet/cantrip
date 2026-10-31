@@ -1588,6 +1588,29 @@ only a bold heading, as in GPT reasoning summaries, also starts a step. Other
 steps are titled by their first sentence. Each subagent's `reasoning` holds its
 last 8 steps. Cantrip Agent shows these steps instead of tool calls.
 
+## Web link previews and inline place cards
+
+When an assistant reply contains public HTTP/HTTPS links outside code blocks,
+Cantrip resolves Open Graph / Twitter Card metadata and includes up to three
+`linkPreviews` items (`id`, `url`, `title`, `domain`, optional `siteName` and
+`imageID`) on the message snapshot while **Show web link preview cards under
+replies** is enabled on the Mac. Loopback, LAN, Tailscale (`*.ts.net`), private
+IP ranges, `*.local`, `file:`, credentialed URLs, and signed/token query
+strings are never unfurled. Paired clients load cached preview images through
+`GET /api/v1/link-previews/image?id=<imageID>` (`{"data": "<base64>"}`, or raw
+image bytes with `raw=1`).
+
+When a reply ends with a fenced `places` or `cantrip-places` JSON block naming
+real-world places, Cantrip strips the block from the visible text, resolves the
+places through Apple MapKit and OpenStreetMap (`Nominatim` / `opening_hours`),
+and attaches a `placeCard` object (`query`, `near`, `places` with `id`, `name`,
+`latitude`, `longitude`, optional `category`, `address`, `rating`,
+`reviewCount`, `priceDisplay`, `isOpenNow`, `phone`, `website`, and
+`directionsURL`). Native Apple clients render the card with MapKit; web and
+Windows clients render an interactive slippy map backed by the Mac's cached
+OpenStreetMap tile proxy at `GET /api/v1/map-tile?z=<z>&x=<x>&y=<y>` (or
+`format=json` for base64 JSON).
+
 ## Understand what is available remotely
 
 | Situation | Behavior |

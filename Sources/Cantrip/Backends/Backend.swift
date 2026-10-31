@@ -16,6 +16,16 @@ enum ReplyVisibility {
     they're sure to see. When the user asks for more detail, including as their answer to a \
     question you asked, answer in full first (a request for detail overrides brevity defaults) \
     and ask a follow-up only if a decision is still needed.
+
+    When your reply recommends real-world places (clinics, restaurants, cafes, stores, venues, or \
+    landmarks), end your reply with a fenced `places` JSON block so Cantrip can render an \
+    interactive map card with place pins under your text:
+    ```places
+    {"near":"Santa Clara, CA","places":[{"name":"Concentra Urgent Care","query":"Concentra Urgent Care Santa Clara CA","category":"Urgent care clinic"}]}
+    ```
+    Include only real places you named in your reply (up to 8). Omit fields you do not know; \
+    Cantrip resolves exact coordinates, addresses, hours, phone numbers, and websites via MapKit \
+    and OpenStreetMap. Never invent ratings, price levels, hours, or coordinates.
     """
 }
 

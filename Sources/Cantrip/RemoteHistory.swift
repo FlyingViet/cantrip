@@ -57,6 +57,12 @@ enum RemoteHistory {
                 return item
             }
         }
+        if !message.linkPreviews.isEmpty, AppSettings.shared.linkPreviewsEnabled {
+            result["linkPreviews"] = message.linkPreviews.map(\.snapshot)
+        }
+        if let placeCard = message.placeCard {
+            result["placeCard"] = placeCard.snapshot
+        }
         return result
     }
 

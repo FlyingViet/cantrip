@@ -269,6 +269,10 @@ final class AppSettings: ObservableObject {
     @Published var copilotMCPApps: Bool {
         didSet { d.set(copilotMCPApps, forKey: "copilotMCPApps") }
     }
+    /// Fetch Open Graph metadata and preview images on the Mac for public web links in replies.
+    @Published var linkPreviewsEnabled: Bool {
+        didSet { d.set(linkPreviewsEnabled, forKey: "linkPreviewsEnabled") }
+    }
     /// Minutes a tab's Copilot runtime may sit idle before Cantrip stops it to free memory;
     /// the next prompt resumes the same session in a new runtime. 0 keeps runtimes running.
     @Published var copilotIdleReleaseMinutes: Int {
@@ -623,6 +627,7 @@ final class AppSettings: ObservableObject {
             "cantripHomeParallelRuns": cantripHomeParallelRuns,
             "copilotAllowSubagents": copilotAllowSubagents,
             "childTabsAutoFork": childTabsAutoFork,
+            "linkPreviewsEnabled": linkPreviewsEnabled,
             "copilotIdleReleaseMinutes": copilotIdleReleaseMinutes,
             "storageUpkeepEnabled": storageUpkeepEnabled,
             "storageSessionRetentionDays": storageSessionRetentionDays,
@@ -713,6 +718,7 @@ final class AppSettings: ObservableObject {
         bool("cantripHomeEnabled") { self.cantripHomeEnabled = $0 }
         bool("copilotAllowSubagents") { self.copilotAllowSubagents = $0 }
         bool("childTabsAutoFork") { self.childTabsAutoFork = $0 }
+        bool("linkPreviewsEnabled") { self.linkPreviewsEnabled = $0 }
         int("cantripHomeParallelRuns", 1...CantripHomeBackgroundRunner.maximumParallelLimit) {
             self.cantripHomeParallelRuns = $0
         }
@@ -825,6 +831,8 @@ final class AppSettings: ObservableObject {
             ? true : d.bool(forKey: "childTabsAutoFork")
         copilotMCPApps = d.object(forKey: "copilotMCPApps") == nil
             ? true : d.bool(forKey: "copilotMCPApps")
+        linkPreviewsEnabled = d.object(forKey: "linkPreviewsEnabled") == nil
+            ? true : d.bool(forKey: "linkPreviewsEnabled")
         copilotIdleReleaseMinutes = d.object(forKey: "copilotIdleReleaseMinutes") as? Int ?? 30
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
         copilotModelCatalog = (d.data(forKey: "copilotModelCatalog")
