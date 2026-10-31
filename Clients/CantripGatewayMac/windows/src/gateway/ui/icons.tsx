@@ -26,7 +26,7 @@ const ICONS = {
   "photo.on.rectangle": Images, film: Film, paperclip: Paperclip, "arrow.up.forward.square": SquareArrowOutUpRight,
   "arrow.up.right": ExternalLink, "arrow.down": ArrowDown, "arrow.up": ArrowUp, xmark: X, "doc.on.doc": Copy,
   magnifyingglass: Search, "rectangle.stack": Layers, sparkles: Sparkles, tray: Archive, "arrow.uturn.backward": Undo2,
-  folder: Folder, "folder.open": FolderOpen, "folder.badge.plus": FolderPlus, "arrow.down.circle": Download, desktopcomputer: Monitor, key: KeyRound,
+  folder: Folder, "folder.open": FolderOpen, "folder.badge.plus": FolderPlus, "arrow.down.circle": Download, desktopcomputer: Monitor, "point.3.connected": Server, key: KeyRound,
   "list.number": ListOrdered, terminal: Terminal, "info.circle": Info, checkmark: Check, wrench: Wrench,
   "paperplane": Send, eraser: Eraser, bolt: Zap, hourglass: Hourglass, bell: Bell, calendar: Calendar, link: Link,
   "link.slash": Unlink, "wifi.slash": WifiOff, wifi: Wifi, "speaker.wave.2": Volume2, eye: Eye, "eye.slash": EyeOff,

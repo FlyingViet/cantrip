@@ -35,6 +35,7 @@ export function tabActions(session: RemoteSessionSummary): MenuEntry[] {
     entries.push({ label: "Open Parent Tab", icon: "arrow.triangle.branch", onSelect: () => nav.openTab(parentID) }, { kind: "separator" });
   }
   entries.push({ label: "Mac Permissions & View Mac", icon: "desktopcomputer", onSelect: () => { nav.sheet.value = { kind: "macAccess" }; } });
+  entries.push({ label: "MCP Servers", icon: "point.3.connected", onSelect: () => { nav.sheet.value = { kind: "mcpServers", tabID: session.id }; } });
   if (session.supportsInputRequests) {
     entries.push({
       label: "View Questions in Chat", icon: "questionmark.circle",

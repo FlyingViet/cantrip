@@ -1928,3 +1928,31 @@ export interface TerminalSnapshot {
   history: string[];
   workdir: string;
 }
+
+/** GET/POST /api/v1/mcp (`MCPServerHub.remotePayload`): the servers Cantrip shares with every backend and
+ * their sign-ins. `state.screenshot` is a JPEG of the consent page while a sign-in waits for approval. */
+export interface MCPServerState {
+  phase: "ready" | "needsSignIn" | "connecting" | "awaitingApproval" | "needsLogin" | "locked" | "failed";
+  message?: string;
+  screenshot?: string;
+  expiresAt?: string;
+  page?: { title: string; host: string };
+}
+
+export interface MCPServer {
+  name: string;
+  remote: boolean;
+  oauth: boolean;
+  relayed: boolean;
+  enabled: boolean;
+  disabledBackends: string[];
+  address?: string;
+  tools?: string[];
+  state?: MCPServerState;
+}
+
+export interface MCPSnapshot {
+  servers: MCPServer[];
+  tabDisabled?: string[];
+  revision?: string;
+}

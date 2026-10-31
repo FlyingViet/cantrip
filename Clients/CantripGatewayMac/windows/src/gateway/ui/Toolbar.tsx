@@ -206,6 +206,7 @@ export function homeMoreMenu(): MenuEntry[] {
     { label: "Customize Mascot", icon: "tshirt", onSelect: () => { nav.sheet.value = { kind: "mascot" }; } },
     { kind: "header", label: "Cantrip Mac" },
     { label: "Mac Permissions & View Mac", icon: "desktopcomputer", disabled: !remote.listed.value, onSelect: () => { nav.sheet.value = { kind: "macAccess" }; } },
+    { label: "MCP Servers", icon: "point.3.connected", disabled: !remote.listed.value, onSelect: () => { nav.sheet.value = { kind: "mcpServers" }; } },
     { label: "Update & Rebuild Cantrip", icon: "arrow.clockwise", disabled: !remote.listed.value, onSelect: () => { nav.sheet.value = { kind: "maintenance" }; } },
     { kind: "separator" },
     ...settingsEntries());
