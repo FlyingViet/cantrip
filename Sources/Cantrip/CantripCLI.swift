@@ -408,7 +408,11 @@ enum CantripCLI {
             var values: [String: String] = [:]
             for index in stride(from: 0, to: pairs.count, by: 2) { values[pairs[index]] = pairs[index + 1] }
             let settings = try request(["command": "config", "set": values])["settings"] as? [String: Any] ?? [:]
-            for key in values.keys.sorted() { print("\(key) = \(display(settings[key] ?? ""))") }
+            for key in values.keys.sorted() {
+                // limitFallbackBackend, from before the chain, sets limitFallbackBackends.
+                let shown = key == "limitFallbackBackend" ? "limitFallbackBackends" : key
+                print("\(shown) = \(display(settings[shown] ?? ""))")
+            }
         default:
             throw Failure(message: "Usage: cantrip config [get KEY | set KEY VALUE ...]")
         }
@@ -416,6 +420,7 @@ enum CantripCLI {
 
     private static func display(_ value: Any) -> String {
         if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue ? "true" : "false" }
+        if let list = value as? [Any] { return list.isEmpty ? "off" : list.map { "\($0)" }.joined(separator: ", ") }
         return "\(value)"
     }
 

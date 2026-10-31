@@ -108,14 +108,16 @@ final class BackendLimitTracker {
 }
 
 enum BackendFallback {
-    /// The backend to use instead of `primary` when it's at its limit, or nil to stay put.
-    /// Unattended Home runs never move to a backend Cantrip can't check per action.
-    static func target(for primary: BackendKind, configured: String, homeRun: Bool,
+    /// The backend to use instead of `primary` when it's at its limit: the first one in the
+    /// configured chain that isn't `primary` and isn't at its limit too, or nil to stay put.
+    /// Every hop marks the backend it leaves as limited, so a run can't go round in circles.
+    /// Unattended Home runs skip backends Cantrip can't check per action.
+    static func target(for primary: BackendKind, chain: [String], homeRun: Bool,
                        tracker: BackendLimitTracker = .shared, now: Date = Date()) -> BackendKind? {
-        guard let fallback = BackendKind(rawValue: configured), fallback != primary,
-              tracker.limitedUntil(fallback, now: now) == nil else { return nil }
-        if homeRun, [.codex, .copilotRemote].contains(fallback) { return nil }
-        return fallback
+        chain.lazy.compactMap(BackendKind.init(rawValue:)).first { fallback in
+            fallback != primary && tracker.limitedUntil(fallback, now: now) == nil
+                && !(homeRun && [.codex, .copilotRemote].contains(fallback))
+        }
     }
 
     static func untilLabel(_ date: Date, now: Date = Date()) -> String {

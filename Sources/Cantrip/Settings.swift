@@ -323,10 +323,21 @@ final class AppSettings: ObservableObject {
     @Published var councilScope: String {
         didSet { d.set(councilScope, forKey: "councilScope") }
     }
-    /// Backend (BackendKind rawValue) a run moves to when the chosen backend reports its
-    /// usage limit (`BackendFallback`). Empty = off: the run stops with the error.
-    @Published var limitFallbackBackend: String {
-        didSet { d.set(limitFallbackBackend, forKey: "limitFallbackBackend") }
+    /// Backends (BackendKind rawValues), in order, a run moves through when the backend it's on
+    /// reports its usage limit (`BackendFallback`). Empty = off: the run stops with the error.
+    @Published var limitFallbackBackends: [String] {
+        didSet {
+            let cleaned = Self.fallbackChain(limitFallbackBackends)
+            // Setting a property inside its own didSet doesn't run didSet again.
+            if cleaned != limitFallbackBackends { limitFallbackBackends = cleaned }
+            d.set(cleaned, forKey: "limitFallbackBackends")
+        }
+    }
+
+    /// Known backends only, each once, in the order given.
+    static func fallbackChain(_ raw: [String]) -> [String] {
+        var seen = Set<String>()
+        return raw.filter { BackendKind(rawValue: $0) != nil && seen.insert($0).inserted }
     }
     /// Union of the account models' advertised reasoning efforts.
     @Published var copilotEffortChoices: [String] {
@@ -599,7 +610,7 @@ final class AppSettings: ObservableObject {
             "agyEffort": agyEffort, "agyPermissionMode": agyPermissionMode,
             "localBaseURL": localBaseURL, "localModel": localModel,
             "localSystemPrompt": localSystemPrompt,
-            "councilScope": councilScope, "limitFallbackBackend": limitFallbackBackend,
+            "councilScope": councilScope, "limitFallbackBackends": limitFallbackBackends,
             "allowActions": allowActions, "shareLocation": shareLocation,
             "shareCalendar": shareCalendar, "attachScreen": attachScreen,
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
@@ -681,8 +692,13 @@ final class AppSettings: ObservableObject {
         str("localModel") { self.localModel = $0 }
         str("localSystemPrompt") { self.localSystemPrompt = $0 }
         str("councilScope") { self.councilScope = $0 }
+        if let raw = dict["limitFallbackBackends"] as? [String], raw.allSatisfy({ BackendKind(rawValue: $0) != nil }) {
+            limitFallbackBackends = raw
+            applied.append("limitFallbackBackends")
+        }
+        // Older ~/.cantriprc files name one backend.
         if let raw = dict["limitFallbackBackend"] as? String, raw.isEmpty || BackendKind(rawValue: raw) != nil {
-            limitFallbackBackend = raw
+            limitFallbackBackends = raw.isEmpty ? [] : [raw]
             applied.append("limitFallbackBackend")
         }
         bool("allowActions") { self.allowActions = $0 }
@@ -822,7 +838,9 @@ final class AppSettings: ObservableObject {
         councilMembers = (d.data(forKey: "councilMembers")
             .flatMap { try? JSONDecoder().decode([CouncilMember].self, from: $0) }) ?? []
         councilScope = d.string(forKey: "councilScope") ?? "planReview"
-        limitFallbackBackend = d.string(forKey: "limitFallbackBackend") ?? ""
+        // Before the chain, one backend was saved under limitFallbackBackend.
+        limitFallbackBackends = Self.fallbackChain(d.stringArray(forKey: "limitFallbackBackends")
+            ?? [d.string(forKey: "limitFallbackBackend") ?? ""])
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
         agyPath = d.string(forKey: "agyPath") ?? ""

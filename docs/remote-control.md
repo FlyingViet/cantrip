@@ -136,20 +136,27 @@ the paired `GET/POST /api/v1/sessions/{id}/model-settings` endpoint.
 
 ## Usage limit fallback
 
-The same **Model Settings** screen has a **Usage limit fallback (all tabs)**
-section: the backend the Mac moves runs to when its own backend reports a plan
-usage limit (see [Backends](backends.md#fall-back-when-a-backend-hits-its-usage-limit)).
-It is Mac-wide, so it saves as soon as you pick a backend, separately from the
-tab's Save. When a backend is at its limit the section names it and its reset
-time, and **Try every backend again** clears that.
+The same **Model Settings** screen has a **Usage limit fallbacks (all tabs)**
+section: the backup backends, in order, the Mac moves a run through when the
+backend it's on reports a plan usage limit (see
+[Backends](backends.md#fall-back-when-a-backend-hits-its-usage-limit)). In the
+browser/Mac Remote, **Add a backup** appends one, the arrows reorder them and
+**Remove** drops one. It is Mac-wide, so each change saves right away,
+separately from the tab's Save. When a backend is at its limit the section
+names it and its reset time, and **Try every backend again** clears that.
 
-`GET /api/v1/usage-fallback` returns `backend` (`""` = off), `primary` (the
-Mac's backend), `choices` (`id`, `label`; never the Mac's own backend),
-`limited` (`backend`, ISO `until`, `untilLabel`) and `revision`. `POST` takes
-`{"revision", "backend"}` or `{"revision", "resetLimits": true}`; a stale
-revision gets `409`, and the Mac's own backend `400`. Session lists and
-`/api/v1/ready` include `supportsUsageFallback`; older Macs answer `404`, and
-clients hide the section.
+`GET /api/v1/usage-fallback` returns `backends` (the chain in the order tried;
+`[]` = off), `backend` (its first entry, `""` = off, for older clients),
+`primary` (the Mac's backend, skipped if the chain names it), `choices` (`id`,
+`label`; never the Mac's own backend), `limited` (`backend`, ISO `until`,
+`untilLabel`) and `revision`. `POST` takes `{"revision", "backends": [...]}`
+to replace the chain (known backends, each once), `{"revision", "backend"}` to
+replace only its first entry (`""` turns every backup off), or
+`{"revision", "resetLimits": true}`; a stale revision gets `409`, and an
+unknown or repeated backend, or the Mac's own backend as `backend`, `400`.
+Macs from before the chain don't send `backends`; treat `backend` as a chain of
+one. Session lists and `/api/v1/ready` include `supportsUsageFallback`; older
+Macs answer `404`, and clients hide the section.
 
 ## Start fresh
 

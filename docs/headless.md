@@ -67,8 +67,8 @@ Settings use the same names as `~/.cantriprc`. Common ones: `backend`,
 `copilotModel`, `copilotEffort`, `allowActions`, `remoteControlPort`,
 `remoteLANPort` (0 = any free port), `cantripHomeEnabled`, `memoryEnabled`,
 `memoryPath`, `storageUpkeepEnabled`, `storageSessionRetentionDays` (3–365,
-default 14), `limitFallbackBackend` (`off` or a backend name; see
-[usage limit fallback](backends.md#fall-back-when-a-backend-hits-its-usage-limit)). Run `cantrip config` for the full list.
+default 14), `limitFallbackBackends` (`off` or comma-separated backend names, tried in
+order; see [usage limit fallbacks](backends.md#fall-back-when-a-backend-hits-its-usage-limit)). Run `cantrip config` for the full list.
 
 ## Good to know
 
