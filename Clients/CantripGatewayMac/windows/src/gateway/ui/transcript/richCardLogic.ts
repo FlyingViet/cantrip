@@ -58,3 +58,40 @@ export function placeNote(place: RemotePlacePin): { text: string; warning: boole
   if (place.listedName) return { text: `Listed as ${place.listedName}`, warning: false };
   return null;
 }
+
+/** A pin's estimated width: icon, padding and its label (capped), as the Mac's PlaceMapFit.pinWidth. */
+export function pinWidth(name: string): number {
+  return Math.min(name.length * 6.4, 150) + 36;
+}
+
+/**
+ * Moves that keep close pins readable (PlaceMapFit.labelOffsets): each pin, centered on its point, keeps
+ * its spot unless an earlier one is there, then takes the nearest free spot (rows above and below, then
+ * sideways) inside the map; with none free, the one that overlaps least.
+ */
+export function pinOffsets(pins: { x: number; y: number; w: number; h: number }[], width: number, height: number): [number, number][] {
+  const placed: { l: number; t: number; r: number; b: number }[] = [];
+  return pins.map((pin) => {
+    const step = pin.h + 2;
+    const moves: [number, number][] = [];
+    for (let row = -3; row <= 3; row++) for (const shift of [0, -0.5, 0.5, -1, 1]) moves.push([shift * (pin.w + 2), row * step]);
+    const cost = (m: [number, number]) => (Math.abs(m[0]) / pin.w) * 2 + Math.abs(m[1]) / step;
+    moves.sort((a, b) => cost(a) - cost(b));
+    let best: [number, number] = [0, 0];
+    let least = Infinity;
+    for (const [dx, dy] of moves) {
+      const r = { l: pin.x - pin.w / 2 + dx - 1, t: pin.y - pin.h / 2 + dy - 1, r: pin.x + pin.w / 2 + dx + 1, b: pin.y + pin.h / 2 + dy + 1 };
+      if ((dx || dy) && (r.l < 0 || r.t < 0 || r.r > width || r.b > height)) continue;
+      let overlap = 0;
+      for (const o of placed) {
+        const w = Math.min(r.r, o.r) - Math.max(r.l, o.l);
+        const h = Math.min(r.b, o.b) - Math.max(r.t, o.t);
+        if (w > 0 && h > 0) overlap += w * h;
+      }
+      if (overlap < least) { best = [dx, dy]; least = overlap; }
+      if (overlap === 0) break;
+    }
+    placed.push({ l: pin.x - pin.w / 2 + best[0], t: pin.y - pin.h / 2 + best[1], r: pin.x + pin.w / 2 + best[0], b: pin.y + pin.h / 2 + best[1] });
+    return best;
+  });
+}
