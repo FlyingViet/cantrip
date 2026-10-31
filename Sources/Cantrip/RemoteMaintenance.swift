@@ -257,6 +257,8 @@ final class RemoteMaintenance {
             try requireIdle()
             try phase("updating", "Fast-forwarding main. Local edits will not be stashed or discarded.")
             try await followOriginMain()
+            // Moves checked-out submodules to the new pins, so they don't show as local changes.
+            _ = try? await git(["submodule", "update", "--recursive", "--quiet"])
             commitsBehind = 0
         }
         guard try await git(["diff", "--name-only", "--diff-filter=U"]).isEmpty else {
