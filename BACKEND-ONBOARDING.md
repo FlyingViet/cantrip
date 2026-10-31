@@ -129,7 +129,10 @@ grep -rn "default:" Sources/Cantrip/ClaudeModels.swift Sources/Cantrip/SessionMo
    `BackendCommandDiscovery` (skill folders, `cliNames`), and the catalog key.
 9. **UI.** Settings section, icon, model labels and council menu in `LauncherView`; also
    `PluginPanelData`, `AppSettings.backendLabel`, and the aliases in `CLIServer` and `HostControl`
-   (the `limitFallbackBackends` names and error text).
+   (the `limitFallbackBackends` names and error text). A backend with a model picker
+   (`AppSettings.tabModelBackends`) can be pinned to a model and effort as a usage-limit backup
+   (`limitFallbackModels`, `AppSettings.fallbackRun`), so its catalog must list real models with
+   their efforts.
 10. **Hooks or helpers** that the CLI runs as a separate program dispatch from `main.swift`
     (see `AntigravityHook.helperArgument`).
 
