@@ -82,6 +82,24 @@ struct CantripUsageFallback: Decodable, Equatable {
     struct Choice: Decodable, Equatable, Identifiable {
         let id: String
         let label: String
+        /// The models a backup on this backend can use; nil when it always runs its default.
+        var models: [ModelChoice]? = nil
+        /// Efforts for its default model.
+        var defaultEfforts: [String]? = nil
+        /// The Mac's own model for this backend, which "Default" means.
+        var defaultModel: String? = nil
+    }
+    struct ModelChoice: Decodable, Equatable, Identifiable {
+        let id: String
+        let label: String
+        /// Efforts the model takes; empty when none, nil when unknown.
+        var efforts: [String]? = nil
+    }
+    /// A backup and what it runs with; "" = the backend's default.
+    struct Entry: Codable, Equatable {
+        let backend: String
+        var model: String = ""
+        var effort: String = ""
     }
     struct Limited: Decodable, Equatable {
         let backend: String
@@ -92,6 +110,8 @@ struct CantripUsageFallback: Decodable, Equatable {
     let backend: String
     /// The whole chain in the order tried; nil from Macs before the chain.
     var backends: [String]? = nil
+    /// The chain with each backup's model and effort; nil from Macs before backup models.
+    var entries: [Entry]? = nil
     let primary: String
     let choices: [Choice]
     let limited: [Limited]
@@ -122,6 +142,29 @@ struct CantripUsageFallback: Decodable, Equatable {
             : "New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch."
     }
 
+    func entry(_ backend: String) -> Entry {
+        entries?.first { $0.backend == backend } ?? Entry(backend: backend)
+    }
+
+    /// Models offered for a backup, or nil when this Mac doesn't take backup models or the backend
+    /// has no model picker.
+    func models(for backend: String) -> [ModelChoice]? {
+        entries == nil ? nil : choices.first { $0.id == backend }?.models
+    }
+
+    /// Efforts for the backup's chosen model (or its default model).
+    func efforts(for backend: String) -> [String] {
+        let choice = choices.first { $0.id == backend }
+        let model = entry(backend).model
+        return (model.isEmpty ? choice?.defaultEfforts : choice?.models?.first { $0.id == model }?.efforts) ?? []
+    }
+
+    /// The change that sets one backup's model and effort, keeping the others.
+    func change(backend: String, model: String, effort: String) -> CantripUsageFallbackChange {
+        let updated = chain.map { $0 == backend ? Entry(backend: backend, model: model, effort: effort) : entry($0) }
+        return CantripUsageFallbackChange(revision: revision, entries: updated)
+    }
+
     /// The change that sets `chain`; a Mac from before the chain only takes its first entry.
     func change(to chain: [String]) -> CantripUsageFallbackChange {
         supportsChain
@@ -134,6 +177,7 @@ struct CantripUsageFallbackChange: Encodable {
     let revision: String
     var backend: String?
     var backends: [String]?
+    var entries: [CantripUsageFallback.Entry]?
     var resetLimits: Bool?
 }
 
@@ -181,23 +225,25 @@ struct CantripUsageFallbackSection: View {
         }
     }
 
+    private static func moved(_ chain: [String], _ index: Int, _ offset: Int) -> [String] {
+        var next = chain
+        next.swapAt(index, index + offset)
+        return next
+    }
+
+    @ViewBuilder
     private func row(_ fallback: CantripUsageFallback, id: String, index: Int) -> some View {
         let chain = fallback.chain
         let name = fallback.label(id)
-        func moved(_ offset: Int) -> [String] {
-            var next = chain
-            next.swapAt(index, index + offset)
-            return next
-        }
-        return HStack(spacing: 14) {
+        HStack(spacing: 14) {
             Text("\(index + 1).").monospacedDigit().foregroundStyle(.secondary)
             Text(name)
             Spacer()
             Group {
-                Button { Task { await save(fallback.change(to: moved(-1))) } } label: { Image(systemName: "arrow.up") }
+                Button { Task { await save(fallback.change(to: Self.moved(chain, index, -1))) } } label: { Image(systemName: "arrow.up") }
                     .disabled(saving || index == 0)
                     .accessibilityLabel("Try \(name) earlier")
-                Button { Task { await save(fallback.change(to: moved(1))) } } label: { Image(systemName: "arrow.down") }
+                Button { Task { await save(fallback.change(to: Self.moved(chain, index, 1))) } } label: { Image(systemName: "arrow.down") }
                     .disabled(saving || index == chain.count - 1)
                     .accessibilityLabel("Try \(name) later")
                 Button("Remove", role: .destructive) {
@@ -216,6 +262,40 @@ struct CantripUsageFallbackSection: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("usageFallback.backup.\(id)")
+        modelPickers(fallback, id: id, name: name)
+    }
+
+    /// The backup's model and effort, from the backend's own lists ("Default" = the Mac's setting).
+    @ViewBuilder
+    private func modelPickers(_ fallback: CantripUsageFallback, id: String, name: String) -> some View {
+        if let models = fallback.models(for: id) {
+            let entry = fallback.entry(id)
+            let choice = fallback.choices.first { $0.id == id }
+            Picker("Model", selection: Binding(get: { entry.model }, set: { model in
+                Task { await save(fallback.change(backend: id, model: model, effort: "")) }
+            })) {
+                Text(choice?.defaultModel.map { "Default (\($0))" } ?? "Default model").tag("")
+                ForEach(models) { Text($0.label).tag($0.id) }
+                if !entry.model.isEmpty, !models.contains(where: { $0.id == entry.model }) {
+                    Text("\(entry.model) (not offered now)").tag(entry.model)
+                }
+            }
+            .disabled(saving)
+            .accessibilityLabel("\(name) model")
+            .accessibilityIdentifier("usageFallback.model.\(id)")
+            let efforts = fallback.efforts(for: id)
+            if !efforts.isEmpty {
+                Picker("Effort", selection: Binding(get: { entry.effort }, set: { effort in
+                    Task { await save(fallback.change(backend: id, model: entry.model, effort: effort)) }
+                })) {
+                    Text("Default effort").tag("")
+                    ForEach(efforts, id: \.self) { Text($0).tag($0) }
+                }
+                .disabled(saving)
+                .accessibilityLabel("\(name) effort")
+                .accessibilityIdentifier("usageFallback.effort.\(id)")
+            }
+        }
     }
 
     /// Older Macs don't offer it; the section stays hidden.

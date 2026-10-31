@@ -183,6 +183,58 @@ final class CantripModelSettingsTests: XCTestCase {
         XCTAssertEqual(posts.map { $0["revision"] as? String }, ["r1", "r2", "r3", "r4"])
     }
 
+    func testUsageFallbackBackupsPickTheirModelAndEffort() async throws {
+        let model = try await model()
+        var entries: [[String: String]] = [["backend": "Claude Code", "model": "", "effort": ""], ["backend": "Codex", "model": "", "effort": ""]]
+        var posted: [String: Any]?
+        func fallback() throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "backend": "Claude Code", "backends": entries.map { $0["backend"]! }, "entries": entries,
+                "primary": "Copilot", "revision": "r\(entries.description.count)", "limited": [],
+                "choices": [
+                    ["id": "Claude Code", "label": "Claude Code", "defaultModel": "opus", "defaultEfforts": ["low", "high"],
+                     "models": [["id": "claude-opus-5-5", "label": "claude-opus-5-5", "efforts": ["low", "medium", "high"]],
+                                ["id": "claude-sonnet-5-5", "label": "claude-sonnet-5-5", "efforts": []]]],
+                    ["id": "Codex", "label": "Codex"],
+                ],
+            ])
+        }
+        ModelSettingsRequestProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                let stream = try XCTUnwrap(request.httpBodyStream)
+                stream.open()
+                defer { stream.close() }
+                var bytes = [UInt8](repeating: 0, count: 4096)
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                posted = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bytes.prefix(count))) as? [String: Any])
+                entries = try XCTUnwrap(posted?["entries"] as? [[String: String]])
+            }
+            return (200, try fallback())
+        }
+        var state = try await model.usageFallback()
+        XCTAssertEqual(state.models(for: "Claude Code")?.map(\.id), ["claude-opus-5-5", "claude-sonnet-5-5"])
+        XCTAssertNil(state.models(for: "Codex"), "A backend without a model picker shows none")
+        XCTAssertEqual(state.efforts(for: "Claude Code"), ["low", "high"], "Default model: its efforts")
+        let first = await model.updateUsageFallback(state.change(backend: "Claude Code", model: "claude-opus-5-5", effort: "high"))
+        state = try XCTUnwrap(first)
+        XCTAssertEqual(state.entry("Claude Code"), .init(backend: "Claude Code", model: "claude-opus-5-5", effort: "high"))
+        XCTAssertEqual(state.entry("Codex").model, "", "The other backup is kept as it was")
+        XCTAssertEqual((posted?["entries"] as? [[String: String]])?.count, 2)
+        XCTAssertNil(posted?["backends"], "Model changes go through entries")
+        XCTAssertEqual(state.efforts(for: "Claude Code"), ["low", "medium", "high"], "The chosen model's efforts")
+
+        // A Mac from before backup models sends no entries: no pickers, the chain still edits.
+        ModelSettingsRequestProtocol.handler = { _ in
+            (200, try JSONSerialization.data(withJSONObject: [
+                "backend": "Codex", "backends": ["Codex"], "primary": "Copilot", "revision": "old", "limited": [],
+                "choices": [["id": "Codex", "label": "Codex"]],
+            ]))
+        }
+        let older = try await model.usageFallback()
+        XCTAssertNil(older.models(for: "Codex"))
+        XCTAssertTrue(older.supportsChain)
+    }
+
     func testSavePreflightsOnceAndPinsTheOriginalTabAndRevision() async throws {
         let model = try await model()
         var methods: [String] = []
