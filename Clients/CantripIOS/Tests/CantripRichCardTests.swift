@@ -158,6 +158,14 @@ final class CantripRichCardTests: XCTestCase {
         XCTAssertEqual(pins[3].pinSymbol, "cross.case.fill", "Only symbols Cantrip uses are drawn")
     }
 
+    func testClosePinsMoveApartInsideTheMap() {
+        let widths = ["Matsu Matcha", "Arisan Tea & Coffee House"].map { CantripPlaceMapFit.pinWidth($0) }
+        let offsets = CantripPlaceMapFit.labelOffsets(points: [CGPoint(x: 300, y: 30), CGPoint(x: 240, y: 31)], widths: widths,
+                                                      bounds: CGRect(x: 0, y: 0, width: 600, height: 300))
+        XCTAssertEqual(offsets[0], .zero)
+        XCTAssertGreaterThan(offsets[1].height, 0, "At the top edge the second pin moves down, still inside the map")
+    }
+
     func testPlaceMapFitKeepsEveryPinRightOfTheList() throws {
         let pins = [
             CLLocationCoordinate2D(latitude: 37.3692, longitude: -121.9512),
