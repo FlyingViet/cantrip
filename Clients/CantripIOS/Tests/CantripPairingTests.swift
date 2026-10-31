@@ -87,7 +87,7 @@ final class CantripPairingTests: XCTestCase {
     private var fullLink: CantripPairingLink {
         get throws {
             try link("name=mac-mini&token=\(token)&url=https%3A%2F%2Fmac-mini.tailnet.ts.net"
-                     + "&direct=192.168.0.94%3A8766&tailscaleOnly=1")
+                     + "&direct=192.168.0.10%3A8766&tailscaleOnly=1")
         }
     }
 
@@ -104,14 +104,14 @@ final class CantripPairingTests: XCTestCase {
         XCTAssertEqual(store.servers.map(\.id), [home.id, server.id], "Pairing adds; the previous server stays saved")
         XCTAssertEqual(server.name, "mac-mini")
         XCTAssertEqual(server.url, "https://mac-mini.tailnet.ts.net")
-        XCTAssertEqual(server.directAddress, "192.168.0.94:8766")
+        XCTAssertEqual(server.directAddress, "192.168.0.10:8766")
         XCTAssertTrue(server.tailscaleOnly)
         XCTAssertEqual(try store.credential(for: server), token)
         XCTAssertEqual(try store.credential(for: home), "home-test-credential")
         XCTAssertEqual(store.selectedID, server.id)
         XCTAssertEqual(model.selectedServerID, server.id)
         XCTAssertEqual(model.configuredURL, "https://mac-mini.tailnet.ts.net")
-        XCTAssertEqual(model.directAddress, "192.168.0.94:8766")
+        XCTAssertEqual(model.directAddress, "192.168.0.10:8766")
         XCTAssertTrue(model.tailscaleOnly)
         XCTAssertTrue(model.isConfigured)
         XCTAssertNil(model.errorMessage)

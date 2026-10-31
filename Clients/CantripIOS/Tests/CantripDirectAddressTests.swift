@@ -124,8 +124,8 @@ final class CantripDirectAddressTests: XCTestCase {
         let unnamed = try store.add(ServerDraft(credential: "other-token", directAddress: "10.0.0.2:8766"))
         XCTAssertEqual(unnamed.name, "10.0.0.2:8766")
         let both = try store.add(ServerDraft(url: "https://mini.example", credential: "mini-token",
-                                             directAddress: "192.168.0.94:8766"))
-        XCTAssertEqual(both.address, "https://mini.example · Direct 192.168.0.94:8766")
+                                             directAddress: "192.168.0.10:8766"))
+        XCTAssertEqual(both.address, "https://mini.example · Direct 192.168.0.10:8766")
         // A Bonjour-only profile is still distinct from one with a direct address.
         _ = try store.add(ServerDraft(name: "LAN", credential: "lan-token"))
         XCTAssertThrowsError(try store.add(ServerDraft(credential: "laptop-token", directAddress: "192.168.0.152:8766")),

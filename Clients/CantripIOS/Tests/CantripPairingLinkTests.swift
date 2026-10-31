@@ -39,18 +39,18 @@ final class CantripPairingLinkTests: XCTestCase {
     func testFullLinkParsesEveryRouteAndNormalizesThem() throws {
         let result = try XCTUnwrap(try parse([
             ("v", "1"), ("name", "mac-mini"), ("token", token),
-            ("url", "https://mac-mini.example-tailnet.ts.net:443/"), ("direct", "192.168.0.94:8766"),
+            ("url", "https://Mac-Mini.example-tailnet.ts.net:443/"), ("direct", "192.168.0.10:8766"),
             ("tailscaleOnly", "1"),
         ]))
         let pairing = try result.get()
         XCTAssertEqual(pairing, CantripPairingLink(
             name: "mac-mini", token: token, url: "https://mac-mini.example-tailnet.ts.net",
-            directAddress: "192.168.0.94:8766", tailscaleOnly: true
+            directAddress: "192.168.0.10:8766", tailscaleOnly: true
         ))
         XCTAssertEqual(pairing.urlHost, "mac-mini.example-tailnet.ts.net")
         XCTAssertEqual(pairing.draft, ServerDraft(
             name: "mac-mini", url: "https://mac-mini.example-tailnet.ts.net", credential: token,
-            tailscaleOnly: true, directAddress: "192.168.0.94:8766"
+            tailscaleOnly: true, directAddress: "192.168.0.10:8766"
         ))
         XCTAssertEqual(pairing.tokenSuffix, "bCdE")
         XCTAssertFalse(String(describing: pairing).contains(token), "Logs never show the whole token")
@@ -135,7 +135,7 @@ final class CantripPairingLinkTests: XCTestCase {
     }
 
     func testDirectAddressesMustBeHostAndPort() throws {
-        for direct in ["192.168.0.94", "192.168.0.94:0", "192.168.0.94:port", "a:b:c", "bad host:8766"] {
+        for direct in ["192.168.0.10", "192.168.0.10:0", "192.168.0.10:port", "a:b:c", "bad host:8766"] {
             XCTAssertEqual(try error([("v", "1"), ("token", token), ("direct", direct)]), .invalidDirectAddress,
                            "Accepted \(direct)")
         }
@@ -146,7 +146,7 @@ final class CantripPairingLinkTests: XCTestCase {
 
     func testTailscaleOnlyNeedsAURL() throws {
         XCTAssertEqual(try error([("v", "1"), ("token", token), ("tailscaleOnly", "1")]), .tailscaleOnlyWithoutURL)
-        XCTAssertEqual(try error([("v", "1"), ("token", token), ("direct", "192.168.0.94:8766"), ("tailscaleOnly", "1")]),
+        XCTAssertEqual(try error([("v", "1"), ("token", token), ("direct", "192.168.0.10:8766"), ("tailscaleOnly", "1")]),
                        .tailscaleOnlyWithoutURL)
         XCTAssertEqual(try error([("v", "1"), ("token", token), ("url", "https://a.example"), ("tailscaleOnly", "yes")]),
                        .malformed)
