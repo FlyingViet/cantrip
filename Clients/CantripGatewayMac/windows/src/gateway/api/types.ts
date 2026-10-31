@@ -954,14 +954,20 @@ export interface ModelOption {
 /** GET/POST /api/v1/usage-fallback (`UsageFallbackSnapshot`): the Mac-wide backend a run moves to at a
  * usage limit. POST `{revision, backend}` ("" = off) or `{revision, resetLimits: true}`. */
 export interface UsageFallbackSnapshot {
+  /** The chain's first entry, "" when off; all a Mac from before the chain sends. */
   backend: string;
+  /** The whole chain in the order tried; missing from Macs before the chain. */
+  backends?: string[];
   primary: string;
   choices: { id: string; label: string }[];
   limited: { backend: string; until: string; untilLabel: string }[];
   revision: string;
 }
 
-export type UsageFallbackRequest = { revision: string; backend: string } | { revision: string; resetLimits: true };
+export type UsageFallbackRequest =
+  | { revision: string; backends: string[] }
+  | { revision: string; backend: string }
+  | { revision: string; resetLimits: true };
 
 /** GET/POST /api/v1/sessions/<id>/model-settings (`SessionModelSettingsSnapshot`). */
 export interface ModelSettingsSnapshot {
