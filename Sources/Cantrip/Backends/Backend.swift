@@ -570,7 +570,7 @@ enum ToolActivityFactory {
 
         guard let args,
               let path = string(in: args, keys: [
-                  "file_path", "filePath", "path", "Path", "notebook_path", "TargetFile"
+                  "file_path", "filePath", "path", "Path", "AbsolutePath", "notebook_path", "TargetFile"
               ]) else {
             return []
         }
@@ -685,7 +685,7 @@ enum ToolActivityFactory {
         }
         if lowerName.contains("edit") || lowerName.contains("patch")
             || lowerName.contains("write") || lowerName.contains("replace_file") {
-            if let path = string(in: arguments, keys: ["file_path", "path", "Path", "TargetFile"])
+            if let path = string(in: arguments, keys: ["file_path", "filePath", "path", "Path", "AbsolutePath", "TargetFile"])
                 ?? fileChanges.first?.path {
                 return "Editing \((path as NSString).lastPathComponent)"
             }
@@ -694,11 +694,34 @@ enum ToolActivityFactory {
         if lowerName == "read_url_content" {
             return "Reading URL"
         }
+        if lowerName == "list_dir" {
+            if let dir = string(in: arguments, keys: ["DirectoryPath", "path", "Path", "AbsolutePath"]) {
+                let name = (dir as NSString).lastPathComponent
+                if !name.isEmpty, name != "/" {
+                    return "Listing \(name)"
+                }
+            }
+            return "Listing directory"
+        }
         if lowerName.contains("read") || lowerName.contains("view") {
+            if let path = string(in: arguments, keys: ["file_path", "filePath", "path", "Path", "AbsolutePath", "TargetFile"]) {
+                let name = (path as NSString).lastPathComponent
+                if !name.isEmpty, name != "/" {
+                    return "Reading \(name)"
+                }
+            }
             return "Reading a file"
         }
         if lowerName.contains("search") || lowerName.contains("grep")
             || lowerName.contains("glob") || lowerName == "find_by_name" {
+            if let query = string(in: arguments, keys: ["Query", "query", "Pattern", "pattern"]) {
+                let singleLine = query.components(separatedBy: .newlines).first?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !singleLine.isEmpty {
+                    let clippedQuery = singleLine.count > 48 ? String(singleLine.prefix(48)) + "…" : singleLine
+                    return "Searching for \(clippedQuery)"
+                }
+            }
             return "Searching"
         }
         return "Using \(displayName(toolName))"
