@@ -3,7 +3,7 @@ import { useEffect, useState } from "preact/hooks";
 import { cachedImage, loadLinkPreviewImage, loadMapTile } from "../../api/client";
 import type { RemoteLinkPreview, RemotePlaceCard, RemotePlacePin } from "../../api/types";
 import { bridge } from "../../bridge";
-import { initialZoomForDelta, isSafePublicUrl, latToTileY, lonToTileX, placeDirectionsUrl } from "./richCardLogic";
+import { initialZoomForDelta, isSafePublicUrl, latToTileY, lonToTileX, placeDirectionsUrl, placeGlyph, placeNote } from "./richCardLogic";
 
 export function LinkPreviewStack(props: { cards: RemoteLinkPreview[] | undefined }): JSX.Element | null {
   const cards = (props.cards ?? []).filter((c) => isSafePublicUrl(c.url));
@@ -149,7 +149,7 @@ export function PlaceCardView(props: { card: RemotePlaceCard | undefined }): JSX
                 bridge.openExternal(placeDirectionsUrl(place));
               }}
             >
-              <span class="place-pin-dot">+</span>
+              <span class="place-pin-dot" aria-hidden="true">{placeGlyph(place)}</span>
               <span class="place-pin-label">{place.name}</span>
             </button>
           );
@@ -185,6 +185,10 @@ export function PlaceCardView(props: { card: RemotePlaceCard | undefined }): JSX
               ) : place.address ? (
                 <div class="place-row-meta">{place.address}</div>
               ) : null}
+              {(() => {
+                const note = placeNote(place);
+                return note ? <div class={`place-row-meta${note.warning ? " place-row-warning" : ""}`}>{note.text}</div> : null;
+              })()}
               <div class="place-row-actions" onClick={(e) => e.stopPropagation()}>
                 <button
                   type="button"

@@ -475,6 +475,13 @@ export interface RemotePlacePin {
   priceLevel?: string;
   isOpenNow?: boolean;
   hoursSummary?: string;
+  /** The name Apple Maps or OpenStreetMap lists it under, when it differs from the reply's. */
+  listedName?: string;
+  /** No listing matched confidently; the pin is near where the place should be. */
+  approximate?: boolean;
+  /** The Mac's SF Symbol for the pin, and an emoji for clients without SF Symbols. */
+  symbol?: string;
+  glyph?: string;
   appleMapsURL?: string;
 }
 

@@ -41,3 +41,20 @@ export function initialZoomForDelta(delta: number): number {
   if (d <= 0.18) return 12;
   return 11;
 }
+
+/** A pin's icon: the Mac's emoji, or one from the category for cards from older Macs. */
+export function placeGlyph(place: RemotePlacePin): string {
+  if (place.glyph && [...place.glyph].length <= 2) return place.glyph;
+  const text = (place.category ?? "").toLowerCase();
+  if (["urgent", "clinic", "hospital", "medical", "pharmacy", "dental"].some((word) => text.includes(word))) return "✚";
+  if (["cafe", "café", "coffee", "tea", "matcha", "boba"].some((word) => text.includes(word))) return "☕";
+  if (["restaurant", "food", "bakery"].some((word) => text.includes(word))) return "🍴";
+  return "📍";
+}
+
+/** The row's note under the address: an approximate pin, or the name the listing uses. */
+export function placeNote(place: RemotePlacePin): { text: string; warning: boolean } | null {
+  if (place.approximate) return { text: "Approximate location", warning: true };
+  if (place.listedName) return { text: `Listed as ${place.listedName}`, warning: false };
+  return null;
+}
