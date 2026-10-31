@@ -1,0 +1,179 @@
+{
+  "osm" : {
+    "Arisan Tea & Coffee House" : [
+
+    ],
+    "Cere Tea" : [
+      {
+        "address" : "18568 Prospect Road, Saratoga",
+        "latitude" : 37.2918301,
+        "longitude" : -121.9960829,
+        "name" : "Ceré Tea",
+        "poiCategory" : "cafe",
+        "source" : "osm"
+      }
+    ],
+    "arisan" : [
+      {
+        "address" : "1082 East El Camino Real, Sunnyvale",
+        "latitude" : 37.3516594,
+        "longitude" : -122.0023325,
+        "name" : "Arisan",
+        "poiCategory" : "cafe",
+        "source" : "osm",
+        "website" : "https:\/\/arisandrinks.square.site\/"
+      }
+    ]
+  },
+  "regions" : {
+    "Santa Clara, CA" : [
+      37.371052826127475,
+      -121.96720645297319,
+      0.09593498893080721,
+      0.07505298592151632
+    ],
+    "cupertino" : [
+      37.30954991574376,
+      -122.04396997578442,
+      0.062166983261704445,
+      0.09641200304029951
+    ]
+  },
+  "search" : {
+    "Arisan Tea & Coffee House" : [
+      {
+        "address" : "979 Story Rd, Unit 7012, San Jose, CA  95122, United States",
+        "latitude" : 37.3311034,
+        "longitude" : -121.8573576,
+        "name" : "Arisan Tea & Coffee House",
+        "phone" : "+1 (408) 642-5978",
+        "poiCategory" : "MKPOICategoryCafe",
+        "source" : "mapkit",
+        "website" : "http:\/\/arisandrinks.com"
+      }
+    ],
+    "Arisan Tea & Coffee House El Camino Real Sunnyvale CA Santa Clara, CA" : [
+      {
+        "address" : "979 Story Rd, Unit 7012, San Jose, CA  95122, United States",
+        "latitude" : 37.3311034,
+        "longitude" : -121.8573576,
+        "name" : "Arisan Tea & Coffee House",
+        "phone" : "+1 (408) 642-5978",
+        "poiCategory" : "MKPOICategoryCafe",
+        "source" : "mapkit",
+        "website" : "http:\/\/arisandrinks.com"
+      }
+    ],
+    "Arisan Tea & Coffee House Santa Clara, CA" : [
+      {
+        "address" : "979 Story Rd, Unit 7012, San Jose, CA  95122, United States",
+        "latitude" : 37.3311034,
+        "longitude" : -121.8573576,
+        "name" : "Arisan Tea & Coffee House",
+        "phone" : "+1 (408) 642-5978",
+        "poiCategory" : "MKPOICategoryCafe",
+        "source" : "mapkit",
+        "website" : "http:\/\/arisandrinks.com"
+      }
+    ],
+    "Cere Tea" : [
+      {
+        "address" : "18568 Prospect Rd, Saratoga, CA  95070, United States",
+        "latitude" : 37.2918791,
+        "longitude" : -121.9961177,
+        "name" : "Ceré Tea",
+        "phone" : "+1 (408) 777-8601",
+        "poiCategory" : "MKPOICategoryRestaurant",
+        "source" : "mapkit",
+        "website" : "https:\/\/cere-tea.foodjoyy.com\/"
+      },
+      {
+        "address" : "686 Barber Ln, Milpitas, CA  95035, United States",
+        "latitude" : 37.4192745,
+        "longitude" : -121.9158751,
+        "name" : "Ceré Tea",
+        "poiCategory" : "MKPOICategoryRestaurant",
+        "source" : "mapkit",
+        "website" : "https:\/\/www.ceretea.com"
+      }
+    ],
+    "Cere Tea Cupertino CA Santa Clara, CA" : [
+      {
+        "address" : "18568 Prospect Rd, Saratoga, CA  95070, United States",
+        "latitude" : 37.2918791,
+        "longitude" : -121.9961177,
+        "name" : "Ceré Tea",
+        "phone" : "+1 (408) 777-8601",
+        "poiCategory" : "MKPOICategoryRestaurant",
+        "source" : "mapkit",
+        "website" : "https:\/\/cere-tea.foodjoyy.com\/"
+      }
+    ],
+    "Cere Tea Santa Clara, CA" : [
+      {
+        "address" : "686 Barber Ln, Milpitas, CA  95035, United States",
+        "latitude" : 37.4192745,
+        "longitude" : -121.9158751,
+        "name" : "Ceré Tea",
+        "poiCategory" : "MKPOICategoryRestaurant",
+        "source" : "mapkit",
+        "website" : "https:\/\/www.ceretea.com"
+      },
+      {
+        "address" : "18568 Prospect Rd, Saratoga, CA  95070, United States",
+        "latitude" : 37.2918791,
+        "longitude" : -121.9961177,
+        "name" : "Ceré Tea",
+        "phone" : "+1 (408) 777-8601",
+        "poiCategory" : "MKPOICategoryRestaurant",
+        "source" : "mapkit",
+        "website" : "https:\/\/cere-tea.foodjoyy.com\/"
+      }
+    ],
+    "Izumi Matcha Cupertino CA Santa Clara, CA" : [
+      {
+        "address" : "19740 Stevens Creek Blvd, Cupertino, CA  95014, United States",
+        "latitude" : 37.3217543,
+        "longitude" : -122.0180095,
+        "name" : "Izumi Matcha",
+        "phone" : "+1 (408) 210-7591",
+        "poiCategory" : "MKPOICategoryRestaurant",
+        "source" : "mapkit",
+        "website" : "https:\/\/izumimatcha.com\/"
+      }
+    ],
+    "Matcha Cafe Maiko Santa Clara, CA" : [
+      {
+        "address" : "2855 Stevens Creek Blvd, Unit 9254, Santa Clara, CA 95050, United States",
+        "latitude" : 37.3260881,
+        "longitude" : -121.9456075,
+        "name" : "Matcha Cafe Maiko",
+        "phone" : "+1 (408) 688-9488",
+        "poiCategory" : "MKPOICategoryRestaurant",
+        "source" : "mapkit",
+        "website" : "https:\/\/www.matchacafe-maiko.com\/eng\/"
+      }
+    ],
+    "Matcha Cafe Maiko Westfield Valley Fair 2855 Stevens Creek Blvd Santa Clara CA Santa Clara, CA" : [
+      {
+        "address" : "2855 Stevens Creek Blvd, Santa Clara, CA  95050, United States",
+        "latitude" : 37.3252047,
+        "longitude" : -121.9469983,
+        "name" : "2855 Stevens Creek Blvd",
+        "source" : "mapkit"
+      }
+    ],
+    "Matsu Matcha 3030 El Camino Real Santa Clara CA Santa Clara, CA" : [
+      {
+        "address" : "3030 El Camino Real, Santa Clara, CA  95051, United States",
+        "latitude" : 37.3516785,
+        "longitude" : -121.9815145,
+        "name" : "Matsu Matcha",
+        "phone" : "+1 (408) 564-4076",
+        "poiCategory" : "MKPOICategoryRestaurant",
+        "source" : "mapkit",
+        "website" : "https:\/\/matsumatcha-usa.com\/"
+      }
+    ]
+  }
+}

@@ -12,6 +12,8 @@ struct RichCardTests {
         testPlaceBlockExtraction()
         testPlaceLinkFilter()
         testPlaceMapFit()
+        testPlaceMatching()
+        try await testMatchaPlacesResolve()
         print("Rich card unit tests passed")
     }
 
@@ -275,5 +277,110 @@ struct RichCardTests {
         let meters = single.size.width / size.width * area.width / MKMapPointsPerMeterAtLatitude(pins[0].latitude)
         precondition(abs(meters - 2_000) < 1, "Single pin spans \(meters) m")
         precondition(PlaceMapFit.rect(for: [], size: size, insets: insets) == nil)
+    }
+
+    static func testPlaceMatching() {
+        precondition(PlaceMatcher.namesMatch("Cere Tea", "Ceré Tea"), "Accents don't matter")
+        precondition(PlaceMatcher.namesMatch("Arisan Tea & Coffee House", "Arisan"), "A listing under the short name matches")
+        precondition(!PlaceMatcher.namesMatch("Matcha Cafe Maiko", "2855 Stevens Creek Blvd"), "An address isn't the place")
+        precondition(!PlaceMatcher.namesMatch("Matcha Cafe Maiko", "Westfield Valley Fair"), "Nor is the mall it's in")
+        precondition(!PlaceMatcher.namesMatch("Tea House", "Story Tea"), "One shared common word isn't a match")
+        precondition(PlaceMatcher.hints(query: "Arisan Tea & Coffee House El Camino Real Sunnyvale CA", name: "Arisan Tea & Coffee House")
+                     == ["el", "camino", "real", "sunnyvale"], "Hints are the query's where-words, without the state")
+
+        // The address result that came first loses to the café a later search found.
+        let address = PlaceCandidate(name: "2855 Stevens Creek Blvd", latitude: 37.3249, longitude: -121.9452,
+                                     poiCategory: nil, address: "2855 Stevens Creek Blvd, Santa Clara")
+        let cafe = PlaceCandidate(name: "Matcha Cafe Maiko", latitude: 37.3261, longitude: -121.9456,
+                                  poiCategory: "MKPOICategoryRestaurant", address: "2855 Stevens Creek Blvd, Unit 9254, Santa Clara")
+        let choice = PlaceMatcher.choose([address, cafe], name: "Matcha Cafe Maiko",
+                                         query: "Matcha Cafe Maiko Westfield Valley Fair 2855 Stevens Creek Blvd Santa Clara CA")
+        precondition(choice?.candidate == cafe && choice?.branchMatched == true)
+        precondition(PlaceMatcher.choose([address], name: "Matcha Cafe Maiko", query: nil) == nil, "No named listing, no match")
+
+        // Icons come from the reply's category first, then the listing's; the cross is only for care.
+        precondition(PlaceSymbol.symbol(category: "Matcha cafe", poi: "MKPOICategoryRestaurant") == "cup.and.saucer.fill")
+        precondition(PlaceSymbol.symbol(category: "Tea house", poi: nil) == "cup.and.saucer.fill")
+        precondition(PlaceSymbol.symbol(category: nil, poi: "MKPOICategoryRestaurant") == "fork.knife")
+        precondition(PlaceSymbol.symbol(category: "Urgent care clinic", poi: nil) == "cross.case.fill")
+        precondition(PlaceSymbol.symbol(category: "Steakhouse", poi: nil) == "mappin", "\"tea\" inside a word doesn't count")
+        precondition(PlaceSymbol.symbol(category: nil, poi: nil) == "mappin" && PlaceSymbol.glyph(for: "mappin") == "📍")
+        // Saved cards from before icons get one from their category.
+        precondition(PlacePin(id: "a", name: "A", latitude: 1, longitude: 1, category: "Cafe").pinSymbol == "cup.and.saucer.fill")
+
+        let pin = PlacePin(id: "m", name: "Matcha Cafe Maiko", latitude: 37.3, longitude: -121.9)
+        precondition(PlaceLinkFilter.covers(url: URL(string: "https://phoenix.aws.mapquest.com/us/california/matcha-cafe-maiko-492809960")!,
+                                            label: nil, places: [pin]), "A listing page whose path spells the name is covered")
+        precondition(!PlaceLinkFilter.covers(url: URL(string: "https://news.example.com/best-matcha-in-the-bay")!, label: nil, places: [pin]))
+    }
+
+    /// The reply that showed "2855 Stevens Creek Blvd", a San Jose branch and medical crosses,
+    /// replayed from recorded MapKit and OpenStreetMap results.
+    static func testMatchaPlacesResolve() async throws {
+        struct Fixture: Decodable {
+            var search: [String: [PlaceCandidate]]
+            var osm: [String: [PlaceCandidate]]
+            var regions: [String: [Double]]
+        }
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("matcha-places.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: file))
+        @Sendable func region(_ name: String?) -> MKCoordinateRegion? {
+            guard let name, let r = fixture.regions[name], r.count == 4 else { return nil }
+            return MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: r[0], longitude: r[1]),
+                                      span: MKCoordinateSpan(latitudeDelta: r[2], longitudeDelta: r[3]))
+        }
+        let sources = PlaceCardResolver.Sources(region: { region($0) }, search: { query, _ in fixture.search[query] ?? [] },
+                                                searchOSM: { query, _ in fixture.osm[query] ?? [] }, details: { _, _ in nil })
+        var reply = """
+        For the best matcha itself, go to [Matsu Matcha](https://matsumatcha.example.com/), or try \
+        [Matcha Cafe Maiko](https://phoenix.aws.mapquest.com/us/california/matcha-cafe-maiko-492809960).
+
+        ```places
+        {"near":"Santa Clara, CA","query":"Matcha cafes near Santa Clara","places":[{"name":"Matsu Matcha","query":"Matsu Matcha 3030 El Camino Real Santa Clara CA","category":"Matcha cafe"},{"name":"Matcha Cafe Maiko","query":"Matcha Cafe Maiko Westfield Valley Fair 2855 Stevens Creek Blvd Santa Clara CA","category":"Matcha cafe"},{"name":"Arisan Tea & Coffee House","query":"Arisan Tea & Coffee House El Camino Real Sunnyvale CA","category":"Tea house"},{"name":"Cere Tea","query":"Cere Tea Cupertino CA","category":"Tea house"},{"name":"Izumi Matcha","query":"Izumi Matcha Cupertino CA","category":"Matcha cafe"}]}
+        ```
+        """
+        let proposal = try XCTUnwrapLike(PlaceCardResolver.extractProposal(from: &reply))
+        let card = try XCTUnwrapLike(await PlaceCardResolver(sources: sources).resolve(proposal))
+        let pins = card.places
+        precondition(pins.map(\.name) == ["Matsu Matcha", "Matcha Cafe Maiko", "Arisan Tea & Coffee House", "Cere Tea", "Izumi Matcha"],
+                     "Every pin is under the reply's name: \(pins.map(\.name))")
+        precondition(pins.allSatisfy { $0.isApproximate == nil && $0.pinSymbol == "cup.and.saucer.fill" },
+                     "All five matched, with cafe icons: \(pins.map { ($0.isApproximate, $0.pinSymbol) })")
+        precondition(pins[1].address?.hasPrefix("2855 Stevens Creek Blvd, Unit 9254") == true && pins[1].listedName == nil,
+                     "Maiko is the café at Valley Fair, not the mall's address")
+        precondition(pins[2].address == "1082 East El Camino Real, Sunnyvale" && pins[2].listedName == "Arisan",
+                     "Arisan is the Sunnyvale branch the query named, from OpenStreetMap: \(pins[2])")
+        precondition(pins[3].address?.contains("Saratoga") == true, "Ceré Tea: the branch nearest Cupertino, not Milpitas")
+        precondition(pins.map(\.category) == ["Matcha cafe", "Matcha cafe", "Tea house", "Tea house", "Matcha cafe"],
+                     "The reply's categories show")
+
+        // No link card repeats a mapped place, whatever listing it resolved to.
+        let previews = [
+            LinkPreviewCard(id: LinkPreviewSecurity.cardID(for: "https://matsumatcha.example.com/"), url: "https://matsumatcha.example.com/",
+                            domain: "matsumatcha.example.com", title: "Matsu Matcha"),
+            LinkPreviewCard(id: LinkPreviewSecurity.cardID(for: "https://phoenix.aws.mapquest.com/us/california/matcha-cafe-maiko-492809960"),
+                            url: "https://phoenix.aws.mapquest.com/us/california/matcha-cafe-maiko-492809960",
+                            domain: "phoenix.aws.mapquest.com", title: "Matcha Cafe Maiko"),
+        ]
+        precondition(PlaceLinkFilter.visible(previews, placeCard: card, text: reply).isEmpty, "No link cards under the map")
+
+        // A place no listing names still gets a pin, under its own name, marked approximate.
+        let lone = PlaceBlockProposal(query: nil, near: "Santa Clara, CA", places: [
+            .init(name: "Matcha Cafe Maiko", query: "Matcha Cafe Maiko Westfield Valley Fair 2855 Stevens Creek Blvd Santa Clara CA", category: nil),
+        ])
+        let addressOnly = PlaceCardResolver.Sources(region: { region($0) }, search: { query, _ in
+            query.contains("Westfield") ? (fixture.search[query] ?? []) : []
+        }, searchOSM: { _, _ in [] }, details: { _, _ in nil })
+        let approximate = try XCTUnwrapLike(await PlaceCardResolver(sources: addressOnly).resolve(lone)).places
+        precondition(approximate.count == 1 && approximate[0].name == "Matcha Cafe Maiko" && approximate[0].isApproximate == true
+                     && approximate[0].listedName == nil && approximate[0].pinSymbol == "mappin",
+                     "Never renamed to an address: \(approximate)")
+        precondition((approximate[0].snapshot["approximate"] as? Bool) == true && approximate[0].snapshot["glyph"] as? String == "📍")
+    }
+
+    struct Missing: Error {}
+    static func XCTUnwrapLike<T>(_ value: T?) throws -> T {
+        guard let value else { throw Missing() }
+        return value
     }
 }

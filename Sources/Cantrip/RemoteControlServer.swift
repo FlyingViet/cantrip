@@ -3077,7 +3077,7 @@ private extension RemoteControlServer {
     .place-map-pins{position:absolute;inset:0;pointer-events:none}
     .place-pin{position:absolute;transform:translate(-50%,-50%);display:inline-flex;align-items:center;gap:4px;padding:3px 8px 3px 4px;border-radius:999px;background:rgba(20,24,30,.88);border:1px solid rgba(255,255,255,.18);color:#fff;font-size:11.5px;font-weight:700;white-space:nowrap;cursor:pointer;pointer-events:auto;box-shadow:0 3px 10px rgba(0,0,0,.4)}
     .place-pin.selected{background:#e04f44;border-color:#fff;z-index:2}.place-pin-dot{display:grid;place-items:center;width:18px;height:18px;border-radius:50%;background:#e04f44;color:#fff;font-size:10px}
-    .place-pin.selected .place-pin-dot{background:#fff;color:#e04f44}.place-pin-label{max-width:130px;overflow:hidden;text-overflow:ellipsis}
+    .place-pin.selected .place-pin-dot{background:#fff;color:#e04f44}.place-item-note{font-size:11px;color:#9ca3af;margin-top:2px}.place-item-note.warn{color:#f5b841}.place-pin-label{max-width:130px;overflow:hidden;text-overflow:ellipsis}
     .place-list{position:relative;z-index:3;width:min(305px,calc(100% - 24px));max-height:360px;overflow-y:auto;margin:12px;border:1px solid rgba(255,255,255,.12);border-radius:13px;background:rgba(24,26,31,.92);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);color:#f3f4f6;box-shadow:0 8px 28px rgba(0,0,0,.42)}
     .place-list-head{padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#9ca3af}
     .place-item{display:grid;gap:4px;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.08);cursor:pointer}.place-item:last-child{border-bottom:0}.place-item:hover,.place-item.selected{background:rgba(255,255,255,.07)}
@@ -4105,7 +4105,7 @@ private extension RemoteControlServer {
           pin.style.left=`${Math.round(px)}px`;pin.style.top=`${Math.round(py)}px`;pin.classList.toggle("selected",p.id===state.selectedID)}
         for(const [id,node] of rowNodes)node.classList.toggle("selected",id===state.selectedID)};
       for(const p of places){const pin=document.createElement("button");pin.type="button";pin.className="place-pin";pin.setAttribute("aria-label",`Pin for ${p.name}`);
-        const dot=document.createElement("span"),lbl=document.createElement("span");dot.className="place-pin-dot";dot.textContent="•";lbl.className="place-pin-label";lbl.textContent=p.name;pin.append(dot,lbl);
+        const dot=document.createElement("span"),lbl=document.createElement("span");dot.className="place-pin-dot";dot.textContent=p.glyph||"📍";dot.setAttribute("aria-hidden","true");lbl.className="place-pin-label";lbl.textContent=p.name;pin.append(dot,lbl);
         pin.onclick=event=>{event.stopPropagation();focusPlace(p)};pinBox.append(pin);pinNodes.set(p.id,pin);
         const item=document.createElement("div"),name=document.createElement("div"),meta=document.createElement("div");item.className="place-item";name.className="place-item-name";name.textContent=p.name;meta.className="place-item-meta";
         const metaParts=[];if(typeof p.rating==="number")metaParts.push(`${p.rating.toFixed(1)} ★${p.reviewCount?` (${p.reviewCount})`:""}`);if(p.priceDisplay)metaParts.push(p.priceDisplay);if(p.category)metaParts.push(p.category);
@@ -4113,6 +4113,8 @@ private extension RemoteControlServer {
         if(typeof p.isOpenNow==="boolean"){if(metaParts.length){const dotSep=document.createElement("span");dotSep.textContent="·";meta.append(dotSep)}const status=document.createElement("span");status.className=p.isOpenNow?"place-open":"place-closed";status.textContent=p.isOpenNow?"Open":"Closed";meta.append(status)}
         item.append(name);if(meta.children.length)item.append(meta);
         if(p.address){const addr=document.createElement("div");addr.className="place-item-addr";addr.textContent=p.address;item.append(addr)}
+        if(p.approximate){const note=document.createElement("div");note.className="place-item-note warn";note.textContent="Approximate location";item.append(note)}
+        else if(p.listedName){const note=document.createElement("div");note.className="place-item-note";note.textContent=`Listed as ${p.listedName}`;item.append(note)}
         const actions=document.createElement("div");actions.className="place-item-actions";
         const dir=document.createElement("a");dir.className="place-action";dir.href=p.directionsURL||`https://maps.apple.com/?q=${encodeURIComponent(p.name)}&ll=${p.latitude},${p.longitude}`;dir.target="_blank";dir.rel="noopener noreferrer";dir.textContent="Directions";dir.onclick=e=>e.stopPropagation();actions.append(dir);
         if(p.phone){const digits=p.phone.replace(/[^0-9+*#]/g,"");if(digits){const call=document.createElement("a");call.className="place-action";call.href=`tel:${digits}`;call.textContent="Call";call.onclick=e=>e.stopPropagation();actions.append(call)}}
