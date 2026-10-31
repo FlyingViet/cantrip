@@ -23,16 +23,21 @@ struct RichCardTests {
             precondition(LinkPreviewSecurity.isAllowed(url: url), "Expected allowed URL: \(raw)")
         }
 
+        // Your own private domains come from a setting, never from the source.
+        UserDefaults.standard.set(["Example-Home.net."], forKey: "richCardBlockedDomains")
+        defer { UserDefaults.standard.removeObject(forKey: "richCardBlockedDomains") }
+        precondition(LinkPreviewSecurity.isAllowed(url: URL(string: "https://notexample-home.net/")!),
+                     "Only the domain and its subdomains are blocked")
         let blockedURLs = [
             "http://localhost:8092/chapters",
             "http://127.0.0.1:11434/api/tags",
             "https://[::1]:8443/api/v1/sessions",
-            "http://192.168.0.94:8092/",
+            "http://192.168.0.10:8092/",
             "http://10.0.0.5/admin",
             "http://172.20.10.1/status",
             "https://100.100.100.100/dns",
             "https://mac-mini.example-tailnet.ts.net/api/v1/sessions",
-            "https://fixer.example-home.com/",
+            "https://fixer.example-home.net/",
             "http://printer.local/status",
             "file:///Users/test/secret.txt",
             "ftp://example.com/file",
@@ -50,7 +55,7 @@ struct RichCardTests {
     static func testLinkPreviewExtractor() {
         let markdown = """
         Order at [Shop Mac Studio](https://www.apple.com/shop/buy-mac/mac-studio).
-        Internal dashboard: https://mac-mini.example-tailnet.ts.net:8445 and http://192.168.0.94:8092.
+        Internal dashboard: https://mac-mini.example-tailnet.ts.net:8445 and http://192.168.0.10:8092.
         Inline code `https://example.com/in-inline-code` and image ![Diagram](https://www.apple.com/image.png) are skipped.
         ```bash
         curl https://example.com/in-fenced-code

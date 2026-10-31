@@ -44,8 +44,16 @@ enum LinkPreviewSecurity {
 
     static let blockedHostSuffixes: [String] = [
         ".local", ".localhost", ".internal", ".lan", ".home.arpa",
-        ".ts.net", ".example-home.com",
+        ".ts.net",
     ]
+
+    /// Your own domains whose pages are private, e.g. a home lab's (`defaults write <bundle id>
+    /// richCardBlockedDomains -array example.net`): never fetched for a preview, subdomains too.
+    static var blockedDomains: [String] {
+        (UserDefaults.standard.stringArray(forKey: "richCardBlockedDomains") ?? [])
+            .map { $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". ")) }
+            .filter { !$0.isEmpty }
+    }
 
     static func cleanDomain(for url: URL) -> String {
         guard var host = url.host?.lowercased() else { return "" }
@@ -84,7 +92,10 @@ enum LinkPreviewSecurity {
               !rawHost.isEmpty else {
             return false
         }
-        if rawHost == "localhost" || rawHost == "example-home.com" || rawHost == "ts.net" {
+        if rawHost == "localhost" || rawHost == "ts.net" {
+            return false
+        }
+        for domain in blockedDomains where rawHost == domain || rawHost.hasSuffix("." + domain) {
             return false
         }
         for suffix in blockedHostSuffixes where rawHost.hasSuffix(suffix) {
