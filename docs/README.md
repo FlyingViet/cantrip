@@ -52,7 +52,8 @@ provider limits, and operating-system permission names can change independently
 of Cantrip.
 
 For implementation details rather than user instructions, see the
-[repository overview](../README.md), [plugin reference](../PLUGINS.md), and
+[repository overview](../README.md), [plugin reference](../PLUGINS.md),
+[backend onboarding guide](../BACKEND-ONBOARDING.md), and
 [Windows parity checklist](../windows/PARITY.md). The iPhone/iPad client is
 [Cantrip Agent](https://github.com/FlyingViet/CantripIOS) and the native Mac client
 is [Cantrip Gateway Mac](https://github.com/FlyingViet/CantripGatewayMac).
