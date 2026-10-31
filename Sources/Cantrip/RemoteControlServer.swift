@@ -4101,8 +4101,17 @@ private extension RemoteControlServer {
         tileBox.replaceChildren();
         for(let tx=startTileX;tx<=endTileX;tx++){for(let ty=startTileY;ty<=endTileY;ty++){if(ty<0||ty>=maxTile)continue;const normX=((tx%maxTile)+maxTile)%maxTile,img=document.createElement("img");
           img.className="place-map-tile";img.alt="";img.style.left=`${Math.round(tx*256-centerX+width/2)}px`;img.style.top=`${Math.round(ty*256-centerY+height/2)}px`;tileBox.append(img);loadMapTile(z,normX,ty,img)}}
+        const laid=[];
         for(const p of places){const pin=pinNodes.get(p.id);if(!pin)continue;const px=lonToWorldX(p.longitude,z)-centerX+width/2,py=latToWorldY(p.latitude,z)-centerY+height/2;
-          pin.style.left=`${Math.round(px)}px`;pin.style.top=`${Math.round(py)}px`;pin.classList.toggle("selected",p.id===state.selectedID)}
+          pin.style.left=`${Math.round(px)}px`;pin.style.top=`${Math.round(py)}px`;pin.classList.toggle("selected",p.id===state.selectedID);laid.push({pin,x:px,y:py,w:pin.offsetWidth,h:pin.offsetHeight})}
+        // Close places: move later pins to the nearest free spot so every name stays readable (PlaceMapFit.labelOffsets).
+        const placed=[];for(const item of laid){const step=item.h+2,moves=[];for(let row=-3;row<=3;row++)for(const shift of [0,-.5,.5,-1,1])moves.push([shift*(item.w+2),row*step]);
+          moves.sort((a,b)=>(Math.abs(a[0])/item.w*2+Math.abs(a[1])/step)-(Math.abs(b[0])/item.w*2+Math.abs(b[1])/step));
+          let best=[0,0],bestOverlap=Infinity;for(const [dx,dy] of moves){const r={l:item.x-item.w/2+dx-1,t:item.y-item.h/2+dy-1,r:item.x+item.w/2+dx+1,b:item.y+item.h/2+dy+1};
+            if((dx||dy)&&(r.l<0||r.t<0||r.r>width||r.b>height))continue;let overlap=0;for(const o of placed){const w=Math.min(r.r,o.r)-Math.max(r.l,o.l),h=Math.min(r.b,o.b)-Math.max(r.t,o.t);if(w>0&&h>0)overlap+=w*h}
+            if(overlap<bestOverlap){best=[dx,dy];bestOverlap=overlap}if(overlap===0)break}
+          placed.push({l:item.x-item.w/2+best[0],t:item.y-item.h/2+best[1],r:item.x+item.w/2+best[0],b:item.y+item.h/2+best[1]});
+          item.pin.style.transform=best[0]||best[1]?`translate(calc(-50% + ${best[0]}px),calc(-50% + ${best[1]}px))`:""}
         for(const [id,node] of rowNodes)node.classList.toggle("selected",id===state.selectedID)};
       for(const p of places){const pin=document.createElement("button");pin.type="button";pin.className="place-pin";pin.setAttribute("aria-label",`Pin for ${p.name}`);
         const dot=document.createElement("span"),lbl=document.createElement("span");dot.className="place-pin-dot";dot.textContent=p.glyph||"📍";dot.setAttribute("aria-hidden","true");lbl.className="place-pin-label";lbl.textContent=p.name;pin.append(dot,lbl);
