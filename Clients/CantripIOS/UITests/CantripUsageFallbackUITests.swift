@@ -58,6 +58,20 @@ final class CantripUsageFallbackUITests: XCTestCase {
         XCTAssertEqual(order(app), ["Claude Code", "Codex", "Antigravity"], "Each backup is added at the end")
         save(app, "fallback-three")
 
+        // A backup's model, from the backend's own list, saves right away.
+        let modelPicker = app.buttons["usageFallback.model.Claude Code"].firstMatch
+        if modelPicker.waitForExistence(timeout: 5) {
+            reveal(modelPicker, app: app)
+            tap(modelPicker, app: app)
+            let opus = app.buttons["opus"].firstMatch
+            XCTAssertTrue(opus.waitForExistence(timeout: 5), "The backend's models are offered")
+            tap(opus, app: app)
+            // The menu shows the pick as its text (the button exposes no value).
+            let shown = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'opus' OR value == 'opus'")).firstMatch
+            XCTAssertTrue(shown.waitForExistence(timeout: 10), "The chosen model shows")
+            save(app, "fallback-model")
+        }
+
         tap(app.buttons["Try Antigravity earlier"].firstMatch, app: app)
         XCTAssertTrue(waitForOrder(app, ["Claude Code", "Antigravity", "Codex"]), "The arrow moves it up one")
         save(app, "fallback-reordered")
