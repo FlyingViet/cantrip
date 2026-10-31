@@ -211,6 +211,21 @@ extension SessionTabTests {
         }
         let badgeUpdate = await recorder.count()
         precondition(badgeUpdate == 2, "Every device gets the lower count")
+        func opened(_ method: String, _ body: Data?) async throws -> (Int, [String: Any]?) {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/v1/notifications/opened")!)
+            request.httpMethod = method
+            request.httpBody = body
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let (data, response) = try await client.data(for: request)
+            return ((response as! HTTPURLResponse).statusCode, try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
+        let openedBody = try JSONSerialization.data(withJSONObject: [
+            "installationID": registration.installationID.uuidString, "serverID": registration.serverID.uuidString])
+        let (openedStatus, openedReply) = try await opened("POST", openedBody)
+        precondition(openedStatus == 200 && openedReply?["badge"] as? Int == 0, "Opening the app clears this device's badge")
+        let (getStatus, _) = try await opened("GET", nil)
+        let (badStatus, _) = try await opened("POST", Data("{}".utf8))
+        precondition(getStatus == 405 && badStatus == 400)
         let removal = try JSONSerialization.data(withJSONObject: [
             "installationID": registration.installationID.uuidString, "serverID": registration.serverID.uuidString
         ])
