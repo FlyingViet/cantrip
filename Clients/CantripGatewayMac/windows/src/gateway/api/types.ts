@@ -496,6 +496,28 @@ export interface RemotePlaceCard {
   places: RemotePlacePin[];
 }
 
+/** Forecast card for a reply's `weather` block (`WeatherCard.snapshot`): Open-Meteo data the Mac fetched. */
+export interface RemoteWeatherCard {
+  place: string;
+  /** Whose location it is: "Your iPhone's location", "The Mac's location". */
+  placeNote?: string;
+  status: "ok" | "unavailable";
+  /** status === "unavailable": why there's no forecast. */
+  message?: string;
+  unit: "F" | "C";
+  attribution: string;
+  attributionURL: string;
+  timeZone?: string;
+  /** ISO 8601. */
+  updatedAt?: string;
+  current?: { temperature: number; feelsLike?: number; condition: string; symbol: string; code: number; isDay: boolean; precipitationChance?: number };
+  today?: { high: number; low: number; precipitationChance?: number };
+  /** Now plus the next 12 hours, labeled in the place's time zone. */
+  hourly?: { time: string; label: string; temperature: number; condition: string; symbol: string; precipitationChance?: number }[];
+  /** 10 days from today. */
+  daily?: { date: string; label: string; high: number; low: number; condition: string; symbol: string; precipitationChance?: number }[];
+}
+
 /** One transcript message (`RemoteHistory.message` + `messageSnapshot`). */
 export interface RemoteMessage {
   id: UUIDString;
@@ -539,6 +561,8 @@ export interface RemoteMessage {
   linkPreviews?: RemoteLinkPreview[];
   /** Interactive map card with place pins resolved on the Mac; omitted when none. */
   placeCard?: RemotePlaceCard;
+  /** Forecast card for the reply's `weather` block; omitted when none. */
+  weatherCard?: RemoteWeatherCard;
 }
 
 /** A Home message's thread tag: the prompt that started its thread. */

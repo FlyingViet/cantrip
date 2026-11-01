@@ -95,3 +95,67 @@ export function pinOffsets(pins: { x: number; y: number; w: number; h: number }[
     return best;
   });
 }
+
+// Weather card (`RemoteWeatherCard`): the Mac sends labels and SF Symbol names; these only format.
+
+const WEATHER_SYMBOLS = new Set([
+  "sun.max.fill", "moon.stars.fill", "cloud.sun.fill", "cloud.moon.fill", "cloud.fill", "cloud.fog.fill",
+  "cloud.drizzle.fill", "cloud.rain.fill", "cloud.heavyrain.fill", "cloud.sleet.fill", "cloud.snow.fill",
+  "cloud.sun.rain.fill", "cloud.moon.rain.fill", "cloud.bolt.rain.fill", "cloud.hail.fill",
+]);
+
+/** An icon the Gateway has for `symbol` (cloud when the Mac sends one it doesn't know). */
+export function weatherIcon(symbol: string | undefined): string {
+  return symbol && WEATHER_SYMBOLS.has(symbol) ? symbol : "cloud.fill";
+}
+
+/** Tint by kind: sun gold, moon pale, rain and snow blue, clouds and fog grey. */
+export function weatherTint(symbol: string | undefined): "sun" | "moon" | "wet" | "cloud" {
+  const icon = weatherIcon(symbol);
+  if (icon === "sun.max.fill") return "sun";
+  if (icon === "moon.stars.fill") return "moon";
+  if (/rain|drizzle|snow|sleet|hail|bolt/.test(icon)) return "wet";
+  return "cloud";
+}
+
+/** "40%" when rain or snow is reasonably likely, else nothing. */
+export function weatherChance(chance: number | undefined): string {
+  return typeof chance === "number" && chance >= 10 ? `${Math.round(chance)}%` : "";
+}
+
+export function weatherUnitName(unit: string | undefined): string {
+  return unit === "C" ? "degrees Celsius" : "degrees Fahrenheit";
+}
+
+export function weatherSpoken(label: string, temperature: string, unit: string | undefined, condition: string, chance?: number): string {
+  const rain = typeof chance === "number" && chance >= 10 ? `, ${Math.round(chance)} percent chance of precipitation` : "";
+  return `${label}, ${temperature} ${weatherUnitName(unit)}, ${condition}${rain}`;
+}
+
+/** Where each day's low-to-high bar sits on the 10 days' scale, as CSS percentages. */
+export function weatherRanges(days: { low: number; high: number }[]): { left: number; width: number }[] {
+  const lows = days.map((d) => d.low).filter(Number.isFinite), highs = days.map((d) => d.high).filter(Number.isFinite);
+  if (!lows.length || !highs.length) return days.map(() => ({ left: 0, width: 0 }));
+  const lowest = Math.min(...lows), span = Math.max(1, Math.max(...highs) - lowest);
+  return days.map((d) => {
+    const left = Math.min(100, Math.max(0, ((d.low - lowest) / span) * 100));
+    return { left, width: Math.min(100 - left, Math.max(4, ((d.high - d.low) / span) * 100)) };
+  });
+}
+
+/** Today's line under the condition: "H 48°  L 38° · 10% precip. · Feels like 45°". */
+export function weatherDetail(card: { today?: { high: number; low: number; precipitationChance?: number }; current?: { temperature: number; feelsLike?: number } }): string {
+  const parts: string[] = [];
+  if (card.today) {
+    parts.push(`H ${Math.round(card.today.high)}°  L ${Math.round(card.today.low)}°`);
+    if (typeof card.today.precipitationChance === "number") parts.push(`${Math.round(card.today.precipitationChance)}% precip.`);
+  }
+  const feels = card.current?.feelsLike;
+  if (card.current && typeof feels === "number" && Math.abs(feels - card.current.temperature) >= 3) parts.push(`Feels like ${Math.round(feels)}°`);
+  return parts.join(" · ");
+}
+
+/** Open-Meteo's own page only: the attribution link never goes anywhere else. */
+export function weatherAttributionUrl(raw: string | undefined): string {
+  return raw && raw.startsWith("https://open-meteo.com/") ? raw : "https://open-meteo.com/";
+}

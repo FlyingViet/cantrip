@@ -2,6 +2,8 @@
 import {
   Activity, Antenna, Archive, ArrowDown, ArrowUp, ArrowUpDown, AudioWaveform, Bell, Bot, Box, Brain, Calendar, Check,
   ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Circle, CircleCheck, CircleDot, CircleEllipsis, CircleHelp,
+  Cloud, CloudAlert, CloudFog, CloudDrizzle, CloudHail, CloudLightning, CloudMoon, CloudMoonRain, CloudRain, CloudRainWind,
+  CloudSnow, CloudSun, CloudSunRain, MoonStar, Navigation, Sun,
   CirclePause, CirclePlay, CirclePlus, CircleStop, CircleX, Clock, Cog, Copy, Download, Ellipsis, Eraser, ExternalLink,
   Eye, EyeOff, File, FileText, Film, Folder, FolderOpen, FolderPlus, Gauge, GitBranch, GripVertical, Hammer, History, Hourglass, House, Image,
   Images, Info, KeyRound, Layers, LayoutGrid, MapPin, Library, Link, ListChecks, ListOrdered, Lock, LogOut, MessagesSquare, Mic, Monitor,
@@ -34,6 +36,11 @@ const ICONS = {
   "rectangle.portrait.and.arrow.right": LogOut, power: Power, waveformPath: Activity, cpu: Bot, person: UserRound,
   "record.circle": CircleDot, circle: Circle, timer: Timer, "clock.arrow.circlepath": History, "list.bullet": Rows3,
   server: Server, "arrow.triangle.branch": GitBranch, "books.vertical": Library,
+  "sun.max.fill": Sun, "moon.stars.fill": MoonStar, "cloud.sun.fill": CloudSun, "cloud.moon.fill": CloudMoon,
+  "cloud.fill": Cloud, "cloud.fog.fill": CloudFog, "cloud.drizzle.fill": CloudDrizzle, "cloud.rain.fill": CloudRain,
+  "cloud.heavyrain.fill": CloudRainWind, "cloud.sleet.fill": CloudSnow, "cloud.snow.fill": CloudSnow,
+  "cloud.sun.rain.fill": CloudSunRain, "cloud.moon.rain.fill": CloudMoonRain, "cloud.bolt.rain.fill": CloudLightning,
+  "cloud.hail.fill": CloudHail, "exclamationmark.icloud": CloudAlert, "location.fill": Navigation,
 } satisfies Record<string, IconNode>;
 
 export type IconName = keyof typeof ICONS;
