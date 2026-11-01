@@ -155,7 +155,8 @@ model" for a backend that's already there), the arrows reorder them and
 **Remove** drops one. It is Mac-wide, so each change saves right away,
 separately from the tab's Save. A backup at its limit shows when it can be used
 again, the section names every limited backend and model, and **Try every
-backend again** clears them all.
+backend again** clears them all. Cantrip Agent (iPhone, Duo) and Gateway Mac keep the same
+section in **Settings › Models**, since it's for every tab, not in a tab's Model Settings.
 
 `GET /api/v1/usage-fallback` returns `backends` (the chain's backends in the
 order tried, a backend twice when it's listed twice; `[]` = off), `entries` (the
@@ -193,7 +194,9 @@ The same **Model Settings** screen has a **Model tiers (all tabs)** section in
 the browser/Mac Remote: pick a backend, then for each tier the models it tries
 in order, each with its effort, with Copilot's token prices beside each model.
 Changes save right away, Mac-wide, separately from the tab's Save; **Reset**
-returns a tier to Cantrip's defaults.
+returns a tier to Cantrip's defaults. Cantrip Agent and Gateway Mac edit it in **Settings ›
+Models › Model tiers**, and their tab Model Settings list Auto, then the tiers, then the
+models grouped by tier.
 
 `GET /api/v1/model-tiers` returns `tiers` (`["fast", "standard", "deep"]`),
 `backends` (Copilot, Claude Code, Antigravity, Codex: `id`, `label`, `models`
