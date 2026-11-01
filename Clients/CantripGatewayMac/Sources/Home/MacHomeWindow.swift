@@ -221,19 +221,7 @@ struct MacHomeWindow: View {
                 Label("Local Model Settings", systemImage: "slider.horizontal.3")
             }
             .help("Local model server, model, context and system prompt")
-            Menu {
-                Button("Clear Conversation…", systemImage: "trash", role: .destructive) {
-                    confirmingDirectLocalClear = true
-                }
-                .disabled(directLocal.messages.isEmpty || directLocal.isReplying)
-                Divider()
-                Button("Back to Home", systemImage: "house") { navigation.showHome() }
-                SettingsLink { Label("Settings…", systemImage: "gearshape") }
-            } label: {
-                Label("More", systemImage: "ellipsis.circle")
-            }
-            .help("Local model actions")
-            .accessibilityIdentifier("directLocal.menu")
+            moreMenu
         }
     }
 
@@ -255,48 +243,8 @@ struct MacHomeWindow: View {
                     .help("Delivery: how a message reaches a working tab")
             }
             MacTerminalButton(navigation: navigation, session: remote.selectedSession)
-            tabMenu
+            moreMenu
         }
-    }
-
-    private var tabMenu: some View {
-        Menu {
-            if let session = remote.selectedSession, remote.sessions.contains(where: { $0.id == session.id }) {
-                CantripTabActions(
-                    model: remote, session: session,
-                    onRename: { navigation.renamingTab = session },
-                    onClose: { navigation.closeTab(session.id) },
-                    onOpenTab: { navigation.openTab($0) }
-                )
-                Divider()
-            }
-            if remote.selectedSession?.canResume == true {
-                Button("Resume", systemImage: "play") {
-                    Task {
-                        _ = await remote.resume()
-                        vm.syncRemoteTranscript()
-                    }
-                }
-                .disabled(remote.isMutating)
-            }
-            Button("Refresh", systemImage: "arrow.clockwise") { Task { await remote.refreshNow() } }
-                .disabled(!remote.isConfigured || remote.isRefreshing)
-            Button("Usage Limits", systemImage: "gauge.with.dots.needle.33percent") {
-                navigation.sheet = .usage
-            }
-            .disabled(!remote.isConfigured)
-            Button(paused ? "Resume Agent" : "Pause Agent",
-                   systemImage: paused ? "play.circle" : "pause.circle") { paused.toggle() }
-            Button("Voice Mode", systemImage: "waveform") { navigation.sheet = .voiceMode }
-                .disabled(paused || !remote.isConfigured || remote.selectedSessionID == nil)
-            Divider()
-            Button("Back to Home", systemImage: "house") { navigation.showHome() }
-            SettingsLink { Label("Settings…", systemImage: "gearshape") }
-        } label: {
-            Label("More", systemImage: paused ? "pause.circle" : "ellipsis.circle")
-        }
-        .help(paused ? "Tab actions — agent paused" : "Tab actions")
-        .accessibilityIdentifier("tab.menu")
     }
 
     @ToolbarContentBuilder private var homeToolbar: some ToolbarContent {
@@ -320,39 +268,67 @@ struct MacHomeWindow: View {
         }
     }
 
+    /// The one More menu in every toolbar: the open tab's actions (or Home's model and
+    /// conversation, or the local model's), the agent, then Back to Home and Settings. Memory,
+    /// Usage Limits, the mascot and the Mac's updates are in Settings; Builds is in View.
     private var moreMenu: some View {
         Menu {
-            if let session = remote.selectedSession {
-                Button("Model Settings…", systemImage: "slider.horizontal.3") {
-                    remote.modelSettingsSession = remote.selectedSession
+            if navigation.showingDirectLocal {
+                Section("Local model") {
+                    Button("Local Model Settings…", systemImage: "slider.horizontal.3") {
+                        navigation.showingDirectLocalSettings = true
+                    }
+                    Button("Clear Conversation…", systemImage: "trash", role: .destructive) {
+                        confirmingDirectLocalClear = true
+                    }
+                    .disabled(directLocal.messages.isEmpty || directLocal.isReplying)
+                }
+            } else if isTabOpen, let session = remote.selectedSession,
+                      remote.sessions.contains(where: { $0.id == session.id }) {
+                CantripTabActions(
+                    model: remote, session: session,
+                    onRename: { navigation.renamingTab = session },
+                    onClose: { navigation.closeTab(session.id) },
+                    onOpenTab: { navigation.openTab($0) }
+                )
+            } else if let session = remote.selectedSession {
+                Section("Model & conversation") {
+                    Button("Model Settings…", systemImage: "slider.horizontal.3") {
+                        remote.modelSettingsSession = remote.selectedSession
+                    }
+                    .disabled(remote.isMutating)
+                    CantripStartFreshMenuItem(
+                        model: remote, sessionID: session.id, support: CantripStartFresh.support(for: session),
+                        isDisabled: remote.isMutating || CantripStartFresh.isBusy(session)
+                    )
+                }
+            }
+            if !navigation.showingDirectLocal, remote.selectedSession?.canResume == true {
+                Button("Resume", systemImage: "play") {
+                    Task {
+                        _ = await remote.resume()
+                        vm.syncRemoteTranscript()
+                    }
                 }
                 .disabled(remote.isMutating)
-                CantripStartFreshMenuItem(
-                    model: remote, sessionID: session.id, support: CantripStartFresh.support(for: session),
-                    isDisabled: remote.isMutating || CantripStartFresh.isBusy(session)
-                )
             }
-            Button("Usage Limits", systemImage: "gauge.with.dots.needle.33percent") {
-                navigation.sheet = .usage
+            Section("Agent") {
+                Button(paused ? "Resume Agent" : "Pause Agent",
+                       systemImage: paused ? "play.circle" : "pause.circle") { paused.toggle() }
+                Button("Voice Mode", systemImage: "waveform") { navigation.sheet = .voiceMode }
+                    .disabled(paused || !remote.isConfigured || remote.selectedSessionID == nil)
             }
-            .disabled(!remote.isConfigured)
-            Button(paused ? "Resume Agent" : "Pause Agent",
-                   systemImage: paused ? "play.circle" : "pause.circle") { paused.toggle() }
-            Button("Voice Mode", systemImage: "waveform") { navigation.sheet = .voiceMode }
-                .disabled(paused || !remote.isConfigured || remote.selectedSessionID == nil)
-            Divider()
-            Button("GitHub Builds", systemImage: "hammer") { navigation.sheet = .builds }
-            Button("Cantrip Memory", systemImage: "brain") { navigation.sheet = .memory }
-            Button("Customize Mascot", systemImage: "tshirt") { navigation.sheet = .mascot }
-            CantripMacMenuActions(remote: remote, showingMaintenance: $showingMaintenance) {
-                vm.leaveVoiceMode()
+            Section {
+                if navigation.showingDirectLocal || isTabOpen {
+                    Button("Back to Home", systemImage: "house") { navigation.showHome() }
+                }
+                SettingsLink { Label("Settings…", systemImage: "gearshape") }
             }
-            Divider()
-            SettingsLink { Label("Settings…", systemImage: "gearshape") }
         } label: {
             Label("More", systemImage: paused ? "pause.circle" : "ellipsis.circle")
         }
         .help(paused ? "More — agent paused" : "More")
+        .accessibilityIdentifier(navigation.showingDirectLocal ? "directLocal.menu" : isTabOpen ? "tab.menu" : "home.menu")
     }
 
     @ViewBuilder private func sheet(_ sheet: MacHomeSheet) -> some View {
