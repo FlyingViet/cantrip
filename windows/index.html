@@ -145,6 +145,30 @@
             <p id="settings-error" class="settings-error hidden" role="alert"></p>
           </section>
 
+          <section class="settings-section" aria-labelledby="settings-location-title">
+            <h2 id="settings-location-title">Location</h2>
+            <label class="settings-check">
+              <span>
+                <strong>Share location with prompts</strong>
+                <small>Answer weather and "near me" questions for where this PC is</small>
+              </span>
+              <input id="settings-location-share" type="checkbox" />
+            </label>
+            <label class="settings-check">
+              <span>
+                <strong>Precise location</strong>
+                <small>Otherwise rounded to about 1 km</small>
+              </span>
+              <input id="settings-location-precise" type="checkbox" />
+            </label>
+            <p class="settings-note">
+              Off by default. While on, each AI prompt includes this PC's location from the Windows
+              Location service and its time zone, read only when you send one and reused for up to
+              15 minutes. It isn't saved, and shell commands never get it.
+            </p>
+            <p id="settings-location-status" class="settings-note hidden" role="status" aria-live="polite"></p>
+          </section>
+
           <section id="settings-plugins-section" class="settings-section">
             <div class="section-heading">
               <h2>Plugins</h2>

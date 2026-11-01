@@ -13,6 +13,8 @@ import type {
   UpdateState,
 } from "../shared/types";
 import type { PluginSummary } from "../shared/pluginTypes";
+import { PRECISE_KEY, SHARE_KEY } from "../shared/location";
+import { forgetFix, promptLocation, readFlag, readPosition } from "./location";
 
 function requiredElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -51,6 +53,9 @@ const settingsContextHelp = requiredElement<HTMLElement>("settings-context-help"
 const settingsResetBackend = requiredElement<HTMLButtonElement>("settings-reset-backend");
 const settingsAllowActions = requiredElement<HTMLInputElement>("settings-allow-actions");
 const settingsLaunchAtLogin = requiredElement<HTMLInputElement>("settings-launch-at-login");
+const settingsLocationShare = requiredElement<HTMLInputElement>("settings-location-share");
+const settingsLocationPrecise = requiredElement<HTMLInputElement>("settings-location-precise");
+const settingsLocationStatus = requiredElement<HTMLElement>("settings-location-status");
 const settingsOpacity = requiredElement<HTMLInputElement>("settings-opacity");
 const settingsOpacityValue = requiredElement<HTMLOutputElement>("settings-opacity-value");
 const settingsError = requiredElement<HTMLElement>("settings-error");
@@ -594,6 +599,7 @@ async function submit(forceAi: boolean): Promise<void> {
       "context",
     ) as ContextTier,
     attachments: screenCaptures.map(({ name, dataUrl }) => ({ name, dataUrl })),
+    location: mode === "ai" ? await promptLocation() : undefined,
   };
 
   currentRunId = runId;
@@ -718,6 +724,39 @@ settingsLaunchAtLogin.addEventListener("change", async () => {
     settingsError.textContent = result.error ?? "Could not update launch at login.";
     settingsError.classList.remove("hidden");
   }
+});
+function showLocationStatus(text: string | null): void {
+  settingsLocationStatus.textContent = text ?? "";
+  settingsLocationStatus.classList.toggle("hidden", !text);
+}
+
+async function checkLocation(): Promise<void> {
+  const precise = settingsLocationPrecise.checked;
+  showLocationStatus("Finding this PC's location…");
+  const reading = await readPosition(precise);
+  if (!settingsLocationShare.checked) return;
+  showLocationStatus("fix" in reading
+    ? `Found${precise ? "" : "; it's sent rounded to about 1 km"}. The reply names the place it used.`
+    : reading.error);
+}
+
+function renderLocationSettings(): void {
+  settingsLocationShare.checked = readFlag(SHARE_KEY);
+  settingsLocationPrecise.checked = readFlag(PRECISE_KEY);
+  settingsLocationPrecise.disabled = !settingsLocationShare.checked;
+}
+
+settingsLocationShare.addEventListener("change", () => {
+  localStorage.setItem(SHARE_KEY, String(settingsLocationShare.checked));
+  forgetFix();
+  renderLocationSettings();
+  if (settingsLocationShare.checked) void checkLocation();
+  else showLocationStatus("Off. Prompts don't include this PC's location.");
+});
+settingsLocationPrecise.addEventListener("change", () => {
+  localStorage.setItem(PRECISE_KEY, String(settingsLocationPrecise.checked));
+  forgetFix();
+  if (settingsLocationShare.checked) void checkLocation();
 });
 settingsOpacity.addEventListener("input", () => {
   const value = Number(settingsOpacity.value);
@@ -846,6 +885,7 @@ async function initialize(): Promise<void> {
   else if (firstAvailable) backendSelect.value = firstAvailable.value;
 
   setAllowActions(localStorage.getItem("allowActions") === "true");
+  renderLocationSettings();
   const savedOpacity = Number(localStorage.getItem("panelOpacity") ?? "100");
   const opacity = Number.isFinite(savedOpacity)
     ? Math.min(100, Math.max(85, savedOpacity))

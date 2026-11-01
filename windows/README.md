@@ -19,6 +19,7 @@ capture, updates, and platform limitations.
 - Streaming process output, cancellation, backend choice, and working directory
 - Sanitized GitHub-flavored Markdown responses with fenced code and tables
 - Opt-in multi-monitor screen context with removable previews and per-run cleanup
+- Opt-in location context, so weather and "near me" answers are for where the PC is
 - Hash-approved plugins with sandboxed dashboards, bounded data sources, MCP
   injection, and live reload
 - Safe-by-default plan mode with an explicit **Allow agent actions** switch
@@ -84,6 +85,18 @@ Click **▣** to capture every available display for the next AI prompt. Cantrip
 shows removable previews, materializes PNG files only for that run, passes them
 through each backend’s supported attachment mechanism, and deletes them on
 completion, cancellation, quit, or the next startup after a crash.
+
+## Location
+
+**Settings → Location → Share location with prompts** (off by default) adds this
+PC's location to each AI prompt, so "what's the weather today" or "coffee near
+me" is answered for where the PC is, and the reply names the place. The launcher
+reads the Windows Location service only when you send a prompt and reuses one
+reading for up to 15 minutes. It's rounded to about 1 km (0.01°) unless
+**Precise location** is on, and goes with the time zone. The main process checks
+it again and adds it as a note to that prompt only. It isn't saved, and `!` shell
+commands never get it. If Windows blocks it, turn on **Settings › Privacy &
+security › Location** for desktop apps.
 
 ## Plugins
 
