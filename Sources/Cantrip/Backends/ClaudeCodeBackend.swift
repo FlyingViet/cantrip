@@ -180,6 +180,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
 
     private func launchSignature(workdir: String) -> String {
         [workdir, String(settings.allowActions), settings.claudePermissionMode, model, effort, guardrail?.rawValue ?? "",
+         String(checksToolCalls),
          String(readOnly), homeProtocol ?? ""].map { "\($0.utf8.count):\($0)" }.joined()
     }
 
@@ -539,28 +540,23 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     /// launches Claude in default mode so every tool reaches Cantrip; the choice is applied here.
     private var homeApproval: CantripHomeApproval { .chosen(for: .claudeCode, settings: settings) }
 
-    /// Cantrip's PreToolUse hook. Hooks run before Claude Code's own permission rules, so a
-    /// user's `Bash(*)` allow rule can't bypass the Home policy. Tools the policy doesn't
-    /// cover get no decision and follow the normal flow (including AskUserQuestion).
+    /// Whether Cantrip's PreToolUse hook checks each tool call: Home and child tabs always, other
+    /// tabs while the agent policy is on.
+    private var checksToolCalls: Bool { !readOnly && (guardrail != nil || AgentPolicyGate.enforcesEverywhere) }
+
+    /// Cantrip's PreToolUse hook. Hooks run before Claude Code's own permission rules and in
+    /// every permission mode, so neither a `Bash(*)` allow rule nor bypassPermissions skips the
+    /// policy. Calls no rule decides get no decision and follow Claude's normal flow.
     private func answerPolicyHook(id: String, request: [String: Any]) {
         let undecided: [String: Any] = ["continue": true]
-        guard request["callback_id"] as? String == Self.policyHookID, let mode = guardrail, !readOnly,
+        guard request["callback_id"] as? String == Self.policyHookID, checksToolCalls,
               let input = request["input"] as? [String: Any],
-              let tool = input["tool_name"] as? String else {
+              let tool = input["tool_name"] as? String, tool != "AskUserQuestion" else {
             sendControlResponse(id: id, response: undecided)
             return
         }
         let toolInput = input["tool_input"] as? [String: Any] ?? [:]
         let action = CantripHomeActionRequest(claudeTool: tool, input: toolInput)
-        func decide(_ permission: String, _ reason: String? = nil) {
-            var output: [String: Any] = ["hookEventName": "PreToolUse", "permissionDecision": permission]
-            if let reason { output["permissionDecisionReason"] = reason }
-            sendControlResponse(id: id, response: ["hookSpecificOutput": output])
-        }
-        guard [.shell, .write, .mcp].contains(action.kind) else {
-            sendControlResponse(id: id, response: undecided)
-            return
-        }
         if action.kind == .shell, let childPolicy {
             // A child tab's shared-resource turn (Simulator, builds, deploys) comes first.
             let owner = process
@@ -568,8 +564,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
                 self?.queue.async {
                     guard let self, self.process === owner else { return }
                     switch verdict {
-                    case .proceed: self.decideWithPolicy(id: id, tool: tool, action: action, mode: mode)
-                    case .deny(let reason): decide("deny", reason)
+                    case .proceed: self.decideWithPolicy(id: id, action: action)
+                    case .deny(let reason): self.answerHook(id: id, "deny", reason)
                     }
                 }
             }, { [weak self] status in
@@ -580,101 +576,78 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             })
             return
         }
-        decideWithPolicy(id: id, tool: tool, action: action, mode: mode)
+        decideWithPolicy(id: id, action: action)
     }
 
-    private func decideWithPolicy(id: String, tool: String, action: CantripHomeActionRequest,
-                                  mode: CantripHomeGuardrail) {
-        let undecided: [String: Any] = ["continue": true]
-        func decide(_ permission: String, _ reason: String? = nil) {
-            var output: [String: Any] = ["hookEventName": "PreToolUse", "permissionDecision": permission]
-            if let reason { output["permissionDecisionReason"] = reason }
-            sendControlResponse(id: id, response: ["hookSpecificOutput": output])
+    private func answerHook(id: String, _ permission: String, _ reason: String? = nil) {
+        var output: [String: Any] = ["hookEventName": "PreToolUse", "permissionDecision": permission]
+        if let reason { output["permissionDecisionReason"] = reason }
+        sendControlResponse(id: id, response: ["hookSpecificOutput": output])
+    }
+
+    private func decideWithPolicy(id: String, action: CantripHomeActionRequest) {
+        let outcome = AgentPolicyGate.decide(action, guardrail: guardrail, approval: homeApproval,
+                                             label: guardrailLabel, workdir: processWorkdir)
+        switch outcome {
+        case .deny(let reason, let by):
+            currentOnEvent?(.activity(AgentPolicyGate.denialActivity(action, reason: reason, by: by)))
+            answerHook(id: id, "deny", reason)
+        case .allow where outcome.explicitlyAllowed:
+            // A policy allow rule: no prompt, whatever Claude's own rules say.
+            answerHook(id: id, "allow")
+        case .allow, .prompt:
+            // Claude's own deny rules and permission mode decide; a prompt reaches Cantrip over stdio.
+            sendControlResponse(id: id, response: ["continue": true])
+        case .ask(let title, let detail, let scope, let source, let what):
+            askPolicy(id: id, title: title, detail: detail, scope: scope, source: source, action: what) { [weak self] allowed, reason in
+                self?.answerHook(id: id, allowed ? "allow" : "deny", reason)
+            }
         }
-        let decision = CantripHomeActionPolicy.evaluate(
-            action, mode: mode, approval: homeApproval, environment: .current(workdir: processWorkdir)
-        )
-        switch decision.verdict {
-        case .allow:
-            // Claude's own deny rules still apply; the permission request then reaches Cantrip.
-            sendControlResponse(id: id, response: undecided)
-        case .deny:
-            Log.write("home policy: denied \(tool): \(action.command.prefix(160))")
-            decide("deny", decision.reason)
-        case .ask:
-            if approvedScopes.contains(decision.scope) { return decide("allow") }
-            let owner = process
-            let pending = BackendInputRequest(
-                kind: .approval, source: "Cantrip Home",
-                title: "\(guardrailLabel) wants to \(decision.action)", detail: decision.detail
-            ) { [weak self] answer in
-                self?.queue.async {
-                    guard let self, self.process === owner,
-                          self.inputRequests.removeValue(forKey: id) != nil else { return }
-                    if answer.decision == .approve {
-                        self.approvedScopes.insert(decision.scope)
-                        decide("allow")
-                    } else {
-                        decide("deny", answer.decision == .deny
-                            ? "The user declined to \(decision.action). Don't retry it another way; say in your reply that it was skipped."
-                            : "No approval arrived to \(decision.action), so it was skipped. Say so in your reply.")
-                    }
+    }
+
+    /// Cantrip's approval card for a call the policy asks about; `answer` runs on the queue.
+    private func askPolicy(id: String, title: String, detail: String, scope: String, source: String, action: String,
+                           answer: @escaping (Bool, String?) -> Void) {
+        if approvedScopes.contains(scope) { return answer(true, nil) }
+        let owner = process
+        let pending = BackendInputRequest(kind: .approval, source: source, title: title, detail: detail) { [weak self] reply in
+            self?.queue.async {
+                guard let self, self.process === owner,
+                      self.inputRequests.removeValue(forKey: id) != nil else { return }
+                if reply.decision == .approve {
+                    self.approvedScopes.insert(scope)
+                    answer(true, nil)
+                } else {
+                    answer(false, AgentPolicyGate.declined(action, answered: reply.decision == .deny))
                 }
             }
-            Log.write("home policy: asking the user before \(decision.action)")
-            inputRequests[id] = pending
-            currentOnEvent?(.inputRequired(pending))
         }
+        Log.write("policy: asking the user before \(action)")
+        inputRequests[id] = pending
+        currentOnEvent?(.inputRequired(pending))
     }
 
-    /// Answers one tool call with the Home policy; false falls through to a normal approval.
+    /// Answers a permission request with the policy; false falls through to a normal approval.
     /// Asked actions become an approval request that answers the control request later.
-    private func answerWithGuardrail(
-        tool: String, input: [String: Any], mode: CantripHomeGuardrail, id: String
-    ) -> Bool {
+    private func answerWithPolicy(tool: String, input: [String: Any], id: String) -> Bool {
         let request = CantripHomeActionRequest(claudeTool: tool, input: input)
-        let approval = homeApproval
-        let decision = CantripHomeActionPolicy.evaluate(
-            request, mode: mode, approval: approval, environment: .current(workdir: processWorkdir)
-        )
-        switch decision.verdict {
-        case .deny:
-            Log.write("home policy: denied \(tool): \(request.command.prefix(160))")
-            sendControlResponse(id: id, response: ["behavior": "deny", "message": decision.reason])
+        let outcome = AgentPolicyGate.decide(request, guardrail: guardrail, approval: homeApproval,
+                                             label: guardrailLabel, workdir: processWorkdir)
+        switch outcome {
+        case .deny(let reason, let by):
+            currentOnEvent?(.activity(AgentPolicyGate.denialActivity(request, reason: reason, by: by)))
+            sendControlResponse(id: id, response: ["behavior": "deny", "message": reason])
             return true
         case .allow:
-            guard approval.runsWithoutAsking(request) else { return false }
-            if decision.automatic {
-                Log.write("home policy: approved \(decision.action) automatically (Act on my behalf or Allow everything)")
-            }
             sendControlResponse(id: id, response: ["behavior": "allow", "updatedInput": input])
             return true
-        case .ask:
-            if approvedScopes.contains(decision.scope) {
-                sendControlResponse(id: id, response: ["behavior": "allow", "updatedInput": input])
-                return true
+        case .prompt:
+            return false
+        case .ask(let title, let detail, let scope, let source, let what):
+            askPolicy(id: id, title: title, detail: detail, scope: scope, source: source, action: what) { [weak self] allowed, reason in
+                self?.sendControlResponse(id: id, response: allowed ? ["behavior": "allow", "updatedInput": input]
+                                                                   : ["behavior": "deny", "message": reason ?? ""])
             }
-            let owner = process
-            let pending = BackendInputRequest(
-                kind: .approval, source: "Cantrip Home",
-                title: "\(guardrailLabel) wants to \(decision.action)", detail: decision.detail
-            ) { [weak self] answer in
-                self?.queue.async {
-                    guard let self, self.process === owner,
-                          self.inputRequests.removeValue(forKey: id) != nil else { return }
-                    if answer.decision == .approve {
-                        self.approvedScopes.insert(decision.scope)
-                        self.sendControlResponse(id: id, response: ["behavior": "allow", "updatedInput": input])
-                    } else {
-                        self.sendControlResponse(id: id, response: ["behavior": "deny", "message": answer.decision == .deny
-                            ? "The user declined to \(decision.action). Don't retry it another way; say in your reply that it was skipped."
-                            : "No approval arrived to \(decision.action), so it was skipped. Say so in your reply."])
-                    }
-                }
-            }
-            Log.write("home policy: asking the user before \(decision.action)")
-            inputRequests[id] = pending
-            currentOnEvent?(.inputRequired(pending))
             return true
         }
     }
@@ -857,7 +830,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             stdinHandle = stdinPipe.fileHandleForWriting
             processWorkdir = workdir
             processSignature = launchSignature(workdir: workdir)
-            if guardrail != nil, !readOnly {
+            if checksToolCalls {
                 writeControlRequest([
                     "subtype": "initialize",
                     "hooks": ["PreToolUse": [["matcher": "", "hookCallbackIds": [Self.policyHookID]]]],
@@ -926,8 +899,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             let input = request["input"] as? [String: Any] ?? [:]
             if readOnly {
                 sendControlResponse(id: id, response: ["behavior": "deny", "message": "Read-only session."])
-            } else if tool != "AskUserQuestion", let guardrail,
-                      answerWithGuardrail(tool: tool, input: input, mode: guardrail, id: id) {
+            } else if tool != "AskUserQuestion", checksToolCalls,
+                      answerWithPolicy(tool: tool, input: input, id: id) {
                 // Answered now, or once the user responds to the approval request.
             } else if tool == "AskUserQuestion",
                       let questions = input["questions"] as? [[String: Any]], !questions.isEmpty {

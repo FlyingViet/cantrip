@@ -18,10 +18,14 @@ import Foundation
 ///   through Cantrip's `PreToolUse` hook (see `AntigravityHook`): read-only sessions may only look,
 ///   "Allow actions" off asks the user, and Cantrip Home applies its action policy.
 final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
-    /// Who decides a tool call. `nil` means agy runs with `--dangerously-skip-permissions`.
+    /// Who decides a tool call. `nil` means agy runs with `--dangerously-skip-permissions` and
+    /// nothing checks it (only when the agent policy is turned off).
     enum HookPolicy: Equatable {
         case readOnly
+        /// "Act on my behalf" off: the agent policy, then the user for anything it doesn't decide.
         case ask
+        /// "Act on my behalf" on: anything the agent policy doesn't deny or ask about runs.
+        case automatic
         case guardrail(CantripHomeGuardrail)
     }
 
@@ -191,7 +195,9 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     var hookPolicy: HookPolicy? {
         if readOnly { return .readOnly }
         if let guardrail { return .guardrail(guardrail) }
-        if settings.allowActions || settings.agyPermissionMode == "bypassPermissions" { return nil }
+        if settings.allowActions || settings.agyPermissionMode == "bypassPermissions" {
+            return AgentPolicyGate.enforcesEverywhere ? .automatic : nil
+        }
         return .ask
     }
 
@@ -216,7 +222,9 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         // sessions with automatic approval enabled, also pass --dangerously-skip-permissions so
         // agy's internal WriteFile confirmation manager does not soft-deny dot-directory writes
         // after Cantrip's PreToolUse hook has already approved them.
-        if hookPolicy == nil || (guardrail == .attended && (settings.allowActions || settings.agyPermissionMode == "bypassPermissions")) {
+        let policy = hookPolicy
+        if policy == nil || policy == .automatic
+            || (guardrail == .attended && (settings.allowActions || settings.agyPermissionMode == "bypassPermissions")) {
             args.append("--dangerously-skip-permissions")
         }
         if settings.agyPermissionMode == "sandbox" {
@@ -228,7 +236,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
     private func launchSignature(for workdir: String) -> String {
         let model = (turnModelOverride ?? modelOverride ?? settings.agyModel).trimmingCharacters(in: .whitespacesAndNewlines)
         let effort = (effortOverride ?? settings.agyEffort).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let guardrailKey = guardrail?.rawValue ?? "none"
+        let guardrailKey = guardrail?.rawValue ?? (hookPolicy == .automatic ? "policy" : "none")
         return "\(workdir)|\(model)|\(effort)|\(readOnly)|\(settings.allowActions)|\(settings.agyPermissionMode)|\(guardrailKey)"
     }
 
@@ -1369,91 +1377,51 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         let callback = turnEventCallback
         stateLock.unlock()
 
-        let activeGuardrail: CantripHomeGuardrail
-        switch policy {
-        case .readOnly:
+        if policy == .readOnly {
             if AntigravityHook.isReadOnly(tool: toolName, arguments: args) {
                 respond("allow", nil)
             } else {
                 respond("deny", "Read-only session: look and report, but don't change anything.")
             }
             return
-        case .ask:
-            if AntigravityHook.isReadOnly(tool: toolName, arguments: args) {
-                respond("allow", nil)
-            } else {
-                promptUserForHookTool(
-                    toolName: toolName,
-                    title: "Allow Antigravity to run \(toolName)?",
-                    detail: ToolActivityFactory.detailText(args) ?? toolName,
-                    scope: nil,
-                    callback: callback,
-                    respond: respond
-                )
-            }
-            return
-        case .guardrail(let mode):
-            activeGuardrail = mode
         }
 
         let action = CantripHomeActionRequest(antigravityTool: toolName, input: args)
-        let homeApproval = CantripHomeApproval.chosen(for: .antigravity, settings: settings)
-        let decision = CantripHomeActionPolicy.evaluate(
-            action,
-            mode: activeGuardrail,
-            approval: homeApproval,
-            environment: .current(workdir: workdir)
-        )
-
-        switch decision.verdict {
-        case .deny:
-            Log.write("antigravity: Cantrip Home blocked \(toolName): \(decision.reason)")
-            callback?(.approval(BackendApproval(
-                tool: toolName,
-                decision: "denied",
-                decidedBy: "Cantrip Home policy"
-            )))
-            respond("deny", decision.reason)
-
-        case .allow:
-            if decision.automatic || homeApproval.runsWithoutAsking(action) {
-                callback?(.approval(BackendApproval(
-                    tool: toolName,
-                    decision: "approved",
-                    decidedBy: decision.automatic ? "Act on my behalf" : "Cantrip Home policy"
-                )))
-                respond("auto_approve", nil)
-            } else {
-                promptUserForHookTool(
-                    toolName: toolName,
-                    title: "Allow Antigravity to run \(toolName)?",
-                    detail: ToolActivityFactory.detailText(args) ?? toolName,
-                    scope: nil,
-                    callback: callback,
-                    respond: respond
-                )
-            }
-
-        case .ask:
-            let alreadyApproved = stateLock.withLock {
-                !decision.scope.isEmpty && approvedGuardrailScopes.contains(decision.scope)
-            }
+        let approval = CantripHomeApproval.chosen(for: .antigravity, settings: settings)
+        let outcome = AgentPolicyGate.decide(action, guardrail: guardrail, approval: approval,
+                                             label: guardrailLabel, workdir: workdir)
+        switch outcome {
+        case .deny(let reason, let by):
+            Log.write("antigravity: \(by) blocked \(toolName): \(reason)")
+            callback?(.activity(AgentPolicyGate.denialActivity(action, reason: reason, by: by)))
+            callback?(.approval(BackendApproval(tool: toolName, decision: "denied", decidedBy: by)))
+            respond("deny", reason)
+        case .allow where guardrail == nil && approval != .automatic && !outcome.explicitlyAllowed
+            && AntigravityHook.isReadOnly(tool: toolName, arguments: args):
+            // A read no rule covers: agy's own policy decides, as before the agent policy.
+            respond("allow", nil)
+        case .allow(let by):
+            callback?(.approval(BackendApproval(tool: toolName, decision: "approved", decidedBy: by)))
+            respond("auto_approve", nil)
+        case .prompt where AntigravityHook.isReadOnly(tool: toolName, arguments: args):
+            respond("allow", nil)
+        case .prompt:
+            promptUserForHookTool(
+                toolName: toolName,
+                title: "Allow Antigravity to run \(toolName)?",
+                detail: ToolActivityFactory.detailText(args) ?? toolName,
+                scope: nil,
+                callback: callback,
+                respond: respond
+            )
+        case .ask(let title, let detail, let scope, _, _):
+            let alreadyApproved = stateLock.withLock { approvedGuardrailScopes.contains(scope) }
             if alreadyApproved {
-                callback?(.approval(BackendApproval(
-                    tool: toolName,
-                    decision: "approved",
-                    decidedBy: "Earlier approval"
-                )))
+                callback?(.approval(BackendApproval(tool: toolName, decision: "approved", decidedBy: "Earlier approval")))
                 respond("auto_approve", nil)
             } else {
-                promptUserForHookTool(
-                    toolName: toolName,
-                    title: "\(guardrailLabel) wants to \(decision.action)",
-                    detail: decision.detail,
-                    scope: decision.scope,
-                    callback: callback,
-                    respond: respond
-                )
+                promptUserForHookTool(toolName: toolName, title: title, detail: detail, scope: scope,
+                                      callback: callback, respond: respond)
             }
         }
     }

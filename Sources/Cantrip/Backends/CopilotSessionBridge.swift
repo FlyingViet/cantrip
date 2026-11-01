@@ -287,8 +287,8 @@ enum CopilotSessionBridge {
         enableFileHooks: config.allowTools && !config.readOnly,
         onPermissionRequest: request => {
           const allowed = config.allowTools && !config.readOnly;
-          if (allowed && config.guardrail && request.kind !== 'read') {
-            // Cantrip Home: the host's action policy decides, whatever model runs the session.
+          if (allowed && (config.guardrail || config.policy)) {
+            // Cantrip's agent policy (and Home's rules) decide on the host, whatever model runs it.
             const summary = {
               kind: request.kind, fullCommandText: request.fullCommandText,
               possiblePaths: request.possiblePaths, hasWriteFileRedirection: request.hasWriteFileRedirection,

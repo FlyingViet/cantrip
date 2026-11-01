@@ -120,13 +120,16 @@ extension SessionTabTests {
                      && !tab.buildArguments(resumingSessionID: nil).contains(skipFlag),
                      "Read-only and Allow actions off go through Cantrip's hook")
         settings.allowActions = true
-        precondition(readOnly.hookPolicy == .readOnly && tab.hookPolicy == nil
+        precondition(readOnly.hookPolicy == .readOnly && tab.hookPolicy == .automatic
                      && tab.buildArguments(resumingSessionID: nil).contains(skipFlag)
                      && !readOnly.buildArguments(resumingSessionID: nil).contains(skipFlag),
-                     "Act on my behalf skips agy's approvals, like Claude Code and Codex; read-only seats still only look")
+                     "Act on my behalf skips agy's approvals but Cantrip's hook still checks the agent policy; read-only seats still only look")
+        try withAgentPolicy(enabled: false) {
+            precondition(tab.hookPolicy == nil, "With the agent policy off, Act on my behalf checks nothing")
+        }
         settings.allowActions = false
         settings.agyPermissionMode = "bypassPermissions"
-        precondition(tab.hookPolicy == nil, "Antigravity's own Allow everything skips approvals too")
+        precondition(tab.hookPolicy == .automatic, "Antigravity's own Allow everything skips approvals too")
         settings.agyPermissionMode = "sandbox"
         precondition(tab.hookPolicy == .ask && tab.buildArguments(resumingSessionID: nil).contains("--sandbox"),
                      "Sandbox mode adds --sandbox and still asks")
@@ -357,6 +360,9 @@ extension SessionTabTests {
         settings.agyPath = script.path
         settings.allowActions = true
         settings.agyPermissionMode = "default"
+        // These fixtures replay tool steps without calling the hook.
+        let restorePolicy = suspendAgentPolicy()
+        defer { restorePolicy() }
 
         let backend = AntigravityBackend(persistKey: "test-agy-intermediate-steps")
         backend.reset()

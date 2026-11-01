@@ -713,6 +713,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/browser"
                 || request.path == "/api/v1/browser/frame"
                 || request.path == "/api/v1/usage-fallback"
+                || request.path == "/api/v1/policy"
                 || request.path == "/api/v1/mcp"
                 || request.path == "/api/v1/link-previews/image"
                 || request.path.hasPrefix("/api/v1/link-previews/image/")
@@ -929,6 +930,30 @@ final class RemoteControlServer {
                 enabled: AppSettings.shared.openAIEndpointEnabled,
                 listening: AppSettings.shared.openAIEndpointListeningPort)
             sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
+            return
+        }
+        if request.path == "/api/v1/policy" {
+            do {
+                let snapshot: AgentPolicyRemoteSnapshot
+                switch request.method {
+                case "GET": snapshot = AgentPolicyRemote.snapshot()
+                case "POST":
+                    guard request.body.count <= 262_144, let json = request.json else {
+                        throw AgentPolicyStore.SaveError(status: 400, message: "Send a JSON object.")
+                    }
+                    snapshot = try AgentPolicyRemote.apply(json)
+                default: throw AgentPolicyStore.SaveError(status: 405, message: "method not allowed")
+                }
+                sendEncoded(on: connection) {
+                    let encoder = JSONEncoder()
+                    encoder.dateEncodingStrategy = .iso8601
+                    return try encoder.encode(snapshot)
+                }
+            } catch let error as AgentPolicyStore.SaveError {
+                sendError(error.status, error.message, on: connection)
+            } catch {
+                sendError(500, "Could not read the agent policy on the Mac.", on: connection)
+            }
             return
         }
         if request.path == "/api/v1/usage-fallback" {
@@ -3017,6 +3042,10 @@ private extension RemoteControlServer {
     #inputEditor{width:min(calc(100% - 24px),580px);max-height:90vh;overflow:auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
     #inputEditor::backdrop{background:rgba(0,0,0,.35)}.input-card{display:grid;gap:12px;margin:16px 0;padding:12px;border:1px solid var(--line);border-radius:10px}
     #desktopEditor{width:min(calc(100% - 24px),1000px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
+    #policyEditor{width:min(calc(100% - 24px),820px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#policyEditor::backdrop{background:rgba(0,0,0,.35)}
+    .policy-rule{display:grid;gap:4px;padding:10px 0;border-top:1px solid var(--line)}.policy-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.policy-head strong{flex:1;min-width:140px;overflow-wrap:anywhere}.policy-rule .muted{overflow-wrap:anywhere}.policy-rule.off{opacity:.55}
+    .policy-effect{font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid var(--line)}.policy-effect.deny{color:#b42318}.policy-effect.ask{color:#b54708}.policy-effect.allow{color:#067647}
+    #policyEditor textarea{width:100%;min-height:90px;font:12px ui-monospace,monospace}#policyJSON{min-height:260px}#policyEditor button,#policyEditor select{min-height:44px}#policyEditor details{margin-top:12px}#policyEditor form{display:grid;gap:8px}
     #mcpEditor{width:min(calc(100% - 24px),760px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#mcpEditor::backdrop{background:rgba(0,0,0,.35)}
     .mcp-row{border-top:1px solid var(--line);padding:10px 0;display:flex;flex-direction:column;gap:6px}.mcp-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.mcp-head strong{flex:1}.mcp-status{font-size:13px}.mcp-status.attn{color:var(--accent,#0a84ff)}.mcp-status.warn{color:#c76a00}
     .mcp-switches{display:flex;gap:12px;flex-wrap:wrap;font-size:13px}.mcp-page img{max-width:100%;max-height:340px;border:1px solid var(--line);border-radius:8px}#mcpEditor button{min-height:44px}
@@ -3118,7 +3147,7 @@ private extension RemoteControlServer {
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
     <label id="tabSectionLabel" class="hidden">Section<select id="tabSection"></select></label><input id="tabNewSection" class="hidden" maxlength="40" autocomplete="off" placeholder="New section name" aria-label="New section name">
-    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button>
+    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button><button id="tabPolicy" type="button" class="control">Agent Policy</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
@@ -3147,6 +3176,24 @@ private extension RemoteControlServer {
     <img id="browserViewerImage" alt="Live view of the agent browser"><div id="browserViewerError" role="status"></div></dialog>
     <dialog id="mcpEditor" aria-labelledby="mcpTitle"><div class="tasks-bar"><strong id="mcpTitle" class="grow">MCP Servers</strong><button id="mcpDone" type="button" class="control">Done</button></div>
     <p class="muted">Every backend shares these. Sign-ins open in the agent Chrome; approve them here.</p><div id="mcpError" role="alert"></div><div id="mcpList"></div></dialog>
+    <dialog id="policyEditor" aria-labelledby="policyTitle"><div class="tasks-bar"><strong id="policyTitle" class="grow">Agent Policy</strong><button id="policyReload" type="button" class="control">Reload</button><button id="policyDone" type="button" class="control">Done</button></div>
+    <p class="muted">Every tab, child tab and Home run checks each tool call against these rules on every backend. Deny beats ask, and ask beats allow. Anything no rule covers runs when Act on my behalf is on and asks when it's off.</p>
+    <label><input id="policyEnabled" type="checkbox"> Check every tab against the policy</label><span id="policyFile" class="muted"></span>
+    <div id="policyError" role="alert"></div><div id="policyRules"></div>
+    <details id="policyAddBox"><summary>Add a rule</summary><form id="policyAdd">
+    <label>ID<input id="policyAddID" maxlength="60" autocomplete="off" placeholder="no-release-on-fridays"></label>
+    <label>Effect<select id="policyAddEffect"><option value="deny">Deny</option><option value="ask">Ask first</option><option value="allow">Allow</option></select></label>
+    <label>Reason (shown to the agent and on approval cards)<input id="policyAddReason" maxlength="300" autocomplete="off"></label>
+    <label>Commands, one per line (git push, re:regex, @cantrip-restart)<textarea id="policyAddCommands"></textarea></label>
+    <label>Paths, one per line ($WORKTREE, $PROJECT, $TMP, ~)<textarea id="policyAddPaths"></textarea></label>
+    <label>MCP tools, one per line (server/tool, server/*)<textarea id="policyAddMCP"></textarea></label>
+    <label>Hours, one per line (21:45-22:50)<textarea id="policyAddHours"></textarea></label>
+    <label>Only in repositories, one per line<textarea id="policyAddRepos"></textarea></label>
+    <div class="tab-actions"><button id="policyAddSave" type="submit" class="control primary">Add Rule</button></div></form></details>
+    <details><summary id="policyConflictsTitle">Imported rules a stricter rule overrides</summary><div id="policyConflicts"></div></details>
+    <details><summary>Imported from each CLI</summary><div id="policyImports"></div></details>
+    <details id="policyJSONBox"><summary>Edit the whole policy as JSON</summary><textarea id="policyJSON" spellcheck="false" aria-label="Policy JSON"></textarea>
+    <div class="tab-actions"><button id="policyJSONSave" type="button" class="control primary">Save JSON</button></div></details></dialog>
     <dialog id="desktopEditor" aria-labelledby="desktopTitle"><strong id="desktopTitle">Mac Permissions &amp; View Mac</strong>
     <p class="muted">Start viewing explicitly. The Mac must first allow paired clients in Cantrip settings. Screen frames and typed text stay out of chat, files and AI models. Protected dialogs may be unavailable. Phone Face ID does not authorize macOS dialogs.</p>
     <div id="desktopError" role="alert"></div><div class="tab-actions">
@@ -3799,6 +3846,40 @@ private extension RemoteControlServer {
     const desktopBytes=value=>Uint8Array.from(atob(value),c=>c.charCodeAt(0));
     function desktopBase64(bytes){let result="";for(let i=0;i<bytes.length;i+=8192)result+=String.fromCharCode(...bytes.subarray(i,i+8192));return btoa(result)}
     let mcpState=null,mcpTab=null,mcpTimer=null;
+    let policyState=null,policySaving=false;
+    $("tabPolicy").onclick=()=>{if(tabSaving||movingTab)return;$("tabEditor").close();editingTab=null;$("policyError").textContent="";$("policyEditor").showModal();loadPolicy()};
+    $("policyDone").onclick=()=>$("policyEditor").close();$("policyReload").onclick=()=>loadPolicy();$("policyEditor").addEventListener("close",()=>{policyState=null});
+    async function loadPolicy(){try{policyState=await api("/api/v1/policy");$("policyError").textContent=policyState.loadError||""}catch(e){policyState=null;$("policyError").textContent=e.message||"The agent policy isn't available on this Mac."}renderPolicy()}
+    async function policyPost(body){if(!policyState||policySaving)return false;policySaving=true;
+      try{policyState=await api("/api/v1/policy",{method:"POST",body:JSON.stringify({...body,revision:policyState.policy.revision})});$("policyError").textContent="";return true}
+      catch(e){$("policyError").textContent=e.message||"That didn't save.";await loadPolicy();return false}finally{policySaving=false;renderPolicy()}}
+    function policyLines(id){return $(id).value.split("\\n").map(s=>s.trim()).filter(Boolean)}
+    function renderPolicy(){const data=policyState,list=$("policyRules");list.replaceChildren();if(!data)return;const p=data.policy;
+      $("policyEnabled").checked=p.enabled;$("policyEnabled").disabled=policySaving;$("policyFile").textContent=`Saved in ${data.file} · revision ${p.revision}`;
+      for(const effect of ["deny","ask","allow"]){const rules=(p.rules||[]).filter(r=>r.effect===effect);if(!rules.length)continue;
+        list.append(el("h3","",{deny:"Always blocked",ask:"Needs approval",allow:"Always allowed"}[effect]+` (${rules.length})`));
+        for(const r of rules){const row=el("div",`policy-rule${r.enabled===false?" off":""}`),head=el("div","policy-head");
+          head.append(el("strong","",r.id),el("span",`policy-effect ${effect}`,{deny:"Deny",ask:"Ask",allow:"Allow"}[effect]));
+          const on=el("label"),box=document.createElement("input");box.type="checkbox";box.checked=r.enabled!==false;box.disabled=policySaving;
+          box.onchange=()=>policyPost({setRuleEnabled:{id:r.id,enabled:box.checked}});on.append(box," On");head.append(on);
+          const remove=el("button","control","Remove");remove.type="button";remove.disabled=policySaving;remove.onclick=()=>{if(confirm(`Remove the rule ${r.id}?`))policyPost({removeRule:r.id})};head.append(remove);
+          row.append(head,el("span","",r.reason),el("span","muted",data.summaries?.[r.id]||""));if(r.source&&r.source!=="default"&&r.source!=="user")row.append(el("span","muted",`From ${r.source}`));list.append(row)}}
+      if((p.projects||[]).length){list.append(el("h3","","Project overrides"));for(const project of p.projects){const row=el("div","policy-rule");row.append(el("strong","",project.path));
+        if((project.disabled||[]).length)row.append(el("span","muted",`Turned off here: ${project.disabled.join(", ")}`));
+        for(const r of project.rules||[])row.append(el("span","",`${r.effect}: ${r.id} — ${data.summaries?.[r.id]||""}`));list.append(row)}}
+      const conflicts=$("policyConflicts");conflicts.replaceChildren();$("policyConflictsTitle").textContent=`Imported rules a stricter rule overrides (${(p.conflicts||[]).length})`;
+      for(const c of p.conflicts||[]){const row=el("div","policy-rule");row.append(el("strong","",`${c.imported} → ${c.stricter}`),el("span","",c.note),el("span","muted",c.source));conflicts.append(row)}
+      if(!(p.conflicts||[]).length)conflicts.append(el("p","muted","None."));
+      const imports=$("policyImports");imports.replaceChildren();for(const i of p.imports||[]){const row=el("div","policy-rule");
+        row.append(el("strong","",`${i.source}: ${i.rules} rule(s) from ${i.file}`),el("span","muted",i.backup?`Backup: ${i.backup}`:"Nothing to back up"));imports.append(row)}
+      if(!(p.imports||[]).length)imports.append(el("p","muted","Nothing imported yet."));
+      if(document.activeElement!==$("policyJSON"))$("policyJSON").value=JSON.stringify({enabled:p.enabled,rules:p.rules,projects:p.projects,privateTerms:p.privateTerms},null,2);
+      $("policyAddSave").disabled=policySaving;$("policyJSONSave").disabled=policySaving}
+    $("policyEnabled").onchange=()=>policyPost({enabled:$("policyEnabled").checked});
+    $("policyAdd").onsubmit=async event=>{event.preventDefault();const rule={id:$("policyAddID").value.trim(),effect:$("policyAddEffect").value,reason:$("policyAddReason").value.trim()};
+      for(const[key,id]of[["commands","policyAddCommands"],["paths","policyAddPaths"],["mcp","policyAddMCP"],["hours","policyAddHours"],["repos","policyAddRepos"]]){const v=policyLines(id);if(v.length)rule[key]=v}
+      if(await policyPost({rule})){for(const id of["policyAddID","policyAddReason","policyAddCommands","policyAddPaths","policyAddMCP","policyAddHours","policyAddRepos"])$(id).value="";$("policyAddBox").open=false}};
+    $("policyJSONSave").onclick=()=>{let policy;try{policy=JSON.parse($("policyJSON").value)}catch(e){$("policyError").textContent=`That isn't valid JSON: ${e.message}`;return}policyPost({policy})};
     function el(tag,cls="",text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n}
     $("tabMCP").onclick=()=>{if(tabSaving||movingTab)return;mcpTab=editingTab;$("tabEditor").close();editingTab=null;$("mcpError").textContent="";$("mcpEditor").showModal();loadMCP()};
     $("mcpDone").onclick=()=>$("mcpEditor").close();$("mcpEditor").addEventListener("close",()=>{clearTimeout(mcpTimer);mcpState=null});

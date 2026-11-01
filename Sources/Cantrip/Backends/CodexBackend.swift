@@ -85,14 +85,18 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
         case guardrail(CantripHomeGuardrail)
         /// Workspace sandbox; each request asks the user.
         case ask
-        /// Full access, no requests (Act on my behalf, or the explicit full-access setting).
+        /// Full access, and every request still comes to Cantrip's agent policy (Act on my
+        /// behalf, or the explicit full-access setting): it runs unless a rule denies or asks.
+        case policy
+        /// Full access, no requests: only when the agent policy is turned off.
         case full
     }
 
     var access: Access {
         if readOnly { return .readOnly }
         if let guardrail { return .guardrail(guardrail) }
-        return settings.allowActions || settings.codexPermissionMode == "bypassPermissions" ? .full : .ask
+        guard settings.allowActions || settings.codexPermissionMode == "bypassPermissions" else { return .ask }
+        return AgentPolicyGate.enforcesEverywhere ? .policy : .full
     }
 
     /// The sandbox and approval policy Codex runs under for `access`.
@@ -100,6 +104,8 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
         switch access {
         case .readOnly: return ("read-only", "untrusted")
         case .full: return ("danger-full-access", "never")
+        // Codex runs reads it knows are safe on its own and asks about everything else.
+        case .policy: return ("danger-full-access", "untrusted")
         case .ask, .guardrail: return ("workspace-write", "untrusted")
         }
     }
@@ -645,33 +651,26 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
             return record(isRead(action), by: "Read-only session")
         case .full:
             return record(true, by: "Act on my behalf")
-        case .ask where isRead(action):
-            // Codex asks even for `cat`; plain reads aren't worth a prompt, as with the other backends.
-            return record(true, by: "Read-only command")
-        case .ask:
-            return ask("Allow Codex to \(label)?", detail: action.command.isEmpty ? label : action.command, scope: nil,
-                       callback: callback, reply: { record($0, by: "User") })
-        case .guardrail(let mode):
+        case .ask, .policy, .guardrail:
             let approval = CantripHomeApproval.chosen(for: .codex, settings: settings)
-            let decision = CantripHomeActionPolicy.evaluate(action, mode: mode, approval: approval,
-                                                            environment: .current(workdir: lock.withLock { workdir }))
-            switch decision.verdict {
-            case .deny:
-                Log.write("codex: Cantrip Home blocked \(action.kind.rawValue): \(decision.reason)")
-                record(false, by: "Cantrip Home policy")
-            case .allow:
-                if decision.automatic || approval.runsWithoutAsking(action) {
-                    record(true, by: decision.automatic ? "Act on my behalf" : "Cantrip Home policy")
-                } else {
-                    ask("Allow Codex to \(label)?", detail: decision.detail, scope: nil, callback: callback,
-                        reply: { record($0, by: "User") })
-                }
-            case .ask:
-                if !decision.scope.isEmpty, lock.withLock({ approvedScopes.contains(decision.scope) }) {
-                    return record(true, by: "Earlier approval")
-                }
-                ask("\(guardrailLabel) wants to \(decision.action)", detail: decision.detail, scope: decision.scope,
+            let outcome = AgentPolicyGate.decide(action, guardrail: guardrail, approval: approval,
+                                                 label: guardrailLabel, workdir: lock.withLock { workdir })
+            switch outcome {
+            case .deny(let reason, let by):
+                Log.write("codex: \(by) blocked \(action.kind.rawValue): \(reason)")
+                callback?(.activity(AgentPolicyGate.denialActivity(action, reason: reason, by: by)))
+                record(false, by: by)
+            case .allow(let by):
+                record(true, by: by)
+            case .prompt where isRead(action):
+                // Codex asks even for `cat`; plain reads aren't worth a prompt, as with the other backends.
+                record(true, by: "Read-only command")
+            case .prompt:
+                ask("Allow Codex to \(label)?", detail: action.command.isEmpty ? label : action.command, scope: nil,
                     callback: callback, reply: { record($0, by: "User") })
+            case .ask(let title, let detail, let scope, let source, _):
+                if lock.withLock({ approvedScopes.contains(scope) }) { return record(true, by: "Earlier approval") }
+                ask(title, detail: detail, scope: scope, source: source, callback: callback, reply: { record($0, by: "User") })
             }
         }
     }
@@ -680,10 +679,10 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
         action.kind == .read || (action.kind == .shell && Self.isKnownRead(action.command))
     }
 
-    private func ask(_ title: String, detail: String, scope: String?, callback: ((BackendEvent) -> Void)?,
-                     reply: @escaping (Bool) -> Void) {
+    private func ask(_ title: String, detail: String, scope: String?, source: String? = nil,
+                     callback: ((BackendEvent) -> Void)?, reply: @escaping (Bool) -> Void) {
         guard let callback else { return reply(false) }
-        let request = BackendInputRequest(kind: .approval, source: guardrail != nil ? "Cantrip Home" : "Codex",
+        let request = BackendInputRequest(kind: .approval, source: source ?? (guardrail != nil ? "Cantrip Home" : "Codex"),
                                           title: title, detail: detail) { [weak self] answer in
             let approved = answer.decision == .approve
             if approved, let scope, !scope.isEmpty { self?.lock.withLock { _ = self?.approvedScopes.insert(scope) } }

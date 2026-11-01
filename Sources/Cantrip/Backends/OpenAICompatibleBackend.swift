@@ -268,10 +268,10 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         }
     }
 
-    /// Checks a Home tool call with the host policy, waiting for the user when it asks.
-    /// Returns the text the model sees instead of the tool's output, or nil to run it.
+    /// Checks a tool call with Cantrip's agent policy (and Home's rules in Home), waiting for the
+    /// user when it asks. Returns the text the model sees instead of the tool's output, or nil to run it.
     private func guardrailRefusal(for name: String, command: String?, arguments: String) -> String? {
-        guard let mode = guardrail else { return nil }
+        guard guardrail != nil || AgentPolicyGate.enforcesEverywhere else { return nil }
         let request: CantripHomeActionRequest
         if name == "run_shell" {
             request = .shell(command ?? "")
@@ -280,38 +280,33 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         } else {
             return nil
         }
-        let decision = CantripHomeActionPolicy.evaluate(
-            request, mode: mode, environment: .current(workdir: currentWorkdir)
-        )
-        switch decision.verdict {
-        case .allow:
+        // Local models have no approval prompts of their own: what no rule stops runs.
+        let outcome = AgentPolicyGate.decide(request, guardrail: guardrail, approval: .ask,
+                                             label: guardrailLabel, workdir: currentWorkdir)
+        switch outcome {
+        case .allow, .prompt:
             return nil
-        case .deny:
-            Log.write("home policy: denied \(name): \((command ?? arguments).prefix(160))")
-            return decision.reason
-        case .ask:
-            if guardrailLock.withLock({ approvedScopes.contains(decision.scope) }) { return nil }
+        case .deny(let reason, let by):
+            onEvent?(.activity(AgentPolicyGate.denialActivity(request, reason: reason, by: by)))
+            return reason
+        case .ask(let title, let detail, let scope, let source, let action):
+            if guardrailLock.withLock({ approvedScopes.contains(scope) }) { return nil }
             let done = DispatchSemaphore(value: 0)
             var approved = false
             var answered: InputRequestAnswer.Decision = .cancel
-            let pending = BackendInputRequest(
-                kind: .approval, source: "Cantrip Home",
-                title: "\(guardrailLabel) wants to \(decision.action)", detail: decision.detail
-            ) { answer in
+            let pending = BackendInputRequest(kind: .approval, source: source, title: title, detail: detail) { answer in
                 answered = answer.decision
                 approved = answer.decision == .approve
                 done.signal()
             }
-            Log.write("home policy: asking the user before \(decision.action)")
+            Log.write("policy: asking the user before \(action)")
             onEvent?(.inputRequired(pending))
             if done.wait(timeout: .now() + 610) == .timedOut { pending.cancel() }
             if approved {
-                guardrailLock.withLock { _ = approvedScopes.insert(decision.scope) }
+                guardrailLock.withLock { _ = approvedScopes.insert(scope) }
                 return nil
             }
-            return answered == .deny
-                ? "The user declined to \(decision.action). Don't retry it another way; say in your reply that it was skipped."
-                : "No approval arrived to \(decision.action), so it was skipped. Say so in your reply."
+            return AgentPolicyGate.declined(action, answered: answered == .deny)
         }
     }
 
