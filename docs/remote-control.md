@@ -1824,9 +1824,9 @@ Ask "what's the weather today?" or "coffee near me" from a paired device and the
 answer can be for where that device is, not where the Mac is. Each client has a
 **Share location** setting, off by default: Cantrip Agent (iPhone and iPhone
 Duo) and Cantrip Gateway for Mac in Settings, Cantrip Gateway for Windows in
-Settings, and the browser Remote under **Location** next to **Unpair** (the
-browser needs the Mac's secure Tailscale address). Clients ask for location only
-while the app is in use, never in the background. The Mac app's own Remote tab
+Settings, and the browser Remote with the location button beside **Send** (filled
+while sharing is on; the browser needs the Mac's secure Tailscale address).
+Clients ask for location only while the app is in use, never in the background. The Mac app's own Remote tab
 shows the browser setting, but its embedded web view may not get a location from
 macOS; its messages then go without one. Cantrip for Windows, which runs backends
 on the PC itself, has its own **Settings → Location** (see `windows/README.md`).
