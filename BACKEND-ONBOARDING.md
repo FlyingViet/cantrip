@@ -184,6 +184,8 @@ live run.
 - Send `.heartbeat` for progress-only events. A Claude build that sent only `tool_progress` for
   15 minutes was killed by the inactivity watchdog (751f6eb).
 - A turn that stops on a limit error ends as a failure, not a reply (86abf76).
+- When a CLI sends a turn's text as several messages (progress notes between steps, then the
+  answer), start each one on a new paragraph; Codex's ran together (6b128bf).
 - Detect a dead runtime instead of waiting for a timeout. If nothing reached the user yet,
   replace the runtime once and resend, resuming the same session. Copilot runtimes crashed
   after 9 to 19 idle hours, so they are restarted after 2 idle hours (8998bf1).
@@ -420,8 +422,11 @@ Last live check of Codex: 2026-10-31, `codex-cli 0.166.0`, ChatGPT free plan, th
 3 (asked and approved, denied and shown as failed, Act on my behalf without prompts), 4, 5, 7
 (`model/list` matches the CLI's three models and efforts; a per-tab model runs), 8 (one 30-day
 window, read without a model call), 10 (Home's policy blocked `sudo` without asking), and a
-shared local MCP server's tool after approval. Not run: 6 (15-minute command), 9 (Auto routing
-is unavailable), 11 (no background agents), 12 (needs the new build in the running app).
+shared local MCP server's tool after approval. Item 12 in the running app (build
+`v1.1.12-18`): a Codex tab ran a shell command and a tool from the shared MCP list, and showed the
+same in the browser Remote and Gateway Mac; it found the reply's messages running together (fixed
+in `6b128bf`). Not run: 6 (15-minute command), 9 (Auto routing is unavailable), 11 (no background
+agents), and item 12 in Cantrip Agent on iPhone.
 
 ## Done checklist
 
