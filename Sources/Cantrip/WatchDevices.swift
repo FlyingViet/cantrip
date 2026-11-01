@@ -67,8 +67,8 @@ final class WatchDeviceRegistry: @unchecked Sendable {
     /// Nonces seen per device, with when, for twice the allowed clock skew.
     private var nonces: [UUID: [String: Date]] = [:]
     private var lastUseSaved: [UUID: Date] = [:]
-    /// Called after the list changes (a watch added or removed).
-    var onChange: (() -> Void)?
+    /// Posted after a watch is added or removed.
+    static let changed = Notification.Name("CantripWatchDevicesChanged")
 
     init(file: URL = CantripPaths.cache("watch-devices.json")) {
         self.file = file
@@ -96,7 +96,7 @@ final class WatchDeviceRegistry: @unchecked Sendable {
             return (device, true)
         }
         try save()
-        onChange?()
+        NotificationCenter.default.post(name: Self.changed, object: self)
         return result
     }
 
@@ -110,7 +110,7 @@ final class WatchDeviceRegistry: @unchecked Sendable {
         }
         if removed {
             try save()
-            onChange?()
+            NotificationCenter.default.post(name: Self.changed, object: self)
         }
         return removed
     }

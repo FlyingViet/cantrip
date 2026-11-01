@@ -349,6 +349,11 @@ final class AppSettings: ObservableObject {
     @Published var linkPreviewsEnabled: Bool {
         didSet { d.set(linkPreviewsEnabled, forKey: "linkPreviewsEnabled") }
     }
+    /// Publishes the voice API to signed Apple Watch requests on the internet (Tailscale Funnel,
+    /// port 10000). Off by default: watches then reach the Mac through the iPhone's Tailscale.
+    @Published var watchInternetRouteEnabled: Bool {
+        didSet { d.set(watchInternetRouteEnabled, forKey: "watchInternetRouteEnabled") }
+    }
     /// Minutes a tab's Copilot runtime may sit idle before Cantrip stops it to free memory;
     /// the next prompt resumes the same session in a new runtime. 0 keeps runtimes running.
     @Published var copilotIdleReleaseMinutes: Int {
@@ -809,6 +814,7 @@ final class AppSettings: ObservableObject {
             "childTabsPerParentLimit": childTabsPerParentLimit,
             "childTabsOverallLimit": childTabsOverallLimit,
             "linkPreviewsEnabled": linkPreviewsEnabled,
+            "watchInternetRouteEnabled": watchInternetRouteEnabled,
             "copilotIdleReleaseMinutes": copilotIdleReleaseMinutes,
             "storageUpkeepEnabled": storageUpkeepEnabled,
             "storageSessionRetentionDays": storageSessionRetentionDays,
@@ -935,6 +941,7 @@ final class AppSettings: ObservableObject {
         int("childTabsPerParentLimit", 1...ChildTabCapacity.maximumPerParent) { self.childTabsPerParentLimit = $0 }
         int("childTabsOverallLimit", 1...ChildTabCapacity.maximumOverall) { self.childTabsOverallLimit = $0 }
         bool("linkPreviewsEnabled") { self.linkPreviewsEnabled = $0 }
+        bool("watchInternetRouteEnabled") { self.watchInternetRouteEnabled = $0 }
         int("cantripHomeParallelRuns", 1...CantripHomeBackgroundRunner.maximumParallelLimit) {
             self.cantripHomeParallelRuns = $0
         }
@@ -1075,6 +1082,7 @@ final class AppSettings: ObservableObject {
             ? true : d.bool(forKey: "copilotMCPApps")
         linkPreviewsEnabled = d.object(forKey: "linkPreviewsEnabled") == nil
             ? true : d.bool(forKey: "linkPreviewsEnabled")
+        watchInternetRouteEnabled = d.bool(forKey: "watchInternetRouteEnabled")
         copilotIdleReleaseMinutes = d.object(forKey: "copilotIdleReleaseMinutes") as? Int ?? 30
         copilotAvailableModels = d.stringArray(forKey: "copilotAvailableModels") ?? []
         copilotModelCatalog = (d.data(forKey: "copilotModelCatalog")

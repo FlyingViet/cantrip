@@ -909,6 +909,25 @@ minutes, and a bad signature, all with `401`. A watch's signature opens only
 `/api/v1/voice/config` and `/api/v1/voice/turns`. Every other endpoint, including
 the watch list and the vocabulary, still needs the pairing token.
 
+**Settings › Remote control › Apple Watch** (shown while Cantrip Home is on) lists
+the watches, with when each was last used and a Remove button. Normally a watch
+reaches the Mac at the iPhone's Tailscale address, which works while it uses the
+paired iPhone's connection. **Reach Home from the watch over the internet** (off
+by default) adds a route for a watch on its own Wi-Fi or cellular:
+
+- Cantrip listens on `127.0.0.1:8799` for the voice API only. It answers only
+  signed requests from registered watches; the pairing token, `/health` and
+  every other path get `401` or `404`.
+- Switching it on runs `tailscale funnel --bg --yes --https=10000
+  http://127.0.0.1:8799`, which replaces anything else served on port 10000.
+  Switching it off runs `tailscale funnel --yes --https=10000 off`. Funnel must be
+  allowed for the Mac in the tailnet policy; if it isn't, Settings says so.
+- `GET /api/v1/voice/config` and the watch list then report
+  `"internet": "https://<mac>.<tailnet>.ts.net:10000"`, so watches pick it up.
+- At launch Cantrip restarts the listener and puts the Funnel back only if it's
+  missing. Turning Remote control off stops the listener but leaves Tailscale's
+  config alone.
+
 ### Tab mentions
 
 Session snapshots carry two flags for `@` mentions

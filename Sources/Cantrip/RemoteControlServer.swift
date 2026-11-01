@@ -29,6 +29,10 @@ final class RemoteControlServer {
     private static let healthBody = Data(#"{"status":"ok"}"#.utf8)
     private var listener: NWListener?
     private var lanListener: NWListener?
+    /// Loopback listener for the watch's internet route: the voice API only, watch signatures only.
+    private var voiceListener: NWListener?
+    /// The public address of that route (Tailscale Funnel), told to watches; nil while it's off.
+    var internetVoiceURL: String?
     private var activePort: Int?
     private var activeLANPort: Int?
     /// Bumped whenever the LAN listener is replaced on purpose, cancelling scheduled retries.
@@ -698,14 +702,45 @@ final class RemoteControlServer {
         return [.EADDRINUSE, .EACCES, .EADDRNOTAVAIL].contains(code)
     }
 
-    private func accept(_ connection: NWConnection) {
+    private func accept(_ connection: NWConnection, voiceOnly: Bool = false) {
         let request = RemoteRequestConnection(socket: connection, queue: queue,
                                               sendTimeout: sendTimeout, log: requestLog)
         request.start()
-        receiveRequest(on: request, buffer: Data())
+        receiveRequest(on: request, buffer: Data(), voiceOnly: voiceOnly)
     }
 
-    private func receiveRequest(on connection: RemoteRequestConnection, buffer: Data) {
+    /// Serves the voice API to signed watch requests on `127.0.0.1:<port>`, for Tailscale Funnel to
+    /// publish. Nothing else is answered there, the pairing token included.
+    func startVoiceListener(port: Int) throws {
+        stopVoiceListener()
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host("127.0.0.1"),
+                                                     port: NWEndpoint.Port(rawValue: UInt16(port))!)
+        let listener = try NWListener(using: parameters)
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.accept(connection, voiceOnly: true)
+        }
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            guard let self, let listener, self.voiceListener === listener else { return }
+            switch state {
+            case .ready: Log.write("remote-control: watch internet route listening at 127.0.0.1:\(port)")
+            case .failed(let error):
+                Log.write("remote-control: watch internet route listener failed: \(error.localizedDescription)")
+                self.stopVoiceListener()
+            default: break
+            }
+        }
+        voiceListener = listener
+        listener.start(queue: queue)
+    }
+
+    func stopVoiceListener() {
+        voiceListener?.stateUpdateHandler = nil
+        voiceListener?.cancel()
+        voiceListener = nil
+    }
+
+    private func receiveRequest(on connection: RemoteRequestConnection, buffer: Data, voiceOnly: Bool = false) {
         connection.socket.receive(
             minimumIncompleteLength: 1,
             maximumLength: 64 * 1024
@@ -723,7 +758,7 @@ final class RemoteControlServer {
             if let request = HTTPRequest.parse(next) {
                 connection.trace.identify(request)
                 connection.trace.enter(.parse)
-                if request.method == "GET", request.path == "/health" {
+                if !voiceOnly, request.method == "GET", request.path == "/health" {
                     self.send(status: 200, contentType: "application/json; charset=utf-8",
                               body: Self.healthBody, on: connection)
                     return
@@ -732,20 +767,34 @@ final class RemoteControlServer {
                 connection.trace.enter(.mainWait)
                 Task { @MainActor [weak self] in
                     connection.trace.enter(.handler)
-                    self?.route(request, json: json, on: connection)
+                    self?.route(request, json: json, on: connection, voiceOnly: voiceOnly)
                 }
             } else if !HTTPRequest.needsMoreData(next) {
                 self.sendError(400, "malformed request", on: connection)
             } else if isComplete || error != nil {
                 self.sendError(400, "incomplete request", on: connection)
             } else {
-                self.receiveRequest(on: connection, buffer: next)
+                self.receiveRequest(on: connection, buffer: next, voiceOnly: voiceOnly)
             }
         }
     }
 
     @MainActor
-    private func route(_ request: HTTPRequest, json: [String: Any]?, on connection: RemoteRequestConnection) {
+    private func route(_ request: HTTPRequest, json: [String: Any]?, on connection: RemoteRequestConnection,
+                       voiceOnly: Bool = false) {
+        if voiceOnly {
+            guard request.path.hasPrefix("/api/v1/voice/"), request.path != "/api/v1/voice/vocabulary" else {
+                sendError(404, "not found", on: connection)
+                return
+            }
+            if case .failure(let failure) = watchDevices.verify(method: request.method, target: request.rawTarget ?? request.target,
+                                                                 headers: request.headers, body: request.body) {
+                sendError(401, failure.localizedDescription, on: connection)
+                return
+            }
+            handleVoice(request, on: connection)
+            return
+        }
         // Frame navigations cannot carry the pairing header, so views load
         // through short-lived single-use URLs minted by an authorized request.
         if request.method == "GET", request.path.hasPrefix("/mcp-app/") {
@@ -2866,7 +2915,7 @@ final class RemoteControlServer {
         let parts = request.path.split(separator: "/").dropFirst(3).map(String.init)
         switch (request.method, parts.count, parts.first) {
         case ("GET", 1, "config"):
-            sendJSON(["home": ["available": voiceTurns.home() != nil], "internet": NSNull()], on: connection)
+            sendJSON(["home": ["available": voiceTurns.home() != nil], "internet": internetVoiceURL ?? NSNull()], on: connection)
         case ("POST", 1, "turns"):
             startVoiceTurn(request, on: connection)
         case ("GET", 2, "turns"):
@@ -2896,7 +2945,8 @@ final class RemoteControlServer {
         let parts = request.path.split(separator: "/").dropFirst(3).map(String.init)
         switch (request.method, parts.count) {
         case ("GET", 1):
-            sendJSON(["devices": watchDevices.all.map(WatchDeviceRegistry.json), "internet": NSNull()], on: connection)
+            sendJSON(["devices": watchDevices.all.map(WatchDeviceRegistry.json), "internet": internetVoiceURL ?? NSNull()],
+                     on: connection)
         case ("POST", 1):
             guard request.body.count <= 4_096, let body = request.json,
                   let name = body["name"] as? String, let key = body["publicKey"] as? String else {
@@ -2906,7 +2956,7 @@ final class RemoteControlServer {
             do {
                 let (device, created) = try watchDevices.register(name: name, publicKey: key)
                 Log.write("watch: \(created ? "added" : "re-registered") \(device.id.uuidString.prefix(8))")
-                sendJSON(["device": WatchDeviceRegistry.json(device), "internet": NSNull()],
+                sendJSON(["device": WatchDeviceRegistry.json(device), "internet": internetVoiceURL ?? NSNull()],
                          status: created ? 201 : 200, on: connection)
             } catch let failure as WatchDeviceRegistry.Failure {
                 sendError(failure == .tooMany ? 409 : 400, failure.localizedDescription, on: connection)
