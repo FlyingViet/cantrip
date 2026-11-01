@@ -45,6 +45,10 @@ struct SessionTabTests {
                 try await testOpenAIEndpointLive()
                 return
             }
+            if ProcessInfo.processInfo.environment["CANTRIP_POLICY_LIVE_TEST"] == "1" {
+                try await testAgentPolicyLive()
+                return
+            }
             if ProcessInfo.processInfo.environment["CANTRIP_CODEX_LIVE_TEST"] == "1" {
                 try await testCodexLive()
                 return
