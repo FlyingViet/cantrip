@@ -884,9 +884,11 @@ enum AgentPolicyGit {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var repositories: [String: (Date, AgentPolicyRepository?)] = [:]
     nonisolated(unsafe) private static var authors: [String: (Date, String?)] = [:]
+    /// A folder's repository and author rarely change; looking them up costs two `git` runs.
+    static let cacheLifetime: TimeInterval = 600
 
     static func repository(at folder: String) -> AgentPolicyRepository? {
-        if let cached = lock.withLock({ repositories[folder] }), Date().timeIntervalSince(cached.0) < 60 { return cached.1 }
+        if let cached = lock.withLock({ repositories[folder] }), Date().timeIntervalSince(cached.0) < cacheLifetime { return cached.1 }
         var repository: AgentPolicyRepository?
         if let root = git(["rev-parse", "--show-toplevel"], in: folder), !root.isEmpty {
             repository = AgentPolicyRepository(root: root, remote: git(["config", "--get", "remote.origin.url"], in: folder))
@@ -896,7 +898,7 @@ enum AgentPolicyGit {
     }
 
     static func author(at folder: String) -> String? {
-        if let cached = lock.withLock({ authors[folder] }), Date().timeIntervalSince(cached.0) < 60 { return cached.1 }
+        if let cached = lock.withLock({ authors[folder] }), Date().timeIntervalSince(cached.0) < cacheLifetime { return cached.1 }
         let name = git(["config", "user.name"], in: folder)
         let email = git(["config", "user.email"], in: folder)
         let author = [name, email].compactMap { $0 }.joined(separator: " ")
