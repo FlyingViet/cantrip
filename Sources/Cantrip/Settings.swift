@@ -369,6 +369,15 @@ final class AppSettings: ObservableObject {
         didSet { d.set(codexPath, forKey: "codexPath") }
     }
     /// Optional model override passed as -m (e.g. gpt-5-codex).
+    /// Codex's reasoning effort (empty = the model's default).
+    @Published var codexEffort: String {
+        didSet { d.set(codexEffort, forKey: "codexEffort") }
+    }
+    /// "default": commands and edits run in Codex's workspace sandbox and each one asks Cantrip.
+    /// "bypassPermissions": no sandbox and no prompts (Codex's full access), like Act on my behalf.
+    @Published var codexPermissionMode: String {
+        didSet { d.set(codexPermissionMode, forKey: "codexPermissionMode") }
+    }
     @Published var codexModel: String {
         didSet { d.set(codexModel, forKey: "codexModel") }
     }
@@ -438,6 +447,13 @@ final class AppSettings: ObservableObject {
         didSet { d.set(agyModelNames, forKey: "agyModelNames") }
     }
     @Published var agyCatalogUpdatedAt: Date? = nil
+    /// Codex's models from the app server's `model/list`, with their efforts.
+    @Published var codexAvailableModels: [CodexModel] = [] {
+        didSet { d.set(try? JSONEncoder().encode(codexAvailableModels), forKey: "codexAvailableModels") }
+    }
+    @Published var codexCatalogUpdatedAt: Date? = nil
+    @Published var codexRefreshInFlight = false
+    @Published var codexModelRefreshError: String? = nil
     @Published var agyRefreshInFlight = false
     @Published var agyModelRefreshError: String? = nil
     /// OpenAI-compatible base URL, e.g. http://hermes.local:8000/v1
@@ -595,7 +611,7 @@ final class AppSettings: ObservableObject {
             return "Copilot Remote · \(address.isEmpty ? "127.0.0.1:3000" : address)"
         case .codex:
             let model = codexModel.trimmingCharacters(in: .whitespaces)
-            return model.isEmpty ? "Codex" : "Codex · \(model)"
+            return model.isEmpty ? "Codex" : "Codex · \(codexModelLabel(model))"
         case .antigravity:
             let model = agyModel.trimmingCharacters(in: .whitespaces)
             return model.isEmpty ? "Antigravity" : "Antigravity · \(agyModelLabel(model))"
@@ -622,7 +638,8 @@ final class AppSettings: ObservableObject {
             "acpAddress": acpAddress,
             "copilotAllowTools": copilotAllowTools, "copilotEffort": copilotEffort,
             "copilotContextTier": copilotContextTier,
-            "codexPath": codexPath, "codexModel": codexModel,
+            "codexPath": codexPath, "codexModel": codexModel, "codexEffort": codexEffort,
+            "codexPermissionMode": codexPermissionMode,
             "agyPath": agyPath, "agyModel": agyModel,
             "agyEffort": agyEffort, "agyPermissionMode": agyPermissionMode,
             "localBaseURL": localBaseURL, "localModel": localModel,
@@ -704,6 +721,11 @@ final class AppSettings: ObservableObject {
         str("copilotContextTier") { self.copilotContextTier = $0 }
         str("codexPath") { self.codexPath = $0 }
         str("codexModel") { self.codexModel = $0 }
+        str("codexEffort") { self.codexEffort = $0 }
+        if let mode = dict["codexPermissionMode"] as? String, ["default", "bypassPermissions"].contains(mode) {
+            codexPermissionMode = mode
+            applied.append("codexPermissionMode")
+        }
         str("agyPath") { self.agyPath = $0 }
         str("agyModel") { self.agyModel = $0 }
         str("agyEffort") { self.agyEffort = $0 }
@@ -878,6 +900,9 @@ final class AppSettings: ObservableObject {
             ?? [d.string(forKey: "limitFallbackBackend") ?? ""])
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
+        codexEffort = d.string(forKey: "codexEffort") ?? ""
+        codexAvailableModels = d.data(forKey: "codexAvailableModels").flatMap { try? JSONDecoder().decode([CodexModel].self, from: $0) } ?? []
+        codexPermissionMode = d.string(forKey: "codexPermissionMode") ?? "default"
         agyPath = d.string(forKey: "agyPath") ?? ""
         agyModel = d.string(forKey: "agyModel") ?? ""
         agyEffort = d.string(forKey: "agyEffort") ?? ""

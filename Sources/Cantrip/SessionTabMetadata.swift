@@ -23,6 +23,8 @@ struct SessionTabMetadata: Equatable {
     var claudeModelSettings: SessionModelSelection?
     /// Antigravity's (`agy models` slugs such as `claude-opus-5-5-medium`), kept apart likewise.
     var antigravityModelSettings: SessionModelSelection?
+    /// Codex's (`model/list` IDs such as `gpt-6-luna`), kept apart likewise.
+    var codexModelSettings: SessionModelSelection?
     /// The sidebar section this tab is filed under; nil (or a deleted section) shows it under Tabs.
     var sectionID: UUID?
 
@@ -50,6 +52,7 @@ struct SessionTabMetadata: Equatable {
         result.modelSettings = selection("modelSettings")
         result.claudeModelSettings = selection("claudeModelSettings")
         result.antigravityModelSettings = selection("antigravityModelSettings")
+        result.codexModelSettings = selection("codexModelSettings")
         return result
     }
 
@@ -57,6 +60,7 @@ struct SessionTabMetadata: Equatable {
         switch backend {
         case .claudeCode: return claudeModelSettings
         case .antigravity: return antigravityModelSettings
+        case .codex: return codexModelSettings
         default: return modelSettings
         }
     }
@@ -65,6 +69,7 @@ struct SessionTabMetadata: Equatable {
         switch backend {
         case .claudeCode: claudeModelSettings = selection
         case .antigravity: antigravityModelSettings = selection
+        case .codex: codexModelSettings = selection
         default: modelSettings = selection
         }
     }
@@ -74,7 +79,8 @@ struct SessionTabMetadata: Equatable {
         if let customTitle { value["customTitle"] = customTitle }
         if let sectionID { value["sectionID"] = sectionID.uuidString }
         for (key, selection) in [("modelSettings", modelSettings), ("claudeModelSettings", claudeModelSettings),
-                                 ("antigravityModelSettings", antigravityModelSettings)] {
+                                 ("antigravityModelSettings", antigravityModelSettings),
+                                 ("codexModelSettings", codexModelSettings)] {
             guard let selection else { continue }
             value[key] = ["model": selection.model, "effort": selection.effort, "contextTier": selection.contextTier]
         }

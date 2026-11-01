@@ -145,6 +145,7 @@ final class ChildTabCoordinator {
         try? child.saveModelSelection(parent.tabMetadata.modelSettings, for: .copilot)
         try? child.saveModelSelection(parent.tabMetadata.claudeModelSettings, for: .claudeCode)
         try? child.saveModelSelection(parent.tabMetadata.antigravityModelSettings, for: .antigravity)
+        try? child.saveModelSelection(parent.tabMetadata.codexModelSettings, for: .codex)
         manager.placeChild(child, after: parent)
         parent.removeQueued(id: item.id)
         observeParent(parent)

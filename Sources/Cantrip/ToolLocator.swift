@@ -43,6 +43,14 @@ final class ToolLocator: @unchecked Sendable {
         path(for: "claude", configured: configured, extraFolders: Self.claudeFolders)
     }
 
+    static let codexFolders = ["~/.local/bin", "~/.npm-global/bin"]
+    var codex: String? { codex(configured: "") }
+    /// `askLoginShell: false` for checks on the main thread: a login shell can take seconds, and
+    /// a Mac without Codex would pay that on every check (nothing is cached when it isn't found).
+    func codex(configured: String, askLoginShell: Bool = true) -> String? {
+        path(for: "codex", configured: configured, extraFolders: Self.codexFolders, askLoginShell: askLoginShell)
+    }
+
     var gh: String? { path(for: "gh") }
 
     var tailscale: String? {

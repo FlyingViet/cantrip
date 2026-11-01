@@ -21,6 +21,7 @@ enum CantripHomeTaskModels {
     static func offered(_ settings: AppSettings) -> [String] {
         if backend(settings) == .claudeCode { return settings.claudeModelCatalog.map(\.id) }
         if backend(settings) == .antigravity { return settings.agyAvailableModels }
+        if backend(settings) == .codex { return settings.codexAvailableModels.map(\.id) }
         var ids = settings.copilotModelCatalog.map(\.id)
         for id in settings.copilotAvailableModels where !ids.contains(id) { ids.append(id) }
         return ids
@@ -80,6 +81,7 @@ enum CantripHomeTaskModels {
         switch backend(settings) {
         case .claudeCode: defaultName = "Claude Code's default model"
         case .antigravity: defaultName = "Antigravity's default model"
+        case .codex: defaultName = "Codex's default model"
         default: defaultName = settings.copilotFileDefaultModel ?? "Copilot's default model"
         }
         let homeModel = home.model.isEmpty ? defaultName : home.model

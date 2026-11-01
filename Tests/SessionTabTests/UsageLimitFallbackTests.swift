@@ -232,15 +232,25 @@ extension SessionTabTests {
         // Each backup's model and effort, from the backend's real lists.
         let savedCatalog = settings.claudeModelCatalog
         let savedModels = settings.limitFallbackModels
-        defer { settings.claudeModelCatalog = savedCatalog; settings.limitFallbackModels = savedModels }
+        let savedCodex = settings.codexAvailableModels
+        defer {
+            settings.claudeModelCatalog = savedCatalog; settings.limitFallbackModels = savedModels
+            settings.codexAvailableModels = savedCodex
+        }
         settings.backend = .copilot
         settings.claudeModelCatalog = [CopilotModelInfo(id: "claude-opus-5-5", reasoningEfforts: ["low", "high"])]
+        settings.codexAvailableModels = [CodexModel(id: "gpt-6-luna", displayName: "GPT-6-Luna", efforts: ["low", "max"],
+                                                    defaultEffort: "low", isDefault: true)]
         let offered = try await call()
         let claudeChoice = (offered.1["choices"] as? [[String: Any]] ?? []).first { $0["id"] as? String == "Claude Code" }
         let codexChoice = (offered.1["choices"] as? [[String: Any]] ?? []).first { $0["id"] as? String == "Codex" }
+        let remoteChoice = (offered.1["choices"] as? [[String: Any]] ?? []).first { $0["id"] as? String == "Copilot Remote" }
         let claudeModels = claudeChoice?["models"] as? [[String: Any]]
+        let codexModels = codexChoice?["models"] as? [[String: Any]]
         precondition(claudeModels?.first?["id"] as? String == "claude-opus-5-5"
-                     && claudeModels?.first?["efforts"] as? [String] == ["low", "high"] && codexChoice?["models"] == nil,
+                     && claudeModels?.first?["efforts"] as? [String] == ["low", "high"]
+                     && codexModels?.first?["id"] as? String == "gpt-6-luna" && codexModels?.first?["efforts"] as? [String] == ["low", "max"]
+                     && remoteChoice != nil && remoteChoice?["models"] == nil,
                      "Choices list each backend's real models and efforts, none for a backend without a picker: \(offered.1)")
         var rev = offered.1["revision"] as? String ?? ""
         let fake = try await call("POST", ["revision": rev, "entries": [["backend": "Claude Code", "model": "claude-fake-9"]]])

@@ -102,13 +102,14 @@ struct TabModelCatalog {
 
 extension AppSettings {
     /// Backends whose tabs can pick their own model and effort.
-    static let tabModelBackends: Set<BackendKind> = [.copilot, .claudeCode, .antigravity]
+    static let tabModelBackends: Set<BackendKind> = [.copilot, .claudeCode, .antigravity, .codex]
 
     /// The backend whose model list per-tab settings, Home and Home tasks use.
     var tabModelBackend: BackendKind {
         switch backend {
         case .claudeCode: return .claudeCode
         case .antigravity: return .antigravity
+        case .codex: return .codex
         default: return .copilot
         }
     }
@@ -136,6 +137,13 @@ extension AppSettings {
                                    fileDefaultModel: macModel.isEmpty ? nil : macModel,
                                    fileDefaultContextTier: nil, refreshError: agyModelRefreshError,
                                    isRefreshing: agyRefreshInFlight)
+        case .codex:
+            // "CLI default" is the Mac's Codex model, or the account's default model.
+            let macModel = codexModel.trimmingCharacters(in: .whitespaces)
+            return TabModelCatalog(backend: backend, models: codexModelCatalog,
+                                   fileDefaultModel: macModel.isEmpty ? codexAvailableModels.first { $0.isDefault }?.id : macModel,
+                                   fileDefaultContextTier: nil, refreshError: codexModelRefreshError,
+                                   isRefreshing: codexRefreshInFlight)
         default:
             return TabModelCatalog(backend: backend, models: copilotModelCatalog, fileDefaultModel: copilotFileDefaultModel,
                                    fileDefaultContextTier: copilotFileContextTier, refreshError: copilotModelRefreshError,
@@ -150,6 +158,8 @@ extension AppSettings {
             return SessionModelSelection(model: claudeModel, effort: claudeEffort, contextTier: "")
         case .antigravity:
             return SessionModelSelection(model: agyModel, effort: agyEffort, contextTier: "")
+        case .codex:
+            return SessionModelSelection(model: codexModel, effort: codexEffort, contextTier: "")
         default:
             return SessionModelSelection(model: copilotModel, effort: copilotEffort, contextTier: copilotContextTier)
         }
@@ -159,6 +169,7 @@ extension AppSettings {
         switch backend {
         case .claudeCode: refreshClaudeModels()
         case .antigravity: refreshAntigravityModels()
+        case .codex: refreshCodexModels()
         default: refreshCopilotModels()
         }
     }
@@ -167,6 +178,7 @@ extension AppSettings {
         switch backend {
         case .claudeCode: refreshClaudeModelsIfNeeded()
         case .antigravity: refreshAntigravityModelsIfNeeded()
+        case .codex: refreshCodexModelsIfNeeded()
         default: refreshCopilotModelsIfNeeded()
         }
     }

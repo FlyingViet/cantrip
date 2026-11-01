@@ -58,7 +58,7 @@ extension ChatSession {
     var modelSettingsUnavailableReason: String? {
         if isLocalPrivate { return "Use Private Local Settings. This tab cannot use Copilot or Mac model defaults." }
         if !AppSettings.tabModelBackends.contains(settings.backend) || councilMode {
-            return "Per-tab model settings require the Mac's Copilot, Claude Code or Antigravity backend with Council mode off."
+            return "Per-tab model settings require the Mac's Copilot, Claude Code, Codex or Antigravity backend with Council mode off."
         }
         if isStreaming || !queued.isEmpty || shell.isRunning {
             return "Wait for this tab and its queued work to finish before changing model settings."
@@ -73,6 +73,7 @@ extension ChatSession {
         switch modelSettingsBackend {
         case .claudeCode: path = settings.claudePath
         case .antigravity: path = settings.agyPath
+        case .codex: path = settings.codexPath
         default: path = settings.copilotPath
         }
         let fields = [settings.backend.rawValue, String(councilMode),

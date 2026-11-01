@@ -48,7 +48,7 @@ extension SessionTabTests {
         settings.agyModel = ""
         var agyCompletion: ((Result<AntigravityAccountUsage, Error>) -> Void)?
         let tracker = UsageTracker(quotaLoader: { $0(.failure(CopilotQuotaError.timeout)) }, claudeLoader: nil,
-                                   antigravityLoader: { { agyCompletion = $0 } }, quotaClock: { now })
+                                   antigravityLoader: { { agyCompletion = $0 } }, codexLoader: { nil }, quotaClock: { now })
         BackendLimitTracker.shared.clear()
         defer { BackendLimitTracker.shared.clear() }
         tracker.refreshQuotas()
@@ -62,7 +62,7 @@ extension SessionTabTests {
 
         let full = try requireHome(AntigravityUsageFetcher.parse(reply(geminiFiveHour: 0)))
         let later = UsageTracker(quotaLoader: { $0(.failure(CopilotQuotaError.timeout)) }, claudeLoader: nil,
-                                 antigravityLoader: { { $0(.success(full)) } }, quotaClock: { now })
+                                 antigravityLoader: { { $0(.success(full)) } }, codexLoader: { nil }, quotaClock: { now })
         later.refreshQuotas()
         try await Task.sleep(for: .milliseconds(20))
         precondition(BackendLimitTracker.shared.limitedUntil(.antigravity, now: now) == copilotDate("2026-10-31T07:31:18Z"),

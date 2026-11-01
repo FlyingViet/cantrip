@@ -274,10 +274,11 @@ enum BackendCommandPolicy {
         case (.copilot, "cwd"), (.copilot, "cd"), (.copilotRemote, "cwd"), (.copilotRemote, "cd"):
             return (.unavailable, cwdNote, nil)
         case (.copilot, "model"), (.copilot, "models"), (.claudeCode, "model"),
-             (.antigravity, "model"), (.antigravity, "models"):
+             (.antigravity, "model"), (.antigravity, "models"), (.codex, "model"), (.codex, "models"):
             return (.cantrip, modelNote, "modelSettings")
         case (.claudeCode, "clear"), (.claudeCode, "reset"), (.claudeCode, "new"),
-             (.antigravity, "clear"), (.antigravity, "reset"), (.antigravity, "new"):
+             (.antigravity, "clear"), (.antigravity, "reset"), (.antigravity, "new"),
+             (.codex, "clear"), (.codex, "new"):
             return (.cantrip, clearNote, "startFresh")
         case (.claudeCode, "color"):
             return (.unavailable, colorNote, nil)
