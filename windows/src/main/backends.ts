@@ -13,6 +13,7 @@ import type {
   RunRequest,
 } from "../shared/types";
 import type { PluginMcpSnapshot } from "../shared/pluginTypes";
+import { checkLocation, locationNote } from "../shared/location";
 
 const execFileAsync = promisify(execFile);
 const ansiPattern =
@@ -63,6 +64,14 @@ async function commandSpec(command: string): Promise<CommandSpec | null> {
   const localNode = path.join(path.dirname(shim), "node.exe");
   const node = existsSync(localNode) ? localNode : (await where("node")).find((file) => file.endsWith(".exe"));
   return node ? { executable: node, prefixArgs: [script] } : null;
+}
+
+/** Settings › Location: an AI prompt gets a note saying where this PC is (shell commands never do). */
+export function withLocationNote(request: RunRequest, now: Date = new Date()): RunRequest {
+  const { location } = checkLocation(request.location);
+  const { location: _sent, ...rest } = request;
+  if (request.mode !== "ai" || !location) return rest;
+  return { ...rest, prompt: `${locationNote(location, now)}\n\n${request.prompt}` };
 }
 
 export function backendArgs(
@@ -209,6 +218,7 @@ export class RunManager {
   ): Promise<{ ok: boolean; error?: string }> {
     const validationError = this.validate(request);
     if (validationError) return { ok: false, error: validationError };
+    request = withLocationNote(request);
     if (this.processes.has(request.runId)) {
       return { ok: false, error: "That run is already active." };
     }
@@ -343,6 +353,8 @@ export class RunManager {
     if (!Array.isArray(request.attachments) || request.attachments.length > 6) {
       return "Too many screen attachments.";
     }
+    const location = checkLocation(request.location);
+    if (location.error) return location.error;
     for (const attachment of request.attachments) {
       if (
         typeof attachment.name !== "string" ||

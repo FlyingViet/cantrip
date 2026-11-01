@@ -1,4 +1,5 @@
 import type { PluginSummary } from "./pluginTypes";
+import type { ClientLocation } from "./location";
 
 export type BackendId = "claude" | "copilot" | "codex" | "agy";
 export type ReasoningEffort =
@@ -57,6 +58,8 @@ export interface RunRequest {
   effort: ReasoningEffort;
   contextTier: ContextTier;
   attachments: RunAttachment[];
+  /** Settings › Location: where this PC is, for AI prompts only; absent while sharing is off. */
+  location?: ClientLocation;
 }
 
 export interface RunChunkEvent {
