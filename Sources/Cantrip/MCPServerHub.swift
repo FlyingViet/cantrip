@@ -248,10 +248,14 @@ final class MCPServerHub: ObservableObject {
                 self.set(name, State(phase: .ready, message: "Signed in.", expiresAt: credential?.expiresAt))
                 Log.write("mcp: \(name) signed in through Cantrip")
             } catch {
-                let failure = error as? MCPOAuth.Failure
+                // Cancel stops the flow wherever it waits (often a network call): that's a cancelled
+                // sign-in, not a failure with Swift's CancellationError text.
+                let cancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
+                let failure = cancelled ? MCPOAuth.Failure(kind: .denied, message: "Sign-in was cancelled.") : error as? MCPOAuth.Failure
+                let message = failure?.message ?? error.localizedDescription
                 self.set(name, State(phase: failure?.kind == .keychain ? .locked : (failure?.kind == .denied ? .needsSignIn : .failed),
-                                     message: error.localizedDescription))
-                Log.write("mcp: \(name) sign-in failed: \(error.localizedDescription)")
+                                     message: message))
+                Log.write("mcp: \(name) sign-in \(cancelled ? "cancelled" : "failed: \(message)")")
             }
             self.flows[name] = nil
         }
