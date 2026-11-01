@@ -24,7 +24,11 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   in that thread; a prompt whose replies got split up says
   "N Replies"; either opens the whole thread over the blurred window, even before older
   messages load), questions answered in the reply panel, approvals and sign-ins inline,
-  prompt token usage, older history loading as you scroll up, and Start Fresh.
+  prompt token usage, older history loading as you scroll up, and Start Fresh. **Delete Message…**
+  in a prompt's, reply's or error's menu (its ⋯ button, or right-click) asks first, then removes that
+  message and its reply from the tab's history on the Mac, so the model won't have them anymore;
+  messages deleted from another device disappear too (needs a Cantrip version that offers it; not
+  while the tab is working).
 - **Slash commands.** Type `/` in a tab's or Home's composer to see the tab backend's
   commands, custom commands and skills, as the Mac lists them (needs a Cantrip version that
   offers them; older ones keep the composer as it was).

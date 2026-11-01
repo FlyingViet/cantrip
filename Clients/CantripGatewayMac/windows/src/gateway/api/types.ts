@@ -697,6 +697,13 @@ export interface RemoteSessionSummary {
   supportsContinueFromMessage?: boolean;
   /** Failed runs' error messages that offer Continue. */
   continuableMessageIDs?: string[];
+  /** POST .../delete-message ({@link DeleteMessageRequest}) is offered on prompts, replies and errors. Absent on older hosts. */
+  supportsDeleteMessage?: boolean;
+  /**
+   * Messages deleted from this tab (from any device). Clients drop them from every cached page and thread.
+   * Absent when none.
+   */
+  deletedMessageIDs?: UUIDString[];
   /** The tab's persistent shell is open to paired clients (…/terminal); false for Private Local. */
   supportsTerminal?: boolean;
   /** A command (the user's or the agent's) is running in that shell. */
@@ -912,6 +919,15 @@ export interface SendMessageRequest {
   fileIDs?: UUIDString[];
   /** Answer this pending question in chat instead of sending a new prompt. */
   inputRequestID?: UUIDString;
+}
+
+/**
+ * POST /api/v1/sessions/<id>/delete-message body (sessions with `supportsDeleteMessage`). The Mac deletes the whole
+ * exchange: the prompt and its reply/replies. 200 → {@link SessionResponse}; `{error}` with 400, 404 (no longer in
+ * the conversation) or 409 (the tab is working).
+ */
+export interface DeleteMessageRequest {
+  messageID: UUIDString;
 }
 
 /** POST /api/v1/sessions/<id>/metadata. At least one key; no other keys. */

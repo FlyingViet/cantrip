@@ -52,6 +52,13 @@
 .error-line { display: flex; gap: 6px; align-items: flex-start; color: var(--red); font-size: 12px; }
 .error-line .icon { margin-top: 2px; }
 .error-actions { flex-wrap: wrap; }
+/* A message's "⋯" menu (Delete Message…): left of a prompt's bubble, after a reply's lane badge; shown on hover or focus. */
+.bubble-line { align-self: stretch; display: flex; justify-content: flex-end; align-items: center; gap: 6px; min-width: 0; }
+.bubble-line > .bubble { min-width: 0; }
+.lane-line { display: inline-flex; align-items: center; gap: 6px; }
+.icon-btn.message-menu { flex: none; width: 24px; height: 24px; opacity: 0; }
+.turn:hover .message-menu, .message-menu:focus-visible, .message-menu[aria-expanded="true"] { opacity: 1; }
+@media (hover: none) { .icon-btn.message-menu { opacity: 0.55; } }
 .fresh-start { display: flex; align-items: center; gap: 10px; color: var(--secondary); font-size: 11.5px; text-align: center; padding: 6px 0; }
 .fresh-start span { flex: 1; min-width: 16px; height: 1px; background: var(--separator); }
 .private-text { white-space: pre-wrap; font: inherit; margin: 0; }

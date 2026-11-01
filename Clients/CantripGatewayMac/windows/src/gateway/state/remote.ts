@@ -4,15 +4,16 @@
 import { batch, computed, signal } from "@preact/signals";
 import { api, APIError, onWritesChanged, pathComponent } from "../api/client";
 import type {
-  ChildTabAction, ForkQueuedResponse, HomeArtifactsResponse, HomeArtifactsSnapshot, HomeBackgroundSnapshot, HomeInputGroup, HomeTasksResponse,
+  ChildTabAction, DeleteMessageRequest, ForkQueuedResponse, HomeArtifactsResponse, HomeArtifactsSnapshot, HomeBackgroundSnapshot, HomeInputGroup, HomeTasksResponse,
   HomeTasksSnapshot, InputAnswerRequest, MoveTabResponse, PagedRemoteSessionDetail, RemoteMessage,
   RemoteSessionSummary, SendMessageRequest, SessionResponse, SessionsListResponse, SessionUpdateResponse,
   SubagentCancelResponse, TabSection, TabSectionsResponse,
 } from "../api/types";
 import { bridge, type HostStatus } from "../bridge";
+import { deletedSet, isDeleted, withoutDeleted } from "./deleteMessage";
 import { movedSections } from "./sections";
 import { plainMentions, plainMentionsDeep, plainSession } from "./tabMentions";
-import { resetThreads } from "./threads";
+import { dropDeletedMessages, resetThreads } from "./threads";
 
 export type Detail = PagedRemoteSessionDetail;
 
@@ -182,6 +183,7 @@ async function refreshOnce(): Promise<void> {
     if ([...details.value.keys()].some((id) => !keep.has(id))) {
       details.value = new Map([...details.value].filter(([id]) => keep.has(id)));
     }
+    dropDeleted(list.home ? [...list.sessions, list.home] : list.sessions);
   });
   const id = selectedID.value;
   if (id) {
@@ -249,6 +251,8 @@ export function apply(received: Detail, options: { keepOlder?: boolean } = {}): 
     expanded.delete(session.id);
     setHistory(session.id, null);
   }
+  const deleted = deletedSet(session.deletedMessageIDs);
+  next = { ...next, messages: withoutDeleted(next.messages, deleted) };
   if (!expanded.has(session.id) && !options.keepOlder) {
     const bounded = historySuffix(next.messages, 3);
     if (bounded.length < next.messages.length) next = { ...next, messages: bounded, hasOlderMessages: true };
@@ -266,6 +270,7 @@ export function apply(received: Detail, options: { keepOlder?: boolean } = {}): 
   }
   batch(() => {
     details.value = map;
+    dropDeletedMessages(deleted);
     // Keep the listed summary in step with the detail.
     if (sessions.value.some((item) => item.id === session.id)) {
       sessions.value = sessions.value.map((item) => (item.id === session.id ? summaryOf(session, item) : item));
@@ -278,6 +283,23 @@ export function apply(received: Detail, options: { keepOlder?: boolean } = {}): 
 function summaryOf(session: Detail, previous: RemoteSessionSummary): RemoteSessionSummary {
   const { messages: _messages, queued: _queued, historyStartID: _start, hasOlderMessages: _older, threadReplies: _replies, ...summary } = session;
   return { ...previous, ...summary };
+}
+
+/** Removes messages deleted on the Mac (from any device) from the cached transcripts and threads of these sessions. */
+function dropDeleted(summaries: readonly Pick<RemoteSessionSummary, "id" | "deletedMessageIDs">[]): void {
+  let map: Map<string, Detail> | null = null;
+  for (const summary of summaries) {
+    const deleted = deletedSet(summary.deletedMessageIDs);
+    if (!deleted.size) continue;
+    dropDeletedMessages(deleted);
+    const cached = (map ?? details.value).get(summary.id);
+    if (!cached) continue;
+    const messages = withoutDeleted(cached.messages, deleted);
+    if (messages === cached.messages) continue;
+    map ??= new Map(details.value);
+    map.set(summary.id, { ...cached, messages });
+  }
+  if (map) details.value = map;
 }
 
 function setHistory(id: string, value: { loading: boolean; error: string | null } | null): void {
@@ -302,7 +324,8 @@ export async function loadOlder(id: string, automatically = false): Promise<bool
       return false;
     }
     const known = new Set(latest.messages.map((message) => message.id));
-    const received = data.session.messages.filter((message) => !known.has(message.id));
+    const deleted = deletedSet([...(latest.deletedMessageIDs ?? []), ...(data.session.deletedMessageIDs ?? [])]);
+    const received = data.session.messages.filter((message) => !known.has(message.id) && !isDeleted(message.id, deleted));
     if (!received.length && data.session.hasOlderMessages !== false) throw new Error("The Mac sent an empty page.");
     expanded.add(id);
     const map = new Map(details.value);
@@ -434,6 +457,17 @@ export async function continueFromMessage(id: string, messageID: string): Promis
 
 export async function startFresh(id: string): Promise<void> {
   await mutate(() => sessionAction(id, "start-fresh", {}));
+}
+
+/** Deletes a prompt, reply or error with the rest of its exchange on the Mac; ask first (DELETE_MESSAGE_CONFIRMATION). */
+export async function deleteMessage(id: string, messageID: string): Promise<void> {
+  const body: DeleteMessageRequest = { messageID };
+  await mutate(async () => {
+    const data = await api<SessionResponse>(sessionPath(id, "delete-message"), { method: "POST", body, recent: true });
+    const listed = data.session.deletedMessageIDs ?? [];
+    // The deleted message goes from every cached page even if the Mac's list leaves it out.
+    apply(isDeleted(messageID, deletedSet(listed)) ? data.session : { ...data.session, deletedMessageIDs: [...listed, messageID] });
+  });
 }
 
 /** Closes a tab; returns the tab the Mac selects instead. */

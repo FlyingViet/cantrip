@@ -8,6 +8,7 @@ import type {
   RemoteSessionSummary, RemoteSubagent,
 } from "../../api/types";
 import { now } from "../../state/clock";
+import { canDeleteMessage, DELETE_MESSAGE_CONFIRMATION, DELETE_MESSAGE_LABEL } from "../../state/deleteMessage";
 import { clockTime, compactTokens, elapsed, isBusy, subagentLive } from "../../state/format";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
@@ -15,7 +16,7 @@ import { mentionSafeCut, plainMentions, plainMentionsDeep } from "../../state/ta
 import { threadReplies, threadTag, type ThreadLine } from "../../state/threads";
 import { SubagentStack } from "../activity/Subagents";
 import { Icon, StatusIcon } from "../icons";
-import { Spinner, toast } from "../kit";
+import { confirmDialog, MenuButton, openMenu, Spinner, toast, type MenuEntry } from "../kit";
 import { openViewer } from "../viewer";
 import { ChildResultCard } from "./ChildTabs";
 import { MCPAppStack } from "./MCPApp";
@@ -443,6 +444,47 @@ function RepeatedErrorActions(props: { session: RemoteSessionSummary }): JSX.Ele
   );
 }
 
+/** Asks first, then deletes the message and the rest of its exchange on the Mac; the returned session drops them. */
+export async function confirmDeleteMessage(sessionID: string, messageID: string): Promise<boolean> {
+  if (!(await confirmDialog(DELETE_MESSAGE_CONFIRMATION))) return false;
+  try {
+    await remote.deleteMessage(sessionID, messageID);
+    return true;
+  } catch (error) {
+    toast(`Delete Message failed: ${(error as Error).message}`);
+    return false;
+  }
+}
+
+/** A prompt's, reply's or error's actions (its "⋯" button and right-click menu). */
+export function messageMenu(session: RemoteSessionSummary, messageID: string): MenuEntry[] {
+  return [{
+    label: DELETE_MESSAGE_LABEL, icon: "trash", destructive: true, disabled: remote.isMutating.value,
+    onSelect: () => void confirmDeleteMessage(session.id, messageID),
+  }];
+}
+
+const MESSAGE_MENU_LABEL = "Message actions";
+
+function MessageMenuButton(props: { session: RemoteSessionSummary; messageID: string; align: "start" | "end" }): JSX.Element {
+  return (
+    <MenuButton class="icon-btn message-menu" label={MESSAGE_MENU_LABEL} align={props.align} entries={() => messageMenu(props.session, props.messageID)}>
+      <Icon name="ellipsis" size={16} />
+    </MenuButton>
+  );
+}
+
+/** Right-click (or the context-menu key) on a row with actions; from the keyboard it opens at the row. */
+function openMessageMenu(event: MouseEvent, session: RemoteSessionSummary, messageID: string): void {
+  event.preventDefault();
+  let point = { x: event.clientX, y: event.clientY };
+  if (!point.x && !point.y) {
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    point = { x: box.left + 24, y: box.top + 24 };
+  }
+  openMenu(point, messageMenu(session, messageID), { label: MESSAGE_MENU_LABEL });
+}
+
 export function ThinkingIndicator(props: { size?: number; class?: string }): JSX.Element {
   return <span class={`thinking${props.class ? ` ${props.class}` : ""}`} role="img" aria-label="Thinking"><Icon name="brain" size={(props.size ?? 22) as 22} /></span>;
 }
@@ -479,15 +521,20 @@ export function MessageRow(props: {
     const caption = message.text?.trim() || "Started fresh — earlier messages aren't sent to the model";
     return <div class="fresh-start" data-message-id={message.id} role="separator" aria-label={caption}><span />{caption}<span /></div>;
   }
+  const deletable = canDeleteMessage(session, message);
+  const onContextMenu = deletable ? (event: MouseEvent) => openMessageMenu(event, session, message.id) : undefined;
   if (message.role === "user") {
     const text = message.displayText ?? message.text;
     const replies = threadReplies(session, message.id);
+    const bubble = (
+      <div class="bubble">
+        {text ? <PromptText text={text} /> : null}
+        <ImageGallery sessionID={session.id} images={message.images ?? []} />
+      </div>
+    );
     return (
-      <div class={`turn user${line}`} data-message-id={message.id}>
-        <div class="bubble">
-          {text ? <PromptText text={text} /> : null}
-          <ImageGallery sessionID={session.id} images={message.images ?? []} />
-        </div>
+      <div class={`turn user${line}`} data-message-id={message.id} onContextMenu={onContextMenu}>
+        {deletable ? <div class="bubble-line"><MessageMenuButton session={session} messageID={message.id} align="end" />{bubble}</div> : bubble}
         {replies ? <ThreadRepliesButton sessionID={session.id} promptID={message.id} prompt={text ?? ""} count={replies} /> : null}
         {message.promptUsage ? <PromptUsageLine usage={message.promptUsage} /> : null}
       </div>
@@ -501,9 +548,10 @@ export function MessageRow(props: {
   const handoffs = (message.delegations ?? []).filter((handoff) => !props.reported.has(handoff.id));
   const text = isError ? "" : (message.displayText ?? message.text ?? "");
   const thinking = props.streaming && !text && !steps.length && !apps.length && !subagents.length;
+  const lane = <LaneBadge lane={props.lane} />;
   return (
-    <div class={`turn assistant${line}`} data-message-id={message.id}>
-      {head(<LaneBadge lane={props.lane} />)}
+    <div class={`turn assistant${line}`} data-message-id={message.id} onContextMenu={onContextMenu}>
+      {head(deletable ? <span class="lane-line">{lane}<MessageMenuButton session={session} messageID={message.id} align="start" /></span> : lane)}
       {rest(
         <>
           {message.author ? <div class="author">{message.author}</div> : null}
