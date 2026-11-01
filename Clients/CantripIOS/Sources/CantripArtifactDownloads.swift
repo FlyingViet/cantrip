@@ -261,7 +261,8 @@ final class CantripLANDownload: @unchecked Sendable {
     }
 }
 
-/// Private temporary copies of downloaded artifacts, handed to Save / Share and removed after.
+/// Private temporary copies of downloaded artifacts, handed to Save / Share; removed once saved,
+/// or (for the share sheet, whose activities read the file after it closes) an hour later.
 enum CantripArtifactDownloadFolder {
     static var root: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("CantripArtifactDownloads", isDirectory: true)
@@ -303,7 +304,8 @@ enum CantripArtifactSaveAction: Equatable {
 
 #if os(iOS)
 /// Presents the system Files exporter or share sheet for a downloaded file over the current
-/// screen; `completion` runs once it is dismissed, so the temporary copy can be removed.
+/// screen; `completion` runs once it is dismissed (the share sheet's activities may still be
+/// reading the file then).
 @MainActor
 enum CantripArtifactExporter {
     @discardableResult
