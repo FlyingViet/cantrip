@@ -39,9 +39,6 @@ struct MacHomeCommands: Commands {
             Button("Toggle Terminal") { navigation.showingTerminal.toggle() }
                 .keyboardShortcut("`", modifiers: .control)
             Divider()
-            Button("Refresh") { Task { await remote.refreshNow() } }
-                .keyboardShortcut("r", modifiers: .command)
-            Divider()
         }
 
         // Tab: the open tab's (or Home's) model and conversation, and the agent.
