@@ -87,7 +87,9 @@ struct StorageUpkeepView: View {
                 .help("Removes Copilot session folders nothing has used for the set number of days, and agent git "
                     + "worktrees (in session folders, ~/.cache/Cantrip or temporary folders) that are clean, unchanged "
                     + "for 3 days and whose commits are on a branch. Sessions of open or closed tabs, ones named in "
-                    + "memory notes, ones in use and anything with uncommitted or unpushed work stay.")
+                    + "memory notes, ones in use and anything with uncommitted or unpushed work stay. Also removes "
+                    + "build output the next build makes again (DerivedData and SwiftPM checkouts nothing used for "
+                    + "days, git-ignored ones only in your checkouts) and trims package caches over their caps.")
             if settings.storageUpkeepEnabled {
                 Stepper(value: $settings.storageSessionRetentionDays, in: StorageUpkeep.sessionRetentionDays) {
                     Text("Keep unused sessions for \(settings.storageSessionRetentionDays) days")

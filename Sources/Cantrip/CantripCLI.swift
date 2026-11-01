@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "tab", "tabs", "sim", "mcp", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 
@@ -16,6 +16,7 @@ enum CantripCLI {
             case "status": try status(json: arguments.contains("--json"))
             case "doctor": return doctor()
             case "cleanup": return cleanup(Array(arguments.dropFirst()))
+            case "seed-worktree": return try seedWorktree(Array(arguments.dropFirst()))
             case "tab", "tabs": return try tab(Array(arguments.dropFirst()))
             case "sim": return try sim(Array(arguments.dropFirst()))
             case "mcp": return try mcp(Array(arguments.dropFirst()))
@@ -49,11 +50,15 @@ enum CantripCLI {
       cantrip config get KEY
       cantrip config set KEY VALUE [KEY VALUE ...]
       cantrip doctor              Check the host, Remote, backends and Tailscale
-      cantrip cleanup [options]   Remove unused agent sessions and worktrees now (Cantrip also does this daily)
+      cantrip cleanup [options]   Remove unused agent sessions, worktrees and build caches now, and show cache
+                                  sizes (Cantrip also does this daily)
           --dry-run               Only show what would be removed
-          --list                  Name each session, worktree and simulator
+          --list                  Name each session, worktree, simulator and build cache
           --simulators            Also simulators the pool didn't make (as the storageSimulatorCleanup setting does)
           --json
+      cantrip seed-worktree PATH [--from CHECKOUT] [--dry-run]
+                                  Clone node_modules, Pods and SwiftPM folders into a new git worktree, copy-on-write,
+                                  from a checkout installed from the same lockfiles (default: the repository's others)
       cantrip sim acquire --device NAME [--os VERSION]
                                   Lease a simulator to this tab and print its UDID: the pool's for that device and
                                   iOS version, or a temporary copy while another tab has it
@@ -226,7 +231,8 @@ enum CantripCLI {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
             print(String(decoding: (try? encoder.encode(report)) ?? Data(), as: UTF8.self))
-            return report.errors.isEmpty && report.simulators?.errors.isEmpty != false ? 0 : 1
+            return report.errors.isEmpty && report.simulators?.errors.isEmpty != false
+                && report.caches?.errors.isEmpty != false ? 0 : 1
         }
         print(report.summary)
         if !report.keptSummary.isEmpty { print("Kept " + report.keptSummary.joined(separator: ", ") + ".") }
@@ -237,15 +243,61 @@ enum CantripCLI {
             print("Simulators: \(simulators.simulators) using \(StorageUpkeep.format(simulators.totalBytes)) "
                 + "(the pool's \(StorageUpkeep.format(simulators.poolBytes))), \(simulators.leased) leased.")
         }
-        for error in report.errors + (report.simulators?.errors ?? []) { print("Error: \(error)") }
+        for cache in report.caches?.caches ?? [] {
+            var line = "Cache \(cache.name): \(StorageUpkeep.format(cache.bytes))"
+            if let cap = cache.cap { line += " of \(StorageUpkeep.format(cap))" }
+            if cache.bytesAfter < cache.bytes { line += ", \(StorageUpkeep.format(cache.bytesAfter)) after trimming" }
+            if let note = cache.note { line += " (\(note))" }
+            print(line)
+        }
+        for error in report.errors + (report.simulators?.errors ?? []) + (report.caches?.errors ?? []) {
+            print("Error: \(error)")
+        }
         if let free = report.freeBytesAfter { print("\(StorageUpkeep.format(free)) free.") }
         if !dryRun, report.bytesRemoved > 0 {
             print("Each removal is listed in \(configuration.stateDirectory.path)/storage-upkeep.log.")
         } else if dryRun, !list, report.sessionsRemoved + report.worktreesRemoved.count
-                    + (report.simulators?.actions.count ?? 0) > 0 {
+                    + (report.simulators?.actions.count ?? 0) + (report.caches?.count ?? 0) > 0 {
             print("Add --list to name each one.")
         }
-        return report.errors.isEmpty && report.simulators?.errors.isEmpty != false ? 0 : 1
+        return report.errors.isEmpty && report.simulators?.errors.isEmpty != false
+            && report.caches?.errors.isEmpty != false ? 0 : 1
+    }
+
+    // MARK: - seed-worktree
+
+    static func seedWorktree(_ arguments: [String]) throws -> Int32 {
+        var path: String?, source: String?, dryRun = false
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--from":
+                index += 1
+                guard index < arguments.count else { throw Failure(message: "--from needs a checkout.", code: 2) }
+                source = arguments[index]
+            case "--dry-run": dryRun = true
+            default:
+                guard path == nil, !arguments[index].hasPrefix("-") else {
+                    throw Failure(message: "Unknown option \(arguments[index]).\n\(usage)", code: 2)
+                }
+                path = arguments[index]
+            }
+            index += 1
+        }
+        let expand = { (value: String) in
+            URL(fileURLWithPath: (value as NSString).expandingTildeInPath).standardizedFileURL.path
+        }
+        guard let worktree = path.map(expand) else { throw Failure(message: "Name the worktree to seed.\n\(usage)", code: 2) }
+        let sources = source.map { [expand($0)] }
+            ?? BuildCaches.checkouts(of: worktree).filter { StorageUpkeep.resolved($0) != StorageUpkeep.resolved(worktree) }
+        guard !sources.isEmpty else {
+            throw Failure(message: "\(worktree) has no other checkout to clone from; pass --from.")
+        }
+        let result = BuildCaches.seed(worktree: worktree, from: sources, dryRun: dryRun)
+        for seeded in result.seeded { print("\(dryRun ? "Would clone" : "Cloned") \(seeded)") }
+        for skipped in result.skipped { print("Skipped \(skipped.path): \(skipped.reason)") }
+        if result.seeded.isEmpty && result.skipped.isEmpty { print("No other checkout has dependency folders to clone.") }
+        return 0
     }
 
     // MARK: - mcp
