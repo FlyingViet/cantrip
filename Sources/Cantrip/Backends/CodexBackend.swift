@@ -120,11 +120,13 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
         return args
     }
 
-    /// What the system message carries: reply visibility, images, simulators and Home's protocol.
-    var developerInstructions: String {
+    /// What the system message carries: reply visibility, images, simulators, Home's protocol and
+    /// the rules Cantrip keeps for `workdir`.
+    func developerInstructions(workdir: String) -> String {
         var parts = [RemoteGeneratedImages.agentGuidance(sessionFilesFolder: false), ReplyVisibility.guidance]
         if !readOnly { parts.append(SimulatorPool.agentGuidance(command: TabInsight.command)) }
         if let homeProtocol { parts.append(homeProtocol) }
+        if let rules = FolderInstructions().guidance(for: workdir) { parts.append(rules) }
         return parts.joined(separator: "\n\n")
     }
 
@@ -225,7 +227,7 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
     private func ensureThread(_ server: CodexAppServer, workdir: String) async throws -> String {
         let policy = Self.threadPolicy(access)
         var params: [String: Any] = ["cwd": workdir, "sandbox": policy.sandbox, "approvalPolicy": policy.approval,
-                                     "developerInstructions": developerInstructions]
+                                     "developerInstructions": developerInstructions(workdir: workdir)]
         if !model.isEmpty { params["model"] = model }
         let savedFolder = UserDefaults.standard.string(forKey: threadFolderKey)
         if let saved = lock.withLock({ threadID }), savedFolder == nil || savedFolder == workdir {
@@ -271,7 +273,7 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
     private func ensureServer(workdir: String) async throws -> CodexAppServer {
         let arguments = launchArguments()
         // New developer instructions (Home's protocol) need a restart: a loaded thread keeps its own.
-        let signature = "\(workdir)|\(access)|\(arguments.joined(separator: " "))|\(tabID?.uuidString ?? "")|\(developerInstructions.hashValue)"
+        let signature = "\(workdir)|\(access)|\(arguments.joined(separator: " "))|\(tabID?.uuidString ?? "")|\(developerInstructions(workdir: workdir).hashValue)"
         if let server = lock.withLock({ self.server }), server.isRunning, launchSignature == signature { return server }
         stopServer()
         var environment = ProcessInfo.processInfo.environment

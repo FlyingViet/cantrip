@@ -408,8 +408,22 @@ do {
     try? await Task.sleep(nanoseconds: 1_100_000_000)
     try! FileManager.default.createDirectory(at: home.appendingPathComponent(".agents/skills/personal"),
                                              withIntermediateDirectories: true)
-    expect(BackendCommandFingerprint.compute(workdir: project.path, home: home.path, environment: environment) != added,
-           "adding a personal skill changes the fingerprint")
+    let personal = BackendCommandFingerprint.compute(workdir: project.path, home: home.path, environment: environment)
+    expect(personal != added, "adding a personal skill changes the fingerprint")
+    // A skill in Cantrip's library is reached through a link, so its own SKILL.md is stamped.
+    let library = home.appendingPathComponent(BackendCommandFingerprint.skillsLibraryPath + "/shared")
+    try! FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+    let skillFile = library.appendingPathComponent("SKILL.md")
+    try! "---\nname: shared\ndescription: One.\n---\n".write(to: skillFile, atomically: true, encoding: .utf8)
+    let libraryAdded = BackendCommandFingerprint.compute(workdir: project.path, home: home.path, environment: environment)
+    expect(libraryAdded != personal, "adding a library skill changes the fingerprint")
+    try? await Task.sleep(nanoseconds: 1_100_000_000)
+    let handle = try! FileHandle(forWritingTo: skillFile)
+    handle.seekToEndOfFile()
+    handle.write(Data("Edited in place.\n".utf8))
+    try! handle.close()
+    expect(BackendCommandFingerprint.compute(workdir: project.path, home: home.path, environment: environment) != libraryAdded,
+           "editing a library skill in place changes the fingerprint")
 }
 
 // MARK: Live CLIs (opt-in: CANTRIP_COMMANDS_LIVE_TEST=1; uses the real home, a temp project)

@@ -179,9 +179,12 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     private var effort: String { (effortOverride ?? settings.claudeEffort).trimmingCharacters(in: .whitespaces) }
 
     private func launchSignature(workdir: String) -> String {
-        [workdir, String(settings.allowActions), settings.claudePermissionMode, model, effort, guardrail?.rawValue ?? "",
-         String(checksToolCalls),
-         String(readOnly), homeProtocol ?? ""].map { "\($0.utf8.count):\($0)" }.joined()
+        // Folder rules are part of it, so an edit reaches the tab at its next message (resumed).
+        let rules = FolderInstructions()
+        return [workdir, String(settings.allowActions), settings.claudePermissionMode, model, effort, guardrail?.rawValue ?? "",
+                String(checksToolCalls),
+                String(readOnly), homeProtocol ?? "", rules.guidance(for: workdir) ?? "", rules.claudeSettings(for: workdir) ?? ""]
+            .map { "\($0.utf8.count):\($0)" }.joined()
     }
 
     /// Claude-style mid-turn injection: append a user message into the
@@ -733,6 +736,10 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             guidance += "\n\n" + SimulatorPool.agentGuidance(command: TabInsight.command)
         }
         if let homeProtocol { guidance += "\n\n" + homeProtocol }
+        // Rules for this folder kept in Cantrip; their CLAUDE.md mirrors (for Claude in a terminal) are skipped.
+        let folderRules = FolderInstructions()
+        if let rules = folderRules.guidance(for: workdir) { guidance += "\n\n" + rules }
+        if let settings = folderRules.claudeSettings(for: workdir) { args += ["--settings", settings] }
         args += ["--append-system-prompt", guidance]
         // MCP servers from enabled+approved plugins (see Plugins.swift), and Cantrip's shared list
         // (before it exists, the Copilot CLI's own local servers), so every backend reaches the same tools.

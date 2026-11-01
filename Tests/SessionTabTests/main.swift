@@ -194,6 +194,8 @@ struct SessionTabTests {
         try await testOpenAIEndpoint()
         try await testStopPausesTheQueue()
         try await testMCPSharing()
+        try testFolderRulesReachEveryBackend()
+        try await testSkillsAPI()
         try await testRunWatchdog()
         try await testRemoteTerminal()
         try await testMCPAppTranscripts()

@@ -118,7 +118,7 @@ invokes a skill.
 
 Cantrip discovers the list on the Mac when you first type `/` in a folder and
 keeps it until a skill or command folder, the CLI or the tab's folder
-changes. Nothing about your skills is stored in Cantrip.
+changes. The list itself keeps no skill contents.
 
 Some commands are dimmed with the reason instead of running:
 
@@ -139,6 +139,53 @@ a command, and pressing **Escape** sends whatever you typed unchanged.
 If Claude Code is signed out, only its local commands such as `/context` run
 until you sign in with `claude auth login`. If Codex isn't installed, the list
 says so.
+
+## Share skills and rules with every backend
+
+Cantrip keeps one skills library, `~/Library/Application Support/Cantrip/skills`, and links each
+skill that's on into `~/.agents/skills` (Copilot, Codex and Antigravity) and `~/.claude/skills`
+(Claude Code). Links, not copies: edit a skill in the library and every backend reads the change.
+The library is a local git repository for history; never push it, since skills hold personal
+details.
+
+```sh
+cantrip skills                       # each skill, which backends see it, and problems
+cantrip skills add PATH --move       # move a skill folder into the library and link it
+cantrip skills edit NAME             # open its SKILL.md, then check and relink
+cantrip skills enable|disable NAME
+cantrip skills sync                  # relink, and record the library's changes
+cantrip skills check                 # name clashes, missing links, credentials
+```
+
+- Cantrip only touches links it made (they're listed in `skills-manifest.json` beside the
+  library). A skill folder another tool installed, or Claude's own synced skills, stays as it
+  is; a name clash with one is reported, never overwritten.
+- A skill never holds a credential: `add` refuses one with a value that looks like a password,
+  token or key, and `sync` unlinks it until it's gone. Scripts get credentials by name at run
+  time, with `cantrip secret run NAME -- command`.
+- A project's own skills go in its `.agents/skills/`, with a committed `.claude/skills` link for
+  Claude Code.
+
+**Rules.** A repository's agent rules live in its `AGENTS.md`; its `CLAUDE.md` holds only a
+pointer (`@AGENTS.md`), since Claude Code doesn't read AGENTS.md on its own. Rules that don't
+belong in a repository (private ones, or ones for a whole folder of projects) are kept in Cantrip
+and given to every new session under that folder:
+
+```sh
+cantrip instructions                 # folder rules
+cantrip instructions list DIR        # the rules that apply in DIR, and their text
+cantrip instructions edit ~/Projects [--mirror ~/Projects/CLAUDE.md]
+cantrip instructions check           # drift in the repositories' rule files
+```
+
+A mirror is a CLAUDE.md that Cantrip rewrites from the rule for Claude Code run in a terminal;
+Cantrip's own Claude sessions skip it. `check` reports out-of-date mirrors, a CLAUDE.md without an
+AGENTS.md, a pointer that grew its own rules, credentials, and personal details (addresses, host
+names, words you list in `instructions/private-terms.txt`) in a public repository's rule files.
+
+The same list (on/off, which backends see each skill, problems and drift) is in **Settings >
+Skills & Rules**, and under **Skills & Rules** in the browser Remote, Cantrip Agent and the
+Gateways (`GET`/`POST /api/v1/skills`).
 
 ## Add MCP tools
 
