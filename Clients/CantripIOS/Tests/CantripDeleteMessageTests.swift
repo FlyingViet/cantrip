@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 @testable import Hermes
 
-/// Delete Message: decoding, the checked single POST, which rows offer it, and that every cached
-/// page (older ones too) drops messages the Mac lists as deleted.
+/// Delete Message: decoding, the checked single POST, which rows have the menu (prompts and errors,
+/// never replies), and that every cached page (older ones too) drops messages the Mac lists as deleted.
 @MainActor
 final class CantripDeleteMessageTests: XCTestCase {
     private let sessionID = "00000000-0000-0000-0000-0000000000d1"
@@ -132,13 +132,13 @@ final class CantripDeleteMessageTests: XCTestCase {
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
                 XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.hasSuffix("delete-message-test-token") == true)
                 XCTAssertTrue(request.url?.query?.contains("recentExchanges=") == true, "Paged clients get the paged form")
-                XCTAssertEqual(try self.body(request) as? [String: String], ["messageID": self.id(8)])
+                XCTAssertEqual(try self.body(request) as? [String: String], ["messageID": self.id(7)])
                 return (200, try self.snapshot(values: [5, 6], revision: "r2", deleted: [7, 8]))
             }
             XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.sessionID)")
             return (200, try self.snapshot())
         }
-        let session = try await api().deleteMessage(messageID: id(8), sessionID: sessionID)
+        let session = try await api().deleteMessage(messageID: id(7), sessionID: sessionID)
         XCTAssertEqual(methods, ["GET", "POST"], "One check of the tab, then a single write")
         XCTAssertEqual(session.transcript.map(\.id), [id(5), id(6)])
         XCTAssertEqual(session.deletedMessageIDs, [id(7), id(8)])
@@ -157,7 +157,7 @@ final class CantripDeleteMessageTests: XCTestCase {
                 return (200, try self.snapshot(supported: item.supported, streaming: item.streaming))
             }
             do {
-                _ = try await api().deleteMessage(messageID: id(8), sessionID: sessionID)
+                _ = try await api().deleteMessage(messageID: id(7), sessionID: sessionID)
                 XCTFail("A tab that can't delete messages must not receive the write")
             } catch CantripRemoteError.http(let status, let message) {
                 XCTAssertEqual(status, 409)
@@ -181,7 +181,7 @@ final class CantripDeleteMessageTests: XCTestCase {
                 return (200, try self.snapshot())
             }
             do {
-                _ = try await api().deleteMessage(messageID: id(8), sessionID: sessionID)
+                _ = try await api().deleteMessage(messageID: id(7), sessionID: sessionID)
                 XCTFail("A refusal must not look like a deleted message")
             } catch CantripRemoteError.http(let code, let message) {
                 XCTAssertEqual(code, status)
@@ -197,13 +197,13 @@ final class CantripDeleteMessageTests: XCTestCase {
         StartFreshRequestProtocol.handler = { request in
             if request.httpMethod == "POST" {
                 XCTAssertTrue(model.isMutating, "Delete disables actions while the request is in flight")
-                XCTAssertEqual(try self.body(request) as? [String: String], ["messageID": self.id(2)])
+                XCTAssertEqual(try self.body(request) as? [String: String], ["messageID": self.id(1)])
                 // The recent page doesn't reach the deleted exchange; only the cached older page holds it.
                 return (200, try self.snapshot(revision: "r2", deleted: [1, 2]))
             }
             return (200, try self.snapshot(list: self.isList(request)))
         }
-        let deleted = await model.deleteMessage(id(2), sessionID: sessionID)
+        let deleted = await model.deleteMessage(id(1), sessionID: sessionID)
         XCTAssertTrue(deleted, model.errorMessage ?? "Expected the message to be deleted")
         XCTAssertEqual(model.selectedSession?.transcript.map(\.id), [3, 4, 5, 6, 7, 8].map(id),
                        "The prompt and its reply leave the older page right away")
@@ -245,7 +245,7 @@ final class CantripDeleteMessageTests: XCTestCase {
             }
             return (200, try self.snapshot(list: self.isList(request)))
         }
-        let deleted = await model.deleteMessage(id(8), sessionID: sessionID)
+        let deleted = await model.deleteMessage(id(7), sessionID: sessionID)
         XCTAssertFalse(deleted)
         XCTAssertEqual(model.selectedSession?.transcript.map(\.id), [5, 6, 7, 8].map(id))
         XCTAssertTrue(model.errorMessage?.contains(busy) == true, model.errorMessage ?? "No error shown")
@@ -254,7 +254,7 @@ final class CantripDeleteMessageTests: XCTestCase {
 
     // MARK: Rows
 
-    func testOnlyPromptsRepliesAndErrorsOfferDeleteWhileTheTabIsIdle() async throws {
+    func testOnlyPromptsAndErrorsHaveTheMenuAndOfferDeleteWhileTheTabIsIdle() async throws {
         let messages: [[String: Any]] = [
             message(1, "user", "Fixture prompt"),
             message(2, "assistant", "Fixture reply"),
@@ -278,28 +278,35 @@ final class CantripDeleteMessageTests: XCTestCase {
         }
         await model.selectSession(sessionID)
         let session = try XCTUnwrap(model.selectedSession)
+        XCTAssertEqual(session.transcript.map(CantripDeleteMessage.hasMenu),
+                       [true, false, false, true, true, false, false])
         XCTAssertEqual(session.transcript.map { CantripDeleteMessage.offers($0, in: session) },
-                       [true, true, false, true, true, false, false])
+                       [true, false, false, true, true, false, false])
 
         // The rows on screen, as TurnView maps them.
         let vm = try StartFreshFixture.chat(model, for: self)
-        func targets() -> [String?] {
+        func rows() -> [TurnView] {
             vm.turns.map { turn in
                 TurnView(turn: turn, remote: model, cantripSessionID: model.selectedSessionID,
-                         remoteMessage: vm.remoteMessage(for: turn.id)).deleteMessageTarget?.messageID
+                         remoteMessage: vm.remoteMessage(for: turn.id))
             }
         }
-        let offered = targets().compactMap { $0 }
-        XCTAssertEqual(offered, [id(1), id(2), id(4), id(5)])
-        XCTAssertNil(TurnView(turn: ChatTurn(role: .user, text: "Not sent"), remote: model,
-                              cantripSessionID: model.selectedSessionID).deleteMessageTarget,
-                     "A local row without a Mac message has nothing to delete")
+        func targets() -> [String?] { rows().map { $0.deleteMessageTarget?.messageID } }
+        XCTAssertEqual(rows().map { $0.messageMenu().attached }, [true, false, false, true, true, false, false],
+                       "Replies get no menu, so their text keeps native selection")
+        XCTAssertEqual(targets().compactMap { $0 }, [id(1), id(4), id(5)])
+        let local = TurnView(turn: ChatTurn(role: .user, text: "Not sent"), remote: model,
+                             cantripSessionID: model.selectedSessionID)
+        XCTAssertFalse(local.messageMenu().attached, "A local row without a Mac message gets no menu")
+        XCTAssertNil(local.deleteMessageTarget)
 
         streaming = true
         revision = "r2"
         try await poll(model, until: { model.selectedSession?.isStreaming == true }, "The tab works")
         vm.syncRemoteTranscript()
         XCTAssertEqual(targets().compactMap { $0 }, [], "Hidden while the tab works")
+        XCTAssertEqual(rows().map { $0.messageMenu().attached }, [true, false, false, true, true, false, false],
+                       "Rows keep the same views while the tab works; the menu is just empty")
 
         streaming = false
         supported = nil
@@ -310,17 +317,15 @@ final class CantripDeleteMessageTests: XCTestCase {
         XCTAssertEqual(targets().compactMap { $0 }, [], "Hidden on Macs without supportsDeleteMessage")
     }
 
-    /// The menu replaces iOS's text selection on rows that offer Delete Message, so it keeps Copy.
+    /// The prompt and error menu's Copy reads like the row.
     func testCopyReadsLikeTheRow() throws {
         let tab = "00000000-0000-0000-0000-0000000000d3"
         let messages = try JSONDecoder().decode(SessionResponse.self, from: snapshot(messages: [
             message(1, "user", "Ask @[Fixture Garden](cantrip-tab:\(tab)) about **seeds**"),
-            message(2, "assistant", "Plant the **seeds** in `row 2`.\n\n- Water [daily](https://example.com)"),
-            message(3, "error", "Fixture **failure**"),
+            message(2, "error", "Fixture **failure**"),
         ])).session.transcript
         XCTAssertEqual(messages.map(CantripDeleteMessage.copyText), [
             "Ask @Fixture Garden about **seeds**",
-            "Plant the seeds in row 2.\n\n- Water daily",
             "Fixture **failure**",
         ])
     }

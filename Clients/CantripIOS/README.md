@@ -999,11 +999,12 @@ an error row offers Continue.
 
 ### Delete a message
 
-Long-press a prompt, reply or error in a tab or Cantrip Home's chat (right-click on Gateway Mac)
-and choose **Delete Message**, then **Delete** to confirm. Cantrip on the Mac removes the message
-and the rest of its exchange (the prompt and its reply) from the tab's history, so the model
-doesn't have them anymore; this can't be undone. The same menu has **Copy**, since it takes the
-long press from text selection. It shows only while the tab isn't working, on Macs with
+Long-press a prompt or an error in a tab or Cantrip Home's chat (right-click on Gateway Mac) and
+choose **Delete Message**, then **Delete** to confirm. Cantrip on the Mac removes the message and
+the rest of its exchange (the prompt and its reply) from the tab's history, so the model doesn't
+have them anymore; this can't be undone. To delete a reply, delete its prompt. The same menu has
+**Copy**. Replies have no menu, so their text keeps the system's selection (partial copy, Look Up,
+Translate). Delete Message shows only while the tab isn't working, on Macs with
 `supportsDeleteMessage`, and never on Start Fresh dividers, handoff results or child tab cards.
 Messages deleted on another device disappear here too, from loaded older messages and open
 threads as well. If the Mac refuses (the tab started working, or the message is already gone),
