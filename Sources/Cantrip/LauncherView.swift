@@ -4180,6 +4180,8 @@ struct SettingsView: View {
             Divider().opacity(0.3)
             usageLimitFallbacks
             Divider().opacity(0.3)
+            ModelTierSettingsView(settings: settings)
+            Divider().opacity(0.3)
             Toggle("Act on my behalf — all backends (run commands, edit files, send messages without asking)", isOn: $settings.allowActions)
                 .font(.caption)
                 .toggleStyle(.checkbox)
