@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("gatewaySettings", {
   remove: (id: string) => ipcRenderer.invoke("gateway:remove", id),
   openLog: () => ipcRenderer.invoke("gateway:open-log"),
   mcp: (request: unknown) => ipcRenderer.invoke("gateway:mcp", request),
+  githubSignIn: () => ipcRenderer.invoke("gateway:github-sign-in"),
   openExternal: (url: string) => ipcRenderer.send("gateway:open-external", url),
   onStatus: (callback: (status: unknown) => void) => {
     ipcRenderer.on("gateway:status", (_event, status) => callback(status));

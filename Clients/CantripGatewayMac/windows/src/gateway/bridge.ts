@@ -9,7 +9,8 @@ export interface HostStatus {
 
 export type GatewayCommand =
   | "chat" | "tasks" | "artifacts" | "background" | "newTab" | "newMessage" | "voiceMode"
-  | "togglePause" | "modelSettings" | "startFresh" | "usage" | "memory" | "builds" | "mascot" | "toggleTerminal";
+  | "togglePause" | "modelSettings" | "startFresh" | "usage" | "memory" | "builds" | "mascot" | "toggleTerminal"
+  | "githubSignIn";
 
 interface Bridge {
   key: string;

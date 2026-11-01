@@ -42,12 +42,7 @@ export function tabActions(session: RemoteSessionSummary): MenuEntry[] {
       label: "View Questions in Chat", icon: "questionmark.circle",
       onSelect: () => { nav.sheet.value = { kind: "inputRequests", sessionID: session.id }; },
     });
-    if (!session.isLocalPrivate) {
-      entries.push({
-        label: "Sign in to GitHub on Mac", icon: "key", disabled: mutating || isBusy(session),
-        onSelect: () => void run("Sign in", () => remote.sendMessage(session.id, { text: "/login github", mode: "queue" })),
-      });
-    }
+    // GitHub sign-in is the Mac's, not the tab's: Settings > Tools & sign-ins.
   }
   entries.push(
     {
