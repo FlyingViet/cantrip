@@ -1192,9 +1192,9 @@ export function skillsWithEnabled<T extends Pick<SkillsSnapshot, "skills">>(snap
   return { ...snapshot, skills: snapshot.skills.map((skill) => (skill.name === name ? { ...skill, enabled } : skill)) };
 }
 
-/** Connect, or Reconnect after a sign-in failed. */
+/** Connect, or Retry after a sign-in failed (the Mac's reason shows under the server). */
 export function mcpConnectLabel(server: MCPServer): string {
-  return server.state?.phase === "failed" ? "Reconnect" : "Connect";
+  return server.state?.phase === "failed" ? "Retry" : "Connect";
 }
 
 /** "Remote · via Cantrip", the way the Mac tags a server. */
