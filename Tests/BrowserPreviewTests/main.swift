@@ -13,6 +13,7 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
 
 expect(BrowserPreview.isBrowserTool("agent_chrome-click"), "Copilot naming")
 expect(BrowserPreview.isBrowserTool("mcp__agent_chrome__page_read"), "Claude / Cantrip MCP naming")
+expect(BrowserPreview.isBrowserTool("browser_mcp-screenshot"), "a server called browser, as Cantrip exports it")
 expect(!BrowserPreview.isBrowserTool("agent_chromecast-play"), "other server with a similar prefix")
 expect(BrowserPreview.isBrowserTool("browser-click"), "legacy Copilot naming in older history")
 expect(BrowserPreview.isBrowserTool("mcp__browser__page_read"), "legacy Claude naming in older history")

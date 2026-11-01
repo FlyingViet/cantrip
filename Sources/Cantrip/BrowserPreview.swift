@@ -13,8 +13,9 @@ import Foundation
 /// Browser-internal pages (extension popups such as a password manager, chrome://,
 /// devtools) are never captured. `browserPreviewEnabled` (default on) turns it off.
 enum BrowserPreview {
-    /// The server's names in tool calls: `agent_chrome` now, and `browser` in older history.
-    static let serverNames = ["agent_chrome", "browser"]
+    /// The server's names in tool calls: `agent_chrome` now, and `browser` in older history, or as
+    /// `browser_mcp` when Cantrip renames a server called `browser` (`MCPBackendConfig.exportName`).
+    static let serverNames = ["agent_chrome", "browser", "browser_mcp"]
     static let enabledKey = "browserPreviewEnabled"
     static let portKey = "browserPreviewCDPPort"
     /// A tab counts as in use for this long after the agent's last browser tool call.

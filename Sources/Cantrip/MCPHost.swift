@@ -142,6 +142,7 @@ enum MCPMigration {
             }
         }
         for known in previous?.servers ?? [] where !servers.contains(where: { $0.name == known.name }) { servers.append(known) }
+        servers = MCPBackendConfig.droppingExportAliases(servers)
         servers.sort { $0.name < $1.name }
         var report = Report(servers: servers.map(\.name), relayed: servers.filter(\.isRelayed).map(\.name),
                             secretsMoved: imported.secrets.count, notes: imported.notes, dryRun: dryRun)
@@ -173,13 +174,16 @@ enum MCPMigration {
             var entry = MCPBackendConfig.command(server, backend: .claudeCode)
             entry["type"] = "stdio"
             let json = String(decoding: try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys]), as: UTF8.self)
-            _ = try? ProcessRunner.run(claudePath, ["mcp", "remove", "-s", "user", name], errorOutput: .discard, timeout: 30)
-            let added = try ProcessRunner.run(claudePath, ["mcp", "add-json", "-s", "user", name, json], timeout: 30)
+            let exported = MCPBackendConfig.exportName(name)
+            for old in Set([name, exported]) {
+                _ = try? ProcessRunner.run(claudePath, ["mcp", "remove", "-s", "user", old], errorOutput: .discard, timeout: 30)
+            }
+            let added = try ProcessRunner.run(claudePath, ["mcp", "add-json", "-s", "user", exported, json], timeout: 30)
             guard added.succeeded else {
                 report.notes.append("Claude Code: couldn't update \(name): \(added.errorText.isEmpty ? added.text : added.errorText)")
                 continue
             }
-            report.written.append("~/.claude.json: \(name)")
+            report.written.append("~/.claude.json: \(exported)")
         }
         Log.write("mcp: migrated \(servers.count) servers (\(imported.secrets.count) credentials to the keychain)")
         return report

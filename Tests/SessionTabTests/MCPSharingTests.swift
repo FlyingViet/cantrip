@@ -84,6 +84,25 @@ extension SessionTabTests {
         precondition(servers["own"] != nil && servers["stale"] == nil && servers["mobbin"] != nil && antigravity.config["other"] != nil,
                      "Antigravity keeps its own servers and drops ones Cantrip stopped managing")
         precondition(antigravity.managed.contains("mobbin") && !antigravity.managed.contains("own"))
+
+        // OpenAI models refuse tools in their reserved `browser` namespace, so no backend gets that name.
+        let reserved = MCPRegistry.Snapshot(servers: [MCPServer(name: "browser", command: "/usr/bin/true"),
+                                                      MCPServer(name: "agent_chrome", command: "/usr/bin/true")])
+        let reservedCopilot = MCPBackendConfig.copilot(reserved, relay: relay)["mcpServers"] as? [String: Any] ?? [:]
+        let reservedClaude = MCPBackendConfig.claude(reserved, relay: relay)["mcpServers"] as? [String: Any] ?? [:]
+        let reservedAgy = MCPBackendConfig.antigravity(existing: nil, snapshot: reserved, managed: [], relay: relay)
+        precondition(reservedCopilot.keys.sorted() == ["agent_chrome", "browser_mcp"]
+                     && reservedClaude.keys.sorted() == ["agent_chrome", "browser_mcp"]
+                     && reservedAgy.managed == ["agent_chrome", "browser_mcp"], "A reserved server name is renamed for every backend")
+        let reservedCodex = MCPBackendConfig.codexArgs(reserved, relay: relay)
+        precondition(reservedCodex.contains("mcp_servers.browser_mcp.command=\"/usr/bin/true\"")
+                     && !reservedCodex.contains { $0.hasPrefix("mcp_servers.browser.") }, "Codex never gets a reserved server name")
+        precondition(MCPBackendConfig.exportName("Browser") == "Browser_mcp" && MCPBackendConfig.exportName("mobbin") == "mobbin",
+                     "Only reserved names change")
+        precondition(MCPBackendConfig.disabledForRun(["browser", "notes"], tab: nil) == ["browser_mcp", "notes"],
+                     "Switching off a renamed server still reaches Copilot")
+        let reimported = MCPBackendConfig.droppingExportAliases(reserved.servers + [MCPServer(name: "browser_mcp", command: "/usr/bin/true")])
+        precondition(reimported.map(\.name) == ["browser", "agent_chrome"], "Re-importing Cantrip's renamed entry doesn't add a second server")
     }
 
     /// A fake MCP server and sign-in server, counting token requests.
