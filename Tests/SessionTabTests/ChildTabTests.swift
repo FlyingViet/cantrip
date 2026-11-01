@@ -621,6 +621,45 @@ extension SessionTabTests {
         precondition(ChildTabGit.cleanup(repo: repo, worktree: keep, branch: "cantrip/child/keep-000000", force: true)
                      && !files.fileExists(atPath: keep))
 
+        // 5e. Git won't remove a worktree with an initialized submodule without --force. A clean one
+        // whose submodule keeps nothing of its own is removed; one with a submodule commit its remote
+        // doesn't have is kept.
+        let library = scratch.appendingPathComponent("library").path
+        let host = scratch.appendingPathComponent("host").path
+        for directory in [library, host] {
+            try files.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            git("init", "-q", "-b", "main", in: directory)
+            git("config", "user.name", "Child Tab Test", in: directory)
+            git("config", "user.email", "child-tabs@example.com", in: directory)
+        }
+        git("commit", "-q", "--allow-empty", "-m", "Library", in: library)
+        git("-c", "protocol.file.allow=always", "submodule", "add", "-q", library, "External/library", in: host)
+        git("commit", "-q", "-m", "Add the library", in: host)
+        func submoduleTree(_ name: String) -> String {
+            let path = scratch.appendingPathComponent(name).path
+            git("worktree", "add", "-q", "-b", "cantrip/child/\(name)-000000", path, "HEAD", in: host)
+            git("-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", in: path)
+            precondition(!ChildTabGit.isDirty(path) && ChildTabGit.run(host, ["worktree", "remove", path])?.succeeded == false,
+                         "git refuses a clean worktree with a submodule")
+            return path
+        }
+        let pinned = submoduleTree("pinned")
+        precondition(ChildTabGit.cleanup(repo: host, worktree: pinned, branch: "cantrip/child/pinned-000000", force: false)
+                     && !files.fileExists(atPath: pinned) && !ChildTabGit.branchExists(host, "cantrip/child/pinned-000000"),
+                     "a clean worktree whose submodule keeps nothing is removed")
+        let edited = submoduleTree("edited")
+        let editedLibrary = edited + "/External/library"
+        git("checkout", "-q", "-b", "local", in: editedLibrary)
+        git("-c", "user.name=Child Tab Test", "-c", "user.email=child-tabs@example.com",
+            "commit", "-q", "--allow-empty", "-m", "Only here", in: editedLibrary)
+        git("checkout", "-q", "--detach", "HEAD~1", in: editedLibrary)
+        precondition(!ChildTabGit.isDirty(edited)
+                     && !ChildTabGit.cleanup(repo: host, worktree: edited, branch: "cantrip/child/edited-000000", force: false)
+                     && files.fileExists(atPath: editedLibrary + "/.git") && ChildTabGit.branchExists(host, "cantrip/child/edited-000000"),
+                     "a submodule commit found nowhere else keeps the worktree")
+        precondition(ChildTabGit.cleanup(repo: host, worktree: edited, branch: "cantrip/child/edited-000000", force: true)
+                     && !files.fileExists(atPath: edited))
+
         // 6. No changes: archived without a merge.
         asked = parentBackend.prompts.count
         parent.submitRemote("Check the build", mode: .queue)

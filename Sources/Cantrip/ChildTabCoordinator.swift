@@ -940,11 +940,12 @@ enum ChildTabMerge {
         return stopped
     }
 
-    /// Nothing to merge, but its checkout still has uncommitted changes: they stay for the user.
+    /// Nothing to merge, but its checkout still has uncommitted changes or unpushed submodule
+    /// commits: they stay for the user.
     private static func kept(_ record: ChildTab) -> ChildTab {
         var record = record
         record.state = .unmerged
-        record.note = "Its checkout \(record.worktree ?? "") still has uncommitted changes, so Cantrip kept it. Commit them, then choose Try Again, or Discard."
+        record.note = "Its checkout \(record.worktree ?? "") still has uncommitted changes or unpushed submodule commits, so Cantrip kept it. Commit or push them, then choose Try Again, or Discard."
         return record
     }
 
