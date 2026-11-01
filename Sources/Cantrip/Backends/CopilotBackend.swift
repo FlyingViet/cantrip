@@ -127,6 +127,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         var excludedTools: [String]?
         var toolDeferThreshold: Int?
         var homeProtocol: String?
+        /// The workdir's environment profile (a change restarts the runtime, which resumes).
+        var environmentFingerprint: String?
 
         var json: [String: Any] {
             var object: [String: Any] = ["command": command, "workdir": workdir, "model": model,
@@ -223,7 +225,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             disabledMcpServers: MCPBackendConfig.disabledForRun(disabledMcpServers, tab: tabID),
             excludedTools: excludedTools,
             toolDeferThreshold: toolDeferThreshold,
-            homeProtocol: homeProtocol
+            homeProtocol: homeProtocol,
+            environmentFingerprint: EnvironmentProfiles.resolved(for: workdir)?.fingerprint
         )
     }
 
@@ -450,12 +453,17 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         }
     }
 
+    static let launchCommand = EnvironmentProfiles.afterLogin("exec \"${__cantrip_node:-node}\" --input-type=module -e \"$1\"")
+
     private func launch(_ config: Configuration) throws {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-l", "-c", "exec node --input-type=module -e \"$1\"", "cantrip-copilot", bridgeScript]
+        // The runtime runs on the login shell's Node; the project's profile (maybe an older Node)
+        // applies only to what it starts, after the login files reorder PATH.
+        p.arguments = ["-l", "-c", Self.launchCommand, "cantrip-copilot", bridgeScript]
         p.currentDirectoryURL = URL(fileURLWithPath: config.workdir)
         var environment = ProcessInfo.processInfo.environment
+        EnvironmentProfiles.applyAfterLogin(to: &environment, workdir: config.workdir)
         environment["NO_COLOR"] = "1"
         environment["TERM"] = "dumb"
         if let tabID { environment[TabInsight.tabIDVariable] = tabID.uuidString }

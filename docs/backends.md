@@ -237,6 +237,46 @@ again every 5 minutes. MCP servers alone don't keep a tab running. Even with
 **Never**, a runtime idle for 2 hours is restarted before its next message,
 because the Copilot CLI can crash after long idle periods.
 
+## Give each project the same toolchain on every backend
+
+An environment profile pins a project's Xcode, Node, extra PATH folders and
+plain variables. Every process Cantrip starts in that project gets it: Claude
+Code, the Copilot runtime, Codex, Antigravity, the tab's `!` commands and
+terminal, child tabs (their worktrees share the checkout's profile), and
+Cantrip Home runs there. Calls with no project, such as the
+[OpenAI-compatible API](#serve-your-backends-to-other-apps-openai-compatible-api),
+get the profile named **Default** if there is one.
+
+```sh
+cantrip env set MyApp --folder ~/Code/my-app --xcode /Applications/Xcode.app --node 22
+cantrip env set MyApp --env SWIFT_STRICT=1 --path ~/Code/my-app/bin --secret my-app-sentry
+cantrip env show ~/Code/my-app      # what a tab there gets
+cantrip env run --dir ~/Code/my-app -- xcodebuild -version
+cantrip env hook install            # once: see below
+```
+
+- Profiles live in `~/.cache/Cantrip/environments.json`, never in the
+  repository. The deepest matching folder wins.
+- `--xcode` sets `DEVELOPER_DIR`, so `xcodebuild`, `xcrun` and
+  `xcode-select -p` use that Xcode. `--node` picks an installed Node by
+  version (Homebrew's `node@N` or `node`, or nvm) and puts it first on PATH.
+- Variables are plain values. Secrets stay in the
+  [secrets broker](privacy-and-memory.md#hand-secrets-to-scripts-jobs-and-mcp-servers):
+  `--secret` only names them (as `CANTRIP_PROJECT_SECRETS`) for
+  `cantrip secret run`, so no value sits where a model can read it.
+- Login and interactive shells reorder PATH in their startup files (macOS's
+  `path_helper`, Homebrew's `shellenv`, a `.zshrc` that picks a Node), so
+  agents' shell commands could lose the profile. `cantrip env hook install`
+  adds two guarded lines to the end of `.zshrc`, `.zlogin` and bash's startup
+  files (backing each up) that re-apply the tab's profile; they do nothing in
+  your own terminals. Non-interactive bash scripts get it through `BASH_ENV`.
+  `cantrip env hook remove` takes them out again.
+- The Copilot runtime itself keeps running on your default Node; only what it
+  starts gets the profile's.
+- The tab header shows the active profile ("Xcode 27.1 · Node 22.23.3") on the
+  Mac and in the browser Remote. Changing a profile restarts a tab's CLI at its
+  next message, and the conversation continues.
+
 ## Fall back when a backend hits its usage limit
 
 Add backups under **Usage limit fallbacks** (Off by default) in Mac Settings or

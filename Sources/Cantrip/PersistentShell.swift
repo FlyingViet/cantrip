@@ -89,8 +89,19 @@ final class PersistentShell: ObservableObject {
 
     // MARK: - Internals
 
+    private var shellProfile: String?
+
     private func ensureStarted(workdir: String) {
+        // A changed profile starts a fresh shell, but never under a running command.
+        let profile = EnvironmentProfiles.resolved(for: workdir)?.fingerprint
+        if process?.isRunning == true, !isRunning, profile != shellProfile {
+            process?.terminate()
+            process = nil
+            stdinHandle = nil
+            isReady = false
+        }
         guard process?.isRunning != true else { return }
+        shellProfile = profile
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/script")
         p.arguments = ["-q", "/dev/null", "/bin/zsh", "-f"]
@@ -99,6 +110,7 @@ final class PersistentShell: ObservableObject {
         env["NO_COLOR"] = "1"
         env["TERM"] = "dumb"
         env["PATH"] = ToolPath.value(inherited: env["PATH"])
+        EnvironmentProfiles.apply(to: &env, workdir: workdir)
         p.environment = env
 
         let stdinPipe = Pipe()
