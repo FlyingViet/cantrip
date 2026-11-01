@@ -10,11 +10,10 @@ struct ModelTierSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Model tiers").font(.caption).foregroundStyle(.secondary)
-            Picker("Backend", selection: $backend) {
-                ForEach(ModelTierMap.backends) { Text($0.rawValue).tag($0) }
+            ViewThatFits(in: .horizontal) {
+                backendPicker.pickerStyle(.segmented)
+                backendPicker.pickerStyle(.menu).fixedSize()
             }
-            .labelsHidden()
-            .pickerStyle(.segmented)
             .controlSize(.small)
             ForEach(ModelTier.allCases, id: \.self) { tier in
                 cell(tier)
@@ -26,6 +25,13 @@ struct ModelTierSettingsView: View {
         }
         .onAppear { settings.refreshTabModelsIfNeeded(for: backend) }
         .onChange(of: backend) { _, kind in settings.refreshTabModelsIfNeeded(for: kind) }
+    }
+
+    private var backendPicker: some View {
+        Picker("Backend", selection: $backend) {
+            ForEach(ModelTierMap.backends) { Text($0.rawValue).tag($0) }
+        }
+        .labelsHidden()
     }
 
     private var catalog: TabModelCatalog { settings.tabModelCatalog(for: backend) }
@@ -70,54 +76,81 @@ struct ModelTierSettingsView: View {
         .buttonStyle(.borderless)
     }
 
-    @ViewBuilder
+    /// One model in a tier's list: on one line when it fits, else its effort goes under the model.
     private func choiceRow(_ tier: ModelTier, choices: [ModelTierChoice], index: Int, choice: ModelTierChoice) -> some View {
         let info = catalog.info(choice.model)
-        let offered = catalog.models.isEmpty || info != nil
-        HStack(spacing: 6) {
-            Text("\(index + 1).").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            Picker("Model", selection: Binding(get: { choice.model }, set: { model in
-                var next = choices
-                next[index] = ModelTierChoice(model: model)
-                set(tier, next)
-            })) {
-                ForEach(catalog.models.filter { model in model.id == choice.model || !choices.contains { $0.model == model.id } }) {
-                    Text(optionLabel($0.id)).tag($0.id)
+        let efforts = info?.reasoningEfforts ?? []
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                choiceModel(tier, choices: choices, index: index, choice: choice, offered: catalog.models.isEmpty || info != nil)
+                if !efforts.isEmpty { choiceEffort(tier, choices: choices, index: index, choice: choice, efforts: efforts) }
+                Spacer(minLength: 4)
+                choiceOrder(tier, choices: choices, index: index, choice: choice)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    choiceModel(tier, choices: choices, index: index, choice: choice, offered: catalog.models.isEmpty || info != nil)
+                    Spacer(minLength: 4)
+                    choiceOrder(tier, choices: choices, index: index, choice: choice)
                 }
-                if !offered { Text("\(choice.model) (not offered now)").tag(choice.model) }
-            }
-            .labelsHidden()
-            .help("Model \(index + 1) for \(tier.label) on \(backend.rawValue)")
-            if let efforts = info?.reasoningEfforts, !efforts.isEmpty {
-                Picker("Effort", selection: Binding(get: { choice.effort }, set: { effort in
-                    var next = choices
-                    next[index].effort = effort
-                    set(tier, next)
-                })) {
-                    Text("Model default").tag("")
-                    ForEach(efforts, id: \.self) { Text($0).tag($0) }
-                    if !choice.effort.isEmpty, !efforts.contains(choice.effort) { Text(choice.effort).tag(choice.effort) }
+                if !efforts.isEmpty {
+                    choiceEffort(tier, choices: choices, index: index, choice: choice, efforts: efforts)
+                        .padding(.leading, 18)
                 }
-                .labelsHidden()
-                .fixedSize()
             }
-            Spacer(minLength: 4)
-            Button { move(tier, choices, index, by: -1) } label: { Image(systemName: "chevron.up") }
-                .disabled(index == 0)
-                .help("Try earlier")
-            Button { move(tier, choices, index, by: 1) } label: { Image(systemName: "chevron.down") }
-                .disabled(index == choices.count - 1)
-                .help("Try later")
-            Button { set(tier, choices.enumerated().filter { $0.offset != index }.map(\.element)) } label: {
-                Image(systemName: "minus.circle")
-            }
-            .disabled(choices.count == 1)
-            .help("Remove \(settings.fallbackModelLabel(backend, choice.model))")
         }
         .pickerStyle(.menu)
         .controlSize(.small)
         .font(.caption)
         .padding(.leading, 18)
+    }
+
+    @ViewBuilder
+    private func choiceModel(_ tier: ModelTier, choices: [ModelTierChoice], index: Int, choice: ModelTierChoice,
+                             offered: Bool) -> some View {
+        Text("\(index + 1).").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+        Picker("Model", selection: Binding(get: { choice.model }, set: { model in
+            var next = choices
+            next[index] = ModelTierChoice(model: model)
+            set(tier, next)
+        })) {
+            ForEach(catalog.models.filter { model in model.id == choice.model || !choices.contains { $0.model == model.id } }) {
+                Text(optionLabel($0.id)).tag($0.id)
+            }
+            if !offered { Text("\(choice.model) (not offered now)").tag(choice.model) }
+        }
+        .labelsHidden()
+        .help("Model \(index + 1) for \(tier.label) on \(backend.rawValue)")
+    }
+
+    private func choiceEffort(_ tier: ModelTier, choices: [ModelTierChoice], index: Int, choice: ModelTierChoice,
+                              efforts: [String]) -> some View {
+        Picker("Effort", selection: Binding(get: { choice.effort }, set: { effort in
+            var next = choices
+            next[index].effort = effort
+            set(tier, next)
+        })) {
+            Text("Model default").tag("")
+            ForEach(efforts, id: \.self) { Text($0).tag($0) }
+            if !choice.effort.isEmpty, !efforts.contains(choice.effort) { Text(choice.effort).tag(choice.effort) }
+        }
+        .labelsHidden()
+        .fixedSize()
+    }
+
+    @ViewBuilder
+    private func choiceOrder(_ tier: ModelTier, choices: [ModelTierChoice], index: Int, choice: ModelTierChoice) -> some View {
+        Button { move(tier, choices, index, by: -1) } label: { Image(systemName: "chevron.up") }
+            .disabled(index == 0)
+            .help("Try earlier")
+        Button { move(tier, choices, index, by: 1) } label: { Image(systemName: "chevron.down") }
+            .disabled(index == choices.count - 1)
+            .help("Try later")
+        Button { set(tier, choices.enumerated().filter { $0.offset != index }.map(\.element)) } label: {
+            Image(systemName: "minus.circle")
+        }
+        .disabled(choices.count == 1)
+        .help("Remove \(settings.fallbackModelLabel(backend, choice.model))")
     }
 
     /// The model's name, with Copilot's token prices.
