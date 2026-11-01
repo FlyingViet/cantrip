@@ -200,6 +200,8 @@ final class MCPServerHub: ObservableObject {
     let signIns: MCPSignIns
     var chrome = AgentChrome()
     var openInDefaultBrowser: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// Asks a server, without credentials, whether it needs a sign-in; tests replace it.
+    var accessProbe: (URL, [String: String]) async -> MCPOAuth.Access = { await MCPOAuth.detectAccess(server: $0, headers: $1) }
 
     init(signIns: MCPSignIns = .shared, snapshot: MCPRegistry.Snapshot? = nil) {
         self.signIns = signIns
@@ -298,6 +300,20 @@ final class MCPServerHub: ObservableObject {
         set(name, State(phase: .connecting, message: "Finding where \(name) signs in…"))
         flows[name] = Task { [weak self] in
             guard let self else { return }
+            // A server that answers without a sign-in (and names no sign-in server) needs none.
+            if await self.accessProbe(address, server.headers) == .open, !Task.isCancelled, self.signsIn(name, at: server.url) {
+                self.flows[name] = nil
+                do {
+                    try self.update { snapshot in
+                        if let index = snapshot.servers.firstIndex(where: { $0.name == name }) { snapshot.servers[index].oauth = false }
+                    }
+                    self.set(name, State(phase: .ready, message: "\(name) answers without signing in, so it needs no sign-in."))
+                    Log.write("mcp: \(name) answers without signing in; it no longer signs in with OAuth")
+                } catch {
+                    self.set(name, State(phase: .failed, message: "\(name) needs no sign-in, but Cantrip couldn't save that: \(error.localizedDescription)"))
+                }
+                return
+            }
             do {
                 try await self.signIn(name, address: address)
                 let credential = try await self.signIns.credential(name)

@@ -123,6 +123,106 @@ enum MCPOAuth {
         return candidates
     }
 
+    /// An unauthenticated MCP `initialize`, as a backend's first request would be.
+    static func initializeRequest(_ server: URL, headers: [String: String] = [:]) -> URLRequest {
+        var request = URLRequest(url: server)
+        request.httpMethod = "POST"
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        request.httpBody = Data(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"Cantrip","version":"1"}}}"#.utf8)
+        return request
+    }
+
+    /// RFC 9728 protected-resource metadata addresses for a server, path-aware first.
+    static func protectedResourceCandidates(_ server: URL) -> [URL] {
+        guard var components = URLComponents(url: server, resolvingAgainstBaseURL: false) else { return [] }
+        let path = components.path
+        components.query = nil
+        var candidates: [URL] = []
+        components.path = "/.well-known/oauth-protected-resource" + (path == "/" ? "" : path)
+        if let url = components.url { candidates.append(url) }
+        components.path = "/.well-known/oauth-protected-resource"
+        if let url = components.url, !candidates.contains(url) { candidates.append(url) }
+        return candidates
+    }
+
+    /// Whether a remote server needs a sign-in, found by asking it without one.
+    enum Access: Equatable {
+        /// It answered `initialize` without credentials and names no sign-in server.
+        case open
+        /// It asked for a sign-in (401 or a Bearer challenge), or its metadata names a sign-in server.
+        case oauth
+        /// It couldn't be told; why, in words.
+        case unknown(String)
+    }
+
+    /// Asks `server` to `initialize` with no credentials (only its non-secret `headers`). An answer
+    /// alone isn't enough: some servers serve anonymous callers and sign in for more (seats.aero),
+    /// and say so in their protected-resource metadata.
+    static func detectAccess(server: URL, headers: [String: String] = [:], timeout: TimeInterval = 8,
+                             transport: Transport = defaultTransport) async -> Access {
+        var probe = initializeRequest(server, headers: headers)
+        probe.timeoutInterval = timeout
+        let response: HTTPURLResponse
+        do {
+            response = try await transport(probe).1
+        } catch {
+            return .unknown("couldn't reach \(server.host ?? "it"): \(error.localizedDescription)")
+        }
+        if let session = response.value(forHTTPHeaderField: "Mcp-Session-Id") {
+            // Ends the session the probe opened (optional for servers; best effort).
+            var close = URLRequest(url: server)
+            close.httpMethod = "DELETE"
+            close.timeoutInterval = timeout
+            close.setValue(session, forHTTPHeaderField: "Mcp-Session-Id")
+            _ = try? await transport(close)
+        }
+        let challenge = response.value(forHTTPHeaderField: "WWW-Authenticate")?.lowercased() ?? ""
+        if response.statusCode == 401 || challenge.hasPrefix("bearer") { return .oauth }
+        for url in protectedResourceCandidates(server) {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = timeout
+            if let (data, metadata) = try? await transport(request), metadata.statusCode == 200,
+               json(data)?["authorization_servers"] != nil {
+                return .oauth
+            }
+        }
+        if (200..<300).contains(response.statusCode) { return .open }
+        return .unknown("it answered HTTP \(response.statusCode)")
+    }
+
+    /// `detectAccess` for several servers at once, for callers that answer synchronously
+    /// (`cantrip mcp migrate`). Waits at most `timeout` for each request; a server still
+    /// unanswered after `limit` is unknown. It blocks the calling thread, so `transport` must not
+    /// need the main actor.
+    static func detectAccessWaiting(_ servers: [MCPServer], timeout: TimeInterval = 8, limit: TimeInterval = 20,
+                                    transport: @escaping Transport = defaultTransport) -> [String: Access] {
+        let targets = servers.compactMap { server in server.url.flatMap(URL.init(string:)).map { (server.name, $0, server.headers) } }
+        guard !targets.isEmpty else { return [:] }
+        final class Results: @unchecked Sendable {
+            let lock = NSLock()
+            var found: [String: Access] = [:]
+        }
+        let results = Results(), done = DispatchSemaphore(value: 0)
+        Task.detached {
+            await withTaskGroup(of: Void.self) { group in
+                for (name, url, headers) in targets {
+                    group.addTask {
+                        let access = await detectAccess(server: url, headers: headers, timeout: timeout, transport: transport)
+                        results.lock.withLock { results.found[name] = access }
+                    }
+                }
+            }
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + limit)
+        let found = results.lock.withLock { results.found }
+        return Dictionary(uniqueKeysWithValues: targets.map { target in
+            (target.0, found[target.0] ?? .unknown("it didn't answer within \(Int(limit)) seconds"))
+        })
+    }
+
     static func discover(server: URL, transport: Transport = defaultTransport) async throws -> Endpoints {
         func fail(_ text: String) -> Failure { Failure(kind: .discovery, message: text) }
         // A server that couldn't be reached isn't a server without sign-in settings: say which it was.
@@ -131,24 +231,12 @@ enum MCPOAuth {
             do { return try await transport(request) } catch { unreachable = error; return nil }
         }
         // An unauthenticated request names its metadata in the challenge.
-        var probe = URLRequest(url: server)
-        probe.httpMethod = "POST"
-        probe.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        probe.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
-        probe.httpBody = Data(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"Cantrip","version":"1"}}}"#.utf8)
         var metadataURLs: [URL] = []
-        if let (_, response) = await fetch(probe), response.statusCode == 401,
+        if let (_, response) = await fetch(initializeRequest(server)), response.statusCode == 401,
            let url = resourceMetadataURL(fromChallenge: response.value(forHTTPHeaderField: "WWW-Authenticate")) {
             metadataURLs.append(url)
         }
-        if var components = URLComponents(url: server, resolvingAgainstBaseURL: false) {
-            let path = components.path
-            components.query = nil
-            components.path = "/.well-known/oauth-protected-resource" + (path == "/" ? "" : path)
-            if let url = components.url, !metadataURLs.contains(url) { metadataURLs.append(url) }
-            components.path = "/.well-known/oauth-protected-resource"
-            if let url = components.url, !metadataURLs.contains(url) { metadataURLs.append(url) }
-        }
+        for url in protectedResourceCandidates(server) where !metadataURLs.contains(url) { metadataURLs.append(url) }
         var resource: [String: Any]?
         for url in metadataURLs {
             if let (data, response) = await fetch(URLRequest(url: url)), response.statusCode == 200,

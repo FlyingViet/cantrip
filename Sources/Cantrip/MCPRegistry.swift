@@ -204,7 +204,8 @@ enum MCPRegistry {
                         server.headers[header] = value
                     }
                 }
-                // A remote server with no credential of its own signs in with OAuth.
+                // A remote server with no credential of its own signs in with OAuth, until it's
+                // asked (`MCPMigration.run` probes it; Connect asks again).
                 server.oauth = server.secretHeaders.isEmpty
             } else {
                 guard let command = spec["command"] as? String, !command.isEmpty else { continue }
