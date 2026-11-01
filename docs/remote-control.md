@@ -192,6 +192,16 @@ advertise `supportsStartFresh`, and `repeatedErrorMessageID` names an error row
 that repeated the previous error, where clients offer Start Fresh and Change
 Model.
 
+## Delete a message
+
+`POST /api/v1/sessions/{id}/delete-message` with `{"messageID": "<UUID>"}`
+deletes that message's prompt and reply everywhere the Mac keeps them (see
+[Sessions](sessions-and-council.md#delete-a-message)) and returns the session.
+It returns `400` for any other body, `404` when the message is gone and `409`
+while the tab runs. Sessions advertise `supportsDeleteMessage` and list
+`deletedMessageIDs` (the tab's last 500); clients drop those messages from any
+history pages they cached, so a deletion on one device reaches the others.
+
 ## Continue a failed run
 
 A run that fails or times out in a conversation waits for the user instead of

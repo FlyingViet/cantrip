@@ -37,6 +37,28 @@ enum Log {
         }
     }
 
+    /// Replaces each fragment in the log and its archives, byte for byte (deleted prompts).
+    static func redact(_ fragments: [String], with replacement: String) {
+        let wanted = fragments.filter { !$0.isEmpty }.map { Data($0.utf8) }
+        guard !wanted.isEmpty else { return }
+        let replacementData = Data(replacement.utf8)
+        queue.async {
+            for file in [url] + (1...archiveCount).map({ LogRotation.archive(of: url, $0) }) {
+                guard var data = try? Data(contentsOf: file) else { continue }
+                var changed = false
+                for fragment in wanted {
+                    var start = data.startIndex
+                    while let found = data.range(of: fragment, in: start..<data.endIndex) {
+                        data.replaceSubrange(found, with: replacementData)
+                        start = found.lowerBound + replacementData.count
+                        changed = true
+                    }
+                }
+                if changed { try? data.write(to: file, options: .atomic) }
+            }
+        }
+    }
+
     /// Waits for queued lines, for code paths that exit immediately.
     static func flush() {
         queue.sync {}

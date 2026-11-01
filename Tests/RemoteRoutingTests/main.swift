@@ -602,6 +602,13 @@ private func runTests() async throws {
         """)
         expect(context.evaluateScript("historyCache.get('b').messages.length")!.toInt32() == 120,
                "unattended browser history remains bounded")
+        context.evaluateScript("""
+        historyCache.clear();
+        cacheSession({id:"d",historyStartID:"start",messages:[{id:"1"},{id:"2"},{id:"3"},{id:"4"}],hasOlderMessages:false},false);
+        cacheSession({id:"d",historyStartID:"start",messages:[{id:"3"},{id:"4"},{id:"5"}],deletedMessageIDs:["2","4"],hasOlderMessages:true});
+        """)
+        expect(context.evaluateScript("historyCache.get('d').messages.map(m=>m.id).join(',')")!.toString() == "1,3,5",
+               "messages deleted on another device leave older pages loaded earlier")
 
         let apiStart = source.range(of: "    async function api(")!
         let apiEnd = source.range(of: "    function pair(", range: apiStart.upperBound..<source.endIndex)!

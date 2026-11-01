@@ -38,9 +38,14 @@ final class SessionOutputFolders: @unchecked Sendable {
     }
 
     func roots(for sessionID: UUID) -> [URL] {
+        cliSessionIDs(for: sessionID).reversed().map(folder(forCLISession:))
+    }
+
+    /// Every CLI session the Cantrip session used, oldest first.
+    func cliSessionIDs(for sessionID: UUID) -> [String] {
         lock.withLock {
             loadLocked()
-            return (sessions[sessionID] ?? []).reversed().map(folder(forCLISession:))
+            return sessions[sessionID] ?? []
         }
     }
 

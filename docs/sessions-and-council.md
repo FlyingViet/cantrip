@@ -82,6 +82,31 @@ If the same model error ends two attempts in a row (for example a model
 declining, then `400 The requested model is not supported`), the error row
 offers **Start Fresh** and **Change Model**.
 
+### Delete a message
+
+To remove a prompt and its reply, for example one that shows a password, choose
+**Delete Message…** and confirm. On the Mac, hover over the message and click
+the trash button, or right-click it. In Mac/browser Remote, hover and click
+**Delete…**. In Cantrip Agent and Gateway, open the message's menu. It works in
+every tab, including Cantrip Home's chat, but not while the tab is running.
+
+Deleting either the prompt or its reply removes both, with any errors and late
+background results in the same thread. The Mac removes them from:
+
+- the tab's saved conversation and its run journal (with the tool output);
+- the day's memory session log in the vault;
+- the prompt as quoted in `Cantrip.log`;
+- the model's context: each backend starts a new session for the next prompt
+  with the history that's left;
+- the backend's own transcripts of this tab: Copilot's session folders and its
+  `session-store.db` index, Claude Code's session file and Codex's rollout file.
+  Copies quoted elsewhere, such as recapped history, are replaced by
+  `[deleted message]`.
+
+Paired devices drop the messages too. Deleting can't be undone. Notes that the
+agent or memory upkeep already wrote, files and screenshots it saved, and
+Antigravity's own transcripts aren't changed; edit those yourself.
+
 ## Send instructions while the agent is busy
 
 | Goal | Mac shortcut | What happens |

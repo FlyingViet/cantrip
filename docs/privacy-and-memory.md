@@ -181,6 +181,8 @@ and deletes session logs older than 30 days.
 | `~/Library/Logs/Cantrip.log` | Diagnostic log; past 10 MB it moves to `Cantrip.log.1`, keeping three older logs (`.1` to `.3`) |
 | macOS Keychain | Remote host/client pairing credentials |
 
+To remove one exchange from all of these (and from the backend's transcripts),
+use **Delete Message…** ([Sessions](sessions-and-council.md#delete-a-message)).
 Closing a tab or disabling Remote does not delete all of this data. Removing
 images can break queued/resumed tasks and historical image references. Review
 specific files before deleting them; do not broadly clear the cache while

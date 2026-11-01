@@ -415,9 +415,10 @@ table when you do.
 
 | Backend | Missing |
 |---|---|
-| Antigravity | `ReplyVisibility`, `SimulatorPool` and `watch-`/`side-` guidance; per-tab MCP switches for local servers (agy reads MCP servers only from `~/.gemini/config/mcp_config.json`, which Cantrip writes); `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
-| Claude Code | Stopping one foreground Task subagent (the CLI can stop only background agents) |
-| Codex | `watch-`/`side-` background agents and wake-up turns (Codex's agents end with the turn); stopping one subagent (no API); Auto routing, queue plans, Done-when checks and memory upkeep (no tool-free one-shot mode wired); idle process release (each tab's app server stays up); shared servers that sign in through Cantrip's relay not yet run live (local `-c` servers were); Windows still runs `codex exec` |
+| Antigravity | Delete Message leaves agy's own conversation files unchanged (it only starts a new conversation); `ReplyVisibility`, `SimulatorPool` and `watch-`/`side-` guidance; per-tab MCP switches for local servers (agy reads MCP servers only from `~/.gemini/config/mcp_config.json`, which Cantrip writes); `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
+| Claude Code | Stopping one foreground Task subagent (the CLI can stop only background agents); Delete Message scrubs only the tab's current session file, not earlier sessions' files or subagent transcripts |
+| Codex | Delete Message scrubs only the tab's current thread's rollout file; `watch-`/`side-` background agents and wake-up turns (Codex's agents end with the turn); stopping one subagent (no API); Auto routing, queue plans, Done-when checks and memory upkeep (no tool-free one-shot mode wired); idle process release (each tab's app server stays up); shared servers that sign in through Cantrip's relay not yet run live (local `-c` servers were); Windows still runs `codex exec` |
+| Copilot Remote | Delete Message can't reach the remote server's session; Cantrip only starts a new one |
 | Windows (all) | Structured events, conversation resume and usage fallback (see PARITY.md) |
 
 Last live check of Codex: 2026-10-31, `codex-cli 0.166.0`, ChatGPT free plan, through
