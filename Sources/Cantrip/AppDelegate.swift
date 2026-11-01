@@ -34,6 +34,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if AntigravityBackend.isInstalled(customPath: AppSettings.shared.agyPath) {
             AppSettings.shared.refreshAntigravityModelsIfNeeded()
         }
+        // Codex's, from its app server's `model/list`.
+        if ToolLocator.shared.codex(configured: AppSettings.shared.codexPath, askLoginShell: false) != nil {
+            AppSettings.shared.refreshCodexModelsIfNeeded()
+        }
         // Main menu: invisible for accessory apps, but REQUIRED for standard
         // keyboard shortcuts (⌘C/⌘V/⌘X/⌘A/⌘Z) to route to the text field.
         let mainMenu = NSMenu()

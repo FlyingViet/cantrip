@@ -1688,7 +1688,7 @@ struct LauncherView: View {
             return "Copilot Remote · \(settings.acpAddress)"
         case .codex:
             let model = settings.codexModel.trimmingCharacters(in: .whitespaces)
-            return model.isEmpty ? "Codex" : "Codex · \(model)"
+            return model.isEmpty ? "Codex" : "Codex · \(settings.codexModelLabel(model))"
         case .antigravity:
             let model = settings.agyModel.trimmingCharacters(in: .whitespaces)
             return model.isEmpty ? "Antigravity" : "Antigravity · \(model)"
@@ -1713,7 +1713,7 @@ struct LauncherView: View {
             return "Copilot Remote · \(settings.acpAddress)"
         case .codex:
             let model = settings.codexModel.trimmingCharacters(in: .whitespaces)
-            return model.isEmpty ? "Codex" : "Codex · \(model)"
+            return model.isEmpty ? "Codex" : "Codex · \(settings.codexModelLabel(model))"
         case .antigravity:
             let model = settings.agyModel.trimmingCharacters(in: .whitespaces)
             return model.isEmpty ? "Antigravity" : "Antigravity · \(model)"
@@ -1780,7 +1780,7 @@ struct LauncherView: View {
                 }
                 Menu("Codex") {
                     councilModelButtons(backend: .codex,
-                                        models: [settings.codexModel].filter { !$0.isEmpty })
+                                        models: settings.codexAvailableModels.map(\.id))
                 }
                 Menu("Antigravity") {
                     councilModelButtons(backend: .antigravity,
@@ -1814,7 +1814,7 @@ struct LauncherView: View {
     private func councilModelButtons(backend: BackendKind, models: [String]) -> some View {
         Button("Configured default") { addCouncilSeat(backend: backend, model: "") }
         ForEach(models, id: \.self) { model in
-            Button(backend == .antigravity ? settings.agyModelLabel(model) : model) {
+            Button(settings.fallbackModelLabel(backend, model)) {
                 addCouncilSeat(backend: backend, model: model)
             }
         }
@@ -2745,6 +2745,7 @@ struct LauncherView: View {
         VStack(alignment: .leading, spacing: 12) {
             ClaudeUsageView(usage: usage)
             if usage.copilotUsage.antigravity != nil { AntigravityUsageView(usage: usage) }
+            if usage.copilotUsage.codex != nil { CodexUsageView(usage: usage) }
             CopilotUsageView(usage: usage)
             if claudeMonthSpend > 0 {
                 HStack(spacing: 6) {
@@ -2754,14 +2755,6 @@ struct LauncherView: View {
                     Text("Claude spend: \(money(claudeMonthSpend)) in the last 30 days")
                         .font(.callout)
                 }
-            }
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.left.forwardslash.chevron.right")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Text("Codex: plan-based (ChatGPT subscription) — limits not exposed by the CLI")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
             }
             HStack(spacing: 6) {
                 Image(systemName: "cpu")
@@ -4105,9 +4098,18 @@ struct SettingsView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             case .codex:
-                labeledField("codex path (blank = auto)", text: $settings.codexPath, prompt: "/opt/homebrew/bin/codex")
-                labeledField("Model (blank = default, e.g. gpt-5-codex)", text: $settings.codexModel, prompt: "")
-                Text("Requires the OpenAI Codex CLI: npm install -g @openai/codex, then run `codex` once to sign in. \"Act on my behalf\" maps to --dangerously-bypass-approvals-and-sandbox.")
+                labeledField("codex path (blank = auto)", text: $settings.codexPath, prompt: "~/.local/bin/codex")
+                codexModelSettings
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Permissions").font(.caption).foregroundStyle(.secondary)
+                    Picker("", selection: $settings.codexPermissionMode) {
+                        Text("Ask before edits, commands and MCP tools").tag("default")
+                        Text("Full access (no sandbox, no approvals)").tag("bypassPermissions")
+                    }
+                    .labelsHidden()
+                }
+                labeledField("Working directory", text: $settings.claudeWorkdir, prompt: NSHomeDirectory())
+                Text("Requires the OpenAI Codex CLI (`codex`), signed in with `codex login`. Cantrip runs `codex app-server` in a workspace-write sandbox and answers each approval itself; council seats are read-only. \"Act on my behalf\" or Full access starts threads with danger-full-access and no approvals.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             case .antigravity:
@@ -4347,6 +4349,57 @@ struct SettingsView: View {
         let current = settings.claudeModel.trimmingCharacters(in: .whitespaces)
         if !current.isEmpty && !options.contains(current) { options.append(current) }
         return options
+    }
+
+    /// Codex's model and effort pickers, from the app server's `model/list`.
+    private var codexModelSettings: some View {
+        let selected = settings.codexAvailableModels.first { $0.id == settings.codexModel }
+            ?? settings.codexAvailableModels.first(where: \.isDefault)
+        return Group {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Model").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Picker("", selection: $settings.codexModel) {
+                        Text("Default (\(settings.codexAvailableModels.first(where: \.isDefault)?.displayName ?? "Codex's choice"))").tag("")
+                        ForEach(CopilotModelInfo.choices(supported: settings.codexAvailableModels.map(\.id), fallback: [],
+                                                         selected: settings.codexModel), id: \.self) { model in
+                            Text(settings.codexModelLabel(model)).tag(model)
+                        }
+                    }
+                    .labelsHidden()
+                    Button(action: { settings.refreshCodexModels() }) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(settings.codexRefreshInFlight)
+                    .accessibilityLabel("Refresh Codex models")
+                    .help("Refresh the model list from Codex's app server. No chat or model request is made.")
+                }
+                if settings.codexRefreshInFlight {
+                    Text("Refreshing Codex models…").font(.caption).foregroundStyle(.secondary)
+                } else if let error = settings.codexModelRefreshError {
+                    Text("\(error) Previously cached models are unchanged.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if let date = settings.codexCatalogUpdatedAt {
+                    Text("Models refreshed \(date.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .onAppear { settings.refreshCodexModelsIfNeeded() }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Effort").font(.caption).foregroundStyle(.secondary)
+                Picker("", selection: $settings.codexEffort) {
+                    Text("Default (\(selected?.defaultEffort?.capitalized ?? "model default"))").tag("")
+                    ForEach(CopilotModelInfo.choices(supported: selected?.efforts, fallback: ["low", "medium", "high"],
+                                                     selected: settings.codexEffort), id: \.self) { effort in
+                        Text(effort.capitalized).tag(effort)
+                    }
+                }
+                .labelsHidden()
+            }
+        }
     }
 
     private var selectedCopilotModelInfo: CopilotModelInfo? {

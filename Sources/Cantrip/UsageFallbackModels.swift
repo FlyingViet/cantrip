@@ -16,7 +16,11 @@ extension AppSettings {
 
     /// A model's name as the pickers show it.
     func fallbackModelLabel(_ kind: BackendKind, _ id: String) -> String {
-        kind == .antigravity ? agyModelLabel(id) : id
+        switch kind {
+        case .antigravity: return agyModelLabel(id)
+        case .codex: return codexModelLabel(id)
+        default: return id
+        }
     }
 
     /// The backup's model and effort, or its default when the chosen model is no longer offered.

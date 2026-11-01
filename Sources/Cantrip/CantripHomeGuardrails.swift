@@ -17,8 +17,8 @@ enum CantripHomeApproval: String {
     /// Tools ask first, and unattended runs pause before outbound or irreversible actions.
     case ask
 
-    /// The mode the user picked for `backend`. Local models keep Cantrip's own pauses; Codex and
-    /// Copilot Remote run commands Cantrip never sees, so their modes can't be honored safely.
+    /// The mode the user picked for `backend`. Local models keep Cantrip's own pauses; Copilot
+    /// Remote runs commands Cantrip never sees, so its mode can't be honored safely.
     static func chosen(for backend: BackendKind, settings: AppSettings) -> Self {
         switch backend {
         case .copilot:
@@ -28,7 +28,9 @@ enum CantripHomeApproval: String {
             return settings.claudePermissionMode == "acceptEdits" ? .fileEdits : .ask
         case .antigravity:
             return (settings.allowActions || settings.agyPermissionMode == "bypassPermissions") ? .automatic : .ask
-        case .copilotRemote, .codex, .localModel:
+        case .codex:
+            return (settings.allowActions || settings.codexPermissionMode == "bypassPermissions") ? .automatic : .ask
+        case .copilotRemote, .localModel:
             return .ask
         }
     }

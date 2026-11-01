@@ -36,6 +36,10 @@ struct SessionTabTests {
                 try await testBackgroundWatcherLive()
                 return
             }
+            if ProcessInfo.processInfo.environment["CANTRIP_CODEX_LIVE_TEST"] == "1" {
+                try await testCodexLive()
+                return
+            }
             if ProcessInfo.processInfo.environment["CANTRIP_HOME_LIVE_TEST"] == "1" {
                 try await testCantripHomeLive()
                 return
@@ -300,7 +304,7 @@ struct SessionTabTests {
         let usage = UsageTracker(quotaLoader: { completion in
             quotaCalls += 1
             completion(.failure(CopilotQuotaError.authentication))
-        }, claudeLoader: nil, antigravityLoader: { nil })
+        }, claudeLoader: nil, antigravityLoader: { nil }, codexLoader: { nil })
         let server = RemoteControlServer(manager: manager, usage: usage)
         let port = Int.random(in: 49152...65535)
         let token = UUID().uuidString

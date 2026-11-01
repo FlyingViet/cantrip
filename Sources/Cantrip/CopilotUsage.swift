@@ -1,7 +1,8 @@
 import Foundation
 
 /// Every backend's account limits for `/api/v1/copilot/usage`: Copilot's allowance at the top
-/// level (as before), Claude's plan limits under `claude` and Antigravity's under `antigravity`.
+/// level (as before), Claude's plan limits under `claude`, Antigravity's under `antigravity` and
+/// Codex's under `codex`.
 struct CopilotUsageSnapshot: Codable {
     var account: CopilotAccountUsage?
     var checkedAt: String?
@@ -11,6 +12,8 @@ struct CopilotUsageSnapshot: Codable {
     var claude: ClaudeUsageState?
     /// Antigravity's weekly and 5-hour limits per model group; nil when agy isn't installed.
     var antigravity: AntigravityUsageState?
+    /// Codex's windows (5-hour, weekly or monthly) per limit; nil when Codex isn't installed.
+    var codex: CodexUsageState?
     /// The Mac's backend when the snapshot was served, so clients lead with the limit in use.
     var activeBackend: String?
 

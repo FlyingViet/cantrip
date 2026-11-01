@@ -31,6 +31,8 @@ final class UsageTracker: ObservableObject {
     private let claudeLoader: ((@escaping (Result<ClaudeAccountUsage, Error>) -> Void) -> Void)?
     /// Asked on every refresh, so Antigravity installed after launch shows up without a restart.
     private let antigravityLoader: () -> ((@escaping (Result<AntigravityAccountUsage, Error>) -> Void) -> Void)?
+    /// Asked on every refresh, like Antigravity's.
+    private let codexLoader: () -> ((@escaping (Result<CodexAccountUsage, Error>) -> Void) -> Void)?
     private let quotaClock: () -> Date
     private var autoRefresh: Timer?
 
@@ -77,7 +79,42 @@ final class UsageTracker: ObservableObject {
                 }
             }
         }
+        if let codexLoader = codexLoader() {
+            group.enter()
+            codexLoader { [weak self] result in
+                DispatchQueue.main.async {
+                    defer { group.leave() }
+                    self?.applyCodex(result)
+                }
+            }
+        }
         group.notify(queue: .main) { [weak self] in self?.copilotUsage.isRefreshing = false }
+    }
+
+    /// Codex's limits, from a read or a running tab's update (`merging` keeps the other limits'
+    /// windows the update didn't carry). A full window sends new messages to the fallback first.
+    func applyCodex(_ result: Result<CodexAccountUsage, Error>, merging: Bool = false) {
+        var state = copilotUsage.codex ?? CodexUsageState()
+        switch result {
+        case .success(var account):
+            if merging, let old = state.account {
+                let updated = Set(account.windows.map(\.id))
+                account.windows += old.windows.filter { !updated.contains($0.id) }
+                account.plan = account.plan ?? old.plan
+            }
+            state = CodexUsageState(account: account, checkedAt: ISODate.string(from: quotaClock()), error: nil)
+            if let full = account.windows.filter(\.isExhausted)
+                .max(by: { (copilotDate($0.resetsAt) ?? .distantPast) < (copilotDate($1.resetsAt) ?? .distantPast) }) {
+                BackendLimitTracker.shared.markLimited(
+                    .codex, message: "Codex \(full.title.lowercased()) reached",
+                    report: UsageLimitReport(code: "usage/\(full.id)", resetsAt: copilotDate(full.resetsAt)),
+                    now: quotaClock()
+                )
+            }
+        case .failure(let error):
+            state.error = ((error as? CodexUsageError) ?? .response).localizedDescription
+        }
+        copilotUsage.codex = state
     }
 
     private func apply(antigravity result: Result<AntigravityAccountUsage, Error>) {
@@ -147,11 +184,14 @@ final class UsageTracker: ObservableObject {
         claudeLoader: ((@escaping (Result<ClaudeAccountUsage, Error>) -> Void) -> Void)? = UsageTracker.defaultClaudeLoader,
         antigravityLoader: @escaping () -> ((@escaping (Result<AntigravityAccountUsage, Error>) -> Void) -> Void)?
             = UsageTracker.defaultAntigravityLoader,
+        codexLoader: @escaping () -> ((@escaping (Result<CodexAccountUsage, Error>) -> Void) -> Void)?
+            = UsageTracker.defaultCodexLoader,
         quotaClock: @escaping () -> Date = Date.init
     ) {
         self.quotaLoader = quotaLoader
         self.claudeLoader = claudeLoader
         self.antigravityLoader = antigravityLoader
+        self.codexLoader = codexLoader
         self.quotaClock = quotaClock
         if let data = d.data(forKey: rateLimitKey),
            let saved = try? JSONDecoder().decode(RateLimit.self, from: data) {
@@ -162,6 +202,14 @@ final class UsageTracker: ObservableObject {
     /// Claude's limits when Claude Code is installed; nil leaves them out.
     static var defaultClaudeLoader: ((@escaping (Result<ClaudeAccountUsage, Error>) -> Void) -> Void)? {
         ToolLocator.shared.claude(configured: AppSettings.shared.claudePath) == nil ? nil : ClaudeUsageFetcher.fetch
+    }
+
+    /// Codex's limits when the Codex CLI is installed; nil leaves them out.
+    static func defaultCodexLoader() -> ((@escaping (Result<CodexAccountUsage, Error>) -> Void) -> Void)? {
+        guard let executable = ToolLocator.shared.codex(configured: AppSettings.shared.codexPath, askLoginShell: false) else {
+            return nil
+        }
+        return { completion in CodexUsage.fetch(executable: executable, completion: completion) }
     }
 
     /// Antigravity's limits when `agy` is installed; nil leaves them out.

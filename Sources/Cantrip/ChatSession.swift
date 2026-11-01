@@ -374,9 +374,9 @@ final class ChatSession: ObservableObject {
     /// Each run gets one correction turn.
     var cantripHomeCorrectionSpent = false
     /// Whether this Home session's backend lets Cantrip check each action before it runs.
-    /// Codex runs commands itself; a Copilot Remote server may approve tools Cantrip never sees.
+    /// A Copilot Remote server may approve tools Cantrip never sees.
     var cantripHomeChecksActions: Bool {
-        ![.codex, .copilotRemote].contains(runningBackendKind ?? effectiveBackendKind)
+        (runningBackendKind ?? effectiveBackendKind) != .copilotRemote
     }
     /// The approval mode the user chose for the backend running this Home session.
     var cantripHomeApproval: CantripHomeApproval {
@@ -518,7 +518,7 @@ final class ChatSession: ObservableObject {
             // A child tab keeps Cantrip's blocked list too (it must not quit Cantrip, for one).
             : ChildTabStore.shared.isActiveChild(id) ? .attended : nil
         let guarded: [CantripHomeGuardedBackend?] = [
-            copilotBackend as? CantripHomeGuardedBackend, copilotRemote, claudeCode, antigravity, localModel
+            copilotBackend as? CantripHomeGuardedBackend, copilotRemote, claudeCode, antigravity, codex, localModel
         ]
         for backend in guarded { backend?.guardrail = guardrail }
         // Remember which agent files folders this session used (Home runs hand them to the log).
@@ -693,6 +693,10 @@ final class ChatSession: ObservableObject {
         let antigravitySelection = selection(for: .antigravity)
         antigravity.modelOverride = antigravitySelection.flatMap { $0.model.isEmpty ? nil : $0.model }
         antigravity.effortOverride = antigravitySelection.flatMap { $0.effort.isEmpty ? nil : $0.effort }
+        // Codex's "CLI default" (and an empty effort) follow the Mac's Codex settings.
+        let codexSelection = selection(for: .codex)
+        codex.modelOverride = codexSelection.flatMap { $0.model.isEmpty ? nil : $0.model }
+        codex.effortOverride = codexSelection.flatMap { $0.effort.isEmpty ? nil : $0.effort }
     }
 
     private func saveTabMetadata(_ updated: SessionTabMetadata) throws {
@@ -1089,7 +1093,7 @@ final class ChatSession: ObservableObject {
     /// Runs this tab's tools under Cantrip's blocked list and the child-tab resource rules.
     func configureAsChildTab(label: String, policy: @escaping CopilotBackend.ChildPolicy) {
         let guarded: [CantripHomeGuardedBackend?] = [
-            copilot as? CantripHomeGuardedBackend, copilotRemote, claudeCode, antigravity, localModel
+            copilot as? CantripHomeGuardedBackend, copilotRemote, claudeCode, antigravity, codex, localModel
         ]
         for backend in guarded {
             backend?.guardrail = .attended
@@ -1097,15 +1101,17 @@ final class ChatSession: ObservableObject {
         }
         (copilot as? CopilotBackend)?.childPolicy = policy
         claudeCode.childPolicy = policy
+        codex.childPolicy = policy
     }
 
     func clearChildTabPolicy() {
         let guarded: [CantripHomeGuardedBackend?] = [
-            copilot as? CantripHomeGuardedBackend, copilotRemote, claudeCode, antigravity, localModel
+            copilot as? CantripHomeGuardedBackend, copilotRemote, claudeCode, antigravity, codex, localModel
         ]
         for backend in guarded { backend?.guardrail = nil }
         (copilot as? CopilotBackend)?.childPolicy = nil
         claudeCode.childPolicy = nil
+        codex.childPolicy = nil
     }
 
     /// After a child tab's merge held the queue.
@@ -2199,6 +2205,7 @@ final class ChatSession: ObservableObject {
         if isCantripHome {
             (copilot as? CantripHomeProtocolCarrier)?.homeProtocol = nil
             claudeCode.homeProtocol = nil
+            codex.homeProtocol = nil
         }
         homeCarrier?.homeProtocol = cantripHomeChatProtocol
         if !isSlashCommand, automatedRun?.isIncident == false, let run = cantripHomeTask,
@@ -2253,12 +2260,12 @@ final class ChatSession: ObservableObject {
                 userMessage: prompt,
                 previousTurns: previousTurns
             )
-            if self.isCantripHomeRun, [.codex, .copilotRemote].contains(backendKind) {
+            if self.isCantripHomeRun, backendKind == .copilotRemote {
                 // Fail closed: an unattended run needs a backend Cantrip can check per action.
                 self.handle(.failure(
-                    "Cantrip Home background runs need Copilot, Claude Code or a local model so Cantrip "
-                        + "can check each action before it runs. Codex and Copilot Remote can't be checked "
-                        + "per command; choose another backend to run scheduled tasks and incidents."
+                    "Cantrip Home background runs need a backend Cantrip can check per action (Copilot, "
+                        + "Claude Code, Codex, Antigravity or a local model). Copilot Remote's server may "
+                        + "approve tools Cantrip never sees; choose another backend for scheduled tasks."
                 ))
                 return
             }
@@ -2447,10 +2454,8 @@ final class ChatSession: ObservableObject {
             b.readOnly = true
             fresh = b
         case .codex:
-            let b = CodexBackend(persistKey: TabDefaults.councilCodex(id, seat: index, model: member.model))
-            b.modelOverride = member.model.isEmpty ? nil : member.model
-            b.readOnly = true
-            fresh = b
+            fresh = CodexBackend(persistKey: TabDefaults.councilCodex(id, seat: index, model: member.model),
+                                 readOnly: true, modelOverride: member.model.isEmpty ? nil : member.model)
         case .antigravity:
             fresh = AntigravityBackend(
                 persistKey: TabDefaults.councilAntigravity(id, seat: index, model: member.model),
@@ -3322,8 +3327,8 @@ final class ChatSession: ObservableObject {
             let m = (copilot as? CopilotBackend)?.modelOverride ?? settings.effectiveCopilotModel ?? ""
             return m.isEmpty ? "copilot" : m
         case .codex:
-            let m = settings.codexModel
-            return m.isEmpty ? "gpt-5-codex" : m
+            let m = codex.modelOverride ?? settings.codexModel
+            return m.isEmpty ? (settings.codexAvailableModels.first { $0.isDefault }?.id ?? "codex") : m
         default:
             return nil
         }

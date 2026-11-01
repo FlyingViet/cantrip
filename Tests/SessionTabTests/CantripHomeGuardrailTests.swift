@@ -17,7 +17,8 @@ extension SessionTabTests {
         try await testAntigravityRestartKeepsNextTurn()
         try await testAntigravityWorkdirAndToolStates()
         try await testAntigravityPermissionModes()
-        try await testCantripHomeCodexFailsClosed()
+        try await testCantripHomeCopilotRemoteFailsClosed()
+        try await testCodexBackend()
         print("Cantrip Home guardrails: action policy, forgiving block parsing, prompt briefs and one-shot corrections passed")
     }
 
@@ -716,7 +717,7 @@ extension SessionTabTests {
         CantripHomeDelegations.shared.refresh()
     }
 
-    /// Home follows the approval mode chosen for each non-local backend; local models, Codex and
+    /// Home follows the approval mode chosen for each non-local backend; local models and
     /// Copilot Remote keep Cantrip's own pauses.
     @MainActor
     static func testCantripHomeApprovalModes() {
@@ -727,9 +728,9 @@ extension SessionTabTests {
         settings.allowActions = true
         settings.claudePermissionMode = "default"
         precondition(mode(.copilot) == .automatic && mode(.claudeCode) == .automatic
-                     && mode(.antigravity) == .automatic,
-                     "Act on my behalf makes Copilot, Claude Code and Antigravity approve automatically")
-        precondition(mode(.localModel) == .ask && mode(.codex) == .ask && mode(.copilotRemote) == .ask,
+                     && mode(.antigravity) == .automatic && mode(.codex) == .automatic,
+                     "Act on my behalf makes Copilot, Claude Code, Antigravity and Codex approve automatically")
+        precondition(mode(.localModel) == .ask && mode(.copilotRemote) == .ask,
                      "Local models and backends Cantrip can't check keep Cantrip's pauses")
         settings.allowActions = false
         precondition(mode(.copilot) == .ask && mode(.claudeCode) == .ask && mode(.antigravity) == .ask,
@@ -1260,12 +1261,17 @@ extension SessionTabTests {
     }
 
     @MainActor
-    static func testCantripHomeCodexFailsClosed() async throws {
+    static func testCantripHomeCopilotRemoteFailsClosed() async throws {
         let settings = AppSettings.shared
         let saved = (settings.backend, settings.memoryEnabled)
         defer { (settings.backend, settings.memoryEnabled) = saved }
-        settings.backend = .codex
         settings.memoryEnabled = false
+        settings.backend = .codex
+        let codexRun = ChatSession(cantripHomeRun: true, makeJournal: {
+            try RunJournal(sessionID: $0, directory: CantripHomeStore.runsDirectory)
+        })
+        precondition(codexRun.cantripHomeChecksActions, "Codex asks Cantrip before each command, edit and MCP tool")
+        settings.backend = .copilotRemote
         let run = ChatSession(cantripHomeRun: true, makeJournal: {
             try RunJournal(sessionID: $0, directory: CantripHomeStore.runsDirectory)
         })
@@ -1275,7 +1281,7 @@ extension SessionTabTests {
         run.submitCantripHomeTask(id: UUID(), title: "Codex probe", scheduleSummary: "Daily", prompt: "Probe.")
         try await waitForJournalTest { !run.isStreaming }
         let error = run.messages.last { $0.role == .error }?.text ?? ""
-        precondition(outcome?.0 == "failed" && error.contains("Codex and Copilot Remote can't be checked")
+        precondition(outcome?.0 == "failed" && error.contains("Copilot Remote's server may approve tools")
                      && !run.cantripHomeChecksActions,
                      "Unattended runs fail closed on a backend Cantrip can't check: \(String(describing: outcome))")
     }

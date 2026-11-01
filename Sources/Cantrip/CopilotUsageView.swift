@@ -159,3 +159,32 @@ struct AntigravityUsageView: View {
         }
     }
 }
+
+struct CodexUsageView: View {
+    @ObservedObject var usage: UsageTracker
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Codex", systemImage: "chevron.left.forwardslash.chevron.right").font(.headline)
+                if let state = usage.copilotUsage.codex, let account = state.account {
+                    if state.isStale(at: context.date) {
+                        Label("Last known limits - data is stale", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
+                    if let plan = account.plan { Text("ChatGPT \(plan.capitalized) plan").foregroundStyle(.secondary) }
+                    ForEach(account.windows) { window in
+                        UsageLimitRow(title: window.title, percentUsed: window.usedPercent,
+                                      resetsAt: copilotDate(window.resetsAt), critical: window.isExhausted)
+                    }
+                    if let error = state.error { Text(error).foregroundStyle(.orange) }
+                } else {
+                    Text(usage.copilotUsage.codex?.error
+                         ?? (usage.copilotUsage.isRefreshing ? "Reading Codex's limits..." : "Codex's limits unavailable"))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption)
+        }
+    }
+}
