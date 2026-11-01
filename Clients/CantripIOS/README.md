@@ -1415,8 +1415,8 @@ In Xcode: select the **Hermes** target → **Signing & Capabilities** → set yo
 
 The app supports portrait and both landscape orientations on iPhone, plus all
 orientations on iPad. Duo unfolded (the hinge open, upright or on its side) uses the system's
-vertical bar as a navigation rail: a **sidebar toggle** at the top, then **Model Settings** (model,
-effort and the Mac's usage limit fallback), **Settings**, Refresh and the menu. The toggle opens
+vertical bar as a navigation rail: a **sidebar toggle** at the top, then **Settings** and the
+tab's menu, whose first item is **Model Settings**. The toggle opens
 and closes Gateway Mac's left sidebar with Pip, Home's sections, the tabs (with **+**), the open
 chat's **Skills** and the connection; the chat header keeps the title and state on the left and
 Stop and delivery on the right. The sidebar stays open or closed as you left it through folding,
@@ -1426,7 +1426,7 @@ either orientation, and while the keyboard is up) keeps chat full-width with
 sessions in the drawer: where the system supplies a
 vertical bar, Home's sections use the bottom of Apple's native adaptive toolbar with Tabs and
 the hamburger menu at the top; in a project tab the back pill uses the bottom and a separate
-Settings gear, Refresh, and the hamburger menu stay at the top, instead of duplicating controls
+Settings gear and the hamburger menu stay at the top, instead of duplicating controls
 above the conversation. The title, connection/usage row,
 and composer remain with the chat. In other display configurations the familiar
 header returns; regular-width iPad windows retain their session sidebar.

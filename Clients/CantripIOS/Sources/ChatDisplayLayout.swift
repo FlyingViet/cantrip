@@ -177,9 +177,9 @@ struct ChatNavigationActions<Leading: View, Settings: View, Trailing: View>: Vie
     /// Cantrip Home, whose tab bar takes the bottom of the vertical bar: only the leading and
     /// trailing actions, both at the top, as in its iPhone header (the menu has settings).
     var sharesVerticalBarWithTabBar = false
-    /// The unfolded iPhone Duo's rail: a sidebar toggle at the top and the tab's model settings.
+    /// The unfolded iPhone Duo's rail: a sidebar toggle at the top (the tab's Model Settings is
+    /// the first item in its menu).
     var sidebarToggle: AnyView? = nil
-    var modelSettings: AnyView? = nil
     /// Leaves the leading action out of the rail (the sidebar it would open is showing).
     var hidesLeadingInRail = false
     @ViewBuilder var leading: () -> Leading
@@ -211,10 +211,6 @@ struct ChatNavigationActions<Leading: View, Settings: View, Trailing: View>: Vie
                 }
                 if displayTraits.isUnfoldedDuo {
                     // Home's iPhone header keeps settings in its menu; the unfolded rail has room.
-                    if let modelSettings {
-                        ToolbarItem(placement: .topBarTrailing) { modelSettings }
-                            .axisBehavior(.verticalPreferred)
-                    }
                     ToolbarItem(placement: .topBarTrailing) { settings() }
                         .axisBehavior(.verticalPreferred)
                 }
@@ -223,10 +219,6 @@ struct ChatNavigationActions<Leading: View, Settings: View, Trailing: View>: Vie
             } else {
                 if !hidesLeadingInRail {
                     ToolbarItem(placement: .bottomBar) { leading() }
-                        .axisBehavior(.verticalPreferred)
-                }
-                if let modelSettings, displayTraits.isUnfoldedDuo {
-                    ToolbarItem(placement: .topBarTrailing) { modelSettings }
                         .axisBehavior(.verticalPreferred)
                 }
                 ToolbarItem(placement: .topBarTrailing) { settings() }
