@@ -293,13 +293,13 @@ final class CantripHomeTabDrawerTests: XCTestCase {
             ChatHeader(style: .tab) {
                 CantripTabHeaderTitle(session: plexible, connectionState: .connected)
             } connection: { EmptyView() } lane: { EmptyView() } usage: { EmptyView() }
-            delivery: { EmptyView() } refresh: { EmptyView() } settings: { EmptyView() }
+            delivery: { EmptyView() } settings: { EmptyView() }
             leading: { CantripHomeBackPill {} }
             trailing: { ChatMenuIcon(systemName: "ellipsis") }
             ChatHeader(style: .mascot) {
                 Text("Pip").font(.headline)
             } connection: { EmptyView() } lane: { EmptyView() } usage: { EmptyView() }
-            delivery: { EmptyView() } refresh: { EmptyView() } settings: { EmptyView() }
+            delivery: { EmptyView() } settings: { EmptyView() }
             leading: { CantripHomeTabsButton(workingCount: 2) {} }
             trailing: { ChatMenuIcon() }
             Spacer(minLength: 0)

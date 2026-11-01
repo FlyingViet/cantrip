@@ -362,6 +362,13 @@ final class CantripHistoryTests: XCTestCase {
         XCTAssertNotNil(model.detailError)
         XCTAssertNil(model.errorMessage)
         XCTAssertEqual(model.pollDelay, .milliseconds(1500))
+        // Retry conversation (CantripDetailNotice) runs refreshNow; a load that works clears the notice.
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(revision: "r3", list: request.url!.path == "/api/v1/sessions", title: "Updated tab"))
+        }
+        await model.refreshNow()
+        XCTAssertNil(model.detailError)
+        XCTAssertEqual(model.selectedSession?.transcript.count, 2)
         HistoryRequestProtocol.handler = { _ in throw URLError(.networkConnectionLost) }
         await model.refreshNow()
         XCTAssertEqual(model.connectionState, .reconnecting)

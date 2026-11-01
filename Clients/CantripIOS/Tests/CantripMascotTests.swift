@@ -131,8 +131,6 @@ final class CantripMascotTests: XCTestCase {
                         EmptyView()
                     } delivery: {
                         EmptyView()
-                    } refresh: {
-                        EmptyView()
                     } settings: {
                         EmptyView()
                     } leading: {
@@ -212,8 +210,6 @@ final class CantripMascotTests: XCTestCase {
                 } usage: {
                     EmptyView()
                 } delivery: {
-                    EmptyView()
-                } refresh: {
                     EmptyView()
                 } settings: {
                     EmptyView()
@@ -629,8 +625,6 @@ final class CantripMascotTests: XCTestCase {
                         EmptyView()
                     } delivery: {
                         EmptyView()
-                    } refresh: {
-                        EmptyView()
                     } settings: {
                         EmptyView()
                     } leading: {
@@ -664,8 +658,6 @@ final class CantripMascotTests: XCTestCase {
                     } usage: {
                         EmptyView()
                     } delivery: {
-                        EmptyView()
-                    } refresh: {
                         EmptyView()
                     } settings: {
                         EmptyView()

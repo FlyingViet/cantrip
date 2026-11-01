@@ -1724,14 +1724,6 @@ struct ChatView: View {
                 CantripDeliveryPicker(deliveryMode: $vm.remoteDeliveryMode, compact: true)
                     .disabled(remote.isMutating || vm.sending || importingImages || submittingRemote)
             }
-        } refresh: {
-            if vm.activeLane.usesCantripRemote {
-                ChatRefreshButton(isConfigured: remote.isConfigured, isRefreshing: remote.isRefreshing) {
-                    composerFocused = false
-                    Task { await remote.refreshNow() }
-                }
-                .disabled(vm.sending || importingImages || submittingRemote)
-            }
         } settings: {
             ChatSettingsButton { showSettings = true }
                 .disabled(vm.sending || importingImages || submittingRemote)
@@ -1774,7 +1766,6 @@ struct ChatView: View {
         let remoteTabsEnabled: Bool
         let paused: Bool
         let voiceModeDisabled: Bool
-        let macControlsEnabled: Bool
         let settingsDisabled: Bool
         let isTabLocked: Bool
         let newConversationDisabled: Bool
@@ -1800,7 +1791,6 @@ struct ChatView: View {
             remoteTabsEnabled: remoteTabsEnabled,
             paused: paused,
             voiceModeDisabled: paused || !destinationReady || hasImageDraft || importingImages,
-            macControlsEnabled: remote.isConfigured,
             settingsDisabled: vm.sending || importingImages || submittingRemote,
             isTabLocked: vm.isTabLocked,
             newConversationDisabled: newConversationDisabled,
@@ -1883,14 +1873,6 @@ struct ChatView: View {
                         }
                         .disabled(state.isRemoteMutating)
                     }
-                    // The iPhone header has no refresh button (the Duo's rail and wider headers do).
-                    Button {
-                        composerFocused = false
-                        Task { await remote.refreshNow() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(!state.macControlsEnabled || state.isRemoteMutating)
                 }
             }
             Section("Agent") {
@@ -2478,11 +2460,6 @@ struct ChatView: View {
                 duoModelSettingsButton
                 ChatSettingsButton { showSettings = true }
                     .disabled(vm.sending || importingImages || submittingRemote)
-                ChatRefreshButton(isConfigured: remote.isConfigured, isRefreshing: remote.isRefreshing) {
-                    composerFocused = false
-                    Task { await remote.refreshNow() }
-                }
-                .disabled(vm.sending || importingImages || submittingRemote)
                 chatMenu.frame(width: 44, height: 44)
             } bottom: {
                 if vm.activeLane == .home {
@@ -3306,7 +3283,7 @@ enum ChatHeaderStyle {
 }
 
 struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delivery: View,
-                  Refresh: View, Settings: View, Leading: View, Trailing: View>: View {
+                  Settings: View, Leading: View, Trailing: View>: View {
     @Environment(\.chatDisplayTraits) private var displayTraits
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var tabLeadingWidth: CGFloat = 96
@@ -3322,7 +3299,6 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     @ViewBuilder var lane: () -> Lane
     @ViewBuilder var usage: () -> Usage
     @ViewBuilder var delivery: () -> Delivery
-    @ViewBuilder var refresh: () -> Refresh
     @ViewBuilder var settings: () -> Settings
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var trailing: () -> Trailing
@@ -3345,7 +3321,6 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                     delivery()
                     // On the unfolded iPhone Duo these are in the rail.
                     if !actionsElsewhere {
-                        refresh()
                         settings()
                         trailing().frame(width: 44, height: 44)
                     }
@@ -3377,7 +3352,6 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                     lane()
                     usage()
                     delivery()
-                    if !actionsElsewhere { refresh() }
                 }
             }
         }
@@ -3393,7 +3367,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         .modifier(ChatNavigationActions(
             sharesVerticalBarWithTabBar: style == .mascot,
             sidebarToggle: sidebarToggle, modelSettings: modelSettings, hidesLeadingInRail: hidesLeadingInRail,
-            leading: leading, refresh: refresh, settings: settings, trailing: trailing
+            leading: leading, settings: settings, trailing: trailing
         ))
         // Unfolding adds the sidebar toggle and model settings above the bar's items; the system
         // keeps the existing items' slots but draws them empty. A fresh toolbar per layout fixes it.
@@ -3494,34 +3468,6 @@ struct ChatConnectionIndicator: View {
         Circle()
             .fill(isConnected ? Color.green : Color.gray)
             .frame(width: 8, height: 8)
-    }
-}
-
-struct ChatRefreshButton: View {
-    let isConfigured: Bool
-    let isRefreshing: Bool
-    let onRefresh: () -> Void
-
-    var isEnabled: Bool { isConfigured && !isRefreshing }
-
-    var body: some View {
-        Button(action: onRefresh) {
-            ZStack {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 14, weight: .semibold))
-                    .opacity(isRefreshing ? 0 : 1)
-                ProgressView()
-                    .controlSize(.small)
-                    .opacity(isRefreshing ? 1 : 0)
-            }
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
-        .accessibilityIdentifier("chat.refresh")
-        .accessibilityLabel("Refresh Cantrip sessions")
-        .accessibilityValue(isRefreshing ? "Refreshing" : "Idle")
     }
 }
 

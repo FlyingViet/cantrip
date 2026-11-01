@@ -5435,7 +5435,7 @@ struct CantripRemoteView: View {
                     ChatTabsButton(isEnabled: model.isConfigured && !model.isMutating) {
                         showTabs = true
                     }
-                }, refresh: {}, settings: {
+                }, settings: {
                     ChatSettingsButton { showSettings = true }
                 }, trailing: {
                     StableMenu(state: model.isConfigured) {
@@ -5545,16 +5545,10 @@ struct CantripRemoteView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
+                // Polling keeps the sessions current; this shows while it reads.
                 if model.isRefreshing {
                     ProgressView().controlSize(.small)
                 }
-                Button {
-                    Task { await model.refreshNow() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Refresh Remote")
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(model.connectionLabel)
