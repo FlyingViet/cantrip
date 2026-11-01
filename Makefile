@@ -54,7 +54,7 @@ test-session-tabs:
 test-message-routing:
 	@BIN="/tmp/cantrip-message-routing-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/QueueGrouping.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/Log.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/QueueGrouping.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-remote-routing:
 	@BIN="/tmp/cantrip-remote-routing-tests-$$$$"; \
@@ -74,7 +74,7 @@ test-rich-cards:
 test-remote-images:
 	@BIN="/tmp/cantrip-remote-image-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/Log.swift Sources/Cantrip/RemoteImageAttachments.swift Sources/Cantrip/RemoteGeneratedImages.swift Sources/Cantrip/SessionOutputFolders.swift Sources/Cantrip/CantripPaths.swift Tests/RemoteImageTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/RemoteImageAttachments.swift Sources/Cantrip/RemoteGeneratedImages.swift Sources/Cantrip/SessionOutputFolders.swift Sources/Cantrip/CantripPaths.swift Tests/RemoteImageTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-context:
 	@BIN="/tmp/cantrip-context-tests-$$$$"; \
@@ -103,13 +103,13 @@ test-package-tracking:
 test-recovery:
 	@BIN="/tmp/cantrip-recovery-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-consolidation:
 	@BIN="/tmp/cantrip-consolidation-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/ConsolidationPolicy.swift Sources/Cantrip/Log.swift Tests/ConsolidationTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/ConsolidationPolicy.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Tests/ConsolidationTests/main.swift -o "$$BIN" && "$$BIN"
 
 # Fixtures (SQLite databases, a memory folder) are written under .build and removed afterwards.
 test-voice-vocabulary:
@@ -143,7 +143,7 @@ test-simulator-pool:
 test-run-journal:
 	@BIN="/tmp/cantrip-run-journal-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/RunJournal.swift Sources/Cantrip/CantripPaths.swift Tests/RunJournalTests/main.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/RunJournal.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/CantripPaths.swift Tests/RunJournalTests/main.swift -o "$$BIN"; \
 	"$$BIN"
 
 # Auto-create the signing certificate if it's missing (first install).
