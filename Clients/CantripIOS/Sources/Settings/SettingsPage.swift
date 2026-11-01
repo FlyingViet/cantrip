@@ -170,19 +170,25 @@ struct SettingsPauseRow: View {
     @AppStorage("hermes.paused") private var paused = false
 
     var body: some View {
-        Toggle(isOn: $paused) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Pause Agent")
-                Text(paused ? "Paused. This device sends nothing until you turn this off or tap Resume in chat."
-                     : "Stops every request from this device, on every tab, until you turn it off.")
-                    .font(.caption)
-                    .foregroundStyle(paused ? Color.orange : Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        // The caption sits under the switch's row so it wraps in Gateway Mac's narrow sidebar too.
+        VStack(alignment: .leading, spacing: 2) {
+            Toggle("Pause Agent", isOn: $paused)
+                .toggleStyle(.switch)
+                .tint(.orange)
+                .accessibilityHint(Self.caption(paused))
+                .accessibilityIdentifier("settings.pause")
+            Text(Self.caption(paused))
+                .font(.caption)
+                .foregroundStyle(paused ? Color.orange : Color.secondary)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityHidden(true)
         }
-        .toggleStyle(.switch)
-        .tint(.orange)
-        .accessibilityIdentifier("settings.pause")
+    }
+
+    static func caption(_ paused: Bool) -> String {
+        paused ? "Paused. This device sends nothing until you turn this off or tap Resume in chat."
+            : "Stops every request from this device, on every tab, until you turn it off."
     }
 }
 

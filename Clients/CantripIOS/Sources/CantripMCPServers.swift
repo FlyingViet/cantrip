@@ -85,12 +85,16 @@ struct CantripMCPServersView: View {
                                     .accessibilityIdentifier("mcp.server.\(server.name)")
                                 #endif
                             }
+                            #if os(macOS)
+                            // macOS draws a section footer on one line; in the section it wraps.
+                            Text("Connect signs in on the Mac's agent Chrome; approve it here. The switches choose which backends use each server, the same as on the Mac.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            #endif
                         } header: {
                             Text("Servers")
                         } footer: {
-                            #if os(macOS)
-                            Text("Connect signs in on the Mac's agent Chrome; approve it here. The switches choose which backends use each server, the same as on the Mac.")
-                            #else
+                            #if os(iOS)
                             Text("Tap a server to sign in or out and choose which backends and tabs use it.")
                             #endif
                         }

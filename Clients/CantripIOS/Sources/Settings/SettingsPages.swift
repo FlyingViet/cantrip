@@ -258,15 +258,24 @@ struct SettingsGitHubSection: View {
                     .fixedSize()
                     .accessibilityIdentifier("settings.github.signIn")
             }
+            #if os(macOS)
+            // macOS draws a section footer on one line; in the section it wraps.
+            Text(Self.explanation).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            #endif
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
             }
         } header: {
             Text("Sign-ins")
         } footer: {
-            Text("Signs the Mac's GitHub CLI in to github.com with GitHub's device sign-in, for pushes, pull requests and GitHub Builds in every backend. It runs in Cantrip Home, whose chat shows a code to enter at github.com/login/device; no password goes through Cantrip.")
+            #if os(iOS)
+            Text(Self.explanation)
+            #endif
         }
     }
+
+    static let explanation = "Signs the Mac's GitHub CLI in to github.com with GitHub's device sign-in, for pushes, pull requests and GitHub Builds in every backend. It runs in Cantrip Home, whose chat shows a code to enter at github.com/login/device; no password goes through Cantrip."
 
     private func signIn() {
         guard let home = remote.homeSummary else { return }
