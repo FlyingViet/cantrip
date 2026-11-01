@@ -371,6 +371,7 @@ enum BackendCommandFingerprint {
         ".agents/skills", ".codex/skills", ".gemini/skills",
     ]
     static let cliNames = ["copilot", "claude", "codex", "agy"]
+    static let skillsLibraryPath = "Library/Application Support/Cantrip/skills"
 
     static func compute(workdir: String, home: String, environment: [String: String]) -> String {
         let fm = FileManager.default
@@ -389,6 +390,12 @@ enum BackendCommandFingerprint {
             }
         }
         for path in homePaths { stamp("\(home)/\(path)", children: true) }
+        // Cantrip's skills library: the folders above link here, so an edit changes no link.
+        let library = "\(home)/\(skillsLibraryPath)"
+        stamp(library, children: true)
+        for entry in ((try? fm.contentsOfDirectory(atPath: library)) ?? []).sorted() where !entry.hasPrefix(".") {
+            stamp("\(library)/\(entry)/SKILL.md", children: false)
+        }
         var directory = workdir
         for _ in 0..<8 {
             for path in projectPaths { stamp("\(directory)/\(path)", children: true) }

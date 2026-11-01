@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "api", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "api", "skills", "instructions", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 
@@ -21,6 +21,8 @@ enum CantripCLI {
             case "sim": return try sim(Array(arguments.dropFirst()))
             case "mcp": return try mcp(Array(arguments.dropFirst()))
             case "api": try api(Array(arguments.dropFirst()))
+            case "skills": return try skills(Array(arguments.dropFirst()))
+            case "instructions": return try instructions(Array(arguments.dropFirst()))
             default: print(usage)
             }
             return 0
@@ -82,6 +84,10 @@ enum CantripCLI {
                                   Answer a sign-in page waiting for your OK
       cantrip mcp enable|disable NAME [--backend B | --tab ID]
       cantrip mcp signout NAME | restore
+      cantrip skills [list | add PATH | edit NAME | enable NAME | disable NAME | sync | check]
+                                  Cantrip's skills library, linked for every backend (`cantrip skills help`)
+      cantrip instructions [list [DIR] | edit FOLDER | check]
+                                  Rules for everything under a folder, given to every backend (`cantrip instructions help`)
       cantrip tab list            Open tabs with their IDs and child tabs (private tabs are never shown)
       cantrip tab read ID         A tab's recent turns, read-only (ID or its first 8 characters)
           --turns N | --all       How many turns (default 3)
