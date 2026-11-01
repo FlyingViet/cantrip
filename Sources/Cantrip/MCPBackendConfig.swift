@@ -12,6 +12,37 @@ enum MCPBackendConfig {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Coding/Cantrip/Scripts/cantrip-mcp").path
     }
 
+    /// Tool namespaces OpenAI keeps for its own tools. Copilot and Codex name an MCP tool
+    /// `<server>-<tool>`, and a GPT model refuses the whole request when a server is called one of
+    /// these ("Function 'browser.browser-browser_status' is not allowed in reserved namespace").
+    static let reservedServerNames: Set<String> = ["browser", "python", "container", "functions", "multi_tool_use",
+                                                    "image_gen", "web_search", "code_interpreter"]
+
+    /// The name a server gets in every backend's config: its own, or `<name>_mcp` for a name OpenAI
+    /// reserves, so a tab keeps the same tool names when it falls back between backends.
+    static func exportName(_ name: String) -> String {
+        guard reservedServerNames.contains(name.lowercased()) else { return name }
+        let renamed = name + "_mcp"
+        warnOnce(name, renamed)
+        return renamed
+    }
+
+    /// Drops servers that are only another server's export name read back from a backend's
+    /// config (`browser_mcp` when the list has `browser`), so re-importing doesn't duplicate them.
+    static func droppingExportAliases(_ servers: [MCPServer]) -> [MCPServer] {
+        servers.filter { server in !servers.contains { $0.name != server.name && exportName($0.name) == server.name } }
+    }
+
+    private static let warnedLock = NSLock()
+    nonisolated(unsafe) private static var warned = Set<String>()
+
+    private static func warnOnce(_ name: String, _ renamed: String) {
+        let first = warnedLock.withLock { warned.insert(name).inserted }
+        if first {
+            Log.write("mcp: server \"\(name)\" is a tool namespace OpenAI models reserve; backends get it as \"\(renamed)\"")
+        }
+    }
+
     /// Per-tab switches, `TabDefaults`-style.
     static func tabDisabledKey(_ tab: UUID) -> String { "mcpDisabledServers.\(tab.uuidString)" }
 
@@ -22,7 +53,7 @@ enum MCPBackendConfig {
 
     /// A Copilot run's disabled servers: the run's own (a scheduled task's) plus the tab's switches.
     static func disabledForRun(_ run: [String]?, tab: UUID?) -> [String]? {
-        let all = Set(run ?? []).union(tabDisabled(tab))
+        let all = Set((run ?? []).map(exportName)).union(tabDisabled(tab).map(exportName))
         return all.isEmpty ? nil : all.sorted()
     }
 
@@ -49,7 +80,7 @@ enum MCPBackendConfig {
         for server in included(snapshot, backend: .claudeCode, excluded: excluded) {
             var entry = command(server, backend: .claudeCode, relay: relay)
             entry["type"] = "stdio"
-            servers[server.name] = entry
+            servers[exportName(server.name)] = entry
         }
         return ["mcpServers": servers]
     }
@@ -78,7 +109,7 @@ enum MCPBackendConfig {
             entry["type"] = "local"
             // The relay limits tools itself; Copilot needs the field.
             entry["tools"] = server.isRelayed ? ["*"] : (server.tools ?? ["*"])
-            servers[server.name] = entry
+            servers[exportName(server.name)] = entry
         }
         return ["mcpServers": servers]
     }
@@ -89,7 +120,7 @@ enum MCPBackendConfig {
         var args: [String] = []
         for server in included(snapshot, backend: .codex, excluded: excluded) {
             let entry = command(server, backend: .codex, relay: relay)
-            let key = "mcp_servers.\(tomlKey(server.name))"
+            let key = "mcp_servers.\(tomlKey(exportName(server.name)))"
             args += ["-c", "\(key).command=\(toml(entry["command"] as? String ?? ""))"]
             let list = (entry["args"] as? [String] ?? []).map(toml).joined(separator: ",")
             args += ["-c", "\(key).args=[\(list)]"]
@@ -125,8 +156,8 @@ enum MCPBackendConfig {
         for name in managed { servers[name] = nil }
         var written = Set<String>()
         for server in included(snapshot, backend: .antigravity) {
-            servers[server.name] = command(server, backend: .antigravity, relay: relay)
-            written.insert(server.name)
+            servers[exportName(server.name)] = command(server, backend: .antigravity, relay: relay)
+            written.insert(exportName(server.name))
         }
         config["mcpServers"] = servers
         return (config, written)

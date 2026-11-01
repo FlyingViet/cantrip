@@ -1399,6 +1399,10 @@ few times per second, with the page title and address.
 - Activities from that server carry `"browser": true` in session history, so
   clients don't have to match backend-specific tool names (`agent_chrome-…` on
   Copilot, `mcp__agent_chrome__…` on Claude Code; older history used `browser`).
+- OpenAI models reserve the `browser` tool namespace and refuse a whole request
+  that has an MCP server called `browser`. Cantrip gives any server named after
+  an OpenAI tool namespace (such as `browser`, `python` or `functions`) to every
+  backend as `<name>_mcp`, and logs it once.
 
 ## Generated image previews in Cantrip Agent and the browser Remote
 
