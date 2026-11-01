@@ -501,16 +501,30 @@ enum ChildTabGit {
     /// Removes the worktree and the branch. Without `force` (Discard), a worktree with uncommitted
     /// changes stays, locked, with its branch; false then.
     @discardableResult
+    /// Whether `worktree` is clean and has initialized submodules that keep nothing of their own:
+    /// no commit checked out, on a branch or stashed that their remotes don't have.
+    static func submodulesKeepNothing(_ worktree: String) -> Bool {
+        guard let status = run(worktree, ["submodule", "status", "--recursive"], timeout: 30), status.succeeded,
+              status.output.split(separator: "\n").contains(where: { !$0.hasPrefix("-") }),
+              !isDirty(worktree),
+              let own = run(worktree, ["submodule", "foreach", "--quiet", "--recursive",
+                                       "git rev-list --max-count=1 HEAD --branches --not --remotes; git stash list"],
+                            timeout: 60), own.succeeded else { return false }
+        return own.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     static func cleanup(repo: String, worktree: String?, branch: String?, force: Bool) -> Bool {
         if let worktree, FileManager.default.fileExists(atPath: worktree) {
             if !force, isDirty(worktree) { return false }
             run(repo, ["worktree", "unlock", worktree], timeout: 15)
             if run(repo, ["worktree", "remove", worktree], timeout: 120)?.succeeded != true {
-                guard force else {
+                // Git won't remove a worktree with initialized submodules without --force, however clean.
+                let forced = (force || submodulesKeepNothing(worktree))
+                    && run(repo, ["worktree", "remove", "--force", worktree], timeout: 120)?.succeeded == true
+                guard forced || force else {
                     run(repo, ["worktree", "lock", "--reason", lockReason, worktree], timeout: 15)
                     return false
                 }
-                run(repo, ["worktree", "remove", "--force", worktree], timeout: 120)
             }
         }
         if worktree != nil { run(repo, ["worktree", "prune"], timeout: 30) }
