@@ -213,5 +213,10 @@ extension SessionTabTests {
         precondition(chat.runSelection(for: .antigravity)?.model == "gemini-3.8-flash-high")
         agy.sink?(.done)
         try await waitForJournalTest { !chat.isStreaming }
+
+        // Every run counted toward its tier, for the usage screens.
+        let tierUsage = UsageTracker.shared.tierSummary(days: 1)
+        precondition((tierUsage["deep"]?.queries ?? 0) >= 4, "each run counts toward its tier: \(tierUsage)")
+        precondition(TierUsageSnapshot.current().rows.contains { $0.tier == "deep" && $0.label == "Deep" && $0.week.runs >= 4 })
     }
 }

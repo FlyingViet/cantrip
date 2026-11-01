@@ -323,14 +323,16 @@ extension SessionTabTests {
         let suite = "cantrip-endpoint-tiers-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let service = OpenAIEndpointService(runner: { _ in runner }, tracker: tracker,
-                                            ledger: EndpointUsageLedger(defaults: defaults, tracker: nil), now: { clock })
+        let ledger = EndpointUsageLedger(defaults: defaults, tracker: nil)
+        let service = OpenAIEndpointService(runner: { _ in runner }, tracker: tracker, ledger: ledger, now: { clock })
         guard case .answered(_, let target, let fellBack) = await service.complete(try request("deep"), consumer: "tiers",
                                                                                   settings: settings) else {
             preconditionFailure("Claude's deep answers")
         }
         precondition(target == OneShotTarget(backend: .claudeCode, model: "opus", effort: "xhigh", tier: .deep) && fellBack == [.copilot])
         precondition(runner.calls.map(\.backend) == [.copilot, .claudeCode], "\(runner.calls)")
+        let counted = ledger.totals(days: 1, now: clock)["tiers"]
+        precondition(counted?.tiers == ["deep": 1] && counted?.detail.contains("Deep 1") == true, "\(String(describing: counted))")
         guard case .failed(429, "usage_limit", _, _) = await service.complete(try request("copilot:deep"), consumer: "tiers",
                                                                              settings: settings) else {
             preconditionFailure("a limited pinned backend at a tier is a 429")

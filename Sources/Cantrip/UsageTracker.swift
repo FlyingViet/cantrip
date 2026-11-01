@@ -187,6 +187,9 @@ final class UsageTracker: ObservableObject {
     @Published private(set) var revision = 0
 
     private let dailyKey = "usageDaily"
+    private let tierKey = "usageTierDaily"
+    /// The tier key for runs on a model picked by name.
+    static let exactModelKey = "model"
     private let rateLimitKey = "claudeRateLimit"
     private let d = UserDefaults.standard
 
@@ -235,6 +238,22 @@ final class UsageTracker: ObservableObject {
         mutateToday(backend) { $0.queries += 1 }
     }
 
+    /// A run, counted for its backend and its model tier (`exactModelKey` when it named a model).
+    func recordQuery(backend: BackendKind, tier: ModelTier?) {
+        recordQuery(backend: backend)
+        mutateToday(tier?.rawValue ?? Self.exactModelKey, in: tierKey) { $0.queries += 1 }
+    }
+
+    /// Spend and tokens, counted for the backend and the run's tier.
+    func recordCost(backend: BackendKind, tier: ModelTier?, costUSD: Double, inputTokens: Int, outputTokens: Int) {
+        recordCost(backend: backend, costUSD: costUSD, inputTokens: inputTokens, outputTokens: outputTokens)
+        mutateToday(tier?.rawValue ?? Self.exactModelKey, in: tierKey) {
+            $0.costUSD += costUSD
+            $0.inputTokens += inputTokens
+            $0.outputTokens += outputTokens
+        }
+    }
+
     func recordCost(backend: BackendKind, costUSD: Double,
                     inputTokens: Int, outputTokens: Int) {
         DispatchQueue.main.async { self.lastQueryCost = costUSD }
@@ -264,7 +283,17 @@ final class UsageTracker: ObservableObject {
 
     /// Aggregate over the last N days (1 = today), per backend rawValue.
     func summary(days: Int) -> [String: Summary] {
-        let store = d.dictionary(forKey: dailyKey) as? [String: [String: [String: Any]]] ?? [:]
+        summary(days: days, in: dailyKey)
+    }
+
+    /// The same per model tier: "fast", "standard", "deep", and `exactModelKey` for runs on a
+    /// model picked by name. Runs from before tiers aren't counted.
+    func tierSummary(days: Int) -> [String: Summary] {
+        summary(days: days, in: tierKey)
+    }
+
+    private func summary(days: Int, in storeKey: String) -> [String: Summary] {
+        let store = d.dictionary(forKey: storeKey) as? [String: [String: [String: Any]]] ?? [:]
         var result: [String: Summary] = [:]
         for offset in 0..<days {
             guard let day = Calendar.current.date(byAdding: .day, value: -offset, to: Date())
@@ -290,17 +319,21 @@ final class UsageTracker: ObservableObject {
 
     private func mutateToday(_ backend: BackendKind,
                              _ change: (inout Summary) -> Void) {
-        var store = d.dictionary(forKey: dailyKey) as? [String: [String: [String: Any]]] ?? [:]
+        mutateToday(backend.rawValue, in: dailyKey, change)
+    }
+
+    private func mutateToday(_ key: String, in storeKey: String, _ change: (inout Summary) -> Void) {
+        var store = d.dictionary(forKey: storeKey) as? [String: [String: [String: Any]]] ?? [:]
         let day = Self.dayKey(Date())
         var dayStore = store[day] ?? [:]
-        let values = dayStore[backend.rawValue] ?? [:]
+        let values = dayStore[key] ?? [:]
         var s = Summary(queries: values["q"] as? Int ?? 0,
                         costUSD: values["cost"] as? Double ?? 0,
                         inputTokens: values["in"] as? Int ?? 0,
                         outputTokens: values["out"] as? Int ?? 0)
         change(&s)
-        dayStore[backend.rawValue] = ["q": s.queries, "cost": s.costUSD,
-                                      "in": s.inputTokens, "out": s.outputTokens]
+        dayStore[key] = ["q": s.queries, "cost": s.costUSD,
+                         "in": s.inputTokens, "out": s.outputTokens]
         store[day] = dayStore
         // Prune anything older than 90 days.
         if store.count > 95 {
@@ -308,7 +341,7 @@ final class UsageTracker: ObservableObject {
                 byAdding: .day, value: -90, to: Date()) ?? Date())
             store = store.filter { $0.key >= cutoff }
         }
-        d.set(store, forKey: dailyKey)
+        d.set(store, forKey: storeKey)
         DispatchQueue.main.async { self.revision += 1 }
     }
 }
