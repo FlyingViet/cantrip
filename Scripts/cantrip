@@ -9,6 +9,7 @@ Usage:
   cantrip tab list | read ID | ask ID "question" | reply ASK_ID   (look into other tabs)
   cantrip skills list|add|edit|enable|disable|sync|check   (shared skills library)
   cantrip instructions list|edit|check   (folder rules for every backend)
+  cantrip mcp list|migrate [--apply]|connect NAME|enable|disable NAME   (shared MCP servers)
   cantrip daemon start|stop|restart|run|logs   (headless background service)
   cantrip pair | status | config | doctor | cleanup  (see `cantrip help`)
   cantrip secret list | sync | run NAME... -- cmd     (secrets broker)
@@ -238,16 +239,17 @@ HOST_COMMANDS = {"daemon", "pair", "config", "status", "doctor", "cleanup", "sec
 TAB_ACTIONS = {"list", "read", "ask", "reply"}
 SKILLS_ACTIONS = {"list", "add", "edit", "enable", "disable", "sync", "check", "help"}
 INSTRUCTIONS_ACTIONS = {"list", "edit", "check", "help"}
+MCP_ACTIONS = {"list", "migrate", "restore", "connect", "approve", "decline", "signout", "enable", "disable", "serve", "help"}
 
 
 def is_host_command(args):
-    """`tab`/`skills`/`instructions` only with an action, so `cantrip tab completion in zsh?` is still a question."""
+    """`tab`/`skills`/`instructions`/`mcp` only with an action, so `cantrip tab completion in zsh?` is still a question."""
     if not args:
         return False
     if args[0] in HOST_COMMANDS:
         return True
     actions = {"tab": TAB_ACTIONS, "tabs": TAB_ACTIONS, "skills": SKILLS_ACTIONS,
-               "instructions": INSTRUCTIONS_ACTIONS}.get(args[0])
+               "instructions": INSTRUCTIONS_ACTIONS, "mcp": MCP_ACTIONS}.get(args[0])
     return actions is not None and (
         len(args) == 1 or args[1] in actions or args[1].startswith("--"))
 
