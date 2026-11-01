@@ -249,7 +249,7 @@ live run.
   use them; that also saves their tokens (10af9aa).
 - Set `canCancel` only when the backend can stop that one agent (c70aaa8).
 
-**Permissions** (never weaker than Cantrip's policy; see CLAUDE.md)
+**Permissions** (never weaker than Cantrip's policy; see AGENTS.md)
 - With **Act on my behalf** off, every tool call is checked before it runs. A permission
   request the current policy can't approve is denied, not left waiting.
 - Read-only council seats run the backend's safest native mode, and Cantrip still denies
