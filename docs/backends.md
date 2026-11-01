@@ -239,28 +239,34 @@ because the Copilot CLI can crash after long idle periods.
 
 ## Fall back when a backend hits its usage limit
 
-Add backup backends under **Usage limit fallbacks** (Off by default) in Mac
-Settings or in the browser/Mac Remote's **Model Settings**: use **Add a backup
-backend** as many times as you like, the arrows to set the order they're tried
-in, and the remove button to drop one. Each backend can be in the list once;
-your main backend isn't offered, and is skipped if you switch to one that's
-already listed. Cantrip Agent (iPhone/iPad) and Cantrip Gateway (Mac and
-Windows) edit the same list. Under each backup on a backend with a model
-picker (Copilot, Claude Code, Antigravity), **Model** and **Effort** menus list
-that backend's own models and the efforts each takes; **Default** means the
-Mac's own setting for that backend. A run that moves to the backup uses them,
-and its note names what runs, for example "Continuing this task with Claude
-Code · claude-opus-5-5 · high". If the chosen model isn't offered any more, the
-run uses the default and the note says so. A backend's choice is kept when it's
-removed and added back, and clients that only change the order don't touch it.
-`cantrip config set limitFallbackBackends "claude:claude-opus-5-5:high, codex"`
-sets them from a terminal (a bare name keeps the saved choice). It's one setting for
-the whole Mac, so changing it saves right away and applies to every tab. Those screens also show which backend is at its limit and until when, with
-**Try every backend again** to clear that early. When the backend you use reports that its plan's usage limit
-is reached (Claude's 5-hour or weekly limit, Copilot's premium requests, a
-Codex's 5-hour, weekly or monthly limit, a Gemini quota), Cantrip:
+Add backups under **Usage limit fallbacks** (Off by default) in Mac Settings or
+in the browser/Mac Remote's **Model Settings**: use **Add a backup** as many
+times as you like, the arrows to set the order they're tried in, and the remove
+button to drop one. Cantrip Agent (iPhone/iPad) and Cantrip Gateway (Mac and
+Windows) edit the same list. Each backup is a backend with the model and effort
+it runs: on a backend with a model picker (Copilot, Claude Code, Antigravity,
+Codex), **Model** and **Effort** menus list that backend's own models and the
+efforts each takes, and **Default** means the Mac's own setting for that
+backend. A backend can be listed more than once with different models, the
+Mac's own backend too ("Antigravity with another model"), for example
+Antigravity · Gemini 4 Argon, then Antigravity · Gemini 3.8 Flash, then Claude
+Code · Sonnet. The same backend and model can be listed only once, and the
+Mac's own backend only with a model other than its own. A run that moves to a
+backup uses its model and effort, and its note names what runs, for example
+"Continuing this task with Antigravity · Gemini 3.8 Flash (Medium)". If the
+chosen model isn't offered any more, the run uses the default and the note says
+so. A backend's choice is remembered when it's removed and added back.
+`cantrip config set limitFallbackBackends "agy:gemini-4-argon-high, agy:gemini-3.8-flash-medium, claude:claude-sonnet-5-5:high"`
+sets them from a terminal (a bare name keeps that backend's next saved entry).
+It's one setting for the whole Mac, so changing it saves right away and applies
+to every tab. Those screens also show which backends and models are at their
+limit and until when, with **Try every backend again** to clear that early.
+When the backend you use reports that its plan's usage limit is reached
+(Claude's 5-hour, weekly or weekly Opus/Sonnet limit, Copilot's premium
+requests, a Codex 5-hour, weekly or monthly limit, an Antigravity model group's
+quota), Cantrip:
 
-1. Shows the error and notes which backend takes over.
+1. Shows the error and notes which backup takes over.
 2. Continues the same task on the first backup in the list that isn't at its
    limit too, with the original request and the steps already taken, like an
    automatic resume. If that backup then hits its own limit, the task moves on
@@ -272,31 +278,45 @@ Codex's 5-hour, weekly or monthly limit, a Gemini quota), Cantrip:
    (00:00 UTC). Quitting Cantrip clears this, so the next message tries the
    original backend first.
 
-Cantrip decides from each backend's own error fields, not the error's wording:
-Copilot's `session.error` category (`quota` or `rate_limit`, with codes such as
-`quota_exceeded` or `user_weekly_rate_limited`), and Claude Code's `rate_limit`
-or `billing_error` message error and `rejected` rate-limit event, which also
-gives the reset time, and Codex's `usageLimitExceeded` or `rateLimitExceeded`
-error code, with the reset time from its rate-limit update. Matching known
-phrases in the message is only the last resort, for CLIs that don't send a code
-(Gemini today); the host log notes when a switch relied on it. Codex and
-Antigravity are also marked limited as soon as the Usage Limits screen (or, for
-Codex, a running tab) shows a full window, so new messages move before the CLI
-refuses one.
+**Per-model limits.** Some backends keep a quota per model, so one model
+running out doesn't stop the others: Antigravity's model groups (Gemini 4
+Argon, the other Gemini models including Auto, and Claude and GPT models share
+one) and Claude's weekly Opus and Sonnet limits. When one of those runs out,
+only backups running a model in that group or tier are skipped, so a run on
+Antigravity · Argon moves to Antigravity · Flash rather than leaving
+Antigravity. A shared quota (Copilot's premium requests, Claude's 5-hour and
+weekly limits, Codex's limits, or any limit a backend reports without saying
+which model) skips every backup on that backend.
+
+Cantrip decides from each backend's own error fields and usage reads, not the
+error's wording: Copilot's `session.error` category (`quota` or `rate_limit`,
+with codes such as `quota_exceeded` or `user_weekly_rate_limited`), Claude
+Code's `rate_limit` or `billing_error` message error and `rejected` rate-limit
+event (whose window, such as `seven_day_opus`, names the model tier and gives
+the reset time), and Codex's `usageLimitExceeded` or `rateLimitExceeded` error
+code, with the reset time from its rate-limit update. Antigravity's errors carry
+no code, so its last usage read names the model group that's used up. Matching
+known phrases in the message is only the last resort, for CLIs that don't send
+a code; the host log notes when a switch relied on it, and such a limit covers
+the whole backend. Antigravity's model groups, Claude's windows and Codex are
+also marked limited as soon as the Usage Limits screen (or, for Codex, a running
+tab) shows a full window, so new messages move before the CLI refuses one.
 
 Each backup uses its own model and effort settings. It doesn't share the
-original backend's session, so it works from the conversation Cantrip passes
-along. Once every backup is at its limit, the run stops with the error; a
-backend is never tried again before its limit resets, so a run can't go round
-in circles. Council seats and Private Local tabs never switch. Scheduled
-Cantrip Home tasks skip Copilot Remote in the list and use the next backup,
-because Cantrip can't check that backend's actions one at a time. A full context window ("Context limit reached") isn't a
-usage limit and doesn't switch backends.
+original backend's session unless it's the same backend with another model, so
+it works from the conversation Cantrip passes along. Once every backup is at
+its limit, the run stops with the error; a backend and model are never tried
+again before their limit resets, so a run can't go round in circles. Council
+seats and Private Local tabs never switch. Scheduled Cantrip Home tasks skip
+Copilot Remote in the list and use the next backup, because Cantrip can't check
+that backend's actions one at a time. A full context window ("Context limit
+reached") isn't a usage limit and doesn't switch backends.
 
 From Terminal: `cantrip config set limitFallbackBackends "copilot, codex, agy"`
-(any of `copilot`, `claude`, `codex`, `agy`, `local`, `copilot-remote`, in the
-order to try them), or `off`. The older `limitFallbackBackend` name still sets a
-single backup. Paired clients use `GET/POST
+(any of `copilot`, `claude`, `codex`, `agy`, `local`, `copilot-remote`, each
+optionally `:model:effort`, in the order to try them), or `off`. `cantrip
+config` lists the chain as `limitFallbackEntries`. The older
+`limitFallbackBackend` name still sets the chain. Paired clients use `GET/POST
 /api/v1/usage-fallback`; see [Remote control](remote-control.md#usage-limit-fallback).
 
 ## Serve your backends to other apps (OpenAI-compatible API)
@@ -335,8 +355,8 @@ The setting names its backend and applies only when that backend answers.
 
 **Usage limits.** When a backend reports its plan's limit (the same error fields
 as in [the fallback section](#fall-back-when-a-backend-hits-its-usage-limit)),
-Cantrip marks it limited for every tab and the API, and the call moves to the
-next backup. A backend that fails for another reason, or can't take the request,
+Cantrip marks it, or only that model where the backend keeps per-model limits,
+limited for every tab and the API, and the call moves to the next backup. A backend that fails for another reason, or can't take the request,
 also hands the call to the next one. When every backend is at its limit, the
 API answers 429 with `Retry-After` set to the soonest reset.
 

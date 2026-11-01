@@ -3576,39 +3576,54 @@ private extension RemoteControlServer {
     let fallbackState=null,fallbackSaving=false,fallbackFocus=null;
     async function loadFallback(){try{fallbackState=await api("/api/v1/usage-fallback");$("fallbackError").textContent=""}catch{fallbackState=null}renderFallback()}
     function renderFallback(){const data=fallbackState;$("fallbackBox").classList.toggle("hidden",!data);if(!data)return;
-      const chain=data.backends||(data.backend?[data.backend]:[]),label=id=>data.choices.find(choice=>choice.id===id)?.label||id;
-      $("fallbackList").replaceChildren(...chain.map((id,index)=>{const row=document.createElement("li"),name=document.createElement("span");
-        name.textContent=id===data.primary?`${label(id)} (skipped: the Mac's backend)`:label(id);row.append(name);
-        // The backup's model and effort, from the backend's own lists ("" = its default).
-        const choice=data.choices.find(item=>item.id===id),entry=(data.entries||[]).find(item=>item.backend===id)||{backend:id,model:"",effort:""};
-        if(choice?.models&&data.entries){const setEntry=(model,effort)=>{fallbackFocus=null;saveFallback({entries:data.entries.map(item=>item.backend===id?{backend:id,model,effort}:item)})};
-          const model=document.createElement("select"),models=choice.models;model.setAttribute("aria-label",`${label(id)} model`);model.disabled=fallbackSaving;
-          model.append(new Option(choice.defaultModel?`Default (${choice.defaultModel})`:"Default model",""),...models.map(item=>new Option(item.label,item.id)));
-          if(entry.model&&!models.some(item=>item.id===entry.model))model.append(new Option(`${entry.model} (not offered now)`,entry.model));
+      // Each backup is a backend with its model and effort; a backend can be listed again with another model.
+      const entries=(data.entries||(data.backends||[]).map(backend=>({backend}))).map(item=>({backend:item.backend,model:item.model||"",effort:item.effort||""})),
+        choices=[...data.choices,...(data.primaryChoice?[data.primaryChoice]:[])],choiceFor=id=>choices.find(choice=>choice.id===id),
+        label=id=>choiceFor(id)?.label||id,runs=(id,model)=>model||choiceFor(id)?.defaultModelID||"",
+        taken=(id,except)=>new Set(entries.filter((item,i)=>i!==except&&item.backend===id).map(item=>runs(id,item.model))
+          .concat(id===data.primary?[runs(id,"")]:[])),
+        freeModel=(id,except)=>{const used=taken(id,except);if(!used.has(runs(id,"")))return "";return choiceFor(id)?.models?.map(item=>item.id).find(model=>!used.has(model))},
+        // Macs from before entries take the order as backends.
+        save=next=>saveFallback(data.entries?{entries:next}:{backends:next.map(item=>item.backend)});
+      $("fallbackList").replaceChildren(...entries.map((entry,index)=>{const id=entry.backend,row=document.createElement("li"),name=document.createElement("span");
+        const shown=(data.entries||[])[index]||{},title=shown.label||label(id);
+        name.textContent=shown.limitedUntilLabel?`${title} (at its limit until ${shown.limitedUntilLabel})`:title;row.append(name);
+        // The backup's model and effort, from the backend's own lists ("" = its default), without
+        // a model another entry of the backend already runs.
+        const choice=choiceFor(id);
+        if(choice?.models&&data.entries){const setEntry=(model,effort)=>{fallbackFocus=null;save(entries.map((item,i)=>i===index?{backend:id,model,effort}:item))};
+          const used=taken(id,index),model=document.createElement("select"),models=choice.models.filter(item=>item.id===entry.model||!used.has(item.id));
+          model.setAttribute("aria-label",`${id} backup ${index+1} model`);model.disabled=fallbackSaving;
+          if(!entry.model||!used.has(runs(id,"")))model.append(new Option(choice.defaultModel?`Default (${choice.defaultModel})`:"Default model",""));
+          model.append(...models.map(item=>new Option(item.label,item.id)));
+          if(entry.model&&!choice.models.some(item=>item.id===entry.model))model.append(new Option(`${entry.model} (not offered now)`,entry.model));
           model.value=entry.model;model.onchange=()=>setEntry(model.value,"");row.append(model);
-          const efforts=(entry.model?models.find(item=>item.id===entry.model)?.efforts:choice.defaultEfforts)||[];
-          if(efforts.length){const effort=document.createElement("select");effort.setAttribute("aria-label",`${label(id)} effort`);effort.disabled=fallbackSaving;
+          const efforts=(entry.model?choice.models.find(item=>item.id===entry.model)?.efforts:choice.defaultEfforts)||[];
+          if(efforts.length){const effort=document.createElement("select");effort.setAttribute("aria-label",`${id} backup ${index+1} effort`);effort.disabled=fallbackSaving;
             effort.append(new Option("Default effort",""),...efforts.map(value=>new Option(value,value)));effort.value=entry.effort;
             effort.onchange=()=>setEntry(entry.model,effort.value);row.append(effort)}}
-        const moved=offset=>{const next=[...chain];[next[index],next[index+offset]]=[next[index+offset],next[index]];return next},buttons={};
-        for(const [action,text,aria,disabled,next] of [["up","↑",`Try ${label(id)} earlier`,index===0,()=>moved(-1)],
-            ["down","↓",`Try ${label(id)} later`,index===chain.length-1,()=>moved(1)],["remove","Remove",`Remove ${label(id)}`,false,()=>chain.filter(other=>other!==id)]]){
+        const moved=offset=>{const next=[...entries];[next[index],next[index+offset]]=[next[index+offset],next[index]];return next},buttons={};
+        for(const [action,text,aria,disabled,next,to] of [["up","↑",`Try ${title} earlier`,index===0,()=>moved(-1),index-1],
+            ["down","↓",`Try ${title} later`,index===entries.length-1,()=>moved(1),index+1],["remove","Remove",`Remove ${title}`,false,()=>entries.filter((other,i)=>i!==index),null]]){
           const button=document.createElement("button");button.type="button";button.className="control";button.textContent=text;button.setAttribute("aria-label",aria);
-          button.disabled=fallbackSaving||disabled;button.onclick=()=>{fallbackFocus=action==="remove"?null:{id,action};saveFallback({backends:next()})};row.append(button);buttons[action]=button}
-        // Keep focus on the moved backend; at the end of the list, on its other arrow.
-        if(!fallbackSaving&&fallbackFocus?.id===id){const target=[buttons[fallbackFocus.action],buttons.up,buttons.down].find(button=>!button.disabled);fallbackFocus=null;if(target)setTimeout(()=>target.focus?.())}
+          button.disabled=fallbackSaving||disabled;button.onclick=()=>{fallbackFocus=to===null?null:{index:to,action};save(next())};row.append(button);buttons[action]=button}
+        // Keep focus on the moved backup; at the end of the list, on its other arrow.
+        if(!fallbackSaving&&fallbackFocus?.index===index){const target=[buttons[fallbackFocus.action],buttons.up,buttons.down].find(button=>!button.disabled);fallbackFocus=null;if(target)setTimeout(()=>target.focus?.())}
         return row}));
-      const add=$("fallbackAdd"),addable=data.choices.filter(choice=>!chain.includes(choice.id));
-      add.replaceChildren(new Option(chain.length?"Choose a backend…":"Off — choose a backend…",""),...addable.map(choice=>new Option(choice.label,choice.id)));add.value="";add.disabled=fallbackSaving||!addable.length;
-      const limited=data.limited.map(entry=>`${entry.backend} until ${entry.untilLabel}`);
+      const add=$("fallbackAdd"),addable=choices.filter(choice=>freeModel(choice.id)!==undefined);
+      add.replaceChildren(new Option(entries.length?"Choose a backend…":"Off — choose a backend…",""),...addable.map(choice=>
+        new Option(choice.id===data.primary||entries.some(item=>item.backend===choice.id)?`${choice.id} with another model`:choice.label,choice.id)));
+      add.value="";add.disabled=fallbackSaving||!addable.length;
+      const limited=[...data.limited.map(item=>`${item.backend} until ${item.untilLabel}`),
+        ...(data.limitedModels||[]).map(item=>`${item.backend} ${item.label} until ${item.untilLabel}`)];
       $("fallbackStatus").textContent=limited.length?`At its usage limit: ${limited.join(", ")}.`
-        :chain.length?"New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch.":"Off: a usage limit stops the run with the error.";
-      $("fallbackReset").classList.toggle("hidden",!limited.length)}
+        :entries.length?"New messages from every tab move there until the limit resets. Where a backend's models have their own limits, only that model is skipped. Council seats and Private Local tabs don't switch.":"Off: a usage limit stops the run with the error.";
+      $("fallbackReset").classList.toggle("hidden",!limited.length);
+      add.onchange=()=>{const id=add.value,model=id?freeModel(id):undefined;if(model!==undefined)save([...entries,{backend:id,model,effort:""}])}}
     async function saveFallback(body){if(!fallbackState||fallbackSaving)return;fallbackSaving=true;renderFallback();
       try{fallbackState=await api("/api/v1/usage-fallback",{method:"POST",body:JSON.stringify({...body,revision:fallbackState.revision})});$("fallbackError").textContent=""}
       catch(error){$("fallbackError").textContent=error.message;await loadFallback()}
       finally{fallbackSaving=false;renderFallback()}}
-    $("fallbackAdd").onchange=()=>{const id=$("fallbackAdd").value;if(id&&fallbackState)saveFallback({backends:[...(fallbackState.backends||[]),id]})};
     $("fallbackReset").onclick=()=>saveFallback({resetLimits:true});
     $("modelCancel").onclick=()=>{if(modelEditorState?.saving)return;$("modelEditor").close();modelEditorState=null};
     $("modelEditor").addEventListener("cancel",event=>{if(modelEditorState?.saving)event.preventDefault();else modelEditorState=null});

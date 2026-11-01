@@ -122,17 +122,12 @@ final class UsageTracker: ObservableObject {
         switch result {
         case .success(let account):
             state = AntigravityUsageState(account: account, checkedAt: ISODate.string(from: quotaClock()), error: nil)
-            // The model group Antigravity runs on (Gemini for Auto) at its limit sends new messages to
-            // the fallback backend before agy refuses one.
-            let model = AppSettings.shared.agyModel.trimmingCharacters(in: .whitespaces)
-            if let group = account.group(forModel: model),
-               let full = group.buckets.filter(\.isExhausted)
-                .max(by: { (copilotDate($0.resetsAt) ?? .distantPast) < (copilotDate($1.resetsAt) ?? .distantPast) }) {
+            // A model group at its limit (Argon, Gemini, Claude and GPT) sends that group's runs to
+            // the next backup, another model on Antigravity included, before agy refuses one.
+            for group in account.groups {
+                guard let report = Self.antigravityReport(group) else { continue }
                 BackendLimitTracker.shared.markLimited(
-                    .antigravity, message: "Antigravity \(group.name) \(full.title.lowercased()) reached",
-                    report: UsageLimitReport(code: "usage/\(full.id)", resetsAt: copilotDate(full.resetsAt)),
-                    now: quotaClock()
-                )
+                    .antigravity, message: "Antigravity \(group.name) limit reached", report: report, now: quotaClock())
             }
         case .failure(let error):
             state.error = ((error as? AntigravityUsageError) ?? .response).localizedDescription
@@ -145,12 +140,15 @@ final class UsageTracker: ObservableObject {
         switch result {
         case .success(let account):
             state = ClaudeUsageState(account: account, checkedAt: ISODate.string(from: quotaClock()), error: nil)
-            // A window at its limit sends new messages to the fallback backend before Claude refuses one.
-            if let full = account.windows.filter(\.isExhausted)
-                .max(by: { (copilotDate($0.resetsAt) ?? .distantPast) < (copilotDate($1.resetsAt) ?? .distantPast) }) {
+            // A window at its limit sends new messages to the fallback before Claude refuses one: the
+            // 5-hour and weekly windows cover every model, the weekly Opus or Sonnet one only those.
+            let full = Dictionary(grouping: account.windows.filter(\.isExhausted)) { BackendLimitTracker.claudeScope(window: $0.id) }
+            for (scope, windows) in full {
+                guard let last = windows.max(by: { (copilotDate($0.resetsAt) ?? .distantPast) < (copilotDate($1.resetsAt) ?? .distantPast) })
+                else { continue }
                 BackendLimitTracker.shared.markLimited(
-                    .claudeCode, message: "Claude \(full.title.lowercased()) reached",
-                    report: UsageLimitReport(code: "usage/\(full.id)", resetsAt: copilotDate(full.resetsAt)),
+                    .claudeCode, message: "Claude \(last.title.lowercased()) reached",
+                    report: UsageLimitReport(code: "usage/\(last.id)", resetsAt: copilotDate(last.resetsAt), scope: scope),
                     now: quotaClock()
                 )
             }
@@ -158,6 +156,19 @@ final class UsageTracker: ObservableObject {
             state.error = ((error as? ClaudeUsageError) ?? .response).localizedDescription
         }
         copilotUsage.claude = state
+    }
+
+    /// An Antigravity group at its limit, as a limit on that group's models (latest reset wins).
+    static func antigravityReport(_ group: AntigravityLimitGroup) -> UsageLimitReport? {
+        guard let full = group.buckets.filter(\.isExhausted)
+            .max(by: { (copilotDate($0.resetsAt) ?? .distantPast) < (copilotDate($1.resetsAt) ?? .distantPast) }) else { return nil }
+        return UsageLimitReport(code: "usage/\(full.id)", resetsAt: copilotDate(full.resetsAt),
+                                scope: BackendLimitTracker.antigravityScope(group: group.name))
+    }
+
+    /// The last usage read's limit for the group `model` counts against, if that group is used up.
+    func antigravityLimit(forModel model: String) -> UsageLimitReport? {
+        copilotUsage.antigravity?.account?.group(forModel: model).flatMap(Self.antigravityReport)
     }
 
     /// Keeps the limits fresh without anyone looking, like Opsboard: every five minutes.

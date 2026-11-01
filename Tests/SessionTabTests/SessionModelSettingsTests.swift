@@ -302,7 +302,9 @@ extension SessionTabTests {
           models:[{id:"model-a",reasoningEfforts:["low","high"],contextTiers:["default","long_context"],contextWindow:1050000,longContextPromptTokens:1050000},
                   {id:"model-b",reasoningEfforts:[],contextTiers:["default"]}],isRefreshing:false};
         function api(path,options){const body=options?JSON.parse(options.body):null;
-          if(path==="/api/v1/usage-fallback"){fallbackCalls.push(body);return Promise.resolve(body?{...fallback,backends:body.backends,backend:body.backends[0]??"",limited:[],revision:`fallback-${fallbackCalls.length}`}:fallback)}
+          if(path==="/api/v1/usage-fallback"){fallbackCalls.push(body);
+            if(body?.entries)return Promise.resolve({...fallbackState,entries:body.entries,backends:body.entries.map(item=>item.backend),revision:`pm-${fallbackCalls.length}`});
+            return Promise.resolve(body?{...fallback,backends:body.backends,backend:body.backends[0]??"",limited:[],revision:`fallback-${fallbackCalls.length}`}:fallback)}
           calls.push({path,body});return Promise.resolve(response)}
         function refresh(){return Promise.resolve()}
         \(source[start.lowerBound..<end.lowerBound])
@@ -352,6 +354,38 @@ extension SessionTabTests {
         precondition(context.evaluateScript("""
         fallbackCalls[4].backends.join()==="Copilot" && $("fallbackList").children.length===1
         """)!.toBool(), "Remove drops that backup and keeps the rest")
+        // A Mac with per-model backups: entries by position, and the Mac's own backend again with another model.
+        context.evaluateScript("""
+        fallbackState={backends:["Antigravity","Claude Code"],backend:"Antigravity",primary:"Antigravity",revision:"pm-0",
+          entries:[{backend:"Antigravity",model:"flash",effort:"",label:"Antigravity · Flash"},
+                   {backend:"Claude Code",model:"",effort:"",label:"Claude Code",limitedUntil:"2026-10-28T13:00:00Z",limitedUntilLabel:"6:00 AM"}],
+          choices:[{id:"Claude Code",label:"Claude Code",models:[{id:"opus",label:"Opus",efforts:["high"]},{id:"sonnet",label:"Sonnet",efforts:[]}],
+                    defaultModel:"Opus",defaultModelID:"opus"}],
+          primaryChoice:{id:"Antigravity",label:"Antigravity · Argon",models:[{id:"argon",label:"Argon",efforts:[]},{id:"flash",label:"Flash",efforts:[]},
+                         {id:"gpt",label:"GPT",efforts:[]}],defaultModel:"Argon",defaultModelID:"argon"},
+          limited:[],limitedModels:[{backend:"Antigravity",scope:"argon",label:"Gemini 4 Argon",until:"2026-10-28T14:00:00Z",untilLabel:"7:00 AM"}]};
+        fallbackCalls=[];renderFallback();
+        """)
+        precondition(context.evaluateScript("""
+        $("fallbackList").children.length===2 && $("fallbackList").children[1].children[0].textContent==="Claude Code (at its limit until 6:00 AM)"
+          && $("fallbackStatus").textContent.includes("Antigravity Gemini 4 Argon until 7:00 AM") && !$("fallbackReset").classList.hidden
+          && $("fallbackAdd").children.map(option=>option.label).slice(1).join()==="Claude Code with another model,Antigravity with another model"
+          && $("fallbackList").children[0].children[1].children.map(option=>option.value).join()==="flash,gpt"
+        """)!.toBool(), "Rows show their own limits; models another entry runs (and the Mac's own) aren't offered again")
+        context.evaluateScript("""
+        $("fallbackAdd").value="Antigravity";$("fallbackAdd").onchange();
+        """)
+        precondition(context.evaluateScript("""
+        fallbackCalls.length===1 && fallbackCalls[0].revision==="pm-0" && fallbackCalls[0].entries.length===3
+          && fallbackCalls[0].entries[2].backend==="Antigravity" && fallbackCalls[0].entries[2].model==="gpt"
+          && $("fallbackList").children.length===3
+        """)!.toBool(), "Adding the Mac's own backend again posts entries with a free model")
+        context.evaluateScript("""
+        $("fallbackList").children[2].children[2].onclick();
+        """)
+        precondition(context.evaluateScript("""
+        fallbackCalls[1].entries.map(item=>item.backend+":"+item.model).join()==="Antigravity:flash,Antigravity:gpt,Claude Code:"
+        """)!.toBool(), "Moving a row moves that entry, not every entry of its backend")
         context.evaluateScript("""
         editModelSettings({id:"tab-a",title:"Fixture"});
         """)

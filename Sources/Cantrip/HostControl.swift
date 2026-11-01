@@ -40,10 +40,10 @@ final class HostControl {
                 guard !values.isEmpty else { return ["error": "Nothing to set."] }
                 let current = settings.dotfileValues
                 var typed: [String: Any] = [:]
-                var fallbackEntries: [[String: Any]]?
+                var fallbackEntries: [FallbackEntry]?
                 for (rawKey, value) in values {
                     // The single-backend name from before the chain still works.
-                    let key = rawKey == "limitFallbackBackend" ? "limitFallbackBackends" : rawKey
+                    let key = rawKey == "limitFallbackBackend" || rawKey == "limitFallbackEntries" ? "limitFallbackBackends" : rawKey
                     guard let existing = current[key] else {
                         return ["error": "Unknown setting \(key). Run `cantrip config` to list them."]
                     }
@@ -56,24 +56,32 @@ final class HostControl {
                     }
                     if key == "limitFallbackBackends" {
                         // "codex, copilot" or ["codex", "copilot"]: tried in that order; off clears it.
-                        // "claude:claude-opus-5-5:high" also sets that backup's model and effort
-                        // (either may be empty); a bare name keeps the one saved for it.
+                        // "agy:gemini-4-argon-high:high" sets that backup's model and effort (either
+                        // may be empty), and a backend can be listed again with another model. A bare
+                        // name keeps that backend's next saved entry, or its remembered model.
                         let names = (value as? [String]) ?? ((value as? String) ?? "").split(separator: ",").map(String.init)
                         let trimmed = names.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
                         if trimmed.isEmpty || (trimmed.count == 1 && ["off", "none"].contains(trimmed[0].lowercased())) {
-                            typed[key] = [String](); continue
+                            fallbackEntries = []
+                            continue
                         }
                         let parts = trimmed.map { $0.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init) }
                         let kinds = parts.map { Self.backend(named: $0[0]) }
                         guard !kinds.contains(where: { $0 == nil }) else {
                             return ["error": "limitFallbackBackends must be off or a comma-separated list of: copilot, claude, codex, antigravity, local, copilot-remote (each optionally :model:effort)."]
                         }
-                        typed[key] = AppSettings.fallbackChain(kinds.compactMap { $0?.rawValue })
-                        let pinned = zip(parts, kinds).filter { $0.0.count > 1 }
-                        if !pinned.isEmpty {
-                            fallbackEntries = pinned.map { part, kind in
-                                ["backend": kind!.rawValue, "model": part[1], "effort": part.count > 2 ? part[2] : ""]
+                        var saved = Dictionary(grouping: settings.limitFallbackEntries, by: \.backend)
+                        fallbackEntries = zip(parts, kinds).map { part, kind in
+                            let backend = kind!.rawValue
+                            if part.count > 1 {
+                                return FallbackEntry(backend: backend, model: part[1], effort: part.count > 2 ? part[2] : "")
                             }
+                            if let next = saved[backend]?.first {
+                                saved[backend]?.removeFirst()
+                                return next
+                            }
+                            let chosen = settings.limitFallbackModels[backend]
+                            return FallbackEntry(backend: backend, model: chosen?.model ?? "", effort: chosen?.effort ?? "")
                         }
                         continue
                     }
@@ -85,21 +93,17 @@ final class HostControl {
                 if let fallbackEntries {
                     // Checked against each backend's real models before anything is saved.
                     do {
-                        let entries = try UsageFallbackRemote.validatedEntries(fallbackEntries, settings: settings)
-                        var models = settings.limitFallbackModels
-                        for entry in entries {
-                            models[entry.backend] = entry.model.isEmpty && entry.effort.isEmpty
-                                ? nil : SessionModelSelection(model: entry.model, effort: entry.effort, contextTier: "")
-                        }
-                        settings.limitFallbackModels = models
+                        let raw = fallbackEntries.map { ["backend": $0.backend, "model": $0.model, "effort": $0.effort] as [String: Any] }
+                        settings.limitFallbackEntries = try UsageFallbackRemote.validatedEntries(raw, settings: settings)
                     } catch {
                         return ["error": "limitFallbackBackends: \(error.localizedDescription)"]
                     }
                 }
-                let applied = Set(settings.applySettings(typed))
+                var applied = Set(settings.applySettings(typed))
                 if let rejected = typed.keys.sorted().first(where: { !applied.contains($0) }) {
                     return ["error": "\(rejected) can't be set to \(typed[rejected]!). Check the allowed values in docs/headless.md."]
                 }
+                if fallbackEntries != nil { applied.insert("limitFallbackEntries") }
                 Log.write("cli: settings changed from the terminal: \(applied.sorted().joined(separator: ", "))")
             }
             return ["settings": settings.dotfileValues]

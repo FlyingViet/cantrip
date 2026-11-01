@@ -4506,69 +4506,102 @@ struct SettingsView: View {
         }
     }
 
-    /// Backups tried in order when the backend a run is on reports its plan's usage limit.
+    /// Backups tried in order when the backend and model a run is on report the plan's usage limit.
+    /// A backend can be listed again with another model, the Mac's own backend included.
     private var usageLimitFallbacks: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Usage limit fallbacks").font(.caption).foregroundStyle(.secondary)
-            let chain = settings.limitFallbackBackends.compactMap(BackendKind.init(rawValue:))
-            ForEach(Array(chain.enumerated()), id: \.element) { index, kind in
+            let entries = settings.limitFallbackEntries
+            ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
+                let kind = entry.kind ?? .copilot
                 HStack(spacing: 6) {
                     Text("\(index + 1).").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    Text(settings.backendLabel(kind)).font(.caption).lineLimit(1)
-                    if kind == settings.backend {
-                        Text("skipped: it's the backend above").font(.caption2).foregroundStyle(.tertiary)
+                    Text(kind.rawValue).font(.caption).lineLimit(1)
+                    if let until = BackendLimitTracker.shared.limitedUntil(kind, model: settings.effectiveModel(kind, chosen: entry.model)) {
+                        Text("at its limit until \(BackendFallback.untilLabel(until))").font(.caption2).foregroundStyle(.orange)
                     }
                     Spacer(minLength: 4)
                     Button { moveFallback(at: index, by: -1) } label: { Image(systemName: "chevron.up") }
                         .disabled(index == 0)
                         .help("Try earlier")
                     Button { moveFallback(at: index, by: 1) } label: { Image(systemName: "chevron.down") }
-                        .disabled(index == chain.count - 1)
+                        .disabled(index == entries.count - 1)
                         .help("Try later")
-                    Button { settings.limitFallbackBackends.remove(at: index) } label: { Image(systemName: "minus.circle") }
-                        .help("Remove \(kind.rawValue)")
+                    Button { settings.limitFallbackEntries.remove(at: index) } label: { Image(systemName: "minus.circle") }
+                        .help("Remove \(settings.fallbackRun(for: entry).label)")
                 }
                 .buttonStyle(.borderless)
-                fallbackModelPickers(kind)
+                fallbackModelPickers(at: index)
             }
-            let addable = BackendKind.allCases.filter { $0 != settings.backend && !chain.contains($0) }
-            Menu(chain.isEmpty ? "Off — add a backup backend" : "Add a backup backend") {
+            let addable = BackendKind.allCases.filter { freeFallbackModel($0) != nil }
+            Menu(entries.isEmpty ? "Off — add a backup" : "Add a backup") {
                 ForEach(addable) { kind in
-                    Button(settings.backendLabel(kind)) { settings.limitFallbackBackends.append(kind.rawValue) }
+                    let again = kind == settings.backend || entries.contains { $0.kind == kind }
+                    Button(again ? "\(kind.rawValue) with another model" : settings.backendLabel(kind)) {
+                        if let model = freeFallbackModel(kind) {
+                            settings.limitFallbackEntries.append(FallbackEntry(backend: kind.rawValue, model: model))
+                        }
+                    }
                 }
             }
             .font(.caption)
             .fixedSize()
             .disabled(addable.isEmpty)
-            Text(chain.isEmpty
+            Text(entries.isEmpty
                  ? "Off: when a backend says its plan's usage limit is reached, the run stops and shows the error."
-                 : "When a backend says its plan's usage limit is reached, Cantrip continues the task on the first backup that isn't at its limit too, moving down the list each time another one runs out, and sends new messages from every tab there until the limit resets (an hour when the backend doesn't say). Council seats and Private Local tabs don't switch.")
+                 : "When a backend says its plan's usage limit is reached, Cantrip continues the task on the first backup that isn't at its limit too, moving down the list each time another one runs out, and sends new messages from every tab there until the limit resets (an hour when the backend doesn't say). Where a backend's models have their own limits (Antigravity's model groups, Claude's weekly Opus and Sonnet limits), only that model's backups are skipped, so the same backend can be listed again with another model. Council seats and Private Local tabs don't switch.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
+    /// The model a new backup on `kind` would run that the chain doesn't have yet (and that isn't
+    /// the Mac's own model, for its own backend): the default first, then the backend's list.
+    private func freeFallbackModel(_ kind: BackendKind, except index: Int? = nil) -> String? {
+        let used = Set(settings.limitFallbackEntries.enumerated()
+            .filter { $0.offset != index && $0.element.kind == kind }
+            .map { settings.effectiveModel(kind, chosen: $0.element.model) })
+        let own = kind == settings.backend ? settings.effectiveModel(kind, chosen: "") : nil
+        func free(_ model: String) -> Bool {
+            let effective = settings.effectiveModel(kind, chosen: model)
+            return !used.contains(effective) && effective != own
+        }
+        if free("") { return "" }
+        guard AppSettings.fallbackModelBackends.contains(kind) else { return nil }
+        return settings.tabModelCatalog(for: kind).models.map(\.id).first(where: free)
+    }
+
     /// The model and effort a backup runs with, from the backend's own lists ("Default" = the
-    /// Mac's setting for that backend). Backends without a model picker always run their default.
+    /// Mac's setting for that backend), leaving out models another entry of the backend runs.
+    /// Backends without a model picker always run their default.
     @ViewBuilder
-    private func fallbackModelPickers(_ kind: BackendKind) -> some View {
-        if AppSettings.fallbackModelBackends.contains(kind) {
+    private func fallbackModelPickers(at index: Int) -> some View {
+        if settings.limitFallbackEntries.indices.contains(index), let kind = settings.limitFallbackEntries[index].kind,
+           AppSettings.fallbackModelBackends.contains(kind) {
+            let entry = settings.limitFallbackEntries[index]
             let catalog = settings.tabModelCatalog(for: kind)
             let defaults = settings.tabModelDefaults(for: kind)
-            let chosen = settings.limitFallbackModels[kind.rawValue] ?? SessionModelSelection(model: "", effort: "", contextTier: "")
-            let efforts = catalog.info(chosen.model.isEmpty ? defaults.model : chosen.model)?.reasoningEfforts ?? []
+            let others = Set(settings.limitFallbackEntries.enumerated()
+                .filter { $0.offset != index && $0.element.kind == kind }
+                .map { settings.effectiveModel(kind, chosen: $0.element.model) })
+                .union(kind == settings.backend ? [settings.effectiveModel(kind, chosen: "")] : [])
+            let offered = catalog.models.filter { $0.id == entry.model || !others.contains($0.id) }
+            let defaultFree = entry.model.isEmpty || !others.contains(settings.effectiveModel(kind, chosen: ""))
+            let efforts = catalog.info(entry.model.isEmpty ? defaults.model : entry.model)?.reasoningEfforts ?? []
             HStack(spacing: 8) {
-                Picker("Model", selection: Binding(get: { chosen.model }, set: { setFallbackModel(kind, model: $0, effort: "") })) {
-                    Text(defaults.model.isEmpty ? "Default model" : "Default (\(settings.fallbackModelLabel(kind, defaults.model)))").tag("")
-                    ForEach(catalog.models) { Text(settings.fallbackModelLabel(kind, $0.id)).tag($0.id) }
-                    if !chosen.model.isEmpty, !catalog.models.contains(where: { $0.id == chosen.model }) {
-                        Text("\(chosen.model) (not offered now)").tag(chosen.model)
+                Picker("Model", selection: Binding(get: { entry.model }, set: { setFallbackModel(at: index, model: $0, effort: "") })) {
+                    if defaultFree {
+                        Text(defaults.model.isEmpty ? "Default model" : "Default (\(settings.fallbackModelLabel(kind, defaults.model)))").tag("")
+                    }
+                    ForEach(offered) { Text(settings.fallbackModelLabel(kind, $0.id)).tag($0.id) }
+                    if !entry.model.isEmpty, !catalog.models.contains(where: { $0.id == entry.model }) {
+                        Text("\(entry.model) (not offered now)").tag(entry.model)
                     }
                 }
-                .help("The model \(kind.rawValue) runs as a backup")
+                .help("The model \(kind.rawValue) runs as this backup")
                 if !efforts.isEmpty {
-                    Picker("Effort", selection: Binding(get: { chosen.effort }, set: { setFallbackModel(kind, model: chosen.model, effort: $0) })) {
+                    Picker("Effort", selection: Binding(get: { entry.effort }, set: { setFallbackModel(at: index, model: entry.model, effort: $0) })) {
                         Text("Default effort").tag("")
                         ForEach(efforts, id: \.self) { Text($0).tag($0) }
                     }
@@ -4584,16 +4617,17 @@ struct SettingsView: View {
         }
     }
 
-    private func setFallbackModel(_ kind: BackendKind, model: String, effort: String) {
-        settings.limitFallbackModels[kind.rawValue] = model.isEmpty && effort.isEmpty
-            ? nil : SessionModelSelection(model: model, effort: effort, contextTier: "")
+    private func setFallbackModel(at index: Int, model: String, effort: String) {
+        guard settings.limitFallbackEntries.indices.contains(index) else { return }
+        settings.limitFallbackEntries[index].model = model
+        settings.limitFallbackEntries[index].effort = effort
     }
 
     private func moveFallback(at index: Int, by offset: Int) {
-        var chain = settings.limitFallbackBackends
+        var chain = settings.limitFallbackEntries
         guard chain.indices.contains(index), chain.indices.contains(index + offset) else { return }
         chain.swapAt(index, index + offset)
-        settings.limitFallbackBackends = chain
+        settings.limitFallbackEntries = chain
     }
 
     private func labeledField(_ label: String, text: Binding<String>, prompt: String) -> some View {

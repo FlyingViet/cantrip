@@ -163,6 +163,193 @@ extension SessionTabTests {
         try await Task.sleep(nanoseconds: 300_000_000)
         precondition(claude.requests.count == 2 && copilot.requests.count == 3 && codex.requests.count == 2)
         try await testUsageFallbackAPI()
+        try await testPerModelFallback()
+    }
+
+    /// A backend whose models have their own limits can be listed again with another model, and a
+    /// used-up model moves runs to the next model on the same backend; a shared quota (Copilot's
+    /// premium requests) still skips every entry of the backend.
+    @MainActor
+    private static func testPerModelFallback() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        precondition(BackendLimitTracker.modelScope(.claudeCode, model: "claude-opus-5-5") == "opus"
+                     && BackendLimitTracker.modelScope(.claudeCode, model: "default") == nil)
+        precondition(BackendLimitTracker.modelScope(.antigravity, model: "gemini-4-argon-high") == "argon"
+                     && BackendLimitTracker.modelScope(.antigravity, model: "gemini-3.8-flash-medium") == "gemini"
+                     && BackendLimitTracker.modelScope(.antigravity, model: "claude-sonnet-5-5-low") == "claude-gpt")
+        precondition(BackendLimitTracker.modelScope(.antigravity, model: "") == "gemini", "Auto runs on Gemini")
+        precondition(BackendLimitTracker.modelScope(.copilot, model: "gpt-5.6-sol") == nil, "Copilot's premium requests are one pool")
+        precondition(BackendLimitTracker.antigravityScope(group: "Gemini 4 Argon") == "argon"
+                     && BackendLimitTracker.antigravityScope(group: "Claude and GPT models") == "claude-gpt"
+                     && BackendLimitTracker.antigravityScope(group: "Gemini models") == "gemini")
+        precondition(BackendLimitTracker.claudeScope(window: "seven_day_opus") == "opus"
+                     && BackendLimitTracker.claudeScope(window: "five_hour") == nil)
+
+        let argon = FallbackEntry(backend: "Antigravity", model: "gemini-4-argon-high")
+        let flash = FallbackEntry(backend: "Antigravity", model: "gemini-3.8-flash-medium")
+        let agyClaude = FallbackEntry(backend: "Antigravity", model: "claude-sonnet-5-5-low")
+        let sonnet = FallbackEntry(backend: "Claude Code", model: "claude-sonnet-5-5")
+        let tracker = BackendLimitTracker()
+        tracker.markLimited(.antigravity, model: argon.model, message: "Argon limit reached",
+                            report: UsageLimitReport(code: "usage/argon-weekly", resetsAt: now.addingTimeInterval(3_600), scope: "argon"), now: now)
+        precondition(tracker.limitedUntil(.antigravity, now: now) == nil, "the backend's other models still run")
+        precondition(tracker.limitedUntil(.antigravity, model: "gemini-4-argon-high", now: now) == now.addingTimeInterval(3_600)
+                     && tracker.limitedUntil(.antigravity, model: "gemini-4-argon-low", now: now) != nil,
+                     "Argon's efforts share its group's limit")
+        precondition(tracker.limitedUntil(.antigravity, model: flash.model, now: now) == nil)
+        precondition(tracker.scopeLimits(now: now) == [.init(backend: .antigravity, scope: "argon", until: now.addingTimeInterval(3_600))])
+        let chain = [flash, sonnet]
+        precondition(BackendFallback.next(after: .antigravity, model: argon.model, chain: chain, homeRun: false, tracker: tracker, now: now) == flash,
+                     "a used-up Argon moves to Antigravity's Flash, not off Antigravity")
+        tracker.markLimited(.antigravity, message: "Gemini limit reached",
+                            report: UsageLimitReport(code: "usage/gemini-5h", resetsAt: now.addingTimeInterval(7_200), scope: "gemini"), now: now)
+        precondition(BackendFallback.next(after: .antigravity, model: argon.model, chain: chain, homeRun: false, tracker: tracker, now: now) == sonnet)
+        let copilotChain = [FallbackEntry(backend: "Copilot", model: "gpt-5.6-sol"), FallbackEntry(backend: "Copilot", model: "claude-opus-5.5"),
+                            FallbackEntry(backend: "Claude Code")]
+        tracker.markLimited(.copilot, message: "monthly", report: UsageLimit.copilotReport(errorType: "quota", errorCode: "quota_exceeded",
+                                                                                           message: "monthly", now: now), now: now)
+        precondition(BackendFallback.next(after: .antigravity, model: argon.model, chain: copilotChain, homeRun: false, tracker: tracker, now: now)
+            == copilotChain[2], "Copilot's monthly cap skips every Copilot entry")
+        tracker.markLimited(.claudeCode, message: "opus", report: UsageLimitReport(code: "rate_limit/seven_day_opus",
+                                                                                  resetsAt: now.addingTimeInterval(600), scope: "opus"), now: now)
+        precondition(tracker.limitedUntil(.claudeCode, model: "claude-opus-5-5", now: now) != nil
+                     && tracker.limitedUntil(.claudeCode, model: "claude-sonnet-5-5", now: now) == nil,
+                     "Claude's weekly Opus limit leaves Sonnet")
+        precondition(BackendFallback.next(after: .copilot, model: "gpt-5.6-sol", chain: [FallbackEntry(backend: "Claude Code", model: "claude-opus-5-5"), sonnet],
+                                          homeRun: false, tracker: tracker, now: now) == sonnet)
+        tracker.clear()
+        precondition(tracker.scopeLimits(now: now).isEmpty && tracker.limitedUntil(.copilot, now: now) == nil,
+                     "Try every backend again clears model limits too")
+
+        // A list of backends from an older client never collapses a backend's entries.
+        let current = [argon, flash, sonnet]
+        precondition(AppSettings.entries(forBackends: ["Claude Code", "Antigravity"], current: current, remembered: [:]) == [sonnet, argon, flash],
+                     "a reorder keeps both Antigravity models")
+        precondition(AppSettings.entries(forBackends: ["Antigravity", "Claude Code", "Antigravity"], current: current, remembered: [:])
+            == [argon, sonnet, flash])
+        precondition(AppSettings.entries(forBackends: ["Antigravity"], current: current, remembered: [:]) == [argon, flash])
+        precondition(AppSettings.entries(forBackends: ["Codex"], current: current,
+                                         remembered: ["Codex": SessionModelSelection(model: "gpt-6-luna", effort: "low", contextTier: "")])
+            == [FallbackEntry(backend: "Codex", model: "gpt-6-luna", effort: "low")], "a backend added back gets its remembered model")
+        precondition(AppSettings.fallbackEntries([argon, argon, FallbackEntry(backend: "Nope"), flash]) == [argon, flash],
+                     "the saved chain drops exact repeats and unknown backends")
+
+        let settings = AppSettings.shared
+        let saved = settings.dotfileValues
+        let savedModels = settings.agyAvailableModels, savedClaude = settings.claudeModelCatalog
+        defer {
+            settings.applySettings(saved)
+            settings.agyAvailableModels = savedModels
+            settings.claudeModelCatalog = savedClaude
+            BackendLimitTracker.shared.clear()
+        }
+        settings.agyAvailableModels = ["gemini-4-argon-high", "gemini-4-argon-low", "gemini-3.8-flash-medium", "claude-sonnet-5-5-low"]
+        settings.claudeModelCatalog = [CopilotModelInfo(id: "claude-opus-5-5", reasoningEfforts: ["low", "high"]),
+                                       CopilotModelInfo(id: "claude-sonnet-5-5", reasoningEfforts: ["low", "high"])]
+        settings.backend = .antigravity
+        settings.agyModel = argon.model
+        // Settings files and older builds: the backend list and per-backend models still describe the chain.
+        settings.applySettings(["limitFallbackBackends": ["Antigravity", "Claude Code"],
+                                "limitFallbackModels": ["Antigravity": ["model": flash.model, "effort": ""]]])
+        precondition(settings.limitFallbackEntries == [flash, FallbackEntry(backend: "Claude Code")], "\(settings.limitFallbackEntries)")
+        settings.limitFallbackEntries = [flash, agyClaude, sonnet]
+        precondition(settings.limitFallbackBackends == ["Antigravity", "Antigravity", "Claude Code"])
+        precondition(settings.limitFallbackModels["Antigravity"]?.model == flash.model, "the first entry is the backend's remembered model")
+        let exported = settings.dotfileValues["limitFallbackEntries"] as? [[String: String]]
+        precondition(exported?.count == 3 && exported?[1]["model"] == agyClaude.model)
+        settings.limitFallbackEntries = []
+        precondition(settings.applySettings(["limitFallbackEntries": exported!]).contains("limitFallbackEntries")
+                     && settings.limitFallbackEntries == [flash, agyClaude, sonnet], "settings files restore the whole chain")
+
+        // Paired clients: entries with a backend twice, the Mac's own backend with another model.
+        BackendLimitTracker.shared.clear()
+        var snapshot = UsageFallbackRemote.snapshot(settings: settings)
+        precondition(snapshot.backends == ["Antigravity", "Antigravity", "Claude Code"] && snapshot.primary == "Antigravity"
+                     && snapshot.primaryChoice?.id == "Antigravity" && snapshot.primaryChoice?.defaultModelID == argon.model
+                     && !snapshot.choices.contains { $0.id == "Antigravity" }, "\(snapshot)")
+        precondition(snapshot.entries[0].label?.hasPrefix("Antigravity · ") == true && snapshot.entries[0].limitedUntil == nil)
+        func post(_ body: [String: Any]) throws -> UsageFallbackSnapshot {
+            try UsageFallbackRemote.apply(body.merging(["revision": snapshot.revision]) { $1 }, settings: settings)
+        }
+        func refused(_ body: [String: Any], _ fragment: String) {
+            do {
+                _ = try post(body)
+                preconditionFailure("expected a refusal mentioning \(fragment)")
+            } catch let error as UsageFallbackError {
+                precondition(error.status == 400 && error.message.contains(fragment), error.message)
+            } catch { preconditionFailure("\(error)") }
+        }
+        refused(["entries": [["backend": "Antigravity", "model": argon.model]]], "Mac's own backend and model")
+        refused(["entries": [["backend": "Antigravity"]]], "Mac's own backend and model")
+        refused(["entries": [["backend": "Antigravity", "model": flash.model], ["backend": "Antigravity", "model": flash.model]]], "twice")
+        refused(["backends": ["Claude Code", "Claude Code"]], "twice")
+        snapshot = try post(["backends": ["Claude Code", "Antigravity"]])
+        precondition(settings.limitFallbackEntries == [sonnet, flash, agyClaude], "an older client's reorder keeps both Antigravity models")
+        snapshot = try post(["entries": Array(snapshot.entries.map { ["backend": $0.backend, "model": $0.model, "effort": $0.effort,
+                                                                       "label": $0.label ?? ""] }.reversed())])
+        precondition(settings.limitFallbackEntries == [agyClaude, flash, sonnet], "snapshot entries can be sent back as they are")
+        snapshot = try post(["backend": "Claude Code"])
+        precondition(settings.limitFallbackEntries == [sonnet, flash],
+                     "the oldest clients' pick replaces the first backup and moves that backend's entry up: \(settings.limitFallbackEntries)")
+        BackendLimitTracker.shared.markLimited(.antigravity, message: "Gemini limit",
+                                               report: UsageLimitReport(code: "usage/gemini-5h", resetsAt: Date().addingTimeInterval(3_600), scope: "gemini"))
+        snapshot = UsageFallbackRemote.snapshot(settings: settings)
+        precondition(snapshot.limited.isEmpty && snapshot.limitedModels.first?.scope == "gemini"
+                     && snapshot.limitedModels.first?.backend == "Antigravity",
+                     "a model limit isn't shown as the whole backend's: \(snapshot.limitedModels)")
+        precondition(snapshot.entries.first { $0.model == flash.model }?.limitedUntil != nil
+                     && snapshot.entries.first { $0.backend == "Claude Code" }?.limitedUntil == nil)
+        BackendLimitTracker.shared.clear()
+
+        // `cantrip config`: a backend listed twice with different models.
+        let manager = SessionManager()
+        defer { withExtendedLifetime(manager) {} }
+        let host = HostControl(manager: manager)
+        let configured = host.handle(["command": "config", "set": [
+            "limitFallbackBackends": "agy:gemini-3.8-flash-medium, agy:claude-sonnet-5-5-low, claude:claude-sonnet-5-5:high"]])
+        precondition(configured["error"] == nil && settings.limitFallbackEntries
+                     == [flash, agyClaude, FallbackEntry(backend: "Claude Code", model: "claude-sonnet-5-5", effort: "high")], "\(configured)")
+        let twice = host.handle(["command": "config", "set": ["limitFallbackBackends": "agy:gemini-3.8-flash-medium, agy:gemini-3.8-flash-medium"]])
+        precondition((twice["error"] as? String)?.contains("twice") == true)
+
+        // A run on Antigravity Argon whose group is used up continues on Antigravity Flash.
+        settings.limitFallbackEntries = [flash, sonnet]
+        let agy = LimitBackend(), claude = LimitBackend(), copilot = LimitBackend()
+        let chat = ChatSession(copilotBackend: copilot, backendOverrides: [.antigravity: agy, .claudeCode: claude])
+        chat.submitRemote("argon task", mode: .queue)
+        try await waitForJournalTest { agy.requests.count == 1 }
+        precondition(chat.fallbackModel == nil, "the tab starts on its own model")
+        agy.sink?(.textDelta("partial work"))
+        agy.sink?(.usageLimit(UsageLimitReport(code: "usage/argon-weekly", resetsAt: Date().addingTimeInterval(3_600), scope: "argon")))
+        agy.sink?(.failure("Out of Argon quota"))
+        try await waitForJournalTest { agy.requests.count == 2 }
+        precondition(claude.requests.isEmpty && chat.fallbackModel?.selection?.model == flash.model,
+                     "the task continues on Antigravity with Flash: \(String(describing: chat.fallbackModel))")
+        precondition(agy.requests[1].prompt.contains("argon task"))
+        precondition(BackendLimitTracker.shared.limitedUntil(.antigravity) == nil
+                     && BackendLimitTracker.shared.limitedUntil(.antigravity, model: argon.model) != nil)
+        let flashLabel = settings.fallbackRun(for: flash).label
+        precondition(chat.messages.contains { $0.role == .error && $0.text.contains("Continuing this task with \(flashLabel)") },
+                     "the note names the backend and model")
+        agy.sink?(.done)
+        try await waitForJournalTest { !chat.isStreaming }
+        chat.submitRemote("next task", mode: .queue)
+        try await waitForJournalTest { agy.requests.count == 3 }
+        precondition(chat.fallbackModel?.selection?.model == flash.model && claude.requests.isEmpty
+                     && chat.deliveryStatus?.contains("is at its usage limit") == true,
+                     "new messages start on Flash while Argon is used up")
+        agy.sink?(.done)
+        try await waitForJournalTest { !chat.isStreaming }
+        // A limit for the whole backend moves the next run off Antigravity.
+        chat.submitRemote("third task", mode: .queue)
+        try await waitForJournalTest { agy.requests.count == 4 }
+        agy.sink?(.usageLimit(UsageLimitReport(code: "usage/all", resetsAt: Date().addingTimeInterval(3_600))))
+        agy.sink?(.failure("Antigravity is out of quota"))
+        try await waitForJournalTest { claude.requests.count == 1 }
+        precondition(agy.requests.count == 4, "every Antigravity entry is skipped")
+        claude.sink?(.done)
+        try await waitForJournalTest { !chat.isStreaming }
+        print("Usage limit backups: a backend listed again with another model, per-model and shared limits, older clients and API passed")
     }
 
     /// Paired clients read and set the fallbacks, and clear limits, through /api/v1/usage-fallback.

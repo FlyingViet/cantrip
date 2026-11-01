@@ -69,55 +69,141 @@ enum UsageLimit {
 }
 
 /// Backends at their usage limit, app-wide (every tab shares the account), so new messages go
-/// straight to the fallback backend instead of failing first. Kept in memory only: after a
-/// relaunch each backend is tried again.
+/// straight to the fallback backend instead of failing first. A limit covers the whole backend
+/// (a shared quota, such as Copilot's premium requests) or one model scope where the backend keeps
+/// quotas per model (Claude's weekly Opus and Sonnet limits, Antigravity's model groups); the
+/// report's `scope` decides. Kept in memory only: after a relaunch each backend is tried again.
 final class BackendLimitTracker {
     static let shared = BackendLimitTracker()
     /// How long a backend is skipped when its error doesn't say when the limit lifts.
     static var defaultCooldown: TimeInterval = 60 * 60
 
+    struct ScopeLimit: Equatable {
+        let backend: BackendKind
+        let scope: String
+        let until: Date
+    }
+
+    private struct ScopeKey: Hashable {
+        let backend: BackendKind
+        let scope: String
+    }
+
     private let lock = NSLock()
     private var limitedUntil: [BackendKind: Date] = [:]
+    private var scopeLimitedUntil: [ScopeKey: Date] = [:]
 
-    func markLimited(_ kind: BackendKind, message: String, report: UsageLimitReport? = nil,
+    /// The quota a model's requests count against, where the backend keeps one per model: Claude's
+    /// model tiers and Antigravity's model groups (Claude and GPT share one, Argon has its own,
+    /// everything else, Auto included, is Gemini). nil: the backend's models share one quota.
+    static func modelScope(_ kind: BackendKind, model: String) -> String? {
+        let slug = model.lowercased()
+        switch kind {
+        case .claudeCode:
+            return ["opus", "sonnet", "haiku"].first { slug.contains($0) }
+        case .antigravity:
+            if slug.hasPrefix("claude") || slug.hasPrefix("gpt") { return "claude-gpt" }
+            return slug.contains("argon") ? "argon" : "gemini"
+        default:
+            return nil
+        }
+    }
+
+    /// The scope of an Antigravity `/usage` group, by its name ("Gemini 4 Argon", "Claude and GPT models").
+    static func antigravityScope(group name: String) -> String {
+        let lowered = name.lowercased()
+        if lowered.contains("claude") || lowered.contains("gpt") { return "claude-gpt" }
+        return lowered.contains("argon") ? "argon" : "gemini"
+    }
+
+    /// The scope of a Claude limit window or rate-limit type ("seven_day_opus"); nil for the
+    /// account-wide windows (five_hour, seven_day).
+    static func claudeScope(window id: String) -> String? {
+        ["opus", "sonnet", "haiku"].first { id.lowercased().contains($0) }
+    }
+
+    func markLimited(_ kind: BackendKind, model: String? = nil, message: String, report: UsageLimitReport? = nil,
                      now: Date = Date()) {
         var until = report?.resetsAt.flatMap { $0 > now ? $0 : nil } ?? UsageLimit.resetDate(in: message, now: now)
-        if until == nil, kind == .claudeCode, let limit = UsageTracker.shared.rateLimit,
+        if until == nil, kind == .claudeCode, report?.scope == nil, let limit = UsageTracker.shared.rateLimit,
            limit.status == "rejected", limit.resetsAt > now {
             until = limit.resetsAt
         }
         let date = until ?? now.addingTimeInterval(Self.defaultCooldown)
-        lock.withLock { limitedUntil[kind] = date }
-        Log.write("usage-limit: \(kind.rawValue) limited until \(ISODate.string(from: date))"
-            + (report.map { " (\($0.code))" } ?? ""))
+        if let scope = report?.scope {
+            lock.withLock { scopeLimitedUntil[ScopeKey(backend: kind, scope: scope)] = date }
+        } else {
+            lock.withLock { limitedUntil[kind] = date }
+        }
+        Log.write("usage-limit: \(kind.rawValue)\(report?.scope.map { " (\($0) models)" } ?? "") limited until "
+            + ISODate.string(from: date) + (report.map { " (\($0.code))" } ?? "")
+            + (model.map { $0.isEmpty ? "" : " while on \($0)" } ?? ""))
     }
 
-    func limitedUntil(_ kind: BackendKind, now: Date = Date()) -> Date? {
+    /// When `kind` can be used again: the whole backend's limit, and with `model` also that model's
+    /// scope; nil when it can be used now.
+    func limitedUntil(_ kind: BackendKind, model: String? = nil, now: Date = Date()) -> Date? {
         lock.withLock {
-            guard let date = limitedUntil[kind] else { return nil }
-            guard date > now else { limitedUntil[kind] = nil; return nil }
-            return date
+            var dates: [Date] = []
+            if let date = limitedUntil[kind] {
+                if date > now { dates.append(date) } else { limitedUntil[kind] = nil }
+            }
+            if let model, let scope = Self.modelScope(kind, model: model) {
+                let key = ScopeKey(backend: kind, scope: scope)
+                if let date = scopeLimitedUntil[key] {
+                    if date > now { dates.append(date) } else { scopeLimitedUntil[key] = nil }
+                }
+            }
+            return dates.max()
         }
     }
 
+    /// Model scopes at their limit now, soonest reset first.
+    func scopeLimits(now: Date = Date()) -> [ScopeLimit] {
+        lock.withLock {
+            scopeLimitedUntil = scopeLimitedUntil.filter { $0.value > now }
+            return scopeLimitedUntil.map { ScopeLimit(backend: $0.key.backend, scope: $0.key.scope, until: $0.value) }
+                .sorted { ($0.until, $0.backend.rawValue, $0.scope) < ($1.until, $1.backend.rawValue, $1.scope) }
+        }
+    }
+
+    /// Clears a backend's limits, its model scopes' too, or every limit.
     func clear(_ kind: BackendKind? = nil) {
         lock.withLock {
-            if let kind { limitedUntil[kind] = nil } else { limitedUntil.removeAll() }
+            if let kind {
+                limitedUntil[kind] = nil
+                scopeLimitedUntil = scopeLimitedUntil.filter { $0.key.backend != kind }
+            } else {
+                limitedUntil.removeAll()
+                scopeLimitedUntil.removeAll()
+            }
         }
     }
 }
 
 enum BackendFallback {
-    /// The backend to use instead of `primary` when it's at its limit: the first one in the
-    /// configured chain that isn't `primary` and isn't at its limit too, or nil to stay put.
-    /// Every hop marks the backend it leaves as limited, so a run can't go round in circles.
-    /// Unattended Home runs skip Copilot Remote, whose tools Cantrip can't check per action.
+    /// The backup to use when the backend and model a run is on reached its limit: the first entry
+    /// in the chain that isn't the one being left and whose backend and model aren't limited too,
+    /// or nil to stay put. Every hop marks what it leaves as limited, so a run can't go round in
+    /// circles. `model` resolves an entry's "" (default) model. Unattended Home runs skip Copilot
+    /// Remote, whose tools Cantrip can't check per action.
+    static func next(after current: BackendKind, model currentModel: String, chain: [FallbackEntry], homeRun: Bool,
+                     model resolve: (BackendKind, String) -> String = { $1 },
+                     tracker: BackendLimitTracker = .shared, now: Date = Date()) -> FallbackEntry? {
+        chain.first { entry in
+            guard let kind = entry.kind else { return false }
+            let model = resolve(kind, entry.model)
+            return !(kind == current && model == currentModel)
+                && tracker.limitedUntil(kind, model: model, now: now) == nil
+                && !(homeRun && kind == .copilotRemote)
+        }
+    }
+
+    /// The backup backend for `primary` when backups are named by backend only.
     static func target(for primary: BackendKind, chain: [String], homeRun: Bool,
                        tracker: BackendLimitTracker = .shared, now: Date = Date()) -> BackendKind? {
-        chain.lazy.compactMap(BackendKind.init(rawValue:)).first { fallback in
-            fallback != primary && tracker.limitedUntil(fallback, now: now) == nil
-                && !(homeRun && fallback == .copilotRemote)
-        }
+        next(after: primary, model: "", chain: chain.map { FallbackEntry(backend: $0) }, homeRun: homeRun,
+             tracker: tracker, now: now)?.kind
     }
 
     static func untilLabel(_ date: Date, now: Date = Date()) -> String {

@@ -73,7 +73,7 @@ working or deliberately unsupported with a clear message.
 | Home task models | Model list for task settings | `CantripHomeTaskModels.swift` | 5062f5b |
 | Child tabs | Inherit the parent's model; shared Simulator/build turns enforced in the tool check | `ChildTabCoordinator.swift`, `ChildTabResources.swift` | d1549c6 |
 | Council seats | Own session per seat and model; safest native mode | `ChatSession` council setup, `TabDefaults.council*` | 1c1b362, 6dd4ee5 |
-| Usage limit fallback | `.usageLimit(UsageLimitReport)` from a structured code, sent just before `.failure` | `BackendLimits.swift`, `ChatSession` | 825fcfb, 86abf76 |
+| Usage limit fallback | `.usageLimit(UsageLimitReport)` from a structured code, sent just before `.failure`; `scope` when the limit covers only some models | `BackendLimits.swift`, `ChatSession` | 825fcfb, 86abf76 |
 | Usage Limits screens | Quota used and reset times, read without spending quota | `UsageTracker.swift`, `CopilotUsage.swift`, `CopilotUsageView.swift`, `QuotaFetcher.swift` | 5c08fdc, 3a04b3f |
 | Auto routing, queue plans, Done-when checks | A tool-free, fast one-shot call | `MessageRouter.swift`, `ChatSession.routerProvider` | daa63fe |
 | OpenAI-compatible API | A stateless, tool-free one-shot call with images, structured limit errors and token or premium-request counts | `OneShotCompletion.swift`, `OpenAIEndpoint.swift` | this guide's section 4, "Routing and other helper calls" |
@@ -285,6 +285,11 @@ live run.
   passes those fields through: the Copilot bridge dropped them, so a monthly quota error never
   triggered the fallback (825fcfb). Send `.usageLimit` with the reset time just before
   `.failure`.
+- Say which models a limit covers. Where the backend keeps a quota per model (Antigravity's
+  model groups, Claude's weekly Opus and Sonnet limits), set `UsageLimitReport.scope` and map
+  model IDs to it in `BackendLimitTracker.modelScope`, so only that model's backups are skipped
+  and the chain can list the backend again with another model. Leave `scope` nil for a shared
+  quota (Copilot's premium requests); it then skips every entry of the backend.
 - Work out reset times the error leaves out. Copilot's monthly allowance resets on the 1st at
   00:00 UTC, so retrying hourly would fail all month (825fcfb).
 - Read limits directly and cheaply every five minutes, without spending quota and without

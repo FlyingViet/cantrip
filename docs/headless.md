@@ -68,8 +68,9 @@ Settings use the same names as `~/.cantriprc`. Common ones: `backend`,
 `copilotModel`, `copilotEffort`, `allowActions`, `remoteControlPort`,
 `remoteLANPort` (0 = any free port), `cantripHomeEnabled`, `memoryEnabled`,
 `memoryPath`, `storageUpkeepEnabled`, `storageSessionRetentionDays` (3–365,
-default 14), `limitFallbackBackends` (`off` or comma-separated backend names, tried in
-order; see [usage limit fallbacks](backends.md#fall-back-when-a-backend-hits-its-usage-limit)),
+default 14), `limitFallbackBackends` (`off` or comma-separated backend names, each optionally
+`:model:effort` and listed again with another model, tried in order; `cantrip
+config` shows them as `limitFallbackEntries`; see [usage limit fallbacks](backends.md#fall-back-when-a-backend-hits-its-usage-limit)),
 `openAIEndpointEnabled`, `openAIEndpointPort` (default 11439), `openAIEndpointModel`
 (`backend:model`, or empty for the tabs' model), `openAIEndpointEffort` and
 `openAIEndpointContextTier` (see [OpenAI-compatible API](backends.md#serve-your-backends-to-other-apps-openai-compatible-api)).
