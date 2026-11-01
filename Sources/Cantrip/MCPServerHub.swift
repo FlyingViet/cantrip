@@ -36,8 +36,17 @@ struct AgentChrome {
         return (try? await session.data(from: url)) != nil
     }
 
+    /// DevTools' `/json/new?<address>`, with the address percent-encoded whole: Chrome unescapes it
+    /// once, and since Chrome 156 reads a raw `&` as the end of the address, which cut sign-in
+    /// addresses down to their first parameter (no `client_id`, PKCE or `redirect_uri`).
+    static func newTabPath(for address: URL) -> String {
+        var unreserved = CharacterSet.alphanumerics
+        unreserved.insert(charactersIn: "-._~")
+        return "/json/new?" + (address.absoluteString.addingPercentEncoding(withAllowedCharacters: unreserved) ?? address.absoluteString)
+    }
+
     func open(_ address: URL) async throws -> Tab {
-        guard let url = endpoint("/json/new?\(address.absoluteString)") else { throw URLError(.badURL) }
+        guard let url = endpoint(Self.newTabPath(for: address)) else { throw URLError(.badURL) }
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         let (data, _) = try await session.data(for: request)
