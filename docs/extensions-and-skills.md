@@ -249,7 +249,11 @@ cantrip mcp connect mobbin     # sign in to a remote server
   needs connecting again. The client Cantrip registers with each sign-in
   server is kept in the keychain too and reused by later sign-ins and retries
   (signing out keeps it); one the server refuses is dropped and registered
-  anew.
+  anew. A sign-in server that only accepts apps it already knows (RevenueCat's
+  answers `invalid_client`) can't be signed in to from Cantrip: use the
+  service's API key instead, as the server's `Authorization` header in
+  `~/.copilot/mcp-config.json`, and run `cantrip mcp migrate --apply`, which
+  moves it to the keychain. The failed sign-in says so.
 - Each server can be switched off entirely, per backend or per tab (the tab
   menu's **MCP Servers**). Scheduled Home tasks still get only the servers in
   `cantripHomeTaskMCPServers`, on every backend.
