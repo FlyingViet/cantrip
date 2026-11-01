@@ -50,7 +50,8 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   lockable session tabs, each with its own terminal. Runs survive crashes and
   relaunches; a run that fails or times out stops on **Continue**, with the
   queue waiting behind it; **Start Fresh** drops a stuck tab's context but
-  keeps its history. [Sessions](docs/sessions-and-council.md)
+  keeps its history; **Delete Message** removes a prompt and reply everywhere,
+  model context included. [Sessions](docs/sessions-and-council.md)
 - **Busy-run messages:** Auto reads each new message and injects context,
   redirects, queues, combines related follow-ups, or starts a parallel
   subagent. Queue, Redirect, Inject and **Send now** stay available.

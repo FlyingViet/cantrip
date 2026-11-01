@@ -294,14 +294,26 @@ final class RunJournal {
         guard failure == nil, let handle,
               let size = try? handle.offset(), size > compactionThreshold else { return }
         guard let kept = Self.compacted(loaded ?? Self.loadEvents(from: fileURL)) else { return }
-        let temporaryURL = fileURL.deletingLastPathComponent()
-            .appendingPathComponent(".\(fileURL.lastPathComponent).compacting")
         do {
             var data = Data()
             for event in kept {
                 data.append(try Self.encoder.encode(event))
                 data.append(0x0A)
             }
+            try replaceContents(with: data, suffix: "compacting")
+        } catch {
+            NSLog("run-journal: compaction skipped (code %ld)", (error as NSError).code)
+            return
+        }
+        reopenAfterReplacing(handle, action: "compaction")
+    }
+
+    /// Writes `data` beside the journal, syncs it and renames it over the journal. A failure
+    /// before the rename leaves the journal untouched.
+    private func replaceContents(with data: Data, suffix: String) throws {
+        let temporaryURL = fileURL.deletingLastPathComponent()
+            .appendingPathComponent(".\(fileURL.lastPathComponent).\(suffix)")
+        do {
             guard FileManager.default.createFile(
                 atPath: temporaryURL.path,
                 contents: nil,
@@ -323,19 +335,68 @@ final class RunJournal {
             }
         } catch {
             try? FileManager.default.removeItem(at: temporaryURL)
-            NSLog("run-journal: compaction skipped (code %ld)", (error as NSError).code)
-            return
+            throw error
         }
+    }
+
+    private func reopenAfterReplacing(_ old: FileHandle, action: String) {
         do {
-            try? handle.close()
+            try? old.close()
             self.handle = try FileHandle(forWritingTo: fileURL)
             try self.handle?.seekToEnd()
             needsSynchronization = false
         } catch {
             self.handle = nil
             failure = error
-            NSLog("run-journal: reopen after compaction failed (code %ld)", (error as NSError).code)
+            NSLog("run-journal: reopen after %@ failed (code %ld)", action as NSString, (error as NSError).code)
         }
+    }
+
+    /// Deletes the records of a deleted message: every event `drop` matches, and the queue
+    /// records of the queued prompts those events started, so a deleted prompt never returns to
+    /// the queue on replay. Queue records are never dropped by `drop` itself: they carry
+    /// whichever run was current, not the run that later handled them. Runs after earlier
+    /// writes; later appends follow the rewritten journal. Completes with the records removed.
+    func removeEvents(where drop: @escaping (Event) -> Bool,
+                      completion: @escaping (Result<Int, Error>) -> Void) {
+        Self.writer.async {
+            completion(Result { try self.removeEventsOnWriter(drop) })
+        }
+    }
+
+    private func removeEventsOnWriter(_ drop: (Event) -> Bool) throws -> Int {
+        if let failure { throw failure }
+        guard let handle else { throw CocoaError(.fileNoSuchFile) }
+        let data = try Data(contentsOf: fileURL)
+        let lines = data.split(separator: 0x0A)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let events = lines.map { try? decoder.decode(Event.self, from: Data($0)) }
+        let queueKinds: Set<EventKind> = [.queueAdded, .queueRemoved, .queueCleared]
+        var removed = Set<Int>()
+        var claimed = Set<UUID>()
+        for (index, event) in events.enumerated() {
+            guard let event, !queueKinds.contains(event.kind), drop(event) else { continue }
+            removed.insert(index)
+            claimed.formUnion(event.claimedQueueItemIDs)
+        }
+        if !claimed.isEmpty {
+            for (index, event) in events.enumerated() {
+                guard let event, event.kind != .queueCleared else { continue }
+                let items = event.claimedQueueItemIDs + (event.queueItem.map { [$0.id] } ?? [])
+                if items.contains(where: claimed.contains) { removed.insert(index) }
+            }
+        }
+        guard !removed.isEmpty else { return 0 }
+        var kept = Data()
+        for (index, line) in lines.enumerated() where !removed.contains(index) {
+            kept.append(contentsOf: line)
+            kept.append(0x0A)
+        }
+        try replaceContents(with: kept, suffix: "removing")
+        reopenAfterReplacing(handle, action: "removal")
+        if let failure { throw failure }
+        return removed.count
     }
 
     /// The fewest original events whose replay yields the same recovery state,

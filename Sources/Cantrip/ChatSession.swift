@@ -4364,6 +4364,141 @@ final class ChatSession: ObservableObject {
         Log.write("tab: started fresh (\(id.uuidString.prefix(8)))")
     }
 
+    // MARK: - Delete message
+
+    /// Deleted message IDs remembered per tab for paired clients' caches.
+    static let deletedMessageMemory = 500
+
+    /// Messages deleted from this tab, oldest first: paired clients drop any cached copies.
+    private(set) lazy var deletedMessageIDs: [UUID] = (UserDefaults.standard.stringArray(
+        forKey: TabDefaults.deletedMessages(id)
+    ) ?? []).compactMap(UUID.init(uuidString:))
+
+    var deleteMessageUnavailableReason: String? {
+        if isCantripHomeRun { return "Background runs can't be edited." }
+        if isStreaming || shell.isRunning || autoResumePending || councilRunning {
+            return "Wait for this tab to finish before deleting a message."
+        }
+        return nil
+    }
+
+    /// The messages deleting `messageID` removes: a prompt with every message in its thread
+    /// (its replies, errors and late background results), or, for history from before threads
+    /// were recorded, with the messages up to the next prompt. A reply whose prompt is gone goes
+    /// alone, and so does a result card. Nil when it isn't there or is a Start Fresh divider.
+    func exchangeIndexes(containing messageID: UUID) -> [Int]? {
+        guard let index = messages.firstIndex(where: { $0.id == messageID }) else { return nil }
+        let target = messages[index]
+        let start: Int
+        switch target.role {
+        case .freshStart:
+            return nil
+        case .handoff:
+            return [index]
+        case .user:
+            start = index
+        case .assistant, .error:
+            if let thread = target.threadID {
+                guard let prompt = messages.firstIndex(where: { $0.id == thread && $0.role == .user }) else {
+                    return [index]
+                }
+                start = prompt
+            } else {
+                guard let prompt = messages[..<index].lastIndex(where: { $0.role == .user || $0.role == .freshStart }),
+                      messages[prompt].role == .user else { return [index] }
+                start = prompt
+            }
+        }
+        let thread = messages[start].threadID
+        var indexes = [start]
+        for later in messages.indices where later > start {
+            let message = messages[later]
+            if let thread {
+                if message.role != .user, message.role != .freshStart, message.threadID == thread {
+                    indexes.append(later)
+                }
+            } else {
+                if message.role == .user || message.role == .freshStart { break }
+                if message.threadID == nil, message.role != .handoff { indexes.append(later) }
+            }
+        }
+        return indexes
+    }
+
+    /// Deletes a prompt and its replies everywhere Cantrip keeps them: the transcript, the run
+    /// journal, the memory session log and Cantrip's log. Every backend starts a new session for
+    /// the next prompt, given the history that's left, and the old backend sessions' own
+    /// transcripts lose the exchange too. Returns the deleted messages' IDs.
+    @discardableResult
+    func deleteExchange(containing messageID: UUID) throws -> [UUID] {
+        if let reason = deleteMessageUnavailableReason { throw SessionModelSettingsError(409, reason) }
+        guard let indexes = exchangeIndexes(containing: messageID) else {
+            throw SessionModelSettingsError(404, "This message is no longer in the conversation.")
+        }
+        let removed = indexes.map { messages[$0] }
+        let removedIDs = Set(removed.map(\.id))
+        let remainingRuns = Set(messages.filter { !removedIDs.contains($0.id) }.compactMap(\.runID))
+        let ownedRuns = Set(removed.compactMap(\.runID)).subtracting(remainingRuns)
+        let prompt = removed.first { $0.role == .user }
+        let exchange = DeletedExchange(
+            prompt: prompt?.text ?? "",
+            replies: removed.filter { $0.role == .assistant && !$0.text.isEmpty }.map(\.text)
+        )
+        let locations = TranscriptScrubber.Locations(
+            copilotSessions: SessionOutputFolders.shared.cliSessionIDs(for: id),
+            claudeSession: UserDefaults.standard.string(forKey: TabDefaults.claudeSession(id)),
+            codexThread: UserDefaults.standard.string(forKey: TabDefaults.codexSession(id))
+        )
+
+        messages.remove(atOffsets: IndexSet(indexes))
+        deletedMessageIDs = Array((deletedMessageIDs + removed.map(\.id)).suffix(Self.deletedMessageMemory))
+        UserDefaults.standard.set(deletedMessageIDs.map(\.uuidString), forKey: TabDefaults.deletedMessages(id))
+        if let run = currentRunID, ownedRuns.contains(run) {
+            restoredRun = nil
+            clearCurrentRun()
+        }
+        if let run = lastJournalRunID, ownedRuns.contains(run) {
+            lastJournalRunID = messages.last { $0.runID != nil }?.runID
+        }
+        mcpAppContext.removeAll()
+        // The model forgets the exchange: each backend's next prompt opens a new session that
+        // gets the history that's left (as after a relaunch), never resuming the old one.
+        streamGeneration += 1
+        resetBackendConversations()
+        for backend in councilInstances.values { backend.reset() }
+        councilInstances = [:]
+        TabDefaults.removeCouncilSeats(for: id)
+        persistTranscript()
+
+        let sessionTag = id.uuidString.prefix(8)
+        journal?.removeEvents(where: { event in
+            ownedRuns.contains(event.runID) || event.messageID.map(removedIDs.contains) == true
+        }) { result in
+            if case .failure(let error) = result {
+                Log.write("delete-message: run journal not updated (\(sessionTag)): code \((error as NSError).code)")
+            }
+        }
+        let exchanges = [exchange]
+        // New Conversation's continuity digest quotes recent prompts and the last answer.
+        if let digest = UserDefaults.standard.string(forKey: "lastConversationDigest"),
+           exchange.fragments.contains(where: { digest.contains($0.prefix(100)) || digest.contains($0.suffix(300)) }) {
+            UserDefaults.standard.removeObject(forKey: "lastConversationDigest")
+        }
+        if !exchange.prompt.isEmpty || !exchange.replies.isEmpty {
+            SessionLogScrubber.remove(exchanges, in: MemoryStore.shared.sessionsURL)
+        }
+        if let prompt = prompt?.text.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
+            Log.redact(Set([prompt.prefix(80), prompt.prefix(60)]).map { "\"\($0)\"" },
+                       with: "\"[deleted message]\"")
+        }
+        Task.detached(priority: .utility) {
+            let changed = TranscriptScrubber.scrub(locations, exchanges: exchanges)
+            Log.write("delete-message: backend transcripts updated (\(sessionTag)): \(changed) changed")
+        }
+        Log.write("tab: deleted \(removed.count) messages (\(sessionTag))")
+        return removed.map(\.id)
+    }
+
     /// The latest message when it's a model error repeating the previous error with no finished
     /// turn between them: the tab is likely stuck on its earlier context, so clients offer
     /// Start Fresh and Change Model on that row.
