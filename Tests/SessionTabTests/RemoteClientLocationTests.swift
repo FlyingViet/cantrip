@@ -2,7 +2,13 @@ import Foundation
 
 private final class LocationBackendFixture: Backend {
     var requests: [BackendRequest] = []
+    var injections: [String] = []
+    var supportsMidTurnInjection = false
     var sink: ((BackendEvent) -> Void)?
+    func injectMidTurn(_ text: String, completion: @escaping (MidTurnDelivery) -> Void) {
+        injections.append(text)
+        completion(.accepted(messageID: "location-\(injections.count)"))
+    }
     func send(_ request: BackendRequest, workdir: String, onEvent: @escaping (BackendEvent) -> Void) {
         requests.append(request)
         sink = onEvent
@@ -144,6 +150,24 @@ extension SessionTabTests {
         precondition(Date().timeIntervalSince(started) < 5 && backend.requests[4].prompt.contains("37.39, -122.08")
                      && backend.requests[4].prompt.contains("my browser"), "naming the place never blocks the message")
         try await finish()
+
+        // Into a running turn: a note only when the device sent a location.
+        backend.supportsMidTurnInjection = true
+        let status6 = try await post(#"{"text":"Plan my afternoon"}"#)
+        precondition(status6 == 202)
+        try await waitForJournalTest { backend.requests.count == 6 }
+        let status7 = try await post(#"{"text":"remote context","mode":"inject"}"#)
+        precondition(status7 == 202)
+        try await waitForJournalTest { backend.injections.count == 1 }
+        precondition(backend.injections == ["remote context"], "no Mac fallback note mid-turn: \(backend.injections)")
+        let status8 = try await post(#"{"text":"I'm out now","mode":"inject",\#(located)}"#)
+        precondition(status8 == 202)
+        try await waitForJournalTest { backend.injections.count == 2 }
+        precondition(backend.injections[1].hasPrefix("I'm out now\n\n(Context:")
+                     && backend.injections[1].contains("Mountain View, CA (37.39, -122.08)"),
+                     "a located injection carries its note: \(backend.injections[1].prefix(300))")
+        try await finish()
+        backend.supportsMidTurnInjection = false
 
         // Nothing about the location is stored with the conversation or its run journal.
         chat.persistTranscript()
