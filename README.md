@@ -57,9 +57,11 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   [Send while busy](docs/sessions-and-council.md#send-instructions-while-the-agent-is-busy)
 - **Background work:** watchers and subagents keep running while you keep
   chatting; Cantrip wakes the run when they finish.
-- **Child tabs:** an independent queued message runs (on its own, with Auto
-  delivery) in a nested tab with its own git branch; it merges back when the
-  parent is idle and asks on a conflict. [Child tabs](docs/sessions-and-council.md#child-tabs)
+- **Child tabs:** an independent queued message runs (on its own for Auto
+  delivery, paired devices and Home handoffs, several at once within the caps
+  and the Mac's resources) in a nested tab with its own git branch; work that
+  depends on it follows it there. It merges back when the parent is idle and
+  asks on a conflict. [Child tabs](docs/sessions-and-council.md#child-tabs)
 - **Tabs look into each other:** parents see live child status, and models and
   Home read any non-private tab's conversation on demand or ask it a question.
   Type `@` to point a message at one tab. [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs)

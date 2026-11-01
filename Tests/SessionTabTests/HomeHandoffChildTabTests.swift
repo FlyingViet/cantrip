@@ -34,7 +34,8 @@ extension SessionTabTests {
         settings.memoryEnabled = false
         settings.voiceMode = false
         settings.attachScreen = false
-        settings.childTabsAutoFork = true
+        // On only for the steps about auto-fork: a handoff is eligible by itself.
+        settings.childTabsAutoFork = false
         defer {
             (settings.backend, settings.memoryEnabled, settings.voiceMode, settings.childTabsAutoFork, settings.attachScreen) = saved
         }
@@ -82,6 +83,7 @@ extension SessionTabTests {
             return ChatSession(id: id, copilotBackend: backend)
         }
         coordinator.worktreesRoot = scratch.appendingPathComponent("worktrees", isDirectory: true)
+        coordinator.sampleResources = { _ in .idle }
         let parentBackend = HandoffChildFixtureBackend()
         let parent = ChatSession(copilotBackend: parentBackend)
         parent.workdir = repo
@@ -155,13 +157,24 @@ extension SessionTabTests {
                      && result.detail.hasSuffix("Child tab of Cantrip · Done; merges into main when the parent tab is idle"),
                      "\(result.headline) | \(result.detail)")
 
-        // 2. Auto-fork: an independent message forked on its own is followed the same way.
+        // 2. Auto-fork: an independent handoff forks on its own (no Auto delivery needed) and is
+        // followed the same way. One that says it depends on other work stays in the queue.
+        settings.childTabsAutoFork = true
+        let dependent = try handOff("Ship the parser\n\nDepends on: the parser refactor")
+        let dependentItem = try requireHandoffChild(parent.queued.first { $0.text == dependent.prompt })
+        precondition(!parent.isAutoForkCandidate(dependentItem), "a handoff that names a dependency isn't auto-forked")
+        parent.applyQueuePlans([dependentItem.id: QueuePlan(kind: .fork, reason: "Independent: can run in a child tab",
+                                                            title: "Ship the parser", repo: nil, touches: ["Parser.swift"])])
         let notes = try handOff("Write release notes")
         let notesItem = try requireHandoffChild(parent.queued.first { $0.text == notes.prompt })
         parent.applyQueuePlans([notesItem.id: QueuePlan(kind: .fork, reason: "Independent: can run in a child tab",
                                                         title: "Write release notes", repo: nil, touches: ["NOTES.md"])])
-        parent.noteAutoDelivered(notesItem.id)
         try await waitForJournalTest { childOf(notes) != nil }
+        precondition(childOf(dependent) == nil && parent.queued.contains(dependentItem)
+                     && parent.queuePlans[dependentItem.id]?.reason == ChildTabCoordinator.dependentReason
+                     && parent.queuePlans[dependentItem.id]?.kind == .queue,
+                     parent.queuePlans[dependentItem.id]?.reason ?? "no plan")
+        parent.removeQueued(id: dependentItem.id)
         let notesRecord = try requireHandoffChild(childOf(notes))
         precondition(notesRecord.autoStarted == true)
         try await waitForJournalTest { (try? current(notes))?.tabID == notesRecord.id }
@@ -169,10 +182,29 @@ extension SessionTabTests {
         precondition(now.isInChildTab && now.status == .running && now.tabTitle == "Write release notes", "\(now)")
         let notesBackend = try requireHandoffChild(backends[notesRecord.id])
         try await waitForJournalTest { notesBackend.prompts.count == 1 }
+        // A handoff that needs the running child's result joins its queue, and Home follows it there.
+        let changelog = try handOff("Add the release notes to the changelog")
+        let changelogItem = try requireHandoffChild(parent.queued.first { $0.text == changelog.prompt })
+        parent.applyQueuePlans([changelogItem.id: QueuePlan(
+            kind: .queue, reason: "Waits for child tab “Write release notes”: needs its result",
+            title: "Changelog entry", repo: nil, touches: [], afterChild: notesRecord.id)])
+        let notesChild = try requireHandoffChild(manager.sessions.first { $0.id == notesRecord.id })
+        try await waitForJournalTest { notesChild.queued.contains { $0.text == changelog.prompt } }
+        precondition(!parent.queued.contains(changelogItem) && store.record(notesRecord.id)?.followUps == [changelog.prompt])
+        now = try current(changelog)
+        precondition(now.tabID == notesRecord.id && now.isInChildTab && now.status == .queued, "\(now)")
+        settings.childTabsAutoFork = false
         notesBackend.finish("Nothing needed changing.\n\nSummary: The notes were already current.")
+        try await waitForJournalTest { notesBackend.prompts.count == 2 }
+        precondition(store.record(notesRecord.id)?.state == .working, "its follow-up keeps it working")
+        now = try current(changelog)
+        precondition(now.status == .running && now.tabID == notesRecord.id, "\(now)")
+        notesBackend.finish("Added them.\n\nSummary: The changelog lists the release notes.")
         try await waitForJournalTest { store.record(notesRecord.id)?.state == .finished }
         now = try current(notes)
         precondition(now.status == .completed && now.outcome == "The notes were already current.", "\(now)")
+        now = try current(changelog)
+        precondition(now.status == .completed && now.outcome == "The changelog lists the release notes.", "\(now)")
 
         // 3. Removing the queued message is still a cancel.
         let removed = try handOff("Rename the parser module")

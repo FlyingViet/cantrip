@@ -4184,13 +4184,24 @@ struct SettingsView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Toggle("Start independent queued messages in child tabs automatically (Auto delivery only)", isOn: $settings.childTabsAutoFork)
+            Toggle("Start independent queued messages in child tabs automatically (Auto delivery, Home handoffs and paired devices)", isOn: $settings.childTabsAutoFork)
                 .font(.caption)
                 .toggleStyle(.checkbox)
-            Text("Each runs in its own tab and git branch and merges back when done. Its card's Run in This Tab Instead puts it back in the queue.")
+            Text("Each runs in its own tab and git branch and merges back when done; requests that depend on it follow it there. A message queued with Queue on this Mac waits for Run in Child Tab. Its card's Run in This Tab Instead puts it back in the queue.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 16) {
+                Stepper(value: $settings.childTabsPerParentLimit, in: 1...ChildTabCapacity.maximumPerParent) {
+                    Text("Child tabs per tab: \(settings.childTabsPerParentLimit)")
+                        .font(.caption)
+                }
+                Stepper(value: $settings.childTabsOverallLimit, in: 1...ChildTabCapacity.maximumOverall) {
+                    Text("In all: \(settings.childTabsOverallLimit)")
+                        .font(.caption)
+                }
+            }
+            .help("Run in Child Tab stops at these. Auto-fork also waits while the Mac is busy, disk is short or no Simulator is free, and runs one fewer while the Mac is fairly busy.")
             Toggle("Memory vault — remember procedures that worked (markdown notes, Obsidian-compatible)", isOn: $settings.memoryEnabled)
                 .font(.caption)
                 .toggleStyle(.checkbox)

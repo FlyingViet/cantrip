@@ -265,6 +265,22 @@ final class AppSettings: ObservableObject {
     @Published var childTabsAutoFork: Bool {
         didSet { d.set(childTabsAutoFork, forKey: "childTabsAutoFork") }
     }
+    /// Child tabs one tab may run at once (`ChildTabCapacity`).
+    @Published var childTabsPerParentLimit: Int {
+        didSet {
+            let clamped = min(max(childTabsPerParentLimit, 1), ChildTabCapacity.maximumPerParent)
+            if clamped != childTabsPerParentLimit { childTabsPerParentLimit = clamped }
+            d.set(childTabsPerParentLimit, forKey: "childTabsPerParentLimit")
+        }
+    }
+    /// Child tabs running at once across all tabs; auto-fork starts fewer while the Mac is busy.
+    @Published var childTabsOverallLimit: Int {
+        didSet {
+            let clamped = min(max(childTabsOverallLimit, 1), ChildTabCapacity.maximumOverall)
+            if clamped != childTabsOverallLimit { childTabsOverallLimit = clamped }
+            d.set(childTabsOverallLimit, forKey: "childTabsOverallLimit")
+        }
+    }
     @Published var copilotAllowSubagents: Bool {
         didSet { d.set(copilotAllowSubagents, forKey: "copilotAllowSubagents") }
     }
@@ -658,6 +674,8 @@ final class AppSettings: ObservableObject {
             "cantripHomeParallelRuns": cantripHomeParallelRuns,
             "copilotAllowSubagents": copilotAllowSubagents,
             "childTabsAutoFork": childTabsAutoFork,
+            "childTabsPerParentLimit": childTabsPerParentLimit,
+            "childTabsOverallLimit": childTabsOverallLimit,
             "linkPreviewsEnabled": linkPreviewsEnabled,
             "copilotIdleReleaseMinutes": copilotIdleReleaseMinutes,
             "storageUpkeepEnabled": storageUpkeepEnabled,
@@ -763,6 +781,8 @@ final class AppSettings: ObservableObject {
         bool("cantripHomeEnabled") { self.cantripHomeEnabled = $0 }
         bool("copilotAllowSubagents") { self.copilotAllowSubagents = $0 }
         bool("childTabsAutoFork") { self.childTabsAutoFork = $0 }
+        int("childTabsPerParentLimit", 1...ChildTabCapacity.maximumPerParent) { self.childTabsPerParentLimit = $0 }
+        int("childTabsOverallLimit", 1...ChildTabCapacity.maximumOverall) { self.childTabsOverallLimit = $0 }
         bool("linkPreviewsEnabled") { self.linkPreviewsEnabled = $0 }
         int("cantripHomeParallelRuns", 1...CantripHomeBackgroundRunner.maximumParallelLimit) {
             self.cantripHomeParallelRuns = $0
@@ -876,6 +896,12 @@ final class AppSettings: ObservableObject {
             ? true : d.bool(forKey: "copilotAllowSubagents")
         childTabsAutoFork = d.object(forKey: "childTabsAutoFork") == nil
             ? true : d.bool(forKey: "childTabsAutoFork")
+        let storedPerParent = d.integer(forKey: "childTabsPerParentLimit")
+        childTabsPerParentLimit = storedPerParent == 0
+            ? ChildTabCapacity.defaultPerParent : min(max(storedPerParent, 1), ChildTabCapacity.maximumPerParent)
+        let storedOverall = d.integer(forKey: "childTabsOverallLimit")
+        childTabsOverallLimit = storedOverall == 0
+            ? ChildTabCapacity.defaultOverall : min(max(storedOverall, 1), ChildTabCapacity.maximumOverall)
         copilotMCPApps = d.object(forKey: "copilotMCPApps") == nil
             ? true : d.bool(forKey: "copilotMCPApps")
         linkPreviewsEnabled = d.object(forKey: "linkPreviewsEnabled") == nil
