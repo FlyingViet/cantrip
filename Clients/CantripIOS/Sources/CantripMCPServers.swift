@@ -17,6 +17,9 @@ struct CantripMCPServer: Decodable, Equatable, Identifiable {
     var enabled: Bool
     var disabledBackends: [String]
     var address: String?
+    /// Its credentials (headers or environment values) are in the Mac's keychain; absent from Macs
+    /// before 1.1.13. Never the values themselves.
+    var credentials: Bool?
     var state: CantripMCPState?
 }
 
@@ -33,6 +36,8 @@ struct CantripMCPState: Decodable, Equatable {
     }
 
     var isActive: Bool { ["connecting", "awaitingApproval", "needsLogin"].contains(phase) }
+
+    var expiry: Date? { expiresAt.flatMap { ISO8601DateFormatter().date(from: $0) } }
 }
 
 /// Settings for shared MCP servers: connect remote ones (the page opens in the Mac's agent
@@ -70,13 +75,21 @@ struct CantripMCPServersView: View {
                         Section {
                             // Not keyed by bare name: Gateway Mac's local tools below list the same names.
                             ForEach(servers, id: \.settingsRowID) { server in
+                                #if os(macOS)
+                                macRow(server)
+                                #else
                                 NavigationLink { detail(server.name) } label: { summary(server) }
                                     .accessibilityIdentifier("mcp.server.\(server.name)")
+                                #endif
                             }
                         } header: {
                             Text("Servers")
                         } footer: {
+                            #if os(macOS)
+                            Text("Connect signs in on the Mac's agent Chrome; approve it here. The switches choose which backends use each server, the same as on the Mac.")
+                            #else
                             Text("Tap a server to sign in or out and choose which backends and tabs use it.")
+                            #endif
                         }
                     }
                 } else {
@@ -125,19 +138,85 @@ struct CantripMCPServersView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    /// A server's row in Settings: its name and state, and Connect when it needs a sign-in.
+    /// A server's row in Settings: its name, state and which backends use it, and Connect (or
+    /// Reconnect) when it needs a sign-in.
     private func summary(_ server: CantripMCPServer) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(server.name)
-                Text(status(server)).font(.caption).foregroundStyle(statusColor(server))
+                Text(Self.status(server)).font(.caption).foregroundStyle(statusColor(server))
+                Text(Self.kindAndBackends(server)).font(.caption).foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .combine)
             Spacer(minLength: 8)
             if server.oauth, server.enabled, server.state?.phase != "ready", server.state?.isActive != true {
-                Button("Connect") { act(["action": "connect", "name": server.name]) }
+                connectButton(server)
                     .buttonStyle(.borderless)
-                    .disabled(working != nil)
-                    .accessibilityIdentifier("mcp.connect.\(server.name)")
+                    .fixedSize()
+            }
+        }
+    }
+
+    #if os(macOS)
+    /// Gateway Mac's row, as Cantrip's own Settings shows it: the server's switch, its state and
+    /// sign-in, and a switch per backend (and for the tab the sheet was opened from).
+    private func macRow(_ server: CantripMCPServer) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Toggle(isOn: binding(server.enabled) { act(["action": "setEnabled", "name": server.name, "enabled": $0]) }) {
+                    Text(server.name).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
+                }
+                .accessibilityIdentifier("mcp.enabled.\(server.name)")
+                Text(Self.kind(server)).font(.caption).foregroundStyle(.secondary).fixedSize()
+                Spacer(minLength: 8)
+                Text(Self.status(server)).font(.caption).foregroundStyle(statusColor(server))
+                    .multilineTextAlignment(.trailing)
+                signInButton(server).fixedSize()
+            }
+            if let state = server.state, state.isActive || ["failed", "locked"].contains(state.phase) {
+                signInPage(server, state).padding(.leading, 20)
+            }
+            if server.enabled {
+                CantripChildFlowLayout(spacing: 12, lineSpacing: 4) {
+                    ForEach(Self.backends, id: \.self) { backend in
+                        Toggle(backend, isOn: binding(!server.disabledBackends.contains(backend)) {
+                            act(["action": "setBackend", "name": server.name, "backend": backend, "enabled": $0])
+                        })
+                        .accessibilityIdentifier("mcp.backend.\(server.name).\(backend)")
+                    }
+                    if let tabID {
+                        Toggle("This tab", isOn: binding(!(snapshot?.tabDisabled ?? []).contains(server.name)) {
+                            act(["action": "setTab", "name": server.name, "tab": tabID, "enabled": $0])
+                        })
+                    }
+                }
+                .font(.caption)
+                .padding(.leading, 20)
+            }
+        }
+        .toggleStyle(.checkbox)
+        .padding(.vertical, 4)
+        .disabled(working != nil)
+    }
+    #endif
+
+    /// Connect, or Reconnect after a sign-in failed.
+    private func connectButton(_ server: CantripMCPServer) -> some View {
+        Button(server.state?.phase == "failed" ? "Reconnect" : "Connect") { act(["action": "connect", "name": server.name]) }
+            .disabled(working != nil)
+            .accessibilityIdentifier("mcp.connect.\(server.name)")
+    }
+
+    @ViewBuilder
+    private func signInButton(_ server: CantripMCPServer) -> some View {
+        if server.oauth, server.enabled {
+            if server.state?.isActive == true {
+                Button("Cancel") { act(["action": "cancel", "name": server.name]) }
+            } else if server.state?.phase == "ready" {
+                Button("Sign Out") { act(["action": "signOut", "name": server.name]) }
+            } else {
+                connectButton(server)
+                    .buttonStyle(.borderedProminent)
             }
         }
     }
@@ -145,22 +224,11 @@ struct CantripMCPServersView: View {
     private func row(_ server: CantripMCPServer) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(status(server)).font(.subheadline).foregroundStyle(statusColor(server))
-                Text([server.remote ? "Remote" : "Local", server.relayed ? "through Cantrip" : nil].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary)
+                Text(Self.status(server)).font(.subheadline).foregroundStyle(statusColor(server))
+                Text(Self.kind(server)).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            if server.oauth, server.enabled {
-                if server.state?.isActive == true {
-                    Button("Cancel") { act(["action": "cancel", "name": server.name]) }
-                } else if server.state?.phase == "ready" {
-                    Button("Sign Out") { act(["action": "signOut", "name": server.name]) }
-                } else {
-                    Button("Connect") { act(["action": "connect", "name": server.name]) }
-                        .buttonStyle(.borderedProminent)
-                        .accessibilityIdentifier("mcp.connect.\(server.name)")
-                }
-            }
+            signInButton(server).fixedSize()
         }
         .disabled(working != nil)
     }
@@ -194,16 +262,19 @@ struct CantripMCPServersView: View {
     @ViewBuilder
     private func switches(_ server: CantripMCPServer) -> some View {
         Toggle("On", isOn: binding(server.enabled) { act(["action": "setEnabled", "name": server.name, "enabled": $0]) })
+            .accessibilityIdentifier("mcp.enabled.\(server.name)")
         if server.enabled {
             ForEach(Self.backends, id: \.self) { backend in
                 Toggle(backend, isOn: binding(!server.disabledBackends.contains(backend)) {
                     act(["action": "setBackend", "name": server.name, "backend": backend, "enabled": $0])
                 })
+                .accessibilityIdentifier("mcp.backend.\(server.name).\(backend)")
             }
             if let tabID {
                 Toggle("This tab", isOn: binding(!(snapshot?.tabDisabled ?? []).contains(server.name)) {
                     act(["action": "setTab", "name": server.name, "tab": tabID, "enabled": $0])
                 })
+                .accessibilityIdentifier("mcp.tab.\(server.name)")
             }
         }
     }
@@ -212,11 +283,13 @@ struct CantripMCPServersView: View {
         Binding(get: { value }, set: set)
     }
 
-    private func status(_ server: CantripMCPServer) -> String {
+    /// What a server's sign-in is doing, in the words Cantrip's own Settings uses.
+    static func status(_ server: CantripMCPServer) -> String {
         guard server.enabled else { return "Off" }
-        guard server.oauth else { return "Ready" }
+        guard server.oauth else { return server.credentials == true ? "Credentials in Mac keychain" : "Ready" }
         switch server.state?.phase {
-        case "ready": return "Signed in"
+        case "ready":
+            return server.state?.expiry.map { "Signed in · token until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Signed in"
         case "connecting": return "Signing in…"
         case "awaitingApproval": return "Waiting for your OK"
         case "needsLogin": return "Log in to finish"
@@ -224,6 +297,18 @@ struct CantripMCPServersView: View {
         case "failed": return "Sign-in failed"
         default: return "Not signed in"
         }
+    }
+
+    static func kind(_ server: CantripMCPServer) -> String {
+        [server.remote ? "Remote" : "Local", server.relayed ? "via Cantrip" : nil].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// "Local · All backends", or the backends that use it.
+    static func kindAndBackends(_ server: CantripMCPServer) -> String {
+        guard server.enabled else { return kind(server) }
+        let on = backends.filter { !server.disabledBackends.contains($0) }
+        let which = on.count == backends.count ? "All backends" : on.isEmpty ? "No backends" : on.joined(separator: ", ")
+        return "\(kind(server)) · \(which)"
     }
 
     private func statusColor(_ server: CantripMCPServer) -> Color {
