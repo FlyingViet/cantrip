@@ -37,6 +37,50 @@ extension SessionTabTests {
         precondition(target.removingPercentEncoding == url.absoluteString, "Chrome's one unescape gives back the whole address")
     }
 
+    /// A sign-in server's refusal reads as words with Retry, never as its raw JSON; an unreachable
+    /// server says so instead of claiming it has no sign-in settings.
+    static func testMCPSignInErrors(_ endpoints: MCPOAuth.Endpoints) async throws {
+        let supabase = "Pretty-print \n{\"code\":400,\"error_code\":\"validation_failed\",\"msg\":\"client_id is required\"}"
+        precondition(MCPOAuth.providerError(pageURL: "https://auth.example.com/auth/v1/oauth/authorize?response_type=code",
+                                            title: "", text: supabase) == "client_id is required (validation_failed)")
+        precondition(MCPOAuth.providerError(pageURL: "https://auth.example.com/oauth/error?error=invalid_request&error_description=Unknown%20client",
+                                            title: "Error", text: "Something went wrong") == "Unknown client (invalid_request)")
+        precondition(MCPOAuth.providerError(pageURL: "chrome-error://chromewebdata/", title: "auth.example.com", text: "")?
+            .contains("couldn't load") == true)
+        precondition(MCPOAuth.providerError(pageURL: "https://example.com/login?redirect_to=/oauth/consent", title: "Login",
+                                            text: "Welcome back Continue with Google or Continue {terms}") == nil,
+                     "An ordinary sign-in page isn't an error")
+
+        let refusing: MCPOAuth.Transport = { request in
+            let body = #"{"error":"invalid_request","error_description":"redirect_uri doesn't match"}"#
+            return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!)
+        }
+        let pending = MCPOAuth.Credential(endpoints: endpoints, clientID: "client-1", clientSecret: nil,
+                                          redirectURI: "http://127.0.0.1:5555/oauth/callback", accessToken: "",
+                                          refreshToken: nil, expiresAt: nil, signedInAt: Date())
+        do {
+            _ = try await MCPOAuth.requestTokens([("grant_type", "authorization_code"), ("code", "c")], credential: pending,
+                                                 now: Date(), transport: refusing)
+            preconditionFailure("A 400 from the token endpoint fails")
+        } catch let failure as MCPOAuth.Failure {
+            precondition(failure.message == "The sign-in server refused the token request: redirect_uri doesn't match (invalid_request).",
+                         failure.message)
+        }
+        do {
+            _ = try await MCPOAuth.register(endpoints, redirectURI: "http://127.0.0.1:5555/oauth/callback", transport: refusing)
+            preconditionFailure("A 400 from registration fails")
+        } catch let failure as MCPOAuth.Failure {
+            precondition(failure.kind == .registration && failure.message.contains("redirect_uri doesn't match"), failure.message)
+        }
+        let offline: MCPOAuth.Transport = { _ in throw URLError(.timedOut) }
+        do {
+            _ = try await MCPOAuth.discover(server: URL(string: "https://mcp.example.com/mcp")!, transport: offline)
+            preconditionFailure("An unreachable server fails")
+        } catch let failure as MCPOAuth.Failure {
+            precondition(failure.message.hasPrefix("Couldn't reach mcp.example.com"), failure.message)
+        }
+    }
+
     /// What Remote clients get: whether a server has a credential in the keychain, never its name or value.
     @MainActor
     static func testMCPRemoteList() async throws {
@@ -241,6 +285,7 @@ extension SessionTabTests {
         precondition(MCPOAuth.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk") == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
                      "S256 matches RFC 7636's example")
         testMCPSignInAddress(endpoints, verifier: verifier)
+        try await testMCPSignInErrors(endpoints)
 
         var clock = Date()
         let secrets = MCPSecrets.Store.memory()

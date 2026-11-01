@@ -323,6 +323,10 @@ final class MCPServerHub: ObservableObject {
             if let fields = callback.result { return fields }
             guard let page = try? await chrome.inspect(tab) else { continue }
             if page.url.hasPrefix(redirect) { continue }
+            // The sign-in server refused instead of showing a sign-in: say why, not its raw JSON.
+            if let refusal = MCPOAuth.providerError(pageURL: page.url, title: page.title, text: page.text) {
+                throw MCPOAuth.Failure(kind: .provider, message: "\(page.host) refused the sign-in: \(refusal). Retry, or check the server's address.")
+            }
             let shot = await chrome.screenshot(tab)
             if let label = page.approve, !page.login, !asked {
                 asked = true

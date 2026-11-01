@@ -3888,7 +3888,7 @@ private extension RemoteControlServer {
       for(const s of mcpState.servers){const row=el("div","mcp-row"),head=el("div","mcp-head");head.append(el("strong","",s.name),el("span","muted",`${s.remote?"remote":"local"}${s.relayed?" · via Cantrip":""}`));
         const[st,cls]=mcpStatus(s);head.append(el("span",`mcp-status ${cls}`,st));const phase=s.state?.phase;
         const button=(label,action,primary)=>{const b=el("button",`control${primary?" primary":""}`,label);b.type="button";b.onclick=()=>mcpAction({action,name:s.name});return b};
-        if(s.oauth&&s.enabled){if(["connecting","awaitingApproval","needsLogin"].includes(phase))head.append(button("Cancel","cancel"));else if(phase==="ready")head.append(button("Sign Out","signOut"));else head.append(button(phase==="failed"?"Reconnect":"Connect","connect",true))}
+        if(s.oauth&&s.enabled){if(["connecting","awaitingApproval","needsLogin"].includes(phase))head.append(button("Cancel","cancel"));else if(phase==="ready")head.append(button("Sign Out","signOut"));else head.append(button(phase==="failed"?"Retry":"Connect","connect",true))}
         row.append(head);
         const sw=el("div","mcp-switches");const check=(label,on,body)=>{const l=el("label");const c=document.createElement("input");c.type="checkbox";c.checked=on;c.onchange=()=>mcpAction({...body,name:s.name,enabled:c.checked});l.append(c," "+label);return l};
         sw.append(check("On",s.enabled,{action:"setEnabled"}));for(const b of backends)sw.append(check(b,!(s.disabledBackends||[]).includes(b),{action:"setBackend",backend:b}));if(mcpTab)sw.append(check("This tab",!tabOff.has(s.name),{action:"setTab",tab:mcpTab}));row.append(sw);

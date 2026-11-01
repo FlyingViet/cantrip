@@ -8,7 +8,7 @@ import Network
 /// Keychain only (`MCPSecrets.oauthAccount`).
 enum MCPOAuth {
     struct Failure: LocalizedError, Equatable {
-        enum Kind: String, Codable { case discovery, registration, denied, exchange, needsSignIn, keychain }
+        enum Kind: String, Codable { case discovery, registration, denied, provider, exchange, needsSignIn, keychain }
         let kind: Kind
         let message: String
         var errorDescription: String? { message }
@@ -62,6 +62,33 @@ enum MCPOAuth {
         (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
+    /// A sign-in server's reason in an error body, in words: `error_description`, Supabase's `msg`,
+    /// or `message`, with its code ("client_id is required (validation_failed)").
+    static func refusal(in object: [String: Any]) -> String? {
+        let reason = ["error_description", "msg", "message", "error"].lazy
+            .compactMap { object[$0] as? String }.first { !$0.isEmpty }
+        guard let reason else { return nil }
+        let code = [object["error_code"] as? String, object["error"] as? String].compactMap { $0 }.first { !$0.isEmpty && $0 != reason }
+        return code.map { "\(reason) (\($0))" } ?? reason
+    }
+
+    /// The sign-in server's refusal on the page agent Chrome shows instead of a sign-in: an OAuth
+    /// `error` in the address, a JSON error body (Chrome shows it under "Pretty-print"), or Chrome's
+    /// own page for an address it couldn't load. Nil for an ordinary page.
+    static func providerError(pageURL: String, title: String, text: String) -> String? {
+        if pageURL.hasPrefix("chrome-error:") { return "agent Chrome couldn't load the page (\(title.isEmpty ? "no answer" : title))" }
+        if let items = URLComponents(string: pageURL)?.queryItems,
+           let error = items.first(where: { $0.name == "error" })?.value, !error.isEmpty {
+            let description = items.first { $0.name == "error_description" }?.value.flatMap { $0.isEmpty ? nil : $0 }
+            return description.map { "\($0) (\(error))" } ?? error
+        }
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard body.count < 4_000, let open = body.firstIndex(of: "{"), let close = body.lastIndex(of: "}"), open < close,
+              body.distance(from: body.startIndex, to: open) <= 20,
+              let object = json(Data(body[open...close].utf8)) else { return nil }
+        return refusal(in: object)
+    }
+
     /// `resource_metadata="…"` from a 401's WWW-Authenticate header.
     static func resourceMetadataURL(fromChallenge header: String?) -> URL? {
         guard let header, let range = header.range(of: #"resource_metadata="([^"]+)""#, options: .regularExpression) else {
@@ -87,6 +114,11 @@ enum MCPOAuth {
 
     static func discover(server: URL, transport: Transport = defaultTransport) async throws -> Endpoints {
         func fail(_ text: String) -> Failure { Failure(kind: .discovery, message: text) }
+        // A server that couldn't be reached isn't a server without sign-in settings: say which it was.
+        var unreachable: Error?
+        func fetch(_ request: URLRequest) async -> (Data, HTTPURLResponse)? {
+            do { return try await transport(request) } catch { unreachable = error; return nil }
+        }
         // An unauthenticated request names its metadata in the challenge.
         var probe = URLRequest(url: server)
         probe.httpMethod = "POST"
@@ -94,7 +126,7 @@ enum MCPOAuth {
         probe.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         probe.httpBody = Data(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"Cantrip","version":"1"}}}"#.utf8)
         var metadataURLs: [URL] = []
-        if let (_, response) = try? await transport(probe), response.statusCode == 401,
+        if let (_, response) = await fetch(probe), response.statusCode == 401,
            let url = resourceMetadataURL(fromChallenge: response.value(forHTTPHeaderField: "WWW-Authenticate")) {
             metadataURLs.append(url)
         }
@@ -108,7 +140,7 @@ enum MCPOAuth {
         }
         var resource: [String: Any]?
         for url in metadataURLs {
-            if let (data, response) = try? await transport(URLRequest(url: url)), response.statusCode == 200,
+            if let (data, response) = await fetch(URLRequest(url: url)), response.statusCode == 200,
                let object = json(data), object["authorization_servers"] != nil {
                 resource = object
                 break
@@ -116,10 +148,13 @@ enum MCPOAuth {
         }
         guard let resource, let issuerText = (resource["authorization_servers"] as? [String])?.first,
               let issuer = URL(string: issuerText) else {
+            if let unreachable {
+                throw fail("Couldn't reach \(server.host ?? "the server") to find where it signs in: \(unreachable.localizedDescription)")
+            }
             throw fail("\(server.host ?? "The server") doesn't say where to sign in (no OAuth protected-resource metadata).")
         }
         for url in metadataCandidates(issuer: issuer) {
-            guard let (data, response) = try? await transport(URLRequest(url: url)), response.statusCode == 200,
+            guard let (data, response) = await fetch(URLRequest(url: url)), response.statusCode == 200,
                   let object = json(data), let authorize = object["authorization_endpoint"] as? String,
                   let token = object["token_endpoint"] as? String else { continue }
             let methods = object["code_challenge_methods_supported"] as? [String] ?? ["S256"]
@@ -129,6 +164,9 @@ enum MCPOAuth {
                              authorizationEndpoint: authorize, tokenEndpoint: token,
                              registrationEndpoint: object["registration_endpoint"] as? String,
                              scopes: resource["scopes_supported"] as? [String] ?? [])
+        }
+        if let unreachable {
+            throw fail("Couldn't reach \(issuer.host ?? issuerText) for its sign-in settings: \(unreachable.localizedDescription)")
         }
         throw fail("Couldn't read the sign-in server's settings at \(issuer.host ?? issuerText).")
     }
@@ -150,7 +188,9 @@ enum MCPOAuth {
         ])
         let (data, response) = try await transport(request)
         guard (200..<300).contains(response.statusCode), let object = json(data), let id = object["client_id"] as? String else {
-            throw Failure(kind: .registration, message: "Registering Cantrip with the sign-in server failed (HTTP \(response.statusCode)).")
+            let reason = refusal(in: json(data) ?? [:]).map { ": \($0)" } ?? ""
+            throw Failure(kind: .registration,
+                          message: "Registering Cantrip with the sign-in server failed\(reason) (HTTP \(response.statusCode)).")
         }
         return (id, object["client_secret"] as? String)
     }
@@ -213,7 +253,7 @@ enum MCPOAuth {
             let signInAgain = ["invalid_grant", "invalid_client", "unauthorized_client"].contains(code)
             throw Failure(kind: signInAgain ? .needsSignIn : .exchange, message: signInAgain
                 ? "The sign-in expired (\(code)). Connect again in Cantrip."
-                : "The sign-in server refused the token request (\(code)).")
+                : "The sign-in server refused the token request: \(refusal(in: object) ?? code).")
         }
         var updated = credential
         updated.accessToken = access

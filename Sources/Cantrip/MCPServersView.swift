@@ -179,7 +179,7 @@ struct MCPServerRow: View {
                 case .ready?:
                     Button("Sign Out") { Task { await hub.signOut(server.name) } }
                 case .failed?:
-                    Button("Reconnect") { hub.connect(server.name) }
+                    Button("Retry") { hub.connect(server.name) }
                 default:
                     Button("Connect") { hub.connect(server.name) }
                 }
