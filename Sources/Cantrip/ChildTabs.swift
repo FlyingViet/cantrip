@@ -76,7 +76,8 @@ struct ChildTab: Codable, Equatable, Identifiable {
     var actions: [String] {
         switch state {
         case .working, .needsInput: return ["open", "requeue", "discard"]
-        case .finished: return note == nil ? ["open"] : ["retry", "open"]
+        // Waiting to merge (the parent's checkout is busy or dirty): its work may already be in elsewhere.
+        case .finished: return note == nil ? ["open"] : ["retry", "discard", "open"]
         case .merging: return ["open"]
         case .merged, .noChanges, .discarded, .requeued: return ["open"]
         case .conflict: return ["resolve", "keepParent", "keepChild", "leave", "open"]
