@@ -995,6 +995,8 @@ private struct CantripHomeArtifactsResponse: Decodable {
     let artifacts: [CantripHomeArtifact]?
     let revision: String
     let unchanged: Bool?
+    /// The Mac streams original files (`…/file`) and folder zips (`…/folder`).
+    let supportsDownloads: Bool?
 }
 
 private struct CantripHomeArtifactDataResponse: Decodable {
@@ -1681,6 +1683,16 @@ struct CantripRemoteAPI {
         return URLSession(configuration: configuration)
     }()
 
+    /// Artifact downloads: a stall (no bytes for 30 s) fails, a long transfer doesn't.
+    private static let downloadSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 60 * 60
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration)
+    }()
+
     private static let imageSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -1958,14 +1970,15 @@ struct CantripRemoteAPI {
         try await request(path: "/api/v1/home/background/\(id.uuidString)/stop", method: "POST")
     }
 
-    func homeArtifacts() async throws -> (artifacts: [CantripHomeArtifact], revision: String) {
+    func homeArtifacts() async throws
+        -> (artifacts: [CantripHomeArtifact], revision: String, supportsDownloads: Bool) {
         guard let snapshot = try await homeArtifacts(ifChangedFrom: nil) else { throw CantripRemoteError.invalidResponse }
         return snapshot
     }
 
     /// nil when the Mac's artifacts still match `revision`.
     func homeArtifacts(ifChangedFrom revision: String?) async throws
-        -> (artifacts: [CantripHomeArtifact], revision: String)? {
+        -> (artifacts: [CantripHomeArtifact], revision: String, supportsDownloads: Bool)? {
         let response: CantripHomeArtifactsResponse = try await request(
             path: Self.path("/api/v1/home/artifacts", revision: revision)
         )
@@ -1974,7 +1987,7 @@ struct CantripRemoteAPI {
             return nil
         }
         guard let artifacts = response.artifacts else { throw CantripRemoteError.invalidResponse }
-        return (artifacts, response.revision)
+        return (artifacts, response.revision, response.supportsDownloads == true)
     }
 
     func homeBuilds() async throws -> CantripOTABuildsSnapshot {
@@ -2074,6 +2087,69 @@ struct CantripRemoteAPI {
         } catch CantripRemoteError.http(404, _) {
             return nil
         }
+    }
+
+    /// Streams a Home artifact's original file (or, with `folder`, a zip of its top-level folder)
+    /// to disk in `directory`, named by the Mac; it never sits whole in memory on either route.
+    func downloadHomeArtifact(id: UUID, folder: Bool, fallbackName: String, into directory: URL) async throws -> URL {
+        try Task.checkCancellation()
+        let path = "/api/v1/home/artifacts/\(id.uuidString)/\(folder ? "folder" : "file")"
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let partial = directory.appendingPathComponent(".download-\(UUID().uuidString)")
+        let status: Int
+        let disposition: String?
+        var errorBody = Data()
+        switch transport {
+        case .lan(let endpoint):
+            let response = try await CantripLANDownload(
+                endpoint: endpoint, token: token, path: path, destination: partial
+            ).run()
+            status = response.statusCode
+            disposition = response.fields["content-disposition"]
+            errorBody = response.errorBody
+        case .remote(let baseURL):
+            var request = URLRequest(
+                url: try endpoint(path: path, baseURL: baseURL),
+                cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30
+            )
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let temporary: URL
+            let response: URLResponse
+            do {
+                (temporary, response) = try await (urlSession ?? Self.downloadSession).download(for: request)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as URLError where error.code == .cancelled {
+                throw CancellationError()
+            } catch let error as URLError {
+                throw CantripRemoteError.transport(error.localizedDescription)
+            }
+            guard let http = response as? HTTPURLResponse else {
+                try? FileManager.default.removeItem(at: temporary)
+                throw CantripRemoteError.invalidResponse
+            }
+            status = http.statusCode
+            disposition = http.value(forHTTPHeaderField: "Content-Disposition")
+            if (200..<300).contains(status) {
+                try FileManager.default.moveItem(at: temporary, to: partial)
+            } else {
+                errorBody = (try? Data(contentsOf: temporary, options: .mappedIfSafe).prefix(64 * 1024)) ?? Data()
+                try? FileManager.default.removeItem(at: temporary)
+            }
+        }
+        if status == 401 { throw CantripRemoteError.authentication }
+        guard (200..<300).contains(status) else {
+            try? FileManager.default.removeItem(at: partial)
+            let message = (try? JSONDecoder().decode(CantripErrorResponse.self, from: errorBody))?.error
+                ?? HTTPURLResponse.localizedString(forStatusCode: status)
+            throw CantripRemoteError.http(status, message)
+        }
+        let name = CantripContentDisposition.fileName(disposition)
+            ?? CantripContentDisposition.sanitized(fallbackName) ?? "Artifact"
+        let destination = directory.appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.moveItem(at: partial, to: destination)
+        return destination
     }
 
     func deleteHomeArtifact(id: UUID) async throws {
@@ -2861,6 +2937,8 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var homeSummary: CantripRemoteSession?
     @Published private(set) var homeTasks: [CantripHomeTask] = []
     @Published private(set) var homeArtifacts: [CantripHomeArtifact] = []
+    /// The Mac streams original artifact files and folder zips (Save / Share).
+    @Published private(set) var homeArtifactsSupportDownloads = false
     let artifactThumbnails = CantripArtifactThumbnailStore()
     /// Backend "/" commands per session; views observe it directly so fetches don't redraw everything.
     let slashCommands = BackendSlashCommandStore()
@@ -3437,6 +3515,7 @@ final class CantripRemoteModel: ObservableObject {
             homeTasks = []
             homeTasksSupportReordering = false
             homeArtifacts = []
+            homeArtifactsSupportDownloads = false
             homeTasksFetched = nil
             homeArtifactsFetched = nil
             homeBuilds = nil
@@ -3503,6 +3582,7 @@ final class CantripRemoteModel: ObservableObject {
             homeTasks = []
             homeTasksSupportReordering = false
             homeArtifacts = []
+            homeArtifactsSupportDownloads = false
             homeTasksFetched = nil
             homeArtifactsFetched = nil
             homeBuilds = nil
@@ -3763,6 +3843,9 @@ final class CantripRemoteModel: ObservableObject {
             }
             if let snapshot = values.1 {
                 if homeArtifacts != snapshot.artifacts { homeArtifacts = snapshot.artifacts }
+                if homeArtifactsSupportDownloads != snapshot.supportsDownloads {
+                    homeArtifactsSupportDownloads = snapshot.supportsDownloads
+                }
                 homeArtifactsFetched = (snapshot.revision, snapshot.artifacts)
             }
             if (selectedSession?.backgroundInputCount ?? 0) > 0
@@ -4029,10 +4112,36 @@ final class CantripRemoteModel: ObservableObject {
         return image
     }
 
-    func homeArtifactFile(_ artifact: CantripHomeArtifact) async throws -> URL {
-        let data = try await performHistoryRead {
-            try await $0.homeArtifactData(id: artifact.id)
+    /// An artifact's original file, or with `folder` a zip of its top-level folder, streamed into
+    /// a private temporary folder for Save / Share (`CantripArtifactDownloadFolder.discard` after).
+    /// A Mac from before downloads sends single files the older, in-memory way.
+    func downloadHomeArtifact(_ artifact: CantripHomeArtifact, folder: Bool) async throws -> URL {
+        let directory = try CantripArtifactDownloadFolder.make()
+        do {
+            guard homeArtifactsSupportDownloads else {
+                guard !folder else {
+                    throw CantripRemoteError.http(404, "Update Cantrip on the Mac to save whole folders.")
+                }
+                let data = try await performHistoryRead { try await $0.homeArtifactData(id: artifact.id) }
+                let url = directory.appendingPathComponent(
+                    CantripContentDisposition.sanitized(artifact.fileName) ?? "Artifact"
+                )
+                try data.write(to: url, options: [.atomic])
+                return url
+            }
+            let fallback = folder ? "\(artifact.folder ?? "Artifacts").zip" : artifact.fileName
+            return try await performHistoryRead {
+                try await $0.downloadHomeArtifact(
+                    id: artifact.id, folder: folder, fallbackName: fallback, into: directory
+                )
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
         }
+    }
+
+    func homeArtifactFile(_ artifact: CantripHomeArtifact) async throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CantripHomeArtifacts", isDirectory: true)
             .appendingPathComponent(artifact.id.uuidString, isDirectory: true)
@@ -4048,6 +4157,22 @@ final class CantripRemoteModel: ObservableObject {
             ext.isEmpty || base.lowercased().hasSuffix(".\(ext.lowercased())")
                 ? base : "\(base).\(ext)"
         )
+        if homeArtifactsSupportDownloads {
+            // Streamed to disk, so a long video or recording never sits whole in memory.
+            let incoming = directory.appendingPathComponent("incoming", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: incoming) }
+            let downloaded = try await performHistoryRead {
+                try await $0.downloadHomeArtifact(
+                    id: artifact.id, folder: false, fallbackName: url.lastPathComponent, into: incoming
+                )
+            }
+            try? FileManager.default.removeItem(at: url)
+            try FileManager.default.moveItem(at: downloaded, to: url)
+            return url
+        }
+        let data = try await performHistoryRead {
+            try await $0.homeArtifactData(id: artifact.id)
+        }
         try data.write(to: url, options: [.atomic])
         return url
     }

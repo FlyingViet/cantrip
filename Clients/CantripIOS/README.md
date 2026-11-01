@@ -123,6 +123,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `GET /api/v1/sessions/{id}/commands` | The tab's (or Home's) backend slash commands, custom commands and skills for `/` suggestions; called only when the snapshot has `supportsBackendCommands` |
 | (fields) `supportsTabMentions`, `mentionable` | `@` suggestions in that composer; which tabs may be suggested. Picked tabs travel in the message text as `@[Title](cantrip-tab:<UUID>)` |
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
+| `GET /api/v1/home/artifacts/{id}/file`, `GET /api/v1/home/artifacts/{id}/folder` | Save / Share (`supportsDownloads` on the artifact list): the registered artifact's original bytes, or an uncompressed zip of every registered artifact in its top-level folder, streamed as an attachment with `Content-Length` and the file name in `Content-Disposition` (`filename*` UTF-8). Never gzipped; `404` for an unknown artifact or, for `folder`, one at the top level. Clients write the body straight to disk on both routes |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, usage limits (Copilot at the top level, Claude Code under `claude`, plus `activeBackend`), View Mac |
 | `GET/POST /api/v1/model-tiers` | **Settings › Models › Model tiers** (Mac-wide): `{tiers, backends: [{id, label, models: [{id, label, efforts, price}], cells: [{tier, label, choices: [{model, effort, label, offered, price}], isDefault, model, effort, note}]}], revision}`. A cell's page reorders, removes and adds models and sets each one's effort; each change POSTs `{revision, backend, tier, choices: [{model, effort}]}`, and **Use Cantrip's Defaults** `{revision, backend, tier, reset: true}`. `supportsModelTiers` on session lists; older hosts `404` and the section says to update the Mac |
@@ -755,8 +756,15 @@ duration); documents and audio keep type icons. Thumbnails load lazily, at most
 three at a time, and are cached in memory and on disk until the file changes;
 unpairing deletes them. An updated Mac host is needed for thumbnails; older hosts
 show the type icons. Images open in the full-screen viewer, and everything else
-opens in the system preview. The menu on each artifact can permanently delete
-its file from the paired Mac.
+opens in the system preview. The menu on each artifact (or touch and hold) saves
+the original file: **Save to Files…** and **Share…** (AirDrop, Mail, other apps)
+on iPhone and the Duo, **Save As…** in a Save panel opened in Downloads on
+Gateway Mac. Artifacts in a folder, such as a knowledge graph with its data and
+playbook, also save or share the whole folder as one zip. Files come straight
+from the paired Mac over Tailscale or the encrypted local network and are written
+to disk as they arrive; nothing gets a public link, and the temporary copy is
+removed once the share sheet or Files closes. The same menu can permanently
+delete the file from the paired Mac.
 
 **Builds** lists every app build on the Mac's private over-the-air install page
 (`~/Sites/ota`, published with `ota-publish.py`), read through the paired host's

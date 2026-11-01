@@ -1272,6 +1272,8 @@ struct CantripHomeArtifactsView: View {
     @State private var previewURL: URL?
     @State private var loadingID: UUID?
     @State private var previewError: String?
+    @State private var saveError: String?
+    @State private var supportsDownloads: Bool
     @State private var deleting: CantripHomeArtifact?
     @State private var viewerSources = CantripViewerSources()
 
@@ -1289,6 +1291,7 @@ struct CantripHomeArtifactsView: View {
         _isLoadingHomeData = State(initialValue: remote.isLoadingHomeData)
         _homeAvailable = State(initialValue: remote.selectedSession?.isCantripHome == true)
         _detailError = State(initialValue: remote.detailError)
+        _supportsDownloads = State(initialValue: remote.homeArtifactsSupportDownloads)
     }
 
     var body: some View {
@@ -1345,6 +1348,7 @@ struct CantripHomeArtifactsView: View {
         }
         .task { await remote.refreshHomeData() }
         .onReceive(remote.$homeArtifacts.removeDuplicates()) { artifacts = $0 }
+        .onReceive(remote.$homeArtifactsSupportDownloads.removeDuplicates()) { supportsDownloads = $0 }
         .onReceive(remote.$homeDataError.removeDuplicates()) { homeDataError = $0 }
         .onReceive(remote.$isLoadingHomeData.removeDuplicates()) { isLoadingHomeData = $0 }
         .onReceive(
@@ -1361,6 +1365,14 @@ struct CantripHomeArtifactsView: View {
             Button("OK", role: .cancel) { previewError = nil }
         } message: {
             Text(previewError ?? "")
+        }
+        .alert("Could not save artifact", isPresented: Binding(
+            get: { saveError != nil },
+            set: { if !$0 { saveError = nil } }
+        )) {
+            Button("OK", role: .cancel) { saveError = nil }
+        } message: {
+            Text(saveError ?? "")
         }
         .confirmationDialog(
             "Delete \(deleting?.title ?? "artifact")?",
@@ -1397,9 +1409,7 @@ struct CantripHomeArtifactsView: View {
             .disabled(loadingID != nil)
 
             Menu {
-                Button("Delete", systemImage: "trash", role: .destructive) {
-                    deleting = artifact
-                }
+                artifactActions(artifact)
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.subheadline.weight(.semibold))
@@ -1412,10 +1422,95 @@ struct CantripHomeArtifactsView: View {
             .accessibilityLabel("Actions for \(artifact.title)")
         }
         .contextMenu {
-            Button("Delete", systemImage: "trash", role: .destructive) {
-                deleting = artifact
+            artifactActions(artifact)
+        }
+    }
+
+    /// Save / Share for the original file, the same for its whole folder as a zip, then Delete.
+    @ViewBuilder
+    private func artifactActions(_ artifact: CantripHomeArtifact) -> some View {
+        #if os(macOS)
+        Button("Save As…", systemImage: "arrow.down.circle") {
+            save(artifact, folder: false, action: .saveCopy)
+        }
+        #else
+        Button("Save to Files…", systemImage: "folder") {
+            save(artifact, folder: false, action: .saveCopy)
+        }
+        Button("Share…", systemImage: "square.and.arrow.up") {
+            save(artifact, folder: false, action: .share)
+        }
+        #endif
+        if let folder = artifact.folder, supportsDownloads {
+            Section("\(folder) folder") {
+                #if os(macOS)
+                Button("Save Folder as Zip…", systemImage: "doc.zipper") {
+                    save(artifact, folder: true, action: .saveCopy)
+                }
+                #else
+                Button("Save Folder to Files…", systemImage: "doc.zipper") {
+                    save(artifact, folder: true, action: .saveCopy)
+                }
+                Button("Share Folder…", systemImage: "square.and.arrow.up.on.square") {
+                    save(artifact, folder: true, action: .share)
+                }
+                #endif
             }
         }
+        Divider()
+        Button("Delete", systemImage: "trash", role: .destructive) {
+            deleting = artifact
+        }
+    }
+
+    /// Downloads the original file (or the folder's zip) over the paired connection, then hands
+    /// it to Save to Files / the share sheet (iOS) or a Save panel opened in Downloads (Mac).
+    private func save(_ artifact: CantripHomeArtifact, folder: Bool, action: CantripArtifactSaveAction) {
+        guard loadingID == nil else { return }
+        let label = folder ? "the \(artifact.folder ?? "artifact") folder" : artifact.title
+        #if os(macOS)
+        let suggested = folder ? "\(artifact.folder ?? "Artifacts").zip" : artifact.fileName
+        CantripArtifactSavePanel.chooseDestination(suggestedName: suggested) { destination in
+            guard let destination else { return }
+            download(artifact, folder: folder, label: label) { file in
+                try CantripArtifactSavePanel.place(file, at: destination)
+                Self.announce("Saved \(destination.lastPathComponent).")
+            }
+        }
+        #else
+        download(artifact, folder: folder, label: label) { file in
+            let shown = CantripArtifactExporter.present(file, action: action) { saved in
+                CantripArtifactDownloadFolder.discard(file)
+                if saved, action == .saveCopy { Self.announce("Saved \(file.lastPathComponent).") }
+            }
+            if !shown { CantripArtifactDownloadFolder.discard(file) }
+        }
+        #endif
+    }
+
+    private func download(_ artifact: CantripHomeArtifact, folder: Bool, label: String,
+                          then deliver: @escaping @MainActor (URL) throws -> Void) {
+        loadingID = artifact.id
+        Self.announce("Downloading \(label)…")
+        Task {
+            defer { loadingID = nil }
+            do {
+                let file = try await remote.downloadHomeArtifact(artifact, folder: folder)
+                do {
+                    try deliver(file)
+                } catch {
+                    CantripArtifactDownloadFolder.discard(file)
+                    throw error
+                }
+            } catch is CancellationError {
+            } catch {
+                saveError = error.localizedDescription
+            }
+        }
+    }
+
+    private static func announce(_ text: String) {
+        AccessibilityNotification.Announcement(text).post()
     }
 
     /// Images open in the zoomable viewer (swipe to dismiss); everything else in Quick Look.
