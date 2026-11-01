@@ -15,7 +15,72 @@ extension SessionTabTests {
         try await testMCPRemoteList()
         try await testMCPClientReuse()
         try await testMCPSignInSettingChange()
+        try await testMCPAccessProbe()
         print("MCP sharing: import, backend configs, OAuth with single-flight refresh, the relay and the remote list passed")
+    }
+
+    /// Whether a remote server needs a sign-in, asked without one: one that answers and names no
+    /// sign-in server needs none (kiwi); one that answers anonymously but names a sign-in server
+    /// (seats.aero) or answers 401 (supabase) signs in with OAuth; anything else is unknown.
+    @MainActor
+    static func testMCPAccessProbe() async throws {
+        final class Calls: @unchecked Sendable {
+            let lock = NSLock()
+            var list: [String] = []
+            var credentials = 0
+        }
+        let calls = Calls()
+        // Sendable, so not tied to the main actor, which the batch below blocks while it waits.
+        let transport: MCPOAuth.Transport = { @Sendable request in
+            let url = request.url!, method = request.httpMethod ?? "GET"
+            calls.lock.withLock {
+                calls.list.append("\(method) \(url.host ?? "")\(url.path)")
+                if request.value(forHTTPHeaderField: "Authorization") != nil { calls.credentials += 1 }
+            }
+            func reply(_ status: Int, _ body: String = "", _ headers: [String: String] = [:]) -> (Data, HTTPURLResponse) {
+                (Data(body.utf8), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: headers)!)
+            }
+            switch (method, url.host ?? "", url.path) {
+            case ("POST", "open.example.com", ""):
+                return reply(200, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{}}\n\n",
+                             ["Content-Type": "text/event-stream", "Mcp-Session-Id": "probe-1"])
+            case ("POST", "anonymous.example.com", "/mcp"):
+                return reply(200, #"{"jsonrpc":"2.0","id":0,"result":{}}"#, ["Content-Type": "application/json"])
+            case ("GET", "anonymous.example.com", "/.well-known/oauth-protected-resource/mcp"):
+                return reply(200, #"{"resource":"https://anonymous.example.com/mcp","authorization_servers":["https://anonymous.example.com"]}"#)
+            case ("POST", "private.example.com", "/mcp"):
+                return reply(401, #"{"message":"No access token provided"}"#,
+                             ["WWW-Authenticate": #"Bearer resource_metadata="https://private.example.com/.well-known/oauth-protected-resource/mcp""#])
+            case ("POST", "refusing.example.com", "/mcp"):
+                return reply(403)
+            case (_, "offline.example.com", _):
+                throw URLError(.cannotFindHost)
+            default:
+                return reply(404)
+            }
+        }
+        func access(_ address: String) async -> MCPOAuth.Access {
+            await MCPOAuth.detectAccess(server: URL(string: address)!, headers: ["X-Client": "cantrip"], transport: transport)
+        }
+        let open = await access("https://open.example.com")
+        precondition(open == .open, "Answers and names no sign-in server: \(open)")
+        precondition(calls.list.contains("DELETE open.example.com"), "The session the probe opened is closed: \(calls.list)")
+        let anonymous = await access("https://anonymous.example.com/mcp")
+        precondition(anonymous == .oauth, "Answers anonymously but names a sign-in server: \(anonymous)")
+        let privateServer = await access("https://private.example.com/mcp")
+        precondition(privateServer == .oauth)
+        let refusing = await access("https://refusing.example.com/mcp")
+        precondition(refusing == .unknown("it answered HTTP 403"), "\(refusing)")
+        guard case .unknown(let why) = await access("https://offline.example.com/mcp"), why.hasPrefix("couldn't reach offline.example.com") else {
+            preconditionFailure("An unreachable server is unknown, with why")
+        }
+        precondition(calls.credentials == 0, "The probe never sends a credential")
+
+        let batch = MCPOAuth.detectAccessWaiting([
+            MCPServer(name: "flights", url: "https://open.example.com"),
+            MCPServer(name: "awards", url: "https://anonymous.example.com/mcp"),
+        ], transport: transport)
+        precondition(batch == ["flights": .open, "awards": .oauth], "Several at once, for `cantrip mcp migrate`: \(batch)")
     }
 
     /// A server whose sign-in setting changes drops the state shown for the old one at once: one
@@ -60,6 +125,15 @@ extension SessionTabTests {
         precondition(hub.states["flights"] == nil, "The old Ready is dropped at once")
         await hub.refreshStates()
         precondition(hub.states["flights"]?.phase == .needsSignIn && MCPRegistry.load()?.servers[0].oauth == true)
+
+        // Connect asks first: a server that answers without signing in needs no sign-in, and shows Ready.
+        hub.accessProbe = { _, _ in .open }
+        hub.connect("flights")
+        for _ in 0..<200 where hub.states["flights"]?.phase != .ready { try await Task.sleep(for: .milliseconds(10)) }
+        precondition(hub.states["flights"]?.phase == .ready && hub.server("flights")?.oauth == false
+                     && MCPRegistry.load()?.servers[0].oauth == false,
+                     "Connect switches it to no sign-in: \(String(describing: hub.states["flights"]))")
+        precondition(HostControl.describe(hub).contains("flights: remote, via relay, ready"))
     }
 
     /// The authorize address carries everything the sign-in server needs, and reaches agent Chrome
@@ -586,12 +660,24 @@ extension SessionTabTests {
         let secrets = MCPSecrets.Store.memory()
         let originalCopilot = try Data(contentsOf: MCPMigration.copilotConfig)
 
-        let preview = try MCPMigration.run(dryRun: true, secrets: secrets, claudePath: fakeClaude.path)
+        // Remote servers without a credential are asked whether they need a sign-in (never the network here).
+        var asked: [String] = []
+        let access: ([MCPServer]) -> [String: MCPOAuth.Access] = { servers in
+            asked += servers.map(\.name)
+            return Dictionary(uniqueKeysWithValues: servers.map { ($0.name, $0.name == "errors" ? .open : .oauth) })
+        }
+        let preview = try MCPMigration.run(dryRun: true, secrets: secrets, claudePath: fakeClaude.path, access: access)
         let afterPreview = try Data(contentsOf: MCPMigration.copilotConfig)
         precondition(preview.dryRun && MCPRegistry.load() == nil && afterPreview == originalCopilot, "A preview changes nothing")
-        let report = try MCPMigration.run(dryRun: false, secrets: secrets, claudePath: fakeClaude.path)
+        precondition(preview.notes.contains("errors answers without signing in, so it needs no sign-in."), "\(preview.notes)")
+        let report = try MCPMigration.run(dryRun: false, secrets: secrets, claudePath: fakeClaude.path, access: access)
         precondition(report.servers == ["errors", "flows", "mobbin", "notes", "vault"] && report.secretsMoved == 2)
         precondition(MCPRegistry.load()?.importedAt != nil, "The list is saved")
+        precondition(asked.sorted() == ["errors", "errors", "mobbin", "mobbin"], "Only remote servers without a credential are asked: \(asked)")
+        let signIns = Dictionary(uniqueKeysWithValues: (MCPRegistry.load()?.servers ?? []).map { ($0.name, $0.oauth) })
+        precondition(signIns["errors"] == false && signIns["mobbin"] == true && signIns["flows"] == false,
+                     "One that answers without signing in needs none; one that asks for it signs in with OAuth: \(signIns)")
+        precondition(report.notes.contains("mobbin signs in with OAuth: `cantrip mcp connect mobbin` (or Connect in Settings)."), "\(report.notes)")
         let moved = try secrets.string(MCPSecrets.headerAccount("flows", "Authorization"))
         precondition(moved == "Bearer secret-flows")
 
@@ -611,9 +697,12 @@ extension SessionTabTests {
                      "Claude Code's own servers become relay entries through its CLI")
 
         // A second run (configs now hold relay entries) keeps the list as it is.
-        let again = try MCPMigration.run(dryRun: false, secrets: secrets, claudePath: fakeClaude.path)
+        asked = []
+        let again = try MCPMigration.run(dryRun: false, secrets: secrets, claudePath: fakeClaude.path, access: access)
         precondition(again.servers == report.servers && MCPRegistry.load()?.servers.first { $0.name == "vault" }?.tools == ["status", "get"],
                      "Re-running doesn't lose a server's settings")
+        precondition(asked.isEmpty && MCPRegistry.load()?.servers.first { $0.name == "errors" }?.oauth == false,
+                     "Servers already in the list aren't asked again and keep their sign-in setting")
 
         let restored = try MCPMigration.restore(secrets: secrets, claudePath: fakeClaude.path)
         let restoredCopilot = try Data(contentsOf: MCPMigration.copilotConfig)
@@ -643,7 +732,7 @@ extension SessionTabTests {
         let hub = MCPServerHub(signIns: MCPSignIns(secrets: secrets), snapshot: MCPRegistry.Snapshot())
         func migrate() -> [String: Any] {
             HostControl.migrate(dryRun: false, hub: hub) {
-                try MCPMigration.run(dryRun: $0, secrets: secrets, claudePath: "", locator: locator)
+                try MCPMigration.run(dryRun: $0, secrets: secrets, claudePath: "", locator: locator, access: { _ in [:] })
             }
         }
         let originalCopilot = try Data(contentsOf: MCPMigration.copilotConfig)
@@ -655,7 +744,7 @@ extension SessionTabTests {
         precondition(missingText.hasPrefix("Nothing changed:") && missingText.contains("Claude Code's CLI (claude)"), missingText)
         let copilotAfterMissing = try Data(contentsOf: MCPMigration.copilotConfig)
         precondition(MCPRegistry.load() == nil && copilotAfterMissing == originalCopilot, "Nothing is written when Claude Code's CLI can't run")
-        let preview = try MCPMigration.run(dryRun: true, secrets: secrets, claudePath: "", locator: locator)
+        let preview = try MCPMigration.run(dryRun: true, secrets: secrets, claudePath: "", locator: locator, access: { _ in [:] })
         precondition(preview.notes.contains { $0.contains("Claude Code's CLI (claude)") }, "The preview warns too")
 
         // `claude` is found but won't start: the other configs are already written by then.

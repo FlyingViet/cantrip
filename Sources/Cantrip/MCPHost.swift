@@ -155,27 +155,53 @@ enum MCPMigration {
     /// `Incomplete` when it stops after changing something.
     @discardableResult
     static func run(dryRun: Bool, secrets: MCPSecrets.Store = .keychain, claudePath: String = AppSettings.shared.claudePath,
-                    locator: ToolLocator = .shared, now: Date = Date()) throws -> Report {
+                    locator: ToolLocator = .shared, now: Date = Date(),
+                    access: ([MCPServer]) -> [String: MCPOAuth.Access] = { MCPOAuth.detectAccessWaiting($0) }) throws -> Report {
         let copilot = object(at: copilotConfig), claude = object(at: claudeConfig)
         let imported = MCPRegistry.importConfigs(copilot: copilot, claude: claude)
         let previous = MCPRegistry.load()
         var servers = imported.servers
+        var unasked: [MCPServer] = []
         for index in servers.indices {
             // A server already in the list keeps its switches; relay entries re-import as themselves.
-            if let known = previous?.servers.first(where: { $0.name == servers[index].name }) {
+            let known = previous?.servers.first(where: { $0.name == servers[index].name })
+            if let known {
                 if servers[index].command == MCPBackendConfig.relayScript || servers[index].args.first == known.name {
                     servers[index] = known
-                } else {
-                    servers[index].enabled = known.enabled
-                    servers[index].disabledBackends = known.disabledBackends
+                    continue
                 }
+                servers[index].enabled = known.enabled
+                servers[index].disabledBackends = known.disabledBackends
+            }
+            // A remote server without a credential of its own is asked whether it needs a sign-in,
+            // unless it's already in the list at that address.
+            guard servers[index].isRemote, servers[index].secretHeaders.isEmpty else { continue }
+            if let known, known.url == servers[index].url, known.secretHeaders.isEmpty {
+                servers[index].oauth = known.oauth
+            } else {
+                unasked.append(servers[index])
+            }
+        }
+        var accessNotes: [String] = []
+        for (name, found) in (unasked.isEmpty ? [:] : access(unasked)).sorted(by: { $0.key < $1.key }) {
+            guard let index = servers.firstIndex(where: { $0.name == name }) else { continue }
+            switch found {
+            case .open:
+                servers[index].oauth = false
+                accessNotes.append("\(name) answers without signing in, so it needs no sign-in.")
+            case .oauth:
+                servers[index].oauth = true
+                accessNotes.append("\(name) signs in with OAuth: `cantrip mcp connect \(name)` (or Connect in Settings).")
+            case .unknown(let why):
+                servers[index].oauth = true
+                accessNotes.append("\(name): couldn't tell whether it needs a sign-in (\(why)), so it's set to sign in with OAuth; Connect checks again.")
             }
         }
         for known in previous?.servers ?? [] where !servers.contains(where: { $0.name == known.name }) { servers.append(known) }
         servers = MCPBackendConfig.droppingExportAliases(servers)
         servers.sort { $0.name < $1.name }
         var report = Report(servers: servers.map(\.name), relayed: servers.filter(\.isRelayed).map(\.name),
-                            secretsMoved: imported.secrets.count, notes: imported.notes, dryRun: dryRun)
+                            secretsMoved: imported.secrets.count, notes: imported.notes + accessNotes, dryRun: dryRun)
         let snapshot = MCPRegistry.Snapshot(servers: servers, importedAt: previous?.importedAt ?? now)
         let claudeServers = claude?["mcpServers"] as? [String: Any] ?? [:]
         let claudeNames = claudeServers.keys.sorted().filter { name in snapshot.servers.contains { $0.name == name } }

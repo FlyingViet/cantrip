@@ -217,6 +217,13 @@ cantrip mcp connect mobbin     # sign in to a remote server
   PATH when that's blank). If that CLI can't run, `--apply` stops before
   changing anything; a run that stops partway lists what it already updated,
   and running it again finishes the rest.
+- A remote server with no credential in its config is asked, without one,
+  whether it needs a sign-in. One that answers and names no sign-in server
+  (Kiwi.com's) needs none and is Ready at once; one that answers 401, or names
+  a sign-in server in its OAuth metadata even though it also serves anonymous
+  callers (seats.aero), signs in with OAuth. If it can't be told (offline),
+  it's set to sign in, and **Connect** asks again before opening a sign-in.
+  Changing a server's sign-in setting updates its state right away.
 - From then on Cantrip writes each backend's config from the list:
   Copilot's `mcp-config.json`, a per-tab `--mcp-config` file for Claude Code,
   `-c mcp_servers…` overrides for Codex and Antigravity's
