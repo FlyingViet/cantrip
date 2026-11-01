@@ -4,17 +4,23 @@ import Network
 /// The `model` names the endpoint accepts.
 /// - `auto` (also empty, and any name that isn't a backend, so clients written for another
 ///   server keep working): the Mac's backend, then its usage-limit backup chain.
+/// - `fast`, `standard`, `deep`: the same chain at that model tier, each backend on its own
+///   models for it (backups pinned to an exact model keep it).
 /// - `copilot`, `claude`, `antigravity`, `local`: that backend with its default model, no backups.
 /// - `copilot:gpt-5.6-sol`: that backend and model, no backups.
+/// - `copilot:deep`: that backend's models for the tier, in order, no backups.
 enum OpenAIEndpointModel: Equatable {
     case auto
+    case tier(ModelTier)
     case backend(BackendKind, model: String)
 
     static func parse(_ name: String?) -> OpenAIEndpointModel {
         let trimmed = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let tier = ModelTier(model: trimmed) { return .tier(tier) }
         let parts = trimmed.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
         guard let kind = HostControl.backend(named: parts[0]), !parts[0].isEmpty else { return .auto }
-        return .backend(kind, model: parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : "")
+        let model = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+        return .backend(kind, model: ModelTier(model: model)?.rawValue ?? model)
     }
 
     /// The short name requests and `/v1/models` use for a backend.
@@ -164,8 +170,9 @@ extension AppSettings {
               !openAIEndpointModel.trimmingCharacters(in: .whitespaces).isEmpty else { return target }
         let catalog = tabModelCatalog(for: kind)
         if !model.isEmpty {
-            // An empty list hasn't loaded yet: trust the choice.
-            guard catalog.models.isEmpty || catalog.models.contains(where: { $0.id == model }) || kind == .localModel else {
+            // An empty list hasn't loaded yet: trust the choice. A tier is always offered.
+            guard catalog.models.isEmpty || catalog.models.contains(where: { $0.id == model }) || kind == .localModel
+                    || (ModelTier(model: model) != nil && Self.tierBackends.contains(kind)) else {
                 return target
             }
             target.model = model
@@ -176,25 +183,56 @@ extension AppSettings {
     }
 
     /// The Mac's backend first, then the usage-limit backups, each with its own model (a backend
-    /// can come back with another model), each backend and model once.
-    func openAIEndpointChain() -> [OneShotTarget] {
+    /// can come back with another model), each backend and model once. With `tier`, the Mac's
+    /// backend and every backup left on its default model run that tier; a backup pinned to a
+    /// tier runs its own. A tier stays a tier here (`model` "deep"); the planner expands it.
+    func openAIEndpointChain(tier: ModelTier? = nil) -> [OneShotTarget] {
         var seen = Set<FallbackEntry>()
         var chain: [OneShotTarget] = []
         func add(_ target: OneShotTarget) {
             let key = FallbackEntry(backend: target.backend.rawValue, model: effectiveModel(target.backend, chosen: target.model))
             if seen.insert(key).inserted { chain.append(target) }
         }
-        add(openAIEndpointTarget(for: backend))
+        if let tier, Self.tierBackends.contains(backend) {
+            add(OneShotTarget(backend: backend, model: tier.rawValue))
+        } else {
+            add(openAIEndpointTarget(for: backend))
+        }
         for entry in limitFallbackEntries {
             guard let kind = entry.kind else { continue }
             if kind == .localModel {
                 add(openAIEndpointTarget(for: kind))
+            } else if Self.tierBackends.contains(kind), let named = ModelTier(model: entry.model) ?? (entry.model.isEmpty ? tier : nil) {
+                add(OneShotTarget(backend: kind, model: named.rawValue, effort: entry.effort))
             } else {
                 let selection = fallbackRun(for: entry).selection ?? tabModelDefaults(for: kind)
                 add(OneShotTarget(backend: kind, model: selection.model, effort: selection.effort))
             }
         }
         return chain
+    }
+
+    /// A tier target as its backend's models for the tier, in order (the ones the backend offers),
+    /// each at the effort the target names when its model takes it, else the tier's own. Others
+    /// are returned as they are.
+    func expandedTargets(_ target: OneShotTarget) -> [OneShotTarget] {
+        guard let tier = ModelTier(model: target.model) else { return [target] }
+        guard Self.tierBackends.contains(target.backend) else {
+            return [OneShotTarget(backend: target.backend, model: target.backend == .localModel ? localModel : "", tier: tier)]
+        }
+        let catalog = tabModelCatalog(for: target.backend)
+        let ids = Set(catalog.models.map(\.id))
+        let offered = tierChoices(tier, on: target.backend).filter { ids.isEmpty || ids.contains($0.model) }
+        guard !offered.isEmpty else {
+            // None offered: the backend's default model.
+            let defaults = tabModelDefaults(for: target.backend)
+            return [OneShotTarget(backend: target.backend, model: defaults.model, effort: defaults.effort, tier: tier)]
+        }
+        return offered.map { choice in
+            let efforts = catalog.info(choice.model)?.reasoningEfforts
+            let effort = [target.effort, choice.effort].first { !$0.isEmpty && (efforts == nil || efforts?.contains($0) == true) } ?? ""
+            return OneShotTarget(backend: target.backend, model: choice.model, effort: effort, tier: tier)
+        }
     }
 }
 
@@ -206,6 +244,8 @@ enum OpenAIEndpointPlanner {
         switch request.model {
         case .auto:
             candidates = settings.openAIEndpointChain()
+        case .tier(let tier):
+            candidates = settings.openAIEndpointChain(tier: tier)
         case .backend(let kind, let model):
             var target = settings.openAIEndpointTarget(for: kind)
             if !model.isEmpty, model != target.model {
@@ -214,6 +254,11 @@ enum OpenAIEndpointPlanner {
                 target.contextTier = ""
             }
             candidates = [target]
+        }
+        // A tier runs its models on each backend in order: one at its own limit moves to the next.
+        var seen = Set<FallbackEntry>()
+        candidates = candidates.flatMap(settings.expandedTargets).filter {
+            seen.insert(FallbackEntry(backend: $0.backend.rawValue, model: settings.effectiveModel($0.backend, chosen: $0.model))).inserted
         }
         var plan = OpenAIEndpointPlan()
         for var target in candidates {
@@ -310,6 +355,9 @@ final class OpenAIEndpointService {
         var limits: [Date] = plan.skipped.compactMap(\.limitedUntil)
         var failedOnlyOnLimits = true
         for target in plan.targets {
+            // A limit on the whole backend, met earlier in this request, skips its other models.
+            if !tried.isEmpty, tracker.limitedUntil(target.backend, model: settings.effectiveModel(target.backend, chosen: target.model),
+                                                    now: now()) != nil { continue }
             do {
                 let result = try await runner.run(request.prompt, on: target, timeout: timeout)
                 return .answered(result, target: target, fellBackFrom: tried)
@@ -345,7 +393,8 @@ final class OpenAIEndpointService {
     /// `GET /v1/models`: `auto`, then each usable backend's models.
     func models(settings: AppSettings = .shared) -> [[String: Any]] {
         var data: [[String: Any]] = [["id": "auto", "object": "model", "created": 0, "owned_by": "cantrip"]]
-        var seen: Set<String> = ["auto"]
+            + ModelTier.allCases.map { ["id": $0.rawValue, "object": "model", "created": 0, "owned_by": "cantrip"] }
+        var seen: Set<String> = Set(["auto"] + ModelTier.allCases.map(\.rawValue))
         func add(_ id: String, _ owner: BackendKind) {
             guard seen.insert(id).inserted else { return }
             data.append(["id": id, "object": "model", "created": 0, "owned_by": OpenAIEndpointModel.alias(owner)])
@@ -357,6 +406,9 @@ final class OpenAIEndpointService {
             if kind == .localModel {
                 if !settings.localModel.isEmpty { add(OpenAIEndpointModel.name(kind, model: settings.localModel), kind) }
                 continue
+            }
+            if AppSettings.tierBackends.contains(kind) {
+                for tier in ModelTier.allCases { add(OpenAIEndpointModel.name(kind, model: tier.rawValue), kind) }
             }
             for model in settings.tabModelCatalog(for: kind).models where !model.id.isEmpty {
                 add(OpenAIEndpointModel.name(kind, model: model.id), kind)
@@ -373,13 +425,15 @@ final class OpenAIEndpointService {
         let entries: [[String: Any]] = chain.map { target in
             var entry: [String: Any] = ["backend": target.backend.rawValue, "model": target.model, "effort": target.effort]
             if let reason = OneShotCompletion.unsupportedReason(target.backend) { entry["unavailable"] = reason }
-            entry["limitedUntil"] = tracker.limitedUntil(target.backend, model: settings.effectiveModel(target.backend, chosen: target.model),
+            let model = settings.effectiveModel(target.backend, chosen: settings.resolvedModel(target.backend, chosen: target.model, tracker: tracker))
+            entry["limitedUntil"] = tracker.limitedUntil(target.backend, model: model,
                                                          now: now).map { ISODate.string(from: $0) as Any } ?? NSNull()
             return entry
         }
         let usable = chain.contains {
             OneShotCompletion.unsupportedReason($0.backend) == nil
-                && tracker.limitedUntil($0.backend, model: settings.effectiveModel($0.backend, chosen: $0.model), now: now) == nil
+                && tracker.limitedUntil($0.backend, model: settings.effectiveModel($0.backend, chosen: settings.resolvedModel($0.backend, chosen: $0.model, tracker: tracker)),
+                                        now: now) == nil
         }
         return [
             "status": usable ? "ok" : "limited", "service": "cantrip-openai",

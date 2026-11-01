@@ -38,6 +38,7 @@ extension SessionTabTests {
         try testOneShotParsers()
         testEndpointLedger()
         try await testOpenAIEndpointRouting()
+        try await testOpenAIEndpointTiers()
         try await testOpenAIEndpointHTTP()
         print("OpenAI endpoint: requests, model names, backup chain, limits, parsers, per-consumer usage and HTTP passed")
     }
@@ -265,6 +266,77 @@ extension SessionTabTests {
         let decoded = try! JSONDecoder().decode(EndpointUsageSnapshot.self, from: JSONEncoder().encode(snapshot))
         precondition(decoded == snapshot && decoded.listening && decoded.port == 11439)
         precondition(ledger.totals(days: 1, now: now)["reader-app"]?.premiumRequests == 0.33)
+    }
+
+    // MARK: - Model tiers
+
+    /// `deep` runs the chain at the deep tier and `copilot:deep` one backend's deep models: a model
+    /// at its own limit moves to the tier's next, a whole-backend limit skips the backend.
+    @MainActor
+    private static func testOpenAIEndpointTiers() async throws {
+        precondition(OpenAIEndpointModel.parse("deep") == .tier(.deep) && OpenAIEndpointModel.parse(" Fast ") == .tier(.fast))
+        precondition(OpenAIEndpointModel.parse("copilot:Deep") == .backend(.copilot, model: "deep"))
+        let settings = AppSettings.shared
+        let saved = (settings.dotfileValues, settings.copilotModelCatalog, settings.claudeModelCatalog, settings.agyAvailableModels)
+        defer {
+            settings.applySettings(saved.0)
+            settings.copilotModelCatalog = saved.1
+            settings.claudeModelCatalog = saved.2
+            settings.agyAvailableModels = saved.3
+        }
+        let efforts = ["low", "medium", "high", "xhigh", "max"]
+        settings.copilotModelCatalog = ["claude-opus-5.5", "gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-sol", "claude-haiku-5.5"]
+            .map { CopilotModelInfo(id: $0, reasoningEfforts: efforts) }
+        settings.claudeModelCatalog = ["opus", "sonnet", "haiku"].map { CopilotModelInfo(id: $0, reasoningEfforts: efforts) }
+        settings.agyAvailableModels = AppSettings.agyDefaultModels
+        settings.applySettings(["backend": "Copilot", "openAIEndpointModel": "", "openAIEndpointEffort": "",
+                                "limitFallbackEntries": [["backend": "Claude Code", "model": "", "effort": ""],
+                                                         ["backend": "Antigravity", "model": "gemini-3.8-flash-medium", "effort": ""]]])
+        settings.modelTiers = ModelTierMap()
+        let tracker = BackendLimitTracker()
+        let clock = Date(timeIntervalSince1970: 1_800_000_000)
+        func request(_ model: String) throws -> OpenAIEndpointRequest {
+            try OpenAIEndpointRequest.parse(json(["model": model, "messages": [["role": "user", "content": "Hi"]]]))
+        }
+        let deep = OpenAIEndpointPlanner.plan(try request("deep"), settings: settings, tracker: tracker, now: clock)
+        precondition(deep.targets.prefix(4).map { "\($0.backend.rawValue)/\($0.model)/\($0.effort)" } == [
+            "Copilot/claude-opus-5.5/xhigh", "Copilot/gpt-6.1-sol/xhigh", "Copilot/gpt-6-astra/xhigh", "Claude Code/opus/xhigh",
+        ] && deep.targets.count == 5 && deep.targets[4].model == "gemini-3.8-flash-medium",
+                     "the chain at deep keeps a backup's exact model: \(deep.targets)")
+        precondition(deep.targets.prefix(4).allSatisfy { $0.tier == .deep } && deep.targets[4].tier == nil)
+        let fast = OpenAIEndpointPlanner.plan(try request("antigravity:fast"), settings: settings, tracker: tracker, now: clock)
+        precondition(fast.targets.map(\.model) == ["gemini-3.8-flash-medium", "gemini-3.8-flash-low"])
+
+        // Argon's group used up: Antigravity's deep starts on Opus.
+        tracker.markLimited(.antigravity, model: "gemini-4-argon-high", message: "Argon",
+                            report: UsageLimitReport(code: "usage/argon", resetsAt: clock.addingTimeInterval(600), scope: "argon"), now: clock)
+        let agyDeep = OpenAIEndpointPlanner.plan(try request("antigravity:deep"), settings: settings, tracker: tracker, now: clock)
+        precondition(agyDeep.targets.map(\.model) == ["claude-opus-5-5-high"] && agyDeep.skipped.count == 1)
+
+        // Copilot's shared quota: its first deep model's limit skips its others, and Claude's deep answers.
+        let runner = FakeOneShotRunner { target in
+            if target.backend == .copilot {
+                throw OneShotError.usageLimit(UsageLimitReport(code: "quota/quota_exceeded", resetsAt: clock.addingTimeInterval(3_600)), "quota")
+            }
+            return OneShotResult(text: "From \(target.backend.rawValue)", model: target.model)
+        }
+        let suite = "cantrip-endpoint-tiers-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let service = OpenAIEndpointService(runner: { _ in runner }, tracker: tracker,
+                                            ledger: EndpointUsageLedger(defaults: defaults, tracker: nil), now: { clock })
+        guard case .answered(_, let target, let fellBack) = await service.complete(try request("deep"), consumer: "tiers",
+                                                                                  settings: settings) else {
+            preconditionFailure("Claude's deep answers")
+        }
+        precondition(target == OneShotTarget(backend: .claudeCode, model: "opus", effort: "xhigh", tier: .deep) && fellBack == [.copilot])
+        precondition(runner.calls.map(\.backend) == [.copilot, .claudeCode], "\(runner.calls)")
+        guard case .failed(429, "usage_limit", _, _) = await service.complete(try request("copilot:deep"), consumer: "tiers",
+                                                                             settings: settings) else {
+            preconditionFailure("a limited pinned backend at a tier is a 429")
+        }
+        let models = service.models(settings: settings).compactMap { $0["id"] as? String }
+        precondition(["fast", "standard", "deep", "copilot:deep", "claude:fast", "antigravity:standard"].allSatisfy(models.contains), "\(models)")
     }
 
     // MARK: - Routing through the backup chain
