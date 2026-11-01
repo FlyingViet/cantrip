@@ -267,6 +267,46 @@ final class RemoteControlServer {
         }
     }
 
+    /// The shared skills library (names, which backends see each, problems) and folder-rule drift;
+    /// actions turn a skill on or off, relink, or start a drift check. Never file contents.
+    @MainActor
+    private func handleSkills(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
+        let hub = SkillsHub.shared
+        switch request.method {
+        case "GET":
+            hub.refresh()
+            hub.checkDriftIfStale()
+            sendJSON(hub.remotePayload(), on: connection)
+        case "POST":
+            guard request.body.count <= 4096,
+                  let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+                  let action = body["action"] as? String else {
+                sendError(400, "Send an action: setEnabled (with name and enabled), sync or check.", on: connection)
+                return
+            }
+            do {
+                switch action {
+                case "setEnabled":
+                    guard let name = body["name"] as? String, let enabled = body["enabled"] as? Bool else {
+                        sendError(400, "setEnabled needs a skill name and enabled true or false.", on: connection)
+                        return
+                    }
+                    try hub.setEnabled(name, enabled)
+                case "sync": try hub.sync()
+                case "check": hub.refresh(); hub.checkDrift()
+                default:
+                    sendError(400, "Unknown skills action \(action).", on: connection)
+                    return
+                }
+                sendJSON(hub.remotePayload(), on: connection)
+            } catch {
+                sendError(400, error.localizedDescription, on: connection)
+            }
+        default:
+            sendError(405, "method not allowed", on: connection)
+        }
+    }
+
     /// Shared MCP servers: the list and sign-in states (never a token), and actions on them.
     /// Approving presses the consent page's own button in the agent Chrome.
     @MainActor
@@ -714,6 +754,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/browser/frame"
                 || request.path == "/api/v1/usage-fallback"
                 || request.path == "/api/v1/mcp"
+                || request.path == "/api/v1/skills"
                 || request.path == "/api/v1/link-previews/image"
                 || request.path.hasPrefix("/api/v1/link-previews/image/")
                 || request.path == "/api/v1/map-tile" else {
@@ -730,6 +771,10 @@ final class RemoteControlServer {
         }
         if request.path == "/api/v1/mcp" {
             handleMCP(request, on: connection)
+            return
+        }
+        if request.path == "/api/v1/skills" {
+            handleSkills(request, on: connection)
             return
         }
         if request.path == "/api/v1/maintenance" {
@@ -3019,7 +3064,7 @@ private extension RemoteControlServer {
     #desktopEditor{width:min(calc(100% - 24px),1000px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
     #mcpEditor{width:min(calc(100% - 24px),760px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#mcpEditor::backdrop{background:rgba(0,0,0,.35)}
     .mcp-row{border-top:1px solid var(--line);padding:10px 0;display:flex;flex-direction:column;gap:6px}.mcp-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.mcp-head strong{flex:1}.mcp-status{font-size:13px}.mcp-status.attn{color:var(--accent,#0a84ff)}.mcp-status.warn{color:#c76a00}
-    .mcp-switches{display:flex;gap:12px;flex-wrap:wrap;font-size:13px}.mcp-page img{max-width:100%;max-height:340px;border:1px solid var(--line);border-radius:8px}#mcpEditor button{min-height:44px}
+    .mcp-switches{display:flex;gap:12px;flex-wrap:wrap;font-size:13px}.mcp-page img{max-width:100%;max-height:340px;border:1px solid var(--line);border-radius:8px}#mcpEditor button,#skillsEditor button{min-height:44px}.mcp-warn{color:#c76a00;font-size:13px;margin:0}
     #desktopEditor::backdrop{background:rgba(0,0,0,.35)}#desktopEditor .tab-actions{flex-wrap:wrap}#desktopEditor button,#desktopEditor select{min-height:44px}
     #desktopViewport{height:380px;overflow:auto;border:1px solid var(--line)}#desktopImage{display:block;max-width:none;height:auto;width:100%}
     #desktopText{width:100%;box-sizing:border-box;min-height:44px}#desktopPermissions>div{margin:12px 0}
@@ -3118,7 +3163,7 @@ private extension RemoteControlServer {
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
     <label id="tabSectionLabel" class="hidden">Section<select id="tabSection"></select></label><input id="tabNewSection" class="hidden" maxlength="40" autocomplete="off" placeholder="New section name" aria-label="New section name">
-    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button>
+    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button><button id="tabSkills" type="button" class="control">Skills &amp; Rules</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
@@ -3147,6 +3192,8 @@ private extension RemoteControlServer {
     <img id="browserViewerImage" alt="Live view of the agent browser"><div id="browserViewerError" role="status"></div></dialog>
     <dialog id="mcpEditor" aria-labelledby="mcpTitle"><div class="tasks-bar"><strong id="mcpTitle" class="grow">MCP Servers</strong><button id="mcpDone" type="button" class="control">Done</button></div>
     <p class="muted">Every backend shares these. Sign-ins open in the agent Chrome; approve them here.</p><div id="mcpError" role="alert"></div><div id="mcpList"></div></dialog>
+    <dialog id="skillsEditor" aria-labelledby="skillsTitle"><div class="tasks-bar"><strong id="skillsTitle" class="grow">Skills &amp; Rules</strong><button id="skillsSync" type="button" class="control">Relink</button><button id="skillsDone" type="button" class="control">Done</button></div>
+    <p class="muted">Cantrip keeps one skills library and gives every backend the same skills and folder rules. Edit skills on the Mac (<code>cantrip skills edit NAME</code>).</p><div id="skillsError" role="alert"></div><div id="skillsStatus" role="status" class="muted"></div><div id="skillsList"></div></dialog>
     <dialog id="desktopEditor" aria-labelledby="desktopTitle"><strong id="desktopTitle">Mac Permissions &amp; View Mac</strong>
     <p class="muted">Start viewing explicitly. The Mac must first allow paired clients in Cantrip settings. Screen frames and typed text stay out of chat, files and AI models. Protected dialogs may be unavailable. Phone Face ID does not authorize macOS dialogs.</p>
     <div id="desktopError" role="alert"></div><div class="tab-actions">
@@ -3820,6 +3867,25 @@ private extension RemoteControlServer {
           if(s.state.screenshot){const img=document.createElement("img");img.alt=`The sign-in page for ${s.name}`;img.src=`data:image/jpeg;base64,${s.state.screenshot}`;page.append(img)}
           if(phase==="awaitingApproval"){const a=el("div","tab-actions");a.append(button("Decline","decline"),button("Approve","approve",true));page.append(a)}row.append(page)}
         list.append(row)}}
+    let skillsState=null,skillsTimer=null,skillsSaving=false;
+    $("tabSkills").onclick=()=>{if(tabSaving||movingTab)return;$("tabEditor").close();editingTab=null;$("skillsError").textContent="";$("skillsStatus").textContent="";$("skillsEditor").showModal();loadSkills()};
+    $("skillsDone").onclick=()=>$("skillsEditor").close();$("skillsEditor").addEventListener("close",()=>{clearTimeout(skillsTimer);skillsState=null});
+    $("skillsSync").onclick=()=>skillsAction({action:"sync"});
+    async function loadSkills(){clearTimeout(skillsTimer);if(!$("skillsEditor").open)return;try{skillsState=await api("/api/v1/skills");$("skillsError").textContent="";renderSkills()}catch(e){$("skillsError").textContent=e.message||"This Mac's Cantrip doesn't share skills yet."}
+      skillsTimer=setTimeout(loadSkills,skillsState?.checking?2000:10000)}
+    async function skillsAction(body){if(skillsSaving)return;skillsSaving=true;try{skillsState=await api("/api/v1/skills",{method:"POST",body:JSON.stringify(body)});$("skillsError").textContent="";$("skillsStatus").textContent=(skillsState.messages||[]).join(" · ");renderSkills();clearTimeout(skillsTimer);skillsTimer=setTimeout(loadSkills,skillsState.checking?2000:10000)}catch(e){$("skillsError").textContent=`${e.message||"That didn't work."} Not retried.`}finally{skillsSaving=false}}
+    function renderSkills(){const list=$("skillsList");list.replaceChildren();const st=skillsState||{};const warn=text=>el("p","mcp-warn","! "+text);
+      const skills=st.skills||[];list.append(el("h3","",`Skills (${skills.length})`));
+      if(!skills.length)list.append(el("p","muted","No skills in Cantrip's library yet. Add one on the Mac with cantrip skills add PATH."));
+      for(const s of skills){const row=el("div","mcp-row"),head=el("div","mcp-head"),label=el("label"),c=document.createElement("input");c.type="checkbox";c.checked=s.enabled;
+        const seen=(s.backends||[]).length?`Seen by ${s.backends.join(", ")}`:"No backend sees it";c.setAttribute("aria-label",`${s.name}, ${s.enabled?"on":"off"}. ${seen}`);
+        c.onchange=()=>skillsAction({action:"setEnabled",name:s.name,enabled:c.checked});label.append(c," ",el("strong","",s.name));head.append(label,el("span","mcp-status"+((s.problems||[]).length?" warn":""),seen));row.append(head);
+        if(s.description)row.append(el("p","muted",s.description));for(const p of s.problems||[])row.append(warn(p));list.append(row)}
+      const rules=st.rules||[];list.append(el("h3","","Folder rules"));if(!rules.length)list.append(el("p","muted","No folder rules. Add some on the Mac with cantrip instructions edit FOLDER."));
+      for(const r of rules)list.append(el("div","mcp-row",`${r.folder} — ${r.lines} line${r.lines===1?"":"s"}${r.mirror?` (mirrored to ${r.mirror})`:""}`));
+      const bar=el("div","mcp-head");bar.append(el("h3","grow","Drift"));const check=el("button","control",st.checking?"Checking…":"Check now");check.type="button";check.disabled=Boolean(st.checking);check.onclick=()=>skillsAction({action:"check"});bar.append(check);list.append(bar);
+      if(st.driftCheckedAt)list.append(el("p","muted",`Last checked ${new Date(st.driftCheckedAt).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}`));
+      const drift=st.drift||[];if(!drift.length&&st.driftCheckedAt&&!st.checking)list.append(el("p","muted","No drift found."));for(const d of drift){const row=el("div","mcp-row");row.append(el("strong","",d.path),warn(d.problem));list.append(row)}}
     function openDesktop(){desktopState={token,lease:null,frame:null,sequence:0,timer:null,saving:false,starting:false,generation:0};$("desktopError").textContent="";$("desktopEditor").showModal();loadDesktopStatus()}
     async function loadDesktopStatus(){const state=desktopState;if(!state)return;
       try{const data=await api("/api/v1/mac-access");if(desktopState!==state||token!==state.token)return;
