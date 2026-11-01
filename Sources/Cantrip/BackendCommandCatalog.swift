@@ -172,7 +172,12 @@ final class BackendCommandCatalog {
                 result = await BackendCommandDiscovery.claude(path: path, workdir: key.workdir,
                                                              environment: environment, home: home)
             case .codex:
-                result = await BackendCommandDiscovery.codex(command: key.cli, workdir: key.workdir,
+                // The same binary tabs run, so skills come from the CLI that owns the sign-in.
+                let configured = key.cli
+                let path = await Task.detached(priority: .utility) {
+                    ToolLocator.shared.codex(configured: configured)
+                }.value
+                result = await BackendCommandDiscovery.codex(command: path ?? configured, workdir: key.workdir,
                                                             environment: environment)
             case .antigravity:
                 result = await BackendCommandDiscovery.antigravity(command: key.cli, workdir: key.workdir,
