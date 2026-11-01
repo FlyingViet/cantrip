@@ -116,6 +116,13 @@ Open Settings and review these switches before asking about sensitive work:
 | Remote control daemon | Off | Allows authenticated remote session control |
 | Act on my behalf | Off | Grants unattended agent actions |
 
+Paired devices have their own **Share location** setting, off by default: while
+it's on, each message from that device carries its approximate location (about
+1 km unless Precise) for that one prompt, and while it's off the model is told to
+use the Mac's location and say so. A device's location is never saved to memory,
+the conversation, the run journal or Cantrip's log. See
+[Use the device's location](remote-control.md#use-the-devices-location).
+
 Calendar, location, and screen access also depend on macOS permission.
 Turning off automatic context prevents that automatic inclusion on later
 prompts; it does not erase data already sent or stop an authorized agent from

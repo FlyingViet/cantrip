@@ -227,6 +227,7 @@ struct SessionTabTests {
         try await testParallelRequestRouting()
         try await testQueueGrouping()
         try await testPromptUsage()
+        try await testRemoteClientLocation()
         try await testHostProtection(manager: manager)
         print("Session tab persistence, protection, privacy, and web controls passed")
     }

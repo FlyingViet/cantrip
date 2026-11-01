@@ -1630,11 +1630,52 @@ final class ChatSession: ObservableObject {
     /// staged by the person at the Mac or capture ambient Mac data.
     /// `autoForkEligible`: a paired client's queued message, which auto-fork may start in a
     /// child tab like one sent with Auto delivery.
-    func submitRemote(_ text: String, mode: MessageDeliveryMode = .auto, autoForkEligible: Bool = false) {
+    /// `client`: a message from a paired device's composer, with the location it shared (if any).
+    func submitRemote(_ text: String, mode: MessageDeliveryMode = .auto, autoForkEligible: Bool = false,
+                      client: RemoteClientMessage? = nil) {
+        if let client { rememberClientMessage(client, text: text) }
         let before = autoForkEligible ? Set(queued.map(\.id)) : []
         receive(text, mode: mode, includesAmbientContext: false)
         guard autoForkEligible, mode == .queue else { return }
         for item in queued where !before.contains(item.id) { noteAutoDelivered(item.id) }
+    }
+
+    /// Paired clients' messages by text, with the location each carried (or none). In memory only,
+    /// for at most six hours: the note is added to that message's backend prompt when it runs.
+    private var clientMessages: [String: (message: RemoteClientMessage, received: Date)] = [:]
+
+    private func rememberClientMessage(_ message: RemoteClientMessage, text: String) {
+        let key = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty, !isLocalPrivate else { return }
+        let now = Date()
+        clientMessages = clientMessages.filter { now.timeIntervalSince($0.value.received) < 6 * 3_600 }
+        if clientMessages.count >= 32,
+           let oldest = clientMessages.min(by: { $0.value.received < $1.value.received })?.key {
+            clientMessages.removeValue(forKey: oldest)
+        }
+        clientMessages[key] = (message, now)
+    }
+
+    /// The location note for the paired-client message(s) about to run, consumed so it goes once.
+    func takeClientContextNote(for texts: [String]) -> String? {
+        var found: RemoteClientMessage?
+        for text in texts {
+            guard let entry = clientMessages.removeValue(
+                forKey: text.trimmingCharacters(in: .whitespacesAndNewlines)
+            ) else { continue }
+            if found?.location == nil { found = entry.message }
+        }
+        guard let found, !isLocalPrivate else { return nil }
+        if found.location == nil, settings.shareLocation { LocationProvider.shared.refresh() }
+        return RemoteClientContextNote.note(
+            for: found.location, macLocation: settings.shareLocation ? LocationProvider.shared.contextLine : nil
+        )
+    }
+
+    /// A queued paired-client message delivered into the running turn, with its location note.
+    private func withClientContext(_ text: String) -> String {
+        guard let note = takeClientContextNote(for: [text]) else { return text }
+        return text + "\n\n" + note
     }
 
     private func invalidateRouting() {
@@ -1970,7 +2011,8 @@ final class ChatSession: ObservableObject {
                 dispatched = true
                 // The root takes the message now, so new messages no longer bypass the queue.
                 if sendNow { self.isWaitingOnBackgroundWatchers = false }
-                let text = parallel ? MessageRoutingPolicy.parallelDelivery(item.text) : item.text
+                let delivered = self.withClientContext(item.text)
+                let text = parallel ? MessageRoutingPolicy.parallelDelivery(delivered) : delivered
                 let result = await withCheckedContinuation { continuation in
                     let resume = { (result: MidTurnDelivery) in continuation.resume(returning: result) }
                     sendNow ? self.activeBackend.sendNowMidTurn(text, completion: resume)
@@ -2064,7 +2106,7 @@ final class ChatSession: ObservableObject {
                 }
                 dispatched = true
                 let result = await withCheckedContinuation { continuation in
-                    self.activeBackend.injectMidTurn(item.text) { result in
+                    self.activeBackend.injectMidTurn(self.withClientContext(item.text)) { result in
                         continuation.resume(returning: result)
                     }
                 }
@@ -2224,6 +2266,11 @@ final class ChatSession: ObservableObject {
         if !isLocalPrivate, !isPrivate, !isResume, automatedRun == nil, !isCantripHomeBackground,
            SlashInvocation(prompt) == nil, let notes = Self.tabContextProvider?(self, prompt) {
             preamble = notes + (preamble.map { "\n\n" + $0 } ?? "")
+        }
+        // A paired device's message says where the device is (or that the Mac's location stands in).
+        if !isLocalPrivate, !isResume, automatedRun == nil, SlashInvocation(prompt) == nil,
+           let note = takeClientContextNote(for: queuedItem.map { [$0.text] + combinedItems.map(\.text) } ?? [prompt]) {
+            preamble = note + (preamble.map { "\n\n" + $0 } ?? "")
         }
         if isCantripHomeBackground, !isResume { cantripHomeRunLabel = automatedRun?.label }
         if let automatedRun {

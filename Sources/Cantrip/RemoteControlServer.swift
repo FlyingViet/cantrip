@@ -1944,6 +1944,9 @@ final class RemoteControlServer {
                     inputRequestID = id
                 } else { inputRequestID = nil }
                 let images = try RemoteImageAttachments.decode(body["images"])
+                // Where the device is, when its "Share location" setting is on; nil means the Mac's
+                // location stands in. Only the message's backend prompt carries it.
+                let location = try RemoteClientLocation.parse(body["location"])
                 var videoID: UUID?
                 if let value = body["videoID"] {
                     guard let raw = value as? String, let uploadID = UUID(uuidString: raw) else {
@@ -1996,7 +1999,10 @@ final class RemoteControlServer {
                             )
                             if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
                             // A paired client's queued message may auto-fork, like one sent with Auto.
-                            else { session.submitRemote(prompt, mode: mode, autoForkEligible: true) }
+                            else {
+                                let client = RemoteClientMessage(location: await location?.named())
+                                session.submitRemote(prompt, mode: mode, autoForkEligible: true, client: client)
+                            }
                             sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
                         } catch let error as InputRequestError {
                             sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
@@ -2029,7 +2035,25 @@ final class RemoteControlServer {
                     text, images: images, sessionID: session.id
                 )
                 if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
-                else { session.submitRemote(prompt, mode: mode, autoForkEligible: true) }
+                else if let location, location.label == nil {
+                    // Name the place first (a browser or Windows PC sends coordinates only).
+                    Task {
+                        let client = RemoteClientMessage(location: await location.named())
+                        guard manager.managedSession(id: id) === session else {
+                            sendError(409, "The session closed before the message could be sent.", on: connection)
+                            return
+                        }
+                        session.submitRemote(prompt, mode: mode, autoForkEligible: true, client: client)
+                        sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
+                    }
+                    return
+                } else {
+                    session.submitRemote(prompt, mode: mode, autoForkEligible: true,
+                                         client: RemoteClientMessage(location: location))
+                }
+            } catch let error as RemoteClientLocation.Invalid {
+                sendError(400, error.localizedDescription, on: connection)
+                return
             } catch let error as InputRequestError {
                 sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
                 return
@@ -2670,6 +2694,9 @@ final class RemoteControlServer {
         // POST …/delete-message {"messageID"} deletes a prompt and its reply; clients drop
         // cached copies of every message listed in deletedMessageIDs.
         result["supportsDeleteMessage"] = !session.isCantripHomeRun
+        // POST …/messages takes {"location": {latitude, longitude, label?, accuracy?, precise?,
+        // timeZone?, age?, device?}}; without it, the model is told to use the Mac's location.
+        result["supportsClientLocation"] = !session.isLocalPrivate
         if !session.deletedMessageIDs.isEmpty {
             result["deletedMessageIDs"] = session.deletedMessageIDs.map(\.uuidString)
         }
