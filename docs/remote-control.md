@@ -1818,6 +1818,38 @@ names a place. Other links, such as a form or an article, keep their cards, and
 the three-card limit counts only those. The Mac applies this when it builds the
 snapshot, so replies saved before the rule show the same cards on every client.
 
+## Use the device's location
+
+Ask "what's the weather today?" or "coffee near me" from a paired device and the
+answer can be for where that device is, not where the Mac is. Each client has a
+**Share location** setting, off by default: Cantrip Agent (iPhone and iPhone
+Duo) and Cantrip Gateway for Mac in Settings, Cantrip Gateway for Windows in
+Settings, and the browser Remote under **Location** next to **Unpair** (the
+browser needs the Mac's secure Tailscale address). Clients ask for location only
+while the app is in use, never in the background.
+
+While it's on, each message you send carries the device's location, rounded to
+about 1 km unless you also turn on **Precise location**, its time zone, and a
+place name such as "Mountain View, CA" (the Mac names the place with Apple's
+geocoder when a browser or Windows PC sends only coordinates). A fix is reused
+for up to 15 minutes. The Mac adds a short note to that message's prompt for the
+model, on every backend: use this location for anything that depends on where
+you are, name the place in the reply, and set a places card's "near" to it.
+
+While it's off, or with a device or Mac version that doesn't send one, the note
+says the device shares no location: the model uses the Mac's own location (from
+**Share my location as context** in the Mac's settings) and says that it did.
+
+The location travels only over the paired connection, with that one message. It
+isn't shown in the chat, saved with the conversation or its run journal, written
+to Cantrip's log, memory notes or Home tasks, and the model is asked not to save
+it either. A backend's own transcript of the conversation keeps the prompt it was
+sent, as it does for any message. `POST /api/v1/sessions/{id}/messages` takes it as
+`"location": {"latitude", "longitude", "label"?, "accuracy"?, "precise"?,
+"timeZone"?, "age"?, "device"?}` (session snapshots report
+`supportsClientLocation`); a malformed object is refused with `400`, and a fix
+older than 15 minutes is ignored.
+
 ## Understand what is available remotely
 
 | Situation | Behavior |
@@ -1826,7 +1858,8 @@ snapshot, so replies saved before the rule show the same cards on every client.
 | Host asleep, logged out, powered off, or waiting at pre-login/FileVault | Remote is unavailable |
 | Private session | Not exposed to Remote clients |
 | Local screenshot, selection, or file staged in Cantrip | Not automatically consumed by a Remote prompt |
-| Host calendar/location | Not automatically added to a Remote prompt |
+| Host calendar | Not automatically added to a Remote prompt |
+| Host location | Named only as the fallback for location-dependent questions from a device that doesn't share its own (see below) |
 | Existing session messages or enabled memory | Can still provide context; Remote is not a clean-room conversation |
 
 Remote access is not a separate low-privilege account. An action-enabled host
