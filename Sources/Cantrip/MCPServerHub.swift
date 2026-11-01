@@ -90,30 +90,61 @@ struct AgentChrome {
     }
 
     static let approvePattern = "^(allow|approve|authorize|authorise|accept|confirm|grant|continue|yes)\\b"
+    /// An option that grants free, guest or anonymous access instead of your account's
+    /// ("Continue as a free user"). Cantrip never presses one.
+    static let limitedPattern = "\\b(free|guest|anonymous(ly)?|no account|without (an? )?(account|sign[ -]?in|signing in|log[ -]?in|logging in))\\b"
+    /// An option that signs in to an account first ("Sign in with seats.aero Pro", "Log in").
+    static let signInPattern = "\\b(sign|log)[ -]?in\\b|^continue with\\b"
+
+    /// What the sign-in does with the page in front of it.
+    enum Step: Equatable {
+        /// Ask you, then press exactly this button.
+        case approve(String)
+        /// Log in to the site in agent Chrome first. `declined` is the free or guest option Cantrip won't press.
+        case logIn(declined: String?)
+        /// Loading, or nothing to press yet.
+        case wait
+    }
+
+    static func step(for page: Page) -> Step {
+        func matches(_ label: String, _ pattern: String) -> Bool {
+            label.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+        }
+        let limited = page.buttons.first { matches($0, limitedPattern) }
+        let signIn = page.buttons.contains { matches($0, signInPattern) && !matches($0, limitedPattern) }
+        if page.login || (limited != nil && signIn) { return .logIn(declined: limited) }
+        if let approve = page.buttons.first(where: { matches($0, approvePattern) && !matches($0, limitedPattern) }) {
+            return .approve(approve)
+        }
+        return limited.map { .logIn(declined: $0) } ?? .wait
+    }
 
     static let inspectScript = """
-    (() => { const re = new RegExp(\(String(reflecting: approvePattern)), 'i');
-      const labels = [...document.querySelectorAll('button,a[role=button],input[type=submit],input[type=button]')]
+    (() => { const labels = [...document.querySelectorAll('button,a[role=button],input[type=submit],input[type=button]')]
         .filter(e => e.offsetParent !== null).map(e => (e.innerText || e.value || '').trim()).filter(Boolean);
       return JSON.stringify({ title: document.title || '', host: location.host, url: location.href.slice(0, 400),
         text: ((document.body && document.body.innerText) || '').replace(/\\s+\\n/g, '\\n').slice(0, 1200),
-        buttons: labels.slice(0, 12), login: !!document.querySelector('input[type=password],input[type=email]'),
-        approve: labels.find(l => re.test(l)) || null }); })()
+        buttons: labels.slice(0, 20), login: !!document.querySelector('input[type=password],input[type=email]') }); })()
     """
 
-    static let approveScript = """
-    (() => { const re = new RegExp(\(String(reflecting: approvePattern)), 'i');
-      const b = [...document.querySelectorAll('button,a[role=button],input[type=submit],input[type=button]')]
-        .filter(e => e.offsetParent !== null).find(e => re.test((e.innerText || e.value || '').trim()));
-      if (!b) return 'none'; b.click(); return 'clicked'; })()
-    """
+    /// Presses the visible button labelled exactly `label` (the one you approved), or none.
+    static func approveScript(label: String) -> String {
+        let literal = (try? JSONEncoder().encode(label)).map { String(decoding: $0, as: UTF8.self) } ?? "null"
+        return """
+        (() => { const want = \(literal);
+          const b = [...document.querySelectorAll('button,a[role=button],input[type=submit],input[type=button]')]
+            .filter(e => e.offsetParent !== null).find(e => (e.innerText || e.value || '').trim() === want);
+          if (!b) return 'none'; b.click(); return 'clicked'; })()
+        """
+    }
 
     func inspect(_ tab: Tab) async throws -> Page {
         let result = try await call(tab, "Runtime.evaluate", ["expression": Self.inspectScript, "returnByValue": true])
         guard let value = (result["result"] as? [String: Any])?["value"] as? String,
-              let page = try? JSONDecoder().decode(Page.self, from: Data(value.utf8)) else {
+              var page = try? JSONDecoder().decode(Page.self, from: Data(value.utf8)) else {
             throw URLError(.cannotParseResponse)
         }
+        if case .approve(let label) = Self.step(for: page) { page.approve = label }
         return page
     }
 
@@ -122,8 +153,8 @@ struct AgentChrome {
         return result?["data"] as? String
     }
 
-    func clickApprove(_ tab: Tab) async throws -> Bool {
-        let result = try await call(tab, "Runtime.evaluate", ["expression": Self.approveScript, "returnByValue": true])
+    func clickApprove(_ tab: Tab, label: String) async throws -> Bool {
+        let result = try await call(tab, "Runtime.evaluate", ["expression": Self.approveScript(label: label), "returnByValue": true])
         return (result["result"] as? [String: Any])?["value"] as? String == "clicked"
     }
 }
@@ -335,7 +366,8 @@ final class MCPServerHub: ObservableObject {
                 throw MCPOAuth.Failure(kind: .provider, message: "\(page.host) refused the sign-in: \(refusal). Retry, or check the server's address.")
             }
             let shot = await chrome.screenshot(tab)
-            if let label = page.approve, !page.login, !asked {
+            switch AgentChrome.step(for: page) {
+            case .approve(let label) where !asked:
                 asked = true
                 set(name, State(phase: .awaitingApproval,
                                 message: "\(page.host) asks to give Cantrip access to \(name). Approve to press “\(label)”.",
@@ -344,17 +376,20 @@ final class MCPServerHub: ObservableObject {
                 let approved = await withCheckedContinuation { decisions[name] = $0 }
                 guard approved else { throw MCPOAuth.Failure(kind: .denied, message: "You declined the sign-in.") }
                 set(name, State(phase: .connecting, message: "Approved. Finishing the sign-in…", page: page, screenshot: shot))
-                if !(try await chrome.clickApprove(tab)) {
+                if !(try await chrome.clickApprove(tab, label: label)) {
                     throw MCPOAuth.Failure(kind: .denied, message: "The approve button disappeared before Cantrip could press it.")
                 }
-            } else if page.login {
+            case .logIn(let declined):
                 if !notedLogin { onNeedsAttention?(name, .needsLogin) }
                 notedLogin = true
-                set(name, State(phase: .needsLogin,
-                                message: "\(page.host) wants you to log in first. Log in in agent Chrome (Remote › Browser shows it), then Cantrip continues.",
-                                page: page, screenshot: shot))
-            } else if !asked {
-                set(name, State(phase: .connecting, message: "Opening \(page.host)…", page: page, screenshot: shot))
+                // Free or guest access isn't your account's: the site's sign-in comes first.
+                let message = declined.map {
+                    "\(page.host) offers “\($0)” instead of your account, which Cantrip won't press. Log in to \(page.host) "
+                        + "in agent Chrome (Remote › Browser shows it), then Cantrip continues (or Connect again if the page doesn't return)."
+                } ?? "\(page.host) wants you to log in first. Log in in agent Chrome (Remote › Browser shows it), then Cantrip continues."
+                set(name, State(phase: .needsLogin, message: message, page: page, screenshot: shot))
+            default:
+                if !asked { set(name, State(phase: .connecting, message: "Opening \(page.host)…", page: page, screenshot: shot)) }
             }
         }
         throw MCPOAuth.Failure(kind: .denied, message: "Sign-in was cancelled.")
