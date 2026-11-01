@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   CopilotQuotaBucket, CopilotUsageSnapshot, DesktopFrame, GitHubBuildJob, GitHubBuildRepository, GitHubBuildSnapshot,
-  MaintenanceSnapshot, MemoryCatalog, MemoryPage, ModelSettingsSnapshot,
+  MaintenanceSnapshot, MemoryCatalog, MemoryPage, ModelSettingsSnapshot, UsageFallbackSnapshot,
 } from "../src/gateway/api/types";
 import {
   EMPTY_READER, INVALID_RESPONSE, alignMemoryPage, codeFenceAfter, renderableMemory, NotSentError, QueueReadiness, amountRatio, assignmentText, bucketSummary, bucketTitle,
@@ -13,7 +13,10 @@ import {
   normalizeTabName, normalizedPoint, openCombined, overageAllowedText, overageText, parseContextTokens, percentageSummary,
   permissionStateLabel, pickerChoices, primaryBucket, privateModelChoices, queueReadiness, queueReason, readerApply,
   readerRequest, relativeDuration, repositoryIsStale, sealCombined, selectModel, snapshotIsComplete, tabNameError,
-  tokenLabel, usageHeaderText, usagePollDelay, usedAmount, validCatalogPage, validMemoryPage, writeFailure,
+  tokenLabel, usageFallbackAdd, usageFallbackAddable, usageFallbackChain, usageFallbackEfforts, usageFallbackEntries, usageFallbackEntry,
+  usageFallbackFreeModel, usageFallbackLabel, usageFallbackLimitNote, usageFallbackLimits, usageFallbackModelChange, usageFallbackModelOptions,
+  usageFallbackMove, usageFallbackMoved, usageFallbackPerModel, usageFallbackRemove, usageFallbackRuns, usageFallbackSave, usageFallbackSkipped,
+  usageFallbackStatus, usageFallbackTaken, usageHeaderText, usagePollDelay, usedAmount, validCatalogPage, validMemoryPage, writeFailure,
 } from "../src/gateway/ui/sheets/sheetLogic";
 
 // Cases mirror Hermes/Tests (CantripModelSettingsTests, CopilotUsageTests, CantripMemoryTests,
@@ -491,63 +494,209 @@ describe("text helpers", () => {
 });
 
 describe("usage limit fallback", () => {
-  const snapshot = (backend: string, limited = false, backends?: string[]) => ({
+  // A Mac from before the chain (`backend` only) or from before backup models (`backends`, no `entries`).
+  const snapshot = (backend: string, limited = false, backends?: string[]): UsageFallbackSnapshot => ({
     backend, ...(backends ? { backends } : {}), primary: "Claude Code", revision: "f1",
     choices: [{ id: "Copilot", label: "Copilot" }, { id: "Codex", label: "Codex" }, { id: "Antigravity", label: "Antigravity" }],
     limited: limited ? [{ backend: "Claude Code", until: "2026-10-28T12:00:00Z", untilLabel: "5:00 AM" }] : [],
   });
 
-  it("reads the whole chain, or an older Mac's single backup", async () => {
-    const { usageFallbackChain, usageFallbackAddable } = await import("../src/gateway/ui/sheets/sheetLogic");
-    expect(usageFallbackChain(snapshot("Copilot", false, ["Copilot", "Codex"]))).toEqual(["Copilot", "Codex"]);
+  // GET /api/v1/usage-fallback from a Mac with per-model backups: Antigravity is the Mac's own backend and is
+  // listed twice with other models; Claude Code is in the chain once.
+  const PER_MODEL = `{
+    "backends": ["Antigravity", "Antigravity", "Claude Code"],
+    "entries": [
+      {"backend": "Antigravity", "model": "gemini-3.8-flash-medium", "effort": "",
+       "label": "Antigravity · Gemini 3.8 Flash (Medium)", "limitedUntil": "2026-11-01T03:00:00Z", "limitedUntilLabel": "8:00 PM"},
+      {"backend": "Antigravity", "model": "claude-sonnet-5-5-low", "effort": "", "label": "Antigravity · Claude Sonnet 5.5 (Low)"},
+      {"backend": "Claude Code", "model": "claude-sonnet-5-5", "effort": "high", "label": "Claude Code · claude-sonnet-5-5 · high"}
+    ],
+    "backend": "Antigravity",
+    "primary": "Antigravity",
+    "choices": [
+      {"id": "Claude Code", "label": "Claude Code · opus",
+       "models": [{"id": "claude-opus-5-5", "label": "claude-opus-5-5", "efforts": ["low", "high"]},
+                  {"id": "claude-sonnet-5-5", "label": "claude-sonnet-5-5", "efforts": ["low", "medium", "high"]}],
+       "defaultEfforts": ["low", "high"], "defaultModel": "opus", "defaultModelID": "opus"},
+      {"id": "Copilot", "label": "Copilot"}
+    ],
+    "primaryChoice": {"id": "Antigravity", "label": "Antigravity",
+      "models": [{"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)", "efforts": []},
+                 {"id": "claude-sonnet-5-5-low", "label": "Claude Sonnet 5.5 (Low)", "efforts": []},
+                 {"id": "gemini-4-argon-high", "label": "Gemini 4 Argon (High)", "efforts": []},
+                 {"id": "gemini-3.8-pro-high", "label": "Gemini 3.8 Pro (High)", "efforts": []}],
+      "defaultModel": "Gemini 4 Argon (High)", "defaultModelID": "gemini-4-argon-high"},
+    "limited": [{"backend": "Copilot", "until": "2026-11-01T12:00:00Z", "untilLabel": "5:00 AM"}],
+    "limitedModels": [{"backend": "Antigravity", "scope": "argon", "label": "Gemini 4 Argon", "until": "2026-11-01T03:00:00Z", "untilLabel": "8:00 PM"}],
+    "revision": "r7"
+  }`;
+  const perModel = (): UsageFallbackSnapshot => JSON.parse(PER_MODEL) as UsageFallbackSnapshot;
+  // The same chain from a Mac before per-model backups: entries without the read-only fields, no primaryChoice
+  // or limitedModels, each backend once.
+  const beforePerModel = (): UsageFallbackSnapshot => ({
+    backend: "Claude Code", backends: ["Claude Code", "Antigravity"], primary: "Codex", revision: "r1",
+    entries: [{ backend: "Claude Code", model: "", effort: "" }, { backend: "Antigravity", model: "", effort: "" }],
+    choices: [
+      { id: "Claude Code", label: "Claude Code", models: [{ id: "claude-opus-5-5", label: "claude-opus-5-5" }] },
+      { id: "Antigravity", label: "Antigravity", models: [{ id: "gemini-3.8-pro-high", label: "Gemini 3.8 Pro (High)" }] },
+      { id: "Copilot", label: "Copilot" },
+    ],
+    limited: [],
+  });
+
+  it("reads a Mac with per-model backups: repeated backends, labels and each backup's limit", () => {
+    const value = perModel();
+    expect(usageFallbackPerModel(value)).toBe(true);
+    expect(usageFallbackChain(value)).toEqual(["Antigravity", "Antigravity", "Claude Code"]);
+    expect(usageFallbackEntries(value), "the read-only fields stay out of what's sent back").toEqual([
+      { backend: "Antigravity", model: "gemini-3.8-flash-medium", effort: "" },
+      { backend: "Antigravity", model: "claude-sonnet-5-5-low", effort: "" },
+      { backend: "Claude Code", model: "claude-sonnet-5-5", effort: "high" },
+    ]);
+    expect([0, 1, 2].map((index) => usageFallbackLabel(value, index)))
+      .toEqual(["Antigravity · Gemini 3.8 Flash (Medium)", "Antigravity · Claude Sonnet 5.5 (Low)", "Claude Code · claude-sonnet-5-5 · high"]);
+    expect([0, 1, 2].map((index) => usageFallbackLimitNote(value, index))).toEqual(["at its limit until 8:00 PM", null, null]);
+    expect(usageFallbackRuns(value, "Claude Code", ""), "default runs defaultModelID").toBe("opus");
+    expect(usageFallbackRuns(value, "Antigravity", "")).toBe("gemini-4-argon-high");
+    expect(usageFallbackRuns(value, "Copilot", "")).toBe("");
+    expect([0, 1, 2].map((index) => usageFallbackSkipped(value, index)), "the Mac's own backend with another model runs").toEqual([false, false, false]);
+  });
+
+  it("names whole backends and model quotas at their limit, and offers to try them all again", () => {
+    const value = perModel();
+    expect(usageFallbackLimits(value)).toEqual(["Copilot until 5:00 AM", "Antigravity Gemini 4 Argon until 8:00 PM"]);
+    expect(usageFallbackStatus(value)).toBe("At its usage limit: Copilot until 5:00 AM, Antigravity Gemini 4 Argon until 8:00 PM.");
+    expect(usageFallbackLimits({ ...value, limited: [] })).toEqual(["Antigravity Gemini 4 Argon until 8:00 PM"]);
+    expect(usageFallbackLimits({ ...value, limited: [], limitedModels: [] })).toEqual([]);
+    expect(usageFallbackStatus({ ...value, limited: [], limitedModels: [] })).toContain("only that model is skipped");
+    expect(usageFallbackLimits(snapshot("Copilot", true))).toEqual(["Claude Code until 5:00 AM"]);
+  });
+
+  it("adds the Mac's own backend and a backend already in the chain with another model", () => {
+    const value = perModel();
+    expect(usageFallbackAddable(value)).toEqual([
+      // Claude Code's default runs opus, which no backup has yet.
+      { id: "Claude Code", label: "Claude Code with another model", model: "" },
+      { id: "Copilot", label: "Copilot", model: "" },
+      // Antigravity's default runs the Mac's own model, so the first of its models no backup runs.
+      { id: "Antigravity", label: "Antigravity with another model", model: "gemini-3.8-pro-high" },
+    ]);
+    expect(usageFallbackAdd(value, "Antigravity")).toEqual({ revision: "r7", entries: [
+      ...usageFallbackEntries(value), { backend: "Antigravity", model: "gemini-3.8-pro-high", effort: "" }] });
+    expect(usageFallbackAdd(value, "Claude Code")).toEqual({ revision: "r7", entries: [
+      ...usageFallbackEntries(value), { backend: "Claude Code", model: "", effort: "" }] });
+  });
+
+  it("chooses a free model: the default first, then the backend's models in order, then none", () => {
+    const value = perModel();
+    const withEntries = (entries: { backend: string; model: string; effort: string }[]) => ({ ...value, entries });
+    // A backend without models runs its default only, so it's listed once.
+    expect(usageFallbackFreeModel(withEntries([{ backend: "Copilot", model: "", effort: "" }]), "Copilot")).toBeUndefined();
+    expect(usageFallbackAddable(withEntries([{ backend: "Copilot", model: "", effort: "" }])).map((item) => item.id)).not.toContain("Copilot");
+    // opus (the default) is taken through its explicit ID, so the next model.
+    expect(usageFallbackFreeModel(withEntries([{ backend: "Claude Code", model: "opus", effort: "" }]), "Claude Code")).toBe("claude-opus-5-5");
+    const claude = withEntries([{ backend: "Claude Code", model: "", effort: "" }, { backend: "Claude Code", model: "claude-opus-5-5", effort: "" }]);
+    expect(usageFallbackTaken(claude, "Claude Code")).toEqual(new Set(["opus", "claude-opus-5-5"]));
+    expect(usageFallbackFreeModel(claude, "Claude Code")).toBe("claude-sonnet-5-5");
+    const full = withEntries([...claude.entries, { backend: "Claude Code", model: "claude-sonnet-5-5", effort: "" }]);
+    expect(usageFallbackFreeModel(full, "Claude Code")).toBeUndefined();
+    expect(usageFallbackAddable(full).map((item) => item.id)).toEqual(["Copilot", "Antigravity"]);
+    // Without a defaultModelID, "" is a model of its own.
+    const unknownDefault: UsageFallbackSnapshot = { ...value, entries: [], primary: "Codex",
+      choices: [{ id: "Claude Code", label: "Claude Code", models: [{ id: "claude-opus-5-5", label: "claude-opus-5-5" }] }], primaryChoice: null };
+    expect(usageFallbackFreeModel(unknownDefault, "Claude Code")).toBe("");
+    expect(usageFallbackFreeModel({ ...unknownDefault, entries: [{ backend: "Claude Code", model: "", effort: "" }] }, "Claude Code")).toBe("claude-opus-5-5");
+    // No primaryChoice: the Mac's own backend has no model picker, so it can't be added.
+    expect(usageFallbackAddable({ ...value, primaryChoice: null }).map((item) => item.id)).toEqual(["Claude Code", "Copilot"]);
+    expect(usageFallbackAddable({ ...value, primaryChoice: undefined, limitedModels: [] }).map((item) => item.id)).toEqual(["Claude Code", "Copilot"]);
+  });
+
+  it("changes, moves and removes backups by position, saving the whole chain as entries", () => {
+    const value = perModel();
+    const [first, second, third] = usageFallbackEntries(value);
+    expect(usageFallbackModelChange(value, 1, "gemini-3.8-pro-high", "")).toEqual({ revision: "r7", entries: [
+      first, { backend: "Antigravity", model: "gemini-3.8-pro-high", effort: "" }, third] });
+    expect(usageFallbackModelChange(value, 2, "claude-sonnet-5-5", "low")).toEqual({ revision: "r7", entries: [
+      first, second, { backend: "Claude Code", model: "claude-sonnet-5-5", effort: "low" }] });
+    expect(usageFallbackMove(value, 1, -1)).toEqual({ revision: "r7", entries: [second, first, third] });
+    expect(usageFallbackMove(value, 1, 1)).toEqual({ revision: "r7", entries: [first, third, second] });
+    expect(usageFallbackMove(value, 0, -1)).toEqual({ revision: "r7", entries: [first, second, third] });
+    expect(usageFallbackMove(value, 2, 1)).toEqual({ revision: "r7", entries: [first, second, third] });
+    expect(usageFallbackRemove(value, 0), "removes only that Antigravity backup").toEqual({ revision: "r7", entries: [second, third] });
+    expect(usageFallbackRemove(value, 1)).toEqual({ revision: "r7", entries: [first, third] });
+    expect(usageFallbackEntry(value, 1)).toEqual(second);
+    expect(usageFallbackMoved(["a", "b", "c"], 1, -1)).toEqual(["b", "a", "c"]);
+  });
+
+  it("offers each backup the models no other backup on its backend runs", () => {
+    const value = perModel();
+    // Row 1 runs Flash; row 2 runs Sonnet and the Mac runs Argon (its default), so neither is offered, nor Default.
+    expect(usageFallbackModelOptions(value, 0)).toEqual([
+      { value: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)" },
+      { value: "gemini-3.8-pro-high", label: "Gemini 3.8 Pro (High)" },
+    ]);
+    expect(usageFallbackModelOptions(value, 1)?.map((option) => option.value)).toEqual(["claude-sonnet-5-5-low", "gemini-3.8-pro-high"]);
+    expect(usageFallbackModelOptions(value, 2)).toEqual([
+      { value: "", label: "Default (opus)" },
+      { value: "claude-opus-5-5", label: "claude-opus-5-5" },
+      { value: "claude-sonnet-5-5", label: "claude-sonnet-5-5" },
+    ]);
+    // A second Claude Code backup on opus takes Default and claude-opus-5-5 from the others' pickers.
+    const twice = { ...value, entries: [...usageFallbackEntries(value), { backend: "Claude Code", model: "", effort: "" }] };
+    expect(usageFallbackModelOptions(twice, 2)?.map((option) => option.value)).toEqual(["claude-opus-5-5", "claude-sonnet-5-5"]);
+    expect(usageFallbackModelOptions(twice, 3)?.map((option) => option.value), "Default stays while it's chosen")
+      .toEqual(["", "claude-opus-5-5"]);
+    const gone = { ...value, entries: [{ backend: "Claude Code", model: "claude-retired", effort: "" }] };
+    expect(usageFallbackModelOptions(gone, 0)?.at(-1)).toEqual({ value: "claude-retired", label: "claude-retired (not offered now)" });
+    expect(usageFallbackModelOptions({ ...value, entries: [{ backend: "Copilot", model: "", effort: "" }] }, 0)).toBeUndefined();
+    expect(usageFallbackEfforts(value, 2)).toEqual(["low", "medium", "high"]);
+    expect(usageFallbackEfforts(twice, 3), "the default model's efforts").toEqual(["low", "high"]);
+    expect(usageFallbackEfforts(value, 0)).toEqual([]);
+  });
+
+  it("keeps a Mac from before per-model backups to one backup per backend, without the read-only fields", () => {
+    const value = beforePerModel();
+    expect(usageFallbackPerModel(value)).toBe(false);
+    expect(usageFallbackAddable(value)).toEqual([{ id: "Copilot", label: "Copilot", model: "" }]);
+    expect(usageFallbackModelOptions(value, 0)?.map((option) => option.value)).toEqual(["", "claude-opus-5-5"]);
+    expect(usageFallbackModelChange(value, 0, "claude-opus-5-5", "")).toEqual({ revision: "r1", entries: [
+      { backend: "Claude Code", model: "claude-opus-5-5", effort: "" }, { backend: "Antigravity", model: "", effort: "" }] });
+    expect(usageFallbackLabel(value, 1)).toBe("Antigravity");
+    expect(usageFallbackLimitNote(value, 1)).toBeNull();
+    expect(usageFallbackStatus(value)).not.toContain("only that model");
+    // Its own backend in the chain is skipped.
+    const own = { ...value, entries: [{ backend: "Codex", model: "", effort: "" }] };
+    expect(usageFallbackLabel(own, 0)).toBe("Codex (skipped: the Mac's backend)");
+    expect(usageFallbackSkipped({ ...perModel(), entries: [{ backend: "Antigravity", model: "gemini-4-argon-high", effort: "" }] }, 0),
+      "the Mac's own backend and model").toBe(true);
+  });
+
+  it("falls back to `backends`, then `backend`, for Macs without entries", () => {
+    const chain = snapshot("Copilot", false, ["Copilot", "Codex", "Antigravity"]);
+    expect(usageFallbackChain(chain)).toEqual(["Copilot", "Codex", "Antigravity"]);
+    expect(usageFallbackEntries(chain).map((entry) => entry.model)).toEqual(["", "", ""]);
+    expect(usageFallbackMove(chain, 1, -1)).toEqual({ revision: "f1", backends: ["Codex", "Copilot", "Antigravity"] });
+    expect(usageFallbackRemove(chain, 2)).toEqual({ revision: "f1", backends: ["Copilot", "Codex"] });
+    expect(usageFallbackModelOptions(chain, 0), "no models without entries").toBeUndefined();
+    const two = snapshot("Copilot", false, ["Copilot", "Codex"]);
+    expect(usageFallbackAddable(two)).toEqual([{ id: "Antigravity", label: "Antigravity", model: "" }]);
+    expect(usageFallbackAdd(two, "Antigravity")).toEqual({ revision: "f1", backends: ["Copilot", "Codex", "Antigravity"] });
+    expect(usageFallbackAdd(two, "Codex"), "a backend once").toBeNull();
     expect(usageFallbackChain(snapshot("Copilot"))).toEqual(["Copilot"]);
     expect(usageFallbackChain(snapshot(""))).toEqual([]);
-    expect(usageFallbackAddable(snapshot("Copilot", false, ["Copilot", "Codex"])).map((choice) => choice.id)).toEqual(["Antigravity"]);
     expect(usageFallbackAddable(snapshot("Copilot")), "an older Mac takes no second backup").toEqual([]);
     expect(usageFallbackAddable(snapshot("")).map((choice) => choice.id)).toEqual(["Copilot", "Codex", "Antigravity"]);
+    expect(usageFallbackAdd(snapshot(""), "Codex")).toEqual({ revision: "f1", backend: "Codex" });
+    expect(usageFallbackRemove(snapshot("Copilot"), 0)).toEqual({ revision: "f1", backend: "" });
+    expect(usageFallbackSave(snapshot("Copilot"), [{ backend: "Codex", model: "", effort: "" }])).toEqual({ revision: "f1", backend: "Codex" });
   });
 
-  it("adds, reorders and removes through the whole chain, or `backend` for older Macs", async () => {
-    const { usageFallbackChange, usageFallbackMoved } = await import("../src/gateway/ui/sheets/sheetLogic");
-    const chain = ["Copilot", "Codex", "Antigravity"];
-    expect(usageFallbackMoved(chain, 1, -1)).toEqual(["Codex", "Copilot", "Antigravity"]);
-    expect(usageFallbackMoved(chain, 1, 1)).toEqual(["Copilot", "Antigravity", "Codex"]);
-    expect(usageFallbackMoved(chain, 0, -1)).toEqual(chain);
-    expect(usageFallbackChange(snapshot("Copilot", false, ["Copilot"]), ["Copilot", "Codex"]))
-      .toEqual({ revision: "f1", backends: ["Copilot", "Codex"] });
-    expect(usageFallbackChange(snapshot("Copilot"), ["Codex"])).toEqual({ revision: "f1", backend: "Codex" });
-    expect(usageFallbackChange(snapshot("Copilot"), [])).toEqual({ revision: "f1", backend: "" });
+  it("marks the Mac's own backend as skipped on older Macs", () => {
+    expect(usageFallbackLabel(snapshot("Codex"), 0)).toBe("Codex");
+    expect(usageFallbackLabel(snapshot("Claude Code"), 0)).toBe("Claude Code (skipped: the Mac's backend)");
   });
 
-  it("offers each backup's own models and efforts and saves them through entries", async () => {
-    const { usageFallbackModels, usageFallbackEfforts, usageFallbackModelChange, usageFallbackEntry } = await import("../src/gateway/ui/sheets/sheetLogic");
-    const withModels = {
-      ...snapshot("Claude Code", false, ["Claude Code", "Codex"]),
-      entries: [{ backend: "Claude Code", model: "claude-opus-5-5", effort: "high" }, { backend: "Codex", model: "", effort: "" }],
-      choices: [
-        { id: "Claude Code", label: "Claude Code", defaultEfforts: ["low", "high"],
-          models: [{ id: "claude-opus-5-5", label: "claude-opus-5-5", efforts: ["low", "medium", "high"] }] },
-        { id: "Codex", label: "Codex" },
-      ],
-    };
-    expect(usageFallbackModels(withModels, "Claude Code")?.map((item) => item.id)).toEqual(["claude-opus-5-5"]);
-    expect(usageFallbackModels(withModels, "Codex")).toBeUndefined();
-    expect(usageFallbackModels(snapshot("Codex", false, ["Codex"]), "Claude Code")).toBeUndefined();
-    expect(usageFallbackEfforts(withModels, "Claude Code")).toEqual(["low", "medium", "high"]);
-    expect(usageFallbackEntry(withModels, "Codex")).toEqual({ backend: "Codex", model: "", effort: "" });
-    expect(usageFallbackModelChange(withModels, "Codex", "", "")).toEqual({ revision: "f1", entries: withModels.entries });
-    expect(usageFallbackModelChange(withModels, "Claude Code", "", "low")).toEqual({
-      revision: "f1", entries: [{ backend: "Claude Code", model: "", effort: "low" }, { backend: "Codex", model: "", effort: "" }] });
-  });
-
-  it("marks the Mac's own backend as skipped", async () => {
-    const { usageFallbackLabel } = await import("../src/gateway/ui/sheets/sheetLogic");
-    expect(usageFallbackLabel(snapshot(""), "Codex")).toBe("Codex");
-    expect(usageFallbackLabel(snapshot(""), "Claude Code")).toBe("Claude Code (skipped: the Mac's backend)");
-  });
-
-  it("names backends at their limit and when they reset", async () => {
-    const { usageFallbackStatus } = await import("../src/gateway/ui/sheets/sheetLogic");
+  it("names backends at their limit and when they reset", () => {
     expect(usageFallbackStatus(snapshot("Copilot", true))).toBe("At its usage limit: Claude Code until 5:00 AM.");
     expect(usageFallbackStatus(snapshot("Copilot"))).toContain("every tab");
     expect(usageFallbackStatus(snapshot(""))).toBe("Off: a usage limit stops the run with the error.");

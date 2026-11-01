@@ -106,7 +106,7 @@ function LimitRow(props: { title: string; used: number | null; resetsAt?: string
 }
 
 /** ClaudeUsageSection: Claude Code's 5-hour and weekly limits, as the Mac reads them from Claude. */
-function ClaudeSection(props: { state: ClaudeUsageState; now: number }): JSX.Element {
+export function ClaudeSection(props: { state: ClaudeUsageState; now: number }): JSX.Element {
   const { state, now } = props;
   const account = state.account;
   return (
@@ -128,7 +128,7 @@ function ClaudeSection(props: { state: ClaudeUsageState; now: number }): JSX.Ele
 }
 
 /** AntigravityUsageSection: Antigravity's weekly and 5-hour limits per model group, as the Mac reads them from agy. */
-function AntigravitySection(props: { state: AntigravityUsageState; now: number }): JSX.Element {
+export function AntigravitySection(props: { state: AntigravityUsageState; now: number }): JSX.Element {
   const { state, now } = props;
   const groups = state.account?.groups ?? [];
   if (!groups.length) {
@@ -162,7 +162,7 @@ function AntigravitySection(props: { state: AntigravityUsageState; now: number }
 }
 
 /** CodexUsageSection: Codex's limits, as the Mac reads them from codex app-server. */
-function CodexSection(props: { state: CodexUsageState; now: number }): JSX.Element {
+export function CodexSection(props: { state: CodexUsageState; now: number }): JSX.Element {
   const { state, now } = props;
   const account = state.account;
   const plan = account?.plan;

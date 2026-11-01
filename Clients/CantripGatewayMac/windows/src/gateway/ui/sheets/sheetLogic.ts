@@ -7,7 +7,8 @@ import type {
   CopilotQuotaBucket, CopilotUsageSnapshot, MCPServer, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
-  ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackEntry, UsageFallbackRequest, UsageFallbackSnapshot,
+  ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackChoice, UsageFallbackEntryChange, UsageFallbackRequest,
+  UsageFallbackSnapshot,
   AntigravityLimitBucket, AntigravityUsageState, ClaudeLimitWindow, ClaudeUsageState, CodexLimitWindow, CodexUsageState,
 } from "../../api/types";
 
@@ -792,73 +793,190 @@ export function normalizedPoint(clientX: number, clientY: number, rect: { left: 
   return { x: clamp((clientX - rect.left) / rect.width), y: clamp((clientY - rect.top) / rect.height) };
 }
 
-/** The backup chain in the order tried (CantripUsageFallback.chain); older Macs send only `backend`. */
+// MARK: Usage limit fallback (CantripUsageFallbackSection)
+// Each backup is a backend with the model and effort it runs, and a backend can be listed again with another
+// model, so the editor addresses backups by their position in the chain, never by backend.
+
+/** The chain's backends in the order tried (a backend twice when it's listed twice); older Macs send only `backend`. */
 export function usageFallbackChain(value: UsageFallbackSnapshot): string[] {
-  return value.backends ?? (value.backend ? [value.backend] : []);
+  return value.entries?.map((entry) => entry.backend) ?? value.backends ?? (value.backend ? [value.backend] : []);
 }
 
-/** Backends that could still be added; a Mac from before the chain takes only one. */
-export function usageFallbackAddable(value: UsageFallbackSnapshot): { id: string; label: string }[] {
+/** The chain as backups, without the read-only fields; a Mac from before backup models runs each one's defaults. */
+export function usageFallbackEntries(value: UsageFallbackSnapshot): UsageFallbackEntryChange[] {
+  return value.entries
+    ? value.entries.map((entry) => ({ backend: entry.backend, model: entry.model ?? "", effort: entry.effort ?? "" }))
+    : usageFallbackChain(value).map((backend) => ({ backend, model: "", effort: "" }));
+}
+
+/** Whether the Mac takes a backend more than once with different models: Macs from before per-model backups
+ * send no `limitedModels` or `primaryChoice`, and refuse a backend listed twice. */
+export function usageFallbackPerModel(value: UsageFallbackSnapshot): boolean {
+  return Boolean(value.entries) && (Array.isArray(value.limitedModels) || Boolean(value.primaryChoice));
+}
+
+/** Backends a backup can run on: the listed choices, and the Mac's own backend to list again with another model. */
+export function usageFallbackChoices(value: UsageFallbackSnapshot): UsageFallbackChoice[] {
+  const primary = usageFallbackPerModel(value) ? value.primaryChoice : null;
+  return primary && !value.choices.some((choice) => choice.id === primary.id) ? [...value.choices, primary] : value.choices;
+}
+
+function fallbackChoice(value: UsageFallbackSnapshot, backend: string): UsageFallbackChoice | undefined {
+  return usageFallbackChoices(value).find((choice) => choice.id === backend);
+}
+
+/** The model a backup on `backend` runs: its own, or the one its default runs ("" when only the CLI knows it). */
+export function usageFallbackRuns(value: UsageFallbackSnapshot, backend: string, model: string): string {
+  return model || fallbackChoice(value, backend)?.defaultModelID || "";
+}
+
+/** Models already taken on `backend`: the ones its other backups run (all but the one at `except`), and the
+ * Mac's own model on the Mac's own backend. */
+export function usageFallbackTaken(value: UsageFallbackSnapshot, backend: string, except?: number): Set<string> {
+  const taken = new Set(usageFallbackEntries(value).flatMap((entry, index) =>
+    index !== except && entry.backend === backend ? [usageFallbackRuns(value, backend, entry.model)] : []));
+  if (backend === value.primary) taken.add(usageFallbackRuns(value, backend, ""));
+  return taken;
+}
+
+/** The model a new backup on `backend` would run that the chain doesn't have yet: its default ("") first, then
+ * the first of its models not taken; undefined when none is free. Before per-model backups, a backend is
+ * listed once. */
+export function usageFallbackFreeModel(value: UsageFallbackSnapshot, backend: string): string | undefined {
+  if (!usageFallbackPerModel(value)) return usageFallbackChain(value).includes(backend) ? undefined : "";
+  const taken = usageFallbackTaken(value, backend);
+  if (!taken.has(usageFallbackRuns(value, backend, ""))) return "";
+  return fallbackChoice(value, backend)?.models?.map((model) => model.id).find((id) => !taken.has(id));
+}
+
+/** "Add a backup": each backend with a free model, the one a new backup on it would run, and its name ("<backend>
+ * with another model" when it's already in the chain or is the Mac's own). A Mac from before the chain takes
+ * only one backup. */
+export function usageFallbackAddable(value: UsageFallbackSnapshot): { id: string; label: string; model: string }[] {
   const chain = usageFallbackChain(value);
-  if (!value.backends && chain.length) return [];
-  return value.choices.filter((choice) => !chain.includes(choice.id));
+  if (!value.entries && !value.backends && chain.length) return [];
+  return usageFallbackChoices(value).flatMap((choice) => {
+    const model = usageFallbackFreeModel(value, choice.id);
+    if (model === undefined) return [];
+    const again = choice.id === value.primary || chain.includes(choice.id);
+    return [{ id: choice.id, label: again ? `${choice.id} with another model` : choice.label, model }];
+  });
 }
 
-/** A backup's name; the Mac's own backend is skipped while it's the primary. */
-export function usageFallbackLabel(value: UsageFallbackSnapshot, id: string): string {
-  const name = value.choices.find((choice) => choice.id === id)?.label ?? id;
-  return id === value.primary ? `${name} (skipped: the Mac's backend)` : name;
+/** The request that saves `entries` as the whole chain: `entries` where the Mac sends them, else its order
+ * (`backends`), else the first backup of a Mac from before the chain (`backend`). */
+export function usageFallbackSave(value: UsageFallbackSnapshot, entries: UsageFallbackEntryChange[]): UsageFallbackRequest {
+  if (value.entries) {
+    return { revision: value.revision, entries: entries.map(({ backend, model, effort }) => ({ backend, model, effort })) };
+  }
+  return value.backends
+    ? { revision: value.revision, backends: entries.map((entry) => entry.backend) }
+    : { revision: value.revision, backend: entries[0]?.backend ?? "" };
 }
 
-/** The chain moved one step: `offset` -1 tries `index` earlier, 1 later. */
-export function usageFallbackMoved(chain: string[], index: number, offset: -1 | 1): string[] {
+/** Adds a backup on `backend` running its free model; null when it has none. */
+export function usageFallbackAdd(value: UsageFallbackSnapshot, backend: string): UsageFallbackRequest | null {
+  const model = usageFallbackFreeModel(value, backend);
+  return model === undefined ? null : usageFallbackSave(value, [...usageFallbackEntries(value), { backend, model, effort: "" }]);
+}
+
+/** The list moved one step: `offset` -1 tries `index` earlier, 1 later. */
+export function usageFallbackMoved<T>(chain: T[], index: number, offset: -1 | 1): T[] {
   const next = [...chain];
   const target = index + offset;
-  if (target < 0 || target >= next.length) return next;
+  if (index < 0 || index >= next.length || target < 0 || target >= next.length) return next;
   [next[index], next[target]] = [next[target], next[index]];
   return next;
 }
 
-/** The request that sets `chain`; a Mac from before the chain only takes its first entry. */
-export function usageFallbackChange(value: UsageFallbackSnapshot, chain: string[]): UsageFallbackRequest {
-  return value.backends
-    ? { revision: value.revision, backends: chain }
-    : { revision: value.revision, backend: chain[0] ?? "" };
+/** Tries the backup at `index` one step earlier (-1) or later (1). */
+export function usageFallbackMove(value: UsageFallbackSnapshot, index: number, offset: -1 | 1): UsageFallbackRequest {
+  return usageFallbackSave(value, usageFallbackMoved(usageFallbackEntries(value), index, offset));
 }
 
-/** A backup's model and effort ("" = its default). */
-export function usageFallbackEntry(value: UsageFallbackSnapshot, backend: string): UsageFallbackEntry {
-  return value.entries?.find((entry) => entry.backend === backend) ?? { backend, model: "", effort: "" };
+/** Removes the backup at `index`, keeping the others in order. */
+export function usageFallbackRemove(value: UsageFallbackSnapshot, index: number): UsageFallbackRequest {
+  return usageFallbackSave(value, usageFallbackEntries(value).filter((_, other) => other !== index));
 }
 
-/** Models offered for a backup; undefined when the Mac doesn't take backup models or the backend has no picker. */
-export function usageFallbackModels(value: UsageFallbackSnapshot, backend: string): { id: string; label: string; efforts?: string[] }[] | undefined {
-  return value.entries ? value.choices.find((choice) => choice.id === backend)?.models : undefined;
+/** Sets the model and effort of the backup at `index` ("" = its default), keeping the others. */
+export function usageFallbackModelChange(value: UsageFallbackSnapshot, index: number, model: string, effort: string): UsageFallbackRequest {
+  return usageFallbackSave(value, usageFallbackEntries(value).map((entry, other) => (other === index ? { ...entry, model, effort } : entry)));
+}
+
+/** The backup at `index` ("" model or effort = its default). */
+export function usageFallbackEntry(value: UsageFallbackSnapshot, index: number): UsageFallbackEntryChange {
+  return usageFallbackEntries(value)[index] ?? { backend: "", model: "", effort: "" };
+}
+
+/** Whether the Mac skips the backup at `index`: its own backend running its own model (or, before per-model
+ * backups, its own backend at all). */
+export function usageFallbackSkipped(value: UsageFallbackSnapshot, index: number): boolean {
+  const entry = usageFallbackEntry(value, index);
+  if (!entry.backend || entry.backend !== value.primary) return false;
+  if (!usageFallbackPerModel(value)) return true;
+  return usageFallbackRuns(value, entry.backend, entry.model) === usageFallbackRuns(value, entry.backend, "");
+}
+
+/** The backup's name: the Mac's label for it ("Antigravity · Gemini 3.8 Flash (Medium)"), else its backend's. */
+export function usageFallbackLabel(value: UsageFallbackSnapshot, index: number): string {
+  const backend = usageFallbackEntry(value, index).backend;
+  const name = value.entries?.[index]?.label || fallbackChoice(value, backend)?.label || backend;
+  return usageFallbackSkipped(value, index) ? `${name} (skipped: the Mac's backend)` : name;
+}
+
+/** "at its limit until 8:00 PM" while the backup's backend or model is at its limit, else null. */
+export function usageFallbackLimitNote(value: UsageFallbackSnapshot, index: number): string | null {
+  const until = value.entries?.[index]?.limitedUntilLabel;
+  return until ? `at its limit until ${until}` : null;
+}
+
+/** The model picker for the backup at `index`: "Default" while it's free or chosen, the backend's models other
+ * backups on it (and the Mac itself, on its own backend) don't run, and the chosen one even when it's no longer
+ * offered. Undefined when the Mac doesn't take backup models or the backend always runs its default. */
+export function usageFallbackModelOptions(value: UsageFallbackSnapshot, index: number): { value: string; label: string }[] | undefined {
+  const entry = usageFallbackEntries(value)[index];
+  const choice = value.entries && entry ? fallbackChoice(value, entry.backend) : undefined;
+  if (!entry || !choice?.models) return undefined;
+  const taken = usageFallbackTaken(value, entry.backend, index);
+  const options: { value: string; label: string }[] = [];
+  if (!entry.model || !taken.has(usageFallbackRuns(value, entry.backend, ""))) {
+    options.push({ value: "", label: choice.defaultModel ? `Default (${choice.defaultModel})` : "Default model" });
+  }
+  for (const model of choice.models) {
+    if (model.id === entry.model || !taken.has(model.id)) options.push({ value: model.id, label: model.label });
+  }
+  if (entry.model && !choice.models.some((model) => model.id === entry.model)) {
+    options.push({ value: entry.model, label: `${entry.model} (not offered now)` });
+  }
+  return options;
 }
 
 /** Efforts for the backup's chosen model, or its default model's. */
-export function usageFallbackEfforts(value: UsageFallbackSnapshot, backend: string): string[] {
-  const choice = value.choices.find((item) => item.id === backend);
-  const model = usageFallbackEntry(value, backend).model;
-  return (model ? choice?.models?.find((item) => item.id === model)?.efforts : choice?.defaultEfforts) ?? [];
+export function usageFallbackEfforts(value: UsageFallbackSnapshot, index: number): string[] {
+  const entry = usageFallbackEntries(value)[index];
+  const choice = entry ? fallbackChoice(value, entry.backend) : undefined;
+  if (!entry || !choice) return [];
+  return (entry.model ? choice.models?.find((item) => item.id === entry.model)?.efforts : choice.defaultEfforts) ?? [];
 }
 
-/** The request that sets one backup's model and effort, keeping the others. */
-export function usageFallbackModelChange(value: UsageFallbackSnapshot, backend: string, model: string, effort: string): UsageFallbackRequest {
-  return {
-    revision: value.revision,
-    entries: usageFallbackChain(value).map((id) => (id === backend ? { backend, model, effort } : usageFallbackEntry(value, id))),
-  };
+/** Every limit in force: whole backends ("Copilot until 5:00 AM") and model quotas ("Antigravity Gemini 4 Argon
+ * until 8:00 PM"). "Try every backend again" clears them all. */
+export function usageFallbackLimits(value: UsageFallbackSnapshot): string[] {
+  return [
+    ...value.limited.map((entry) => `${entry.backend} until ${entry.untilLabel}`),
+    ...(value.limitedModels ?? []).map((entry) => `${entry.backend} ${entry.label} until ${entry.untilLabel}`),
+  ];
 }
 
 /** The status line under the backups (CantripUsageFallback.status). */
 export function usageFallbackStatus(value: UsageFallbackSnapshot): string {
-  if (value.limited.length) {
-    return `At its usage limit: ${value.limited.map((entry) => `${entry.backend} until ${entry.untilLabel}`).join(", ")}.`;
-  }
-  return usageFallbackChain(value).length
-    ? "New messages from every tab move there until the limit resets. Council seats and Private Local tabs don't switch."
-    : "Off: a usage limit stops the run with the error.";
+  const limits = usageFallbackLimits(value);
+  if (limits.length) return `At its usage limit: ${limits.join(", ")}.`;
+  if (!usageFallbackChain(value).length) return "Off: a usage limit stops the run with the error.";
+  return "New messages from every tab move there until the limit resets."
+    + (usageFallbackPerModel(value) ? " Where a backend's models have their own limits, only that model is skipped." : "")
+    + " Council seats and Private Local tabs don't switch.";
 }
 
 /** ClaudeLimitWindow.title. */
