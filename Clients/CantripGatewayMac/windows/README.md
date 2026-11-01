@@ -52,7 +52,10 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   artifacts with thumbnails, the image viewer, Save and Delete.
 - **Sheets.** Background runs (answer a waiting run in place), a tab's background tasks and
   queue (each message's suggested plan, **Run in child tab**, Send now, Remove), Model Settings (with the Mac-wide usage limit fallbacks: add, reorder and remove backups, pick each one's model and effort, and list a backend again, the Mac's own included, with another model; and Private Local), Rename, Usage Limits (Claude Code, Antigravity, Codex and Copilot, with each model's own limits), Cantrip Memory (formatted
-  Markdown or its source), GitHub Builds, Update & Rebuild Cantrip, and Mac Permissions & View Mac.
+  Markdown or its source), GitHub Builds, Update & Rebuild Cantrip, Mac Permissions & View Mac, MCP Servers, and Skills & Rules
+  (the Mac's one skills library: switch a skill on or off for every backend, see which backends
+  see it and its problems, Relink, the folder rules, and a rules drift check with **Check now**;
+  older Macs say to update Cantrip).
 - **Voice.** Dictation from the composer's microphone and Voice Mode (hold the microphone),
   with speech recognition running on this PC after a one-time model download, and replies
   read aloud with a Windows voice.

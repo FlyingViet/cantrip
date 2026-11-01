@@ -207,6 +207,7 @@ export function homeMoreMenu(): MenuEntry[] {
     { kind: "header", label: "Cantrip Mac" },
     { label: "Mac Permissions & View Mac", icon: "desktopcomputer", disabled: !remote.listed.value, onSelect: () => { nav.sheet.value = { kind: "macAccess" }; } },
     { label: "MCP Servers", icon: "point.3.connected", disabled: !remote.listed.value, onSelect: () => { nav.sheet.value = { kind: "mcpServers" }; } },
+    { label: "Skills & Rules", icon: "books.vertical", disabled: !remote.listed.value, onSelect: () => { nav.sheet.value = { kind: "skills" }; } },
     { label: "Update & Rebuild Cantrip", icon: "arrow.clockwise", disabled: !remote.listed.value, onSelect: () => { nav.sheet.value = { kind: "maintenance" }; } },
     { kind: "separator" },
     ...settingsEntries());

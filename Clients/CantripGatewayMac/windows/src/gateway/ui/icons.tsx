@@ -4,7 +4,7 @@ import {
   ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Circle, CircleCheck, CircleDot, CircleEllipsis, CircleHelp,
   CirclePause, CirclePlay, CirclePlus, CircleStop, CircleX, Clock, Cog, Copy, Download, Ellipsis, Eraser, ExternalLink,
   Eye, EyeOff, File, FileText, Film, Folder, FolderOpen, FolderPlus, Gauge, GitBranch, GripVertical, Hammer, History, Hourglass, House, Image,
-  Images, Info, KeyRound, Layers, LayoutGrid, Link, ListChecks, ListOrdered, Lock, LogOut, MessagesSquare, Mic, Monitor,
+  Images, Info, KeyRound, Layers, LayoutGrid, Library, Link, ListChecks, ListOrdered, Lock, LogOut, MessagesSquare, Mic, Monitor,
   PanelLeft, Paperclip, Pause, Pencil, Play, Plus, Power, RadioTower, RotateCw, Rows3, Search, Send, Server, Settings,
   Settings2, Shirt, ShieldCheck, SlidersHorizontal, Sparkles, Square, SquareArrowOutUpRight, Star, Terminal, Timer, Trash2,
   TriangleAlert, Undo2, Unlink, UserRound, Volume2, Wifi, WifiOff, Wrench, X, Zap,
@@ -33,7 +33,7 @@ const ICONS = {
   "line.3.horizontal": GripVertical, "arrow.up.arrow.down": ArrowUpDown, star: Star, shippingbox: Box, doc: File,
   "rectangle.portrait.and.arrow.right": LogOut, power: Power, waveformPath: Activity, cpu: Bot, person: UserRound,
   "record.circle": CircleDot, circle: Circle, timer: Timer, "clock.arrow.circlepath": History, "list.bullet": Rows3,
-  server: Server, "arrow.triangle.branch": GitBranch,
+  server: Server, "arrow.triangle.branch": GitBranch, "books.vertical": Library,
 } satisfies Record<string, IconNode>;
 
 export type IconName = keyof typeof ICONS;

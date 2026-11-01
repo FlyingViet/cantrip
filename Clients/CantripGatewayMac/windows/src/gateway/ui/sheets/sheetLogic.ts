@@ -1,10 +1,10 @@
 // Pure rules behind the tool sheets, ported from the shared Hermes Swift views so they can be unit
 // tested: model settings (CantripModelSettings.swift), tab names (ChatTabMetadata.swift), Copilot
 // usage (CopilotUsageView.swift), memory paging (CantripMemoryView.swift), GitHub builds
-// (GitHubBuildsView.swift), maintenance (CantripMaintenanceView.swift) and View Mac's AES-GCM framing
-// (CantripMacAccess.swift). No DOM or API client imports, so it runs under Node.
+// (GitHubBuildsView.swift), maintenance (CantripMaintenanceView.swift), Skills & Rules (CantripSkills.swift)
+// and View Mac's AES-GCM framing (CantripMacAccess.swift). No DOM or API client imports, so it runs under Node.
 import type {
-  CopilotQuotaBucket, CopilotUsageSnapshot, MCPServer, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
+  CopilotQuotaBucket, CopilotUsageSnapshot, MCPServer, SkillEntry, SkillsDrift, SkillsRule, SkillsSnapshot, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
   ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackChoice, UsageFallbackEntryChange, UsageFallbackRequest,
@@ -1088,4 +1088,98 @@ export function mcpStatus(server: MCPServer): { text: string; tone: "" | "attent
     case "failed": return { text: "Sign-in failed", tone: "warning" };
     default: return { text: "Not signed in", tone: "warning" };
   }
+}
+
+// MARK: Skills & Rules (CantripSkills.swift)
+
+export const SKILLS_TITLE = "Skills & Rules";
+export const SKILLS_EXPLAINER_LEAD = "Cantrip keeps one skills library and gives every backend the same skills and folder rules. Edit skills on the Mac";
+export const SKILLS_EDIT_COMMAND = "cantrip skills edit NAME";
+export const SKILLS_UNSUPPORTED = "This Mac's Cantrip doesn't share skills yet. Update Cantrip on the Mac.";
+
+/** A skills payload with its defaults filled in. */
+export interface SkillsState {
+  library: string;
+  backends: string[];
+  skills: Required<SkillEntry>[];
+  rules: SkillsRule[];
+  drift: SkillsDrift[];
+  driftCheckedAt: string | null;
+  checking: boolean;
+  messages?: string[];
+}
+
+/** A 200 that isn't a skills payload is `INVALID_RESPONSE`; optional fields get their defaults. */
+export function normalizeSkills(value: unknown): SkillsState {
+  const raw = value as Partial<SkillsSnapshot> | null;
+  if (!raw || !Array.isArray(raw.skills)) throw new InvalidResponseError();
+  return {
+    library: raw.library ?? "",
+    backends: raw.backends ?? [],
+    skills: raw.skills.map((skill) => ({
+      ...skill, description: skill.description ?? "", enabled: skill.enabled === true,
+      backends: skill.backends ?? [], problems: skill.problems ?? [],
+    })),
+    rules: raw.rules ?? [],
+    drift: raw.drift ?? [],
+    driftCheckedAt: raw.driftCheckedAt ?? null,
+    checking: raw.checking === true,
+    messages: raw.messages,
+  };
+}
+
+/** Every ~2 s while the drift check runs, otherwise no faster than every ~10 s. */
+export function skillsPollDelay(snapshot: Pick<SkillsSnapshot, "checking"> | null | undefined): number {
+  return snapshot?.checking ? 2000 : 10000;
+}
+
+export function skillSeenBy(skill: Pick<SkillEntry, "backends">): string {
+  const backends = skill.backends ?? [];
+  return backends.length ? `Seen by: ${backends.join(", ")}` : "No backend sees it";
+}
+
+export function skillToggleLabel(skill: Pick<SkillEntry, "name" | "enabled">): string {
+  return `${skill.name}, ${skill.enabled ? "on" : "off"} for every backend`;
+}
+
+export function skillsRuleText(rule: SkillsRule): string {
+  const text = `${rule.folder} — ${rule.lines} ${rule.lines === 1 ? "line" : "lines"}`;
+  return rule.mirror ? `${text} (mirrored to ${rule.mirror})` : text;
+}
+
+/** "just now" under a minute, else `RelativeDateTimeFormatter` (.full, .named): "5 minutes ago", "yesterday". */
+export function skillsRelative(date: Date, now = Date.now(), locale?: string): string {
+  const seconds = Math.max(0, Math.floor((now - date.getTime()) / 1000));
+  if (seconds < 60) return "just now";
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [
+    ["year", 365 * 86400], ["month", 30 * 86400], ["week", 7 * 86400], ["day", 86400], ["hour", 3600], ["minute", 60],
+  ];
+  const [unit, size] = units.find(([, size]) => seconds >= size) ?? ["minute", 60];
+  return new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(-Math.floor(seconds / size), unit);
+}
+
+export function skillsDriftStatus(snapshot: Pick<SkillsSnapshot, "checking" | "driftCheckedAt">, now = Date.now(), locale?: string): string {
+  if (snapshot.checking) return "Checking…";
+  const checked = snapshot.driftCheckedAt ? new Date(snapshot.driftCheckedAt) : null;
+  if (!checked || Number.isNaN(checked.getTime())) return "Not checked yet";
+  return `Last checked ${skillsRelative(checked, now, locale)}`;
+}
+
+/** Drift was checked and found nothing. */
+export function skillsDriftClear(snapshot: Pick<SkillsSnapshot, "checking" | "drift" | "driftCheckedAt">): boolean {
+  return !snapshot.checking && !(snapshot.drift ?? []).length && Boolean(snapshot.driftCheckedAt);
+}
+
+export function skillsDriftSummary(snapshot: Pick<SkillsSnapshot, "drift">): string {
+  const count = (snapshot.drift ?? []).length;
+  return count === 0 ? "No drift found" : count === 1 ? "1 drift finding" : `${count} drift findings`;
+}
+
+export function skillsRelinkSummary(messages: readonly string[]): string {
+  return messages.length ? `Relinked: ${messages.join(". ")}` : "Relinked. Everything was already linked.";
+}
+
+/** A toggle shows its new state at once; the Mac's answer (or a reload) settles it. */
+export function skillsWithEnabled<T extends Pick<SkillsSnapshot, "skills">>(snapshot: T, name: string, enabled: boolean): T {
+  return { ...snapshot, skills: snapshot.skills.map((skill) => (skill.name === name ? { ...skill, enabled } : skill)) };
 }
