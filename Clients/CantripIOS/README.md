@@ -1244,6 +1244,28 @@ local-network-only pairing refreshes the widget whenever the app is open.
 Private tabs are never included. Tab titles and current steps can appear on the
 Lock Screen and are hidden when iOS redacts widgets on a locked device.
 
+### Cantrip on Apple Watch
+
+The **Cantrip** watch app talks to Cantrip Home: tap the microphone, speak, and
+the watch sends the clip to your Mac, which transcribes it and sends it to Home
+like a typed message (it shows in Home on every client). The watch shows what
+it heard and Home's reply, and speaks the reply (turn off **Speak replies** in
+the watch's settings to only read it). It stops listening after a short pause,
+or tap again to send sooner. **Ask Cantrip** also works from Siri and
+Shortcuts on the watch ("Ask Cantrip").
+
+Set up: pair Cantrip Agent on the iPhone with your Mac over Tailscale (an HTTPS
+`*.ts.net` URL), open Cantrip on the watch and tap **Set up with your iPhone**.
+The watch makes its own signing key (kept in the Secure Enclave), and the
+iPhone registers it with the selected Mac using its pairing token; the token
+never leaves the iPhone. Remove a watch from Cantrip on the Mac.
+
+The watch reaches the Mac through the iPhone's Tailscale URL while it's using
+the iPhone's connection. To use it away from the iPhone, turn on the internet
+route in Cantrip on the Mac; it serves only the watch's voice requests, each
+signed by the watch. Needs an updated Mac host (`/api/v1/voice`,
+`/api/v1/watch/devices`).
+
 ### GitHub build queue
 
 Open **hamburger menu > GitHub Builds** from any chat lane to see builds
