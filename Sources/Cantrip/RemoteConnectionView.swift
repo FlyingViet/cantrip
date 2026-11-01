@@ -125,7 +125,7 @@ struct RemoteConnectionView: View {
 
 @MainActor
 final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
-    WKScriptMessageHandler, WKUIDelegate {
+    WKScriptMessageHandler, WKUIDelegate, WKDownloadDelegate {
     @Published var address: String
     @Published var pairingToken = ""
     @Published var tailscaleOnly: Bool
@@ -360,6 +360,14 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
             decisionHandler(.cancel)
             return
         }
+        // The paired page's own downloads (artifact files it fetched with the pairing token
+        // and handed over as a blob) go through a Save panel; nothing else downloads.
+        if navigationAction.shouldPerformDownload, target.scheme?.lowercased() == "blob",
+           navigationAction.sourceFrame.isMainFrame, sameOrigin(webView.url, endpoint),
+           sameOrigin(URL(string: String(target.absoluteString.dropFirst("blob:".count))), endpoint) {
+            decisionHandler(.download)
+            return
+        }
         if target.absoluteString == "about:blank" || sameOrigin(target, endpoint) {
             decisionHandler(.allow)
         } else if navigationAction.navigationType == .linkActivated,
@@ -370,6 +378,33 @@ final class RemoteConnection: NSObject, ObservableObject, WKNavigationDelegate,
             errorMessage = "Blocked navigation outside the paired Cantrip host."
             decisionHandler(.cancel)
         }
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    /// Save As, starting in Downloads; Cancel ends the download.
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
+                  suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        let panel = NSSavePanel()
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.nameFieldStringValue = (suggestedFilename as NSString).lastPathComponent
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.presentKeepingPanelOpen(on: webView.window) { response in
+            guard response == .OK, let url = panel.url else {
+                completionHandler(nil)
+                return
+            }
+            // The panel already confirmed replacing an existing file; WKDownload won't overwrite.
+            try? FileManager.default.removeItem(at: url)
+            completionHandler(url)
+        }
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        errorMessage = "The download didn't finish: \(error.localizedDescription)"
     }
 
     /// JavaScript confirm() for the paired Remote page (e.g. approving a message

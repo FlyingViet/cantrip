@@ -1187,8 +1187,13 @@ Windows app needs Cantrip v1.0-161 or later on the Mac.
 When Cantrip Home is on, **Artifacts** sits next to **Tasks** in the browser
 Remote, Mac Remote and the Windows app. It lists the documents and media Home
 saved on the Mac, with thumbnails for images and videos. Images open in the
-viewer; other files download. **Delete** asks first and removes the file from
-the Mac. **Create in Chat** opens Home with "Create a " in the message box.
+viewer; other files download. Each card's **Download** button saves the
+original file, and artifacts in a folder add **Download folder** for the whole
+folder as a zip (see [Saving artifacts on a client](cantrip-home.md#saving-artifacts-on-a-client)).
+The browser fetches the file with the pairing token and hands it to its normal
+download; the Mac Remote asks where to save it, starting in Downloads.
+**Delete** asks first and removes the file from the Mac. **Create in Chat**
+opens Home with "Create a " in the message box.
 
 ## Rename and protect remote tabs
 
