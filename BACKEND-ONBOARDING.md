@@ -321,6 +321,9 @@ live run.
   for that tab, make it an opt-in setting that is off by default (291336e).
 
 **Privacy**
+- Turn the CLI's own memory off for everything Cantrip starts (`CLIMemory`); Cantrip Memory is
+  the only durable store. If the CLI has no switch, check that facts don't carry between its
+  conversations and record that in `docs/privacy-and-memory.md`.
 - Private Local tabs never reach a cloud backend. Private tabs follow `MemoryStore`'s rules.
   Never log prompts, secrets or tokens. Secrets the agent asks for use the secure prompt, never
   the chat (eed73f0).

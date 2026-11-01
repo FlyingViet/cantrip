@@ -104,9 +104,10 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
         }
     }
 
-    /// Launch arguments after `app-server`: the shared MCP servers (and plugin servers).
+    /// Launch arguments after `app-server`: Codex's own memory off, then the shared MCP servers
+    /// (and plugin servers).
     func launchArguments() -> [String] {
-        var args = PluginManager.codexMCPOverrides()
+        var args = CLIMemory.codexArguments + PluginManager.codexMCPOverrides()
         if let snapshot = MCPRegistry.load(), snapshot.importedAt != nil {
             args += MCPBackendConfig.codexArgs(snapshot, excluded: excludedMcpServers.union(MCPBackendConfig.tabDisabled(tabID)))
         }

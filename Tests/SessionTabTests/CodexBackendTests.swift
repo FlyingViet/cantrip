@@ -6,11 +6,25 @@ extension SessionTabTests {
     /// checks, usage limits, resume, steering and Stop are tested without an account.
     @MainActor
     static func testCodexBackend() async throws {
+        testCLIMemoryOff()
         testCodexModelList()
         try await testCodexUsageLimits()
         testCodexItems()
         try await testCodexAppServerTurns()
         print("Codex: models, limits, items, approvals, Home checks, resume, steering and Stop passed")
+    }
+
+    /// Cantrip Memory is the one durable memory: every CLI Cantrip starts has its own switched off.
+    static func testCLIMemoryOff() {
+        CLIMemory.exportEnvironment()
+        precondition(ProcessInfo.processInfo.environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1",
+                     "Claude Code processes inherit auto-memory off")
+        let args = CodexBackend(persistKey: "cli-memory-test").launchArguments()
+        precondition(Array(args.prefix(CLIMemory.codexArguments.count)) == CLIMemory.codexArguments
+                     && args.contains("memories.generate_memories=false") && args.contains("memories.use_memories=false"),
+                     "Codex starts with its memories feature off: \(args)")
+        precondition(CopilotSessionBridge.script.contains("memory: { enabled: false }"),
+                     "Copilot sessions start with memory off")
     }
 
     static func testCodexModelList() {

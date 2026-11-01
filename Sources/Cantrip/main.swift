@@ -16,6 +16,8 @@ if let watcherFlag = CommandLine.arguments.firstIndex(of: "--cantrip-crash-watch
 
 // Agents' builds (and `cantrip cleanup`) find the build disk in their environment.
 BuildCaches.exportBuildRoot(UserDefaults.standard.string(forKey: "buildRoot"))
+// Every CLI Cantrip starts keeps its own memory off; Cantrip Memory is the one store.
+CLIMemory.exportEnvironment()
 
 // `Cantrip daemon|pair|config|status|doctor …`: a terminal client of the running host.
 let arguments = Array(CommandLine.arguments.dropFirst())

@@ -128,6 +128,24 @@ never transmitted.
 To stop using the vault, turn **Memory vault** off. This does not delete it.
 Back up notes before manually removing or rewriting them.
 
+## Keep memory in one place
+
+Cantrip Memory is the only durable memory. The CLIs' own memories stay off in every
+tab, child tab, Home task and helper call Cantrip starts, so a fact never lands in a
+store that skips these rules or that only one backend reads:
+
+| Backend | Its own memory | How Cantrip keeps it off |
+|---|---|---|
+| Claude Code | Auto-memory under `~/.claude/projects/*/memory` | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` for every process Cantrip starts |
+| Copilot | Copilot Memory, kept by GitHub | Each session starts with `memory: { enabled: false }`; `copilot -p` helper calls have it off by default |
+| Codex | Generated memories in `~/.codex` | `features.memories`, `memories.generate_memories` and `memories.use_memories` set to false at launch |
+| Antigravity | No setting or command turns memory on or off | None needed: no conversation has used a memory step, and facts don't carry between conversations |
+
+For the same behaviour when you run a CLI in Terminal, set `autoMemoryEnabled` and
+`autoDreamEnabled` to `false` in `~/.claude/settings.json`, add `[features] memories = false`
+and `[memories] generate_memories = false` and `use_memories = false` to
+`~/.codex/config.toml`, and turn off Copilot Memory in your GitHub Copilot settings.
+
 ## Background memory upkeep
 
 While **Memory vault** is on, Cantrip tidies the vault about once a day in the

@@ -272,6 +272,8 @@ enum CopilotSessionBridge {
         model: config.model || undefined, reasoningEffort: config.effort || undefined,
         contextTier: config.contextTier || undefined, streaming: true,
         enableConfigDiscovery: true, remoteSession: 'off', mcpOAuthTokenStorage: 'persistent',
+        // Cantrip Memory is the one durable memory; Copilot's own stays off (CLIMemory).
+        memory: { enabled: false },
         enableMcpApps: config.mcpApps === true,
         availableTools: config.readOnly ? [] : config.allowTools ? undefined : ['view', 'glob', 'grep'],
         excludedTools: config.allowSubagents === false || config.excludedTools?.length
