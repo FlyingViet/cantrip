@@ -70,124 +70,117 @@ struct CantripTabActions: View {
     }
 
     var body: some View {
-        if let parentID = state.parentID, let onOpenTab {
+        Section("Model & conversation") {
             Button {
-                onOpenTab(parentID)
+                model.modelSettingsSession = model.sessions.first { $0.id == state.id }
+                    ?? (model.selectedSession?.id == state.id ? model.selectedSession : nil)
             } label: {
-                Label("Open Parent Tab", systemImage: CantripChildTabStyle.glyph)
-            }
-            Divider()
-        }
-        Button {
-            model.showingMacAccess = true
-        } label: {
-            Label("Mac Permissions & View Mac", systemImage: "display")
-        }
-        Button {
-            model.mcpServersTab = state.id
-            model.showingMCPServers = true
-        } label: {
-            Label("MCP Servers", systemImage: "point.3.connected.trianglepath.dotted")
-        }
-        Button {
-            model.showingSkills = true
-        } label: {
-            Label(CantripSkills.title, systemImage: "books.vertical")
-        }
-        if state.supportsInputRequests {
-            Button {
-                Task { await model.showInputRequests(sessionID: state.id) }
-            } label: {
-                Label("View Questions in Chat", systemImage: "person.crop.circle.badge.questionmark")
-            }
-            if !state.isLocalPrivate {
-                Button {
-                    Task { await model.send("/login github", mode: .queue, sessionID: state.id) }
-                } label: {
-                    Label("Sign in to GitHub on Mac", systemImage: "person.badge.key")
-                }
-                .disabled(state.isMutating || state.isBusy)
-            }
-        }
-        Button {
-            model.modelSettingsSession = model.sessions.first { $0.id == state.id }
-                ?? (model.selectedSession?.id == state.id ? model.selectedSession : nil)
-        } label: {
-            Label(state.isLocalPrivate ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
-        }
-        .disabled(state.isMutating)
-        CantripStartFreshMenuItem(model: model, sessionID: state.id, support: state.supportsStartFresh,
-                                  isDisabled: state.isMutating || state.isBusy)
-        Button(action: onRename) {
-            Label("Rename Tab", systemImage: "pencil")
-        }
-        .disabled(state.isMutating || !state.supportsTabMetadata)
-        Button {
-            Task { await model.updateTab(state.id, isLocked: !state.isLocked) }
-        } label: {
-            Label(state.isLocked ? "Unlock Tab" : "Lock Tab",
-                  systemImage: state.isLocked ? "lock.open" : "lock")
-        }
-        .disabled(state.isMutating || !state.supportsTabMetadata || state.isLocalPrivate)
-        if state.canFileInSection {
-            Menu {
-                Picker("Section", selection: Binding(
-                    get: { state.sectionID ?? CantripTabGrouping.looseID },
-                    set: { picked in
-                        Task { await model.fileTab(state.id, in: picked == CantripTabGrouping.looseID ? nil : picked) }
-                    }
-                )) {
-                    Text("Tabs").tag(CantripTabGrouping.looseID)
-                    ForEach(state.sections) { section in
-                        Text(section.name).tag(section.id)
-                    }
-                }
-                .pickerStyle(.inline)
-                Button {
-                    model.sectionPrompt = .create(fileTabID: state.id)
-                } label: {
-                    Label("New Section", systemImage: "folder.badge.plus")
-                }
-                Button {
-                    model.editingSections = true
-                } label: {
-                    Label("Edit Sections…", systemImage: "list.bullet")
-                }
-            } label: {
-                Label("Move to Section", systemImage: "folder")
+                Label(state.isLocalPrivate ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
             }
             .disabled(state.isMutating)
-        }
-        if state.isLocalPrivate {
-            Text("Permanent tab. History saved; self-hosted models only.")
-        }
-        if !state.supportsTabMetadata {
-            Text("Update and reopen Cantrip to rename or lock tabs.")
-        }
-        Divider()
-        if state.supportsTabReordering {
+            CantripStartFreshMenuItem(model: model, sessionID: state.id, support: state.supportsStartFresh,
+                                      isDisabled: state.isMutating || state.isBusy)
             Button {
-                Task { await model.moveTab(state.id, offset: -1) }
+                model.mcpServersTab = state.id
+                model.showingMCPServers = true
             } label: {
-                Label("Move Tab Up", systemImage: "arrow.up")
+                Label("Tools for This Tab", systemImage: "point.3.connected.trianglepath.dotted")
             }
-            .disabled(state.isMutating || state.isFirst)
+            if state.supportsInputRequests {
+                Button {
+                    Task { await model.showInputRequests(sessionID: state.id) }
+                } label: {
+                    Label("View Questions in Chat", systemImage: "person.crop.circle.badge.questionmark")
+                }
+                if !state.isLocalPrivate {
+                    Button {
+                        Task { await model.send("/login github", mode: .queue, sessionID: state.id) }
+                    } label: {
+                        Label("Sign in to GitHub on Mac", systemImage: "person.badge.key")
+                    }
+                    .disabled(state.isMutating || state.isBusy)
+                }
+            }
+        }
+        Section("Tab") {
+            if let parentID = state.parentID, let onOpenTab {
+                Button {
+                    onOpenTab(parentID)
+                } label: {
+                    Label("Open Parent Tab", systemImage: CantripChildTabStyle.glyph)
+                }
+            }
+            Button(action: onRename) {
+                Label("Rename Tab", systemImage: "pencil")
+            }
+            .disabled(state.isMutating || !state.supportsTabMetadata)
             Button {
-                Task { await model.moveTab(state.id, offset: 1) }
+                Task { await model.updateTab(state.id, isLocked: !state.isLocked) }
             } label: {
-                Label("Move Tab Down", systemImage: "arrow.down")
+                Label(state.isLocked ? "Unlock Tab" : "Lock Tab",
+                      systemImage: state.isLocked ? "lock.open" : "lock")
             }
-            .disabled(state.isMutating || state.isLast)
-        } else if state.parentID != nil {
-            Text("Child tab of \(state.parentTitle ?? "another tab"). It stays under it until its work merges.")
-        } else {
-            Text("Update and reopen Cantrip to reorder tabs.")
+            .disabled(state.isMutating || !state.supportsTabMetadata || state.isLocalPrivate)
+            if state.canFileInSection {
+                Menu {
+                    Picker("Section", selection: Binding(
+                        get: { state.sectionID ?? CantripTabGrouping.looseID },
+                        set: { picked in
+                            Task { await model.fileTab(state.id, in: picked == CantripTabGrouping.looseID ? nil : picked) }
+                        }
+                    )) {
+                        Text("Tabs").tag(CantripTabGrouping.looseID)
+                        ForEach(state.sections) { section in
+                            Text(section.name).tag(section.id)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    Button {
+                        model.sectionPrompt = .create(fileTabID: state.id)
+                    } label: {
+                        Label("New Section", systemImage: "folder.badge.plus")
+                    }
+                    Button {
+                        model.editingSections = true
+                    } label: {
+                        Label("Edit Sections…", systemImage: "list.bullet")
+                    }
+                } label: {
+                    Label("Move to Section", systemImage: "folder")
+                }
+                .disabled(state.isMutating)
+            }
+            if state.supportsTabReordering {
+                Button {
+                    Task { await model.moveTab(state.id, offset: -1) }
+                } label: {
+                    Label("Move Tab Up", systemImage: "arrow.up")
+                }
+                .disabled(state.isMutating || state.isFirst)
+                Button {
+                    Task { await model.moveTab(state.id, offset: 1) }
+                } label: {
+                    Label("Move Tab Down", systemImage: "arrow.down")
+                }
+                .disabled(state.isMutating || state.isLast)
+            } else if state.parentID != nil {
+                Text("Child tab of \(state.parentTitle ?? "another tab"). It stays under it until its work merges.")
+            } else {
+                Text("Update and reopen Cantrip to reorder tabs.")
+            }
+            if state.isLocalPrivate {
+                Text("Permanent tab. History saved; self-hosted models only.")
+            }
+            if !state.supportsTabMetadata {
+                Text("Update and reopen Cantrip to rename or lock tabs.")
+            }
         }
-        Divider()
-        Button(role: .destructive, action: onClose) {
-            Label("Close Tab", systemImage: "xmark")
+        Section {
+            Button(role: .destructive, action: onClose) {
+                Label("Close Tab", systemImage: "xmark")
+            }
+            .disabled(state.isMutating || state.isLocked)
         }
-        .disabled(state.isMutating || state.isLocked)
     }
 }
 
