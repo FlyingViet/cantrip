@@ -244,7 +244,7 @@ extension SessionTabTests {
         record.state = .finished
         precondition(record.actions == ["open"] && record.statusLine == "Done; merges into the parent's branch when the parent tab is idle")
         record.note = "Waiting: uncommitted changes."
-        precondition(record.actions == ["retry", "open"] && record.statusLine == "Waiting: uncommitted changes.")
+        precondition(record.actions == ["retry", "discard", "open"] && record.statusLine == "Waiting: uncommitted changes.")
         record.note = nil
         record.state = .conflict
         record.conflictFiles = ["a.swift"]
@@ -553,7 +553,7 @@ extension SessionTabTests {
         parentBackend.finish("Docs updated.")
         try await waitForJournalTest { store.record(tidy.id)?.note?.hasPrefix("Waiting: uncommitted changes in child-demo") == true }
         current = try record(tidy)
-        precondition(current.state == .finished && current.actions == ["retry", "open"] && current.statusLine == current.note)
+        precondition(current.state == .finished && current.actions == ["retry", "discard", "open"] && current.statusLine == current.note)
         precondition(read(repo + "/b.txt") == "alpha\nparent beta\ngamma\n", "the parent's edits stay")
         git("checkout", "--", "b.txt")
         try coordinator.perform("retry", childID: tidy.id)

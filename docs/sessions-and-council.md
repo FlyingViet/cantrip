@@ -276,7 +276,8 @@ match ([details](updating-and-troubleshooting.md#new-worktrees-reuse-installed-p
   branch for later (**Try Again** or **Discard**). If uncommitted edits in the
   parent's checkout touch the same files, or a merge, rebase, cherry-pick or
   revert is unfinished there, the merge waits and tries again after the
-  parent's next turn; Cantrip never aborts work it didn't start. While a merge
+  parent's next turn (**Discard** drops a waiting child whose work is already in
+  elsewhere); Cantrip never aborts work it didn't start. While a merge
   runs (seconds), new messages to the parent wait in its queue.
 - **Your work is kept:** a child's worktree is deleted only once everything in
   it is committed and merged (or you choose **Discard**). If Cantrip can't
