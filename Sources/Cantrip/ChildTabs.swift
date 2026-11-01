@@ -60,6 +60,8 @@ struct ChildTab: Codable, Equatable, Identifiable {
     var reportedState: State?
     /// Started by auto-fork rather than Run in Child Tab (optional: older records lack it).
     var autoStarted: Bool?
+    /// Dependency folders cloned from the parent's checkout into the worktree (optional: older records lack it).
+    var seededFolders: [String]?
     let createdAt: Date
     var updatedAt: Date
     var finishedAt: Date?

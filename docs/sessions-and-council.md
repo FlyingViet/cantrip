@@ -190,7 +190,9 @@ input redirect instead. See [Send now details](remote-control.md#see-queued-prom
 
 A queued message that doesn't depend on the current task can run in parallel
 in a **child tab**: its own tab, nested under the parent, with its own git
-worktree and branch, merged back when it's done.
+worktree and branch, merged back when it's done. The worktree starts with
+copy-on-write clones of the parent's installed packages where the lockfiles
+match ([details](updating-and-troubleshooting.md#new-worktrees-reuse-installed-packages)).
 
 - **Plans:** while a tab works, the same tool-free router suggests a plan for
   each queued message, shown as a chip on its row: *Independent: can run in a

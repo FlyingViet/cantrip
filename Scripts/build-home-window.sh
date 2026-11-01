@@ -2,6 +2,9 @@
 # Builds the Home window plug-in (Cantrip's Window interface) from the CantripGatewayMac submodule
 # into .build/home-window. Optional: without Xcode, xcodegen or the submodule it explains why and
 # exits 0, and Cantrip builds with the panel only. CANTRIP_SKIP_HOME_WINDOW=1 skips it.
+# With CANTRIP_BUILD_ROOT set (a build disk, such as a NAS), its DerivedData goes there, one folder per
+# checkout; when that folder can't be written it builds locally. SwiftPM checkouts stay in .build,
+# cloned copy-on-write from the main checkout's so a worktree doesn't fetch them again.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 SRC="${HOME_WINDOW_SOURCE:-External/CantripGatewayMac}"
@@ -24,14 +27,36 @@ sdk=$(xcrun --sdk macosx --show-sdk-version 2>/dev/null || echo 0)
 echo "Home window: building from $SRC ($(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown))…"
 log="$OUT/build.log"
 mkdir -p "$OUT"
+
+DERIVED="$OUT/DerivedData"
+if [ -n "${CANTRIP_BUILD_ROOT:-}" ]; then
+    # Only below an existing root: creating it would put a local folder where the disk mounts.
+    remote="$CANTRIP_BUILD_ROOT/CantripHomeWindow/$(basename "$PWD")-$(printf %s "$PWD" | shasum | cut -c1-8)"
+    if [ -d "$CANTRIP_BUILD_ROOT" ] && mkdir -p "$remote" 2>/dev/null && [ -w "$remote" ]; then
+        DERIVED="$remote/DerivedData"
+    else
+        echo "Home window: $CANTRIP_BUILD_ROOT isn't available, building in $DERIVED instead." >&2
+    fi
+fi
+PACKAGES="$OUT/spm"
+if [ ! -e "$PACKAGES" ]; then
+    # The main checkout's, or this checkout's from before they moved out of DerivedData.
+    main="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+    for seed in "${main%/.git}/$PACKAGES" "$OUT/DerivedData/SourcePackages"; do
+        [ -d "$seed/checkouts" ] || continue
+        rm -rf "$PACKAGES.tmp"
+        cp -c -R "$seed" "$PACKAGES.tmp" 2>/dev/null && mv "$PACKAGES.tmp" "$PACKAGES" && break
+    done
+    rm -rf "$PACKAGES.tmp"
+fi
 if ! (cd "$SRC" && xcodegen generate --quiet) >"$log" 2>&1; then
     skip "xcodegen failed, see $log"
 fi
 if ! xcodebuild -project "$SRC/CantripGatewayMac.xcodeproj" -scheme CantripHomeWindow -configuration Release \
-        -derivedDataPath "$OUT/DerivedData" CODE_SIGNING_ALLOWED=NO \
+        -derivedDataPath "$DERIVED" -clonedSourcePackagesDirPath "$PACKAGES" CODE_SIGNING_ALLOWED=NO \
         GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all build >>"$log" 2>&1; then
     skip "the Xcode build failed, see $log"
 fi
 rm -rf "$OUT/CantripHomeWindow.bundle"
-ditto "$OUT/DerivedData/Build/Products/Release/CantripHomeWindow.bundle" "$OUT/CantripHomeWindow.bundle"
+ditto "$DERIVED/Build/Products/Release/CantripHomeWindow.bundle" "$OUT/CantripHomeWindow.bundle"
 echo "Home window: built $OUT/CantripHomeWindow.bundle"
