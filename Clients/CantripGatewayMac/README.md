@@ -137,6 +137,10 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   their text keeps the system's selection and right-click menu. Not while the tab works, and
   never on Start Fresh dividers, handoff results or child tab cards. Messages deleted on another
   device disappear here too. Needs a Cantrip host with `supportsDeleteMessage` (`POST …/delete-message`).
+- **Save artifacts:** an artifact's **…** menu (or right-click) has **Save As…**, a Save panel
+  opened in Downloads that writes the Mac's original file to disk as it arrives; artifacts in a
+  folder also have **Save Folder as Zip…**. Files come only over the paired connection. Folder
+  zips (and streaming) need a Cantrip host with `supportsDownloads` on its artifact list.
 - **Slash commands:** type `/` in Home's or a tab's composer to list that tab's backend
   commands, custom commands and skills. Up/Down move the highlight (Return runs a command
   without arguments, or inserts one that takes an argument), Tab inserts, Escape hides the list
