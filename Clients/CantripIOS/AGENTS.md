@@ -1,0 +1,99 @@
+# AGENTS.md — Hermes (iOS client)
+
+Native SwiftUI iOS client for a self-hosted **Hermes agent** (`~/.hermes`) — voice
++ chat, as an alternative to talking to Hermes through Telegram/Discord. See
+`README.md` for end-to-end setup (gateway + app).
+
+## Build / run
+- `xcodegen generate`, then build or test with
+  `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all`
+  so SwiftPM can use its scoped bare-repository cache.
+- The `.xcodeproj` is generated (git-ignored); regenerate after editing `project.yml`.
+- iOS 26+, universal (`TARGETED_DEVICE_FAMILY "1,2"`). Set your own bundle id +
+  signing team in `project.yml` before building to a device.
+- Use the selected Xcode SDK without raising the iOS 26 deployment target.
+  Duo-specific simulation/reserved-region APIs require Xcode/iOS 27.1.
+
+## How it connects
+- Talks to the Hermes gateway's **OpenAI-compatible API server** adapter
+  (`gateway/platforms/api_server.py`), NOT the raw inference shim. The api_server
+  is the full agent (skills, memory, sessions).
+- Chat uses **`POST /v1/runs`** with a persisted `Idempotency-Key`, then
+  `GET /v1/runs/{id}/events` for live SSE and `GET /v1/runs/{id}` for
+  authoritative recovery. Closing iOS never calls `/stop`; only explicit user
+  cancellation interrupts server work.
+- The app persists a pending request before POST and an active run immediately
+  after `202`. A lost response can safely replay the same idempotency key.
+- Headers: `Authorization: Bearer <API_SERVER_KEY>`, `X-Hermes-Session-Key`
+  (stable per-install id → scopes long-term memory). The base URL is user-set in
+  Settings — nothing hardcoded.
+- Execution uses named gateway model routes. `copilot-coding` is the default;
+  `local-private` remains unavailable until explicitly advertised by
+  `/v1/models`. Never silently fall back from the private lane to Copilot.
+- Copilot and local lanes keep separate local transcripts, durable runs,
+  conversation IDs, and long-term-memory session keys.
+- Non-loopback HTTP is rejected. Use HTTPS over a private network or
+  authenticated tunnel; loopback HTTP is only for simulator development.
+- Run events drive the UI: `message.delta`, `tool.started`/`tool.completed`,
+  `approval.request`, and `run.completed`/`run.failed`.
+- Optional `GET /v1/commands` powers the `/` autocomplete + Skills list (see README).
+
+## Voice
+- Fully on-device: FluidAudio Parakeet EOU 120M (320 ms model) is the default
+  STT engine; `SFSpeechRecognizer` with `requiresOnDeviceRecognition` is the
+  fallback. TTS remains Qwen or `AVSpeechSynthesizer`.
+- The AVAudioEngine tap deep-copies buffers into one bounded serial consumer.
+  A generation token prevents EOU/timer/cancellation races from submitting an
+  utterance twice. Parakeet and Qwen release memory before switching engines.
+
+## Gateway-side prerequisite
+The api_server adapter must be enabled + reachable. It refuses non-localhost
+binding without `API_SERVER_KEY`. To use it away from home, expose it over an
+HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
+
+## Conventions
+- Keep SwiftUI `body` lean (extract subviews) — the type-checker chokes on long chains.
+- `ChatNavigationView` keeps one navigation stack on iPhone (including Duo);
+  iPad uses adaptive split navigation, with a sidebar at regular width and a
+  drawer when compact. Never switch stack types based on folding or window width.
+  Keep drafts, voice, and run ownership outside size-dependent branches.
+- `ChatDisplayObserver` reads window-local vertical-bar traits, the hinge (`onHingeChange`) and
+  the window's own bounds (never the keyboard-shortened content).
+  `ChatHeader` moves actions into the native vertical toolbar
+  wherever the system has one. On an unfolded iPhone Duo (vertical bar + hinge not closed, either
+  orientation: `ChatDisplayTraits.isUnfoldedDuo`) that bar is the app's rail: a sidebar toggle at
+  the top, then Model Settings and Settings. The toggle shows `CantripDuoSidebar` beside the same
+  stack; its open state is saved (`cantrip.duoSidebar.open`), so folding, rotation and the keyboard
+  never change it. When the window can't keep the chat 400 pt wide beside it (split screen, or
+  unfolded upright) the sidebar slides over the dimmed chat instead (`ChatNavigationView.overlaysSidebar`),
+  with its own unsaved open state that starts closed; a tap outside, the toggle or a pick closes it.
+  Folded, the Tabs button toggles the tab drawer (the vertical bar stays tappable above it). On a
+  Duo, in every pose and with the sidebar open or closed, Home's sections are at
+  the bottom of the right-side rail (the system's tab bar in the vertical bar, or
+  `CantripDuoRailSections` in the app rail upright), never a bottom bar. Upright, the app rail keeps its
+  actions low, just above the sections (or at the bottom in a tab), within thumb reach; other iPhones use
+  `CantripHomeCompactTabBar`. Home puts only Tabs and the menu at the top of the vertical bar when
+  folded (`sharesVerticalBarWithTabBar`); unfolded, the toggle replaces Tabs. A project tab on the Duo
+  (folded or not) has no "‹ Home": the left-edge swipe and the Tabs button (folded; unfolded, the
+  sidebar toggle) bring out the tab picker, with Home pinned first (`usesDuoTabPicker`). Other
+  iPhones keep "‹ Home" and the swipe back to Home. Do not infer Duo from dimensions or device
+  names. `AGENTGATEWAY_DUO_SDK` is selected by SDK in `project.yml`, not by the
+  Swift compiler version; keep both SDK and iOS availability guards.
+- Saved servers live in `ServerProfiles`; each server's credential is stored
+  separately in Keychain. Legacy `hermes.apiKey`/Cantrip slots are migrated.
+  Settings uses blank add-server drafts, never live bindings to active credentials.
+- The alert `installationID` is bound to the device by a this-device-only Keychain
+  marker. A transferred/restored install gets a fresh ID (its alerts become pending
+  until re-paired). Removing a server whose token is missing clears only local
+  alert state; it never unregisters on the Mac.
+- Hermes history, durable runs, and memory keys are scoped by server and lane.
+  The migrated server retains its original history and memory namespace.
+- The gateway URL defaults to empty so each user points at their own server.
+- Cantrip Gateway Mac (`FlyingViet/CantripGatewayMac`) compiles `Sources/` and
+  `Shared/` for macOS through a git submodule, so Home logic stays identical.
+  Keep UIKit, ActivityKit and AVAudioSession use behind `#if os(iOS)` (imports
+  behind `#if canImport(UIKit)`); the Mac repo supplies AppKit equivalents.
+  After changing shared code, run `make test` there before bumping its submodule.
+- Never animate `Text` size per frame (Canvas/TimelineView): every new size is a fresh
+  glyph rasterization that macOS keeps, so memory grows without bound. Animate shapes, or
+  fill a glyph outline (`CantripMascotRenderer.GlyphOutline`) at the frame's size.
