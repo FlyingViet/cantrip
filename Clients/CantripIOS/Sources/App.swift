@@ -18,6 +18,13 @@ struct HermesApp: App {
     // Held like remoteModel; App state lives for the process, so only cold launches show it.
     @State private var launchSplash = CantripLaunchSplashController()
 
+    init() {
+        #if os(iOS) && canImport(WatchConnectivity)
+        // Early, so a watch asking to be set up can wake this app in the background.
+        CantripWatchLink.shared.activate()
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             #if DEBUG
