@@ -6,6 +6,8 @@ struct HTTPRequest {
     let headers: [String: String]
     let body: Data
     var queryItems: [URLQueryItem] = []
+    /// The request target exactly as sent (path and query), which device signatures cover.
+    var rawTarget: String?
 
     var target: String {
         var components = URLComponents()
@@ -60,7 +62,8 @@ struct HTTPRequest {
             path: components.path,
             headers: headers,
             body: data.subdata(in: bodyStart..<(bodyStart + contentLength)),
-            queryItems: components.queryItems ?? []
+            queryItems: components.queryItems ?? [],
+            rawTarget: target
         )
     }
 

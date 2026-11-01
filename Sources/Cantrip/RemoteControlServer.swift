@@ -57,6 +57,8 @@ final class RemoteControlServer {
     private let maximumRequestBytes = RemoteImageAttachments.maximumRequestBytes
     /// Speech-to-text for voice turns' clips; tests replace it.
     var transcribe: VoiceTranscription.Transcriber = VoiceTranscription.onDevice
+    /// Apple Watches whose signed requests may use the voice API.
+    let watchDevices: WatchDeviceRegistry
     private var voiceTurnsStore: VoiceTurns?
     static let maximumVoiceClipBytes = 4 << 20
 
@@ -67,10 +69,12 @@ final class RemoteControlServer {
          maintenance: RemoteMaintenance? = nil,
          desktop: RemoteDesktop? = nil,
          voiceVocabulary: VoiceVocabularyService? = nil,
+         watchDevices: WatchDeviceRegistry = .shared,
          encodingQueue: DispatchQueue = DispatchQueue(label: "cantrip.remote-encoding", qos: .userInitiated),
          sendTimeout: TimeInterval = 15,
          requestLog: @escaping (String) -> Void = Log.write) {
         self.manager = manager
+        self.watchDevices = watchDevices
         self.buildMonitor = buildMonitor
         self.usage = usage
         self.notifications = notifications
@@ -758,11 +762,27 @@ final class RemoteControlServer {
             return
         }
         if request.path.hasPrefix("/api/v1/voice/"), request.path != "/api/v1/voice/vocabulary" {
+            // The pairing token, or the signature of a registered Apple Watch (voice only).
+            if !authorized(request.headers["authorization"]) {
+                guard WatchDeviceRegistry.isSigned(request.headers) else {
+                    sendError(401, "invalid pairing token", on: connection)
+                    return
+                }
+                if case .failure(let failure) = watchDevices.verify(method: request.method, target: request.rawTarget ?? request.target,
+                                                                     headers: request.headers, body: request.body) {
+                    sendError(401, failure.localizedDescription, on: connection)
+                    return
+                }
+            }
+            handleVoice(request, on: connection)
+            return
+        }
+        if request.path == "/api/v1/watch/devices" || request.path.hasPrefix("/api/v1/watch/devices/") {
             guard authorized(request.headers["authorization"]) else {
                 sendError(401, "invalid pairing token", on: connection)
                 return
             }
-            handleVoice(request, on: connection)
+            handleWatchDevices(request, on: connection)
             return
         }
         guard request.path == "/api/v1/sessions"
@@ -2864,6 +2884,51 @@ final class RemoteControlServer {
                 self.sendJSON(["turn": turn.json], on: connection)
             }
         case (_, 1, "config"), (_, 1, "turns"), (_, 2, "turns"):
+            sendError(405, "method not allowed", on: connection)
+        default:
+            sendError(404, "not found", on: connection)
+        }
+    }
+
+    /// `/api/v1/watch/devices`: list, register (`{"name", "publicKey"}`) and remove watches. Pairing token only.
+    @MainActor
+    private func handleWatchDevices(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
+        let parts = request.path.split(separator: "/").dropFirst(3).map(String.init)
+        switch (request.method, parts.count) {
+        case ("GET", 1):
+            sendJSON(["devices": watchDevices.all.map(WatchDeviceRegistry.json), "internet": NSNull()], on: connection)
+        case ("POST", 1):
+            guard request.body.count <= 4_096, let body = request.json,
+                  let name = body["name"] as? String, let key = body["publicKey"] as? String else {
+                sendError(400, "Send {\"name\": …, \"publicKey\": <base64 X9.63 P-256 key>}.", on: connection)
+                return
+            }
+            do {
+                let (device, created) = try watchDevices.register(name: name, publicKey: key)
+                Log.write("watch: \(created ? "added" : "re-registered") \(device.id.uuidString.prefix(8))")
+                sendJSON(["device": WatchDeviceRegistry.json(device), "internet": NSNull()],
+                         status: created ? 201 : 200, on: connection)
+            } catch let failure as WatchDeviceRegistry.Failure {
+                sendError(failure == .tooMany ? 409 : 400, failure.localizedDescription, on: connection)
+            } catch {
+                sendError(500, "Could not save the watch on the Mac.", on: connection)
+            }
+        case ("DELETE", 2):
+            guard let id = UUID(uuidString: parts[1]) else {
+                sendError(404, "watch not found", on: connection)
+                return
+            }
+            do {
+                guard try watchDevices.remove(id) else {
+                    sendError(404, "watch not found", on: connection)
+                    return
+                }
+                Log.write("watch: removed \(id.uuidString.prefix(8))")
+                sendJSON(["removed": true], on: connection)
+            } catch {
+                sendError(500, "Could not save the watch list on the Mac.", on: connection)
+            }
+        case (_, 1), (_, 2):
             sendError(405, "method not allowed", on: connection)
         default:
             sendError(404, "not found", on: connection)
