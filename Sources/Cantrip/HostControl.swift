@@ -253,22 +253,7 @@ final class HostControl {
         case "list", nil:
             return ["text": Self.describe(hub)]
         case "migrate":
-            let dryRun = request["dryRun"] as? Bool ?? true
-            do {
-                let report = try MCPMigration.run(dryRun: dryRun)
-                hub.reload()
-                Task { await hub.refreshStates() }
-                var lines = [dryRun ? "Would share \(report.servers.count) servers with every backend:" : "Shared \(report.servers.count) servers with every backend:"]
-                lines.append("  " + report.servers.joined(separator: ", "))
-                lines.append("Through Cantrip's relay (sign-in, credential or tool limit): " + report.relayed.joined(separator: ", "))
-                lines.append("\(report.secretsMoved) credential(s) \(dryRun ? "would move" : "moved") to the keychain.")
-                lines += report.notes
-                if !report.written.isEmpty { lines.append("Updated: " + report.written.joined(separator: "; ")) }
-                if dryRun { lines.append("Run `cantrip mcp migrate --apply` to do it (originals stay restorable with `cantrip mcp restore`).") }
-                return ["text": lines.joined(separator: "\n")]
-            } catch {
-                return ["error": "Nothing changed: \(error.localizedDescription)"]
-            }
+            return Self.migrate(dryRun: request["dryRun"] as? Bool ?? true, hub: hub)
         case "restore":
             do {
                 let restored = try MCPMigration.restore()
@@ -317,6 +302,32 @@ final class HostControl {
         default:
             return ["error": "Unknown mcp action."]
         }
+    }
+
+    /// `cantrip mcp migrate [--apply]`. The list is reloaded whenever something was written, a run
+    /// that stopped partway included, so `cantrip mcp` shows what's now shared.
+    static func migrate(dryRun: Bool, hub: MCPServerHub,
+                        run: (Bool) throws -> MCPMigration.Report = { try MCPMigration.run(dryRun: $0) }) -> [String: Any] {
+        let report: MCPMigration.Report
+        do {
+            report = try run(dryRun)
+        } catch let incomplete as MCPMigration.Incomplete {
+            hub.reload()
+            Task { await hub.refreshStates() }
+            return ["error": incomplete.localizedDescription]
+        } catch {
+            return ["error": "Nothing changed: \(error.localizedDescription)"]
+        }
+        hub.reload()
+        Task { await hub.refreshStates() }
+        var lines = [dryRun ? "Would share \(report.servers.count) servers with every backend:" : "Shared \(report.servers.count) servers with every backend:"]
+        lines.append("  " + report.servers.joined(separator: ", "))
+        lines.append("Through Cantrip's relay (sign-in, credential or tool limit): " + report.relayed.joined(separator: ", "))
+        lines.append("\(report.secretsMoved) credential(s) \(dryRun ? "would move" : "moved") to the keychain.")
+        lines += report.notes
+        if !report.written.isEmpty { lines.append("Updated: " + report.written.joined(separator: "; ")) }
+        if dryRun { lines.append("Run `cantrip mcp migrate --apply` to do it (originals stay restorable with `cantrip mcp restore`).") }
+        return ["text": lines.joined(separator: "\n")]
     }
 
     static func describe(_ hub: MCPServerHub) -> String {

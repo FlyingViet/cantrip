@@ -212,6 +212,11 @@ cantrip mcp connect mobbin     # sign in to a remote server
   are imported. Header and environment values that are credentials move to
   the macOS Keychain, so no config file holds them. The originals stay
   restorable with `cantrip mcp restore` (the backups on disk are redacted).
+  Claude Code's own servers are rewritten as relay entries through its CLI
+  (`claude mcp add-json`; the `claude` path in Settings, or `claude` on the
+  PATH when that's blank). If that CLI can't run, `--apply` stops before
+  changing anything; a run that stops partway lists what it already updated,
+  and running it again finishes the rest.
 - From then on Cantrip writes each backend's config from the list:
   Copilot's `mcp-config.json`, a per-tab `--mcp-config` file for Claude Code,
   `-c mcp_servers…` overrides for Codex and Antigravity's
@@ -229,7 +234,11 @@ cantrip mcp connect mobbin     # sign in to a remote server
   Gateway show it with **Approve** and **Decline**, and you get an alert;
   Cantrip presses the page's own button only after you approve. If the site
   wants you to log in first, finish that in the agent Chrome (Remote shows
-  it). Cantrip refreshes sign-ins before they expire and alerts you when one
+  it). A page that offers free, guest or anonymous access next to signing in
+  (seats.aero's "Continue as a free user") is treated the same way: Cantrip
+  never offers that option for approval, so log in to the site in the agent
+  Chrome and approve the access page that follows (or **Connect** again).
+  Cantrip refreshes sign-ins before they expire and alerts you when one
   needs connecting again. The client Cantrip registers with each sign-in
   server is kept in the keychain too and reused by later sign-ins and retries
   (signing out keeps it); one the server refuses is dropped and registered
