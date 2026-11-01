@@ -31,6 +31,8 @@ struct WatchTalkView: View {
                         .id(WatchConversation.scrollID)
                 }
                 .frame(maxWidth: .infinity)
+                // The Stop Speaking button floats over the bottom; the reply's end can scroll above it.
+                .padding(.bottom, model.phase == .speaking ? 48 : 0)
             }
             .onChange(of: model.reply != nil) { _, hasReply in
                 guard hasReply else { return }
