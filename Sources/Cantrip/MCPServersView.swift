@@ -47,6 +47,11 @@ struct MCPServersView: View {
                         "\(report.secretsMoved) credential(s) \(apply ? "moved" : "would move") to the keychain."] + report.notes)
                 .joined(separator: "\n")
             error = nil
+        } catch let incomplete as MCPMigration.Incomplete {
+            hub.reload()
+            Task { await hub.refreshStates() }
+            preview = nil
+            self.error = incomplete.localizedDescription
         } catch {
             self.error = "Nothing changed: \(error.localizedDescription)"
         }
