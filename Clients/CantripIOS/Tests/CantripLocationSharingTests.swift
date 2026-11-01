@@ -137,6 +137,11 @@ final class CantripLocationSharingTests: XCTestCase {
         XCTAssertEqual(SettingsLocationPage.status(.found("Mountain View, CA")), "Mountain View, CA")
         XCTAssertEqual(SettingsLocationPage.status(.denied), "Location access is off for this app")
         XCTAssertEqual(SettingsLocationPage.status(.off), "Off")
-        XCTAssertFalse(UserDefaults.standard.bool(forKey: CantripLocationSharing.enabledKey), "off by default")
+        // The default, whatever an earlier run on this simulator saved.
+        let key = CantripLocationSharing.enabledKey
+        let saved = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.removeObject(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        XCTAssertFalse(UserDefaults.standard.bool(forKey: key), "off by default")
     }
 }
