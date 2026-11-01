@@ -46,4 +46,76 @@ extension SessionTabTests {
         precondition(none == "plain" && empty.isEmpty, "No rules, no change")
         print("Folder rules: Copilot, Codex and Antigravity get the folder's rules once, without the mirror twice")
     }
+
+    /// Paired clients list the skills library, turn a skill off and on, relink and start a drift
+    /// check through /api/v1/skills.
+    @MainActor
+    static func testSkillsAPI() async throws {
+        requireTemporaryHome()
+        let fm = FileManager.default
+        let library = SkillsLibrary()
+        let draft = fm.homeDirectoryForCurrentUser.appendingPathComponent("drafts-\(UUID().uuidString.prefix(8))/weather-lookup")
+        try fm.createDirectory(at: draft, withIntermediateDirectories: true)
+        try "---\nname: weather-lookup\ndescription: Looks up the weather.\n---\nSay it's sunny.\n"
+            .write(to: draft.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        // Leave the home as found: other tests run agents there and check it has no .agents folder.
+        let made = [library.home.appendingPathComponent(".agents"), library.home.appendingPathComponent(".claude/skills"),
+                    library.folder.deletingLastPathComponent()].filter { !fm.fileExists(atPath: $0.path) }
+        try library.add(source: draft)
+        defer {
+            try? fm.removeItem(at: library.skillFolder("weather-lookup"))
+            _ = try? library.sync()
+            try? fm.removeItem(at: draft.deletingLastPathComponent())
+            for folder in made { try? fm.removeItem(at: folder) }
+        }
+
+        let manager = SessionManager()
+        let server = RemoteControlServer(manager: manager)
+        defer { withExtendedLifetime(manager) {} }
+        let port = Int.random(in: 20_000...45_000), token = UUID().uuidString
+        server.start(port: port, token: token)
+        defer { server.stop() }
+        try await Task.sleep(for: .milliseconds(250))
+        let client = URLSession(configuration: .ephemeral)
+        defer { client.invalidateAndCancel() }
+        func call(_ method: String = "GET", _ body: [String: Any]? = nil, authorized: Bool = true) async throws -> (Int, [String: Any]) {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/v1/skills")!)
+            request.httpMethod = method
+            if authorized { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
+            let (data, response) = try await client.data(for: request)
+            return ((response as! HTTPURLResponse).statusCode,
+                    ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:])
+        }
+        func skill(_ payload: [String: Any]) -> [String: Any]? {
+            (payload["skills"] as? [[String: Any]])?.first { $0["name"] as? String == "weather-lookup" }
+        }
+
+        let anonymous = try await call(authorized: false)
+        precondition(anonymous.0 == 401, "Pairing is required")
+        let listed = try await call()
+        precondition(listed.0 == 200 && skill(listed.1)?["enabled"] as? Bool == true
+                     && skill(listed.1)?["backends"] as? [String] == SkillsLibrary.allBackends
+                     && skill(listed.1)?["description"] as? String == "Looks up the weather."
+                     && listed.1["backends"] as? [String] == SkillsLibrary.allBackends && listed.1["rules"] is [Any],
+                     "GET lists each skill and which backends see it: \(listed)")
+        let rendered = String(decoding: try JSONSerialization.data(withJSONObject: listed.1), as: UTF8.self)
+        precondition(!rendered.contains("sunny"),
+                     "Never a skill's contents")
+        let off = try await call("POST", ["action": "setEnabled", "name": "weather-lookup", "enabled": false])
+        precondition(off.0 == 200 && skill(off.1)?["enabled"] as? Bool == false && (skill(off.1)?["backends"] as? [String])?.isEmpty == true
+                     && !fm.fileExists(atPath: library.targets[0].folder.appendingPathComponent("weather-lookup").path),
+                     "Turning a skill off unlinks it for every backend: \(off)")
+        let on = try await call("POST", ["action": "setEnabled", "name": "weather-lookup", "enabled": true])
+        precondition(on.0 == 200 && skill(on.1)?["backends"] as? [String] == SkillsLibrary.allBackends, "And on again: \(on)")
+        let sync = try await call("POST", ["action": "sync"])
+        precondition(sync.0 == 200 && (sync.1["messages"] as? [String])?.isEmpty == false, "Relink reports what it did: \(sync)")
+        let check = try await call("POST", ["action": "check"])
+        precondition(check.0 == 200 && check.1["drift"] is [Any], "A drift check starts: \(check)")
+        let unknown = try await call("POST", ["action": "nope"])
+        let missing = try await call("POST", ["action": "setEnabled", "name": "not-a-skill", "enabled": true])
+        precondition(unknown.0 == 400 && missing.0 == 400 && (missing.1["error"] as? String)?.contains("no skill named") == true,
+                     "Bad requests are refused with a reason: \(unknown) \(missing)")
+        print("Skills API: list, on/off, relink, drift check and errors passed")
+    }
 }
