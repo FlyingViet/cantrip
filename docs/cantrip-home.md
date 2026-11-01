@@ -41,8 +41,13 @@ child tab is reported rather than sent back, because its branch may already be
 merging. A child that's discarded or closed before it finishes says so on the
 card, and **Run in this tab instead** puts the handoff back in the parent's
 queue with its request. Only removing the queued message itself reads as
-stopped. Home queues its handoffs with an explicit Queue, so auto-fork leaves
-them alone; start one in a child tab yourself. See
+stopped. A handoff to a busy tab starts in a child tab on its own (auto-fork)
+when its plan rates it independent and a slot is free, even after a relaunch;
+otherwise it waits in the queue with the reason on its row. Home sets
+`dependsOn` in the brief only for a real dependency (it needs another item in
+that tab finished first); the prompt then carries *Depends on: …* and the
+handoff runs in order instead. A handoff that depends on work already running
+in a child tab joins that child's queue, and its card follows it there. See
 [Child tabs](sessions-and-council.md#child-tabs).
 
 When a handoff's brief has a "Done when:" line, Cantrip checks the tab's

@@ -1792,7 +1792,8 @@ final class RemoteControlServer {
                                 images: images, sessionID: session.id
                             )
                             if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
-                            else { session.submitRemote(prompt, mode: mode) }
+                            // A paired client's queued message may auto-fork, like one sent with Auto.
+                            else { session.submitRemote(prompt, mode: mode, autoForkEligible: true) }
                             sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
                         } catch let error as InputRequestError {
                             sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
@@ -1825,7 +1826,7 @@ final class RemoteControlServer {
                     text, images: images, sessionID: session.id
                 )
                 if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
-                else { session.submitRemote(prompt, mode: mode) }
+                else { session.submitRemote(prompt, mode: mode, autoForkEligible: true) }
             } catch let error as InputRequestError {
                 sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
                 return

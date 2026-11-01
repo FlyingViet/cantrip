@@ -1109,7 +1109,15 @@ banner. Older clients show children as ordinary tabs and the card as text.
 
 API (`supportsChildTabs`, `supportsQueuePlans` on each session):
 - Queue items carry `plan` (`{kind: fork|batch|wait|queue, reason, title,
-  repo?}`) while the tab works.
+  repo?, readOnly?, autoFork?}`) while the tab works. `reason` is the row's
+  chip, including why an eligible message waits (*Auto-forks when a child tab
+  finishes (3 of 3 running for this tab)*). `autoFork` is `starting` while
+  auto-fork starts it in a child tab and `waiting` while it waits for a slot
+  or the Mac's resources; absent otherwise.
+- A message sent with `mode: "queue"` from a paired client may auto-fork like
+  one sent with Auto (see
+  [Child tabs](sessions-and-council.md#child-tabs)); **Run in child tab** on
+  any row starts it now, up to the caps.
 - `POST /api/v1/sessions/{id}/queue/{queuedID}/fork` starts a child tab and
   returns `{session, childID}`; `409` with the reason when the caps are full or
   the message already left the queue. A session that can't fork now has

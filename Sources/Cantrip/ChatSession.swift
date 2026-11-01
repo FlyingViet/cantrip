@@ -210,9 +210,10 @@ final class ChatSession: ObservableObject {
             scheduleQueuePlanning()
         }
     }
-    /// Queued messages sent with Auto delivery (not commands, councils or very long messages): the
-    /// only ones auto-fork may start in a child tab, once routing leaves them queued. An explicit
-    /// Queue means "after this".
+    /// Queued messages sent with Auto delivery (not commands, councils or very long messages), or
+    /// queued from a paired client: auto-fork may start them in a child tab, once routing leaves
+    /// them queued. So may Home handoffs (`isAutoForkCandidate`). An explicit Queue on the Mac
+    /// means "after this".
     private(set) var autoDeliveredItemIDs: Set<UUID> = []
     /// A queued message's plan changed, or Auto routing left one in the queue (auto-fork checks).
     var onQueuePlansChanged: ((ChatSession) -> Void)?
@@ -1120,6 +1121,28 @@ final class ChatSession: ObservableObject {
         drainQueue()
     }
 
+    /// Whether auto-fork may start this queued message in a child tab: it came through Auto
+    /// delivery or a paired client's queue, or it's a Cantrip Home handoff that doesn't say it
+    /// depends on other work. Commands never are.
+    func isAutoForkCandidate(_ item: QueuedPrompt) -> Bool {
+        let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.hasPrefix("!"), !text.hasPrefix("/") else { return false }
+        return autoDeliveredItemIDs.contains(item.id) || CantripHomeHandoffBrief.isIndependentHandoff(text)
+    }
+
+    /// Work that runs after this tab's current request, in this tab (a queued message that depends
+    /// on what a child tab is doing follows it there). No routing: it waits its turn.
+    func queueFollowUp(_ text: String) {
+        enqueue(text, includesAmbientContext: false)
+        if !isStreaming { drainQueue() }
+    }
+
+    /// Plans again even though the queue didn't change (a child tab it may wait for stopped).
+    func replanQueue() {
+        plannedKey = ""
+        scheduleQueuePlanning()
+    }
+
     /// This queued message was sent with Auto delivery: auto-fork may start it in a child tab.
     func noteAutoDelivered(_ itemID: UUID) {
         guard queued.contains(where: { $0.id == itemID }) else { return }
@@ -1192,7 +1215,7 @@ final class ChatSession: ObservableObject {
                 let decision = try await MessageRouter.planQueue(snapshot, provider: provider)
                 guard let self, !Task.isCancelled else { return }
                 let plans = QueuePlanningPolicy.plans(decision, items: items, repositories: context.repos,
-                                                      childTitles: children.map(\.title))
+                                                      children: children.map { .init(id: $0.id, title: $0.title) })
                 let live = Set(self.queued.map(\.id))
                 self.queuePlans = self.queuePlans.merging(plans) { $1 }.filter { live.contains($0.key) }
                 self.onQueuePlansChanged?(self)
@@ -1521,8 +1544,13 @@ final class ChatSession: ObservableObject {
 
     /// Remote clients share the live session but must not consume context
     /// staged by the person at the Mac or capture ambient Mac data.
-    func submitRemote(_ text: String, mode: MessageDeliveryMode = .auto) {
+    /// `autoForkEligible`: a paired client's queued message, which auto-fork may start in a
+    /// child tab like one sent with Auto delivery.
+    func submitRemote(_ text: String, mode: MessageDeliveryMode = .auto, autoForkEligible: Bool = false) {
+        let before = autoForkEligible ? Set(queued.map(\.id)) : []
         receive(text, mode: mode, includesAmbientContext: false)
+        guard autoForkEligible, mode == .queue else { return }
+        for item in queued where !before.contains(item.id) { noteAutoDelivered(item.id) }
     }
 
     private func invalidateRouting() {

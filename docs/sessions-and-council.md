@@ -197,18 +197,42 @@ worktree and branch, merged back when it's done.
   child tab*, *Batched: same tab-list code* (it overlaps the current task or
   another queued message, so it runs with it), *Waits: releases run one at a
   time*, or *Runs after the current task*.
-- **Auto-fork:** a message sent with **Auto** delivery that the plan rates
-  independent starts in a child tab on its own, as soon as routing has left it
-  in the queue. Cantrip first checks what it knows for sure: the message's
-  likely files (from the plan) must not be ones the parent has uncommitted or
-  edited in its recent replies, or that a running child tab expects to change,
-  and the parent must work in a git repository. Otherwise it stays queued and
-  its chip says why (*Runs after the current task: it also changes
-  CantripHome.swift*). An explicit **Queue** still means "after this"; the
-  caps and the rules below apply, and a request the router sends to a
-  background agent (*parallel*) still goes there. Its card says *Started
-  automatically*. Turn it off in Settings (**Start independent queued messages
-  in child tabs automatically**).
+- **Auto-fork:** a queued message the plan rates independent starts in a
+  child tab on its own when it was sent with **Auto** delivery (once routing
+  has left it in the queue), queued from a paired device (Cantrip Agent, the
+  Gateways, the browser), or is a Cantrip Home handoff that doesn't say it
+  depends on other work. An explicit **Queue** on the Mac still means "after
+  this"; its chip says *Independent: queued with Queue, so it waits for Run in
+  Child Tab*. Cantrip first checks what it knows for sure: the message's likely
+  files (from the plan, plus paths the message names) must not be ones the
+  parent has uncommitted or edited in its recent replies, and the parent must
+  work in a git repository. Work that only reads, reviews, audits or plans
+  (including a plan that ends with a question) needs neither. Otherwise it
+  stays queued and its chip says why (*Runs after the current task: it also
+  changes CantripHome.swift*). Each pass starts every eligible message the caps
+  allow, not one at a time. A request the router sends to a background agent
+  (*parallel*) still goes there. Its card says *Started automatically*. Turn it
+  off in Settings (**Start independent queued messages in child tabs
+  automatically**).
+- **Dependencies:** the plan names the queued message (or running child tab) a
+  message must run after, because it needs that work's result or changes the
+  same code. When the first of such a group starts in a child tab, the
+  messages that depend on it go with it, into that child's queue, and run there
+  in order on the same branch (at most 3 per child). A message that depends on
+  a running child, or would change files that child expects to change, joins
+  that child's queue the same way. Either way it leaves the parent's queue, and
+  a Home handoff follows it into the child.
+- **Caps and waiting:** at most 3 child tabs per tab and 4 overall by default
+  (Settings: **Child tabs per tab** and **In all**). Auto-fork also checks the
+  Mac first: it waits while the load is above one per core or less than 15 GB
+  is free where worktrees live, runs one fewer child overall while the load is
+  above 0.7 per core or less than 30 GB is free, and work that needs a
+  Simulator waits while 3 are leased. A waiting message keeps its place and
+  its chip says what it waits for (*Auto-forks when a child tab finishes (3 of
+  3 running for this tab)*, *Auto-forks when the Mac is less busy (load 12.5
+  on 10 cores)*); Cantrip checks again when a child stops and every minute
+  while something waits. **Run in Child Tab** starts one now regardless of the
+  Mac's load, up to the caps.
 - **Run in this tab instead:** while a child works, its card can send the
   request back: the child stops, its branch and worktree are deleted, and the
   request goes to the front of the parent's queue (it won't be auto-forked
@@ -268,7 +292,7 @@ worktree and branch, merged back when it's done.
   files. The lines carry each child's ID; the model reads a child's
   conversation only when it needs the details (`tab read`) and can ask or steer
   a child (`tab ask`, below). Nothing more of the child is pasted in.
-- **Guardrails:** at most 2 child tabs per tab and 3 overall. Children run
+- **Guardrails:** the caps above (3 per tab and 4 overall by default). Children run
   with the attended guardrail. Simulator runs (`xcodebuild test`, `simctl`)
   take turns across children and wait for any other Simulator build or test on
   the Mac. Restarting or deploying Cantrip, TestFlight uploads, releases and
