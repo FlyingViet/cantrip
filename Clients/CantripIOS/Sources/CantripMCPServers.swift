@@ -139,7 +139,7 @@ struct CantripMCPServersView: View {
     }
 
     /// A server's row in Settings: its name, state and which backends use it, and Connect (or
-    /// Reconnect) when it needs a sign-in.
+    /// Retry) when it needs a sign-in.
     private func summary(_ server: CantripMCPServer) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
@@ -200,9 +200,9 @@ struct CantripMCPServersView: View {
     }
     #endif
 
-    /// Connect, or Reconnect after a sign-in failed.
+    /// Connect, or Retry after a sign-in failed (the Mac's reason shows with the server).
     private func connectButton(_ server: CantripMCPServer) -> some View {
-        Button(server.state?.phase == "failed" ? "Reconnect" : "Connect") { act(["action": "connect", "name": server.name]) }
+        Button(Self.connectLabel(server)) { act(["action": "connect", "name": server.name]) }
             .disabled(working != nil)
             .accessibilityIdentifier("mcp.connect.\(server.name)")
     }
@@ -297,6 +297,10 @@ struct CantripMCPServersView: View {
         case "failed": return "Sign-in failed"
         default: return "Not signed in"
         }
+    }
+
+    static func connectLabel(_ server: CantripMCPServer) -> String {
+        server.state?.phase == "failed" ? "Retry" : "Connect"
     }
 
     static func kind(_ server: CantripMCPServer) -> String {

@@ -188,6 +188,8 @@ final class SettingsMapTests: XCTestCase {
         XCTAssertEqual(try status("notes"), "Ready")
         XCTAssertEqual(try status("flows"), "Credentials in Mac keychain")
         XCTAssertEqual(try status("design"), "Sign-in failed")
+        XCTAssertEqual(CantripMCPServersView.connectLabel(try XCTUnwrap(byName["design"])), "Retry")
+        XCTAssertEqual(CantripMCPServersView.connectLabel(try XCTUnwrap(byName["errors"])), "Connect")
         XCTAssertTrue(try status("errors").hasPrefix("Signed in · token until "))
         XCTAssertEqual(try status("old"), "Off")
         XCTAssertNil(byName["old"]?.credentials, "a Mac from before 1.1.13 sends no credentials flag")

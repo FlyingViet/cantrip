@@ -261,7 +261,7 @@ tabs run on, and the usage-limit backups), then the same pages as Gateway Mac:
 |---|---|
 | Macs | Each paired Mac with an **Active** badge and when this device last reached it. A Mac's page has **Use This Mac**, **Re-enter Pairing Token**, its addresses under **Advanced**, and **Remove Mac…**. **Pair a Mac** walks through pairing. Hermes gateways show here only while one is saved. |
 | Models | What new tabs run (read-only; change it on the Mac), **Model tiers** (each backend's models for Fast, Standard and Deep, with Copilot's prices), the **Usage-limit backups** and **Usage Limits**. |
-| Tools & sign-ins | The Mac's shared MCP servers, in the same words as Cantrip's own Settings: each row shows its state (including "Credentials in Mac keychain" and when a sign-in's token ends), which backends use it, and **Connect** (**Reconnect** after a failed sign-in); a row opens its sign-in and per-backend switches. Gateway Mac shows the switches in each row, as Cantrip does. Clients see state and send actions; credentials stay on the Mac. |
+| Tools & sign-ins | The Mac's shared MCP servers, in the same words as Cantrip's own Settings: each row shows its state (including "Credentials in Mac keychain" and when a sign-in's token ends), which backends use it, and **Connect** (**Retry** after a failed sign-in, with the Mac's reason); a row opens its sign-in and per-backend switches. Gateway Mac shows the switches in each row, as Cantrip does. Clients see state and send actions; credentials stay on the Mac. |
 | Memory | The Mac's memory files, read-only. |
 | Voice | Speech recognition, dictation vocabulary, the reply voice and the pause before sending. |
 | Notifications | Completion and input alerts, the widget and the Live Activity. |
