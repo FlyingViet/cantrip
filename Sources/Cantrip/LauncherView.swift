@@ -50,6 +50,9 @@ struct LauncherView: View {
     @State private var childTabError: String?
     /// Why Continue on a failed message couldn't start (offline, busy).
     @State private var continueError: String?
+    /// Delete Message's confirmation, then its error when the Mac couldn't delete it.
+    @State private var deletingMessage: MessageDeletionRequest?
+    @State private var deleteMessageError: String?
     /// The section header a dragged tab or section is over.
     @State private var sectionDropTarget: String?
     @ObservedObject private var sectionCollapse = TabSectionCollapse.shared
@@ -221,6 +224,27 @@ struct LauncherView: View {
         }
         .modifier(ChildTabAlerts(discarding: $discardingChild, requeueing: $requeueingChild,
                                  error: $childTabError, perform: performChildAction))
+        .alert("Delete this message?", isPresented: Binding(
+            get: { deletingMessage != nil },
+            set: { if !$0 { deletingMessage = nil } }
+        ), presenting: deletingMessage) { request in
+            Button("Delete", role: .destructive) {
+                do { try request.session.deleteExchange(containing: request.messageID) }
+                catch { deleteMessageError = error.localizedDescription }
+                deletingMessage = nil
+            }
+            Button("Cancel", role: .cancel) { deletingMessage = nil }
+        } message: { _ in
+            Text(MessageDeletionRequest.explanation)
+        }
+        .alert("Message Not Deleted", isPresented: Binding(
+            get: { deleteMessageError != nil },
+            set: { if !$0 { deleteMessageError = nil } }
+        )) {
+            Button("OK") { deleteMessageError = nil }
+        } message: {
+            Text(deleteMessageError ?? "")
+        }
         .keepingLauncherPanelOpen(while: presentingPanelModal)
         .alert("Tab Protected", isPresented: Binding(
             get: { manager.tabActionError != nil || session.tabActionError != nil },
@@ -965,6 +989,7 @@ struct LauncherView: View {
             || sectioningSession != nil || creatingSection || renamingSection != nil || deletingSection != nil
             || manager.tabActionError != nil || session.tabActionError != nil
             || discardingChild != nil || requeueingChild != nil || childTabError != nil
+            || deletingMessage != nil || deleteMessageError != nil
     }
 
     // MARK: Tab sections in the strip
@@ -3049,6 +3074,9 @@ struct LauncherView: View {
                                    childTabOpen: message.childResult.map { child in
                                        manager.sessions.contains { $0.id == child.id }
                                    } ?? false)
+                            .modifier(DeleteMessageAction(isAvailable: MessageDeletionRequest.offers(message, in: session)) {
+                                deletingMessage = MessageDeletionRequest(session: session, messageID: message.id)
+                            })
                             .id(message.id)
                     }
                     RemoteInputView(session: session, openSecureInput: { showingInputRequests = true })
@@ -3411,6 +3439,53 @@ private struct SuggestionListHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+/// A message the user chose to delete, waiting for confirmation.
+struct MessageDeletionRequest: Identifiable {
+    let session: ChatSession
+    let messageID: UUID
+    var id: UUID { messageID }
+
+    static let explanation = "This removes the message and its reply from this tab's history on the Mac, and the model won't have them anymore. This can't be undone."
+
+    /// Prompts, replies and errors offer Delete Message while the tab is idle.
+    @MainActor
+    static func offers(_ message: ChatMessage, in session: ChatSession) -> Bool {
+        [.user, .assistant, .error].contains(message.role) && session.deleteMessageUnavailableReason == nil
+    }
+}
+
+/// Delete Message: a trash button while the pointer is over the message (selectable reply text
+/// keeps its own right-click menu), the message's context menu and a VoiceOver action.
+struct DeleteMessageAction: ViewModifier {
+    let isAvailable: Bool
+    let delete: () -> Void
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering = $0 }
+            .overlay(alignment: .topTrailing) {
+                if isAvailable, hovering {
+                    Button(action: delete) {
+                        Image(systemName: "trash").font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Delete Message…")
+                    .accessibilityHidden(true)
+                }
+            }
+            .contextMenu {
+                if isAvailable {
+                    Button("Delete Message…", systemImage: "trash", role: .destructive, action: delete)
+                }
+            }
+            .accessibilityActions {
+                if isAvailable { Button("Delete Message", action: delete) }
+            }
     }
 }
 

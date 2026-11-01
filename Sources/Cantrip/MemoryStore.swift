@@ -14,7 +14,7 @@ final class MemoryStore {
     static let userCap = 1375
 
     private var dirURL: URL { directory ?? URL(fileURLWithPath: AppSettings.shared.memoryPath) }
-    private var sessionsURL: URL { dirURL.appendingPathComponent("sessions") }
+    var sessionsURL: URL { dirURL.appendingPathComponent("sessions") }
 
     static func contextBlock(query: String, path: String, isPrivate: Bool, isLocal: Bool) async -> String {
         await withCheckedContinuation { continuation in
