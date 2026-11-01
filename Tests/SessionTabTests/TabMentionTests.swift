@@ -226,7 +226,7 @@ extension SessionTabTests {
 
         // Remote: which tabs a composer may suggest, and plain text where people read it.
         let server = RemoteControlServer(manager: manager)
-        let port = Int.random(in: 49152...65535), token = UUID().uuidString
+        let port = Int.random(in: 20_000...45_000), token = UUID().uuidString
         server.start(port: port, token: token)
         defer { server.stop() }
         try await Task.sleep(for: .milliseconds(300))

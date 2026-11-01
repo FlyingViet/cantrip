@@ -311,7 +311,7 @@ struct SessionTabTests {
             completion(.failure(CopilotQuotaError.authentication))
         }, claudeLoader: nil, antigravityLoader: { nil }, codexLoader: { nil })
         let server = RemoteControlServer(manager: manager, usage: usage)
-        let port = Int.random(in: 49152...65535)
+        let port = Int.random(in: 20_000...45_000)
         let token = UUID().uuidString
         server.start(port: port, token: token)
         defer { server.stop() }

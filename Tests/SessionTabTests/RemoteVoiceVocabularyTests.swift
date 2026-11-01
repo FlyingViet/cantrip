@@ -26,7 +26,7 @@ extension SessionTabTests {
             callHistoryDatabase: root.appendingPathComponent("CallHistory.storedata"),
             readsCalendar: false, readsContacts: false))
         let server = RemoteControlServer(manager: manager, voiceVocabulary: vocabulary)
-        let port = Int.random(in: 49152...65535), token = UUID().uuidString
+        let port = Int.random(in: 20_000...45_000), token = UUID().uuidString
         server.start(port: port, token: token)
         defer { server.stop() }
         let client = URLSession(configuration: .ephemeral)

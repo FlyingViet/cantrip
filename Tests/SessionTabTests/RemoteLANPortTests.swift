@@ -21,8 +21,8 @@ extension SessionTabTests {
             preconditionFailure("LAN listener status never matched: \(statuses)")
         }
 
-        let httpPort = Int.random(in: 49152...54000)
-        let pinned = Int.random(in: 54001...58000)
+        let httpPort = Int.random(in: 20_000...30_000)
+        let pinned = Int.random(in: 30_001...40_000)
         statuses.removeAll()
         server.start(port: httpPort, token: token, lanPort: pinned)
         defer { server.stop() }

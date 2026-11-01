@@ -47,7 +47,7 @@ extension SessionTabTests {
         privateTab.isPrivate = true
         manager.select(manager.sessions.firstIndex(where: { $0.id == middle.id })!)
         let server = RemoteControlServer(manager: manager)
-        let port = Int.random(in: 49152...65535)
+        let port = Int.random(in: 20_000...45_000)
         let token = UUID().uuidString
         server.start(port: port, token: token)
         defer { server.stop() }
