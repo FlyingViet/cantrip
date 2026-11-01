@@ -150,6 +150,52 @@ and deletes session logs older than 30 days.
   the next retry until a run succeeds. Each attempt is also logged in
   `Cantrip.log` as a `consolidator:` line.
 
+## Hand secrets to scripts, jobs and MCP servers
+
+Cantrip can broker the API keys, tokens and passwords your scripts use, so
+they don't sit in plain files and never pass through a model.
+
+- **Bitwarden is the source of truth.** Keep each secret as an item in one
+  Bitwarden folder, **Cantrip Secrets**: a secure note whose custom fields are
+  environment variables (hidden fields for secrets, text fields for addresses
+  and user names), or whose note text is a file such as a key or a service
+  account JSON. Binary files are stored as base64 text with a
+  `cantrip-encoding` field set to `base64`. Attachments and Sends aren't used.
+- **The macOS Keychain is the runtime copy.** **Settings > Secrets > Unlock &
+  Sync**, `cantrip secret sync`, or **Secrets** in a paired device's tab menu
+  opens a Bitwarden password dialog on the Mac. Cantrip unlocks the vault with
+  it, copies the folder into the Keychain, and locks the vault again. The
+  password and the session key are never stored. Scheduled jobs keep working
+  while the vault is locked. The Bitwarden CLI (`bw`) must be installed and
+  logged in once (`bw login`).
+- **Commands get values by name:**
+
+  ```sh
+  cantrip secret list                                # names and field names only
+  cantrip secret run example -- ./sync.sh            # every field of "example" as variables
+  cantrip secret run TOKEN=example.API_TOKEN -- sh -c 'curl -H "Authorization: Bearer $TOKEN" https://service.example/api'
+  cantrip secret run --file KEY_FILE=example-key -- ./sign.sh   # key at the path in $KEY_FILE
+  cantrip secret run --env-file ENV=example -- bash -c '. "$ENV"; ./job.sh'
+  ```
+
+  `--file` hands over a pipe that can be read once; add `--temp-files` for a
+  tool that reads its file twice. `--env-file` is always a private file, since
+  the macOS shell can't source a pipe. Both are deleted when the command exits.
+  `secret run` reads the Keychain itself, so it works while Cantrip restarts,
+  and it masks every secret value in the command's output as
+  `[secret:NAME.FIELD]`.
+- **LaunchAgents and MCP servers** use the same wrapper: put
+  `cantrip secret run NAME -- ` in front of the job's or server's command.
+- **Moving existing files in:** `cantrip secret import FOLDER` previews which
+  item each file becomes (names only). `--apply` creates the items through
+  `bw`, syncs, and compares every file with the Keychain copy by hash;
+  `cantrip secret verify FOLDER` repeats that comparison. Certificates, signing
+  requests and provisioning profiles aren't secret and stay files.
+- **Values stay out of logs and clients:** Cantrip masks the values in its own
+  log and run journals. Settings, the browser Remote and `cantrip secret list`
+  show only names, field names and the last sync. Cantrip Home can't read
+  Cantrip's Keychain items with `security`.
+
 ## Know where data lives
 
 | Location | Contents |
@@ -161,7 +207,8 @@ and deletes session logs older than 30 days.
 | `~/.cache/Cantrip/session-output-folders.json` | Which Copilot CLI session folders each tab used |
 | `~/.cache/Cantrip/storage-upkeep.log` | Session folders and worktrees the daily cleanup removed ([Free up disk space](updating-and-troubleshooting.md#free-up-disk-space)) |
 | `~/Library/Logs/Cantrip.log` | Diagnostic log; past 10 MB it moves to `Cantrip.log.1`, keeping three older logs (`.1` to `.3`) |
-| macOS Keychain | Remote host/client pairing credentials |
+| `~/.cache/Cantrip/secrets/index.json` | Names of the brokered secrets and their fields, and the last sync (never values) |
+| macOS Keychain | Remote host/client pairing credentials, MCP sign-ins, and the copy of the Bitwarden **Cantrip Secrets** folder |
 
 Closing a tab or disabling Remote does not delete all of this data. Removing
 images can break queued/resumed tasks and historical image references. Review

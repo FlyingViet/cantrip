@@ -9,14 +9,14 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards cert artwork icon app run clean
+.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards test-secrets cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-rich-cards
+test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-rich-cards test-secrets
 
 test-architectures:
 	@bash Tests/ArchitectureTests/run.sh
@@ -221,6 +221,13 @@ prune-builds:
 
 test-prune:
 	@bash Tests/PruneBuildTests/run.sh
+
+# The secrets broker's import, sync, run and masking, in a temporary home with a fake `bw` and keychain.
+test-secrets:
+	@BIN="/tmp/cantrip-secret-tests-$$$$"; H="$$(mktemp -d)"; \
+	trap 'rm -rf "$$BIN" "$$H"' EXIT; \
+	swiftc -parse-as-library Sources/Cantrip/Secrets.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/SecretKeychain.swift Sources/Cantrip/SecretVault.swift Sources/Cantrip/SecretCLI.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ToolLocator.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Sources/Cantrip/PrivateFile.swift Tests/SecretBrokerTests/main.swift -o "$$BIN" && \
+	HOME="$$H" CFFIXED_USER_HOME="$$H" CANTRIP_TAB_TEST_HOME="$$H" "$$BIN"
 
 test-mcp-on-demand:
 	@python3 Tests/MCPOnDemandTests/test_mcp_on_demand.py
