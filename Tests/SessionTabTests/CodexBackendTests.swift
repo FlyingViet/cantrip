@@ -191,6 +191,7 @@ extension SessionTabTests {
     def turn(text):
         interrupted[0] = False
         if text.startswith("ask"):
+            item("agentMessage", "completed", {"id": "msg-0", "text": "Checking."})
             shell = "/bin/zsh -lc 'touch made.txt'"
             item("commandExecution", "started", {"id": "exec-1", "command": shell, "status": "inProgress"})
             answer = ask(100, "item/commandExecution/requestApproval", {"itemId": "exec-1", "command": shell, "cwd": "/tmp"})
@@ -206,7 +207,8 @@ extension SessionTabTests {
                                               "status": "completed" if used else "failed",
                                               "result": {"content": [{"type": "text", "text": "HI"}]} if used else None,
                                               "error": None if used else {"message": "user rejected MCP tool call"}})
-            note(("item/agentMessage/delta", {"itemId": "msg-1", "delta": "Done."}))
+            note(("item/agentMessage/delta", {"itemId": "msg-1", "delta": "Do"}))
+            note(("item/agentMessage/delta", {"itemId": "msg-1", "delta": "ne."}))
             item("agentMessage", "completed", {"id": "msg-1", "text": "Done."})
             note(("thread/tokenUsage/updated", {"tokenUsage": {"last": {"inputTokens": 100, "cachedInputTokens": 40,
                                                                         "outputTokens": 20}, "modelContextWindow": 258400}}))
@@ -348,10 +350,10 @@ extension SessionTabTests {
         precondition(ask.value.prompts == ["Allow Codex to run touch made.txt?", "Allow Codex to use echo (shout)?"]
                      && answers()[100]?["decision"] as? String == "accept" && answers()[101]?["action"] as? String == "decline",
                      "The command was allowed and the MCP tool declined, as answered: \(ask.value.prompts) \(answers())")
-        precondition(ask.value.text == "Done." && ask.value.failure == nil
+        precondition(ask.value.text == "Checking.\n\nDone." && ask.value.failure == nil
                      && ask.value.activities["exec-1"]?.state == .succeeded && ask.value.activities["mcp-1"]?.state == .failed
                      && ask.value.usage?.inputTokens == 100 && ask.value.usage?.cachedInputTokens == 40,
-                     "Streams the reply once, the steps and the token use: \(ask.value.text) \(ask.value.activities.keys)")
+                     "Streams the reply once (each message its own paragraph), the steps and the token use: \(ask.value.text) \(ask.value.activities.keys)")
 
         // A usage limit: reported once, with the full window's reset, and the turn fails.
         let limit = CodexTurnBox()
