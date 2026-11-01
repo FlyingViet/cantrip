@@ -9,14 +9,14 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards test-agent-policy test-skills cert artwork icon app run clean
+.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards test-agent-policy test-skills test-secrets test-environments cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-rich-cards test-agent-policy test-skills
+test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-rich-cards test-agent-policy test-skills test-secrets test-environments
 
 test-agent-policy:
 	@BIN="/tmp/cantrip-agent-policy-tests-$$$$"; HOME_DIR="$$(mktemp -d)"; \
@@ -59,7 +59,7 @@ test-session-tabs:
 test-message-routing:
 	@BIN="/tmp/cantrip-message-routing-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/QueueGrouping.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/Log.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/QueueGrouping.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-remote-routing:
 	@BIN="/tmp/cantrip-remote-routing-tests-$$$$"; \
@@ -79,7 +79,7 @@ test-rich-cards:
 test-remote-images:
 	@BIN="/tmp/cantrip-remote-image-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/Log.swift Sources/Cantrip/RemoteImageAttachments.swift Sources/Cantrip/RemoteGeneratedImages.swift Sources/Cantrip/SessionOutputFolders.swift Sources/Cantrip/CantripPaths.swift Tests/RemoteImageTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/RemoteImageAttachments.swift Sources/Cantrip/RemoteGeneratedImages.swift Sources/Cantrip/SessionOutputFolders.swift Sources/Cantrip/CantripPaths.swift Tests/RemoteImageTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-context:
 	@BIN="/tmp/cantrip-context-tests-$$$$"; \
@@ -108,13 +108,13 @@ test-package-tracking:
 test-recovery:
 	@BIN="/tmp/cantrip-recovery-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-consolidation:
 	@BIN="/tmp/cantrip-consolidation-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/ConsolidationPolicy.swift Sources/Cantrip/Log.swift Tests/ConsolidationTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/ConsolidationPolicy.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Tests/ConsolidationTests/main.swift -o "$$BIN" && "$$BIN"
 
 # Fixtures (SQLite databases, a memory folder) are written under .build and removed afterwards.
 test-voice-vocabulary:
@@ -155,13 +155,13 @@ test-skills:
 test-message-deletion:
 	@BIN="/tmp/cantrip-message-deletion-tests-$$$$"; H="$$(mktemp -d)"; \
 	trap 'rm -f "$$BIN"; rm -rf "$$H"' EXIT; \
-	swiftc Sources/Cantrip/MessageDeletion.swift Sources/Cantrip/Log.swift Tests/MessageDeletionTests/main.swift -o "$$BIN" && \
+	swiftc Sources/Cantrip/MessageDeletion.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Tests/MessageDeletionTests/main.swift -o "$$BIN" && \
 	CFFIXED_USER_HOME="$$H" "$$BIN"
 
 test-run-journal:
 	@BIN="/tmp/cantrip-run-journal-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/RunJournal.swift Sources/Cantrip/CantripPaths.swift Tests/RunJournalTests/main.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/RunJournal.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/CantripPaths.swift Tests/RunJournalTests/main.swift -o "$$BIN"; \
 	"$$BIN"
 
 # Auto-create the signing certificate if it's missing (first install).
@@ -239,6 +239,20 @@ prune-builds:
 
 test-prune:
 	@bash Tests/PruneBuildTests/run.sh
+
+# The secrets broker's import, sync, run and masking, in a temporary home with a fake `bw` and keychain.
+test-secrets:
+	@BIN="/tmp/cantrip-secret-tests-$$$$"; H="$$(mktemp -d)"; \
+	trap 'rm -rf "$$BIN" "$$H"' EXIT; \
+	swiftc -parse-as-library Sources/Cantrip/Secrets.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/SecretKeychain.swift Sources/Cantrip/SecretVault.swift Sources/Cantrip/SecretCLI.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ToolLocator.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Sources/Cantrip/PrivateFile.swift Tests/SecretBrokerTests/main.swift -o "$$BIN" && \
+	HOME="$$H" CFFIXED_USER_HOME="$$H" CANTRIP_TAB_TEST_HOME="$$H" "$$BIN"
+
+# Environment profiles: matching, Xcode/Node resolution and real zsh/bash startup files, in a temporary home.
+test-environments:
+	@BIN="/tmp/cantrip-environment-tests-$$$$"; H="$$(mktemp -d)"; \
+	trap 'rm -rf "$$BIN" "$$H"' EXIT; \
+	swiftc -parse-as-library Sources/Cantrip/EnvironmentProfiles.swift Sources/Cantrip/EnvironmentCLI.swift Sources/Cantrip/Secrets.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/SecretKeychain.swift Sources/Cantrip/SecretVault.swift Sources/Cantrip/SecretCLI.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ToolLocator.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Sources/Cantrip/PrivateFile.swift Tests/EnvironmentProfileTests/main.swift -o "$$BIN" && \
+	HOME="$$H" CFFIXED_USER_HOME="$$H" CANTRIP_TAB_TEST_HOME="$$H" "$$BIN"
 
 test-mcp-on-demand:
 	@python3 Tests/MCPOnDemandTests/test_mcp_on_demand.py

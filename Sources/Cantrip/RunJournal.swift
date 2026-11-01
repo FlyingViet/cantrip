@@ -459,7 +459,8 @@ final class RunJournal {
         guard let handle else { throw CocoaError(.fileNoSuchFile) }
         var stamped = event
         stamped.sequence = nextSequence
-        var data = try Self.encoder.encode(stamped)
+        // Secret values a command or model printed never reach the journal (names stay).
+        var data = SecretRedaction.redact(try Self.encoder.encode(stamped))
         data.append(0x0A)
         try handle.write(contentsOf: data)
         needsSynchronization = true

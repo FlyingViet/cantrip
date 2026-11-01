@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "api", "skills", "instructions", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 
@@ -23,6 +23,8 @@ enum CantripCLI {
             case "api": try api(Array(arguments.dropFirst()))
             case "skills": return try skills(Array(arguments.dropFirst()))
             case "instructions": return try instructions(Array(arguments.dropFirst()))
+            case "secret", "secrets": return SecretCLI.main(Array(arguments.dropFirst()))
+            case "env": return EnvironmentCLI.main(Array(arguments.dropFirst()))
             default: print(usage)
             }
             return 0
@@ -88,6 +90,13 @@ enum CantripCLI {
                                   Cantrip's skills library, linked for every backend (`cantrip skills help`)
       cantrip instructions [list [DIR] | edit FOLDER | check]
                                   Rules for everything under a folder, given to every backend (`cantrip instructions help`)
+      cantrip secret list         Secrets Cantrip hands to commands (names only; values come from Bitwarden)
+      cantrip secret sync         Unlock Bitwarden on the Mac and refresh the keychain cache, then lock it again
+      cantrip secret run SECRET... -- COMMAND
+                                  Run COMMAND with secrets as variables or files, masked in its output
+                                  (`cantrip secret help` for the forms, import and verify)
+      cantrip env [list|show]     Per-project environment profiles: the Xcode, Node, PATH and variables every
+                                  backend, child tab and `!` command in a project gets (`cantrip env help`)
       cantrip tab list            Open tabs with their IDs and child tabs (private tabs are never shown)
       cantrip tab read ID         A tab's recent turns, read-only (ID or its first 8 characters)
           --turns N | --all       How many turns (default 3)

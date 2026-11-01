@@ -11,6 +11,7 @@ Usage:
   cantrip instructions list|edit|check   (folder rules for every backend)
   cantrip daemon start|stop|restart|run|logs   (headless background service)
   cantrip pair | status | config | doctor | cleanup  (see `cantrip help`)
+  cantrip secret list | sync | run NAME... -- cmd     (secrets broker)
 
 If the app isn't running, the exact bundle next to this script's repo is
 launched (never LaunchServices' pick among stale copies), with a warning
@@ -233,7 +234,7 @@ def inspect_runs(identifier=None):
     return 0
 
 
-HOST_COMMANDS = {"daemon", "pair", "config", "status", "doctor", "cleanup", "help"}
+HOST_COMMANDS = {"daemon", "pair", "config", "status", "doctor", "cleanup", "secret", "secrets", "env", "help"}
 TAB_ACTIONS = {"list", "read", "ask", "reply"}
 SKILLS_ACTIONS = {"list", "add", "edit", "enable", "disable", "sync", "check", "help"}
 INSTRUCTIONS_ACTIONS = {"list", "edit", "check", "help"}

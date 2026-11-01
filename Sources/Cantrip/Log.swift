@@ -22,7 +22,7 @@ enum Log {
 
     static func write(_ message: String) {
         queue.async {
-            let line = "[\(df.string(from: Date()))] \(message)\n"
+            let line = "[\(df.string(from: Date()))] \(SecretRedaction.redact(message))\n"
             guard let data = line.data(using: .utf8) else { return }
             if let handle = try? FileHandle(forWritingTo: url) {
                 let size = handle.seekToEndOfFile() + UInt64(data.count)

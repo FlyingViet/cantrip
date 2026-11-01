@@ -672,6 +672,13 @@ enum CantripHomeActionPolicy {
             return [deny("Formatting disks isn't allowed.")]
         case "csrutil", "nvram", "fdesetup", "tccutil", "systemsetup", "shutdown", "reboot", "halt":
             return [deny("Changing macOS security, startup or power state isn't allowed.")]
+        case "security":
+            // Secrets reach commands only through `cantrip secret run`, which masks their output.
+            let readsSecrets = ["find-generic-password", "find-internet-password", "delete-generic-password"].contains(sub)
+                && ["cantrip secrets", "cantrip mcp", "agentspotlight"].contains { full.contains($0) }
+            if readsSecrets || (sub == "dump-keychain" && has("-d")) || sub == "export" {
+                return [deny("Cantrip's keychain secrets can't be read directly; commands get them through `cantrip secret run`.")]
+            }
         case "spctl":
             if has("--master-disable", "--global-disable", "--disable") {
                 return [deny("Turning off Gatekeeper isn't allowed.")]

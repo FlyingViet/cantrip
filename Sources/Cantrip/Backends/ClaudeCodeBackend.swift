@@ -183,7 +183,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         let rules = FolderInstructions()
         return [workdir, String(settings.allowActions), settings.claudePermissionMode, model, effort, guardrail?.rawValue ?? "",
                 String(checksToolCalls),
-                String(readOnly), homeProtocol ?? "", rules.guidance(for: workdir) ?? "", rules.claudeSettings(for: workdir) ?? ""]
+                String(readOnly), homeProtocol ?? "", rules.guidance(for: workdir) ?? "", rules.claudeSettings(for: workdir) ?? "",
+                EnvironmentProfiles.resolved(for: workdir)?.fingerprint ?? ""]
             .map { "\($0.utf8.count):\($0)" }.joined()
     }
 
@@ -758,6 +759,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         p.currentDirectoryURL = URL(fileURLWithPath: workdir)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = ToolPath.value(inherited: env["PATH"])
+        EnvironmentProfiles.apply(to: &env, workdir: workdir)
         if let tabID { env[TabInsight.tabIDVariable] = tabID.uuidString }
         if !readOnly {
             do {

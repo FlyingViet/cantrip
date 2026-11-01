@@ -3015,7 +3015,13 @@ final class ChatSession: ObservableObject {
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-l", "-c", command]
+        var shellEnvironment = ProcessInfo.processInfo.environment
+        // Login files reorder PATH, so the project's profile is sourced again after them.
+        if EnvironmentProfiles.apply(to: &shellEnvironment, workdir: workdir) != nil {
+            p.arguments = ["-l", "-c", ". \"$\(EnvironmentProfiles.fileVariable)\"; " + command]
+        } else {
+            p.arguments = ["-l", "-c", command]
+        }
         p.currentDirectoryURL = URL(fileURLWithPath: workdir)
         p.standardInput = FileHandle.nullDevice
         do {
@@ -3025,7 +3031,7 @@ final class ChatSession: ObservableObject {
                     self.receiveInput(request)
                 }
             }
-            p.environment = ProcessInfo.processInfo.environment.merging(broker.environment) { _, new in new }
+            p.environment = shellEnvironment.merging(broker.environment) { _, new in new }
             shellAskpass = broker
         } catch {
             handleRunInterruption(errorText: "Could not prepare secure command input. The command was not started.")
@@ -3114,6 +3120,7 @@ final class ChatSession: ObservableObject {
         p.standardInput = FileHandle.nullDevice
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = ToolPath.value(inherited: env["PATH"])
+        EnvironmentProfiles.apply(to: &env, workdir: workdir)
         env["CANTRIP_WORKDIR"] = workdir
         p.environment = env
         let pipe = Pipe()

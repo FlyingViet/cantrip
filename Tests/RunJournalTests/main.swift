@@ -449,6 +449,21 @@ do {
     expect(expectedActive?.activeRun?.messages.first?.text == "in progress"
             && expectedActive?.queued == [keptLast],
            "the unfinished run and remaining queue replay after reopening")
+
+    // Secret values the broker hands out never reach a journal, even JSON-escaped.
+    SecretRedaction.update([(label: "example.EXAMPLE_TOKEN", value: "example/secret\"value")])
+    defer { SecretRedaction.update([]) }
+    let redactedID = UUID()
+    let redacting = try RunJournal(sessionID: redactedID, directory: directory)
+    var leaked = RunJournal.Event(sessionID: redactedID, runID: UUID(), kind: .output)
+    leaked.text = "token example/secret\"value at https://service.example"
+    try redacting.append(leaked, durable: true)
+    let written = try String(contentsOf: redacting.fileURL, encoding: .utf8)
+    expect(!written.contains("secret\\\"value") && !written.contains("secret\"value"),
+           "a secret value is masked in the journal")
+    expect(RunJournal.loadEvents(from: redacting.fileURL).last?.text
+            == "token [secret:example.EXAMPLE_TOKEN] at https://service.example",
+           "the masked event still decodes, and plain fields stay")
 } catch {
     failures += 1
     fputs("FAIL: unexpected error: \(error)\n", stderr)

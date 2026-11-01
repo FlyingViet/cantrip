@@ -467,6 +467,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         stopProcessAndCleanUp()
 
         var env = ToolPath.environment()
+        EnvironmentProfiles.apply(to: &env, workdir: workdir)
         env["NO_COLOR"] = "1"
         env.removeValue(forKey: AntigravityHook.socketVariable)
         if let policy = hookPolicy {
