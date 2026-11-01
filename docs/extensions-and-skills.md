@@ -187,6 +187,11 @@ cantrip mcp connect mobbin     # sign in to a remote server
 - Each server can be switched off entirely, per backend or per tab (the tab
   menu's **MCP Servers**). Scheduled Home tasks still get only the servers in
   `cantripHomeTaskMCPServers`, on every backend.
+- The same list, with each server's sign-in, **Connect** (**Reconnect** after
+  a sign-in fails) and its backend switches, is in **Settings > Tools &
+  sign-ins** in Cantrip Agent and Cantrip Gateway (Mac and Windows), and in the
+  browser Remote's **MCP Servers**. They show the state and send actions; the
+  credentials stay in the Mac's keychain.
 
 ### Start a large MCP server only when it's used
 

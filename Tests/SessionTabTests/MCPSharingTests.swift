@@ -9,7 +9,28 @@ extension SessionTabTests {
         try await testMCPOAuth()
         try await testMCPRelay()
         try testMCPMigration()
-        print("MCP sharing: import, backend configs, OAuth with single-flight refresh, and the relay passed")
+        try await testMCPRemoteList()
+        print("MCP sharing: import, backend configs, OAuth with single-flight refresh, the relay and the remote list passed")
+    }
+
+    /// What Remote clients get: whether a server has a credential in the keychain, never its name or value.
+    @MainActor
+    static func testMCPRemoteList() async throws {
+        let secrets = MCPSecrets.Store.memory()
+        try secrets.set("secret-flows-value", for: MCPSecrets.headerAccount("flows", "X-Api-Key"))
+        let hub = MCPServerHub(signIns: MCPSignIns(secrets: secrets), snapshot: MCPRegistry.Snapshot(servers: [
+            MCPServer(name: "notes", command: "/usr/bin/python3"),
+            MCPServer(name: "flows", url: "https://flows.example.com/mcp", secretHeaders: ["X-Api-Key"]),
+            MCPServer(name: "vault", command: "/usr/bin/python3", secretEnv: ["VAULT_SESSION"]),
+        ], importedAt: Date()))
+        await hub.refreshStates()
+        let payload = hub.remotePayload()
+        guard let servers = payload["servers"] as? [[String: Any]] else { preconditionFailure("The list has servers") }
+        let credentials = Dictionary(uniqueKeysWithValues: servers.map { ($0["name"] as? String ?? "", $0["credentials"] as? Bool) })
+        precondition(credentials == ["notes": false, "flows": true, "vault": true], "credentials flags: \(credentials)")
+        let text = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        precondition(!text.contains("X-Api-Key") && !text.contains("VAULT_SESSION") && !text.contains("secret-flows-value"),
+                     "A Remote client never sees a credential's name or value")
     }
 
     static let mcpCopilotFixture: [String: Any] = ["mcpServers": [

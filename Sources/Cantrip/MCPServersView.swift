@@ -178,6 +178,8 @@ struct MCPServerRow: View {
                     Button("Cancel") { hub.cancel(server.name) }
                 case .ready?:
                     Button("Sign Out") { Task { await hub.signOut(server.name) } }
+                case .failed?:
+                    Button("Reconnect") { hub.connect(server.name) }
                 default:
                     Button("Connect") { hub.connect(server.name) }
                 }

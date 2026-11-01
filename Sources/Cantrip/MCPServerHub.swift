@@ -350,6 +350,8 @@ final class MCPServerHub: ObservableObject {
             var item: [String: Any] = [
                 "name": server.name, "remote": server.isRemote, "oauth": server.oauth, "relayed": server.isRelayed,
                 "enabled": server.enabled, "disabledBackends": server.disabledBackends, "source": server.source,
+                // Whether a header or environment credential is in the keychain; never its name or value.
+                "credentials": !server.secretHeaders.isEmpty || !server.secretEnv.isEmpty,
                 "address": server.url ?? ([server.command.map { ($0 as NSString).lastPathComponent }].compactMap { $0 }
                     + server.args.map { ($0 as NSString).lastPathComponent }).joined(separator: " "),
             ]

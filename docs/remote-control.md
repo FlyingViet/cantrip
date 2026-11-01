@@ -217,6 +217,19 @@ lists the tiers first, labeled with what they run), and `GET
 /api/v1/copilot/usage` adds `tiers`: runs, tokens and cost per tier today and
 over 7 days.
 
+## Shared MCP servers
+
+`GET /api/v1/mcp` lists the [shared MCP servers](extensions-and-skills.md#share-mcp-servers-with-every-backend):
+each with `name`, `remote`, `oauth`, `relayed`, `enabled`, `disabledBackends`,
+`source`, `address`, `tools` when limited, `credentials` (whether a header or
+environment credential is in the Mac's keychain, never its name or value) and
+`state` (`phase`, `message`, `expiresAt`, and the waiting sign-in `page` with a
+`screenshot`), plus `revision`; `?tab=<id>` adds that tab's `tabDisabled`.
+`POST` takes `{"action", "name"}` with `connect`, `approve`, `decline`,
+`cancel` or `signOut`, or `setEnabled` (`enabled`), `setBackend` (`backend`,
+`enabled`) or `setTab` (`tab`, `enabled`), and returns the list. Sign-in tokens
+never leave the Mac.
+
 ## Start fresh
 
 **Start Fresh**, next to **Model Settings** in the same menus, keeps a tab and
