@@ -257,7 +257,7 @@ final class SettingsMapTests: XCTestCase {
         let previous: [String: Any] = [
             "hermes.voiceEngine": "qwen", "hermes.voicePause": 3.5, "hermes.sttEngine": "apple",
             "hermes.showSteps": true, "hermes.qwenPreset": "vivian-plain", "hermes.qwenRate": 1.3,
-            "hermes.qwenModelQuality": "high", "cantrip.mascot.name": "Mochi",
+            "hermes.qwenModelQuality": "high", "cantrip.mascot.name": "Mochi", "hermes.paused": true,
         ]
         let before = previous.keys.map { ($0, defaults.object(forKey: $0)) }
         addTeardownBlock {
@@ -284,6 +284,8 @@ final class SettingsMapTests: XCTestCase {
         XCTAssertEqual(stored(qwen, "_presetId", as: String.self), "vivian-plain")
         XCTAssertEqual(stored(qwen, "_rate", as: Double.self), 1.3)
         XCTAssertEqual(stored(qwen, "_modelQuality", as: String.self), "high")
+        XCTAssertEqual(stored(SettingsPauseRow(), "_paused", as: Bool.self), true,
+                       "Pause Agent in Settings reads the same key the chat's paused bar does")
 
         // Every page draws at a narrow folded width and the largest text without scrolling sideways.
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)

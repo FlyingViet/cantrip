@@ -1875,11 +1875,8 @@ struct ChatView: View {
                     }
                 }
             }
+            // Pause Agent is app-wide: it's in Settings, under the status card.
             Section("Agent") {
-                Button { paused.toggle() } label: {
-                    Label(state.paused ? "Resume Agent" : "Pause Agent",
-                          systemImage: state.paused ? "play.circle" : "pause.circle")
-                }
                 Button { showVoiceMode = true } label: { Label("Voice Mode", systemImage: "waveform") }
                     .disabled(state.voiceModeDisabled)
                 if !state.isCantrip && !state.isHome {
