@@ -1821,7 +1821,7 @@ snapshot, so replies saved before the rule show the same cards on every client.
 ### Weather cards
 
 When a reply ends with a fenced `weather` or `cantrip-weather` JSON block
-(`{"place": "Santa Clara, CA"}`, or `{}` for where the user is), Cantrip strips
+(`{"place": "Portland, OR"}`, or `{}` for where the user is), Cantrip strips
 the block and attaches a `weatherCard` built from [Open-Meteo](https://open-meteo.com/)
 data, never from numbers the model wrote. The place is geocoded on the Mac; with
 no place, the card uses the location the paired device sent with the message,
