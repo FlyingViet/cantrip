@@ -9,14 +9,14 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-simulator-pool test-rich-cards cert artwork icon app run clean
+.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-simulator-pool test-browser-preview test-rich-cards
+test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-rich-cards
 
 test-architectures:
 	@bash Tests/ArchitectureTests/run.sh
@@ -127,13 +127,18 @@ test-backend-commands:
 test-storage-upkeep:
 	@BIN="/tmp/cantrip-storage-upkeep-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/StorageUpkeep.swift Sources/Cantrip/SimulatorPool.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/StorageUpkeepTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/StorageUpkeep.swift Sources/Cantrip/BuildCaches.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/SimulatorPool.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/StorageUpkeepTests/main.swift -o "$$BIN" && "$$BIN"
 
 # A fake simctl and a temporary state folder; no real simulator is touched.
+test-build-caches:
+	@BIN="/tmp/cantrip-build-cache-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc Sources/Cantrip/BuildCaches.swift Sources/Cantrip/StorageUpkeep.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/SimulatorPool.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/BuildCacheTests/main.swift -o "$$BIN" && "$$BIN"
+
 test-simulator-pool:
 	@BIN="/tmp/cantrip-simulator-pool-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/SimulatorPool.swift Sources/Cantrip/StorageUpkeep.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/SimulatorPoolTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/SimulatorPool.swift Sources/Cantrip/StorageUpkeep.swift Sources/Cantrip/BuildCaches.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/SimulatorPoolTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-run-journal:
 	@BIN="/tmp/cantrip-run-journal-tests-$$$$"; \

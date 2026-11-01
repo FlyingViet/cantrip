@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 /// Keeps agent leftovers from filling the disk: Copilot CLI session folders nothing uses anymore,
-/// and agent git worktrees whose work is saved elsewhere. The host runs it daily and
+/// agent git worktrees whose work is saved elsewhere, and build caches (`BuildCaches`). The host runs it daily and
 /// `cantrip cleanup` on demand. It never touches project checkouts, uncommitted files, commits
 /// that exist nowhere else, or anything a running process, a Cantrip tab or a memory note uses.
 enum StorageUpkeep {
@@ -37,6 +37,8 @@ enum StorageUpkeep {
         /// Simulator cleanup (`SimulatorPool.sweep`); nil skips it (no Xcode, or tests).
         var simulators: SimulatorPool.SweepOptions?
         var simulatorPool = SimulatorPool.Context()
+        /// Build and package caches (`BuildCaches.sweep`); nil skips them (tests).
+        var caches: BuildCaches.SweepOptions?
 
         static func standard(defaults: UserDefaults = .standard, now: Date = Date()) -> Configuration {
             let home = FileManager.default.homeDirectoryForCurrentUser
@@ -65,7 +67,8 @@ enum StorageUpkeep {
                 stateDirectory: cache,
                 sessionRetention: TimeInterval(retentionDays(defaults)) * 86_400,
                 now: now,
-                simulators: hasSimulators ? simulators : nil
+                simulators: hasSimulators ? simulators : nil,
+                caches: .standard(home: home, now: now)
             )
         }
 
@@ -115,9 +118,12 @@ enum StorageUpkeep {
         var freeBytesBefore: Int64?
         var freeBytesAfter: Int64?
         var simulators: SimulatorPool.SweepReport?
+        var caches: BuildCaches.Report?
 
         var worktreeBytesRemoved: Int64 { worktreesRemoved.reduce(0) { $0 + $1.bytes } }
-        var bytesRemoved: Int64 { sessionBytesRemoved + worktreeBytesRemoved + (simulators?.bytesRemoved ?? 0) }
+        var bytesRemoved: Int64 {
+            sessionBytesRemoved + worktreeBytesRemoved + (simulators?.bytesRemoved ?? 0) + (caches?.bytesRemoved ?? 0)
+        }
 
         /// One sentence for Settings, the log and the terminal.
         var summary: String {
@@ -130,10 +136,14 @@ enum StorageUpkeep {
                 let count = simulators.removedCount == 1 ? "1 simulator's data" : "\(simulators.removedCount) simulators' data"
                 parts.append("\(count) (\(StorageUpkeep.format(simulators.bytesRemoved)))")
             }
+            if let caches, caches.count > 0 {
+                let count = caches.count == 1 ? "1 build cache" : "\(caches.count) build caches"
+                parts.append("\(count) (\(StorageUpkeep.format(caches.bytesRemoved)))")
+            }
             var text = parts.isEmpty
                 ? (dryRun ? "Nothing to clean up right now." : "Nothing needed cleaning up.")
                 : (dryRun ? "Would remove " : "Removed ") + parts.joined(separator: " and ") + "."
-            let failed = errors.count + (simulators?.errors.count ?? 0)
+            let failed = errors.count + (simulators?.errors.count ?? 0) + (caches?.errors.count ?? 0)
             if failed > 0 { text += " \(failed) could not be removed." }
             return text
         }
@@ -211,6 +221,10 @@ enum StorageUpkeep {
             pool.commandLines = { processes.commandLines }
             pool.now = { c.now }
             report.simulators = SimulatorPool.sweep(options, dryRun: dryRun, context: pool, log: log)
+        }
+        if var caches = c.caches {
+            caches.git = c.git
+            report.caches = BuildCaches.sweep(caches, processes: processes, dryRun: dryRun, log: log)
         }
         report.freeBytesAfter = freeBytes(c.sessionRoot)
         report.finishedAt = Date()
