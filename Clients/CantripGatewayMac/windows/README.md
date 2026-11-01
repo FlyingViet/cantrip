@@ -65,7 +65,7 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 - **Several Macs.** Settings keeps a list of Macs, like the Mac app; pick one to connect.
 - **Tools & sign-ins.** Settings lists the MCP servers Cantrip on the Mac shares with every
   backend, as the Mac's Settings does: each server's state ("Credentials in Mac keychain", when
-  a sign-in's token ends), **Connect** (**Reconnect** after a failed sign-in), **Approve** for
+  a sign-in's token ends), **Connect** (**Retry** after a failed sign-in, with the Mac's reason), **Approve** for
   a sign-in waiting on you, and switches for the server and each backend, saved on the Mac at
   once. The Settings window asks the app for exactly these requests; it never sees the token.
   A tab's own switches are in the toolbar's **MCP Servers**.

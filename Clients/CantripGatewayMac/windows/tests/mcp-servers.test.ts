@@ -28,8 +28,8 @@ describe("MCP server rows", () => {
     expect(mcpStatus(server({ state: { phase: "ready", expiresAt: "2026-11-01T18:30:00Z" } })).text).toMatch(/^Signed in · token until /);
   });
 
-  it("offers Reconnect after a failed sign-in and tags servers like the Mac", () => {
-    expect(mcpConnectLabel(server({ state: { phase: "failed" } }))).toBe("Reconnect");
+  it("offers Retry after a failed sign-in and tags servers like the Mac", () => {
+    expect(mcpConnectLabel(server({ state: { phase: "failed" } }))).toBe("Retry");
     expect(mcpConnectLabel(server({}))).toBe("Connect");
     expect(mcpKind(server({}))).toBe("Remote · via Cantrip");
     expect(mcpKind(server({ remote: false, relayed: false }))).toBe("Local");
