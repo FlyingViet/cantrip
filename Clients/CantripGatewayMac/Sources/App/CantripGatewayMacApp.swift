@@ -41,9 +41,10 @@ struct CantripGatewayMacApp: App {
         }
 
         Settings {
-            MacSettingsView(env: env, remote: remote, voice: voice)
+            MacSettingsView(env: env, remote: remote, voice: voice, directLocal: directLocal)
                 .preferredColorScheme(.dark)
         }
+        .windowResizability(.contentMinSize)
     }
 }
 
