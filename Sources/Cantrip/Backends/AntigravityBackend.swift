@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -76,6 +77,10 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         }
     }
     private var workdirKey: String { persistKey + ".workdir" }
+    /// A digest of the folder rules this tab's conversation last got (see `withFolderRules`).
+    private var folderRulesKey: String { persistKey + ".folderRules" }
+    /// Set when a process starts a new conversation: its first message carries the folder rules.
+    private var conversationNeedsRules = false
     private var outputSessionKey = UUID().uuidString
 
     var conversationID: String? {
@@ -390,7 +395,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         let userFrame: [String: Any] = [
             "event": "user",
             "message": [
-                "content": prompt,
+                "content": folderRulesPrompt(prompt, workdir: workdir),
             ],
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: userFrame),
@@ -410,6 +415,29 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         }
     }
 
+    /// `prompt`, preceded by the rules Cantrip keeps for `workdir` when this is the conversation's
+    /// first message or the rules changed since it last got them.
+    private func folderRulesPrompt(_ prompt: String, workdir: String) -> String {
+        let fresh = stateLock.withLock { () -> Bool in
+            defer { conversationNeedsRules = false }
+            return conversationNeedsRules
+        }
+        let (text, digest) = Self.withFolderRules(prompt, rules: FolderInstructions().guidance(for: workdir), newConversation: fresh,
+                                                  delivered: UserDefaults.standard.string(forKey: folderRulesKey))
+        UserDefaults.standard.set(digest, forKey: folderRulesKey)
+        return text
+    }
+
+    /// Antigravity has no system-prompt option, so folder rules go ahead of a conversation's first
+    /// message, and again whenever they change. Returns the message and the rules' digest to remember.
+    static func withFolderRules(_ prompt: String, rules: String?, newConversation: Bool, delivered: String?) -> (String, String) {
+        let rules = rules ?? ""
+        let digest = rules.isEmpty ? "" : SHA256.hash(data: Data(rules.utf8)).map { String(format: "%02x", $0) }.joined()
+        guard !rules.isEmpty, newConversation || digest != delivered else { return (prompt, digest) }
+        let intro = newConversation ? "" : "The rules Cantrip keeps for this folder changed; these replace any earlier ones.\n\n"
+        return (intro + rules + "\n\n---\n\n" + prompt, digest)
+    }
+
     private func ensureProcess(executable: String, workdir: String) throws {
         let signature = launchSignature(for: workdir)
         stateLock.lock()
@@ -425,6 +453,7 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
             resumeID = nil
             Log.write("antigravity: the tab moved from \(folder) to \(workdir); starting a new conversation there")
         }
+        conversationNeedsRules = resumeID == nil
         stateLock.unlock()
 
         stopProcessAndCleanUp()
