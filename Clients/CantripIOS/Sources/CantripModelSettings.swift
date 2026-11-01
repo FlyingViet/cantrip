@@ -561,18 +561,20 @@ struct CantripUsageFallbackRow: View {
     }
 }
 
+/// A tab's model, effort and context window. Auto follows the Mac's default; a tier (Fast,
+/// Standard, Deep) runs the backend's model for it. Each change saves on the Mac at once, so the
+/// next prompt uses it. The usage-limit backups, for every tab, are in Settings › Models.
 struct CantripModelSettingsView: View {
     @ObservedObject var model: CantripRemoteModel
     let session: CantripRemoteSession
     @State private var identity: UUID
     @Environment(\.dismiss) private var dismiss
     @State private var settings: CantripModelSettings?
-    @State private var fallback: CantripUsageFallback?
-    @State private var selection = CantripModelSelection(model: "", effort: "", contextTier: "")
-    @State private var usesDefaults = true
+    @State private var tiers: CantripModelTiers?
     @State private var loading = false
     @State private var saving = false
     @State private var error: String?
+    @State private var showsAdvanced = false
 
     init(model: CantripRemoteModel, session: CantripRemoteSession, identity: UUID) {
         self.model = model
@@ -580,131 +582,266 @@ struct CantripModelSettingsView: View {
         _identity = State(initialValue: identity)
     }
 
-    private var info: CantripModelOption? { settings?.info(for: selection) }
-    private var validationError: String? { usesDefaults ? nil : settings?.validationError(selection) }
+    /// What this tab runs: its own pick, or nil for Auto.
+    private var own: CantripModelSelection? { settings.flatMap { $0.usesDefaults ? nil : $0.selection } }
+    private var shown: CantripModelSelection? { settings.map { $0.usesDefaults ? $0.defaults : $0.selection } }
+    private var info: CantripModelOption? { shown.flatMap { settings?.info(for: $0) } }
+    private var locked: Bool { settings == nil || settings?.unavailableReason != nil || saving || loading || model.isMutating }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
+                    SettingsScopeLabel.thisTab()
                     Text(session.title).font(.headline)
-                    Toggle("Use Mac defaults", isOn: $usesDefaults)
-                        .disabled(settings == nil || settings?.unavailableReason != nil)
-                    pickers
-                        .disabled(usesDefaults || settings == nil || settings?.unavailableReason != nil)
-                } footer: {
-                    Text("Only this tab changes. Save while idle; the next prompt uses the new settings and continues the same conversation. Long context may cost more.")
                 }
-                if let tokens = info?.contextWindow {
-                    Section {
-                        LabeledContent("Advertised maximum", value: "\(CantripModelOption.tokenLabel(tokens)) tokens")
-                        Text("Tier values are input budgets, not total context.").font(.footnote)
-                    }
-                }
-                if let message = error ?? settings?.unavailableReason ?? validationError ?? settings?.catalogError {
+                modelSection
+                effortSection
+                advancedSection
+                if let message = error ?? settings?.unavailableReason ?? settings?.catalogError {
                     Section { Text(message).foregroundStyle(.orange).accessibilityIdentifier("modelSettings.error") }
                 }
-                CantripUsageFallbackSection(model: model, fallback: $fallback)
-                Section {
-                    Button("Reload settings") { Task { await load(replaceDraft: true) } }
-                    Button("Refresh models") { Task { await load(refreshModels: true) } }
-                    if loading || settings?.isRefreshing == true { ProgressView("Loading model options...") }
+                if loading || settings?.isRefreshing == true {
+                    Section { ProgressView("Loading the Mac's models…") }
                 }
             }
-            .disabled(saving || loading)
+            .formStyle(.grouped)
             .navigationTitle("Model Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }.disabled(saving)
-                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        guard let settings else { return }
-                        let change = CantripModelSettingsChange(revision: settings.revision,
-                                                               selection: usesDefaults ? nil : selection)
-                        saving = true
-                        Task {
-                            if await model.updateModelSettings(id: session.id, change: change, identity: identity) {
-                                dismiss()
-                            } else { error = model.errorMessage ?? "Model settings could not be saved." }
-                            saving = false
-                        }
-                    }
-                    .disabled(settings == nil || saving || loading || model.isMutating
-                              || settings?.unavailableReason != nil || validationError != nil)
-                    .accessibilityIdentifier("modelSettings.save")
+                    Button("Done") { dismiss() }
+                        .disabled(saving)
+                        .accessibilityIdentifier("modelSettings.done")
                 }
             }
         }
         .interactiveDismissDisabled(saving)
-        .task { await load(replaceDraft: true) }
-        .task { fallback = await CantripUsageFallbackSection.load(model) }
+        // The list is read again from the Mac each time the sheet opens.
+        .task { await load(refreshModels: true) }
+        .task { tiers = try? await model.modelTiers() }
         .onChange(of: model.usageIdentity) { _, _ in dismiss() }
     }
 
-    private var pickers: some View {
-        Group {
-            Picker("Model", selection: Binding(get: { selection.model }, set: { value in
-                selection.model = value
-                selection.effort = ""
-                selection.contextTier = info?.contextTiers?.contains("default") == true ? "default" : ""
-            })) {
-                Text("CLI default (\(settings?.fileDefaultModel ?? "Auto"))").tag("")
-                ForEach(choices(settings?.models.map(\.id), selected: selection.model), id: \.self) {
-                    Text($0).tag($0)
+    private var modelSection: some View {
+        Section {
+            NavigationLink {
+                CantripModelPickerList(settings: settings, tiers: tiers, current: own?.model) { pick in
+                    apply(pick)
+                }
+                .disabled(locked)
+            } label: {
+                LabeledContent {
+                    Text(own.map { settings?.label($0.model) ?? $0.model } ?? "Auto")
+                } label: {
+                    Text("Model")
                 }
             }
-            Picker("Effort", selection: $selection.effort) {
-                Text("Model default").tag("")
-                ForEach(choices(info?.reasoningEfforts, selected: selection.effort), id: \.self) {
-                    Text($0.capitalized).tag($0).disabled(info?.reasoningEfforts?.contains($0) != true)
-                }
-            }
-            Picker("Context window", selection: $selection.contextTier) {
-                Text("CLI default").tag("")
-                ForEach(choices(info?.contextTiers, selected: selection.contextTier), id: \.self) {
-                    Text(info?.contextLabel($0) ?? $0).tag($0).disabled(info?.contextTiers?.contains($0) != true)
-                }
-            }
-        }
-        .onChange(of: usesDefaults) { _, inherited in
-            if inherited, let settings { selection = settings.defaults }
+            .disabled(settings == nil || settings?.unavailableReason != nil)
+            .accessibilityIdentifier("modelSettings.model")
+        } footer: {
+            Text(own == nil
+                 ? (settings?.autoLabel ?? "Auto") + ". Saves on the Mac at once; the next prompt uses it and continues the same conversation."
+                 : "Saves on the Mac at once; the next prompt uses it and continues the same conversation.")
         }
     }
 
-    private func choices(_ values: [String]?, selected: String) -> [String] {
-        var seen = Set<String>()
-        return ((values ?? []) + [selected]).filter { !$0.isEmpty && seen.insert($0).inserted }
+    @ViewBuilder
+    private var effortSection: some View {
+        if let own, let efforts = info?.reasoningEfforts, !efforts.isEmpty {
+            Section {
+                let binding = Binding(get: { own.effort }, set: { effort in
+                    apply(CantripModelSelection(model: own.model, effort: effort, contextTier: own.contextTier))
+                })
+                ViewThatFits(in: .horizontal) {
+                    Picker("Effort", selection: binding) {
+                        Text("Default").tag("")
+                        ForEach(efforts, id: \.self) { Text($0.capitalized).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    Picker("Effort", selection: binding) {
+                        Text("Model default").tag("")
+                        ForEach(efforts, id: \.self) { Text($0.capitalized).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                }
+                .disabled(locked)
+                .accessibilityIdentifier("modelSettings.effort")
+            } header: {
+                Text("Effort")
+            } footer: {
+                Text("More effort thinks longer and uses more of the plan. Default lets the model decide.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var advancedSection: some View {
+        if let own, let contexts = info?.contextTiers, !contexts.isEmpty {
+            Section {
+                DisclosureGroup("Advanced", isExpanded: $showsAdvanced) {
+                    Picker("Context window", selection: Binding(get: { own.contextTier }, set: { tier in
+                        apply(CantripModelSelection(model: own.model, effort: own.effort, contextTier: tier))
+                    })) {
+                        Text("Auto").tag("")
+                        ForEach(contexts, id: \.self) { Text(info?.contextLabel($0) ?? $0).tag($0) }
+                    }
+                    .disabled(locked)
+                    if let tokens = info?.contextWindow {
+                        LabeledContent("Largest context", value: "\(CantripModelOption.tokenLabel(tokens)) tokens")
+                    }
+                    Text("The numbers are how much of your conversation the model reads, not its total limit. A long context may cost more.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// Saves `selection` (nil = Auto) on the Mac, then reads the tab's settings back.
+    private func apply(_ selection: CantripModelSelection?) {
+        guard let settings, !saving else { return }
+        if let selection, let message = settings.validationError(selection) {
+            error = message
+            return
+        }
+        guard selection != own || (selection == nil) != settings.usesDefaults else { return }
+        saving = true
+        error = nil
+        let change = CantripModelSettingsChange(revision: settings.revision, selection: selection)
+        Task {
+            defer { saving = false }
+            if !(await model.updateModelSettings(id: session.id, change: change, identity: identity)) {
+                error = model.errorMessage ?? "Model settings could not be saved."
+            }
+            await load()
+        }
     }
 
     @MainActor
-    private func load(replaceDraft: Bool = false, refreshModels: Bool = false) async {
-        guard !loading, !saving else { return }
+    private func load(refreshModels: Bool = false) async {
+        guard !loading else { return }
         loading = true
         defer { loading = false }
         do {
             var value = try await model.modelSettings(id: session.id, refreshModels: refreshModels)
-            if replaceDraft {
-                selection = value.selection
-                usesDefaults = value.usesDefaults
-                settings = value
-            }
-            // Do not silently rebase an edited form over another device's changes.
-            let originalRevision = settings?.revision ?? value.revision
+            settings = value
             for _ in 0..<30 where value.isRefreshing {
                 try await Task.sleep(for: .seconds(1))
                 value = try await model.modelSettings(id: session.id)
             }
             guard model.usageIdentity == identity else { throw CancellationError() }
-            guard value.revision == originalRevision else {
-                error = "Model settings changed on another device. Reload before saving."
-                return
-            }
             settings = value
-            error = value.isRefreshing ? "Model lookup is still running. Reload in a moment." : nil
+            if value.isRefreshing { error = "The Mac is still reading its models. Try again in a moment." }
         } catch is CancellationError {
             return
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+/// Pick a tab's model: Auto, then the tiers with what each is for, then the backend's models
+/// grouped by the tier that lists them, each with its context window and price.
+struct CantripModelPickerList: View {
+    let settings: CantripModelSettings?
+    let tiers: CantripModelTiers?
+    /// The tab's own pick; nil for Auto.
+    let current: String?
+    let pick: (CantripModelSelection?) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            Section {
+                row(title: settings?.autoLabel ?? "Auto", detail: "Follows the Mac's default for new tabs.",
+                    selected: current == nil, id: "auto") { choose(nil) }
+            }
+            if let options = settings?.tiers, !options.isEmpty {
+                Section {
+                    ForEach(options) { tier in
+                        row(title: tier.label,
+                            detail: CantripModelTiers.summary(tier.id) + " Runs \(tier.modelLabel)"
+                                + (tier.effort.isEmpty ? "." : " · \(tier.effort)."),
+                            selected: current == tier.id, id: tier.id) { choose(tier.id) }
+                    }
+                } header: {
+                    Text("Tiers")
+                } footer: {
+                    Text("A tier keeps its level on any backend, including a usage-limit backup. Settings › Models sets which models each tier runs.")
+                }
+            }
+            ForEach(groups, id: \.title) { group in
+                Section(group.title) {
+                    ForEach(group.models) { option in
+                        row(title: option.id, detail: option.summary, selected: current == option.id, id: option.id) {
+                            choose(option.id)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Model")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// The backend's models by the tier that lists them first, then the rest.
+    private var groups: [(title: String, models: [CantripModelOption])] {
+        let models = settings?.catalogModels ?? []
+        guard let backend = matchingBackend else { return models.isEmpty ? [] : [("Models", models)] }
+        var placed = Set<String>()
+        var result: [(String, [CantripModelOption])] = []
+        for cell in backend.cells {
+            let listed = models.filter { option in
+                !placed.contains(option.id) && cell.choices.contains { $0.model == option.id }
+            }
+            placed.formUnion(listed.map(\.id))
+            if !listed.isEmpty { result.append(("\(cell.label) models", listed)) }
+        }
+        let rest = models.filter { !placed.contains($0.id) }
+        if !rest.isEmpty { result.append((result.isEmpty ? "Models" : "More models", rest)) }
+        return result
+    }
+
+    /// The tier map's backend whose models this tab's list matches best.
+    private var matchingBackend: CantripModelTiers.Backend? {
+        let ids = Set((settings?.catalogModels ?? []).map(\.id))
+        guard !ids.isEmpty else { return nil }
+        return tiers?.backends
+            .map { backend in (backend, backend.models.filter { ids.contains($0.id) }.count) }
+            .filter { $0.1 > 0 }
+            .max { $0.1 < $1.1 }?.0
+    }
+
+    private func choose(_ id: String?) {
+        guard let settings else { return }
+        guard let id else {
+            pick(nil)
+            dismiss()
+            return
+        }
+        let info = settings.models.first { $0.id == id }
+        pick(CantripModelSelection(model: id, effort: "",
+                                   contextTier: info?.contextTiers?.contains("default") == true ? "default" : ""))
+        dismiss()
+    }
+
+    private func row(title: String, detail: String?, selected: Bool, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).foregroundStyle(.primary)
+                    if let detail {
+                        Text(detail).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if selected {
+                    Image(systemName: "checkmark").foregroundStyle(.tint).accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+        .accessibilityIdentifier("modelPicker.\(id)")
     }
 }

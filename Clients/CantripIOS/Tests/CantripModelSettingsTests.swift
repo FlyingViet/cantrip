@@ -827,7 +827,7 @@ final class CantripModelSettingsTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(400))
                 controller.view.layoutIfNeeded()
                 XCTAssertGreaterThan(reads, previousReads, "The form must load the host's options")
-                XCTAssertGreaterThan(fallbackReads, previousFallbackReads, "The sheet loads the Mac's usage limit fallback")
+                XCTAssertEqual(fallbackReads, previousFallbackReads, "The backups are in Settings › Models, not the tab's sheet")
                 func descendants(_ view: UIView) -> [UIView] {
                     [view] + view.subviews.flatMap(descendants)
                 }
@@ -844,14 +844,14 @@ final class CantripModelSettingsTests: XCTestCase {
                 attachment.name = "Model settings \(Int(width)) \(size)"
                 attachment.lifetime = .keepAlways
                 add(attachment)
-                // The usage limit fallbacks, further down.
+                // The rest of the sheet, further down.
                 if let form = scrollViews.max(by: { $0.contentSize.height < $1.contentSize.height }) {
                     form.setContentOffset(CGPoint(x: 0, y: max(0, form.contentSize.height * 0.45)), animated: false)
                     try await Task.sleep(for: .milliseconds(300))
                     let fallbacks = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
                         window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
                     })
-                    fallbacks.name = "Usage limit fallbacks \(Int(width)) \(size)"
+                    fallbacks.name = "Model settings scrolled \(Int(width)) \(size)"
                     fallbacks.lifetime = .keepAlways
                     add(fallbacks)
                 }
