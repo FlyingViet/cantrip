@@ -72,6 +72,10 @@ struct MacHomeWindow: View {
             CantripMCPServersView(remote: remote, tabID: remote.mcpServersTab)
                 .frame(minWidth: 520, minHeight: 560)
         }
+        .sheet(isPresented: $remote.showingSkills) {
+            CantripSkillsView(remote: remote)
+                .frame(minWidth: 520, minHeight: 560)
+        }
         .sheet(isPresented: $remote.showingMacAccess) {
             NavigationStack { CantripMacAccessView(remote: remote) }
                 .macSheetFrame(width: 760, height: 620)
