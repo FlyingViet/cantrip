@@ -55,6 +55,10 @@ final class RemoteControlServer {
     private var liveStatusLifecycleTask: Task<Void, Never>?
     private var liveStatusObservation: AnyCancellable?
     private let maximumRequestBytes = RemoteImageAttachments.maximumRequestBytes
+    /// Speech-to-text for voice turns' clips; tests replace it.
+    var transcribe: VoiceTranscription.Transcriber = VoiceTranscription.onDevice
+    private var voiceTurnsStore: VoiceTurns?
+    static let maximumVoiceClipBytes = 4 << 20
 
     init(manager: SessionManager, buildMonitor: GitHubBuildMonitor = GitHubBuildMonitor(),
          usage: UsageTracker = .shared,
@@ -751,6 +755,14 @@ final class RemoteControlServer {
                 body: Data(Self.webApp.utf8),
                 on: connection
             )
+            return
+        }
+        if request.path.hasPrefix("/api/v1/voice/"), request.path != "/api/v1/voice/vocabulary" {
+            guard authorized(request.headers["authorization"]) else {
+                sendError(401, "invalid pairing token", on: connection)
+                return
+            }
+            handleVoice(request, on: connection)
             return
         }
         guard request.path == "/api/v1/sessions"
@@ -2809,6 +2821,107 @@ final class RemoteControlServer {
             } catch {
                 self.requestLog("remote-memory: id=\(connection.trace.id) error=\(error.localizedDescription)")
                 self.sendError(500, "Could not read Cantrip memory. Check file access on the Mac.", on: connection)
+            }
+        }
+    }
+
+    // MARK: - Voice turns
+
+    /// Voice turns answered by Cantrip Home, created on first use (main actor: it reads Home's chat).
+    @MainActor
+    var voiceTurns: VoiceTurns {
+        if let voiceTurnsStore { return voiceTurnsStore }
+        let turns = VoiceTurns()
+        turns.home = { [weak self] in
+            guard let self, AppSettings.shared.cantripHomeEnabled else { return nil }
+            return self.manager?.managedSession(id: ChatSession.cantripHomeID)
+        }
+        voiceTurnsStore = turns
+        return turns
+    }
+
+    /// `/api/v1/voice/config`, `/api/v1/voice/turns` and `/api/v1/voice/turns/<id>` (see docs/remote-control.md).
+    @MainActor
+    private func handleVoice(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
+        let parts = request.path.split(separator: "/").dropFirst(3).map(String.init)
+        switch (request.method, parts.count, parts.first) {
+        case ("GET", 1, "config"):
+            sendJSON(["home": ["available": voiceTurns.home() != nil], "internet": NSNull()], on: connection)
+        case ("POST", 1, "turns"):
+            startVoiceTurn(request, on: connection)
+        case ("GET", 2, "turns"):
+            guard let id = UUID(uuidString: parts[1]) else {
+                sendError(404, "voice turn not found", on: connection)
+                return
+            }
+            let wait = Double(request.query("wait") ?? "0") ?? 0
+            let turns = voiceTurns
+            Task { @MainActor in
+                guard let turn = await turns.wait(id, seconds: wait) else {
+                    self.sendError(404, "voice turn not found", on: connection)
+                    return
+                }
+                self.sendJSON(["turn": turn.json], on: connection)
+            }
+        case (_, 1, "config"), (_, 1, "turns"), (_, 2, "turns"):
+            sendError(405, "method not allowed", on: connection)
+        default:
+            sendError(404, "not found", on: connection)
+        }
+    }
+
+    /// A clip (`audio/mp4` or `audio/wav`) is transcribed on the Mac first; `{"text": …}` goes as is.
+    @MainActor
+    private func startVoiceTurn(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
+        let turns = voiceTurns
+        guard turns.home() != nil else {
+            sendError(503, VoiceTurns.StartError.homeOff.localizedDescription, on: connection)
+            return
+        }
+        func start(_ text: String) {
+            do {
+                let turn = try turns.start(text)
+                sendJSON(["turn": turn.json], status: 202, on: connection)
+            } catch VoiceTurns.StartError.empty {
+                sendError(422, VoiceTurns.StartError.empty.localizedDescription, on: connection)
+            } catch {
+                sendError(503, error.localizedDescription, on: connection)
+            }
+        }
+        let type = (request.headers["content-type"] ?? "").lowercased()
+        if type.hasPrefix("application/json") {
+            guard let text = request.json?["text"] as? String else {
+                sendError(400, "Send {\"text\": …} or an audio clip.", on: connection)
+                return
+            }
+            start(text)
+            return
+        }
+        guard type.hasPrefix("audio/mp4") || type.hasPrefix("audio/m4a") || type.hasPrefix("audio/x-m4a")
+                || type.hasPrefix("audio/wav") || type.hasPrefix("audio/x-wav") else {
+            sendError(415, "Send audio/mp4 (AAC), audio/wav, or JSON text.", on: connection)
+            return
+        }
+        guard !request.body.isEmpty, request.body.count <= Self.maximumVoiceClipBytes else {
+            sendError(request.body.isEmpty ? 400 : 413, "Send a clip of up to 4 MB.", on: connection)
+            return
+        }
+        let clip = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cantrip-voice-\(UUID().uuidString).\(type.contains("wav") ? "wav" : "m4a")")
+        do {
+            try request.body.write(to: clip, options: .atomic)
+        } catch {
+            sendError(500, "Could not keep the clip on the Mac.", on: connection)
+            return
+        }
+        let hints = VoiceTranscription.hints(from: voiceVocabulary.cachedData())
+        let transcribe = self.transcribe
+        Task { @MainActor in
+            defer { try? FileManager.default.removeItem(at: clip) }
+            do {
+                start(try await transcribe(clip, hints))
+            } catch {
+                self.sendError(500, error.localizedDescription, on: connection)
             }
         }
     }
