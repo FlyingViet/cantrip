@@ -179,6 +179,9 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   Mac's shared MCP servers, and this Mac's local model tools), Memory, Voice, Appearance (the
   mascot) and About & Updates (Update & rebuild Cantrip, Mac permissions). It reopens on the
   last page you used. Each page says who its settings change.
+- **Weather cards:** a reply about the weather shows the forecast card the host built from
+  Open-Meteo under its text, in the map card's container: whose location it is, now, the next 12
+  hours and 10 days, or **Forecast unavailable** and why.
 - **Location (off by default):** Settings › Location › Share location with messages sends this
   Mac's location with each message (When In Use only; rounded to about 1 km unless Precise
   location is on; one fix reused for up to 15 minutes), so weather and "near me" answers are for
