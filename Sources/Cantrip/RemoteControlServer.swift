@@ -3464,7 +3464,7 @@ private extension RemoteControlServer {
     .artifact-card{display:grid;gap:6px;box-sizing:border-box;width:100%;height:100%;align-content:start;padding:8px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:inherit;font:inherit;text-align:left;cursor:pointer}.artifact-card:hover{background:var(--surface-2)}.artifact-card[aria-busy="true"]{opacity:.6}
     .artifact-thumb{display:grid;place-items:center;aspect-ratio:4/3;overflow:hidden;border-radius:8px;background:var(--surface-2);color:var(--secondary);font-size:13px;font-weight:650;letter-spacing:.04em}.artifact-thumb img{width:100%;height:100%;object-fit:cover}
     .artifact-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:14px;font-weight:600;overflow-wrap:anywhere}.artifact-meta{display:flex;justify-content:space-between;gap:6px;color:var(--secondary);font-size:12px}
-    .artifact-delete{position:absolute;top:14px;right:14px;display:grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:18px;background:rgba(0,0,0,.6);color:#fff;opacity:.85}.artifact-delete:hover,.artifact-delete:focus-visible{background:rgba(0,0,0,.82);opacity:1}.artifact-delete svg{width:18px;height:18px}
+    .artifact-actions{position:absolute;top:14px;right:14px;display:flex;gap:6px}.artifact-action{display:grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:18px;background:rgba(0,0,0,.6);color:#fff;opacity:.85}.artifact-action:hover,.artifact-action:focus-visible{background:rgba(0,0,0,.82);opacity:1}.artifact-action[aria-busy="true"]{opacity:.5;cursor:progress}.artifact-action svg{width:18px;height:18px}
     #tasksTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}#tasksTitle:focus{outline:0}
     #tasksError:not(:empty){margin:10px 14px 0;color:var(--red);font-size:13px}#tasksSearch{display:block;box-sizing:border-box;width:calc(100% - 28px);min-height:40px;margin:12px 14px 0;padding:6px 10px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--text);font:inherit}
     #tasksBody{padding:10px 14px 16px}.tasks-empty{padding:18px 2px;font-size:14px}.task-list,.record-list,.run-list{display:grid;gap:8px;margin:0;padding:0;list-style:none}
@@ -5252,6 +5252,7 @@ private extension RemoteControlServer {
         body.append(list)}
       return body}
     // Artifacts: files Cantrip Home saved on the Mac. Images open in the viewer; other files download.
+    // Downloads stream the original file (or a folder's zip) from the Mac; nothing gets a public address.
     let artifactsState=null,artifactThumbActive=0;const artifactThumbs=new Map(),artifactThumbQueue=[];
     function openArtifacts(){closeArtifacts();artifactsState={token,artifacts:[],revision:null,loaded:false,failed:false,loading:false,opening:null,timer:setInterval(()=>loadArtifacts(),15000)};
       setText($("artifactsError"),"");renderArtifacts();$("artifactsPanel").showModal();$("artifactsTitle").focus();loadArtifacts()}
@@ -5259,7 +5260,7 @@ private extension RemoteControlServer {
     async function loadArtifacts(){const state=artifactsState;if(!state||state.loading)return;state.loading=true;
       try{const data=await api("/api/v1/home/artifacts"+(state.loaded&&state.revision?`?revision=${encodeURIComponent(state.revision)}`:""));if(state!==artifactsState)return;state.failed=false;setText($("artifactsError"),"");
         if(data.unchanged)return;
-        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.artifacts=data.artifacts||[];state.loaded=true;renderArtifacts()}}
+        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.artifacts=data.artifacts||[];state.supportsDownloads=data.supportsDownloads===true;state.loaded=true;renderArtifacts()}}
       catch(error){if(state===artifactsState){setText($("artifactsError"),`Couldn't load artifacts: ${error.message}`);if(!state.loaded){state.loaded=true;state.failed=true;renderArtifacts()}}}
       finally{state.loading=false}}
     function renderArtifacts(){const state=artifactsState;if(!state)return;const panel=$("artifactsPanel"),body=$("artifactsBody"),scroll=panel.scrollTop,focused=document.activeElement?.closest?.("#artifactsBody [data-focus-key]")?.dataset.focusKey;
@@ -5272,12 +5273,17 @@ private extension RemoteControlServer {
       return unit?`${value<10?value.toFixed(1):Math.round(value)} ${units[unit]}`:`${bytes} ${bytes===1?"byte":"bytes"}`}
     function artifactDuration(seconds){const total=Math.round(seconds),minutes=Math.floor(total/60),rest=total%60;return`${minutes}:${String(rest).padStart(2,"0")}`}
     function artifactFileName(artifact){return String(artifact.relativePath||"").split("/").pop()||artifact.title}
+    function artifactFolder(artifact){const parts=String(artifact.relativePath||"").split("/").filter(Boolean);return parts.length>1?parts[0]:null}
     function artifactBadge(artifact){const extension=artifactFileName(artifact).split(".");return extension.length>1?extension.pop().slice(0,5).toUpperCase():artifactKind(artifact)}
-    function artifactItem(artifact){const item=homeNode("li"),card=homeNode("button","artifact-card"),thumb=homeNode("span","artifact-thumb"),meta=homeNode("span","artifact-meta"),remove=homeNode("button","artifact-delete");
+    function artifactAction(kind,artifact,label,icon,action){const button=homeNode("button","artifact-action");button.type="button";button.title=label;button.setAttribute("aria-label",label);
+      button.dataset.focusKey=`artifact-${kind}:${artifact.id}`;button.innerHTML=`<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="${icon}"/></svg>`;button.onclick=()=>action(button);return button}
+    function artifactItem(artifact){const item=homeNode("li"),card=homeNode("button","artifact-card"),thumb=homeNode("span","artifact-thumb"),meta=homeNode("span","artifact-meta"),actions=homeNode("span","artifact-actions"),folder=artifactFolder(artifact);
       card.type="button";card.dataset.focusKey=`artifact:${artifact.id}`;card.title=artifact.kind==="image"?"Opens the image":"Downloads the file";card.onclick=()=>openArtifact(artifact,card);
       meta.append(homeNode("span","artifact-kind",artifactKind(artifact)),homeNode("span",null,artifactSize(artifact.size)));card.append(thumb,homeNode("span","artifact-title",artifact.title),meta);
-      remove.type="button";remove.title="Delete";remove.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4zM6 9h12l-1 12H7zm4 2v8h1.5v-8zm2.5 0v8H14v-8z"/></svg>';remove.dataset.focusKey=`artifact-delete:${artifact.id}`;remove.setAttribute("aria-label",`Delete ${artifact.title}`);remove.onclick=()=>deleteArtifact(artifact);
-      item.append(card,remove);showArtifactThumb(artifact,card);return item}
+      actions.append(artifactAction("download",artifact,`Download ${artifact.title}`,"M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3zM5 18h14v2H5z",button=>downloadArtifact(artifact,null,button)));
+      if(folder&&artifactsState?.supportsDownloads)actions.append(artifactAction("folder",artifact,`Download the ${folder} folder as a zip`,"M3 5h7l2 2h9v12H3zm8 4v4.2l-1.6-1.6-1.4 1.4 4 4 4-4-1.4-1.4-1.6 1.6V9z",button=>downloadArtifact(artifact,folder,button)));
+      actions.append(artifactAction("delete",artifact,`Delete ${artifact.title}`,"M9 3h6l1 2h4v2H4V5h4zM6 9h12l-1 12H7zm4 2v8h1.5v-8zm2.5 0v8H14v-8z",()=>deleteArtifact(artifact)));
+      item.append(card,actions);showArtifactThumb(artifact,card);return item}
     function showArtifactThumb(artifact,card){const cached=artifactThumbs.get(artifact.id),thumb=card.querySelector(".artifact-thumb"),kind=card.querySelector(".artifact-kind");
       if(cached?.src){const img=homeNode("img");img.alt="";img.src=cached.src;thumb.replaceChildren(img)}else thumb.replaceChildren(homeNode("span",null,artifactBadge(artifact)));
       if(cached?.duration)setText(kind,`${artifactKind(artifact)} · ${artifactDuration(cached.duration)}`);
@@ -5290,12 +5296,20 @@ private extension RemoteControlServer {
     async function openArtifact(artifact,card){const state=artifactsState;if(!state||state.opening)return;
       if(artifact.kind==="image"){openImageViewer({kind:"preview",label:artifact.title,img:card.querySelector(".artifact-thumb img"),
         load:async()=>{const data=await mcpFetch(`/api/v1/home/artifacts/${artifact.id}`);return`data:${data.artifact?.mimeType||"image/png"};base64,${data.data}`}});return}
-      state.opening=artifact.id;card.setAttribute("aria-busy","true");setText($("artifactsStatus"),`Downloading ${artifact.title}…`);
-      try{const data=await mcpFetch(`/api/v1/home/artifacts/${artifact.id}`),binary=atob(data.data),bytes=new Uint8Array(binary.length);for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
-        const url=URL.createObjectURL(new Blob([bytes],{type:data.artifact?.mimeType||"application/octet-stream"})),link=homeNode("a");link.href=url;link.download=artifactFileName(artifact);document.body.append(link);link.click();link.remove();
-        setTimeout(()=>URL.revokeObjectURL(url),60000);setText($("artifactsStatus"),`Downloaded ${artifact.title}.`)}
-      catch(error){setText($("artifactsError"),`Couldn't open ${artifact.title}: ${error.message}`)}
-      finally{if(state===artifactsState)state.opening=null;card.removeAttribute("aria-busy")}}
+      downloadArtifact(artifact,null,card)}
+    // Paired fetch of the original bytes (or the folder's zip), then a normal browser download.
+    async function downloadArtifact(artifact,folder,control){const state=artifactsState;if(!state||state.opening)return;const label=folder?`the ${folder} folder`:artifact.title;
+      state.opening=artifact.id;control?.setAttribute("aria-busy","true");setText($("artifactsError"),"");setText($("artifactsStatus"),`Downloading ${label}…`);
+      try{let blob;
+        if(state.supportsDownloads){const response=await fetch(`/api/v1/home/artifacts/${artifact.id}/${folder?"folder":"file"}`,{headers:{Authorization:`Bearer ${token}`}});
+          if(!response.ok){const data=await response.json().catch(()=>({}));throw Error(data.error||`HTTP ${response.status}`)}
+          blob=await response.blob()}
+        else{const data=await mcpFetch(`/api/v1/home/artifacts/${artifact.id}`),binary=atob(data.data),bytes=new Uint8Array(binary.length);for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
+          blob=new Blob([bytes],{type:data.artifact?.mimeType||"application/octet-stream"})}
+        const url=URL.createObjectURL(blob),link=homeNode("a");link.href=url;link.download=folder?`${folder}.zip`:artifactFileName(artifact);document.body.append(link);link.click();link.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),60000);setText($("artifactsStatus"),`Downloaded ${label}.`)}
+      catch(error){setText($("artifactsError"),`Couldn't download ${label}: ${error.message}`)}
+      finally{if(state===artifactsState)state.opening=null;control?.removeAttribute("aria-busy")}}
     async function deleteArtifact(artifact){if(!confirm(`Delete ${artifact.title}?\n\nThis permanently deletes the file from your Mac.`))return;
       try{await api(`/api/v1/home/artifacts/${artifact.id}`,{method:"DELETE"});artifactThumbs.delete(artifact.id);const state=artifactsState;if(!state)return;
         state.artifacts=state.artifacts.filter(item=>item.id!==artifact.id);renderArtifacts();setText($("artifactsStatus"),`Deleted ${artifact.title}.`);$("artifactsTitle").focus();loadArtifacts()}
