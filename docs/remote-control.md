@@ -848,6 +848,33 @@ still returned. The response is computed off the main thread and kept in
 memory for 10 minutes. `Cantrip.log` records only counts and timings
 (`voice-vocabulary:` lines).
 
+### Voice turns with Cantrip Home
+
+A voice client (Cantrip on Apple Watch) sends a short clip, and the Mac does the
+rest. It transcribes the clip with Apple's on-device recognizer, using the
+vocabulary above as hints. It sends the words to Cantrip Home's chat like a typed
+message (queued, so they never steer the task already running) and follows that
+message's reply. Every client sees the exchange in Home. These endpoints accept
+the pairing token, or a registered watch's signature (see Apple Watch below).
+
+- `POST /api/v1/voice/turns` with `Content-Type: audio/mp4` (AAC) or `audio/wav`
+  (up to 4 MB), or JSON `{"text": "…"}`, answers `202 {"turn": …}`. A clip with no
+  speech gets `422`, and Home being off gets `503`.
+- `GET /api/v1/voice/turns/<id>?wait=<0–25>` waits up to that many seconds for
+  the turn to change, then answers `{"turn": …}`.
+- `GET /api/v1/voice/config` answers `{"home": {"available": true}, "internet": null}`.
+
+```json
+{"turn": {"id": "…", "status": "done", "transcript": "what's on my calendar",
+  "reply": "You have **two** meetings…", "spoken": "You have two meetings…",
+  "createdAt": "2026-11-01T19:00:00Z"}}
+```
+
+`status` is `queued`, `thinking`, `done` or `failed` (with `error`). `spoken` is
+the reply as plain sentences: code and tables are mentioned rather than read,
+links become their words, and a long answer stops after about 1,200 characters
+with "The rest is on screen." Turns are kept in memory for an hour.
+
 ### Tab mentions
 
 Session snapshots carry two flags for `@` mentions
