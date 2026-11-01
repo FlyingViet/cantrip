@@ -166,8 +166,8 @@ tier's next model on the same backend before the next backup ("Continuing this
 task on the next Deep model"). A limit on the whole backend, such as Copilot's
 shared premium requests, skips straight to the next backup.
 
-**Edit the map** under **Model tiers** in Mac Settings, or in the browser/Mac
-Remote's **Model Settings** (all tabs): pick a backend, then for each tier
+**Edit the map** under **Model tiers** in Mac Settings, in the browser/Mac Remote's
+**Model Settings** (all tabs), or in Cantrip Agent's and Gateway Mac's **Settings › Models**: pick a backend, then for each tier
 choose up to five models in order, each with its effort; **Reset** goes back to
 Cantrip's defaults. Copilot's token prices show next to each model. Paired
 clients use `GET/POST /api/v1/model-tiers`; see
@@ -302,8 +302,8 @@ because the Copilot CLI can crash after long idle periods.
 Add backups under **Usage limit fallbacks** (Off by default) in Mac Settings or
 in the browser/Mac Remote's **Model Settings**: use **Add a backup** as many
 times as you like, the arrows to set the order they're tried in, and the remove
-button to drop one. Cantrip Agent (iPhone/iPad) and Cantrip Gateway (Mac and
-Windows) edit the same list. Each backup is a backend with the model and effort
+button to drop one. Cantrip Agent (iPhone/iPad) and Cantrip Gateway Mac edit the
+same list in **Settings › Models**, and Gateway Windows in Model Settings. Each backup is a backend with the model and effort
 it runs: on a backend with a model picker (Copilot, Claude Code, Antigravity,
 Codex), **Model** and **Effort** menus list that backend's own models and the
 efforts each takes, and **Default** means the Mac's own setting for that
