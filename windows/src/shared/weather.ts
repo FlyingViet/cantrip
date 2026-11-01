@@ -155,16 +155,20 @@ export function parseCoordinate(text: string): { latitude: number; longitude: nu
   return Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180 ? { latitude, longitude } : null;
 }
 
-export function forecastUrl(latitude: number, longitude: number, unit: "F" | "C"): string {
-  const query = new URLSearchParams({
-    latitude: latitude.toFixed(2), longitude: longitude.toFixed(2),
-    current: "temperature_2m,apparent_temperature,weather_code,is_day",
-    hourly: "temperature_2m,weather_code,precipitation_probability,is_day",
-    daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+/**
+ * Two requests: asking for `current` (or `forecast_hours`) changes how Open-Meteo sums up today in
+ * `daily`, so the days come from a request of their own and match its daily forecast.
+ */
+export function forecastUrls(latitude: number, longitude: number, unit: "F" | "C"): { now: string; daily: string } {
+  const url = (fields: Record<string, string>) => `https://api.open-meteo.com/v1/forecast?${new URLSearchParams({
+    latitude: latitude.toFixed(2), longitude: longitude.toFixed(2), ...fields,
     temperature_unit: unit === "C" ? "celsius" : "fahrenheit", timezone: "auto",
-    forecast_days: String(DAY_COUNT), forecast_hours: String(HOUR_COUNT + 2), timeformat: "unixtime",
-  });
-  return `https://api.open-meteo.com/v1/forecast?${query}`;
+    forecast_days: String(DAY_COUNT), timeformat: "unixtime",
+  })}`;
+  return {
+    now: url({ current: "temperature_2m,apparent_temperature,weather_code,is_day", hourly: "temperature_2m,weather_code,precipitation_probability,is_day" }),
+    daily: url({ daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" }),
+  };
 }
 
 export function geocodeUrl(place: string): string {
