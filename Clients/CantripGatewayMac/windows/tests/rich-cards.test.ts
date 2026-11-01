@@ -4,8 +4,7 @@ import {
   isSafePublicUrl,
   latToTileY,
   lonToTileX,
-  placeDirectionsUrl,
-} from "../src/gateway/ui/transcript/richCardLogic";
+  placeDirectionsUrl, weatherAttributionUrl, weatherChance, weatherDetail, weatherIcon, weatherRanges, weatherSpoken, weatherTint } from "../src/gateway/ui/transcript/richCardLogic";
 
 describe("rich cards logic", () => {
   it("allows only public HTTP/HTTPS URLs and blocks private/LAN/tailnet hosts", () => {
@@ -67,5 +66,41 @@ describe("close pins", () => {
       expect(overlap, `pins ${i} and ${j}`).toBe(false);
     }
     for (const r of rects) expect(r.l >= -1 && r.t >= -1 && r.r <= 581 && r.b <= 211).toBe(true);
+  });
+});
+
+describe("weather card", () => {
+  it("maps the Mac's SF Symbol names to icons and tints, with a cloud for unknown ones", () => {
+    expect(weatherIcon("cloud.sun.rain.fill")).toBe("cloud.sun.rain.fill");
+    expect(weatherIcon("tornado")).toBe("cloud.fill");
+    expect(weatherIcon(undefined)).toBe("cloud.fill");
+    expect(weatherTint("sun.max.fill")).toBe("sun");
+    expect(weatherTint("moon.stars.fill")).toBe("moon");
+    expect(weatherTint("cloud.bolt.rain.fill")).toBe("wet");
+    expect(weatherTint("cloud.fog.fill")).toBe("cloud");
+  });
+
+  it("shows a precipitation chance only from 10% and speaks every hour", () => {
+    expect(weatherChance(8)).toBe("");
+    expect(weatherChance(62)).toBe("62%");
+    expect(weatherChance(undefined)).toBe("");
+    expect(weatherSpoken("3 PM", "47", "F", "Light rain", 40)).toBe("3 PM, 47 degrees Fahrenheit, Light rain, 40 percent chance of precipitation");
+    expect(weatherSpoken("Now", "9", "C", "Clear", 0)).toBe("Now, 9 degrees Celsius, Clear");
+  });
+
+  it("places each day's bar on the 10 days' scale", () => {
+    const ranges = weatherRanges([{ low: 38, high: 48 }, { low: 35, high: 53 }, { low: 43, high: 55 }]);
+    expect(ranges[1]).toEqual({ left: 0, width: 90 });
+    expect(ranges[2].left).toBeCloseTo(40);
+    expect(ranges[2].width).toBeCloseTo(60);
+    expect(weatherRanges([{ low: 50, high: 50 }])[0]).toEqual({ left: 0, width: 4 });
+  });
+
+  it("writes today's line and keeps the attribution link on Open-Meteo", () => {
+    expect(weatherDetail({ today: { high: 48, low: 38, precipitationChance: 1 }, current: { temperature: 48, feelsLike: 45 } }))
+      .toBe("H 48°  L 38° · 1% precip. · Feels like 45°");
+    expect(weatherDetail({ today: { high: 60, low: 50 }, current: { temperature: 55, feelsLike: 54 } })).toBe("H 60°  L 50°");
+    expect(weatherAttributionUrl("https://open-meteo.com/")).toBe("https://open-meteo.com/");
+    expect(weatherAttributionUrl("https://tracker.example/x")).toBe("https://open-meteo.com/");
   });
 });

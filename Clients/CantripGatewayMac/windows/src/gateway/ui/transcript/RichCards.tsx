@@ -1,9 +1,89 @@
 import type { JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { cachedImage, loadLinkPreviewImage, loadMapTile } from "../../api/client";
-import type { RemoteLinkPreview, RemotePlaceCard, RemotePlacePin } from "../../api/types";
+import type { RemoteLinkPreview, RemotePlaceCard, RemotePlacePin, RemoteWeatherCard } from "../../api/types";
+import { Icon, type IconName } from "../icons";
 import { bridge } from "../../bridge";
-import { initialZoomForDelta, isSafePublicUrl, latToTileY, lonToTileX, placeDirectionsUrl, placeGlyph, placeNote, pinOffsets, pinWidth } from "./richCardLogic";
+import {
+  initialZoomForDelta, isSafePublicUrl, latToTileY, lonToTileX, placeDirectionsUrl, placeGlyph, placeNote, pinOffsets, pinWidth,
+  weatherAttributionUrl, weatherChance, weatherDetail, weatherIcon, weatherRanges, weatherSpoken, weatherTint, weatherUnitName,
+} from "./richCardLogic";
+
+function WeatherGlyph(props: { symbol: string | undefined; size?: 16 | 18 | 28 }): JSX.Element {
+  return <span class={`weather-glyph ${weatherTint(props.symbol)}`}><Icon name={weatherIcon(props.symbol) as IconName} size={props.size ?? 18} /></span>;
+}
+
+/** A reply's forecast card: Open-Meteo numbers the Mac fetched, in the map card's container. */
+export function WeatherCardView(props: { card: RemoteWeatherCard | undefined }): JSX.Element | null {
+  const card = props.card;
+  if (!card || typeof card !== "object") return null;
+  const current = card.status === "ok" ? card.current : undefined;
+  const hourly = (card.hourly ?? []).slice(0, 13), daily = (card.daily ?? []).slice(0, 10);
+  const ranges = weatherRanges(daily);
+  const updated = current && card.updatedAt ? new Date(card.updatedAt) : null;
+  const detail = weatherDetail(card);
+  return (
+    <section class="weather-card" aria-label={`Weather for ${card.place || "this place"}`}>
+      <div class="weather-head">
+        <div class="weather-info">
+          <div class="weather-place">{card.place || "Weather"}</div>
+          {card.placeNote ? <div class="weather-note"><Icon name="location.fill" size={12} />{card.placeNote}</div> : null}
+          {current ? (
+            <>
+              <div class="weather-cond">{current.condition}</div>
+              {detail ? <div class="weather-detail">{detail}</div> : null}
+            </>
+          ) : (
+            <>
+              <div class="weather-unavailable"><Icon name="exclamationmark.icloud" size={16} />Forecast unavailable</div>
+              <div class="weather-reason">{card.message || "Ask again in a moment."}</div>
+            </>
+          )}
+        </div>
+        {current ? (
+          <div class="weather-now" role="img" aria-label={`Now ${Math.round(current.temperature)} ${weatherUnitName(card.unit)}, ${current.condition}`}>
+            <WeatherGlyph symbol={current.symbol} size={28} />
+            <span class="weather-now-temp">{Math.round(current.temperature)}°</span>
+          </div>
+        ) : null}
+      </div>
+      {current && hourly.length ? (
+        <div class="weather-hours" role="list" aria-label="Hourly forecast">
+          {hourly.map((hour, index) => (
+            <div key={index} class="weather-hour" role="listitem"
+              aria-label={weatherSpoken(hour.label, String(Math.round(hour.temperature)), card.unit, hour.condition, hour.precipitationChance)}>
+              <span class="weather-hour-label">{hour.label}</span>
+              <WeatherGlyph symbol={hour.symbol} />
+              <span class="weather-chance">{weatherChance(hour.precipitationChance)}</span>
+              <span class="weather-hour-temp">{Math.round(hour.temperature)}°</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {current && daily.length ? (
+        <div class="weather-days" role="list" aria-label={`${daily.length}-day forecast`}>
+          {daily.map((day, index) => (
+            <div key={day.date || index} class="weather-day" role="listitem"
+              aria-label={`${day.label}, ${day.condition}, high ${Math.round(day.high)}, low ${Math.round(day.low)} ${weatherUnitName(card.unit)}${weatherChance(day.precipitationChance) ? `, ${Math.round(day.precipitationChance ?? 0)} percent chance of precipitation` : ""}`}>
+              <span class="weather-day-label">{day.label}</span>
+              <WeatherGlyph symbol={day.symbol} size={16} />
+              <span class="weather-chance">{weatherChance(day.precipitationChance)}</span>
+              <span class="weather-low">{Math.round(day.low)}°</span>
+              <span class="weather-bar" aria-hidden="true"><span style={{ left: `${ranges[index].left}%`, width: `${ranges[index].width}%` }} /></span>
+              <span class="weather-high">{Math.round(day.high)}°</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div class="weather-foot">
+        {updated && !Number.isNaN(updated.getTime()) ? <span>Updated {updated.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span> : null}
+        <button type="button" class="weather-attr" onClick={() => bridge.openExternal(weatherAttributionUrl(card.attributionURL))}>
+          {card.attribution || "Weather data by Open-Meteo.com"}
+        </button>
+      </div>
+    </section>
+  );
+}
 
 export function LinkPreviewStack(props: { cards: RemoteLinkPreview[] | undefined }): JSX.Element | null {
   const cards = (props.cards ?? []).filter((c) => isSafePublicUrl(c.url));
