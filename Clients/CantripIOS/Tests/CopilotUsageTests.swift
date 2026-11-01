@@ -271,6 +271,94 @@ final class CopilotUsageTests: XCTestCase {
         XCTAssertNil(old.codex, "Macs before Codex limits send no field")
     }
 
+    /// Model limits as the Mac sends them: Claude's weekly Opus and Sonnet windows, each
+    /// Antigravity model group, and a Codex model's own quota.
+    private func perModelUsage(now: Date = Date()) throws -> Data {
+        let iso = ISO8601DateFormatter()
+        func at(_ hours: Double) -> String { iso.string(from: now.addingTimeInterval(hours * 3600)) }
+        func bucket(_ id: String, _ window: String, _ remaining: Double, _ reset: Double) -> [String: Any] {
+            ["id": id, "name": window == "weekly" ? "Weekly Limit Remaining" : "Five Hour Limit Remaining",
+             "window": window, "remainingPercent": remaining, "resetsAt": at(reset)]
+        }
+        var object = try JSONSerialization.jsonObject(with: fixture(remaining: 0, amount: 0)) as! [String: Any]
+        object["activeBackend"] = "Antigravity"
+        object["claude"] = ["checkedAt": at(0), "account": ["plan": "max", "windows": [
+            ["id": "five_hour", "percentUsed": 12, "resetsAt": at(2)],
+            ["id": "seven_day", "percentUsed": 41, "resetsAt": at(90)],
+            ["id": "seven_day_opus", "percentUsed": 100, "resetsAt": at(30), "lockedReason": "limit"],
+            ["id": "seven_day_sonnet", "percentUsed": 64, "resetsAt": at(90)],
+        ]]]
+        object["antigravity"] = ["checkedAt": at(0), "account": ["groups": [
+            ["name": "Gemini models", "models": "Gemini Flash, Gemini Pro",
+             "buckets": [bucket("gemini-weekly", "weekly", 70, 120), bucket("gemini-5h", "5h", 35, 3)]],
+            ["name": "Gemini 4 Argon", "buckets": [bucket("argon-weekly", "weekly", 0, 1), bucket("argon-5h", "5h", 0, 1)]],
+            ["name": "Claude and GPT models", "buckets": [bucket("claude-gpt-weekly", "weekly", 88, 140)]],
+        ]]]
+        object["codex"] = ["checkedAt": at(0), "account": ["plan": "pro", "windows": [
+            ["id": "codex/primary", "usedPercent": 22, "windowMinutes": 300, "resetsAt": at(4)],
+            ["id": "codex/secondary", "usedPercent": 51, "windowMinutes": 10080, "resetsAt": at(100)],
+            ["id": "codex_bengalfox/secondary", "usedPercent": 97, "windowMinutes": 10080, "resetsAt": at(100),
+             "limitName": "GPT-5.6-Codex-Spark"],
+        ]]]
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    func testUsageLimitsShowEachModelsOwnLimits() async throws {
+        let now = Date()
+        let snapshot = try JSONDecoder().decode(CopilotUsageSnapshot.self, from: perModelUsage(now: now))
+        XCTAssertEqual(snapshot.claude?.account?.windows.map(\.title),
+                       ["5-hour session", "Weekly limit", "Weekly Opus limit", "Weekly Sonnet limit"])
+        XCTAssertEqual(snapshot.claude?.account?.windows.map(\.isExhausted), [false, false, true, false])
+        XCTAssertEqual(snapshot.antigravity?.account?.groups.map(\.name),
+                       ["Gemini models", "Gemini 4 Argon", "Claude and GPT models"])
+        XCTAssertEqual(snapshot.antigravity?.account?.groups.map { $0.buckets.map(\.title) },
+                       [["Weekly limit", "5-hour limit"], ["Weekly limit", "5-hour limit"], ["Weekly limit"]])
+        XCTAssertEqual(snapshot.antigravity?.account?.groups[0].models, "Gemini Flash, Gemini Pro")
+        XCTAssertEqual(snapshot.antigravity?.account?.primary?.group.name, "Gemini 4 Argon", "The model group at its limit")
+        XCTAssertEqual(snapshot.codex?.account?.windows.map(\.title),
+                       ["5-hour limit", "Weekly limit", "GPT-5.6-Codex-Spark weekly limit"])
+
+        let model = CopilotUsageModel()
+        await model.refresh { try JSONDecoder().decode(CopilotUsageSnapshot.self, from: self.perModelUsage(now: now)) }
+        XCTAssertEqual(model.accessibilityValue(at: now), "Antigravity Gemini 4 Argon weekly limit 100% used")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        // The folded iPhone Duo leaves about 382 pt beside its vertical bar.
+        for width: CGFloat in [320, 382] {
+            for size: DynamicTypeSize in [.large, .accessibility3] {
+                let controller = UIHostingController(rootView: CopilotUsageView(model: model, remote: CantripRemoteModel())
+                    .environment(\.dynamicTypeSize, size))
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: width, height: 1800)
+                window.rootViewController = controller
+                window.makeKeyAndVisible()
+                defer { window.isHidden = true }
+                try await Task.sleep(for: .milliseconds(400))
+                controller.view.layoutIfNeeded()
+                func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
+                let scrollViews = descendants(controller.view).compactMap { $0 as? UIScrollView }.filter { $0.bounds.width > 0 }
+                XCTAssertFalse(scrollViews.isEmpty)
+                for scroll in scrollViews {
+                    XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1, "No sideways scrolling")
+                }
+                let attachment = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                })
+                attachment.name = "usage-limits-models-\(Int(width))-\(size)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+        // Each limit's row keeps inside a narrow width with the largest text.
+        for title in ["GPT-5.6-Codex-Spark weekly limit", "Weekly Sonnet limit"] {
+            for size: DynamicTypeSize in [.large, .accessibility5] {
+                let row = UIHostingController(rootView: UsageLimitRow(title: title, percentUsed: 100,
+                                                                      resetsAt: now.addingTimeInterval(3600))
+                    .environment(\.dynamicTypeSize, size))
+                XCTAssertLessThanOrEqual(row.sizeThatFits(in: CGSize(width: 288, height: 5000)).width, 289)
+            }
+        }
+    }
+
     func testCreditAmountsPrecisionMissingValuesAndLegacyUnits() async throws {
         let locale = Locale(identifier: "en_US")
         let model = CopilotUsageModel()
