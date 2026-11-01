@@ -6,7 +6,7 @@ vi.mock("electron", () => ({ app: { getLocaleCountryCode: () => "US" }, ipcMain:
 import { withLocationNote, withWeatherGuidance } from "../src/main/backends";
 import { preferredUnit, WeatherService } from "../src/main/weather";
 import {
-  asksAboutWeather, buildCard, decodeWeatherBlock, displayName, extractWeatherBlock, parseCoordinate, pickGeocode,
+  asksAboutWeather, buildCard, decodeWeatherBlock, displayName, extractWeatherBlock, forecastUrls, parseCoordinate, pickGeocode,
   visibleWeatherText, WEATHER_GUIDANCE,
 } from "../src/shared/weather";
 import type { RunRequest } from "../src/shared/types";
@@ -60,6 +60,12 @@ describe("weather block", () => {
     expect(parseCoordinate("47.6062, -122.3321")).toEqual({ latitude: 47.6062, longitude: -122.3321 });
     expect(parseCoordinate("Seattle, WA")).toBeNull();
     expect(displayName("Seattle, WA, United States (47.61, -122.33)")).toBe("Seattle, WA");
+    const urls = forecastUrls(47.61, -122.33, "F");
+    expect(urls.now).toContain("current=");
+    expect(urls.now).not.toContain("daily=");
+    expect(urls.daily).toContain("daily=");
+    expect(urls.daily).not.toContain("current=");
+    expect(urls.now + urls.daily).not.toContain("forecast_hours");
   });
 });
 
@@ -90,12 +96,13 @@ describe("weather card", () => {
     const card = await service.card({ place: "Seattle, WA" });
     expect(card).toMatchObject({ status: "ok", place: "Seattle, WA" });
     expect(urls[1]).toContain("latitude=47.61&longitude=-122.33");
+    expect(urls).toHaveLength(3);
     now = new Date(fixtureNow.getTime() + 5 * 60_000);
     await service.card({ place: "seattle, wa" });
-    expect(urls).toHaveLength(2);
+    expect(urls).toHaveLength(3);
     now = new Date(fixtureNow.getTime() + 11 * 60_000);
     await service.card({ place: "Seattle, WA" });
-    expect(urls).toHaveLength(3);
+    expect(urls).toHaveLength(5);
 
     expect(await service.card({ place: "Atlantis" })).toMatchObject({ status: "unavailable", message: "Couldn't find “Atlantis” to get its forecast." });
     expect(await service.card({ place: null })).toMatchObject({ status: "unavailable", place: "Weather" });

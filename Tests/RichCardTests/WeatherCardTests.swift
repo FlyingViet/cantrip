@@ -193,10 +193,18 @@ extension RichCardTests {
         precondition(WeatherCardResolver.displayName("Paris, Île-de-France, France") == "Paris, Île-de-France, France")
         precondition(WeatherCardResolver.samePlace("SEATTLE", "Seattle, WA (47.61, -122.33)")
                      && !WeatherCardResolver.samePlace("Tacoma, WA", "Seattle, WA"))
-        let url = WeatherCardResolver.forecastURL(.init(latitude: 47.61, longitude: -122.33), unit: "C").absoluteString
-        precondition(url.hasPrefix("https://api.open-meteo.com/v1/forecast?latitude=47.61&longitude=-122.33")
-                     && url.contains("temperature_unit=celsius") && url.contains("forecast_days=10")
-                     && url.contains("timeformat=unixtime"), url)
+        let urls = WeatherCardResolver.forecastURLs(.init(latitude: 47.61, longitude: -122.33), unit: "C")
+        let now = urls.now.absoluteString, daily = urls.daily.absoluteString
+        precondition(now.hasPrefix("https://api.open-meteo.com/v1/forecast?latitude=47.61&longitude=-122.33")
+                     && now.contains("current=") && now.contains("hourly=") && !now.contains("daily=")
+                     && daily.contains("daily=") && !daily.contains("current=") && !daily.contains("hourly=")
+                     && [now, daily].allSatisfy { $0.contains("temperature_unit=celsius") && $0.contains("forecast_days=10")
+                         && $0.contains("timeformat=unixtime") && !$0.contains("forecast_hours") }, now + " " + daily)
+        let combined = try WeatherCardResolver.merged(
+            now: Data(#"{"timezone":"UTC","current":{"temperature_2m":1}}"#.utf8),
+            daily: Data(#"{"daily":{"time":[1]}}"#.utf8))
+        let object = try JSONSerialization.jsonObject(with: combined) as! [String: Any]
+        precondition(object["current"] != nil && (object["daily"] as? [String: Any])?["time"] != nil)
     }
 
     static func testWeatherLinkFilter() {

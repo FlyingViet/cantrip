@@ -608,29 +608,52 @@ actor WeatherCardResolver {
         return URLSession(configuration: config)
     }()
 
-    static func forecastURL(_ coordinate: Coordinate, unit: String) -> URL {
-        var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
-        components.queryItems = [
-            URLQueryItem(name: "latitude", value: String(format: "%.2f", coordinate.latitude)),
-            URLQueryItem(name: "longitude", value: String(format: "%.2f", coordinate.longitude)),
-            URLQueryItem(name: "current", value: "temperature_2m,apparent_temperature,weather_code,is_day"),
-            URLQueryItem(name: "hourly", value: "temperature_2m,weather_code,precipitation_probability,is_day"),
-            URLQueryItem(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"),
-            URLQueryItem(name: "temperature_unit", value: unit == "C" ? "celsius" : "fahrenheit"),
-            URLQueryItem(name: "timezone", value: "auto"),
-            URLQueryItem(name: "forecast_days", value: String(WeatherCard.dayCount)),
-            URLQueryItem(name: "forecast_hours", value: String(WeatherCard.hourCount + 2)),
-            URLQueryItem(name: "timeformat", value: "unixtime"),
-        ]
-        return components.url!
+    /// Two requests: asking for `current` (or `forecast_hours`) changes how Open-Meteo sums up today
+    /// in `daily`, so the days come from a request of their own and match its daily forecast.
+    static func forecastURLs(_ coordinate: Coordinate, unit: String) -> (now: URL, daily: URL) {
+        func url(_ fields: [URLQueryItem]) -> URL {
+            var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
+            components.queryItems = [
+                URLQueryItem(name: "latitude", value: String(format: "%.2f", coordinate.latitude)),
+                URLQueryItem(name: "longitude", value: String(format: "%.2f", coordinate.longitude)),
+            ] + fields + [
+                URLQueryItem(name: "temperature_unit", value: unit == "C" ? "celsius" : "fahrenheit"),
+                URLQueryItem(name: "timezone", value: "auto"),
+                URLQueryItem(name: "forecast_days", value: String(WeatherCard.dayCount)),
+                URLQueryItem(name: "timeformat", value: "unixtime"),
+            ]
+            return components.url!
+        }
+        return (
+            url([URLQueryItem(name: "current", value: "temperature_2m,apparent_temperature,weather_code,is_day"),
+                 URLQueryItem(name: "hourly", value: "temperature_2m,weather_code,precipitation_probability,is_day")]),
+            url([URLQueryItem(name: "daily",
+                              value: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max")])
+        )
+    }
+
+    /// The `daily` request's days in the `now` request's answer.
+    static func merged(now: Data, daily: Data) throws -> Data {
+        guard var root = try JSONSerialization.jsonObject(with: now) as? [String: Any],
+              let days = (try JSONSerialization.jsonObject(with: daily) as? [String: Any])?["daily"] else {
+            throw WeatherForecast.Malformed()
+        }
+        root["daily"] = days
+        return try JSONSerialization.data(withJSONObject: root)
     }
 
     private static func fetchOpenMeteo(_ coordinate: Coordinate, unit: String) async throws -> WeatherForecast {
-        let (data, response) = try await session.data(from: forecastURL(coordinate, unit: unit))
-        guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 512 * 1024 else {
-            throw URLError(.badServerResponse)
+        let urls = forecastURLs(coordinate, unit: unit)
+        func load(_ url: URL) async throws -> Data {
+            let (data, response) = try await session.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 512 * 1024 else {
+                throw URLError(.badServerResponse)
+            }
+            return data
         }
-        return try WeatherForecast.parse(data, fetchedAt: Date())
+        async let now = load(urls.now)
+        async let daily = load(urls.daily)
+        return try WeatherForecast.parse(try merged(now: await now, daily: await daily), fetchedAt: Date())
     }
 
     @MainActor

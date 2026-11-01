@@ -1,7 +1,7 @@
 import { app, ipcMain } from "electron";
 import { checkLocation } from "../shared/location";
 import {
-  buildCard, cleanPlace, displayName, forecastUrl, geocodeUrl, parseCoordinate, pickGeocode, unavailableCard, type WeatherCard,
+  buildCard, cleanPlace, displayName, forecastUrls, geocodeUrl, parseCoordinate, pickGeocode, unavailableCard, type WeatherCard,
 } from "../shared/weather";
 
 type FetchJSON = (url: string) => Promise<unknown>;
@@ -69,7 +69,9 @@ export class WeatherService {
     try {
       let cached = this.forecasts.get(key);
       if (!cached || Math.abs(now.getTime() - cached.at) >= FORECAST_LIFETIME_MS) {
-        cached = { json: await this.fetchJSON(forecastUrl(latitude, longitude, unit)), at: now.getTime() };
+        const urls = forecastUrls(latitude, longitude, unit);
+        const [current, daily] = await Promise.all([this.fetchJSON(urls.now), this.fetchJSON(urls.daily)]);
+        cached = { json: { ...(current as object), daily: (daily as { daily?: unknown })?.daily }, at: now.getTime() };
         this.forecasts.set(key, cached);
         if (this.forecasts.size > 64) this.forecasts.delete(this.forecasts.keys().next().value as string);
       }
