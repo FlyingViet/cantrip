@@ -19,7 +19,12 @@ final class CantripPairingUITests: XCTestCase {
         let openSettings = app.buttons["Open Settings"].firstMatch
         XCTAssertTrue(openSettings.waitForExistence(timeout: 10))
         openSettings.tap()
-        XCTAssertTrue(app.staticTexts["No saved servers"].firstMatch.waitForExistence(timeout: 5))
+        let macs = app.buttons["settings.page.macs"].firstMatch
+        XCTAssertTrue(macs.waitForExistence(timeout: 5))
+        macs.tap()
+        // Not "No Mac paired yet.": a simulator's Keychain outlives the app, so a reinstall can
+        // bring back an older pairing. The link's host is unique, which is what the test checks.
+        XCTAssertTrue(app.buttons["settings.pairMac"].firstMatch.waitForExistence(timeout: 5), "Settings › Macs is up")
 
         let host = "codespaces-pair-ui-\(Int.random(in: 1000...9999))"
         let link = try XCTUnwrap(URL(string: "cantripagent://pair?v=1&name=\(host)&token=\(token)"
@@ -33,8 +38,8 @@ final class CantripPairingUITests: XCTestCase {
         attach(app, "Confirmation over Settings")
         confirmation.buttons["Cancel"].tap()
         XCTAssertTrue(confirmation.waitForNonExistence(timeout: 5))
-        let cantripServers = app.staticTexts["Add Cantrip Remote"].firstMatch
-        for _ in 0..<10 where !cantripServers.isHittable { app.swipeUp() }
+        let pairMac = app.buttons["settings.pairMac"].firstMatch
+        for _ in 0..<10 where !pairMac.isHittable { app.swipeUp() }
         let saved = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", host)).firstMatch
         XCTAssertFalse(saved.exists, "Cancel saves nothing")
 
@@ -42,8 +47,8 @@ final class CantripPairingUITests: XCTestCase {
         XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
         confirmation.buttons["Pair"].tap()
         XCTAssertTrue(confirmation.waitForNonExistence(timeout: 10), "Pair closes the confirmation")
-        XCTAssertTrue(saved.waitForExistence(timeout: 5), "The host is saved like Add Server")
-        XCTAssertTrue(saved.isSelected || saved.label.contains("Selected"), "and selected")
+        XCTAssertTrue(saved.waitForExistence(timeout: 5), "The host is saved like Pair a Mac")
+        XCTAssertTrue(saved.isSelected || saved.label.contains("Active"), "and active")
         attach(app, "Saved and selected")
 
         open(try XCTUnwrap(URL(string: "cantripagent://pair?v=2&token=\(token)")), app, springboard)

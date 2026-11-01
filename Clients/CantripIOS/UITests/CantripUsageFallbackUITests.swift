@@ -1,6 +1,6 @@
 import XCTest
 
-/// Model Settings' usage limit fallbacks against a real Mac host: add backups (a backend again with
+/// Settings › Models' usage-limit backups against a real Mac host: add backups (a backend again with
 /// another model, when the host offers it), move one earlier and remove one, each saving right away. Runs on any iPhone, and on an iPhone Duo folded or unfolded.
 /// Set `TEST_RUNNER_CANTRIP_UITEST_HOME_URL=http://127.0.0.1:<port>` (and
 /// `TEST_RUNNER_CANTRIP_UITEST_HOME_TOKEN` if the host's token isn't `duo-qa-token`) to a host with
@@ -20,7 +20,9 @@ final class CantripUsageFallbackUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-CantripUITestRemoteURL", host,
                                "-CantripUITestRemoteToken", environment["CANTRIP_UITEST_HOME_TOKEN"] ?? "duo-qa-token",
-                               "-CantripUITestLane", "cantrip"]
+                               "-CantripUITestLane", "cantrip",
+                               // The backups are Mac-wide, in Settings › Models (no longer in a tab's sheet).
+                               "-CantripUITestSettings", "models"]
         app.launch()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for _ in 0..<3 {
@@ -29,27 +31,17 @@ final class CantripUsageFallbackUITests: XCTestCase {
             deny.tap()
         }
 
-        // The unfolded Duo's rail has its own Model Settings; elsewhere it's in the chat menu.
-        let rail = app.buttons["duo.rail.modelSettings"].firstMatch
-        let menu = app.buttons["Tab menu"].firstMatch
-        let opened = expectation(for: NSPredicate { _, _ in rail.exists || menu.exists }, evaluatedWith: nil)
-        if XCTWaiter.wait(for: [opened], timeout: 30) != .completed { save(app, "no-tab") }
-        XCTAssertTrue(rail.exists || menu.exists, "A tab is open")
-        unfolded = rail.exists
-        if unfolded {
-            rail.tap()
-        } else {
-            menu.tap()
-            let item = app.buttons["Model Settings"].firstMatch
-            XCTAssertTrue(item.waitForExistence(timeout: 5), "The chat menu has Model Settings")
-            item.tap()
-        }
-        XCTAssertTrue(app.navigationBars["Model Settings"].waitForExistence(timeout: 10))
+        let models = app.navigationBars["Models"].firstMatch
+        if !models.waitForExistence(timeout: 40) { save(app, "no-settings") }
+        XCTAssertTrue(models.exists, "Settings opens on Models")
+        unfolded = app.buttons["duo.rail.modelSettings"].firstMatch.exists
 
         let add = app.buttons["usageFallback.add"].firstMatch
-        XCTAssertTrue(add.waitForExistence(timeout: 10), "The fallbacks section offers Add a backup")
+        // The backups sit below New tabs and the tiers; the list loads rows as they scroll in.
+        for _ in 0..<8 where !add.waitForExistence(timeout: 2) { app.swipeUp() }
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "The backups section offers Add a backup")
         reveal(add, app: app)
-        XCTAssertTrue(app.staticTexts["Usage limit fallbacks (all tabs)"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["Usage-limit backups"].firstMatch.exists)
         save(app, "fallback-off")
 
         for backend in ["Claude Code", "Codex", "Antigravity"] {

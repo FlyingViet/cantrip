@@ -72,6 +72,12 @@ enum CantripUITestFixtures {
         UserDefaults.standard.string(forKey: "CantripUITestChooseSlashCommand")
     }
 
+    /// `-CantripUITestSettings models` opens Settings on that page once the Mac answers (`home`
+    /// opens its list), and `-CantripUITestModelSettings YES` the tab's Model Settings, for screenshots.
+    static var settingsTarget: String? { UserDefaults.standard.string(forKey: "CantripUITestSettings") }
+    static var settingsPage: SettingsPage? { settingsTarget.flatMap(SettingsPage.init(rawValue:)) }
+    static var opensModelSettings: Bool { UserDefaults.standard.bool(forKey: "CantripUITestModelSettings") }
+
     /// `-CantripUITestComposerText "/pl"` types that text into the composer and focuses it once a
     /// session is ready, for screenshots of the "/" suggestions without driving the keyboard.
     static var composerText: String? { UserDefaults.standard.string(forKey: "CantripUITestComposerText") }

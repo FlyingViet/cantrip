@@ -1224,6 +1224,8 @@ struct CantripMascotHeaderFade: View {
 /// Outfit picker with a live preview. The choice is saved on this device and applies immediately.
 struct CantripMascotCustomizationView: View {
     @Environment(\.dismiss) private var dismiss
+    /// A page inside Settings, without its own navigation and Done.
+    var embedded = false
     @AppStorage(CantripMascotOutfit.storageKey) private var outfit: CantripMascotOutfit = .starryPlush
     @AppStorage(CantripMascotName.storageKey) private var storedName = ""
     @State private var previewMood: CantripMascotMood = .idle
@@ -1233,7 +1235,7 @@ struct CantripMascotCustomizationView: View {
     private var name: String { CantripMascotName.display(storedName) }
 
     var body: some View {
-        NavigationStack {
+        CantripSheetStack(embedded: embedded) {
             ScrollView {
                 VStack(spacing: 22) {
                     VStack(spacing: 10) {
@@ -1274,8 +1276,10 @@ struct CantripMascotCustomizationView: View {
             .navigationTitle("Mascot")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                if !embedded {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
             .sensoryFeedback(.selection, trigger: outfit)
