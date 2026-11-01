@@ -1,5 +1,21 @@
 import Foundation
 
+/// One backup in the usage-limit chain: a backend and the model and effort it runs ("" = the
+/// backend's default). The chain is unique by backend and model, so a backend whose models have
+/// their own limits (Antigravity, Claude's model tiers) can be listed again with another model.
+struct FallbackEntry: Codable, Hashable {
+    var backend: String
+    var model: String = ""
+    var effort: String = ""
+
+    var kind: BackendKind? { BackendKind(rawValue: backend) }
+
+    /// The model and effort as a selection; nil when both are the backend's default.
+    var selection: SessionModelSelection? {
+        model.isEmpty && effort.isEmpty ? nil : SessionModelSelection(model: model, effort: effort, contextTier: "")
+    }
+}
+
 /// What a usage-limit backup runs with: the model and effort chosen for it in the backup chain,
 /// checked against the backend's real model list when the run starts.
 struct FallbackRun: Equatable {
@@ -23,10 +39,25 @@ extension AppSettings {
         }
     }
 
-    /// The backup's model and effort, or its default when the chosen model is no longer offered.
+    /// The model a backend runs when `chosen` is empty: the Mac's own setting for it, or the CLI's
+    /// default when Cantrip knows it ("" when it doesn't).
+    func effectiveModel(_ kind: BackendKind, chosen: String) -> String {
+        let trimmed = chosen.trimmingCharacters(in: .whitespaces)
+        guard trimmed.isEmpty else { return trimmed }
+        guard Self.tabModelBackends.contains(kind) else { return kind == .localModel ? localModel : "" }
+        let mac = tabModelDefaults(for: kind).model.trimmingCharacters(in: .whitespaces)
+        return mac.isEmpty ? (tabModelCatalog(for: kind).fileDefaultModel ?? "") : mac
+    }
+
+    /// A backend's first entry in the chain, for callers that name only the backend.
     func fallbackRun(for kind: BackendKind) -> FallbackRun {
-        guard Self.fallbackModelBackends.contains(kind), let chosen = limitFallbackModels[kind.rawValue],
-              !(chosen.model.isEmpty && chosen.effort.isEmpty) else {
+        fallbackRun(for: limitFallbackEntries.first { $0.backend == kind.rawValue } ?? FallbackEntry(backend: kind.rawValue))
+    }
+
+    /// The backup's model and effort, or its default when the chosen model is no longer offered.
+    func fallbackRun(for entry: FallbackEntry) -> FallbackRun {
+        let kind = entry.kind ?? .copilot
+        guard Self.fallbackModelBackends.contains(kind), let chosen = entry.selection else {
             return FallbackRun(backend: kind, selection: nil, label: backendLabel(kind))
         }
         let catalog = tabModelCatalog(for: kind)

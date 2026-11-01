@@ -122,7 +122,7 @@ final class AppSettings: ObservableObject {
         if let error = openAIEndpointError { return error }
         guard openAIEndpointEnabled else { return "Off." }
         guard let port = openAIEndpointListeningPort else { return "Starting…" }
-        let chain = ([backend.rawValue] + limitFallbackBackends.filter { $0 != backend.rawValue }).joined(separator: ", then ")
+        let chain = openAIEndpointChain().map(\.label).joined(separator: ", then ")
         return "Listening at http://127.0.0.1:\(port)/v1 · \(chain)"
     }
 
@@ -403,30 +403,90 @@ final class AppSettings: ObservableObject {
     @Published var councilScope: String {
         didSet { d.set(councilScope, forKey: "councilScope") }
     }
-    /// Backends (BackendKind rawValues), in order, a run moves through when the backend it's on
-    /// reports its usage limit (`BackendFallback`). Empty = off: the run stops with the error.
-    @Published var limitFallbackBackends: [String] {
+    /// The backups, in order, a run moves through when the backend and model it's on report a
+    /// usage limit (`BackendFallback`): each a backend with the model and effort it runs. A backend
+    /// can be listed more than once with different models, the Mac's own included. Empty = off:
+    /// the run stops with the error.
+    @Published var limitFallbackEntries: [FallbackEntry] {
         didSet {
-            let cleaned = Self.fallbackChain(limitFallbackBackends)
+            let cleaned = Self.fallbackEntries(limitFallbackEntries)
             // Setting a property inside its own didSet doesn't run didSet again.
-            if cleaned != limitFallbackBackends { limitFallbackBackends = cleaned }
-            d.set(cleaned, forKey: "limitFallbackBackends")
+            if cleaned != limitFallbackEntries { limitFallbackEntries = cleaned }
+            if let data = try? JSONEncoder().encode(cleaned) { d.set(data, forKey: "limitFallbackEntries") }
+            // Builds from before entries read the backend list.
+            d.set(cleaned.map(\.backend), forKey: "limitFallbackBackends")
+            var remembered = limitFallbackModels
+            for (backend, entry) in Self.firstEntries(cleaned) { remembered[backend] = entry.selection }
+            if remembered != limitFallbackModels { limitFallbackModels = remembered }
         }
     }
 
-    /// The model and effort each backup runs with, by BackendKind rawValue; a backend with none
-    /// (or empty fields) uses its default. Kept apart from the chain so clients that only edit the
-    /// order can't drop them.
+    /// The chain's backends in order (a backend twice when it's listed twice). Setting it keeps
+    /// each entry's model: a backend's entries are reused in order, extra ones get its remembered
+    /// model, and entries of a backend the list names fewer times stay after it, so a client that
+    /// knows only backends can reorder the chain without collapsing a backend's models.
+    var limitFallbackBackends: [String] {
+        get { limitFallbackEntries.map(\.backend) }
+        set { limitFallbackEntries = Self.entries(forBackends: newValue, current: limitFallbackEntries, remembered: limitFallbackModels) }
+    }
+
+    /// Each backend's model and effort as a backup, by BackendKind rawValue: its first entry in the
+    /// chain, remembered when the backend is removed so adding it back restores them. Setting it
+    /// (older clients and settings files) updates each backend's first entry.
     @Published var limitFallbackModels: [String: SessionModelSelection] {
         didSet {
             if let data = try? JSONEncoder().encode(limitFallbackModels) { d.set(data, forKey: "limitFallbackModels") }
+            var synced = limitFallbackEntries
+            var seen = Set<String>()
+            for index in synced.indices where seen.insert(synced[index].backend).inserted {
+                let chosen = limitFallbackModels[synced[index].backend]
+                synced[index].model = chosen?.model ?? ""
+                synced[index].effort = chosen?.effort ?? ""
+            }
+            if synced != limitFallbackEntries { limitFallbackEntries = synced }
         }
     }
 
-    /// Known backends only, each once, in the order given.
+    /// Known backends only, in the order given, without repeating a backend and model.
+    static func fallbackEntries(_ raw: [FallbackEntry]) -> [FallbackEntry] {
+        var seen = Set<FallbackEntry>()
+        return raw.map { FallbackEntry(backend: $0.backend, model: $0.model.trimmingCharacters(in: .whitespaces),
+                                       effort: $0.effort.trimmingCharacters(in: .whitespaces)) }
+            .filter { $0.kind != nil && seen.insert(FallbackEntry(backend: $0.backend, model: $0.model)).inserted }
+    }
+
+    /// Known backends only, each once, in the order given (the chain before entries).
     static func fallbackChain(_ raw: [String]) -> [String] {
         var seen = Set<String>()
         return raw.filter { BackendKind(rawValue: $0) != nil && seen.insert($0).inserted }
+    }
+
+    private static func firstEntries(_ entries: [FallbackEntry]) -> [(String, FallbackEntry)] {
+        var seen = Set<String>()
+        return entries.compactMap { seen.insert($0.backend).inserted ? ($0.backend, $0) : nil }
+    }
+
+    /// A chain from a list of backends (see `limitFallbackBackends`).
+    static func entries(forBackends names: [String], current: [FallbackEntry],
+                        remembered: [String: SessionModelSelection]) -> [FallbackEntry] {
+        let known = names.filter { BackendKind(rawValue: $0) != nil }
+        var pools = Dictionary(grouping: current, by: \.backend)
+        var result: [FallbackEntry] = []
+        var last: [String: Int] = [:]
+        for name in known {
+            if let pool = pools[name], let first = pool.first {
+                result.append(first)
+                pools[name] = Array(pool.dropFirst())
+            } else {
+                let chosen = remembered[name]
+                result.append(FallbackEntry(backend: name, model: chosen?.model ?? "", effort: chosen?.effort ?? ""))
+            }
+            last[name] = result.count - 1
+        }
+        for (name, index) in last.sorted(by: { $0.value > $1.value }) {
+            if let rest = pools[name], !rest.isEmpty { result.insert(contentsOf: rest, at: index + 1) }
+        }
+        return result
     }
     /// Union of the account models' advertised reasoning efforts.
     @Published var copilotEffortChoices: [String] {
@@ -726,6 +786,7 @@ final class AppSettings: ObservableObject {
             "localSystemPrompt": localSystemPrompt,
             "councilScope": councilScope, "limitFallbackBackends": limitFallbackBackends,
             "limitFallbackModels": limitFallbackModels.mapValues { ["model": $0.model, "effort": $0.effort] },
+            "limitFallbackEntries": limitFallbackEntries.map { ["backend": $0.backend, "model": $0.model, "effort": $0.effort] },
             "allowActions": allowActions, "shareLocation": shareLocation,
             "shareCalendar": shareCalendar, "attachScreen": attachScreen,
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
@@ -837,6 +898,12 @@ final class AppSettings: ObservableObject {
         if let raw = dict["limitFallbackBackend"] as? String, raw.isEmpty || BackendKind(rawValue: raw) != nil {
             limitFallbackBackends = raw.isEmpty ? [] : [raw]
             applied.append("limitFallbackBackend")
+        }
+        // The whole chain, last, so it wins over the backend list and models above.
+        if let raw = dict["limitFallbackEntries"] as? [[String: String]],
+           raw.allSatisfy({ BackendKind(rawValue: $0["backend"] ?? "") != nil }) {
+            limitFallbackEntries = raw.map { FallbackEntry(backend: $0["backend"] ?? "", model: $0["model"] ?? "", effort: $0["effort"] ?? "") }
+            applied.append("limitFallbackEntries")
         }
         bool("allowActions") { self.allowActions = $0 }
         bool("shareLocation") { self.shareLocation = $0 }
@@ -1008,10 +1075,19 @@ final class AppSettings: ObservableObject {
             .flatMap { try? JSONDecoder().decode([CouncilMember].self, from: $0) }) ?? []
         councilScope = d.string(forKey: "councilScope") ?? "planReview"
         // Before the chain, one backend was saved under limitFallbackBackend.
-        limitFallbackModels = d.data(forKey: "limitFallbackModels")
+        let savedFallbackModels = d.data(forKey: "limitFallbackModels")
             .flatMap { try? JSONDecoder().decode([String: SessionModelSelection].self, from: $0) } ?? [:]
-        limitFallbackBackends = Self.fallbackChain(d.stringArray(forKey: "limitFallbackBackends")
-            ?? [d.string(forKey: "limitFallbackBackend") ?? ""])
+        limitFallbackModels = savedFallbackModels
+        if let saved = d.data(forKey: "limitFallbackEntries").flatMap({ try? JSONDecoder().decode([FallbackEntry].self, from: $0) }) {
+            limitFallbackEntries = Self.fallbackEntries(saved)
+        } else {
+            // Before entries: one model per backend, each backend once.
+            limitFallbackEntries = Self.fallbackChain(d.stringArray(forKey: "limitFallbackBackends")
+                ?? [d.string(forKey: "limitFallbackBackend") ?? ""]).map { backend in
+                    let chosen = savedFallbackModels[backend]
+                    return FallbackEntry(backend: backend, model: chosen?.model ?? "", effort: chosen?.effort ?? "")
+                }
+        }
         codexPath = d.string(forKey: "codexPath") ?? ""
         codexModel = d.string(forKey: "codexModel") ?? ""
         codexEffort = d.string(forKey: "codexEffort") ?? ""

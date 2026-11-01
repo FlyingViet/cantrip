@@ -410,6 +410,9 @@ struct UsageLimitReport: Equatable {
     let code: String
     /// When the limit lifts, if the backend says.
     let resetsAt: Date?
+    /// The model quota that's used up (`BackendLimitTracker.modelScope`), such as Claude's weekly
+    /// Opus limit or Antigravity's Argon group; nil when the whole backend is (a shared quota).
+    var scope: String? = nil
 }
 
 struct BackendRequest {

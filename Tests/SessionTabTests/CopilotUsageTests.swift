@@ -96,8 +96,11 @@ extension SessionTabTests {
         try await Task.sleep(for: .milliseconds(20))
         precondition(!tracker.copilotUsage.isRefreshing && tracker.copilotUsage.claude?.account == usage
                      && tracker.copilotUsage.claude?.isStale(at: now) == false)
-        precondition(BackendLimitTracker.shared.limitedUntil(.claudeCode, now: now) == copilotDate("2026-11-02T04:00:00Z"),
+        precondition(BackendLimitTracker.shared.limitedUntil(.claudeCode, model: "claude-sonnet-5-5", now: now) == copilotDate("2026-11-02T04:00:00Z"),
                      "A full window sends messages to the fallback until it resets")
+        precondition(BackendLimitTracker.shared.limitedUntil(.claudeCode, now: now) == nil
+                     && BackendLimitTracker.shared.limitedUntil(.claudeCode, model: "claude-opus-5-5", now: now) == nil,
+                     "The weekly Sonnet limit leaves Claude's other models running")
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(tracker.copilotUsage)) as? [String: Any]
         precondition(((encoded?["claude"] as? [String: Any])?["account"] as? [String: Any])?["windows"] != nil,
                      "Remote clients get Claude's limits under `claude`")

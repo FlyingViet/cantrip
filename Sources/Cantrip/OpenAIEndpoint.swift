@@ -175,16 +175,23 @@ extension AppSettings {
         return target
     }
 
-    /// The Mac's backend first, then the usage-limit backups, each with its own model.
+    /// The Mac's backend first, then the usage-limit backups, each with its own model (a backend
+    /// can come back with another model), each backend and model once.
     func openAIEndpointChain() -> [OneShotTarget] {
-        var seen: Set<BackendKind> = []
+        var seen = Set<FallbackEntry>()
         var chain: [OneShotTarget] = []
-        for kind in [backend] + limitFallbackBackends.compactMap(BackendKind.init(rawValue:)) where seen.insert(kind).inserted {
-            if kind == backend || kind == .localModel {
-                chain.append(openAIEndpointTarget(for: kind))
+        func add(_ target: OneShotTarget) {
+            let key = FallbackEntry(backend: target.backend.rawValue, model: effectiveModel(target.backend, chosen: target.model))
+            if seen.insert(key).inserted { chain.append(target) }
+        }
+        add(openAIEndpointTarget(for: backend))
+        for entry in limitFallbackEntries {
+            guard let kind = entry.kind else { continue }
+            if kind == .localModel {
+                add(openAIEndpointTarget(for: kind))
             } else {
-                let selection = fallbackRun(for: kind).selection ?? tabModelDefaults(for: kind)
-                chain.append(OneShotTarget(backend: kind, model: selection.model, effort: selection.effort))
+                let selection = fallbackRun(for: entry).selection ?? tabModelDefaults(for: kind)
+                add(OneShotTarget(backend: kind, model: selection.model, effort: selection.effort))
             }
         }
         return chain
@@ -214,9 +221,10 @@ enum OpenAIEndpointPlanner {
                 plan.skipped.append(.init(backend: target.backend, reason: reason, limitedUntil: nil))
                 continue
             }
-            if let until = tracker.limitedUntil(target.backend, now: now) {
+            if let until = tracker.limitedUntil(target.backend, model: settings.effectiveModel(target.backend, chosen: target.model),
+                                                now: now) {
                 plan.skipped.append(.init(backend: target.backend,
-                                          reason: "At its usage limit until \(ISODate.string(from: until)).",
+                                          reason: "\(target.label) is at its usage limit until \(ISODate.string(from: until)).",
                                           limitedUntil: until))
                 continue
             }
@@ -308,9 +316,10 @@ final class OpenAIEndpointService {
             } catch let error as OneShotError {
                 switch error {
                 case .usageLimit(let report, let message):
-                    tracker.markLimited(target.backend, message: message, report: report, now: now())
-                    if let until = tracker.limitedUntil(target.backend, now: now()) { limits.append(until) }
-                    notes.append("\(target.backend.rawValue): at its usage limit (\(report.code)).")
+                    let model = settings.effectiveModel(target.backend, chosen: target.model)
+                    tracker.markLimited(target.backend, model: model, message: message, report: report, now: now())
+                    if let until = tracker.limitedUntil(target.backend, model: model, now: now()) { limits.append(until) }
+                    notes.append("\(target.label): at its usage limit (\(report.code)).")
                 case .cancelled:
                     return .failed(status: 499, code: "cancelled", message: error.message, retryAfter: nil)
                 case .timedOut:
@@ -341,7 +350,7 @@ final class OpenAIEndpointService {
             guard seen.insert(id).inserted else { return }
             data.append(["id": id, "object": "model", "created": 0, "owned_by": OpenAIEndpointModel.alias(owner)])
         }
-        let kinds = [settings.backend] + settings.limitFallbackBackends.compactMap(BackendKind.init(rawValue:))
+        let kinds = [settings.backend] + settings.limitFallbackEntries.compactMap(\.kind)
             + [.copilot, .claudeCode, .antigravity]
         for kind in kinds where OneShotCompletion.unsupportedReason(kind) == nil {
             add(OpenAIEndpointModel.alias(kind), kind)
@@ -364,16 +373,19 @@ final class OpenAIEndpointService {
         let entries: [[String: Any]] = chain.map { target in
             var entry: [String: Any] = ["backend": target.backend.rawValue, "model": target.model, "effort": target.effort]
             if let reason = OneShotCompletion.unsupportedReason(target.backend) { entry["unavailable"] = reason }
-            entry["limitedUntil"] = tracker.limitedUntil(target.backend, now: now).map { ISODate.string(from: $0) as Any } ?? NSNull()
+            entry["limitedUntil"] = tracker.limitedUntil(target.backend, model: settings.effectiveModel(target.backend, chosen: target.model),
+                                                         now: now).map { ISODate.string(from: $0) as Any } ?? NSNull()
             return entry
         }
         let usable = chain.contains {
-            OneShotCompletion.unsupportedReason($0.backend) == nil && tracker.limitedUntil($0.backend, now: now) == nil
+            OneShotCompletion.unsupportedReason($0.backend) == nil
+                && tracker.limitedUntil($0.backend, model: settings.effectiveModel($0.backend, chosen: $0.model), now: now) == nil
         }
         return [
             "status": usable ? "ok" : "limited", "service": "cantrip-openai",
             "backend": settings.backend.rawValue, "chain": entries,
-            "fallback": settings.limitFallbackBackends.isEmpty ? "off" : settings.limitFallbackBackends.joined(separator: ", "),
+            "fallback": settings.limitFallbackEntries.isEmpty ? "off"
+                : settings.limitFallbackEntries.map { settings.fallbackRun(for: $0).label }.joined(separator: ", "),
             "copilot_limited_until": tracker.limitedUntil(.copilot, now: now).map { ISODate.string(from: $0) as Any } ?? NSNull(),
         ]
     }

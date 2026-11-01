@@ -715,8 +715,8 @@ enum CantripCLI {
             for index in stride(from: 0, to: pairs.count, by: 2) { values[pairs[index]] = pairs[index + 1] }
             let settings = try request(["command": "config", "set": values])["settings"] as? [String: Any] ?? [:]
             for key in values.keys.sorted() {
-                // limitFallbackBackend, from before the chain, sets limitFallbackBackends.
-                let shown = key == "limitFallbackBackend" ? "limitFallbackBackends" : key
+                // limitFallbackBackend(s) set the whole chain, shown with each backup's model.
+                let shown = ["limitFallbackBackend", "limitFallbackBackends"].contains(key) ? "limitFallbackEntries" : key
                 print("\(shown) = \(display(settings[shown] ?? ""))")
             }
         default:
@@ -726,6 +726,13 @@ enum CantripCLI {
 
     private static func display(_ value: Any) -> String {
         if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue ? "true" : "false" }
+        // limitFallbackEntries: "Antigravity · gemini-4-argon-high · high, Claude Code · sonnet".
+        if let entries = value as? [[String: Any]] {
+            return entries.isEmpty ? "off" : entries.map { entry in
+                ([entry["backend"], entry["model"], entry["effort"]].compactMap { $0 as? String }.filter { !$0.isEmpty })
+                    .joined(separator: " · ")
+            }.joined(separator: ", ")
+        }
         if let list = value as? [Any] { return list.isEmpty ? "off" : list.map { "\($0)" }.joined(separator: ", ") }
         if let map = value as? [String: Any] {
             // limitFallbackModels: "Claude Code = claude-opus-5-5 · high".

@@ -485,7 +485,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     }
 
     /// Records a `rate_limit_event` for the Usage Limits screen, and returns the window that is
-    /// used up (status `rejected`) with the time it opens again.
+    /// used up (status `rejected`) with the time it opens again; a model tier's own window
+    /// (`seven_day_opus`) limits only those models.
     static func rateLimitEvent(_ event: [String: Any], tracker: UsageTracker = .shared) -> UsageLimitReport? {
         guard let info = event["rate_limit_info"] as? [String: Any],
               let resets = info["resetsAt"] as? TimeInterval else { return nil }
@@ -498,7 +499,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         let status = info["status"] as? String ?? "unknown"
         tracker.updateRateLimit(type: type, resetsAtEpoch: resets, status: status, percentUsed: percent)
         guard status == "rejected" else { return nil }
-        return UsageLimitReport(code: "rate_limit/\(type)", resetsAt: Date(timeIntervalSince1970: resets))
+        return UsageLimitReport(code: "rate_limit/\(type)", resetsAt: Date(timeIntervalSince1970: resets),
+                                scope: BackendLimitTracker.claudeScope(window: type))
     }
 
     /// Copilot's watcher and parallel-request conventions, in Claude Code's terms.

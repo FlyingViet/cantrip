@@ -138,31 +138,47 @@ the paired `GET/POST /api/v1/sessions/{id}/model-settings` endpoint.
 ## Usage limit fallback
 
 The same **Model Settings** screen has a **Usage limit fallbacks (all tabs)**
-section: the backup backends, in order, the Mac moves a run through when the
-backend it's on reports a plan usage limit (see
-[Backends](backends.md#fall-back-when-a-backend-hits-its-usage-limit)). In the
-browser/Mac Remote, **Add a backup** appends one, the arrows reorder them and
+section: the backups, in order, the Mac moves a run through when the backend
+and model it's on report a plan usage limit (see
+[Backends](backends.md#fall-back-when-a-backend-hits-its-usage-limit)). Each
+backup is a backend with the model and effort it runs, and a backend can be
+listed again with another model, the Mac's own backend included. In the
+browser/Mac Remote, **Add a backup** appends one ("Antigravity with another
+model" for a backend that's already there), the arrows reorder them and
 **Remove** drops one. It is Mac-wide, so each change saves right away,
-separately from the tab's Save. When a backend is at its limit the section
-names it and its reset time, and **Try every backend again** clears that.
+separately from the tab's Save. A backup at its limit shows when it can be used
+again, the section names every limited backend and model, and **Try every
+backend again** clears them all.
 
-`GET /api/v1/usage-fallback` returns `backends` (the chain in the order tried;
-`[]` = off), `entries` (the same chain as `{backend, model, effort}`, `""` =
-the backend's default), `backend` (its first entry, `""` = off, for older clients),
-`primary` (the Mac's backend, skipped if the chain names it), `choices` (`id`,
-`label`; never the Mac's own backend; backends with a model picker add
-`models` (`id`, `label`, `efforts`), `defaultModel` and `defaultEfforts`),
-`limited` (`backend`, ISO `until`, `untilLabel`) and `revision`. `POST` takes
-`{"revision", "entries": [{"backend", "model", "effort"}]}` to replace the chain
-with each backup's model and effort (a model the backend lists and an effort
-that model takes, or `400`), `{"revision", "backends": [...]}` to replace only
-the order (known backends, each once; saved models are kept), `{"revision", "backend"}` to
-replace only its first entry (`""` turns every backup off), or
-`{"revision", "resetLimits": true}`; a stale revision gets `409`, and an
-unknown or repeated backend, or the Mac's own backend as `backend`, `400`.
-Macs from before the chain don't send `backends`; treat `backend` as a chain of
-one. Session lists and `/api/v1/ready` include `supportsUsageFallback`; older
-Macs answer `404`, and clients hide the section.
+`GET /api/v1/usage-fallback` returns `backends` (the chain's backends in the
+order tried, a backend twice when it's listed twice; `[]` = off), `entries` (the
+same chain as `{backend, model, effort}`, `""` = the backend's default, plus
+read-only `label` and, when that backup's backend or model is at its limit,
+`limitedUntil` and `limitedUntilLabel`), `backend` (its first entry, `""` = off,
+for older clients), `primary` (the Mac's backend), `choices` (`id`, `label`;
+never the Mac's own backend; backends with a model picker add `models` (`id`,
+`label`, `efforts`), `defaultModel`, `defaultModelID` and `defaultEfforts`),
+`primaryChoice` (the Mac's own backend in the same shape, to list it again with
+another model; `null` without a model picker), `limited` (whole backends:
+`backend`, ISO `until`, `untilLabel`), `limitedModels` (model quotas at their
+limit, whose backend's other models still run: `backend`, `scope`, `label` such
+as "Gemini 4 Argon" or "Opus models", `until`, `untilLabel`) and `revision`.
+
+`POST` takes `{"revision", "entries": [{"backend", "model", "effort"}]}` to
+replace the chain (a model the backend lists and an effort that model takes;
+the read-only fields may be sent back), `{"revision", "backends": [...]}` to
+replace only the order, `{"revision", "backend"}` to replace only its first
+entry (`""` turns every backup off), or `{"revision", "resetLimits": true}` to
+clear every backend's and model's limit. With `backends`, a backend's entries
+are reused in order and any it lists fewer times stay after it, so a client
+that knows only backends never collapses a backend's models. A stale revision
+gets `409`. `400` answers an unknown backend, a backend and model listed twice
+(a default model counts as the model it runs, `defaultModelID`), the Mac's own
+backend running its own model, and the Mac's own backend as `backend`. Macs
+from before the chain don't send `backends`; treat `backend` as a chain of one.
+Macs from before per-model backups send no `primaryChoice` or `limitedModels`,
+and refuse a backend listed twice. Session lists and `/api/v1/ready` include
+`supportsUsageFallback`; older Macs answer `404`, and clients hide the section.
 
 ## Start fresh
 

@@ -315,6 +315,9 @@ final class ChatSession: ObservableObject {
     private(set) var lastRunOutcome: LiveStatusRunOutcome?
     private var currentRunMode: RunJournal.Mode?
     private var currentRunBackend: BackendKind?
+    /// The usage-limit backup (backend, model and effort) the current run moved to; nil on the
+    /// tab's own backend and model.
+    private var currentRunFallback: FallbackEntry?
     /// The backend's own usage-limit report for the attempt that's about to fail, if it sent one.
     private var reportedUsageLimit: UsageLimitReport?
     private var currentAttempt = 0
@@ -671,14 +674,49 @@ final class ChatSession: ObservableObject {
     /// while the run is on the Mac's own backend.
     private(set) var fallbackModel: FallbackRun?
 
+    /// The model settings this tab runs `kind` with on its own. Background runs use their task's
+    /// model, or whatever the user picked for Home.
+    private func ownModelSelection(for kind: BackendKind) -> SessionModelSelection? {
+        isCantripHomeBackground
+            ? (kind == modelSettingsBackend ? cantripHomeModelOverride : nil)
+                ?? SessionTabMetadata.load(id: Self.cantripHomeID).modelSettings(for: kind)
+            : tabMetadata.modelSettings(for: kind)
+    }
+
+    /// The model this tab runs on `kind` on its own ("" when only the CLI knows its default).
+    private func ownModel(for kind: BackendKind) -> String {
+        settings.effectiveModel(kind, chosen: ownModelSelection(for: kind)?.model ?? "")
+    }
+
+    /// The model the current run is on: its backup's, or the tab's own.
+    private func runModel(for kind: BackendKind) -> String {
+        if let fallbackModel, fallbackModel.backend == kind, let model = fallbackModel.selection?.model, !model.isEmpty {
+            return model
+        }
+        return ownModel(for: kind)
+    }
+
+    /// What a backup entry runs with. A backup on the tab's own backend with the default model runs
+    /// the Mac's model for it, not the tab's own pick (which may be the one at its limit).
+    private func backupRun(_ entry: FallbackEntry) -> FallbackRun {
+        let run = settings.fallbackRun(for: entry)
+        guard run.selection == nil, let kind = entry.kind, kind == (isLocalPrivate ? .localModel : settings.backend),
+              AppSettings.fallbackModelBackends.contains(kind) else { return run }
+        let defaults = settings.tabModelDefaults(for: kind)
+        return FallbackRun(backend: kind, selection: SessionModelSelection(model: defaults.model, effort: defaults.effort, contextTier: ""),
+                           label: run.label)
+    }
+
+    /// "Antigravity" when the whole backend is limited, "Antigravity · gemini-4-argon-high" when its model is.
+    private func limitedLabel(_ kind: BackendKind, model: String) -> String {
+        BackendLimitTracker.shared.limitedUntil(kind) != nil || model.isEmpty ? kind.rawValue
+            : "\(kind.rawValue) · \(settings.fallbackModelLabel(kind, model))"
+    }
+
     private func applyModelSelection() {
-        // Background runs use their task's model, or whatever the user picked for Home.
         func selection(for kind: BackendKind) -> SessionModelSelection? {
             if let fallbackModel, fallbackModel.backend == kind, let pinned = fallbackModel.selection { return pinned }
-            return isCantripHomeBackground
-                ? (kind == modelSettingsBackend ? cantripHomeModelOverride : nil)
-                    ?? SessionTabMetadata.load(id: Self.cantripHomeID).modelSettings(for: kind)
-                : tabMetadata.modelSettings(for: kind)
+            return ownModelSelection(for: kind)
         }
         if let backend = copilot as? CopilotBackend {
             let copilotSelection = selection(for: .copilot)
@@ -772,6 +810,7 @@ final class ChatSession: ObservableObject {
         currentRunStartedAt = Date()
         currentRunMode = mode
         currentRunBackend = backend
+        currentRunFallback = nil
         reportedUsageLimit = nil
         currentAttempt = 1
         promptUsageMessageID = nil
@@ -1029,6 +1068,7 @@ final class ChatSession: ObservableObject {
         currentRunStartedAt = nil
         currentRunMode = nil
         currentRunBackend = nil
+        currentRunFallback = nil
         reportedUsageLimit = nil
         currentAttempt = 0
         runningBackendKind = nil
@@ -2159,20 +2199,30 @@ final class ChatSession: ObservableObject {
         let requestedBackend = isLocalPrivate ? .localModel
             : isResume ? (currentRunBackend ?? settings.backend) : settings.backend
         var backendKind = requestedBackend
-        // The chosen backend is still at its usage limit: start on the fallback instead of failing first.
+        // A resumed run stays on the backup it moved to (after a relaunch, its backend's first entry).
+        var target: FallbackEntry? = isResume && !isLocalPrivate ? currentRunFallback : nil
+        if isResume, !isLocalPrivate, target == nil, let kind = currentRunBackend, kind != settings.backend {
+            target = settings.limitFallbackEntries.first { $0.kind == kind } ?? FallbackEntry(backend: kind.rawValue)
+        }
+        if let kind = target?.kind { backendKind = kind }
+        // The chosen backend or its model is still at its usage limit: start on the fallback
+        // instead of failing first.
         var limitNotice: String?
-        if !isLocalPrivate, !isResume, let until = BackendLimitTracker.shared.limitedUntil(backendKind),
-           let fallback = BackendFallback.target(for: backendKind, chain: settings.limitFallbackBackends,
-                                                 homeRun: isCantripHomeRun) {
-            limitNotice = "\(backendKind.rawValue) is at its usage limit until \(BackendFallback.untilLabel(until))."
-                + " Using \(settings.fallbackRun(for: fallback).label)."
-            if fallback == .antigravity {
+        let ownModel = ownModel(for: backendKind)
+        if !isLocalPrivate, !isResume, let until = BackendLimitTracker.shared.limitedUntil(backendKind, model: ownModel),
+           let fallback = BackendFallback.next(after: backendKind, model: ownModel, chain: settings.limitFallbackEntries,
+                                               homeRun: isCantripHomeRun, model: settings.effectiveModel),
+           let fallbackKind = fallback.kind {
+            limitNotice = "\(limitedLabel(backendKind, model: ownModel)) is at its usage limit until \(BackendFallback.untilLabel(until))."
+                + " Using \(backupRun(fallback).label)."
+            if fallbackKind == .antigravity, requestedBackend != .antigravity {
                 antigravity.fallbackSourceModel = sourceModelName(for: requestedBackend)
             }
-            backendKind = fallback
+            target = fallback
+            backendKind = fallbackKind
         }
         // On a backup, use the model and effort chosen for it in the chain.
-        let backup = !isLocalPrivate && backendKind != settings.backend ? settings.fallbackRun(for: backendKind) : nil
+        let backup = isLocalPrivate ? nil : target.map(backupRun)
         if backup != fallbackModel {
             fallbackModel = backup
             applyModelSelection()
@@ -2200,6 +2250,7 @@ final class ChatSession: ObservableObject {
             cantripHomeHeldFailures = []
         }
         runningBackendKind = backendKind
+        currentRunFallback = target
         let isFirstOfConversation = messages.isEmpty && automatedRun == nil
         let previousTurns = automatedRun == nil ? completedConversationTurns() : []
         if automaticTitle == "New chat" { automaticTitle = String(TabMentions.plain(prompt).prefix(34)) }
@@ -3255,14 +3306,15 @@ final class ChatSession: ObservableObject {
         let fallback = usageLimitFallback(after: errorText)
         recordInterruption(errorText)
         appendRunMessage(ChatMessage(role: .error, text: fallback.map {
-            errorText + "\n\nContinuing this task with \(settings.fallbackRun(for: $0).label) (Settings ▸ Usage limit fallbacks)."
+            errorText + "\n\nContinuing this task with \(backupRun($0).label) (Settings ▸ Usage limit fallbacks)."
         } ?? errorText))
-        if let fallback {
-            Log.write("resume: \(runningBackendKind?.rawValue ?? "backend") hit its usage limit — continuing on \(fallback.rawValue)")
-            if fallback == .antigravity, let source = runningBackendKind ?? currentRunBackend {
+        if let fallback, let fallbackKind = fallback.kind {
+            Log.write("resume: \(runningBackendKind?.rawValue ?? "backend") hit its usage limit — continuing on \(backupRun(fallback).label)")
+            if fallbackKind == .antigravity, let source = runningBackendKind ?? currentRunBackend, source != .antigravity {
                 antigravity.fallbackSourceModel = sourceModelName(for: source)
             }
-            currentRunBackend = fallback
+            currentRunBackend = fallbackKind
+            currentRunFallback = fallback
             interruptionAwaitsResume = false
             finishStream(dequeue: false, notify: false) { [weak self] in
                 self?.scheduleAutoResume(reason: "usage-limit-fallback")
@@ -3366,16 +3418,22 @@ final class ChatSession: ObservableObject {
     /// backend this run continues on (the next one in Settings' usage limit fallbacks that isn't
     /// at its limit too), or nil to fail as usual. The backend's structured report decides;
     /// matching the error's wording is the last resort for CLIs that don't send one.
-    private func usageLimitFallback(after errorText: String) -> BackendKind? {
-        let report = reportedUsageLimit
+    private func usageLimitFallback(after errorText: String) -> FallbackEntry? {
+        var report = reportedUsageLimit
         reportedUsageLimit = nil
         guard !isLocalPrivate, report != nil || UsageLimit.isLimitError(errorText),
               let limited = runningBackendKind ?? currentRunBackend, limited != .localModel else { return nil }
+        let model = runModel(for: limited)
+        // Antigravity's errors carry no code, but its usage read names the model group that's used
+        // up, so only that group's models are skipped.
+        if report == nil, limited == .antigravity, let scoped = UsageTracker.shared.antigravityLimit(forModel: model) {
+            report = scoped
+        }
         if report == nil { Log.write("usage-limit: \(limited.rawValue) matched by wording only: \(errorText.prefix(120))") }
-        BackendLimitTracker.shared.markLimited(limited, message: errorText, report: report)
+        BackendLimitTracker.shared.markLimited(limited, model: model, message: errorText, report: report)
         guard currentRunPrompt != nil, currentRunMode == .single, !councilMode, journalError == nil else { return nil }
-        return BackendFallback.target(for: limited, chain: settings.limitFallbackBackends,
-                                      homeRun: isCantripHomeRun)
+        return BackendFallback.next(after: limited, model: model, chain: settings.limitFallbackEntries,
+                                    homeRun: isCantripHomeRun, model: settings.effectiveModel)
     }
 
     /// Error text a dropped or flaky connection produces (Node, URLSession and DNS failures).

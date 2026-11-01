@@ -65,8 +65,11 @@ extension SessionTabTests {
                                  antigravityLoader: { { $0(.success(full)) } }, codexLoader: { nil }, quotaClock: { now })
         later.refreshQuotas()
         try await Task.sleep(for: .milliseconds(20))
-        precondition(BackendLimitTracker.shared.limitedUntil(.antigravity, now: now) == copilotDate("2026-10-31T07:31:18Z"),
+        precondition(BackendLimitTracker.shared.limitedUntil(.antigravity, model: "", now: now) == copilotDate("2026-10-31T07:31:18Z"),
                      "Auto runs on Gemini: its full 5-hour window sends messages to the fallback until it resets")
+        precondition(BackendLimitTracker.shared.limitedUntil(.antigravity, now: now) == nil
+                     && BackendLimitTracker.shared.limitedUntil(.antigravity, model: "gemini-4-argon-high", now: now) == nil,
+                     "only the Gemini group's models are skipped; Argon has its own limit")
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(later.copilotUsage)) as? [String: Any]
         precondition(((encoded?["antigravity"] as? [String: Any])?["account"] as? [String: Any])?["groups"] != nil,
                      "Remote clients get Antigravity's limits under `antigravity`")
