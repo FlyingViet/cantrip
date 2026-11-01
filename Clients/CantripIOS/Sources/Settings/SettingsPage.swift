@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Settings' pages, in the same order on iPhone, iPhone Duo and Gateway Mac.
 enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
-    case macs, models, tools, memory, voice, notifications, appearance, about
+    case macs, models, tools, memory, voice, location, notifications, appearance, about
 
     var id: String { rawValue }
 
@@ -13,6 +13,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .tools: return "Tools & sign-ins"
         case .memory: return "Memory"
         case .voice: return "Voice"
+        case .location: return "Location"
         case .notifications: return "Notifications"
         case .appearance: return "Appearance"
         case .about: return "About & Updates"
@@ -26,6 +27,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .tools: return "puzzlepiece.extension"
         case .memory: return "brain"
         case .voice: return "waveform"
+        case .location: return "location.fill"
         case .notifications: return "bell.badge"
         case .appearance: return "paintpalette"
         case .about: return "info.circle"
@@ -39,6 +41,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .tools: return .orange
         case .memory: return .pink
         case .voice: return .indigo
+        case .location: return .green
         case .notifications: return .red
         case .appearance: return .teal
         case .about: return .gray
@@ -53,6 +56,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .tools: return "Backends, GitHub and MCP servers, and their sign-ins"
         case .memory: return "What Cantrip remembers on your Mac"
         case .voice: return "Speech recognition and reply voice"
+        case .location: return "Answers for where this device is"
         case .notifications: return "Alerts, widget and Live Activity"
         case .appearance: return "Mascot and reply steps"
         case .about: return "Version, updates, Mac permissions and skills"

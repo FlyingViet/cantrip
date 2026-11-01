@@ -73,7 +73,7 @@ final class SettingsMapTests: XCTestCase {
 
     func testPagesFollowTheSharedMapAndReopenTheLastOne() {
         XCTAssertEqual(SettingsPage.allCases.map(\.title), [
-            "Macs", "Models", "Tools & sign-ins", "Memory", "Voice", "Notifications", "Appearance", "About & Updates",
+            "Macs", "Models", "Tools & sign-ins", "Memory", "Voice", "Location", "Notifications", "Appearance", "About & Updates",
         ])
         XCTAssertEqual(SettingsPage.available, SettingsPage.allCases, "the iPhone shows every page")
         XCTAssertTrue(SettingsPage.allCases.allSatisfy { !$0.summary.isEmpty && !$0.systemImage.isEmpty })
