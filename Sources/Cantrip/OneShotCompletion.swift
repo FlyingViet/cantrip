@@ -59,9 +59,12 @@ struct OneShotPrompt: Sendable {
 /// The backend, model and effort one attempt runs with. Empty fields leave the CLI's own default.
 struct OneShotTarget: Equatable, Sendable {
     let backend: BackendKind
+    /// A model, or a tier ("deep") until the planner turns it into the tier's models.
     var model = ""
     var effort = ""
     var contextTier = ""
+    /// The tier this model was picked for, if any.
+    var tier: ModelTier? = nil
 
     var label: String {
         ([backend.rawValue] + [model, effort, contextTier].filter { !$0.isEmpty }).joined(separator: " · ")
