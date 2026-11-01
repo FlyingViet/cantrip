@@ -302,6 +302,8 @@ struct CantripHomeTabDrawer: View {
     let onCreate: () -> Void
     let onRename: (CantripRemoteSession) -> Void
     let onClose: (String) -> Void
+    /// Settings, from the drawer's footer; nil hides the button.
+    var onOpenSettings: (() -> Void)? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var query = ""
     @FocusState private var searchFocused: Bool
@@ -573,17 +575,35 @@ struct CantripHomeTabDrawer: View {
                     .accessibilityIdentifier("cantrip-tab-error")
             }
             HStack(spacing: 8) {
-                Circle()
-                    .fill(model.isConnected ? Color.green : Color.gray)
-                    .frame(width: 8, height: 8)
-                Text("\(serverName) · \(model.connectionLabel.lowercased())")
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
-                    .truncationMode(.middle)
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(model.isConnected ? Color.green : Color.gray)
+                        .frame(width: 8, height: 8)
+                    Text("\(serverName) · \(model.connectionLabel.lowercased())")
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
+                        .truncationMode(.middle)
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("drawer.connection")
+                if let onOpenSettings {
+                    Button {
+                        searchFocused = false
+                        if isModal { onDismiss() }
+                        onOpenSettings()
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Settings")
+                    .accessibilityIdentifier("drawer.settings")
+                }
             }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("drawer.connection")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)

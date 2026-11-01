@@ -8,12 +8,39 @@ struct CantripModelSelection: Codable, Equatable {
 }
 
 struct CantripModelOption: Decodable, Identifiable, Equatable {
+    /// Copilot's AI-credit prices per billing batch of tokens; absent on other backends and older Macs.
+    struct Price: Decodable, Equatable {
+        var input: Double?
+        var output: Double?
+        var cachedInput: Double?
+        var batchSize: Int?
+
+        /// "10 in · 50 out credits per 1M tokens".
+        var label: String? {
+            guard input != nil || output != nil else { return nil }
+            if (input ?? 0) == 0, (output ?? 0) == 0 { return "No AI credits" }
+            func number(_ value: Double?) -> String {
+                guard let value else { return "?" }
+                return value.rounded() == value ? String(Int(value)) : String(format: "%g", value)
+            }
+            let per = batchSize.map { " per \(CantripModelOption.tokenLabel($0)) tokens" } ?? ""
+            return "\(number(input)) in · \(number(output)) out credits\(per)"
+        }
+    }
+
     let id: String
     var contextWindow: Int?
     var reasoningEfforts: [String]?
     var contextTiers: [String]?
     var defaultContextPromptTokens: Int?
     var longContextPromptTokens: Int?
+    var price: Price?
+
+    /// One line under the model in the picker: its context window and Copilot's price, if known.
+    var summary: String? {
+        let parts = [contextWindow.map { "\(Self.tokenLabel($0)) context" }, price?.label].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 
     static func tokenLabel(_ tokens: Int) -> String {
         let divisor = tokens >= 1_000_000 ? 1_000_000 : tokens >= 1000 ? 1000 : 1
@@ -31,12 +58,27 @@ struct CantripModelOption: Decodable, Identifiable, Equatable {
     }
 }
 
+/// A tier as the tab's picker offers it, from Macs with model tiers.
+struct CantripModelTierOption: Decodable, Equatable, Identifiable {
+    /// "fast", "standard" or "deep": the value a selection's model takes.
+    let id: String
+    let label: String
+    /// What it runs on this backend now ("" = the backend's default) and why it skipped a model.
+    let model: String
+    let modelLabel: String
+    let effort: String
+    var note: String? = nil
+}
+
 struct CantripModelSettings: Decodable, Equatable {
     let selection: CantripModelSelection
     let defaults: CantripModelSelection
     let usesDefaults: Bool
     let revision: String
+    /// The tiers first (on Macs with model tiers), then the backend's models.
     let models: [CantripModelOption]
+    /// What each tier runs now; nil from Macs before tiers.
+    let tiers: [CantripModelTierOption]?
     let fileDefaultModel: String?
     let fileDefaultContextTier: String?
     let unavailableReason: String?
@@ -51,12 +93,32 @@ struct CantripModelSettings: Decodable, Equatable {
         let info = info(for: selection)
         if !selection.model.isEmpty && info == nil { return "This model is no longer in the Mac's catalog." }
         if !selection.effort.isEmpty && info?.reasoningEfforts?.contains(selection.effort) != true {
-            return "Choose a supported effort or Model default."
+            return "Choose an effort this model takes, or Model default."
         }
         if !selection.contextTier.isEmpty && info?.contextTiers?.contains(selection.contextTier) != true {
-            return "Choose a supported context window or CLI default."
+            return "Choose a context window this model takes, or Auto."
         }
         return nil
+    }
+
+    func tier(_ id: String) -> CantripModelTierOption? { tiers?.first { $0.id == id } }
+
+    /// The backend's own models, without the tier entries.
+    var catalogModels: [CantripModelOption] {
+        let tierIDs = Set((tiers ?? []).map(\.id))
+        return models.filter { !tierIDs.contains($0.id) }
+    }
+
+    /// A model or tier as the picker names it: "Deep · Claude Opus 5.5".
+    func label(_ id: String) -> String {
+        guard let tier = tier(id) else { return id }
+        return "\(tier.label) · \(tier.modelLabel)"
+    }
+
+    /// The Mac's default for this tab, as Auto names it.
+    var autoLabel: String {
+        let model = defaults.model.isEmpty ? fileDefaultModel : defaults.model
+        return model.map { "Auto (Mac default: \(label($0)))" } ?? "Auto (Mac default)"
     }
 }
 
@@ -321,8 +383,8 @@ struct CantripUsageFallbackChange: Encodable {
     var resetLimits: Bool?
 }
 
-/// Mac-wide, so each change saves right away, apart from the tab's Save. The sheet loads it
-/// (`load`): a hidden section has no view to run a task from.
+/// Mac-wide, so each change saves right away. Settings › Models loads it (`load`) and shows it
+/// with the tiers.
 struct CantripUsageFallbackSection: View {
     @ObservedObject var model: CantripRemoteModel
     @Binding var fallback: CantripUsageFallback?
@@ -356,9 +418,9 @@ struct CantripUsageFallbackSection: View {
                     }
                     if let error { Text(error).foregroundStyle(.orange) }
                 } header: {
-                    Text("Usage limit fallbacks (all tabs)")
+                    Text("Usage-limit backups")
                 } footer: {
-                    Text("When a backend hits its usage limit, the task continues on the first backup here that isn't at its limit too. "
+                    Text("When a backend hits its usage limit, the task continues on the first backup here that isn't at its limit too. A backup can run a tier (Fast, Standard, Deep); one left on its default model keeps the tier of a run that has one. "
                          + fallback.status)
                 }
             }

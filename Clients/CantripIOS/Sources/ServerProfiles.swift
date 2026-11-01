@@ -19,6 +19,8 @@ struct SavedServer: Codable, Identifiable, Equatable {
     /// Cantrip only: host:port of the Mac's encrypted LAN listener, tried when Bonjour can't see
     /// it (e.g. through a Tailscale subnet router). Absent in profiles saved by older builds.
     var directAddress: String? = nil
+    /// When this device last reached it ("Last seen" in Settings); absent until it connects once.
+    var lastConnectedAt: Date? = nil
 
     var address: String {
         let parts = [url.isEmpty ? nil : url, directAddress.map { "Direct \($0)" }].compactMap { $0 }
@@ -185,6 +187,17 @@ final class ServerProfiles: ObservableObject {
         if let server { _ = try credential(for: server) }
         let snapshot = Snapshot(servers: servers, selectedID: server?.id)
         commit(snapshot, data: try JSONEncoder().encode(snapshot))
+    }
+
+    /// Records that `id` just connected, for "Last seen" in Settings; saved at most once a minute.
+    func markConnected(_ id: UUID, at date: Date = Date()) {
+        guard loadIssue == nil, let index = servers.firstIndex(where: { $0.id == id }) else { return }
+        if let last = servers[index].lastConnectedAt, abs(date.timeIntervalSince(last)) < 60 { return }
+        var updated = servers
+        updated[index].lastConnectedAt = date
+        let snapshot = Snapshot(servers: updated, selectedID: selectedID)
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        commit(snapshot, data: data)
     }
 
     func remove(_ server: SavedServer) throws {

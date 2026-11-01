@@ -1257,7 +1257,12 @@ struct ChatView: View {
                 onSelect: { openTab($0, picturesHome: false) },
                 onCreate: createRemoteSession,
                 onRename: { renamingRemoteSession = $0 },
-                onClose: closeRemoteSession
+                onClose: closeRemoteSession,
+                onOpenSettings: {
+                    dismiss()
+                    composerFocused = false
+                    showSettings = true
+                }
             )
         } content: {
             Group {
@@ -1308,7 +1313,7 @@ struct ChatView: View {
                 }
             ) {
                 SettingsView(env: env, remote: remote, voice: voice,
-                             canChangeGateway: !vm.sending)
+                             canChangeGateway: !vm.sending, displayTraits: displayTraits)
             }
             .sheet(isPresented: $showSkills) {
                 SkillsView(client: env.client) { skill in
@@ -2470,6 +2475,18 @@ struct ChatView: View {
             if backendSlashToken != nil { remote.refreshSlashCommandsIfNeeded() }
         }
         #if DEBUG
+        .task {
+            guard CantripUITestFixtures.settingsTarget != nil || CantripUITestFixtures.opensModelSettings else { return }
+            for _ in 0..<200 where !(destinationReady && remote.isConnected) {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            try? await Task.sleep(for: .seconds(1))
+            if CantripUITestFixtures.settingsTarget != nil {
+                showSettings = true
+            } else if let session = remote.selectedSession {
+                remote.modelSettingsSession = session
+            }
+        }
         .task {
             if CantripUITestFixtures.composerText == nil, let name = CantripUITestFixtures.slashCommandToChoose {
                 // The Duo sidebar's Skills rows: choose from the chat's command list.

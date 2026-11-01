@@ -1081,6 +1081,7 @@ enum CantripRemoteError: LocalizedError {
     case maintenanceUnsupported
     case copilotUsageUnsupported
     case usageFallbackUnsupported
+    case modelTiersUnsupported
     case mcpUnsupported
     case skillsUnsupported
     /// A `400` whose reason is shown as the Mac wrote it.
@@ -1149,6 +1150,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to view Copilot account usage."
         case .usageFallbackUnsupported:
             return "Update and reopen Cantrip on your Mac to choose a usage limit fallback."
+        case .modelTiersUnsupported:
+            return "Update and reopen Cantrip on your Mac to edit its model tiers."
         case .mcpUnsupported:
             return "Update and reopen Cantrip on your Mac to manage its shared MCP servers."
         case .skillsUnsupported:
@@ -1749,6 +1752,18 @@ struct CantripRemoteAPI {
 
     fileprivate func updateUsageFallback(body: Data) async throws -> CantripUsageFallback {
         try await request(path: "/api/v1/usage-fallback", method: "POST", body: body)
+    }
+
+    func modelTiers() async throws -> CantripModelTiers {
+        do {
+            return try await request(path: "/api/v1/model-tiers")
+        } catch CantripRemoteError.http(let status, _) where status == 404 || status == 405 {
+            throw CantripRemoteError.modelTiersUnsupported
+        }
+    }
+
+    fileprivate func updateModelTiers(body: Data) async throws -> CantripModelTiers {
+        try await request(path: "/api/v1/model-tiers", method: "POST", body: body)
     }
 
     func mcpServers(tab: String?) async throws -> CantripMCPSnapshot {
@@ -2937,6 +2952,16 @@ final class CantripRemoteModel: ObservableObject {
             return "\(baseURL.host ?? baseURL.absoluteString):\(port)"
         }
         return baseURL.host ?? baseURL.absoluteString
+    }
+
+    /// How this device reaches the Mac now, for Settings' status card.
+    var routeLabel: String {
+        guard isConnected else { return connectionLabel }
+        if case .lan(let endpoint) = activeTransport {
+            return endpoint == directEndpoint ? "Direct address, encrypted" : "Local network, encrypted"
+        }
+        guard let host = baseURL?.host?.lowercased() else { return "Connected" }
+        return host.hasSuffix(".ts.net") || host.hasPrefix("100.") ? "Tailscale" : "HTTPS"
     }
 
     /// The Mac's browser remote opened on one tab, for clients without Remote tabs of their own.
@@ -4209,6 +4234,19 @@ final class CantripRemoteModel: ObservableObject {
         })
     }
 
+    /// Each backend's models for fast, standard and deep (Macs from before tiers throw
+    /// `modelTiersUnsupported`).
+    func modelTiers() async throws -> CantripModelTiers {
+        try await performHistoryRead { try await $0.modelTiers() }
+    }
+
+    /// Saves one tier cell (or resets it); nil when it didn't save (`errorMessage` says why).
+    func updateModelTiers(_ change: CantripModelTiersChange) async -> CantripModelTiers? {
+        await mutate(prepare: { _ in try JSONEncoder().encode(change) }, { api, body in
+            try await api.updateModelTiers(body: body)
+        })
+    }
+
     /// The backend commands for "/" suggestions; never holds the polling/mutation gate.
     func fetchBackendCommands(sessionID: String) async throws -> BackendCommandsResponse {
         #if DEBUG
@@ -5262,6 +5300,7 @@ final class CantripRemoteModel: ObservableObject {
         let completedAt = Date()
         lastAuthenticatedAt = completedAt
         connectionState = .connected
+        if let selectedServerID { servers.markConnected(selectedServerID, at: completedAt) }
         refreshCompletionNotificationRegistration()
         staleTask?.cancel()
         staleTask = Task { [weak self] in

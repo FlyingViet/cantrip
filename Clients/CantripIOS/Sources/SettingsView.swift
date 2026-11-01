@@ -1,291 +1,170 @@
 import SwiftUI
 import AVFoundation
 
+/// Settings: a status card, then one row per page (`SettingsPage`), the same map on every client.
+/// iPhone shows the list and opens a page over it; an unfolded iPhone Duo and Gateway Mac show the
+/// list and the open page side by side. Folding keeps the open page, with its back button.
 struct SettingsView: View {
     @ObservedObject var env: HermesEnv
     @ObservedObject var remote: CantripRemoteModel
     let voice: VoiceController
     var canChangeGateway = true
+    /// Gateway Mac's own sections for the Tools page (the local model's MCP tools).
+    var macTools: AnyView? = nil
+    /// The presenting chat's traits: a sheet's own window never hears the Duo's hinge.
+    var displayTraits = ChatDisplayTraits()
     @Environment(\.dismiss) private var dismiss
-    @State private var testing = false
-    @ObservedObject private var parakeet = ParakeetSpeechEngine.shared
-    @AppStorage("hermes.sttEngine") private var sttEngine = SpeechInputEngine.parakeet.rawValue
-    @AppStorage("hermes.voicePause") private var voicePause = 2.5
-    @AppStorage("hermes.showSteps") private var showSteps = false
-    @AppStorage("hermes.voiceEngine") private var voiceEngine = "system"
+    @State private var page: SettingsPage?
+    @State private var fallback: CantripUsageFallback?
+    @AppStorage(SettingsPage.lastPageKey) private var lastPage = ""
+
+    private var showsSideBySide: Bool {
+        #if os(macOS)
+        true
+        #else
+        displayTraits.isUnfoldedDuo
+        #endif
+    }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                executionSection
-                backendPreferencesSection
-                gatewaySection
-                CantripRemoteSettingsSection(model: remote)
-                CantripNotificationSettingsSection(remote: remote)
-                speechRecognitionSection
-                DictationSettingsSection(remote: remote)
+        Group {
+            if showsSideBySide { split } else { stack }
+        }
+        .task {
+            fallback = await CantripUsageFallbackSection.load(remote)
+            _ = await env.refreshGateway()
+        }
+        .onChange(of: page) { _, page in
+            if let page { lastPage = page.rawValue }
+        }
+        .onChange(of: showsSideBySide, initial: true) { _, sideBySide in
+            // Beside the list a page is always open: the last one, or Macs.
+            if sideBySide, page == nil { page = Self.restoredPage(lastPage) }
+        }
+        #if DEBUG
+        .onAppear { if let target = CantripUITestFixtures.settingsPage { page = target } }
+        #endif
+    }
 
-                Section {
-                    NavigationLink {
-                        QwenVoiceSettingsView()
-                    } label: {
-                        HStack {
-                            Label("Voice engine", systemImage: "waveform")
-                            Spacer()
-                            Text(voiceEngine == "qwen" ? "Qwen3 (Neural)" : "System").foregroundStyle(.secondary)
-                        }
-                    }
-                    NavigationLink {
-                        VoiceListView(env: env, voice: voice)
-                    } label: {
-                        HStack {
-                            Label("Reply voice", systemImage: "speaker.wave.2")
-                            Spacer()
-                            Text(currentVoiceName).foregroundStyle(.secondary)
-                        }
-                    }
-                    .disabled(voiceEngine == "qwen")
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Label("Pause before sending", systemImage: "timer")
-                            Spacer()
-                            Text(String(format: "%.1fs", voicePause)).foregroundStyle(.secondary).monospacedDigit()
-                        }
-                        Slider(value: $voicePause, in: 1.5...5.0, step: 0.5)
-                    }
-                } header: { Text("Voice") }
-                footer: { Text("How long to wait after you stop talking before sending. Raise it if a thinking or breathing pause sends your prompt too early.") }
+    /// The saved page if this device shows it, else Macs.
+    static func restoredPage(_ saved: String) -> SettingsPage {
+        SettingsPage(rawValue: saved).flatMap { SettingsPage.available.contains($0) ? $0 : nil } ?? .macs
+    }
 
-                Section {
-                    Toggle(isOn: $showSteps) {
-                        Label("Show reasoning steps", systemImage: "list.bullet.indent")
-                    }
-                } header: { Text("Replies") }
-                footer: { Text("Off: just the final answer. On: stream the agent's step-by-step narration as it works. Tool activity still shows either way.") }
+    private var stack: some View {
+        NavigationStack(path: Binding(
+            get: { page.map { [$0] } ?? [] },
+            set: { page = $0.last }
+        )) {
+            home
+                .navigationDestination(for: SettingsPage.self) { pageView($0) }
+        }
+    }
 
-                connectionSection
+    #if os(macOS)
+    private var split: some View {
+        NavigationSplitView {
+            home
+                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 320)
+        } detail: {
+            NavigationStack {
+                pageView(page ?? .macs)
             }
+            .id(page)
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+    #else
+    /// Two columns drawn directly: a sheet is compact even on an unfolded Duo, which would
+    /// collapse a `NavigationSplitView` back into a stack.
+    private var split: some View {
+        HStack(spacing: 0) {
+            NavigationStack { home }
+                .frame(width: 290)
+            Divider()
+                .ignoresSafeArea()
+            NavigationStack {
+                pageView(page ?? .macs)
+            }
+            .id(page)
+        }
+    }
+    #endif
+
+    private var home: some View {
+        homeList
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .task { await env.refreshGateway() }
-        }
-    }
-
-    private var executionSection: some View {
-        Section {
-            ForEach(env.selectableLanes) { lane in
-                Button {
-                    env.select(lane)
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: lane.systemImage)
-                            .foregroundStyle(laneTint(lane))
-                            .frame(width: 24)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(lane.title)
-                                .foregroundStyle(.primary)
-                            Text(
-                                laneStatus(lane)
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if lane == env.executionLane.pickerLane {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.tint)
-                        }
-                    }
-
-                    .contentShape(Rectangle())
+            .toolbar {
+                #if os(iOS)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("settings.done")
                 }
-                .buttonStyle(.plain)
-                .disabled(!env.isAvailable(lane) || !canChangeGateway || remote.isMutating)
+                #endif
             }
-        } header: {
-            Text("Execution")
-        } footer: {
-            Text("Choose the agent behind the shared chat and voice interface. Each destination keeps its own conversation.")
-        }
+            .refreshable { fallback = await CantripUsageFallbackSection.load(remote) }
     }
 
-    private var backendPreferencesSection: some View {
-        Section {
-            NavigationLink {
-                BackendSettingsView(env: env)
-            } label: {
-                LabeledContent {
-                    Text("\(env.selectableLanes.count) shown")
-                        .foregroundStyle(.secondary)
-                } label: {
-                    Label("Backends", systemImage: "line.3.horizontal.decrease")
-                }
-            }
-        } footer: {
-            Text("Choose which backends appear in the picker and set their order.")
-        }
-    }
-
-    private func laneStatus(_ lane: ExecutionLane) -> String {
-        switch lane {
-        case .local where !env.isAvailable(.local):
-            "Unavailable until the local-private gateway route is configured."
-        case .home where remote.isConnected:
-            "Home and your project tabs on \(remote.endpointHost)."
-        case .home where remote.isConfigured:
-            "Configured for \(remote.endpointHost). Enable Cantrip Home on the Mac if needed."
-        default:
-            lane.detail
-        }
-    }
-
-    private func laneTint(_ lane: ExecutionLane) -> Color {
-        switch lane {
-        case .copilot: .orange
-        case .local: .green
-        case .cantrip: .cyan
-        case .home: .purple
-        }
-    }
-
-    private var gatewaySection: some View {
-        ServerSettingsSections(
-            servers: env.servers,
-            canChangeSelection: canChangeGateway,
-            add: { try env.addServer($0) },
-            select: {
-                try env.selectServer($0)
-                await env.refreshGateway()
-            },
-            remove: env.removeServer,
-            reenter: {
-                try env.reenterCredential($1, for: $0)
-                await env.refreshGateway()
-            }
-        )
-    }
-
-    private var speechRecognitionSection: some View {
-        Section {
-            Picker("Engine", selection: $sttEngine) {
-                ForEach(SpeechInputEngine.allCases) { engine in
-                    Text(engine.title).tag(engine.rawValue)
-                }
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: sttEngine) { _, _ in
-                voice.requestAuth()
-            }
-
-            if sttEngine == SpeechInputEngine.parakeet.rawValue {
-                parakeetStateRow
-                switch parakeet.state {
-                case .idle, .cached, .failed:
-                    Button {
-                        prepareParakeet()
-                    } label: {
-                        Label(
-                            parakeet.isPrepared
-                                ? "Load Parakeet"
-                                : "Download Parakeet",
-                            systemImage: "waveform.badge.magnifyingglass"
-                        )
-                    }
-                case .preparing, .ready:
-                    EmptyView()
-                }
-            }
-        } header: {
-            Text("Speech Recognition")
-        } footer: {
-            Text("Parakeet EOU runs entirely on this device and is the recommended low-latency engine. Apple Speech remains available as a no-download fallback.")
-        }
+    /// The Mac's sidebar selects through the list; on iOS any selection binding, even a constant
+    /// one, keeps a row's NavigationLink from pushing its page.
+    @ViewBuilder
+    private var homeList: some View {
+        #if os(macOS)
+        List(selection: $page) { homeRows }
+        #else
+        List { homeRows }
+        #endif
     }
 
     @ViewBuilder
-    private var parakeetStateRow: some View {
-        switch parakeet.state {
-        case .idle:
-            Label("Model not downloaded", systemImage: "arrow.down.circle")
-                .foregroundStyle(.secondary)
-        case .cached:
-            Label("Model downloaded", systemImage: "checkmark.circle")
-                .foregroundStyle(.green)
-        case .ready:
-            Label("Parakeet ready", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-        case .preparing(let progress, let phase):
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(phase)
-                    Spacer()
-                    Text("\(Int(progress * 100))%")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-                ProgressView(value: progress)
-            }
-        case .failed(let message):
-            Label(message, systemImage: "exclamationmark.triangle")
-                .font(.caption)
-                .foregroundStyle(.red)
-        }
-    }
-
-    private func prepareParakeet() {
-        Task {
-            do {
-                await QwenVoiceEngine.shared.releaseMemory()
-                try await parakeet.prepareIfNeeded()
-            } catch {
-                // The engine publishes the actionable error in its state row.
-            }
-        }
-    }
-
-    private var connectionSection: some View {
+    private var homeRows: some View {
         Section {
-            Button {
-                Task { await test() }
-            } label: {
-                HStack {
-                    Text("Test selected Hermes server")
-                    Spacer()
-                    connectionIndicator
+            SettingsStatusCard(remote: remote, fallback: fallback)
+        }
+        Section {
+            ForEach(SettingsPage.available) { item in
+                #if os(iOS)
+                if showsSideBySide {
+                    Button { page = item } label: {
+                        SettingsPageRow(page: item)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .foregroundStyle(.primary)
+                    .listRowBackground(page == item ? Color.accentColor.opacity(0.22) : nil)
+                    .accessibilityAddTraits(page == item ? .isSelected : [])
+                } else {
+                    NavigationLink(value: item) { SettingsPageRow(page: item) }
                 }
-            }
-            .disabled(env.client(for: .copilot) == nil || testing)
-            if case .failed(let message) = env.connectionState {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                #else
+                NavigationLink(value: item) { SettingsPageRow(page: item) }
+                    .tag(item)
+                #endif
             }
         }
     }
 
     @ViewBuilder
-    private var connectionIndicator: some View {
-        if testing || env.connectionState == .checking {
-            ProgressView()
-        } else if env.connectionState == .connected {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-        } else if case .failed = env.connectionState {
-            Image(systemName: "xmark.circle.fill")
-                .foregroundStyle(.red)
+    private func pageView(_ page: SettingsPage) -> some View {
+        switch page {
+        case .macs:
+            SettingsMacsPage(env: env, remote: remote, canChangeGateway: canChangeGateway)
+        case .models:
+            SettingsModelsPage(env: env, remote: remote, canChangeGateway: canChangeGateway, fallback: $fallback)
+        case .tools:
+            SettingsToolsPage(remote: remote, macTools: macTools)
+        case .memory:
+            SettingsMemoryPage(remote: remote)
+        case .voice:
+            SettingsVoicePage(env: env, remote: remote, voice: voice)
+        case .notifications:
+            SettingsNotificationsPage(remote: remote)
+        case .appearance:
+            SettingsAppearancePage()
+        case .about:
+            SettingsAboutPage(env: env, remote: remote)
         }
-    }
-
-    private func test() async {
-        testing = true
-        await env.refreshGateway()
-        testing = false
-    }
-
-    private var currentVoiceName: String {
-        guard !env.voiceId.isEmpty, let v = AVSpeechSynthesisVoice(identifier: env.voiceId) else { return "Default" }
-        return v.name
     }
 }
 
@@ -400,6 +279,7 @@ struct QwenVoiceSettingsView: View {
     @AppStorage("hermes.qwenPreset") private var presetId = "serena-gentle"
     @AppStorage("hermes.qwenRate") private var rate = 1.15
     @AppStorage("hermes.qwenModelQuality") private var modelQuality = "compact"
+    @State private var confirmingDelete = false
 
     var body: some View {
         Form {
@@ -454,7 +334,6 @@ struct QwenVoiceSettingsView: View {
                             Text(ByteCountFormatter.string(fromByteCount: engine.modelSizeBytes, countStyle: .file))
                                 .foregroundStyle(.secondary)
                         }
-                        Button("Delete model", role: .destructive) { engine.deleteModel() }
                     case .failed(let msg):
                         Label(msg, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
                         Button("Retry download") { engine.downloadModel() }
@@ -478,7 +357,21 @@ struct QwenVoiceSettingsView: View {
                               footer: "Female voices tuned for a soft tone with crisp articulation. Tap to select and hear a sample (once the model is downloaded).")
                 presetSection(QwenVoiceEngine.plainPresets, header: "All speakers",
                               footer: "The model's built-in speakers, unstyled. Download on Wi-Fi — it's a one-time ~800 MB fetch from Hugging Face.")
+                if engine.download == .ready {
+                    Section {
+                        Button("Delete model…", role: .destructive) { confirmingDelete = true }
+                            .accessibilityIdentifier("voice.deleteModel")
+                    } footer: {
+                        Text("Frees the space on this device. Replies use the system voice until you download it again.")
+                    }
+                }
             }
+        }
+        .confirmationDialog("Delete the Qwen3 voice model?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("Delete model", role: .destructive) { engine.deleteModel() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("It frees \(ByteCountFormatter.string(fromByteCount: engine.modelSizeBytes, countStyle: .file)). Downloading it again takes a while.")
         }
         .navigationTitle("Voice Engine")
         .navigationBarTitleDisplayMode(.inline)

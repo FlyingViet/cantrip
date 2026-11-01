@@ -453,9 +453,11 @@ struct CopilotUsageView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: CopilotUsageModel
     @ObservedObject var remote: CantripRemoteModel
+    /// A page inside Settings, without its own navigation and Done.
+    var embedded = false
 
     var body: some View {
-        NavigationStack {
+        CantripSheetStack(embedded: embedded) {
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 List {
                     if model.isLoading || model.snapshot?.isRefreshing == true || model.error != nil {
@@ -489,8 +491,10 @@ struct CopilotUsageView: View {
             .navigationTitle("Usage Limits")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                if !embedded {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button {

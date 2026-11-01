@@ -217,9 +217,11 @@ private struct CantripMemoryInlineImagePlaceholder: InlineImageProvider {
 
 struct CantripMemoryView: View {
     @ObservedObject var remote: CantripRemoteModel
+    /// A page inside Settings, without its own navigation and Done.
+    var embedded = false
 
     var body: some View {
-        CantripMemoryBrowser(remote: remote)
+        CantripMemoryBrowser(remote: remote, embedded: embedded)
             .id(remote.usageIdentity)
     }
 }
@@ -227,11 +229,12 @@ struct CantripMemoryView: View {
 private struct CantripMemoryBrowser: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var remote: CantripRemoteModel
+    let embedded: Bool
     @StateObject private var model = CantripMemoryCatalogModel()
     @State private var query = ""
 
     var body: some View {
-        NavigationStack {
+        CantripSheetStack(embedded: embedded) {
             List {
                 Section {
                     Text("Read-only memory saved on your connected Mac. Core memory contains facts and preferences; notes hold procedures; session history records earlier conversations.")
@@ -279,14 +282,16 @@ private struct CantripMemoryBrowser: View {
                     }
                 }
             }
-            .navigationTitle("Cantrip Memory")
+            .navigationTitle(embedded ? "Memory" : "Cantrip Memory")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: CantripMemoryEntry.self) { entry in
                 CantripMemoryReader(remote: remote, entry: entry)
             }
             .searchable(text: $query, prompt: "Find a memory file")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                if !embedded {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button { Task { await refresh() } } label: { Image(systemName: "arrow.clockwise") }
                         .disabled(model.isLoading)

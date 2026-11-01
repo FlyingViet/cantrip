@@ -9,6 +9,7 @@ struct CantripMCPSnapshot: Decodable, Equatable {
 
 struct CantripMCPServer: Decodable, Equatable, Identifiable {
     var id: String { name }
+    var settingsRowID: String { "shared.\(name)" }
     var name: String
     var remote: Bool
     var oauth: Bool
@@ -40,6 +41,11 @@ struct CantripMCPServersView: View {
     @ObservedObject var remote: CantripRemoteModel
     /// The tab the sheet was opened from, for its own switches.
     let tabID: String?
+    /// A page inside Settings, without its own navigation and Done: one row per server that
+    /// opens its sign-in and switches.
+    var embedded = false
+    /// More sections at the end (Gateway Mac's local model tools).
+    var extra: AnyView? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var snapshot: CantripMCPSnapshot?
     @State private var error: String?
@@ -47,7 +53,7 @@ struct CantripMCPServersView: View {
     static let backends = ["Copilot", "Claude Code", "Codex", "Antigravity"]
 
     var body: some View {
-        NavigationStack {
+        CantripSheetStack(embedded: embedded) {
             List {
                 Section {
                     Text("Every backend on your Mac shares these servers. Sign-ins open in the Mac's agent Chrome; approve them here.")
@@ -59,25 +65,80 @@ struct CantripMCPServersView: View {
                 if let snapshot, snapshot.servers.isEmpty {
                     Section { Text("Cantrip isn't sharing MCP servers yet. Turn it on in Cantrip's Settings > MCP Servers on the Mac.") }
                 }
-                ForEach(snapshot?.servers ?? []) { server in
-                    Section {
-                        row(server)
-                        if let state = server.state, state.isActive || ["failed", "locked"].contains(state.phase) {
-                            signInPage(server, state)
+                if embedded {
+                    if let servers = snapshot?.servers, !servers.isEmpty {
+                        Section {
+                            // Not keyed by bare name: Gateway Mac's local tools below list the same names.
+                            ForEach(servers, id: \.settingsRowID) { server in
+                                NavigationLink { detail(server.name) } label: { summary(server) }
+                                    .accessibilityIdentifier("mcp.server.\(server.name)")
+                            }
+                        } header: {
+                            Text("Servers")
+                        } footer: {
+                            Text("Tap a server to sign in or out and choose which backends and tabs use it.")
                         }
-                        switches(server)
-                    } header: {
-                        Text(server.name)
+                    }
+                } else {
+                    ForEach(snapshot?.servers ?? []) { server in
+                        Section {
+                            serverContent(server)
+                        } header: {
+                            Text(server.name)
+                        }
                     }
                 }
+                if let extra { extra }
             }
-            .navigationTitle("MCP Servers")
+            .navigationTitle(embedded ? "Tools & sign-ins" : "MCP Servers")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                if !embedded {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                }
             }
             .task { await poll() }
             .refreshable { await load() }
+        }
+    }
+
+    @ViewBuilder
+    private func serverContent(_ server: CantripMCPServer) -> some View {
+        row(server)
+        if let state = server.state, state.isActive || ["failed", "locked"].contains(state.phase) {
+            signInPage(server, state)
+        }
+        switches(server)
+    }
+
+    /// One server's page in Settings: its sign-in and switches, kept current while it polls.
+    private func detail(_ name: String) -> some View {
+        List {
+            if let server = snapshot?.servers.first(where: { $0.name == name }) {
+                Section { serverContent(server) }
+            }
+            if let error {
+                Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+            }
+        }
+        .navigationTitle(name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// A server's row in Settings: its name and state, and Connect when it needs a sign-in.
+    private func summary(_ server: CantripMCPServer) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(server.name)
+                Text(status(server)).font(.caption).foregroundStyle(statusColor(server))
+            }
+            Spacer(minLength: 8)
+            if server.oauth, server.enabled, server.state?.phase != "ready", server.state?.isActive != true {
+                Button("Connect") { act(["action": "connect", "name": server.name]) }
+                    .buttonStyle(.borderless)
+                    .disabled(working != nil)
+                    .accessibilityIdentifier("mcp.connect.\(server.name)")
+            }
         }
     }
 
