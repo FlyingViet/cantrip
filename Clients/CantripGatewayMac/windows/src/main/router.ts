@@ -47,6 +47,11 @@ export class HostRouter {
 
   async request(request: HostRequest): Promise<HostResponse> {
     const idempotent = request.method === "GET" || request.method === "HEAD";
+    return this.perform(idempotent, (route) => this.send(route, request));
+  }
+
+  /** Runs `attempt` on the preferred route with the same fallback rules as `request` (e.g. a download to disk). */
+  async perform<T>(idempotent: boolean, attempt: (route: Route) => Promise<T>): Promise<T> {
     const order = this.routes.map((_, index) => index);
     const promote = idempotent && this.preferred > 0 && this.now() - this.lastPromotionAttempt >= this.promoteAfterMs;
     if (promote) this.lastPromotionAttempt = this.now();
@@ -55,7 +60,7 @@ export class HostRouter {
     let lastError: unknown;
     for (const index of order) {
       try {
-        const response = await this.send(this.routes[index], request);
+        const response = await attempt(this.routes[index]);
         if (index !== this.preferred) {
           this.preferred = index;
           this.onRouteChange(this.routes[index]);

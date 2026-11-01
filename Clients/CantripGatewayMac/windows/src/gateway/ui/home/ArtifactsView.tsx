@@ -1,17 +1,19 @@
 // Home's Artifacts (CantripHomeArtifactsView): files Cantrip Home saved on the Mac, as a grid of cards. Images open
-// in the viewer; other files download through a Save dialog (Windows has no Quick Look).
+// in the viewer; other files download through a Save dialog (Windows has no Quick Look). Save As… streams the original
+// file, and Save Folder as Zip… a multi-file artifact's whole folder, straight to disk in the main process.
 import { signal } from "@preact/signals";
 import type { JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import type { HomeArtifact } from "../../api/types";
+import { bridge } from "../../bridge";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
 import { Icon } from "../icons";
 import { alertDialog, confirmDialog, MenuButton, Spinner, type MenuEntry } from "../kit";
 import { openViewer } from "../viewer";
 import {
-  artifactAccessibilityText, artifactFileName, artifactGlyph, capitalized, durationLabel, fileSize, isImageArtifact,
-  isVideoArtifact, supportsThumbnail, artifactKey,
+  artifactAccessibilityText, artifactFileName, artifactFolder, artifactGlyph, artifactOriginalName, capitalized,
+  durationLabel, fileSize, isImageArtifact, isVideoArtifact, supportsThumbnail, artifactKey,
 } from "./homeLogic";
 import { deleteArtifact, homeDataError } from "./homeState";
 import { contextMenuAt, ErrorLine, HomeGate, Unavailable } from "./parts";
@@ -72,9 +74,34 @@ function confirmDelete(artifact: HomeArtifact): void {
   });
 }
 
-/** Downloads the file; Windows asks where to save it. */
-async function save(artifact: HomeArtifact): Promise<void> {
+/** Save As… (default Downloads): the original file, or with `folder` the artifact's folder as one zip. */
+async function save(artifact: HomeArtifact, folder = false): Promise<void> {
   if (loadingID.value) return;
+  const folderName = artifactFolder(artifact);
+  if (bridge.saveArtifact && remote.homeArtifacts.value?.supportsDownloads) {
+    const label = folder && folderName ? `the ${folderName} folder` : artifact.title;
+    loadingID.value = artifact.id;
+    status.value = `Downloading ${label}…`;
+    try {
+      const result = await bridge.saveArtifact({
+        id: artifact.id, folder, name: folder ? `${folderName ?? "Artifacts"}.zip` : artifactOriginalName(artifact),
+      });
+      if (result.canceled) status.value = "";
+      else if (result.ok) status.value = `Saved ${result.name ?? label}.`;
+      else {
+        status.value = "";
+        void alertDialog("Could not save artifact", result.error ?? "The Mac didn't send the file.");
+      }
+    } catch (error) {
+      status.value = "";
+      void alertDialog("Could not save artifact", (error as Error).message);
+    } finally {
+      loadingID.value = null;
+    }
+    return;
+  }
+  // A Mac from before downloads: the single file, read in one piece.
+  if (folder) return;
   loadingID.value = artifact.id;
   status.value = `Downloading ${artifact.title}…`;
   try {
@@ -131,9 +158,13 @@ function ArtifactCard(props: { artifact: HomeArtifact }): JSX.Element {
   const busy = loadingID.value !== null;
   const opening = loadingID.value === artifact.id;
   const image = isImageArtifact(artifact);
+  const folder = remote.homeArtifacts.value?.supportsDownloads && bridge.saveArtifact ? artifactFolder(artifact) : null;
   const entries = (): MenuEntry[] => [
     ...(image ? [{ label: "Open", icon: "photo", disabled: busy, onSelect: () => open(artifact) } as MenuEntry] : []),
     { label: "Save As…", icon: "arrow.down.circle", disabled: busy, onSelect: () => void save(artifact) },
+    ...(folder
+      ? [{ label: `Save “${folder}” Folder as Zip…`, icon: "folder", disabled: busy, onSelect: () => void save(artifact, true) } as MenuEntry]
+      : []),
     { kind: "separator" },
     { label: "Delete", icon: "trash", destructive: true, disabled: busy || remote.isMutating.value, onSelect: () => confirmDelete(artifact) },
   ];
