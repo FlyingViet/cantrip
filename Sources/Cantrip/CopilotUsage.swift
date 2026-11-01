@@ -18,6 +18,8 @@ struct CopilotUsageSnapshot: Codable {
     var activeBackend: String?
     /// Calls to Cantrip's OpenAI-compatible endpoint per consumer; set when the snapshot is served.
     var endpoint: EndpointUsageSnapshot?
+    /// Runs and spend per model tier; set when the snapshot is served.
+    var tiers: TierUsageSnapshot?
 
     func isStale(at now: Date = Date()) -> Bool {
         guard account != nil, error == nil, let checked = copilotDate(checkedAt),

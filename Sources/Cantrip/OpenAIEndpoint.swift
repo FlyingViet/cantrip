@@ -321,7 +321,7 @@ final class OpenAIEndpointService {
         case .answered(let result, let target, let fellBackFrom):
             Log.write("openai-endpoint: \(consumer) answered by \(target.label) in \(String(format: "%.1f", seconds))s"
                 + (fellBackFrom.isEmpty ? "" : " after \(fellBackFrom.map(\.rawValue).joined(separator: ", "))"))
-            ledger.record(consumer: consumer, backend: target.backend, outcome: .answered, result: result, at: started)
+            ledger.record(consumer: consumer, backend: target.backend, tier: target.tier, outcome: .answered, result: result, at: started)
         case .failed(let status, let code, let message, _):
             guard code != "cancelled" else { break }
             Log.write("openai-endpoint: \(consumer) failed \(status) \(code): \(message.prefix(200))")

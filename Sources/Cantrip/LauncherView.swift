@@ -2750,6 +2750,7 @@ struct LauncherView: View {
             if settings.openAIEndpointEnabled || !EndpointUsageLedger.shared.consumers().isEmpty {
                 EndpointUsageView(ledger: .shared, settings: settings)
             }
+            TierUsageView(usage: usage)
             if claudeMonthSpend > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "dollarsign.circle")

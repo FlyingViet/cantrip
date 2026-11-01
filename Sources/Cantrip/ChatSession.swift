@@ -1000,6 +1000,7 @@ final class ChatSession: ObservableObject {
         if let backend = BackendKind(rawValue: usage.backend) {
             UsageTracker.shared.recordCost(
                 backend: backend,
+                tier: councilMode ? nil : runningTier(on: backend),
                 costUSD: usage.costUSD,
                 inputTokens: usage.inputTokens,
                 outputTokens: usage.outputTokens
@@ -2371,7 +2372,7 @@ final class ChatSession: ObservableObject {
                                            compactHome: homeCarrier != nil)
         }
 
-        UsageTracker.shared.recordQuery(backend: backendKind)
+        UsageTracker.shared.recordQuery(backend: backendKind, tier: runningTier(on: backendKind))
         armWatchdog()
         streamGeneration += 1
         let generation = streamGeneration
