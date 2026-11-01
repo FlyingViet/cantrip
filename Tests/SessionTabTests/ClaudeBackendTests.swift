@@ -36,6 +36,26 @@ extension SessionTabTests {
         try await testClaudeCarriesEarlierTurns(directory)
         try await testClaudeReportsUsageLimit(directory)
         try testClaudeSharedMCP(directory)
+        try await testClaudeFolderRules(directory)
+    }
+
+    /// Rules Cantrip keeps for a folder reach the appended system prompt, and their CLAUDE.md
+    /// mirror is excluded so Claude doesn't read them twice.
+    @MainActor
+    private static func testClaudeFolderRules(_ directory: URL) async throws {
+        let store = FolderInstructions()
+        let rule = try store.save(folder: directory.path, body: "FOLDER-RULE-MARKER: keep the notes.",
+                                  mirror: directory.appendingPathComponent("CLAUDE.md").path)
+        defer { try? FileManager.default.removeItem(at: rule.file) }
+        let backend = ClaudeCodeBackend(persistKey: "test-claude-rules")
+        backend.reset()
+        defer { backend.cancel() }
+        let turn = ClaudeTurn()
+        backend.send(BackendRequest(prompt: "args", userMessage: "args", previousTurns: []),
+                     workdir: directory.path, onEvent: turn.record)
+        try await waitForJournalTest { turn.finished }
+        precondition(turn.text.contains("rules=1") && turn.text.contains("settings={\"claudeMdExcludes\":[\"\(directory.path)/CLAUDE.md\"]}"),
+                     "The folder's rules are in the system prompt and its mirror is skipped: \(turn.text)")
     }
 
     /// A turn the plan's limit stops reports it from Claude's own fields (the `rejected`
@@ -380,9 +400,10 @@ extension SessionTabTests {
                 'input': {'tool_name': 'Bash', 'tool_input': {'command': 'xcrun simctl boot test-device'}}}})
         elif prompt == 'args':
             prompt_text = arg('--append-system-prompt')
-            text = 'pid=%d model=%s effort=%s resume=%s home=%d %s' % (
+            text = 'pid=%d model=%s effort=%s resume=%s home=%d %s rules=%d settings=%s' % (
                 os.getpid(), arg('--model'), arg('--effort'), arg('--resume'),
-                int('HOME-PROTOCOL-MARKER' in prompt_text), 'watch-' if 'watch-' in prompt_text else '')
+                int('HOME-PROTOCOL-MARKER' in prompt_text), 'watch-' if 'watch-' in prompt_text else '',
+                int('FOLDER-RULE-MARKER' in prompt_text), arg('--settings'))
             emit({'type': 'system', 'subtype': 'init', 'session_id': 'session-args', 'model': 'claude-opus-5-5'})
             emit({'type': 'stream_event', 'event': {'type': 'content_block_delta', 'delta': {'type': 'text_delta', 'text': text}}})
             emit({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': text, 'num_turns': 1,

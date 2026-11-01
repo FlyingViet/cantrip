@@ -127,6 +127,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         var excludedTools: [String]?
         var toolDeferThreshold: Int?
         var homeProtocol: String?
+        /// Rules Cantrip keeps for the folder (part of the configuration, so an edit restarts the runtime).
+        var folderRules: String?
 
         var json: [String: Any] {
             var object: [String: Any] = ["command": command, "workdir": workdir, "model": model,
@@ -134,7 +136,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
              "allowTools": allowTools, "readOnly": readOnly, "autoApprove": autoApprove,
              "allowSubagents": allowSubagents, "mcpApps": mcpApps,
              "systemGuidance": CopilotBackend.systemGuidance(allowSubagents: allowSubagents)
-                + (homeProtocol.map { "\n\n" + $0 } ?? "")]
+                + (homeProtocol.map { "\n\n" + $0 } ?? "") + (folderRules.map { "\n\n" + $0 } ?? "")]
             if let guardrail { object["guardrail"] = guardrail }
             if let disabledMcpServers, !disabledMcpServers.isEmpty {
                 object["disabledMcpServers"] = disabledMcpServers
@@ -223,7 +225,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             disabledMcpServers: MCPBackendConfig.disabledForRun(disabledMcpServers, tab: tabID),
             excludedTools: excludedTools,
             toolDeferThreshold: toolDeferThreshold,
-            homeProtocol: homeProtocol
+            homeProtocol: homeProtocol,
+            folderRules: FolderInstructions().guidance(for: workdir, readsClaudeMdHere: true)
         )
     }
 
