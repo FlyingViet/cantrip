@@ -2041,3 +2041,44 @@ export interface MCPSnapshot {
   tabDisabled?: string[];
   revision?: string;
 }
+
+/** GET/POST /api/v1/skills: the one skills library Cantrip gives every backend, the folder rules it
+ * mirrors and their drift. Mac-wide (not per tab); older Macs answer 404. */
+export interface SkillEntry {
+  name: string;
+  description?: string;
+  enabled: boolean;
+  /** The backends that see it now. */
+  backends?: string[];
+  problems?: string[];
+}
+
+export interface SkillsRule {
+  folder: string;
+  lines: number;
+  mirror?: string | null;
+}
+
+export interface SkillsDrift {
+  path: string;
+  problem: string;
+}
+
+export interface SkillsSnapshot {
+  library?: string;
+  backends?: string[];
+  skills: SkillEntry[];
+  rules?: SkillsRule[];
+  drift?: SkillsDrift[];
+  /** ISO 8601; absent or null until the drift check has run. */
+  driftCheckedAt?: string | null;
+  checking?: boolean;
+  /** What a relink (`sync`) changed. */
+  messages?: string[];
+}
+
+/** POST /api/v1/skills bodies (a 400 `{ error }` says why one was refused). */
+export type SkillsAction =
+  | { action: "setEnabled"; name: string; enabled: boolean }
+  | { action: "sync" }
+  | { action: "check" };

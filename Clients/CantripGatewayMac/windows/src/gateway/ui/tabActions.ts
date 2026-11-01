@@ -36,6 +36,7 @@ export function tabActions(session: RemoteSessionSummary): MenuEntry[] {
   }
   entries.push({ label: "Mac Permissions & View Mac", icon: "desktopcomputer", onSelect: () => { nav.sheet.value = { kind: "macAccess" }; } });
   entries.push({ label: "MCP Servers", icon: "point.3.connected", onSelect: () => { nav.sheet.value = { kind: "mcpServers", tabID: session.id }; } });
+  entries.push({ label: "Skills & Rules", icon: "books.vertical", onSelect: () => { nav.sheet.value = { kind: "skills" }; } });
   if (session.supportsInputRequests) {
     entries.push({
       label: "View Questions in Chat", icon: "questionmark.circle",

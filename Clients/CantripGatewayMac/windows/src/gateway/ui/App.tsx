@@ -16,6 +16,7 @@ import { MascotCustomization } from "./pip/MascotCustomization";
 import { BuildsSheet } from "./sheets/BuildsSheet";
 import { MacAccessSheet } from "./sheets/MacAccessSheet";
 import { MCPServersSheet } from "./sheets/MCPServersSheet";
+import { SkillsSheet } from "./sheets/SkillsSheet";
 import { MaintenanceSheet } from "./sheets/MaintenanceSheet";
 import { MemorySheet } from "./sheets/MemorySheet";
 import { ModelSettingsSheet } from "./sheets/ModelSettingsSheet";
@@ -128,6 +129,7 @@ function SheetHost(): JSX.Element | null {
     case "inputRequests": return <InputRequestsSheet sessionID={sheet.sessionID} onClose={close} />;
     case "macAccess": return <MacAccessSheet onClose={close} />;
     case "mcpServers": return <MCPServersSheet tabID={sheet.tabID} onClose={close} />;
+    case "skills": return <SkillsSheet onClose={close} />;
     case "usage": return <UsageSheet onClose={close} />;
     case "memory": return <MemorySheet onClose={close} />;
     case "builds": return <BuildsSheet onClose={close} />;
