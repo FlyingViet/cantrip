@@ -13,6 +13,30 @@ extension SessionTabTests {
         print("MCP sharing: import, backend configs, OAuth with single-flight refresh, the relay and the remote list passed")
     }
 
+    /// The authorize address carries everything the sign-in server needs, and reaches agent Chrome
+    /// whole: Chrome 156 ends a raw `/json/new?` address at its first `&`, which dropped `client_id`.
+    static func testMCPSignInAddress(_ discovered: MCPOAuth.Endpoints, verifier: String) {
+        var endpoints = discovered
+        endpoints.authorizationEndpoint += "?prompt=consent"
+        endpoints.scopes = ["org:read", "project:write"]
+        let redirect = "http://127.0.0.1:5555/oauth/callback"
+        let url = MCPOAuth.authorizeURL(endpoints, clientID: "client-1", redirectURI: redirect, state: "s1", verifier: verifier)!
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!
+        let fields = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
+        precondition(fields == ["prompt": "consent", "response_type": "code", "client_id": "client-1", "redirect_uri": redirect,
+                                "state": "s1", "code_challenge": MCPOAuth.challenge(for: verifier), "code_challenge_method": "S256",
+                                "resource": "https://mcp.example.com/mcp", "scope": "org:read project:write"],
+                     "client_id, PKCE, redirect_uri, resource and scope, keeping the endpoint's own parameters: \(fields)")
+        precondition(items.count == fields.count, "No parameter twice")
+
+        let path = AgentChrome.newTabPath(for: url)
+        precondition(path.hasPrefix("/json/new?"))
+        let target = String(path.dropFirst("/json/new?".count))
+        precondition(!target.contains("&") && !target.contains("?") && !target.contains("#") && !target.contains(" "),
+                     "Nothing in the address can end it early: \(target)")
+        precondition(target.removingPercentEncoding == url.absoluteString, "Chrome's one unescape gives back the whole address")
+    }
+
     /// What Remote clients get: whether a server has a credential in the keychain, never its name or value.
     @MainActor
     static func testMCPRemoteList() async throws {
@@ -216,6 +240,7 @@ extension SessionTabTests {
                      && items["resource"] == "https://mcp.example.com/mcp" && items["state"] == "s1", "PKCE S256 and the resource")
         precondition(MCPOAuth.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk") == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
                      "S256 matches RFC 7636's example")
+        testMCPSignInAddress(endpoints, verifier: verifier)
 
         var clock = Date()
         let secrets = MCPSecrets.Store.memory()
