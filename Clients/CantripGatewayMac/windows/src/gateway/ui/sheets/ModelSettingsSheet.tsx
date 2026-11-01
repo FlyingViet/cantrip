@@ -2,9 +2,9 @@
 // and context window (CantripModelSettingsView, CantripModelSettings.swift), or the saved Private Local
 // tab's self-hosted server (CantripPrivateLocalSettingsView). Saves check the revision first and are
 // never retried: a lost reply may still have reached the Mac.
-import type { JSX } from "preact";
+import { Fragment, type JSX } from "preact";
 import { batch, useSignal } from "@preact/signals";
-import { useEffect, useId, useState } from "preact/hooks";
+import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { api, pathComponent } from "../../api/client";
 import type {
   ModelSelection, ModelSettingsSnapshot, PrivateLocalConfiguration, PrivateLocalModelsResponse, PrivateLocalSettingsSnapshot,
@@ -16,9 +16,9 @@ import { Loading, StatusLabel, Warning, findSession, sleep, useAlive } from "./c
 import {
   DEFAULT_PRIVATE_CONFIGURATION, MODEL_REFRESH_POLLS, capitalized, contextLabel, errorText, isUnsupported, modelInfo,
   modelSettingsChange, modelValidationError, parseContextTokens, pickerChoices, privateModelChoices, selectModel, tokenLabel,
-  usageFallbackAddable, usageFallbackChain, usageFallbackChange, usageFallbackEfforts, usageFallbackEntry, usageFallbackLabel,
-  usageFallbackModelChange, usageFallbackModels, usageFallbackMoved,
-  usageFallbackStatus, writeFailure,
+  usageFallbackAdd, usageFallbackAddable, usageFallbackEfforts, usageFallbackEntries, usageFallbackLabel, usageFallbackLimitNote,
+  usageFallbackLimits, usageFallbackModelChange, usageFallbackModelOptions, usageFallbackMove, usageFallbackPerModel,
+  usageFallbackRemove, usageFallbackStatus, writeFailure,
 } from "./sheetLogic";
 
 export function ModelSettingsSheet(props: { sessionID: string; onClose: () => void }): JSX.Element | null {
@@ -223,8 +223,10 @@ function UsageFallbackSection(): JSX.Element | null {
   const fallback = useSignal<UsageFallbackSnapshot | null>(null);
   const saving = useSignal(false);
   const error = useSignal<string | null>(null);
+  // The controls to focus once a save lands (the first that's there and enabled), as the rows re-render.
+  const focusAfterSave = useRef<string[] | null>(null);
   const alive = useAlive();
-  const pickerID = useId();
+  const ids = useId();
 
   const load = async () => {
     try {
@@ -236,14 +238,29 @@ function UsageFallbackSection(): JSX.Element | null {
   };
   useEffect(() => { void load(); }, []);
 
-  const save = async (change: UsageFallbackRequest) => {
-    if (saving.value) return;
+  useEffect(() => {
+    const targets = focusAfterSave.current;
+    if (saving.value || !targets) return;
+    focusAfterSave.current = null;
+    for (const id of targets) {
+      const control = document.getElementById(id) as HTMLButtonElement | HTMLSelectElement | null;
+      if (control && !control.disabled) {
+        control.focus();
+        break;
+      }
+    }
+  });
+
+  const save = async (change: UsageFallbackRequest | null, focus: FallbackFocus) => {
+    if (!change || saving.value) return;
+    focusAfterSave.current = focus.saved;
     saving.value = true;
     try {
       const value = await remote.mutate(() => api<UsageFallbackSnapshot>("/api/v1/usage-fallback", { method: "POST", body: change }));
       if (alive.current) { fallback.value = value; error.value = null; }
     } catch (failure) {
       if (!alive.current) return;
+      focusAfterSave.current = focus.failed;
       error.value = writeFailure(failure) || "The fallback could not be saved.";
       await load();
     } finally {
@@ -253,68 +270,107 @@ function UsageFallbackSection(): JSX.Element | null {
 
   const value = fallback.value;
   if (!value) return null;
-  const chain = usageFallbackChain(value);
+  return <UsageFallbackEditor value={value} saving={saving.value} error={error.value} ids={ids}
+    onSave={(change, focus) => void save(change, focus)} />;
+}
+
+/** Where focus goes after a save: `saved` once it lands, `failed` (the control used) if the Mac refuses it. */
+export interface FallbackFocus { saved: string[]; failed: string[] }
+
+/** The chain editor, without state. A backend can be listed more than once with different models, so every
+ * row and control is addressed by its position in the chain, and saves send the whole chain. */
+export function UsageFallbackEditor(props: {
+  value: UsageFallbackSnapshot;
+  saving: boolean;
+  error: string | null;
+  /** Prefix for the controls' element IDs. */
+  ids: string;
+  onSave: (change: UsageFallbackRequest | null, focus: FallbackFocus) => void;
+}): JSX.Element {
+  const { value, saving, ids, onSave } = props;
+  const entries = usageFallbackEntries(value);
   const addable = usageFallbackAddable(value);
+  const control = (index: number, part: string) => `${ids}-backup${index}-${part}`;
+  const addID = `${ids}-add`;
   return (
     <FormSection header="Usage limit fallbacks (all tabs)"
-      footer={`When a backend hits its usage limit, the task continues on the first backup here that isn't at its limit too. ${usageFallbackStatus(value)}`}>
-      {chain.map((id, index) => {
-        const name = usageFallbackLabel(value, id);
-        const models = usageFallbackModels(value, id);
-        const entry = usageFallbackEntry(value, id);
-        const efforts = usageFallbackEfforts(value, id);
-        const choice = value.choices.find((item) => item.id === id);
-        const pickers = models ? (
-          <FormRow key={`${id}-model`} label={<span class="sh-secondary">Runs</span>}>
-            <span class="sh-buttons">
-              <select class="select" aria-label={`${name} model`} value={entry.model} disabled={saving.value}
-                onChange={(event) => void save(usageFallbackModelChange(value, id, event.currentTarget.value, ""))}>
-                <option value="" selected={entry.model === ""}>{choice?.defaultModel ? `Default (${choice.defaultModel})` : "Default model"}</option>
-                {models.map((item) => <option key={item.id} value={item.id} selected={item.id === entry.model}>{item.label}</option>)}
-                {entry.model && !models.some((item) => item.id === entry.model)
-                  ? <option value={entry.model} selected>{`${entry.model} (not offered now)`}</option> : null}
-              </select>
-              {efforts.length ? (
-                <select class="select" aria-label={`${name} effort`} value={entry.effort} disabled={saving.value}
-                  onChange={(event) => void save(usageFallbackModelChange(value, id, entry.model, event.currentTarget.value))}>
-                  <option value="" selected={entry.effort === ""}>Default effort</option>
-                  {efforts.map((item) => <option key={item} value={item} selected={item === entry.effort}>{item}</option>)}
-                </select>
-              ) : null}
-            </span>
-          </FormRow>
-        ) : null;
-        return [
-          <FormRow key={id} label={<span>{index + 1}. {name}</span>}>
-            <span class="sh-buttons">
-              <button type="button" class="btn" aria-label={`Try ${name} earlier`} disabled={saving.value || index === 0}
-                onClick={() => void save(usageFallbackChange(value, usageFallbackMoved(chain, index, -1)))}>↑</button>
-              <button type="button" class="btn" aria-label={`Try ${name} later`} disabled={saving.value || index === chain.length - 1}
-                onClick={() => void save(usageFallbackChange(value, usageFallbackMoved(chain, index, 1)))}>↓</button>
-              <button type="button" class="btn" aria-label={`Remove ${name}`} disabled={saving.value}
-                onClick={() => void save(usageFallbackChange(value, chain.filter((other) => other !== id)))}>Remove</button>
-            </span>
-          </FormRow>,
-          pickers,
-        ];
+      footer={`When ${usageFallbackPerModel(value) ? "a backend or one of its models" : "a backend"} hits its usage limit, the task continues on the first backup here that isn't at its limit too. ${usageFallbackStatus(value)}`}>
+      {entries.map((entry, index) => {
+        const backup = `${entry.backend} backup ${index + 1}`;
+        const nameID = control(index, "name");
+        const note = usageFallbackLimitNote(value, index);
+        const models = usageFallbackModelOptions(value, index);
+        const efforts = usageFallbackEfforts(value, index);
+        const up = control(index, "up");
+        const down = control(index, "down");
+        const remove = control(index, "remove");
+        const modelID = control(index, "model");
+        const effortID = control(index, "effort");
+        return (
+          <Fragment key={index}>
+            <FormRow label={(
+              <span class="sh-stack" id={nameID}>
+                <span>{index + 1}. {usageFallbackLabel(value, index)}</span>
+                {note ? <span class="sh-footnote sh-warning">{note}</span> : null}
+              </span>
+            )}>
+              <span class="sh-buttons">
+                <button id={up} type="button" class="btn" aria-label={`Try ${backup} earlier`} aria-describedby={nameID}
+                  disabled={saving || index === 0}
+                  onClick={() => onSave(usageFallbackMove(value, index, -1),
+                    { saved: [control(index - 1, "up"), control(index - 1, "down")], failed: [up, down] })}>↑</button>
+                <button id={down} type="button" class="btn" aria-label={`Try ${backup} later`} aria-describedby={nameID}
+                  disabled={saving || index === entries.length - 1}
+                  onClick={() => onSave(usageFallbackMove(value, index, 1),
+                    { saved: [control(index + 1, "down"), control(index + 1, "up")], failed: [down, up] })}>↓</button>
+                <button id={remove} type="button" class="btn" aria-label={`Remove ${backup}`} aria-describedby={nameID} disabled={saving}
+                  onClick={() => onSave(usageFallbackRemove(value, index),
+                    { saved: [remove, control(index - 1, "remove"), addID], failed: [remove] })}>Remove</button>
+              </span>
+            </FormRow>
+            {models ? (
+              <FormRow label={<span class="sh-secondary">Runs</span>}>
+                <span class="sh-buttons">
+                  <select id={modelID} class="select" aria-label={`${backup} model`} aria-describedby={nameID} value={entry.model}
+                    disabled={saving}
+                    onChange={(event) => onSave(usageFallbackModelChange(value, index, event.currentTarget.value, ""),
+                      { saved: [modelID], failed: [modelID] })}>
+                    {models.map((option) => (
+                      <option key={option.value} value={option.value} selected={option.value === entry.model}>{option.label}</option>
+                    ))}
+                  </select>
+                  {efforts.length ? (
+                    <select id={effortID} class="select" aria-label={`${backup} effort`} aria-describedby={nameID} value={entry.effort}
+                      disabled={saving}
+                      onChange={(event) => onSave(usageFallbackModelChange(value, index, entry.model, event.currentTarget.value),
+                        { saved: [effortID], failed: [effortID] })}>
+                      <option value="" selected={entry.effort === ""}>Default effort</option>
+                      {efforts.map((item) => <option key={item} value={item} selected={item === entry.effort}>{item}</option>)}
+                    </select>
+                  ) : null}
+                </span>
+              </FormRow>
+            ) : null}
+          </Fragment>
+        );
       })}
       {addable.length ? (
-        <FormRow label={<label for={pickerID}>Add a backup</label>}>
-          <select id={pickerID} class="select" value="" disabled={saving.value}
+        <FormRow label={<label for={addID}>Add a backup</label>}>
+          <select id={addID} class="select" value="" disabled={saving}
             onChange={(event) => {
               const id = event.currentTarget.value;
-              if (id) void save(usageFallbackChange(value, [...chain, id]));
+              if (id) onSave(usageFallbackAdd(value, id), { saved: [addID, control(entries.length, "remove")], failed: [addID] });
             }}>
-            <option value="" selected>{chain.length ? "Choose a backend…" : "Off — choose a backend…"}</option>
+            <option value="" selected>{entries.length ? "Choose a backend…" : "Off — choose a backend…"}</option>
             {addable.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
           </select>
         </FormRow>
       ) : null}
-      {value.limited.length ? (
-        <FormRow><button type="button" class="btn" disabled={saving.value}
-          onClick={() => void save({ revision: value.revision, resetLimits: true })}>Try every backend again</button></FormRow>
+      {usageFallbackLimits(value).length ? (
+        <FormRow><button type="button" class="btn" disabled={saving}
+          onClick={() => onSave({ revision: value.revision, resetLimits: true }, { saved: [], failed: [] })}>Try every backend again</button></FormRow>
       ) : null}
-      {error.value ? <FormRow><span class="sh-warning selectable" role="alert">{error.value}</span></FormRow> : null}
+      {props.error ? <FormRow><span class="sh-warning selectable" role="alert">{props.error}</span></FormRow> : null}
     </FormSection>
   );
 }

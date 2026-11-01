@@ -1020,36 +1020,80 @@ export interface ModelOption {
   longContextPromptTokens?: Int;
 }
 
-/** GET/POST /api/v1/usage-fallback (`UsageFallbackSnapshot`): the Mac-wide backend a run moves to at a
- * usage limit. POST `{revision, backend}` ("" = off) or `{revision, resetLimits: true}`. */
+/** GET/POST /api/v1/usage-fallback (`UsageFallbackSnapshot`): the Mac-wide backups a run moves through, in
+ * order, at a usage limit. Each is a backend with the model and effort it runs; a backend can be listed
+ * again with another model (the Mac's own backend too, with a model other than its own). */
 export interface UsageFallbackSnapshot {
   /** The chain's first entry, "" when off; all a Mac from before the chain sends. */
   backend: string;
-  /** The whole chain in the order tried; missing from Macs before the chain. */
+  /** The chain's backends in the order tried (a backend twice when it's listed twice); missing from Macs before the chain. */
   backends?: string[];
   /** The chain with each backup's model and effort ("" = default); missing from Macs before backup models. */
   entries?: UsageFallbackEntry[];
+  /** The Mac's own backend. */
   primary: string;
+  /** Backends to add, never the Mac's own (see `primaryChoice`). */
   choices: UsageFallbackChoice[];
-  limited: { backend: string; until: string; untilLabel: string }[];
+  /** The Mac's own backend, to list it again with another of its models; null or missing when it has no model
+   * picker, and missing from Macs before per-model backups. */
+  primaryChoice?: UsageFallbackChoice | null;
+  /** Whole backends at their limit. */
+  limited: UsageFallbackLimited[];
+  /** Model quotas at their limit, whose backend's other models still run; missing from Macs before per-model backups. */
+  limitedModels?: UsageFallbackLimitedModel[];
   revision: string;
 }
 
-export interface UsageFallbackEntry { backend: string; model: string; effort: string }
+/** A backup: "" model or effort = the backend's default. The other fields are read-only (Macs from before
+ * per-model backups don't send them, nor take them back). */
+export interface UsageFallbackEntry {
+  backend: string;
+  model: string;
+  effort: string;
+  /** "Antigravity · Gemini 4 Argon (High) · high", as the run's notes name it. */
+  label?: string;
+  /** ISO-8601, when this backup's backend or model is at its limit. */
+  limitedUntil?: ISO8601String;
+  /** "8:00 PM". */
+  limitedUntilLabel?: string;
+}
+
+/** What POST `entries` sends for each backup. */
+export type UsageFallbackEntryChange = Pick<UsageFallbackEntry, "backend" | "model" | "effort">;
+
+/** Efforts the model accepts: [] when it takes none, missing (or null) when unknown. */
+export interface UsageFallbackModel { id: string; label: string; efforts?: string[] | null }
 
 export interface UsageFallbackChoice {
   id: string;
   label: string;
-  /** Models a backup on this backend can use; missing when it always runs its default. */
-  models?: { id: string; label: string; efforts?: string[] }[];
+  /** Models a backup on this backend can use; missing (or null) when it always runs its default. */
+  models?: UsageFallbackModel[] | null;
   /** Efforts for its default model. */
-  defaultEfforts?: string[];
-  /** The Mac's own model for this backend, which "Default" means. */
-  defaultModel?: string;
+  defaultEfforts?: string[] | null;
+  /** The Mac's own model for this backend, which "Default" means, as the pickers name it. */
+  defaultModel?: string | null;
+  /** The ID of the model "" (default) runs, to tell a backend's entries apart; missing when only the CLI knows it. */
+  defaultModelID?: string | null;
 }
 
+export interface UsageFallbackLimited { backend: string; until: ISO8601String; untilLabel: string }
+
+/** One model quota at its limit (Claude's weekly Opus limit, an Antigravity model group). */
+export interface UsageFallbackLimitedModel {
+  backend: string;
+  /** "opus", "argon", "gemini", "claude-gpt", … */
+  scope: string;
+  /** "Opus models", "Gemini 4 Argon". */
+  label: string;
+  until: ISO8601String;
+  untilLabel: string;
+}
+
+/** POST /api/v1/usage-fallback, always with the revision loaded (stale → 409). `entries` replaces the chain;
+ * `backends` (Macs before backup models) its order, `backend` (Macs before the chain) its first entry. */
 export type UsageFallbackRequest =
-  | { revision: string; entries: UsageFallbackEntry[] }
+  | { revision: string; entries: UsageFallbackEntryChange[] }
   | { revision: string; backends: string[] }
   | { revision: string; backend: string }
   | { revision: string; resetLimits: true };
