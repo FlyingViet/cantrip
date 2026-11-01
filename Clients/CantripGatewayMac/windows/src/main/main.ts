@@ -11,7 +11,7 @@ import { mcpBridgeRequest } from "./mcpBridge";
 import { PairingError, ServerConfig, displayName, parsePairingLink, validateServer, validateToken } from "./pairing";
 import { HostRouter, Route, describeRoute, routesFor } from "./router";
 import { Pairing, SettingsStore } from "./store";
-import { HostRequest, HostResponse, forwardedHeaders, sendOverHTTPS, sendOverPSK } from "./transport";
+import { HostRequest, HostResponse, LocalFileError, forwardedHeaders, sendOverHTTPS, sendOverPSK } from "./transport";
 
 const HOST_SCHEME = "cantrip-host";
 const HOST_ORIGIN = `${HOST_SCHEME}://mac/`;
@@ -85,6 +85,11 @@ function sendRoute(route: Route, request: HostRequest): Promise<HostResponse> {
   return route.kind === "direct"
     ? sendOverPSK(route, pairing.token, request)
     : sendOverHTTPS(route.origin, request, net.fetch.bind(net));
+}
+
+/** Removes a partial download; a file that can't be removed is left rather than failing the save. */
+function discard(file: string): void {
+  try { rmSync(file, { force: true }); } catch { /* left for the user */ }
 }
 
 function downloadRoute(route: Route, request: HostRequest, destination: string): Promise<DownloadResult> {
@@ -556,14 +561,18 @@ function registerIPC(): void {
       const result = await router.perform(true, (route) => downloadRoute(route, hostRequest, partial));
       updateStatus({ connected: true, route: describeRoute(router.current), message: "" });
       if (result.status < 200 || result.status >= 300) {
-        rmSync(partial, { force: true });
+        discard(partial);
         return { status: result.status, error: downloadError(result) };
       }
       renameSync(partial, destination);
       return { ok: true, name: basename(destination) };
     } catch (error) {
-      rmSync(partial, { force: true });
+      discard(partial);
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof LocalFileError) {
+        log(`save failed: ${error.code ?? "file error"}`);
+        return { error: `Couldn't save ${basename(destination)} on this PC. ${message}` };
+      }
       log(`download failed: ${message}`);
       return { status: 502, error: `Couldn't download from your Mac. ${message}` };
     }

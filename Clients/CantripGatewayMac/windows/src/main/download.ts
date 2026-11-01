@@ -1,11 +1,12 @@
 // Home artifact downloads (Save As…): the Mac's response body goes straight to a file on disk over
 // the paired routes, so a long video or a folder zip never sits whole in memory.
-import { once } from "node:events";
 import { createWriteStream } from "node:fs";
 import type * as http from "node:http";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import {
-  DROPPED_RESPONSE_HEADERS, FetchLike, HostRequest, NOT_SENT, PSKOptions, requestOverPSK, responseHeaders, TransportError,
+  DROPPED_RESPONSE_HEADERS, FetchLike, HostRequest, LocalFileError, NOT_SENT, PSKOptions, requestOverPSK, responseHeaders,
+  TransportError,
 } from "./transport";
 
 export interface DownloadResult {
@@ -29,20 +30,28 @@ function encoded(headers: Record<string, string | string[] | undefined>): boolea
   return value !== "identity" && value !== "";
 }
 
-/** Writes `source` to `destination` (owner-only), failing when it ends short of `expected` bytes. */
+/**
+ * Writes `source` to `destination` (owner-only) with backpressure, failing when it ends short of
+ * `expected` bytes. A file that can't be opened or written (no permission, disk full) rejects with
+ * a `LocalFileError`: it isn't the Mac's fault, so no other route is tried.
+ */
 async function writeBody(source: AsyncIterable<Uint8Array>, destination: string, expected: number | null,
   touch: () => void): Promise<number> {
-  const file = createWriteStream(destination, { flags: "w", mode: 0o600 });
   let bytes = 0;
-  try {
-    for await (const chunk of source) {
+  const counter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
       touch();
       bytes += chunk.length;
-      if (!file.write(chunk)) await once(file, "drain");
-    }
-    await new Promise<void>((resolve, reject) => file.end((error?: Error | null) => (error ? reject(error) : resolve())));
+      callback(null, chunk);
+    },
+  });
+  try {
+    await pipeline(source, counter, createWriteStream(destination, { flags: "w", mode: 0o600 }));
   } catch (error) {
-    file.destroy();
+    const fileError = error as NodeJS.ErrnoException;
+    if (fileError.path !== undefined && ["open", "write", "close", "fsync"].includes(fileError.syscall ?? "")) {
+      throw new LocalFileError(fileError.message, fileError.code);
+    }
     throw error;
   }
   if (expected !== null && bytes !== expected) throw new TransportError("The download ended early.", true, "protocol");
@@ -119,7 +128,7 @@ export async function downloadOverHTTPS(
     const bytes = await writeBody(source, destination, expectedLength(raw), touch);
     return { status: response.status, headers, errorBody: Buffer.alloc(0), bytes };
   } catch (error) {
-    if (error instanceof TransportError) throw error;
+    if (error instanceof TransportError || error instanceof LocalFileError) throw error;
     if (controller.signal.aborted) throw new TransportError("The download stalled.", true, "timeout");
     throw new TransportError((error as Error).message, true, "protocol");
   } finally {

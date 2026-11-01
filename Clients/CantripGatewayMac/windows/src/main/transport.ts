@@ -38,6 +38,13 @@ export class TransportError extends Error {
   }
 }
 
+/** Saving on this computer failed (permissions, disk full): not a route failure, never retried elsewhere. */
+export class LocalFileError extends Error {
+  constructor(message: string, readonly code?: string) {
+    super(message);
+  }
+}
+
 export function pskKey(token: string): Buffer {
   return createHash("sha256").update(token, "utf8").digest();
 }
@@ -112,7 +119,7 @@ export function requestOverPSK<T>(
   return new Promise<T>((resolve, reject) => {
     let secure = false;
     let settled = false;
-    const fail = (error: TransportError) => {
+    const fail = (error: TransportError | LocalFileError) => {
       if (settled) return;
       settled = true;
       clearTimeout(connectTimer);
@@ -172,7 +179,8 @@ export function requestOverPSK<T>(
         socket.destroy();
         resolve(value);
       }, (error: Error) => {
-        fail(error instanceof TransportError ? error : new TransportError(error.message, true, "protocol"));
+        fail(error instanceof TransportError || error instanceof LocalFileError
+          ? error : new TransportError(error.message, true, "protocol"));
       });
     });
     outgoing.end(request.body);
