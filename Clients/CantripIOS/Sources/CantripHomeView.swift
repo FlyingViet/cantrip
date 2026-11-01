@@ -1480,8 +1480,12 @@ struct CantripHomeArtifactsView: View {
         #else
         download(artifact, folder: folder, label: label) { file in
             let shown = CantripArtifactExporter.present(file, action: action) { saved in
+                // The share sheet reports back before activities such as Save to Files or AirDrop
+                // have read the file, so only the Files exporter (which has copied it) cleans up now;
+                // shared copies go with the next download's purge of hour-old folders.
+                guard action == .saveCopy else { return }
                 CantripArtifactDownloadFolder.discard(file)
-                if saved, action == .saveCopy { Self.announce("Saved \(file.lastPathComponent).") }
+                if saved { Self.announce("Saved \(file.lastPathComponent).") }
             }
             if !shown { CantripArtifactDownloadFolder.discard(file) }
         }
