@@ -65,7 +65,10 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   pairing token) on your home network or over Tailscale, with no certificates and no open
   port on the PC, and falls back to the Mac's Tailscale HTTPS address.
 - **Several Macs.** Settings keeps a list of Macs, like the Mac app; pick one to connect.
-- **Tools & sign-ins.** Settings lists the MCP servers Cantrip on the Mac shares with every
+- **Pause Agent.** A switch under the connection status in Settings (or Ctrl+Shift+P) stops
+  every request from this PC until you turn it off; chat shows **Agent paused** with **Resume**.
+- **Tools & sign-ins.** **GitHub on your Mac › Sign In…** runs GitHub's device sign-in in Cantrip
+  Home, whose chat shows the code (it used to be in a tab's actions). Then Settings lists the MCP servers Cantrip on the Mac shares with every
   backend, as the Mac's Settings does: each server's state ("Credentials in Mac keychain", when
   a sign-in's token ends), **Connect** (**Retry** after a failed sign-in, with the Mac's reason), **Approve** for
   a sign-in waiting on you, and switches for the server and each backend, saved on the Mac at

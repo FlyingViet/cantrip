@@ -54,6 +54,15 @@ export function runCommand(command: GatewayCommand): void {
     case "builds": nav.sheet.value = { kind: "builds" }; break;
     case "mascot": nav.sheet.value = { kind: "mascot" }; break;
     case "toggleTerminal": if (nav.section.value === "chat" || nav.openTabID.value) nav.terminalOpen.value = !nav.terminalOpen.value; break;
+    case "githubSignIn": {
+      // The Mac's gh CLI signs in with GitHub's device flow; Home's chat shows the code.
+      const home = remote.homeSummary.value;
+      if (!home) { toast("Connect to your Mac to sign in to GitHub."); break; }
+      nav.openChat();
+      void remote.sendMessage(home.id, { text: "/login github", mode: "queue" })
+        .catch((error) => toast(`GitHub sign-in didn't start: ${error.message}`));
+      break;
+    }
   }
 }
 

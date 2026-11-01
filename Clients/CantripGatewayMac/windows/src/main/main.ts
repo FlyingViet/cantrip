@@ -187,7 +187,8 @@ function openExternally(url: string): void {
 /** App commands the Gateway page runs (menu items on macOS, the page's own shortcuts on Windows). */
 export type GatewayCommand =
   | "chat" | "tasks" | "artifacts" | "background" | "newTab" | "newMessage" | "voiceMode"
-  | "togglePause" | "modelSettings" | "startFresh" | "usage" | "memory" | "builds" | "mascot" | "toggleTerminal";
+  | "togglePause" | "modelSettings" | "startFresh" | "usage" | "memory" | "builds" | "mascot" | "toggleTerminal"
+  | "githubSignIn";
 
 function sendCommand(command: GatewayCommand): void {
   if (!mainWindow) return;
@@ -512,6 +513,14 @@ function registerIPC(): void {
   ipcMain.handle("gateway:open-log", (event) => {
     fromSettings(event);
     shell.showItemInFolder(logFile());
+  });
+  // Settings > Tools & sign-ins: GitHub's device sign-in runs in Cantrip Home, in the main window.
+  ipcMain.handle("gateway:github-sign-in", (event) => {
+    fromSettings(event);
+    if (!mainWindow || !pairing) return { error: "Pair a Mac on Connection first." };
+    sendCommand("githubSignIn");
+    mainWindow.focus();
+    return { ok: true };
   });
   // Settings > Tools & sign-ins: only the shared MCP list and its actions, sent with the token here.
   ipcMain.handle("gateway:mcp", async (event, input: unknown) => {

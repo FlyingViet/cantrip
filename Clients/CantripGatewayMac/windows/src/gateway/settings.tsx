@@ -49,6 +49,8 @@ interface SettingsBridge {
   openLog(): Promise<void>;
   /** GET or POST /api/v1/mcp through the main process, which checks the request and adds the token. */
   mcp(request: { method: "GET" } | { method: "POST"; body: Record<string, unknown> }): Promise<{ status: number; body?: unknown; error?: string }>;
+  /** Runs GitHub's device sign-in in Cantrip Home, in the main window. */
+  githubSignIn(): Promise<{ ok?: boolean; error?: string }>;
   openExternal(url: string): void;
   onStatus(callback: (status: Status) => void): void;
   onServers(callback: (state: State) => void): void;
@@ -116,13 +118,55 @@ function SettingsApp(): JSX.Element {
         {tab === "connection"
           ? (state ? <Connection state={state} setState={setState} notice={notice} link={link} clearLink={() => setLink(null)} /> : <Spinner />)
           : tab === "tools"
-            ? (state?.selectedID ? <MCPServerList transport={mcpTransport} /> : <p class="callout muted">Pair a Mac on Connection first.</p>)
+            ? (state?.selectedID ? <><GitHubSignIn /><MCPServerList transport={mcpTransport} /></> : <p class="callout muted">Pair a Mac on Connection first.</p>)
             : <VoiceSettingsPanel />}
       </div>
       <MenuLayer />
       <ConfirmLayer />
       <ToastLayer />
     </div>
+  );
+}
+
+/** Pause Agent (the main window's "hermes.paused", shared through this window's storage). */
+function PauseAgent(): JSX.Element {
+  const read = (): boolean => { try { return JSON.parse(localStorage.getItem("hermes.paused") ?? "false") === true; } catch { return false; } };
+  const [paused, setPaused] = useState(read);
+  useEffect(() => {
+    const follow = (event: StorageEvent) => { if (event.key === "hermes.paused") setPaused(read()); };
+    addEventListener("storage", follow);
+    return () => removeEventListener("storage", follow);
+  }, []);
+  const set = (value: boolean) => {
+    localStorage.setItem("hermes.paused", JSON.stringify(value));
+    setPaused(value);
+  };
+  return (
+    <FormSection footer={paused ? "Paused. This PC sends nothing until you turn this off or click Resume in chat."
+      : "Stops every request from this PC, on every tab, until you turn it off (Ctrl+Shift+P)."}>
+      <FormRow label="Pause Agent">
+        <input type="checkbox" class="switch" checked={paused} aria-label="Pause Agent"
+          onChange={(event) => set((event.target as HTMLInputElement).checked)} />
+      </FormRow>
+    </FormSection>
+  );
+}
+
+/** GitHub on the Mac: Sign In runs GitHub's device sign-in in Cantrip Home, whose chat shows the code. */
+function GitHubSignIn(): JSX.Element {
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <FormSection header="Sign-ins" footer="Signs the Mac's GitHub CLI in to github.com with GitHub's device sign-in, for pushes, pull requests and GitHub Builds in every backend. It runs in Cantrip Home, whose chat shows a code to enter at github.com/login/device; no password goes through Cantrip.">
+      <FormRow label="GitHub on your Mac">
+        <button type="button" class="btn" onClick={() => void settings.githubSignIn().then((reply) => {
+          setError(reply.error ?? null);
+          setMessage(reply.error ? null : "Started in Cantrip Home: its chat shows GitHub's code.");
+        })}>Sign In…</button>
+      </FormRow>
+      {message ? <FormRow><span class="callout muted" role="status">{message}</span></FormRow> : null}
+      {error ? <FormRow><span class="alert-text" role="alert"><Icon name="exclamationmark.triangle" size={14} />{error}</span></FormRow> : null}
+    </FormSection>
   );
 }
 
@@ -150,6 +194,7 @@ function Connection(props: { state: State; setState: (state: State) => void; not
           </span>
         </FormRow>
       </FormSection>
+      <PauseAgent />
       {props.notice ? <p class="callout settings-notice" role="status">{props.notice}</p> : null}
 
       <section class="form-section">

@@ -160,15 +160,7 @@ function commonEntries(): MenuEntry[] {
   const configured = remote.listed.value;
   return [
     { label: "Usage Limits", icon: "gauge.with.dots.needle.33percent", disabled: !configured, onSelect: () => { nav.sheet.value = { kind: "usage" }; } },
-    {
-      label: nav.paused.value ? "Resume Agent" : "Pause Agent", icon: nav.paused.value ? "play.circle" : "pause.circle", shortcut: shortcut("Ctrl+Shift+P"),
-      onSelect: () => { nav.paused.value = !nav.paused.value; },
-    },
-    {
-      label: "Voice Mode", icon: "waveform", shortcut: shortcut("Ctrl+Shift+V"),
-      disabled: nav.paused.value || !configured || !remote.selectedID.value,
-      onSelect: () => { nav.sheet.value = { kind: "voiceMode" }; },
-    },
+    // Pause Agent is in Settings (Ctrl+Shift+P still toggles it); Voice Mode is on the microphone.
   ];
 }
 

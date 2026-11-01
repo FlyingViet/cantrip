@@ -42,6 +42,11 @@ function persisted<T>(key: string, initial: T) {
   effect(() => {
     try { localStorage.setItem(key, JSON.stringify(state.value)); } catch { /* storage full */ }
   });
+  // The Settings window shares this storage (Pause Agent is a switch there): follow its changes.
+  addEventListener("storage", (event) => {
+    if (event.key !== key || event.newValue === null) return;
+    try { state.value = JSON.parse(event.newValue) as T; } catch { /* not ours */ }
+  });
   return state;
 }
 
