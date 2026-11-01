@@ -161,6 +161,7 @@ targets:
       - path: Hermes/Tests/CantripTerminalTests.swift
       - path: Hermes/Tests/CantripRichCardTests.swift
       - path: Hermes/Tests/CantripDeleteMessageTests.swift
+      - path: Hermes/Tests/CantripSkillsTests.swift
     dependencies:
       - target: CantripGatewayMac
     settings:
