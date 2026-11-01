@@ -64,6 +64,13 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 - **Voice.** Dictation from the composer's microphone and Voice Mode (hold the microphone),
   with speech recognition running on this PC after a one-time model download, and replies
   read aloud with a Windows voice.
+- **Location (off by default).** **Settings › Location › Share location with messages** sends this
+  PC's location from the Windows Location service with each message (rounded to about 1 km unless
+  **Precise location** is on, plus its time zone; one reading is reused for up to 15 minutes), so
+  "what's the weather today" or "coffee near me" is answered for where the PC is, and the reply
+  names the place. It goes only to the paired Mac and isn't saved; while it's off, the Mac uses
+  its own location and says so. If Windows blocks it, turn on **Settings › Privacy & security ›
+  Location** for desktop apps.
 - **Encrypted direct connection.** The app talks to the Mac's TLS-PSK listener (the same
   pairing token) on your home network or over Tailscale, with no certificates and no open
   port on the PC, and falls back to the Mac's Tailscale HTTPS address.

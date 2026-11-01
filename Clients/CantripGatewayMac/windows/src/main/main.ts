@@ -720,14 +720,24 @@ if (!app.requestSingleInstanceLock()) {
         return;
       }
       if (permission === "clipboard-read") { callback(topFrame); return; }
+      // Settings › Location (off by default): the main window and Settings only, top frame. On
+      // Windows, Chromium reads the Windows Location service (LocationProviderManager PlatformOnly).
+      if (permission === "geolocation") {
+        callback((topFrame || (contents === settingsWindow?.webContents && details.isMainFrame !== false))
+          && isHostURL(details.requestingUrl ?? ""));
+        return;
+      }
       callback(["notifications", "clipboard-sanitized-write", "fullscreen"].includes(permission));
     });
     hostSession.setPermissionCheckHandler((contents, permission, origin) =>
-      ["media", "clipboard-read", "clipboard-sanitized-write"].includes(permission)
-        ? (contents === mainWindow?.webContents
-          || (permission === "clipboard-sanitized-write" && contents === settingsWindow?.webContents))
+      permission === "geolocation"
+        ? (contents === mainWindow?.webContents || contents === settingsWindow?.webContents)
           && origin.startsWith(HOST_ORIGIN.slice(0, -1))
-        : ["notifications", "fullscreen"].includes(permission));
+        : ["media", "clipboard-read", "clipboard-sanitized-write"].includes(permission)
+          ? (contents === mainWindow?.webContents
+            || (permission === "clipboard-sanitized-write" && contents === settingsWindow?.webContents))
+            && origin.startsWith(HOST_ORIGIN.slice(0, -1))
+          : ["notifications", "fullscreen"].includes(permission));
     registerIPC();
     buildMenu();
 

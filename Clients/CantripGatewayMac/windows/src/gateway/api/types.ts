@@ -919,6 +919,21 @@ export interface SendMessageRequest {
   fileIDs?: UUIDString[];
   /** Answer this pending question in chat instead of sending a new prompt. */
   inputRequestID?: UUIDString;
+  /** Where this PC is (Settings › Location); omitted while sharing is off. */
+  location?: ClientLocation;
+}
+
+/** POST …/messages `location` (sessions with `supportsClientLocation`). */
+export interface ClientLocation {
+  latitude: number;
+  longitude: number;
+  label?: string;
+  accuracy?: number;
+  precise: boolean;
+  timeZone: string;
+  /** Seconds since the fix; the Mac ignores one older than 15 minutes. */
+  age: number;
+  device: string;
 }
 
 /**
