@@ -9,6 +9,8 @@ struct CopilotModelInfo: Codable, Equatable, Identifiable {
     var contextTiers: [String]?
     var defaultContextPromptTokens: Int?
     var longContextPromptTokens: Int?
+    /// Copilot's token prices for the model; nil for other backends and older catalogs.
+    var price: CopilotModelPrice?
 
     var contextLabel: String? {
         contextWindow.map(Self.tokenLabel)
@@ -36,6 +38,27 @@ struct CopilotModelInfo: Codable, Equatable, Identifiable {
         return ((supported ?? fallback) + [selected]).filter {
             !$0.isEmpty && seen.insert($0).inserted
         }
+    }
+}
+
+/// Copilot's AI-credit prices per billing batch of tokens (`billing.tokenPrices`).
+struct CopilotModelPrice: Codable, Equatable {
+    var input: Double?
+    var output: Double?
+    var cachedInput: Double?
+    /// Tokens per billing batch (1M today).
+    var batchSize: Int?
+
+    /// "10 in · 50 out credits per 1M tokens", or "free" when every price is zero.
+    var label: String? {
+        guard input != nil || output != nil else { return nil }
+        if (input ?? 0) == 0, (output ?? 0) == 0 { return "no AI credits" }
+        func number(_ value: Double?) -> String {
+            guard let value else { return "?" }
+            return value.rounded() == value ? String(Int(value)) : String(format: "%g", value)
+        }
+        let per = batchSize.map { " per \(CopilotModelInfo.tokenLabel($0)) tokens" } ?? ""
+        return "\(number(input)) in · \(number(output)) out credits\(per)"
     }
 }
 
@@ -91,6 +114,12 @@ enum CopilotModelFetcher {
 
     static let script = CopilotRuntime.discoveryScript + "\n" + #"""
     const positive = value => Number.isSafeInteger(value) && value > 0 ? value : undefined;
+    const credits = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+    const price = prices => {
+      if (!prices || (credits(prices.inputPrice) === undefined && credits(prices.outputPrice) === undefined)) return undefined;
+      return { input: credits(prices.inputPrice), output: credits(prices.outputPrice),
+               cachedInput: credits(prices.cacheReadPrice ?? prices.cachePrice), batchSize: positive(prices.batchSize) };
+    };
     const strings = value => Array.isArray(value)
       ? [...new Set(value.filter(v => typeof v === 'string' && /^[a-z][a-z0-9_-]{0,39}$/.test(v)))]
       : undefined;
@@ -118,7 +147,8 @@ enum CopilotModelFetcher {
           defaultContextPromptTokens: positive(prices?.maxPromptTokens) ?? positive(prices?.contextMax)
             ?? (hasLongContext || tiers?.includes('long_context') ? undefined : positive(limits.max_prompt_tokens)),
           longContextPromptTokens: positive(prices?.longContext?.maxPromptTokens)
-            ?? positive(prices?.longContext?.contextMax)
+            ?? positive(prices?.longContext?.contextMax),
+          price: price(prices)
         });
       }
       if (!result.length) throw new Error('response');
