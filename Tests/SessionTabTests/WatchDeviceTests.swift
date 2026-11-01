@@ -7,7 +7,111 @@ extension SessionTabTests {
         testDeviceSignatureFormat()
         try testWatchDeviceRegistry()
         try await testWatchDeviceAPI()
-        print("Apple Watch devices: signature format, registry, replay and stale-time checks and the API passed")
+        try await testWatchInternetRoute()
+        print("Apple Watch devices: signature format, registry, replay and stale-time checks, the API and the internet route passed")
+    }
+
+    /// The internet route: a loopback listener that answers only signed voice requests, published
+    /// with Tailscale Funnel (a fake CLI here) only when the setting is switched.
+    @MainActor
+    static func testWatchInternetRoute() async throws {
+        let serveStatus = #"{"TCP":{"10000":{"HTTPS":true}},"Web":{"mac.example.ts.net:10000":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:53421"}}}}}"#
+        precondition(WatchInternetRoute.funnel(in: serveStatus, port: 10_000) == ("http://127.0.0.1:53421", false))
+        precondition(WatchInternetRoute.funnel(in: "not json", port: 10_000) == (nil, false))
+        precondition(WatchInternetRoute.dnsName(in: #"{"Self":{"DNSName":"mac.example.ts.net."}}"#) == "mac.example.ts.net")
+
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("watch-route-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let registry = WatchDeviceRegistry(file: folder.appendingPathComponent("watch-devices.json"))
+        let key = P256.Signing.PrivateKey()
+        let device = try registry.register(name: "Apple Watch", publicKey: key.publicKey.x963Representation.base64EncodedString()).device
+        let server = RemoteControlServer(manager: SessionManager(), watchDevices: registry,
+                                         encodingQueue: DispatchQueue(label: "cantrip.test.watch-route"), requestLog: { _ in })
+        let port = Int.random(in: 20_000...45_000)
+        let token = UUID().uuidString
+        server.start(port: port, token: token)
+        defer { server.stop(); server.stopVoiceListener() }
+        server.voiceTurns.home = { nil }
+
+        final class CLI: @unchecked Sendable {
+            var calls: [[String]] = []
+            var serve = #"{"TCP":{"10000":{"HTTPS":true}},"Web":{"mac.example.ts.net:10000":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:53421"}}}}}"#
+            var funnelWorks = true
+        }
+        let cli = CLI()
+        let route = WatchInternetRoute()
+        route.server = server
+        route.localPort = port + 1
+        route.run = { arguments in
+            cli.calls.append(arguments)
+            switch arguments.first {
+            case "serve": return (true, cli.serve)
+            case "status": return (true, #"{"Self":{"DNSName":"mac.example.ts.net."}}"#)
+            case "funnel": return cli.funnelWorks ? (true, "Available on the internet") : (false, "error: Funnel not available; \"funnel\" node attribute not set.")
+            default: return (false, "unexpected")
+            }
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 3
+        let client = URLSession(configuration: configuration)
+        defer { client.invalidateAndCancel() }
+        func call(_ target: String, voicePort: Bool = true, token useToken: Bool = false, signed: Bool = false) async -> Int? {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(voicePort ? port + 1 : port)\(target)")!)
+            if useToken { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            if signed {
+                for (name, value) in deviceHeaders(method: "GET", target: target, body: Data(), key: key, device: device.id.uuidString) {
+                    request.setValue(value, forHTTPHeaderField: name)
+                }
+            }
+            return try? await (client.data(for: request).1 as? HTTPURLResponse)?.statusCode
+        }
+
+        await route.apply(on: true, switched: true)
+        let funnelCommand = ["funnel", "--bg", "--yes", "--https=10000", "http://127.0.0.1:\(port + 1)"]
+        precondition(cli.calls.contains(funnelCommand), "\(cli.calls)")
+        precondition(route.url == "https://mac.example.ts.net:10000" && server.internetVoiceURL == route.url
+                     && route.status?.contains("replaced the earlier Serve on that port (http://127.0.0.1:53421)") == true,
+                     "\(String(describing: route.status))")
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let voiceConfig = await call("/api/v1/voice/config", signed: true)
+        precondition(voiceConfig == 200, "A signed voice request is answered on the route")
+        let tokenOnRoute = await call("/api/v1/voice/config", token: true)
+        precondition(tokenOnRoute == 401, "The pairing token opens nothing on the internet route")
+        let sessions = await call("/api/v1/sessions", token: true)
+        precondition(sessions == 404, "Nothing but the voice API is served there")
+        let health = await call("/health")
+        precondition(health == 404)
+        let devices = await call("/api/v1/watch/devices", token: true)
+        precondition(devices == 404)
+        let mainConfig = await call("/api/v1/voice/config", voicePort: false, token: true)
+        precondition(mainConfig == 200)
+
+        // At launch with the route on and Funnel already in place, Tailscale isn't touched.
+        cli.calls = []
+        cli.serve = #"{"AllowFunnel":{"mac.example.ts.net:10000":true},"Web":{"mac.example.ts.net:10000":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:\#(port + 1)"}}}}}"#
+        await route.apply(on: true, switched: false)
+        precondition(!cli.calls.contains { $0.first == "funnel" } && route.url != nil, "\(cli.calls)")
+
+        // Remote control off: the listener stops, Funnel config stays.
+        cli.calls = []
+        await route.apply(on: false, switched: false)
+        precondition(cli.calls.isEmpty && route.url == nil && server.internetVoiceURL == nil)
+        let stopped = await call("/api/v1/voice/config", signed: true)
+        precondition(stopped == nil, "The listener is gone")
+
+        // Funnel refused (not allowed in the tailnet's policy): said in words, nothing listening.
+        cli.serve = "{}"
+        cli.funnelWorks = false
+        await route.apply(on: true, switched: true)
+        precondition(route.url == nil && route.status?.contains("Funnel must be allowed") == true, "\(String(describing: route.status))")
+        let refused = await call("/api/v1/voice/config", signed: true)
+        precondition(refused == nil)
+
+        // Switched off: Funnel is turned off.
+        cli.calls = []
+        cli.funnelWorks = true
+        await route.apply(on: false, switched: true)
+        precondition(cli.calls == [["funnel", "--yes", "--https=10000", "off"]] && route.status?.hasPrefix("Off.") == true)
     }
 
     static func randomNonce() -> String {

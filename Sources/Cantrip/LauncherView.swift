@@ -4401,6 +4401,9 @@ struct SettingsView: View {
                     .font(.caption2)
                     .foregroundStyle(settings.remoteLANStatus?.fellBack == true ? Color.orange : Color.secondary)
                     .textSelection(.enabled)
+                if settings.cantripHomeEnabled {
+                    AppleWatchSettingsView()
+                }
             }
             if let error = settings.remoteControlError {
                 Text(error)
