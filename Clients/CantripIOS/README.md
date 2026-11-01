@@ -627,6 +627,16 @@ The camera is fitted so every pin and its label sit in the area the list
 doesn't cover. The Mac leaves out link cards for links the map already covers
 (a place's website, or a link named for a place).
 
+When a reply asks about the weather, it ends with a `weather` block naming the
+place, and the message carries a `weatherCard` the Mac built from Open-Meteo
+(never numbers the model wrote): the place and whose location it is ("Your
+iPhone's location", "The Mac's location"), now, today's high and low, the next
+12 hours and 10 days, the update time and Open-Meteo's attribution. If the Mac
+can't get a forecast the card says **Forecast unavailable** and why. The card
+uses the map card's container (680 pt wide at most, dark), every hour and day has
+a VoiceOver label, and a malformed card never stops the message from showing.
+Link cards for weather sites are left out under it.
+
 ### Live agent browser preview
 
 When the Mac has an agent-only Chrome driven by an MCP server named `browser`,

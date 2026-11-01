@@ -632,6 +632,8 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var linkPreviews: [CantripLinkPreview]? = nil
     /// Interactive map card with place pins resolved on the Mac; absent when there are no places.
     var placeCard: CantripPlaceCard? = nil
+    /// Forecast card for the reply's `weather` block (Open-Meteo, fetched on the Mac).
+    var weatherCard: CantripWeatherCard? = nil
 
     var presentedText: String { displayText ?? text }
     /// Result cards Cantrip posts into Home's chat; never a model reply.
