@@ -160,6 +160,7 @@ targets:
       - path: Hermes/Tests/CantripTabMentionsTests.swift
       - path: Hermes/Tests/CantripTerminalTests.swift
       - path: Hermes/Tests/CantripRichCardTests.swift
+      - path: Hermes/Tests/CantripDeleteMessageTests.swift
     dependencies:
       - target: CantripGatewayMac
     settings:
