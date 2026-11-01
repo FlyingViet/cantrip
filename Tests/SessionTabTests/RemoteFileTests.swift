@@ -194,7 +194,7 @@ extension SessionTabTests {
                 try? fm.removeItem(at: root.appendingPathComponent(sessionID.uuidString))
             }
         }
-        let server = RemoteControlServer(manager: manager), port = Int.random(in: 49152...65535)
+        let server = RemoteControlServer(manager: manager), port = Int.random(in: 20_000...45_000)
         let token = UUID().uuidString
         server.start(port: port, token: token)
         defer { server.stop() }
@@ -273,7 +273,7 @@ extension SessionTabTests {
     @MainActor
     private static func testHandoffCardsOnWeb() async throws {
         let manager = SessionManager()
-        let server = RemoteControlServer(manager: manager), port = Int.random(in: 49152...65535)
+        let server = RemoteControlServer(manager: manager), port = Int.random(in: 20_000...45_000)
         server.start(port: port, token: UUID().uuidString)
         defer { server.stop() }
         let client = URLSession(configuration: .ephemeral)

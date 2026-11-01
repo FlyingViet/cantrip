@@ -25,7 +25,7 @@ extension SessionTabTests {
         let logs = RequestLogCapture()
         let server = RemoteControlServer(manager: manager, encodingQueue: encoder,
                                          requestLog: logs.append)
-        let port = Int.random(in: 49152...65535)
+        let port = Int.random(in: 20_000...45_000)
         let token = UUID().uuidString
         server.start(port: port, token: token)
         defer { server.stop() }

@@ -179,7 +179,7 @@ extension SessionTabTests {
         let manager = SessionManager()
         let server = RemoteControlServer(manager: manager)
         defer { withExtendedLifetime(manager) {} }
-        let port = Int.random(in: 49152...65535), token = UUID().uuidString
+        let port = Int.random(in: 20_000...45_000), token = UUID().uuidString
         server.start(port: port, token: token)
         defer { server.stop() }
         try await Task.sleep(for: .milliseconds(250))

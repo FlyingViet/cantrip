@@ -154,7 +154,7 @@ extension SessionTabTests {
         let manager = SessionManager(), serverID = UUID()
         manager.active.isStreaming = true
         defer { manager.active.isStreaming = false }
-        let server = RemoteControlServer(manager: manager), port = Int.random(in: 49152...65535)
+        let server = RemoteControlServer(manager: manager), port = Int.random(in: 20_000...45_000)
         let token = UUID().uuidString
         server.start(port: port, token: token)
         defer { server.stop() }
