@@ -2583,7 +2583,7 @@ struct ChatView: View {
         })
     }
 
-    /// The rail's model settings (model, effort and the Mac's usage limit fallback) for this chat.
+    /// The rail's model settings (model and effort) for this chat.
     private var duoModelSettingsButton: AnyView? {
         guard vm.activeLane.usesCantripRemote else { return nil }
         let session = remote.selectedSession
@@ -3348,7 +3348,7 @@ struct CantripRailModelSettingsButton: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel(isLocalPrivate ? "Private Local Settings" : "Model Settings")
-        .accessibilityHint(isLocalPrivate ? "" : "Model, effort and the Mac's usage limit fallback")
+        .accessibilityHint(isLocalPrivate ? "" : "Model and effort for this tab")
         .accessibilityIdentifier("duo.rail.modelSettings")
     }
 }
