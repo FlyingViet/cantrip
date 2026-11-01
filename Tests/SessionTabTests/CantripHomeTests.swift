@@ -561,6 +561,9 @@ extension SessionTabTests {
         let artifactData = try await call("/api/v1/home/artifacts/\(artifact.id.uuidString)")
         precondition(Data(base64Encoded: artifactData.1["data"] as? String ?? "")
                      == imageData)
+        try await testCantripHomeArtifactDownloads(
+            store: store, image: artifact, imageData: imageData, port: port, token: token, client: client
+        )
         let thumbnailRoute = "/api/v1/home/artifacts/\(artifact.id.uuidString)/thumbnail"
         let thumbnail = try await call(thumbnailRoute)
         let thumbnailJPEG = Data(base64Encoded: thumbnail.1["data"] as? String ?? "") ?? Data()

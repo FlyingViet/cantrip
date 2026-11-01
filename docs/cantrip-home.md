@@ -271,6 +271,34 @@ artifact folder, every folder opened without following symlinks, 20 MB and
 limit. Thumbnails are cached in `~/.cache/Cantrip/home/thumbnails/` until the
 file changes or is deleted.
 
+### Saving artifacts on a client
+
+Every client can save the original file, not just preview it: **Save to Files…**
+and **Share…** on iPhone (and the Duo, folded or open), **Save As…** on Cantrip
+Gateway for Mac and Windows (a Save dialog opened in Downloads), and **Download**
+in the browser and Mac Remote. An artifact in a folder (for example
+`ddia-knowledge-graph/` with its graph, data and playbook) also offers the whole
+folder as one zip.
+
+Files travel only over the paired connection (Tailscale HTTPS or the TLS-PSK
+local network) with the pairing token; there are no public or shareable links.
+The Mac serves:
+
+- `GET /api/v1/home/artifacts/{id}/file`: the original bytes as an attachment,
+  streamed from disk (never read whole into memory), with `Content-Length` and
+  the original file name in `Content-Disposition`.
+- `GET /api/v1/home/artifacts/{id}/folder`: an uncompressed zip of every
+  registered artifact in that artifact's top-level folder (subfolders included),
+  named after the folder. Unregistered files in the folder are left out; at most
+  1,000 artifacts and 2 GB. 404 for an artifact at the top level.
+
+Only registered artifact IDs are accepted, never paths. Each file is opened
+without following a final symlink and checked again by its open descriptor's
+real path, so a file swapped for a link after registration can't send anything
+from outside `~/.cache/Cantrip/home/artifacts/`. The artifact list reports
+`supportsDownloads: true`; clients fall back to the older single-file read on
+Macs without it.
+
 ## Builds
 
 Cantrip Agent's **Builds** tab lists the over-the-air install page in

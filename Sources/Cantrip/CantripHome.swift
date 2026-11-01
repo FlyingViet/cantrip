@@ -451,6 +451,8 @@ private struct CantripHomeTaskEditEnvelope: Decodable {
 struct CantripHomeArtifactsSnapshot: Encodable {
     let artifacts: [CantripHomeArtifact]
     let revision: String
+    /// `GET …/artifacts/<id>/file` streams the original file; `…/folder` zips its top-level folder.
+    var supportsDownloads = true
 }
 
 /// One scheduled-task or incident run: in its own hidden session, or handed to a project tab.

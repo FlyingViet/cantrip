@@ -158,6 +158,55 @@ final class RemoteRequestConnection {
         }
     }
 
+    /// Sends `head`, then `body` one piece at a time: each piece waits until the previous one
+    /// left, and the send deadline applies per piece, so only a stalled client (not a long
+    /// download) times out. Pieces are read off the listener queue.
+    func sendStream(head: Data, body: RemoteStreamBody, status: Int, pieceBytes: Int = 256 * 1024) {
+        trace.response(status: status, bytes: body.length, wireBytes: head.count + body.length)
+        trace.enter(.sendWait)
+        queue.async { [self] in
+            guard !self.finished else { return }
+            self.trace.enter(.send)
+            self.watchdog?.cancel()
+            self.watchdog = nil
+            self.sendPiece(head, then: body, pieceBytes: pieceBytes)
+        }
+    }
+
+    private static let streamReadQueue = DispatchQueue(
+        label: "cantrip.remote.stream-read", qos: .userInitiated, attributes: .concurrent
+    )
+
+    private func sendPiece(_ piece: Data, then body: RemoteStreamBody, pieceBytes: Int) {
+        sendDeadline?.cancel()
+        let deadline = DispatchWorkItem { [weak self] in
+            self?.finish("send_timeout")
+        }
+        sendDeadline = deadline
+        queue.asyncAfter(deadline: .now() + sendTimeout, execute: deadline)
+        socket.send(content: piece, completion: .contentProcessed { [self] error in
+            if let error {
+                self.finish("send_error_\(RemoteRequestTrace.errorCode(error))")
+                return
+            }
+            guard !self.finished else { return }
+            Self.streamReadQueue.async { [self] in
+                let next = Result { try body.next(maxBytes: pieceBytes) }
+                self.queue.async { [self] in
+                    guard !self.finished else { return }
+                    switch next {
+                    case .success(let data?) where !data.isEmpty:
+                        self.sendPiece(data, then: body, pieceBytes: pieceBytes)
+                    case .success:
+                        self.finish("sent")
+                    case .failure:
+                        self.finish("stream_read_error")
+                    }
+                }
+            }
+        })
+    }
+
     private func finish(_ outcome: String) {
         guard !finished else { return }
         finished = true
