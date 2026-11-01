@@ -67,7 +67,7 @@ working or deliberately unsupported with a clear message.
 | Earlier turns | Replay the turns the backend's own session hasn't seen | backend | bb39eeb |
 | Stop | `cancel()`; `interruptTurn()` when the session survives | backend | b74702b |
 | Live steering | `injectMidTurn`, `sendNowMidTurn`, `supportsMidTurnInjection`, `canSteerTurns` | backend | 553237b, a8df390 |
-| Action policy | Every tool call checked; asks through `.inputRequired`; read-only seats only look | `CantripHomeGuardrails.swift` | `AntigravityHook.swift`, Claude's `PreToolUse` hook |
+| Agent policy | Every tool call, in every tab, sent to `AgentPolicyGate.decide` before it runs, also under Act on my behalf; denials add a failed step (`AgentPolicyGate.denialActivity`); asks through `.inputRequired`; read-only seats only look | `AgentPolicy.swift`, `AgentPolicyGate.swift`, `AgentPolicySetup.swift` | Claude's `PreToolUse` hook, Copilot's `onPermissionRequest`, Codex `untrusted` approvals, `AntigravityHook.swift` |
 | Cantrip Home | `CantripHomeGuardedBackend`, `CantripHomeApproval.chosen(for:)` | `CantripHomeGuardrails.swift` | fd7faaa, d774fe6 |
 | Per-tab model and effort | Model catalog, `modelOverride`, `effortOverride` | `ClaudeModels.swift`, `SessionTabMetadata.swift`, `SessionModelSettings*.swift` | c480a60, d1549c6, a1e4a83 |
 | Home task models | Model list for task settings | `CantripHomeTaskModels.swift` | 5062f5b |
@@ -98,7 +98,7 @@ Codex (0.166.0), as wired in `CodexBackend` and `CodexAppServer`:
 | Token usage and context | `thread/tokenUsage/updated` `last` per model call, summed per turn; `modelContextWindow` |
 | Resume and earlier turns | Thread ID under the tab's `persistKey` plus its folder; turns the thread hasn't seen are replayed (`.seenTurns`) |
 | Stop and live steering | `turn/interrupt`; `turn/steer` |
-| Action policy and Home | Every approval request goes through `CodexBackend.decide`: read-only seats (Codex `read-only` sandbox) allow plain reads only, tabs ask (plain reads allowed), Home and child tabs use `CantripHomeActionPolicy` and child-tab resource turns, full access only with Act on my behalf or Settings > Codex > Permissions. A non-read command that ran without a request stops a Home run |
+| Agent policy and Home | Every approval request goes through `CodexBackend.decide` and `AgentPolicyGate`: read-only seats (Codex `read-only` sandbox) allow plain reads only; other tabs get the agent policy, then Home's rules for Home and child tabs, then child-tab resource turns. Act on my behalf or Settings > Codex > Permissions keeps `danger-full-access` but switches approvals to `untrusted`, so every command, edit and MCP call still reaches Cantrip (`never` only when the policy is turned off). Policy deny rules also go into `~/.codex/rules/cantrip.rules`. A non-read command that ran without a request stops a Home run |
 | Per-tab, Home task and backup models | `model/list` through a short-lived app server (`CodexModelFetcher`), `codexModelSettings`, `turn/start` `model`/`effort` |
 | Usage limits and screens | `codexErrorInfo` → `.usageLimit` (`codex/usageLimitExceeded`), reset from the last `account/rateLimits/updated`; `account/rateLimits/read` → `CodexUsage`, `copilotUsage.codex` |
 | Shared MCP servers | `MCPBackendConfig.codexArgs` `-c` overrides on the app server; tool calls come back as `mcpServer/elicitation/request` |
@@ -135,9 +135,17 @@ grep -rn "default:" Sources/Cantrip/ClaudeModels.swift Sources/Cantrip/SessionMo
    `SessionTabMetadata`, labels in `SessionModelSettingsView`, `CantripHomeTaskModels`, and
    inheritance in `ChildTabCoordinator`. Refresh at launch in `AppDelegate` when installed.
 5. **Policy.** Add the backend to `CantripHomeApproval.chosen(for:)`, plus a
-   `CantripHomeActionRequest` initializer that converts its tool calls. If tools can't be checked
-   one at a time, Home must not run unattended on it (see `BackendFallback.target`, which keeps
-   Home runs off Copilot Remote).
+   `CantripHomeActionRequest` initializer (`AgentActionRequest.swift`) that converts its tool
+   calls, including the paths reads and writes touch and the MCP server and tool. Send every
+   tool call, in every tab, through `AgentPolicyGate.decide` and handle its four outcomes:
+   `.deny` (refuse with the reason and emit `AgentPolicyGate.denialActivity`), `.ask` (Cantrip's
+   approval card; remember the `scope` for the turn), `.allow` (run without the CLI's own
+   prompt) and `.prompt` (the CLI's usual approval, as before). Act on my behalf must not skip
+   the check: launch the CLI so tool calls still reach Cantrip, and let the gate approve. Map
+   the policy's deny rules into the CLI's own configuration in `AgentPolicyBackstop.apply`
+   (backed up, marked, and replaced on change) and its existing allow rules into
+   `AgentPolicyImport`. If tools can't be checked one at a time, Home must not run unattended on
+   it (see `BackendFallback.target`, which keeps Home runs off Copilot Remote).
 6. **Limits and usage.** Emit `.usageLimit` from the CLI's structured error, and add phrases to
    `UsageLimit.phrases` only as a last resort. Add a usage reader and state to
    `UsageTracker`/`CopilotUsage`, and a view in `CopilotUsageView` shown from `LauncherView`.
@@ -250,8 +258,15 @@ live run.
 - Set `canCancel` only when the backend can stop that one agent (c70aaa8).
 
 **Permissions** (never weaker than Cantrip's policy; see CLAUDE.md)
-- With **Act on my behalf** off, every tool call is checked before it runs. A permission
-  request the current policy can't approve is denied, not left waiting.
+- Every tool call in every tab is checked against the agent policy before it runs, whether or
+  not **Act on my behalf** is on. Act on my behalf only decides what happens to calls no rule
+  covers. A backup backend must never be able to do more than the main one (00a8443).
+- With **Act on my behalf** off, a call the policy doesn't decide gets the CLI's usual
+  approval. A permission request the current policy can't approve is denied, not left waiting.
+- Keep the per-call check cheap: the policy file is parsed once per change and a shell line is
+  judged in under a millisecond (`make test-agent-policy` measures it).
+- A hook Cantrip installs for Terminal use must fail open (Copilot treats a crashing hook as a
+  denial) and step aside for runs Cantrip starts (`CANTRIP_POLICY_HOST`, ccd409f).
 - Read-only council seats run the backend's safest native mode, and Cantrip still denies
   anything that isn't a read, even if the server would allow it (1c1b362, ec439d1).
 - Cantrip Home's rules are enforced on the host for every backend, and follow the approval
@@ -366,7 +381,9 @@ Add unit tests next to the existing ones in `Tests/SessionTabTests/` (`ClaudeBac
 
 - stream parsing from saved fixtures: text, reasoning, tools, results, errors and cumulative usage
 - argument building for each permission mode, model, effort and resume case
-- tool-call policy: read-only, ask, Home attended and unattended, and an unchecked tool
+- tool-call policy: read-only, ask, Home attended and unattended, an unchecked tool, and the
+  agent policy under Act on my behalf (a deny rule refuses with a visible step, an ask rule
+  shows one card, an allow rule skips the CLI's prompt; see `AgentPolicyGateTests`)
 - turn lifecycle: one terminal event, late events after cancel, interrupt, heartbeat
 - folder change and reset
 - model list parsing and labels
@@ -383,7 +400,9 @@ Then do a live check with the real, signed-in CLI. Record the CLI version and th
    survives Stop.
 2. A tab that ran on another backend, switched to this one, still knows the earlier turns.
 3. A tool call with actions off (Cantrip asks), one denied (shown as failed), and one with
-   actions on.
+   actions on. Then `CANTRIP_POLICY_LIVE_TEST=1` (add the backend to `AgentPolicyLiveTests`):
+   with Act on my behalf on, a delete outside the tab's folder is refused, an ordinary command
+   runs without a prompt, and an ask rule shows one card.
 4. A read-only council seat that tries to edit (refused).
 5. A tab whose folder changes, then runs `pwd`.
 6. A command that runs over 15 minutes without output (not killed by the watchdog).
@@ -415,7 +434,15 @@ table when you do.
 | Antigravity | `ReplyVisibility`, `SimulatorPool` and `watch-`/`side-` guidance; per-tab MCP switches for local servers (agy reads MCP servers only from `~/.gemini/config/mcp_config.json`, which Cantrip writes); `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
 | Claude Code | Stopping one foreground Task subagent (the CLI can stop only background agents) |
 | Codex | `watch-`/`side-` background agents and wake-up turns (Codex's agents end with the turn); stopping one subagent (no API); Auto routing, queue plans, Done-when checks and memory upkeep (no tool-free one-shot mode wired); idle process release (each tab's app server stays up); shared servers that sign in through Cantrip's relay not yet run live (local `-c` servers were); Windows still runs `codex exec` |
-| Windows (all) | Structured events, conversation resume and usage fallback (see PARITY.md) |
+| Agent policy | Reads that Codex runs on its own under `untrusted` (`cat`, `ls`) never reach Cantrip, so read and `any` path rules can't stop them on Codex; deletes done inside an interpreter (`python3 -c 'os.remove(…)'`) aren't matched by `deletesOutside`; a delete whose target is a variable (`rm -rf "$OUT"`) can't be checked; Claude Code and Codex in Terminal get only the deny rules they can express (plain command prefixes, whole MCP servers, `~` paths) |
+| Windows (all) | Structured events, conversation resume, usage fallback and the agent policy (see PARITY.md) |
+
+Last live check of the agent policy: 2026-10-31, `claude` 2.1.312, Copilot CLI 1.0.105,
+`codex-cli` 0.166.0 and `agy` 1.4.12 (Gemini 3.8 Flash, as the automatic pick was at its weekly
+quota), through each backend class with Act on my behalf on (`CANTRIP_POLICY_LIVE_TEST=1`). On
+every backend `rm` of a file outside the tab's folder was refused with a "Blocked by Cantrip policy
+(deletes-outside-workspace)" step, `touch inside.txt` ran with no card, and the ask rule showed
+exactly one card and ran after approval. Not yet run in the restarted app or from the clients.
 
 Last live check of Codex: 2026-10-31, `codex-cli 0.166.0`, ChatGPT free plan, through
 `CodexBackend` (`CANTRIP_CODEX_LIVE_TEST=1`). Passed: items 1 (three turns, restart, Stop), 2,

@@ -22,6 +22,7 @@ target or certify separately installed backend runtimes on either platform.
 | Math and unit conversions | Implemented | Local parser; no model round-trip. |
 | Raw shell | Partial | Explicit `!` PowerShell commands work; persistent per-session ConPTY terminal remains. |
 | Claude / Copilot / Codex / Antigravity | Partial | Detection, safe/action modes, model, effort, context, cancellation, and raw streaming work. Windows still runs `codex exec` with a fixed model list; macOS runs `codex app-server` with per-call approvals, resume, steering and `model/list`. Antigravity runs only with actions on: headless `agy` edits workspace files without asking, and Windows has no tool-call hook yet. Structured events and conversation resume remain. |
+| Agent policy | Missing | macOS checks every tool call in every tab against one policy file (allow, ask and deny rules on commands, paths, MCP tools; per-project overrides), imports each CLI's rules, writes deny rules back into the CLIs, and serves `/api/v1/policy`. Windows keeps its per-backend safe/action modes. |
 | Settings | Implemented for current features | Per-backend configuration, opacity, launch at login, action policy, shortcut status. |
 | In-app updates | Implemented; release bootstrap required | Checks the newest `windows-v*` GitHub release, download progress, restart-to-install, tray controls, and release workflow. A first release (and signing) must be published. |
 | File search | Missing | Use Windows Search API, with optional Everything integration. |
