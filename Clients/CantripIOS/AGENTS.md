@@ -72,7 +72,7 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
   the bottom of the right-side rail (the system's tab bar in the vertical bar, or
   `CantripDuoRailSections` in the app rail upright), never a bottom bar. Upright, the app rail keeps its
   actions low, just above the sections (or at the bottom in a tab), within thumb reach; other iPhones use
-  `CantripHomeCompactTabBar`. Home puts only Tabs and the menu at the top of the vertical bar when
+  `CantripHomeCompactTabBar`. Home puts Tabs, Settings and the menu at the top of the vertical bar when
   folded (`sharesVerticalBarWithTabBar`); unfolded, the toggle replaces Tabs. A project tab on the Duo
   (folded or not) has no "‹ Home": the left-edge swipe and the Tabs button (folded; unfolded, the
   sidebar toggle) bring out the tab picker, with Home pinned first (`usesDuoTabPicker`). Other

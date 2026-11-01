@@ -174,8 +174,8 @@ struct ChatToolbarLayout: Hashable {
 struct ChatNavigationActions<Leading: View, Settings: View, Trailing: View>: ViewModifier {
     @Environment(\.chatDisplayTraits) private var displayTraits
     var showsHorizontalBar = false
-    /// Cantrip Home, whose tab bar takes the bottom of the vertical bar: only the leading and
-    /// trailing actions, both at the top, as in its iPhone header (the menu has settings).
+    /// Cantrip Home, whose tab bar takes the bottom of the vertical bar: its leading action, settings
+    /// and its trailing action, all at the top.
     var sharesVerticalBarWithTabBar = false
     /// The unfolded iPhone Duo's rail: a sidebar toggle at the top (the tab's Model Settings is
     /// the first item in its menu).
@@ -209,11 +209,8 @@ struct ChatNavigationActions<Leading: View, Settings: View, Trailing: View>: Vie
                     ToolbarItem(placement: .topBarTrailing) { leading() }
                         .axisBehavior(.verticalPreferred)
                 }
-                if displayTraits.isUnfoldedDuo {
-                    // Home's iPhone header keeps settings in its menu; the unfolded rail has room.
-                    ToolbarItem(placement: .topBarTrailing) { settings() }
-                        .axisBehavior(.verticalPreferred)
-                }
+                ToolbarItem(placement: .topBarTrailing) { settings() }
+                    .axisBehavior(.verticalPreferred)
                 ToolbarItem(placement: .topBarTrailing) { trailing() }
                     .axisBehavior(.verticalPreferred)
             } else {
