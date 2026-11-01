@@ -236,6 +236,8 @@ Thread.sleep(forTimeInterval: 1.1)
 try! Data("{ not json".utf8).write(to: store.url)
 check(store.current().revision == 2 && store.loadError != nil, "a broken file keeps the last good policy")
 
+testImportAndBackstops()
+
 // Speed: every tool call is checked, so evaluation must stay cheap.
 let started = Date()
 for index in 0..<2_000 {

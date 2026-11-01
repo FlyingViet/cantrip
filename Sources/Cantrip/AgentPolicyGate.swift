@@ -172,3 +172,41 @@ enum AgentPolicyPrivacyScan {
         return result
     }
 }
+
+/// Startup and saves: import each CLI's rules once, report overlaps, and write the deny rules
+/// back into each CLI's own configuration.
+enum AgentPolicySetup {
+    nonisolated(unsafe) static var files = AgentPolicyFiles.current
+    private static let lock = NSLock()
+
+    static func run(store: AgentPolicyStore = AgentPolicyGate.store) {
+        lock.withLock {
+            var document = store.current()
+            let revision = store.exists ? document.revision : nil
+            let before = document
+            AgentPolicyImport.importMissing(into: &document, files: files).forEach(Log.write)
+            document.conflicts = AgentPolicyImport.conflicts(document)
+            AgentPolicyBackstop.apply(&document, files: files, executable: Bundle.main.executablePath).forEach(Log.write)
+            guard document != before || !store.exists else { return }
+            do { try store.save(document, basedOn: revision) } catch { Log.write("policy: couldn't save after setup: \(error.localizedDescription)") }
+        }
+    }
+
+    /// Saves an edited policy and brings each CLI's deny rules in line with it.
+    @discardableResult
+    static func save(_ document: AgentPolicyDocument, basedOn revision: Int?,
+                     store: AgentPolicyStore = AgentPolicyGate.store) throws -> AgentPolicyDocument {
+        try lock.withLock {
+            var updated = document
+            updated.conflicts = AgentPolicyImport.conflicts(updated)
+            // Imports and backstop records belong to Cantrip, not to whoever edited the rules.
+            let current = store.current()
+            updated.imports = current.imports
+            updated.backstops = current.backstops
+            let saved = try store.save(updated, basedOn: revision)
+            var synced = saved
+            AgentPolicyBackstop.apply(&synced, files: files, executable: Bundle.main.executablePath).forEach(Log.write)
+            return synced.backstops == saved.backstops ? saved : try store.save(synced, basedOn: saved.revision)
+        }
+    }
+}
