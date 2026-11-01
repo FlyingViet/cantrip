@@ -45,6 +45,73 @@ extension SessionTabTests {
         return try await body()
     }
 
+    /// Paired clients read the policy and the browser Remote edits it through /api/v1/policy.
+    @MainActor
+    static func testAgentPolicyRemote() async throws {
+        let store = AgentPolicyGate.store
+        let previous = try? Data(contentsOf: store.url)
+        defer {
+            if let previous { try? previous.write(to: store.url) } else { try? FileManager.default.removeItem(at: store.url) }
+            _ = store.current()
+        }
+        try? FileManager.default.removeItem(at: store.url)
+        let manager = SessionManager()
+        let server = RemoteControlServer(manager: manager)
+        defer { withExtendedLifetime(manager) {} }
+        let port = Int.random(in: 20_000...45_000), token = UUID().uuidString
+        server.start(port: port, token: token)
+        defer { server.stop() }
+        try await Task.sleep(for: .milliseconds(250))
+        let client = URLSession(configuration: .ephemeral)
+        defer { client.invalidateAndCancel() }
+        func call(_ method: String = "GET", _ body: [String: Any]? = nil, authorized: Bool = true) async throws -> (Int, [String: Any]) {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/v1/policy")!)
+            request.httpMethod = method
+            if authorized { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
+            let (data, response) = try await client.data(for: request)
+            return ((response as! HTTPURLResponse).statusCode,
+                    ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:])
+        }
+        func policy(_ response: (Int, [String: Any])) -> [String: Any] { response.1["policy"] as? [String: Any] ?? [:] }
+        func ruleIDs(_ response: (Int, [String: Any])) -> [String] {
+            (policy(response)["rules"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+        }
+
+        let anonymous = try await call(authorized: false)
+        precondition(anonymous.0 == 401, "Pairing is required")
+        let loaded = try await call()
+        precondition(loaded.0 == 200 && ruleIDs(loaded) == AgentPolicyRule.starter.map(\.id)
+                     && (loaded.1["summaries"] as? [String: String])?["deletes-outside-workspace"]?.contains("deletes outside") == true
+                     && (loaded.1["namedCommands"] as? [String]) == ["@cantrip-restart"],
+                     "GET returns the starter rules before anything is saved: \(loaded)")
+        let added = try await call("POST", ["revision": 0, "rule": [
+            "id": "no-fly-deploy", "effect": "deny", "reason": "Deploys go through CI.", "commands": ["fly deploy"]]])
+        let revision = policy(added)["revision"] as? Int ?? -1
+        precondition(added.0 == 200 && ruleIDs(added).last == "no-fly-deploy" && revision >= 1, "Adding a rule saves it: \(added)")
+        precondition(store.current().evaluate(.shell("fly deploy"), context: .current(workdir: NSTemporaryDirectory())).ruleID == "no-fly-deploy",
+                     "The saved rule applies at once")
+        let stale = try await call("POST", ["revision": 0, "enabled": false])
+        precondition(stale.0 == 409, "A stale revision is refused")
+        let invalid = try await call("POST", ["revision": revision, "rule": ["id": "empty", "effect": "deny", "reason": "r"]])
+        precondition(invalid.0 == 400 && (invalid.1["error"] as? String ?? "").contains("matches nothing"), "An invalid rule is refused: \(invalid)")
+        let toggled = try await call("POST", ["revision": revision, "setRuleEnabled": ["id": "no-fly-deploy", "enabled": false]])
+        let toggledRule = (policy(toggled)["rules"] as? [[String: Any]] ?? []).first { $0["id"] as? String == "no-fly-deploy" }
+        precondition(toggled.0 == 200 && toggledRule?["enabled"] as? Bool == false, "A rule turns off")
+        let removed = try await call("POST", ["revision": policy(toggled)["revision"] as? Int ?? 0, "removeRule": "no-fly-deploy"])
+        precondition(removed.0 == 200 && !ruleIDs(removed).contains("no-fly-deploy"), "A rule is removed")
+        let missing = try await call("POST", ["revision": policy(removed)["revision"] as? Int ?? 0, "removeRule": "nothing"])
+        precondition(missing.0 == 404, "Removing an unknown rule says so")
+        var replacement = policy(removed)
+        replacement["enabled"] = false
+        replacement["privateTerms"] = ["Fixture Person"]
+        let replaced = try await call("POST", ["revision": policy(removed)["revision"] as? Int ?? 0, "policy": replacement])
+        precondition(replaced.0 == 200 && policy(replaced)["enabled"] as? Bool == false
+                     && policy(replaced)["privateTerms"] as? [String] == ["Fixture Person"] && !AgentPolicyGate.enforcesEverywhere,
+                     "The whole policy can be replaced: \(replaced)")
+        print("Agent policy Remote API: read, add, turn off, remove, replace, conflicts and pairing passed")
+    }
+
     /// One policy for every backend: the gate's decisions, Home's stricter layer, the push
     /// privacy scan, and a Claude tab that acts on the user's behalf still checking every call.
     @MainActor
