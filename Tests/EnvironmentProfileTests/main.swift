@@ -89,6 +89,8 @@ enum EnvironmentProfileTests {
         precondition(name(fake.home + "/elsewhere/x") == "Elsewhere", "~ expands")
         precondition(name(fake.repo + "-other") == "Default", "A sibling with the same prefix doesn't match")
         precondition(name(nil) == "Default" && name("/") == "Default", "No project gets Default")
+        precondition(name("/private" + fake.repo) == "App" || !fake.repo.hasPrefix("/var/"), "/private/var and /var are the same folder")
+        precondition(EnvironmentProfiles.canonical("/private/var/x/../y") == "/var/y" && EnvironmentProfiles.canonical("/privatefoo") == "/privatefoo")
         precondition(EnvironmentProfiles.profile(for: "/", in: .init(profiles: [snapshot.profiles[1]])) == nil)
     }
 
@@ -220,6 +222,18 @@ enum EnvironmentProfileTests {
         }
         try EnvironmentCLI.remove(["App"])
         precondition(EnvironmentProfiles.load(from: file).profiles.isEmpty)
+
+        // Relative folders are saved, and looked up, as absolute ones.
+        let previous = FileManager.default.currentDirectoryPath
+        defer { FileManager.default.changeCurrentDirectoryPath(previous) }
+        FileManager.default.changeCurrentDirectoryPath(fake.repo)
+        try EnvironmentCLI.set(["Here", "--folder", ".", "--path", "bin"])
+        let here = EnvironmentProfiles.load(from: file).profiles[0]
+        let cwd = EnvironmentProfiles.canonical(FileManager.default.currentDirectoryPath)
+        precondition(here.folders == [cwd] && here.path == [cwd + "/bin"], "\(here.folders) \(here.path)")
+        precondition(EnvironmentCLI.absolute("tools/../tools") == cwd + "/tools" && EnvironmentCLI.absolute("~/x") == fake.home + "/x")
+        precondition(EnvironmentProfiles.resolved(for: EnvironmentCLI.absolute("."))?.profile.name == "Here")
+        try EnvironmentCLI.remove(["Here"])
         let mode = (try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)?.intValue
         precondition(mode == 0o600, "Profiles are private to the user")
     }

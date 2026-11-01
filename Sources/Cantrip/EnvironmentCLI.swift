@@ -53,6 +53,13 @@ enum EnvironmentCLI {
         return 0
     }
 
+    /// `~` expanded and a relative path made absolute against the current folder.
+    static func absolute(_ path: String) -> String {
+        let expanded = EnvironmentProfiles.expand(path)
+        guard !expanded.hasPrefix("/") else { return expanded }
+        return EnvironmentProfiles.canonical((FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(expanded))
+    }
+
     static func describe(_ resolved: ResolvedEnvironment) -> [String] {
         var lines: [String] = []
         let profile = resolved.profile
@@ -80,8 +87,7 @@ enum EnvironmentCLI {
     }
 
     static func show(_ arguments: [String]) throws {
-        let folder = arguments.first { !$0.hasPrefix("-") }.map { EnvironmentProfiles.expand($0) }
-            ?? FileManager.default.currentDirectoryPath
+        let folder = arguments.first { !$0.hasPrefix("-") }.map(absolute) ?? FileManager.default.currentDirectoryPath
         guard let resolved = EnvironmentProfiles.resolved(for: folder) else {
             if arguments.contains("--json") { print("{}") } else { print("No profile applies to \(folder).") }
             return
@@ -109,7 +115,7 @@ enum EnvironmentCLI {
             resolved = EnvironmentProfiles.resolve(profile)
         } else {
             let folder = options.firstIndex(of: "--dir").flatMap { $0 + 1 < options.count ? options[$0 + 1] : nil }
-                .map { EnvironmentProfiles.expand($0) } ?? FileManager.default.currentDirectoryPath
+                .map(absolute) ?? FileManager.default.currentDirectoryPath
             resolved = EnvironmentProfiles.resolved(for: folder)
         }
         var environment = ToolPath.environment()
@@ -139,12 +145,12 @@ enum EnvironmentCLI {
             switch option {
             case "--clear": break
             case "--folder":
-                let folder = try value(option)
+                let folder = absolute(try value(option))
                 if !profile.folders.contains(folder) { profile.folders.append(folder) }
-            case "--xcode": let xcode = try value(option); profile.developerDir = xcode.isEmpty ? nil : xcode
+            case "--xcode": let xcode = try value(option); profile.developerDir = xcode.isEmpty ? nil : absolute(xcode)
             case "--node": let node = try value(option); profile.node = node.isEmpty ? nil : node
             case "--path":
-                let folder = try value(option)
+                let folder = absolute(try value(option))
                 if !profile.path.contains(folder) { profile.path.append(folder) }
             case "--env":
                 let pair = try value(option)
