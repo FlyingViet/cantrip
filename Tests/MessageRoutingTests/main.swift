@@ -50,7 +50,9 @@ struct MessageRoutingTests {
                     : #"{"intent":"context","confidence":0.99,"evidence":"The config lives in /config"}"#)
                 return
             }
-            guard args.contains("--available-tools="), args.contains("--disable-builtin-mcps"),
+            // An empty --available-tools= list is ignored by the CLI; only a list naming no real tool leaves none.
+            guard args.contains(MessageRouter.copilotNoTools), !args.contains("--available-tools="),
+                  args.contains("--disable-builtin-mcps"),
                   args.contains("--no-custom-instructions"), !args.contains("--allow-all-tools"),
                   let home = ProcessInfo.processInfo.environment["COPILOT_HOME"],
                   URL(fileURLWithPath: home).resolvingSymlinksInPath()

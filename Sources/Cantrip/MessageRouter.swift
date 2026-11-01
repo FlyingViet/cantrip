@@ -6,6 +6,10 @@ enum MessageRouter {
     static let copilotModel = "claude-haiku-4.5"
     /// The Antigravity CLI model for lightweight routing, queue planning, and Done-when checks.
     static let antigravityModel = "gemini-3.8-flash-medium"
+    /// Copilot CLI flag that leaves the model with no tools at all. An empty list
+    /// (`--available-tools=`) is ignored, so every built-in tool was still offered (1.0.105:
+    /// 20 tools, 8.5K tokens a call); naming one tool that doesn't exist leaves none.
+    static let copilotNoTools = "--available-tools=cantrip_no_tools"
 
     enum Provider {
         case copilot(command: String)
@@ -216,7 +220,7 @@ private final class RouterProcess: @unchecked Sendable {
                     "-s", "--stream", "on", "--output-format", "json",
                     // 0.33 premium requests a call; it takes no reasoning-effort setting.
                     "--model", MessageRouter.copilotModel,
-                    "--available-tools=", "--disable-builtin-mcps",
+                    MessageRouter.copilotNoTools, "--disable-builtin-mcps",
                     "--no-custom-instructions", "--no-ask-user",
                     "--no-auto-update", "--sync-session=off", "--log-level", "none",
                 ]
