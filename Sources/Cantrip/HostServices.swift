@@ -23,6 +23,8 @@ final class HostServices {
 
     func start(recoveryReport: CrashRecovery.Report?) {
         UsageTracker.shared.startAutoRefresh()
+        // Each CLI's own rules join the agent policy once; its deny rules go back into each CLI.
+        DispatchQueue.global(qos: .utility).async { AgentPolicySetup.run() }
         // Older replies point at agent files folders recorded before Cantrip tracked them.
         let transcripts = SessionManager.chatsDir
         DispatchQueue.global(qos: .utility).async {

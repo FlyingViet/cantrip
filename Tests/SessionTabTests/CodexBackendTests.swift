@@ -432,11 +432,15 @@ extension SessionTabTests {
 
         // Full access only with Act on my behalf or the explicit setting.
         let open = CodexBackend(persistKey: key + "-open")
-        precondition(open.access == .full && CodexBackend.threadPolicy(open.access) == ("danger-full-access", "never"))
+        precondition(open.access == .policy && CodexBackend.threadPolicy(open.access) == ("danger-full-access", "untrusted"),
+                     "Act on my behalf keeps full access, but every request still reaches Cantrip's agent policy")
+        try withAgentPolicy(enabled: false) {
+            precondition(open.access == .full && CodexBackend.threadPolicy(open.access) == ("danger-full-access", "never"))
+        }
         settings.allowActions = false
         precondition(open.access == .ask)
         settings.codexPermissionMode = "bypassPermissions"
-        precondition(open.access == .full, "Full access is the explicit setting")
+        precondition(open.access == .policy, "Full access is the explicit setting")
         settings.codexPermissionMode = "default"
 
         // Cantrip Home: the action policy answers; a command that ran unasked stops the run.

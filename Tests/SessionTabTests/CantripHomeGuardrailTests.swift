@@ -1195,6 +1195,8 @@ extension SessionTabTests {
         settings.agyPermissionMode = "default"
         // Stream parsing only: this fixture runs no hooks (AntigravityPermissionTests covers them).
         settings.allowActions = true
+        let restorePolicy = suspendAgentPolicy()
+        defer { restorePolicy() }
 
         let backend = AntigravityBackend(persistKey: "test-agy-stream")
         backend.reset()

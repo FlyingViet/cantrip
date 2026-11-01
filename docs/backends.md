@@ -50,10 +50,15 @@ If automatic detection fails, run `command -v claude`, `command -v copilot`,
 or `command -v codex` in Terminal and paste the returned executable path into
 the matching field.
 
-On Mac, Antigravity keeps one `agy` process per tab. Unless **Act on my
-behalf** (or Antigravity's **Allow everything**) is on, Cantrip checks each
-tool call before it runs: read-only council seats may only look, and other tabs
-ask before edits and commands. Cantrip Home and child tabs apply their own
+Every backend checks each tool call against Cantrip's
+[agent policy](privacy-and-memory.md#set-what-agents-may-do) before it runs,
+also with **Act on my behalf** on.
+
+On Mac, Antigravity keeps one `agy` process per tab. Cantrip checks each tool
+call before it runs: read-only council seats may only look, other tabs follow
+the agent policy, and with **Act on my behalf** (or Antigravity's **Allow
+everything**) off they ask before edits and commands the policy doesn't
+decide. Cantrip Home and child tabs apply their own
 policy. `agy` reads hooks only from a project's `.agents/hooks.json` or the
 global `~/.gemini/config/hooks.json`, so Cantrip adds one `cantrip-guardrail`
 entry to the global file instead of writing into your projects. The entry does
@@ -69,7 +74,8 @@ read-only sandbox and may only look, and Cantrip Home and child tabs apply
 their own policy. Codex runs a few plain reads (`cat`, `ls`) without asking;
 under Cantrip Home, a command other than a plain read that runs without
 Cantrip's check stops the run. Settings > Codex > **Permissions** offers **Full
-access**, the same as **Act on my behalf**: no sandbox and no approvals.
+access**, the same as **Act on my behalf**: no sandbox, and Cantrip approves
+each request itself unless the agent policy denies or asks about it.
 Council seats stay read-only either way. Cantrip never reads or changes Codex's
 sign-in (`codex login`).
 

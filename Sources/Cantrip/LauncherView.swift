@@ -4112,7 +4112,7 @@ struct SettingsView: View {
                     .labelsHidden()
                 }
                 labeledField("Working directory", text: $settings.claudeWorkdir, prompt: NSHomeDirectory())
-                Text("Requires the OpenAI Codex CLI (`codex`), signed in with `codex login`. Cantrip runs `codex app-server` in a workspace-write sandbox and answers each approval itself; council seats are read-only. \"Act on my behalf\" or Full access starts threads with danger-full-access and no approvals.")
+                Text("Requires the OpenAI Codex CLI (`codex`), signed in with `codex login`. Cantrip runs `codex app-server` in a workspace-write sandbox and answers each approval itself; council seats are read-only. \"Act on my behalf\" or Full access starts threads with danger-full-access, and Cantrip still approves each command, edit and MCP tool against the agent policy.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             case .antigravity:
@@ -4168,7 +4168,7 @@ struct SettingsView: View {
                     .labelsHidden()
                 }
                 labeledField("Working directory", text: $settings.claudeWorkdir, prompt: NSHomeDirectory())
-                Text("Requires the Google Antigravity CLI (`agy`). \"Act on my behalf\" maps to --dangerously-skip-permissions. Otherwise Cantrip checks each tool call through a hook it adds to ~/.gemini/config/hooks.json, which does nothing for agy runs Cantrip didn't start.")
+                Text("Requires the Google Antigravity CLI (`agy`). \"Act on my behalf\" maps to --dangerously-skip-permissions. Either way Cantrip checks each tool call through a hook it adds to ~/.gemini/config/hooks.json; agy runs Cantrip didn't start get only the agent policy's deny rules.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             case .localModel:
@@ -4180,10 +4180,10 @@ struct SettingsView: View {
             Divider().opacity(0.3)
             usageLimitFallbacks
             Divider().opacity(0.3)
-            Toggle("Act on my behalf — all backends (run commands, edit files, send messages without asking)", isOn: $settings.allowActions)
+            Toggle("Act on my behalf — all backends (run what the agent policy doesn't block or ask about, without asking)", isOn: $settings.allowActions)
                 .font(.caption)
                 .toggleStyle(.checkbox)
-            Text("Cantrip Home and its scheduled tasks follow this (and Claude's Permissions) on Copilot and Claude Code. Cantrip's blocked commands are always refused.")
+            Text("Every tab, child tab and Home run still checks each tool call against the agent policy below, on every backend, so a backup backend can't do more than the main one. Cantrip Home's blocked commands are always refused.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -4339,6 +4339,8 @@ struct SettingsView: View {
             StorageUpkeepView()
             Divider().opacity(0.3)
             MCPServersView()
+            Divider().opacity(0.3)
+            AgentPolicyView()
             Divider().opacity(0.3)
             CantripVersionView(busySessions: busySessions, onUpdate: onUpdate)
         }
