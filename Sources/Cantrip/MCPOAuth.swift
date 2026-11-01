@@ -40,6 +40,17 @@ enum MCPOAuth {
         var scopes: [String] = []
     }
 
+    /// The client Cantrip registered with a sign-in server (dynamic client registration), stored as
+    /// JSON in the Keychain from registration on, so a retry or a later sign-in reuses it.
+    struct RegisteredClient: Codable, Equatable {
+        var issuer: String
+        var clientID: String
+        var clientSecret: String?
+        var redirectURI: String
+
+        var port: UInt16? { URL(string: redirectURI)?.port.flatMap { UInt16(exactly: $0) } }
+    }
+
     /// One server's sign-in, stored as JSON in the Keychain.
     struct Credential: Codable, Equatable {
         var endpoints: Endpoints
@@ -393,8 +404,39 @@ actor MCPSignIns {
         try secrets.write(MCPSecrets.oauthAccount(server), try encoder.encode(credential))
     }
 
+    /// Signing out removes the tokens; the registered client stays for the next sign-in.
     func signOut(_ server: String) throws {
         try secrets.delete(MCPSecrets.oauthAccount(server))
+    }
+
+    /// The saved registration, or the one inside a sign-in saved before registrations were kept.
+    func registeredClient(_ server: String) throws -> MCPOAuth.RegisteredClient? {
+        if let data = try secrets.read(MCPSecrets.clientAccount(server)),
+           let client = try? JSONDecoder().decode(MCPOAuth.RegisteredClient.self, from: data) {
+            return client
+        }
+        return try credential(server).map {
+            MCPOAuth.RegisteredClient(issuer: $0.endpoints.issuer, clientID: $0.clientID, clientSecret: $0.clientSecret,
+                                      redirectURI: $0.redirectURI)
+        }
+    }
+
+    /// The client to sign in with: the saved one when it's for this sign-in server and redirect,
+    /// else a new registration, saved before the sign-in page opens.
+    func client(for server: String, endpoints: MCPOAuth.Endpoints, redirectURI: String) async throws -> MCPOAuth.RegisteredClient {
+        if let saved = try registeredClient(server), saved.issuer == endpoints.issuer, saved.redirectURI == redirectURI {
+            return saved
+        }
+        let registered = try await MCPOAuth.register(endpoints, redirectURI: redirectURI, transport: transport)
+        let client = MCPOAuth.RegisteredClient(issuer: endpoints.issuer, clientID: registered.id, clientSecret: registered.secret,
+                                               redirectURI: redirectURI)
+        try secrets.write(MCPSecrets.clientAccount(server), try JSONEncoder().encode(client))
+        return client
+    }
+
+    /// Drops a registration the sign-in server refused, so the next try registers again.
+    func forgetClient(_ server: String) throws {
+        try secrets.delete(MCPSecrets.clientAccount(server))
     }
 
     /// A current access token: the stored one while fresh, else refreshed. `force` refreshes
