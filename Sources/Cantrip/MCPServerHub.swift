@@ -36,8 +36,17 @@ struct AgentChrome {
         return (try? await session.data(from: url)) != nil
     }
 
+    /// DevTools' `/json/new?<address>`, with the address percent-encoded whole: Chrome unescapes it
+    /// once, and since Chrome 156 reads a raw `&` as the end of the address, which cut sign-in
+    /// addresses down to their first parameter (no `client_id`, PKCE or `redirect_uri`).
+    static func newTabPath(for address: URL) -> String {
+        var unreserved = CharacterSet.alphanumerics
+        unreserved.insert(charactersIn: "-._~")
+        return "/json/new?" + (address.absoluteString.addingPercentEncoding(withAllowedCharacters: unreserved) ?? address.absoluteString)
+    }
+
     func open(_ address: URL) async throws -> Tab {
-        guard let url = endpoint("/json/new?\(address.absoluteString)") else { throw URLError(.badURL) }
+        guard let url = endpoint(Self.newTabPath(for: address)) else { throw URLError(.badURL) }
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         let (data, _) = try await session.data(for: request)
@@ -239,10 +248,14 @@ final class MCPServerHub: ObservableObject {
                 self.set(name, State(phase: .ready, message: "Signed in.", expiresAt: credential?.expiresAt))
                 Log.write("mcp: \(name) signed in through Cantrip")
             } catch {
-                let failure = error as? MCPOAuth.Failure
+                // Cancel stops the flow wherever it waits (often a network call): that's a cancelled
+                // sign-in, not a failure with Swift's CancellationError text.
+                let cancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
+                let failure = cancelled ? MCPOAuth.Failure(kind: .denied, message: "Sign-in was cancelled.") : error as? MCPOAuth.Failure
+                let message = failure?.message ?? error.localizedDescription
                 self.set(name, State(phase: failure?.kind == .keychain ? .locked : (failure?.kind == .denied ? .needsSignIn : .failed),
-                                     message: error.localizedDescription))
-                Log.write("mcp: \(name) sign-in failed: \(error.localizedDescription)")
+                                     message: message))
+                Log.write("mcp: \(name) sign-in \(cancelled ? "cancelled" : "failed: \(message)")")
             }
             self.flows[name] = nil
         }
@@ -265,34 +278,37 @@ final class MCPServerHub: ObservableObject {
 
     private func signIn(_ name: String, address: URL) async throws {
         let endpoints = try await MCPOAuth.discover(server: address)
-        // Reuse the registration and its loopback port when the server knew Cantrip before.
-        let previous = try? await signIns.credential(name)
-        let reusePort = previous.flatMap { URL(string: $0.redirectURI)?.port }.flatMap { UInt16(exactly: $0) }
+        // Listen where the saved registration redirects, so it can be reused.
+        let reusePort = (try? await signIns.registeredClient(name))?.port
         let callback: MCPOAuth.Callback
         if let reused = try? MCPOAuth.Callback(port: reusePort ?? 0) { callback = reused } else { callback = try MCPOAuth.Callback() }
         defer { callback.cancel() }
-        let client: (id: String, secret: String?)
-        if let previous, previous.redirectURI == callback.redirectURI, previous.endpoints.issuer == endpoints.issuer {
-            client = (previous.clientID, previous.clientSecret)
-        } else {
-            client = try await MCPOAuth.register(endpoints, redirectURI: callback.redirectURI)
+        let client: MCPOAuth.RegisteredClient
+        do {
+            client = try await signIns.client(for: name, endpoints: endpoints, redirectURI: callback.redirectURI)
+        } catch let failure as MCPSecrets.Failure {
+            throw MCPOAuth.Failure(kind: .keychain, message: failure.localizedDescription)
         }
         let verifier = MCPOAuth.randomURLSafe(48), state = MCPOAuth.randomURLSafe(16)
-        guard let url = MCPOAuth.authorizeURL(endpoints, clientID: client.id, redirectURI: callback.redirectURI,
+        guard let url = MCPOAuth.authorizeURL(endpoints, clientID: client.clientID, redirectURI: callback.redirectURI,
                                               state: state, verifier: verifier) else {
             throw MCPOAuth.Failure(kind: .discovery, message: "Couldn't build the sign-in address.")
         }
-        let fields = try await authorize(name, url: url, callback: callback, redirect: callback.redirectURI)
-        guard fields["state"] == state else { throw MCPOAuth.Failure(kind: .denied, message: "The sign-in reply didn't match (state).") }
-        guard let code = fields["code"] else {
-            throw MCPOAuth.Failure(kind: .denied, message: "Sign-in was declined: \(fields["error_description"] ?? fields["error"] ?? "no code").")
-        }
-        set(name, State(phase: .connecting, message: "Saving the sign-in…"))
         do {
-            _ = try await signIns.complete(server: name, endpoints: endpoints, clientID: client.id, clientSecret: client.secret,
+            let fields = try await authorize(name, url: url, callback: callback, redirect: callback.redirectURI)
+            guard fields["state"] == state else { throw MCPOAuth.Failure(kind: .denied, message: "The sign-in reply didn't match (state).") }
+            guard let code = fields["code"] else {
+                throw MCPOAuth.Failure(kind: .denied, message: "Sign-in was declined: \(fields["error_description"] ?? fields["error"] ?? "no code").")
+            }
+            set(name, State(phase: .connecting, message: "Saving the sign-in…"))
+            _ = try await signIns.complete(server: name, endpoints: endpoints, clientID: client.clientID, clientSecret: client.clientSecret,
                                            redirectURI: callback.redirectURI, code: code, verifier: verifier)
         } catch let failure as MCPSecrets.Failure {
             throw MCPOAuth.Failure(kind: .keychain, message: failure.localizedDescription)
+        } catch let failure as MCPOAuth.Failure where failure.kind == .provider || failure.kind == .needsSignIn {
+            // The server refused this client or its code: the next try registers a new one.
+            try? await signIns.forgetClient(name)
+            throw failure
         }
     }
 
@@ -314,6 +330,10 @@ final class MCPServerHub: ObservableObject {
             if let fields = callback.result { return fields }
             guard let page = try? await chrome.inspect(tab) else { continue }
             if page.url.hasPrefix(redirect) { continue }
+            // The sign-in server refused instead of showing a sign-in: say why, not its raw JSON.
+            if let refusal = MCPOAuth.providerError(pageURL: page.url, title: page.title, text: page.text) {
+                throw MCPOAuth.Failure(kind: .provider, message: "\(page.host) refused the sign-in: \(refusal). Retry, or check the server's address.")
+            }
             let shot = await chrome.screenshot(tab)
             if let label = page.approve, !page.login, !asked {
                 asked = true
@@ -350,6 +370,8 @@ final class MCPServerHub: ObservableObject {
             var item: [String: Any] = [
                 "name": server.name, "remote": server.isRemote, "oauth": server.oauth, "relayed": server.isRelayed,
                 "enabled": server.enabled, "disabledBackends": server.disabledBackends, "source": server.source,
+                // Whether a header or environment credential is in the keychain; never its name or value.
+                "credentials": !server.secretHeaders.isEmpty || !server.secretEnv.isEmpty,
                 "address": server.url ?? ([server.command.map { ($0 as NSString).lastPathComponent }].compactMap { $0 }
                     + server.args.map { ($0 as NSString).lastPathComponent }).joined(separator: " "),
             ]

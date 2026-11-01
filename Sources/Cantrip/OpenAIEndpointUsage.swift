@@ -16,6 +16,8 @@ struct EndpointUsageTotals: Codable, Equatable {
     var costUSD = 0.0
     /// Answered calls per backend (`BackendKind` raw values).
     var backends: [String: Int] = [:]
+    /// Answered calls per model tier ("fast", "standard", "deep"); nil before any (and on older Macs).
+    var tiers: [String: Int]?
 
     mutating func add(_ other: EndpointUsageTotals) {
         calls += other.calls
@@ -26,12 +28,16 @@ struct EndpointUsageTotals: Codable, Equatable {
         premiumRequests += other.premiumRequests
         costUSD += other.costUSD
         for (backend, count) in other.backends { backends[backend, default: 0] += count }
+        for (tier, count) in other.tiers ?? [:] { tiers = tiers ?? [:]; tiers?[tier, default: 0] += count }
     }
 
     /// "Copilot 41 · Claude Code 3 · 12 premium requests · 1.2M tokens · 2 failed"
     var detail: String {
         var parts = backends.sorted { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) }
             .map { "\($0.key) \($0.value)" }
+        for tier in ModelTier.allCases {
+            if let count = tiers?[tier.rawValue], count > 0 { parts.append("\(tier.label) \(count)") }
+        }
         if premiumRequests > 0 {
             let value = premiumRequests.rounded() == premiumRequests ? String(Int(premiumRequests))
                 : String(format: "%.2f", premiumRequests)
@@ -83,7 +89,8 @@ final class EndpointUsageLedger: ObservableObject {
         self.tracker = tracker
     }
 
-    func record(consumer: String, backend: BackendKind?, outcome: Outcome, result: OneShotResult?, at date: Date = Date()) {
+    func record(consumer: String, backend: BackendKind?, tier: ModelTier? = nil, outcome: Outcome, result: OneShotResult?,
+                at date: Date = Date()) {
         lock.withLock {
             var store = defaults.dictionary(forKey: key) as? [String: [String: Data]] ?? [:]
             let day = ISODate.localDay(date)
@@ -94,6 +101,7 @@ final class EndpointUsageLedger: ObservableObject {
             case .answered:
                 totals.calls += 1
                 if let backend { totals.backends[backend.rawValue, default: 0] += 1 }
+                if let tier { totals.tiers = totals.tiers ?? [:]; totals.tiers?[tier.rawValue, default: 0] += 1 }
             case .limited: totals.limited += 1
             case .failed: totals.failed += 1
             }
@@ -115,9 +123,9 @@ final class EndpointUsageLedger: ObservableObject {
             defaults.set(last, forKey: key + ".last")
         }
         if let backend, outcome == .answered {
-            tracker?.recordQuery(backend: backend)
+            tracker?.recordQuery(backend: backend, tier: tier)
             if let result, let cost = result.costUSD {
-                tracker?.recordCost(backend: backend, costUSD: cost, inputTokens: result.inputTokens,
+                tracker?.recordCost(backend: backend, tier: tier, costUSD: cost, inputTokens: result.inputTokens,
                                     outputTokens: result.outputTokens)
             }
         }
@@ -251,7 +259,7 @@ struct OpenAIEndpointSettingsView: View {
                     }
                 }
                 if let keyNote { Text(keyNote).font(.caption2).foregroundStyle(.secondary) }
-                Text("Apps call http://127.0.0.1:\(String(settings.openAIEndpointPort))/v1 and name themselves with /consumer/NAME/v1 for the usage screen. The model auto uses this Mac's backend, then its usage-limit backups. Each call is stateless and tool-free. Requests through a proxy such as Tailscale Serve need the key.")
+                Text("Apps call http://127.0.0.1:\(String(settings.openAIEndpointPort))/v1 and name themselves with /consumer/NAME/v1 for the usage screen. The model auto uses this Mac's backend, then its usage-limit backups; fast, standard or deep runs that chain at the tier, and copilot:deep one backend's tier. Each call is stateless and tool-free. Requests through a proxy such as Tailscale Serve need the key.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -260,13 +268,18 @@ struct OpenAIEndpointSettingsView: View {
 
     @ViewBuilder private var modelPickers: some View {
         let catalog = settings.tabModelCatalog(for: primary)
-        let info = catalog.info(model.wrappedValue)
+        let choices = settings.tabModelChoices(for: primary)
+        let tiers = settings.tierOptions(for: primary)
+        let info = choices.first { $0.id == model.wrappedValue } ?? catalog.info(model.wrappedValue)
         Picker("Model", selection: model) {
             Text("Same as tabs").tag("")
+            ForEach(tiers, id: \.id) { tier in
+                Text("\(tier.label) — \(tier.modelLabel)").tag(tier.id)
+            }
             ForEach(catalog.models) { model in
                 Text(settings.fallbackModelLabel(primary, model.id)).tag(model.id)
             }
-            if !model.wrappedValue.isEmpty, !catalog.models.contains(where: { $0.id == model.wrappedValue }) {
+            if !model.wrappedValue.isEmpty, !choices.contains(where: { $0.id == model.wrappedValue }) {
                 Text("\(model.wrappedValue) (not offered now)").tag(model.wrappedValue)
             }
         }

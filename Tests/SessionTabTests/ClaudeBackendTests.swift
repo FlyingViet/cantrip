@@ -157,8 +157,8 @@ extension SessionTabTests {
         let chat = ChatSession()
         defer { chat.cancel() }
         precondition(chat.modelSettingsUnavailableReason == nil, "Claude Code tabs can pick a model")
-        precondition(chat.modelSettingsSnapshot.models.map(\.id) == catalog.map(\.id),
-                     "Clients get Claude Code's models")
+        precondition(chat.modelSettingsSnapshot.models.map(\.id) == ["fast", "standard", "deep"] + catalog.map(\.id),
+                     "Clients get the tiers, then Claude Code's models")
         do {
             try chat.updateModelSettings(.init(model: "gpt-5.6", effort: "", contextTier: ""), revision: chat.modelSettingsRevision)
             preconditionFailure("A model Claude Code doesn't list is refused")

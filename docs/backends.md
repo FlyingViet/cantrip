@@ -125,6 +125,66 @@ are not interchangeable with total context or maximum output tokens. Unsupported
 saved effort/tier values remain visible with a warning, without changing active
 sessions or silently resetting your preferences.
 
+## Ask for a model tier instead of a model
+
+Anywhere you pick a model, you can pick a tier instead: **Fast**, **Standard**
+or **Deep**. Each backend maps every tier to an ordered list of its own models,
+each with an effort, so a deep run stays deep whichever backend serves it, and
+changing what deep means is one edit that applies everywhere at once. Exact
+model names keep working everywhere; tiers are an addition, and nothing that
+names a model today changes until you switch it to a tier.
+
+| Tier | Copilot | Claude Code | Antigravity | Codex |
+|---|---|---|---|---|
+| Fast | claude-haiku-5.5 (low), then gpt-5.6-sol-fast, mai-code-2-flash | haiku (low) | Gemini 3.8 Flash (Medium), then Flash (Low) | gpt-6-luna (low), then gpt-5.6-luna |
+| Standard | gpt-5.6-sol (high), then claude-sonnet-5.5, gpt-6-sol | sonnet (high) | Gemini 4 Argon (Medium), then Claude Sonnet 5.5 (Medium) | gpt-6-luna (medium), then gpt-5.6-terra |
+| Deep | claude-opus-5.5 (xhigh), then gpt-6.1-sol, gpt-6-astra | opus (xhigh) | Gemini 4 Argon (High), then Claude Opus 5.5 (High) | gpt-5.6-terra (xhigh), then gpt-6-luna |
+
+Claude Code's aliases always point at the newest model of each family, and
+Antigravity's model names already include the effort. Codex's row comes from
+its `model/list`: gpt-6-luna is its default and cheapest model, gpt-5.6-terra
+its strongest. Local Model runs its one model for every tier, and Copilot
+Remote runs its server's model.
+
+**Where tiers work.**
+
+- **Tab model picker** (Mac, browser/Mac Remote, iPhone, Duo, Gateway): Fast,
+  Standard and Deep come first, then the backend's models. The tier's own
+  effort applies unless you pick one its model takes.
+- **Home tasks**: a task's `model` can be `fast`, `standard` or `deep`. Home is
+  told to prefer a tier when you ask for a cheaper or stronger model.
+- **Child tabs** inherit the parent's tier, not the model it runs today.
+- **Usage limit fallbacks**: a backup can be pinned to a tier (for example
+  Antigravity · Deep). A backup left on its default model follows the run's
+  tier, so a deep run stays deep on whichever backup serves it. A backup pinned
+  to an exact model keeps that model.
+- **Auto routing, queue plans and Done-when checks** run on the backend's Fast
+  model (they used fixed Haiku and Flash models before).
+- **OpenAI-compatible API**: `model` can be `deep` (the backup chain at that
+  tier) or `copilot:deep` (only that backend).
+
+**When a tier's model can't run.** A run on a tier takes the first model in the
+list that its backend offers and that isn't at its own usage limit. If the
+first choice is skipped, the run note says why, for example "Deep on
+Antigravity: Gemini 4 Argon (High) is at its usage limit until 9:40 PM, so
+Claude Opus 5.5 (High)." A model that runs out partway moves the task to the
+tier's next model on the same backend before the next backup ("Continuing this
+task on the next Deep model"). A limit on the whole backend, such as Copilot's
+shared premium requests, skips straight to the next backup.
+
+**Edit the map** under **Model tiers** in Mac Settings, in the browser/Mac Remote's
+**Model Settings** (all tabs), or in Cantrip Agent's and Gateway Mac's **Settings › Models**: pick a backend, then for each tier
+choose up to five models in order, each with its effort; **Reset** goes back to
+Cantrip's defaults. Copilot's token prices show next to each model. Paired
+clients use `GET/POST /api/v1/model-tiers`; see
+[Remote control](remote-control.md#model-tiers). The map is saved with the
+other settings and in `~/.cantriprc` as `modelTiers` (only the cells you
+changed).
+
+**Usage by tier.** Each run records its tier, and the usage screens break down
+messages, tokens and cost by tier (and by exact model choice) for today and the
+last 7 days.
+
 ## Claude Code context
 
 Claude Code tabs get the same context as Copilot tabs: Cantrip's memory and notes, location,
@@ -263,16 +323,19 @@ because the Copilot CLI can crash after long idle periods.
 Add backups under **Usage limit fallbacks** (Off by default) in Mac Settings or
 in the browser/Mac Remote's **Model Settings**: use **Add a backup** as many
 times as you like, the arrows to set the order they're tried in, and the remove
-button to drop one. Cantrip Agent (iPhone/iPad) and Cantrip Gateway (Mac and
-Windows) edit the same list. Each backup is a backend with the model and effort
+button to drop one. Cantrip Agent (iPhone/iPad) and Cantrip Gateway Mac edit the
+same list in **Settings › Models**, and Gateway Windows in Model Settings. Each backup is a backend with the model and effort
 it runs: on a backend with a model picker (Copilot, Claude Code, Antigravity,
 Codex), **Model** and **Effort** menus list that backend's own models and the
 efforts each takes, and **Default** means the Mac's own setting for that
 backend. A backend can be listed more than once with different models, the
 Mac's own backend too ("Antigravity with another model"), for example
 Antigravity · Gemini 4 Argon, then Antigravity · Gemini 3.8 Flash, then Claude
-Code · Sonnet. The same backend and model can be listed only once, and the
-Mac's own backend only with a model other than its own. A run that moves to a
+Code · Sonnet. A backup can also be pinned to a tier, such as Antigravity ·
+Deep, and a backup on its default model runs the same tier as a tab set to one
+(see [model tiers](#ask-for-a-model-tier-instead-of-a-model)). The same backend
+and model can be listed only once, and the Mac's own backend only with a model
+other than its own. A run that moves to a
 backup uses its model and effort, and its note names what runs, for example
 "Continuing this task with Antigravity · Gemini 3.8 Flash (Medium)". If the
 chosen model isn't offered any more, the run uses the default and the note says
@@ -354,7 +417,7 @@ this Mac's loopback address.
   `stream`, `max_tokens`, `reasoning_effort`) and answers with a `chat.completion`
   (or `chat.completion.chunk` events when `stream` is true). The answer arrives
   as one chunk; the stream sends keep-alive comments while the model works.
-- `GET /v1/models` lists `auto` and each backend's models; `GET /health` shows
+- `GET /v1/models` lists `auto`, the tiers and each backend's tiers and models; `GET /health` shows
   the chain and which backends are at their limit (`copilot_limited_until`
   too, for probes written against Copilot-only servers).
 
@@ -363,7 +426,11 @@ a backend (so clients written for another server keep working) use the Mac's bac
 **Usage limit fallbacks**, each with the model and effort chosen there. A
 backend name (`copilot`, `claude`, `antigravity`, `local`) or `backend:model`
 (for example `copilot:gpt-5.6-sol` or `claude:sonnet`) runs only there, as
-picked, and returns 429 when that backend is at its limit. `reasoning_effort`
+picked, and returns 429 when that backend is at its limit. A tier (`fast`,
+`standard`, `deep`) runs the same chain at that tier: each backend on its own
+models for it, in order, except backups pinned to an exact model. `copilot:deep`
+runs only Copilot's deep models. A model at its own limit moves the call to the
+tier's next model. `reasoning_effort`
 overrides the effort where the model supports it. The reply's `model` names
 what answered, such as `claude:claude-opus-5-5`, and the `X-Cantrip-Backend`
 header names the backend.

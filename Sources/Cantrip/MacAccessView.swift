@@ -8,7 +8,9 @@ struct MacAccessView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Toggle("Allow paired clients to view and control this Mac", isOn: $desktop.enabled)
+            Toggle(isOn: $desktop.enabled) {
+                Text("Allow paired clients to view and control this Mac").fixedSize(horizontal: false, vertical: true)
+            }
             Text("View Mac is off by default. Enabling it allows any client with your pairing token to start a five-minute session. Screen Recording and Accessibility must be granted here first. Screen frames and typed text are not saved or sent to AI models.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if desktop.activeUntil != nil {
@@ -16,7 +18,7 @@ struct MacAccessView: View {
                 Button("End Remote View Now", role: .destructive) { desktop.stop() }
             }
 
-            HStack {
+            FlowLayout(spacing: 8, lineSpacing: 4) {
                 Button("Screen Recording Settings") { open(.screenRecording) }
                 Button("Accessibility Settings") { open(.accessibility) }
             }

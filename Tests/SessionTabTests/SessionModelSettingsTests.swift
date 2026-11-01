@@ -115,7 +115,7 @@ extension SessionTabTests {
         precondition(unauthorized.0 == 401)
         let loaded = try await request()
         precondition(loaded.0 == 200 && loaded.1["usesDefaults"] as? Bool == true)
-        precondition((loaded.1["models"] as? [[String: Any]])?.count == 2)
+        precondition((loaded.1["models"] as? [[String: Any]])?.count == 5, "the three tiers, then the two models")
         let body: [String: Any] = ["revision": loaded.1["revision"]!, "usesDefaults": false,
                                    "model": "model-a", "effort": "high", "contextTier": "long_context"]
         for invalid in [
@@ -132,6 +132,33 @@ extension SessionTabTests {
         precondition(stale.0 == 409)
         let wrongMethod = try await request("DELETE")
         precondition(wrongMethod.0 == 405)
+
+        // Fast, Standard and Deep lead every client's model list; a tier saves by its name and runs
+        // the backend's model for it, and an edit to the tier map reaches the tab's next run.
+        let tierIDs = ((applied.1["models"] as? [[String: Any]]) ?? []).prefix(3).compactMap { $0["id"] as? String }
+        precondition(tierIDs == ["fast", "standard", "deep"], "\(tierIDs)")
+        let savedTiers = settings.modelTiers
+        defer { settings.modelTiers = savedTiers }
+        settings.modelTiers.set([ModelTierChoice(model: "model-a", effort: "high")], for: .deep, on: .copilot)
+        let tierBody: [String: Any] = ["usesDefaults": false, "model": "Deep", "effort": "", "contextTier": ""]
+        let tiered = try await request("POST", body: tierBody.merging(["revision": chat.modelSettingsRevision]) { $1 })
+        precondition(tiered.0 == 200 && chat.modelSelection == SessionModelSelection(model: "deep", effort: "", contextTier: "")
+                     && chat.runTier == .deep, "\(tiered)")
+        precondition(backend.modelOverride == "model-a" && backend.effortOverride == "high" && backend.contextTierOverride == "")
+        let deepOption = (tiered.1["tiers"] as? [[String: Any]])?.last
+        precondition(deepOption?["id"] as? String == "deep" && deepOption?["model"] as? String == "model-a"
+                     && deepOption?["effort"] as? String == "high")
+        precondition((tiered.1["models"] as? [[String: Any]])?[2]["reasoningEfforts"] as? [String] == ["low", "high"],
+                     "A tier offers its model's efforts")
+        settings.modelTiers.set([ModelTierChoice(model: "model-b")], for: .deep, on: .copilot)
+        precondition(chat.modelSettingsRevision == tiered.1["revision"] as? String, "A tier edit doesn't make an open form stale")
+        try chat.updateModelSettings(chat.modelSelection, revision: chat.modelSettingsRevision)
+        precondition(backend.modelOverride == "model-b" && backend.effortOverride == "")
+        let tierWindow = try await request("POST", body: tierBody.merging(["revision": chat.modelSettingsRevision,
+                                                                           "contextTier": "long_context"]) { $1 })
+        precondition(tierWindow.0 == 400)
+        try chat.updateModelSettings(selected, revision: chat.modelSettingsRevision)
+        precondition(backend.modelOverride == "model-a" && chat.runTier == nil)
         chat.isStreaming = true
         let busy = try await request("POST", body: ["revision": chat.modelSettingsRevision, "usesDefaults": true])
         precondition(busy.0 == 409 && chat.modelSelection == selected)
@@ -301,7 +328,14 @@ extension SessionTabTests {
           defaults:{model:"model-a",effort:"low",contextTier:"default"},revision:"revision-a",usesDefaults:true,
           models:[{id:"model-a",reasoningEfforts:["low","high"],contextTiers:["default","long_context"],contextWindow:1050000,longContextPromptTokens:1050000},
                   {id:"model-b",reasoningEfforts:[],contextTiers:["default"]}],isRefreshing:false};
+        let tierCalls=[];const tiers={tiers:["fast","standard","deep"],revision:"tiers-a",backends:[{id:"Copilot",label:"Copilot",
+          models:[{id:"model-a",label:"model-a",efforts:["low","high"],price:"10 in · 50 out credits per 1M tokens"},{id:"model-b",label:"model-b",efforts:[]}],
+          cells:[{tier:"fast",label:"Fast",choices:[{model:"model-b",effort:""}],isDefault:true,model:"model-b",effort:""},
+                 {tier:"standard",label:"Standard",choices:[{model:"model-a",effort:"low"}],isDefault:true,model:"model-a",effort:"low"},
+                 {tier:"deep",label:"Deep",choices:[{model:"model-a",effort:"high"},{model:"gone-1",effort:""}],isDefault:false,
+                  model:"model-a",effort:"high",note:"gone-1 isn't offered"}]}]};
         function api(path,options){const body=options?JSON.parse(options.body):null;
+          if(path==="/api/v1/model-tiers"){tierCalls.push(body);return Promise.resolve(body?{...tiers,revision:`tiers-${tierCalls.length}`}:tiers)}
           if(path==="/api/v1/usage-fallback"){fallbackCalls.push(body);
             if(body?.entries)return Promise.resolve({...fallbackState,entries:body.entries,backends:body.entries.map(item=>item.backend),revision:`pm-${fallbackCalls.length}`});
             return Promise.resolve(body?{...fallback,backends:body.backends,backend:body.backends[0]??"",limited:[],revision:`fallback-${fallbackCalls.length}`}:fallback)}
@@ -398,5 +432,34 @@ extension SessionTabTests {
         modelEditorState.draft.effort="high";renderModelSettings();
         """)
         precondition(context.evaluateScript("$('modelSave').disabled")!.toBool())
+
+        // The Mac-wide tier map: each tier's models in order with Copilot's prices, saved per cell.
+        precondition(context.evaluateScript("""
+        !$("tierBox").classList.hidden && $("tierBackend").value==="Copilot" && $("tierCells").children.length===3
+          && $("tierCells").children[2].children[0].textContent==="Deep: runs model-a · high"
+          && $("tierCells").children[2].children[1].children[1].children[0].children[0].label==="gone-1 (not offered now)"
+          && $("tierCells").children[1].children[1].children[0].children[0].children.map(option=>option.label).join("|")
+             ==="model-a — 10 in · 50 out credits per 1M tokens|model-b"
+          && $("tierCells").children[2].children[4].textContent==="Now: gone-1 isn't offered."
+        """)!.toBool(), "The tier section lists each tier's models in order, with prices and what it runs now")
+        context.evaluateScript("""
+        fallbackCalls=[];tierCalls=[];const deepFirst=$("tierCells").children[2].children[1].children[0];
+        deepFirst.children[1].value="low";deepFirst.children[1].onchange();
+        """)
+        precondition(context.evaluateScript("""
+        tierCalls.length===1 && tierCalls[0].revision==="tiers-a" && tierCalls[0].backend==="Copilot" && tierCalls[0].tier==="deep"
+          && tierCalls[0].choices.map(item=>item.model+"/"+item.effort).join()==="model-a/low,gone-1/" && tierState.revision==="tiers-1"
+          && fallbackCalls.length===1
+        """)!.toBool(), "Changing an effort posts that cell with the loaded revision, and the backups reload")
+        context.evaluateScript("""
+        $("tierCells").children[2].children[1].children[1].children[3].onclick();
+        """)
+        context.evaluateScript("""
+        $("tierCells").children[2].children[3].onclick();
+        """)
+        precondition(context.evaluateScript("""
+        tierCalls.length===3 && tierCalls[1].choices.map(item=>item.model).join()==="model-a"
+          && tierCalls[2].reset===true && tierCalls[2].tier==="deep" && tierCalls[2].revision==="tiers-2"
+        """)!.toBool(), "Remove drops a model from the tier and Reset returns the cell to its defaults")
     }
 }

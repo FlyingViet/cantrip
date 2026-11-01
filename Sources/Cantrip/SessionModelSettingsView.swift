@@ -24,10 +24,17 @@ struct SessionModelSettingsView: View {
     private var showsContextTiers: Bool { !isClaude && !isAntigravity && !isCodex }
 
     private func modelLabel(_ id: String) -> String {
-        isAntigravity ? settings.agyModelLabel(id) : isCodex ? settings.codexModelLabel(id) : id
+        if let tier = ModelTier(model: id), let option = tierOptions.first(where: { $0.id == tier.rawValue }) {
+            return "\(option.label) — \(option.modelLabel)" + (option.effort.isEmpty ? "" : " · \(option.effort)")
+        }
+        return isAntigravity ? settings.agyModelLabel(id) : isCodex ? settings.codexModelLabel(id) : id
     }
 
-    private var info: CopilotModelInfo? { catalog.info(selection.model) }
+    /// Fast, Standard and Deep first, then the backend's models.
+    private var choices: [CopilotModelInfo] { settings.tabModelChoices(for: session.modelSettingsBackend) }
+    private var tierOptions: [ModelTierOption] { settings.tierOptions(for: session.modelSettingsBackend) }
+
+    private var info: CopilotModelInfo? { choices.first { $0.id == selection.model } ?? catalog.info(selection.model) }
 
     private var validationError: String? {
         guard !usesDefaults else { return nil }
@@ -49,7 +56,7 @@ struct SessionModelSettingsView: View {
                     selection.contextTier = info?.contextTiers?.contains("default") == true ? "default" : ""
                 })) {
                     Text("CLI default (\(catalog.fileDefaultModel.map(modelLabel) ?? "Auto"))").tag("")
-                    ForEach(CopilotModelInfo.choices(supported: catalog.models.map(\.id),
+                    ForEach(CopilotModelInfo.choices(supported: choices.map(\.id),
                                                    fallback: [], selected: selection.model), id: \.self) {
                         Text(modelLabel($0)).tag($0)
                     }
@@ -77,7 +84,12 @@ struct SessionModelSettingsView: View {
             .onChange(of: usesDefaults) { _, inherited in
                 if inherited { selection = session.defaultModelSelection }
             }
-            if showsContextTiers, let context = info?.contextLabel {
+            if let tier = ModelTier(model: selection.model) {
+                let note = tierOptions.first { $0.id == tier.rawValue }?.note
+                Text("\(tier.label) runs each backend's \(tier.rawValue) model (Settings ▸ Model tiers), here and on a usage-limit backup."
+                     + (note.map { " Now: \($0)." } ?? ""))
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if showsContextTiers, let context = info?.contextLabel {
                 Text("Advertised maximum: \(context) tokens. Tier values are input budgets, not total context.")
                     .font(.caption).foregroundStyle(.secondary)
             }

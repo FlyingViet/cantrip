@@ -7,6 +7,17 @@ struct SessionModelSelection: Codable, Equatable {
     var contextTier: String
 
     func validate(catalog: [CopilotModelInfo], fileDefaultModel: String?) throws {
+        // A tier runs its own models' context windows; its effort applies where its model takes it.
+        if ModelTier(model: model) != nil {
+            let efforts = Set(catalog.flatMap { $0.reasoningEfforts ?? [] })
+            guard effort.isEmpty || efforts.isEmpty || efforts.contains(effort) else {
+                throw SessionModelSettingsError(400, "Choose a supported effort or the tier's own.")
+            }
+            guard contextTier.isEmpty else {
+                throw SessionModelSettingsError(400, "A model tier uses its models' default context window.")
+            }
+            return
+        }
         let modelID = model.isEmpty ? fileDefaultModel : model
         let info = catalog.first { $0.id == modelID }
         guard model.isEmpty || info != nil else {
@@ -28,12 +39,29 @@ struct SessionModelSettingsError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// A tier as the tab model picker offers it: what it runs on this backend now.
+struct ModelTierOption: Encodable, Equatable {
+    /// "fast", "standard" or "deep", the value a selection's `model` takes.
+    let id: String
+    let label: String
+    /// The backend's model for it now ("" = the backend's default) and its effort.
+    let model: String
+    let modelLabel: String
+    let effort: String
+    /// Why it isn't on the tier's first model, if it isn't.
+    let note: String?
+}
+
 struct SessionModelSettingsSnapshot: Encodable {
     let selection: SessionModelSelection
     let defaults: SessionModelSelection
     let usesDefaults: Bool
     let revision: String
+    /// The tiers first (ids "fast", "standard", "deep", with their model's efforts), so clients
+    /// that list `models` offer them too, then the backend's models.
     let models: [CopilotModelInfo]
+    /// What each tier runs on this backend now.
+    let tiers: [ModelTierOption]
     let fileDefaultModel: String?
     let fileDefaultContextTier: String?
     let unavailableReason: String?
@@ -87,10 +115,12 @@ extension ChatSession {
 
     var modelSettingsSnapshot: SessionModelSettingsSnapshot {
         let catalog = modelCatalog
+        let kind = modelSettingsBackend
         return SessionModelSettingsSnapshot(
             selection: modelSelection, defaults: defaultModelSelection,
             usesDefaults: ownModelSelection == nil, revision: modelSettingsRevision,
-            models: catalog.models, fileDefaultModel: catalog.fileDefaultModel,
+            models: settings.tabModelChoices(for: kind), tiers: settings.tierOptions(for: kind),
+            fileDefaultModel: catalog.fileDefaultModel,
             fileDefaultContextTier: catalog.fileDefaultContextTier,
             unavailableReason: modelSettingsUnavailableReason,
             catalogError: catalog.refreshError, isRefreshing: catalog.isRefreshing
@@ -104,6 +134,8 @@ extension ChatSession {
         if let reason = modelSettingsUnavailableReason { throw SessionModelSettingsError(409, reason) }
         let catalog = modelCatalog
         try selection?.validate(catalog: catalog.models, fileDefaultModel: catalog.fileDefaultModel)
-        try saveModelSelection(selection)
+        var saved = selection
+        if let tier = selection.flatMap({ ModelTier(model: $0.model) }) { saved?.model = tier.rawValue }
+        try saveModelSelection(saved)
     }
 }
