@@ -2059,6 +2059,7 @@ extension ChatSession {
             : (compact ? cantripHomeBackgroundRules + "\n\n" + CantripHomeDelegations.shared.homeHandoffRules
                : cantripHomeBackgroundGuidance + CantripHomeDelegations.shared.instructions)
                 + "\n\n" + PlaceCardResolver.agentGuidance
+                + "\n\n" + WeatherCardResolver.agentGuidance(command: TabInsight.command)
         let zoneText = compact ? "Each message gives the current time zone." : "Current time zone: \(zone)."
         let modelText = compact ? "Each message lists the tiers and model IDs." : "Models: \(modelList)."
         let treatText = compact

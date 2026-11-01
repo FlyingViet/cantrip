@@ -64,6 +64,9 @@ enum RemoteHistory {
         if let placeCard = message.placeCard {
             result["placeCard"] = placeCard.snapshot
         }
+        if let weatherCard = message.weatherCard {
+            result["weatherCard"] = weatherCard.snapshot
+        }
         return result
     }
 

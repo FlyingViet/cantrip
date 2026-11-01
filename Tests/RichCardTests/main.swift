@@ -15,6 +15,7 @@ struct RichCardTests {
         testPlaceMatching()
         testPinLabelOffsets()
         try await testMatchaPlacesResolve()
+        try await testWeatherCards()
         print("Rich card unit tests passed")
     }
 
