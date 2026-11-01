@@ -1298,7 +1298,8 @@ struct ChatView: View {
                         }
                 }
             }
-            .sheet(
+            // Full screen: as a sheet it was a small card on an unfolded Duo and iPad.
+            .fullScreenCover(
                 isPresented: $showSettings,
                 onDismiss: {
                     if vm.activeLane == .home {
