@@ -85,6 +85,9 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
 - **Extensions:** dashboards, MCP tools with inline MCP App views, custom
   slash commands and a `cantrip` CLI. Typing `/` suggests the backend's own
   commands and skills. [Extensions](docs/extensions-and-skills.md)
+- **Same skills and rules on every backend:** one skills library and folder
+  rules, linked or passed to Claude Code, Copilot, Codex and Antigravity.
+  [Share skills](docs/extensions-and-skills.md#share-skills-and-rules-with-every-backend)
 
 Capabilities depend on the backend. The Local Model backend does not receive
 attachments or screen captures.
@@ -133,6 +136,8 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 | `cantrip cleanup [--dry-run] [--list] [--simulators] [--json]` | Remove unused agent sessions, worktrees, simulators and build caches now, and show package cache sizes (Cantrip also does this daily) | [Free up disk space](docs/updating-and-troubleshooting.md#free-up-disk-space) |
 | `cantrip seed-worktree PATH [--from CHECKOUT]` | Clone another checkout's installed `node_modules`, `Pods` and `.spm` into a new worktree, copy-on-write | [New worktrees reuse installed packages](docs/updating-and-troubleshooting.md#new-worktrees-reuse-installed-packages) |
 | `cantrip mcp` / `migrate [--apply]` / `connect NAME` / `approve NAME` / `enable` / `disable NAME [--backend B \| --tab ID]` / `restore` | Share MCP servers and their sign-ins with every backend, sign in to remote ones (approve from any client) | [Share MCP servers](docs/extensions-and-skills.md#share-mcp-servers-with-every-backend) |
+| `cantrip skills` / `add PATH [--move]` / `edit NAME` / `enable` / `disable NAME` / `sync` / `check` | One skills library linked for every backend: which backends see each skill, problems, credentials refused | [Share skills](docs/extensions-and-skills.md#share-skills-and-rules-with-every-backend) |
+| `cantrip instructions [list [DIR]]` / `edit FOLDER [--mirror PATH]` / `check` | Rules for everything under a folder, given to every backend; drift in repositories' AGENTS.md and CLAUDE.md files | [Share skills](docs/extensions-and-skills.md#share-skills-and-rules-with-every-backend) |
 | `cantrip api [--json]` / `api key new` / `api key clear` | Cantrip's OpenAI-compatible API for apps on this Mac: status, calls per consumer and the proxy key | [OpenAI-compatible API](docs/backends.md#serve-your-backends-to-other-apps-openai-compatible-api) |
 | `cantrip sim acquire --device NAME [--os VERSION]` / `release` / `list` / `adopt UDID` | Lease a shared simulator to a tab (a temporary copy while another tab has it) and give it back | [Shared simulators](docs/updating-and-troubleshooting.md#shared-simulators) |
 | `cantrip help` | Show the usage of these host commands (`cantrip --help` shows the ask and `runs` examples) | [Headless](docs/headless.md#commands) |
