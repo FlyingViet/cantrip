@@ -8,9 +8,11 @@
 ## Let an agent make changes
 
 **Act on my behalf** is off by default. Enabling it allows unattended actions
-such as shell commands, file edits, and sending messages. For Codex, it maps
-to bypassing approvals and its sandbox. Treat this as granting powerful
-access to your user account, not merely unlocking better answers.
+such as shell commands, file edits, and sending messages, except what the
+[agent policy](#set-what-agents-may-do) blocks or asks about. For Codex, it
+removes the sandbox but still sends each action to Cantrip's policy. Treat this
+as granting powerful access to your user account, not merely unlocking better
+answers.
 
 1. Select the intended project with the **folder** button.
 2. Open the **gear** and review your backend's permissions.
@@ -42,6 +44,63 @@ off, and leave **Act on my behalf** off.
 Explicit `!` commands, terminal commands, skills, and approved plugin processes
 are separate execution paths. The working directory is not a filesystem
 sandbox, and a prompt such as "do not edit files" is not an OS access control.
+
+## Set what agents may do
+
+Cantrip keeps one agent policy for every tab, child tab and Cantrip Home run,
+on every backend (Claude Code, Copilot, Codex, Antigravity, Copilot Remote and
+local models). Each rule **allows**, **asks** about or **denies** a tool call.
+Deny beats ask and ask beats allow, so switching backends or falling back to a
+backup never changes what an agent may do. Anything no rule covers runs when
+**Act on my behalf** is on and asks when it's off.
+
+Cantrip checks each call on the Mac before the backend runs it, also with **Act
+on my behalf** on. A denied call shows as a failed step named "Blocked by
+Cantrip policy" with the rule's reason, and the agent is told not to try
+another way. An ask rule shows the usual approval card on every paired client;
+approving lets the same action repeat for the rest of that reply.
+
+Open **Settings › Agent policy** on the Mac, or **Agent Policy** in a tab's
+menu in the browser/Mac Remote, to turn rules on or off, change their effect,
+remove them or add one. The rules live in
+`~/Library/Application Support/Cantrip/policy.json` (Settings › **Open File**).
+A rule matches any of these, limited by optional `hours` (`"21:45-22:50"`),
+`repos` (a folder or origin repository name) and `unlessGitAuthor`:
+
+- `commands`: words a command starts with (`"git push"`), with globs, `re:` for
+  a regular expression, or `@cantrip-restart`. Cantrip reads commands inside
+  `bash -c`, `eval`, heredocs fed to a shell, and after `cd`, `sudo`, `timeout`
+  and `xcrun`.
+- `paths` with `access` (`write`, `delete`, `read` or `any`); `$WORKTREE` (the
+  tab's folder), `$PROJECT` (its git repository), `$TMP` and `~` expand.
+- `deletesOutside`: deletes whose targets fall outside these folders.
+- `mcp` (`server/tool` globs), optionally only tools whose names contain one of
+  `verbs` (`send`, `delete`); `tools` (such as `WebFetch`); `kinds` (`shell`,
+  `write`, `read`, `url`, `mcp`).
+- `privacyScan` on a `git push` rule adds a scan of the outgoing commits (email
+  addresses, private network addresses, tailnet names and your `privateTerms`)
+  to the approval card.
+
+`projects` holds per-folder overrides (extra rules, and Mac-wide rules turned
+off there) in the same file, so nothing is written into your repositories. A
+new Mac starts with: deny administrator commands, deny deletes outside the
+tab's folder, project and temporary folders, deny creating, cloning, erasing
+or deleting simulators (lease one with `cantrip sim acquire`), and ask before
+publishing releases, changing production data, and sending messages, email or
+posts.
+
+The first time it runs, Cantrip imports each CLI's own rules (Claude Code's
+`permissions`, Copilot's remembered approvals, Codex's rules files), after
+copying each file to `~/Library/Application Support/Cantrip/policy-backups`,
+so nothing that ran without a prompt starts asking. Settings lists imported
+allow rules that a stricter rule overrides; the stricter rule wins until you
+narrow or turn it off. Cantrip also writes the policy's deny rules back into
+each CLI for Terminal use: Claude Code's `permissions.deny` and
+`~/.codex/rules/cantrip.rules` get the rules they can express, and Copilot
+(`~/.copilot/hooks/cantrip-policy.json`) and Antigravity (its existing hook)
+ask Cantrip's app for deny rules, allowing the call if Cantrip can't answer.
+Turn **Check every tab against the policy** off to go back to each backend's
+own rules; Cantrip Home and child tabs keep Home's rules either way.
 
 ## Choose automatic context
 

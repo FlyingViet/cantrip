@@ -141,7 +141,10 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 
 **Act on my behalf** is off by default. Keep it off, with Claude
 **Permissions** at **Safe** and Copilot **Allow all tools** off, until you
-trust the setup; explicit shell commands still run on their own. Memory,
+trust the setup; explicit shell commands still run on their own. Either way,
+one [agent policy](docs/privacy-and-memory.md#set-what-agents-may-do) of allow,
+ask and deny rules applies to every tab and backend, checked on the Mac before
+each tool call. Memory,
 document search, calendar and location context are **on** by default (subject
 to macOS permissions); screen context and Remote hosting are off. Private mode
 stops Cantrip saving the conversation, but not tool writes, image caches or

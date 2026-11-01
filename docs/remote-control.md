@@ -164,6 +164,18 @@ another model; `null` without a model picker), `limited` (whole backends:
 limit, whose backend's other models still run: `backend`, `scope`, `label` such
 as "Gemini 4 Argon" or "Opus models", `until`, `untilLabel`) and `revision`.
 
+`GET /api/v1/policy` returns the [agent policy](privacy-and-memory.md#set-what-agents-may-do)
+as `policy` (`revision`, `enabled`, `rules`, `projects`, `privateTerms`,
+`imports`, `conflicts`, `backstops`), `summaries` (a one-line description per
+rule ID), `file`, `loadError` and `namedCommands`. Every paired client can show
+it; approvals for ask rules arrive as the usual input requests. `POST` takes the
+`revision` it read and one change: `{"enabled": true|false}`, `{"rule": {…}}`
+(adds or replaces a Mac-wide rule by `id`), `{"removeRule": "id"}`,
+`{"setRuleEnabled": {"id", "enabled"}}`, or `{"policy": {"enabled", "rules",
+"projects", "privateTerms"}}`. It returns the new snapshot; a stale revision
+gets `409`, an invalid rule `400` with the reason, an unknown rule `404`.
+Imports and the CLIs' deny lists stay under Cantrip's control.
+
 `POST` takes `{"revision", "entries": [{"backend", "model", "effort"}]}` to
 replace the chain (a model the backend lists and an effort that model takes;
 the read-only fields may be sent back), `{"revision", "backends": [...]}` to
