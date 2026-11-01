@@ -50,6 +50,9 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
     private var finished = true
     private var activities: [String: ToolActivity] = [:]
     private var streamed: Set<String> = []
+    /// The agent message the reply's text last came from, and how that text ended.
+    private var textItem: String?
+    private var textEnding = ""
     private var checkedItems: Set<String> = []
     private var turnUsage = (input: 0, cached: 0, output: 0, calls: 0)
     private var lastLimit: [String: Any]?
@@ -187,6 +190,8 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
             turnID = nil
             activities.removeAll()
             streamed.removeAll()
+            textItem = nil
+            textEnding = ""
             checkedItems.removeAll()
             turnUsage = (0, 0, 0, 0)
             lastLimit = nil
@@ -353,8 +358,9 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
         switch method {
         case "item/agentMessage/delta":
             guard let delta = params["delta"] as? String, !delta.isEmpty else { return }
-            if let id = params["itemId"] as? String { lock.withLock { _ = streamed.insert(id) } }
-            emit(.textDelta(delta))
+            let id = params["itemId"] as? String
+            if let id { lock.withLock { _ = streamed.insert(id) } }
+            emitText(delta, item: id)
         case "item/reasoning/summaryTextDelta", "item/reasoning/textDelta":
             if let delta = params["delta"] as? String, !delta.isEmpty { emit(.thinkingDelta(delta)) }
         case "item/started":
@@ -438,6 +444,21 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
 
     // MARK: - Items
 
+    /// A turn's agent messages (progress notes between steps, then the answer) become paragraphs
+    /// of one reply instead of running together.
+    private func emitText(_ text: String, item: String?) {
+        let prefix = lock.withLock { () -> String in
+            defer {
+                if let item { textItem = item }
+                textEnding = String((textEnding + text).suffix(2))
+            }
+            guard let item, let previous = textItem, previous != item, !textEnding.isEmpty,
+                  !textEnding.hasSuffix("\n\n") else { return "" }
+            return textEnding.hasSuffix("\n") ? "\n" : "\n\n"
+        }
+        emit(.textDelta(prefix + text))
+    }
+
     private func itemStarted(_ item: [String: Any]) {
         guard let id = item["id"] as? String, let activity = Self.activity(for: item, running: true) else { return }
         lock.withLock { activities[id] = activity }
@@ -449,7 +470,7 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
         if item["type"] as? String == "agentMessage" {
             // Text not streamed as deltas (a resumed or very short reply) still reaches the reply.
             let wasStreamed = lock.withLock { streamed.contains(id) }
-            if !wasStreamed, let text = item["text"] as? String, !text.isEmpty { emit(.textDelta(text)) }
+            if !wasStreamed, let text = item["text"] as? String, !text.isEmpty { emitText(text, item: id) }
             return
         }
         guard var activity = Self.activity(for: item, running: false) else { return }
