@@ -1764,7 +1764,6 @@ struct ChatView: View {
         let isRemoteMutating: Bool
         let remoteTabsEnabled: Bool
         let paused: Bool
-        let voiceModeDisabled: Bool
         let settingsDisabled: Bool
         let isTabLocked: Bool
         let newConversationDisabled: Bool
@@ -1789,7 +1788,6 @@ struct ChatView: View {
             isRemoteMutating: remote.isMutating,
             remoteTabsEnabled: remoteTabsEnabled,
             paused: paused,
-            voiceModeDisabled: paused || !destinationReady || hasImageDraft || importingImages,
             settingsDisabled: vm.sending || importingImages || submittingRemote,
             isTabLocked: vm.isTabLocked,
             newConversationDisabled: newConversationDisabled,
@@ -1874,11 +1872,10 @@ struct ChatView: View {
                     }
                 }
             }
-            // Pause Agent is app-wide: it's in Settings, under the status card.
-            Section("Agent") {
-                Button { showVoiceMode = true } label: { Label("Voice Mode", systemImage: "waveform") }
-                    .disabled(state.voiceModeDisabled)
-                if !state.isCantrip && !state.isHome {
+            // Pause Agent is app-wide (Settings, under the status card); Voice Mode opens from the
+            // composer's microphone (double-tap) or, in local chats, its ∞ button.
+            if !state.isCantrip && !state.isHome {
+                Section("Agent") {
                     Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
                         .disabled(state.paused)
                 }
