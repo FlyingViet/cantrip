@@ -10,6 +10,7 @@ extension SessionTabTests {
         try await testMCPRelay()
         try testMCPMigration()
         try await testMCPRemoteList()
+        try await testMCPClientReuse()
         print("MCP sharing: import, backend configs, OAuth with single-flight refresh, the relay and the remote list passed")
     }
 
@@ -79,6 +80,53 @@ extension SessionTabTests {
         } catch let failure as MCPOAuth.Failure {
             precondition(failure.message.hasPrefix("Couldn't reach mcp.example.com"), failure.message)
         }
+    }
+
+    /// The client Cantrip registers is saved in the keychain store at once and reused by the next
+    /// sign-in (a retry included), until the sign-in server or redirect changes or it's refused.
+    static func testMCPClientReuse() async throws {
+        final class Registrations: @unchecked Sendable { var count = 0 }
+        let registrations = Registrations()
+        let transport: MCPOAuth.Transport = { request in
+            registrations.count += 1
+            let body = #"{"client_id":"client-\#(registrations.count)","client_secret":"secret-\#(registrations.count)"}"#
+            return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!)
+        }
+        let secrets = MCPSecrets.Store.memory()
+        let signIns = MCPSignIns(secrets: secrets, transport: transport)
+        let endpoints = MCPOAuth.Endpoints(resource: "https://mcp.example.com/mcp", issuer: "https://auth.example.com",
+                                           authorizationEndpoint: "https://auth.example.com/authorize",
+                                           tokenEndpoint: "https://auth.example.com/token",
+                                           registrationEndpoint: "https://auth.example.com/register")
+        let redirect = "http://127.0.0.1:5555/oauth/callback"
+        let first = try await signIns.client(for: "design", endpoints: endpoints, redirectURI: redirect)
+        precondition(first.clientID == "client-1" && registrations.count == 1)
+        let saved = try secrets.string(MCPSecrets.clientAccount("design"))
+        precondition(saved?.contains("secret-1") == true, "Saved in the keychain store as soon as it's registered")
+        let retry = try await signIns.client(for: "design", endpoints: endpoints, redirectURI: redirect)
+        precondition(retry == first && registrations.count == 1, "A retry reuses it instead of registering again")
+        let port = try await signIns.registeredClient("design")?.port
+        precondition(port == 5555, "The next sign-in listens on its redirect port")
+
+        let moved = try await signIns.client(for: "design", endpoints: endpoints, redirectURI: "http://127.0.0.1:6666/oauth/callback")
+        precondition(moved.clientID == "client-2", "Another redirect (the port was taken) needs a new registration")
+        var other = endpoints
+        other.issuer = "https://login.example.com"
+        let otherServer = try await signIns.client(for: "design", endpoints: other, redirectURI: moved.redirectURI)
+        precondition(otherServer.clientID == "client-3", "Another sign-in server needs its own")
+        try await signIns.forgetClient("design")
+        let fresh = try await signIns.client(for: "design", endpoints: other, redirectURI: moved.redirectURI)
+        precondition(fresh.clientID == "client-4", "A refused client is forgotten, and the next try registers again")
+
+        // A sign-in saved before registrations were kept still lends its client.
+        let signedIn = MCPOAuth.Credential(endpoints: endpoints, clientID: "legacy", clientSecret: nil, redirectURI: redirect,
+                                           accessToken: "a", refreshToken: nil, expiresAt: nil, signedInAt: Date())
+        try await signIns.store(signedIn, for: "errors")
+        let legacy = try await signIns.client(for: "errors", endpoints: endpoints, redirectURI: redirect)
+        precondition(legacy.clientID == "legacy" && registrations.count == 4)
+        try await signIns.signOut("design")
+        let kept = try await signIns.registeredClient("design")
+        precondition(kept != nil, "Signing out keeps the registration")
     }
 
     /// What Remote clients get: whether a server has a credential in the keychain, never its name or value.

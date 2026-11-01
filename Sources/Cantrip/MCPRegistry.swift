@@ -87,6 +87,8 @@ enum MCPSecrets {
     static func envAccount(_ server: String, _ key: String) -> String { "\(server)/env/\(key)" }
     static func headerAccount(_ server: String, _ name: String) -> String { "\(server)/header/\(name.lowercased())" }
     static func oauthAccount(_ server: String) -> String { "\(server)/oauth" }
+    /// The client Cantrip registered with a server's sign-in server, kept between sign-ins.
+    static func clientAccount(_ server: String) -> String { "\(server)/client" }
     static func backupAccount(_ file: String) -> String { "backup/\(file)" }
 
     private static func query(_ account: String) -> [String: Any] {
