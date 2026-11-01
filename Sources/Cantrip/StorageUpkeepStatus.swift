@@ -81,7 +81,9 @@ struct StorageUpkeepView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Toggle("Clean up unused agent sessions and worktrees daily", isOn: $settings.storageUpkeepEnabled)
+            Toggle(isOn: $settings.storageUpkeepEnabled) {
+                Text("Clean up unused agent sessions and worktrees daily").fixedSize(horizontal: false, vertical: true)
+            }
                 .font(.caption)
                 .toggleStyle(.checkbox)
                 .help("Removes Copilot session folders nothing has used for the set number of days, and agent git "

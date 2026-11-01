@@ -3981,18 +3981,26 @@ struct SettingsView: View {
     private var interfacePicker: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Interface").font(.caption).foregroundStyle(.secondary)
-            Picker("", selection: $settings.interfaceMode) {
-                Text("Panel (⌥Space)").tag(InterfaceMode.panel)
-                Text("Home window, like Cantrip Gateway").tag(InterfaceMode.window)
-                    .disabled(!HomeWindow.isAvailable)
+            // Side by side when the pane is wide enough; stacked otherwise, so Settings never
+            // grows wider than its pane.
+            ViewThatFits(in: .horizontal) {
+                interfaceModePicker.pickerStyle(.segmented)
+                interfaceModePicker.pickerStyle(.radioGroup)
             }
-            .labelsHidden()
-            .pickerStyle(.segmented)
             Text(HomeWindow.unavailableReason
                  ?? "The Home window has a sidebar of tabs, Home, tasks, artifacts and a terminal. ⌥Space and the menu bar icon open whichever you pick; the other stays available from the menu.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var interfaceModePicker: some View {
+        Picker("", selection: $settings.interfaceMode) {
+            Text("Panel (⌥Space)").tag(InterfaceMode.panel)
+            Text("Home window, like Cantrip Gateway").tag(InterfaceMode.window)
+                .disabled(!HomeWindow.isAvailable)
+        }
+        .labelsHidden()
     }
 
     var body: some View {
@@ -4002,7 +4010,7 @@ struct SettingsView: View {
         .frame(maxHeight: 500)
     }
 
-    private var settingsContent: some View {
+    var settingsContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             interfacePicker
             Divider().opacity(0.3)
@@ -4197,7 +4205,7 @@ struct SettingsView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 16) {
+            FlowLayout(spacing: 16, lineSpacing: 4) {
                 Stepper(value: $settings.childTabsPerParentLimit, in: 1...ChildTabCapacity.maximumPerParent) {
                     Text("Child tabs per tab: \(settings.childTabsPerParentLimit)")
                         .font(.caption)
@@ -4267,7 +4275,7 @@ struct SettingsView: View {
                     }
                 }
                 MacAccessView()
-                HStack(spacing: 8) {
+                FlowLayout(spacing: 8, lineSpacing: 4) {
                     Text("Port")
                         .font(.caption)
                         .foregroundStyle(.secondary)
