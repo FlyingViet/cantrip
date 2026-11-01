@@ -33,6 +33,19 @@ function templateSlice(startMarker, endMarker) {
     return swiftUnescape(template.slice(start, end));
 }
 
+// The whole page script must parse: one bad escape (a "\n" that Swift turns into a real newline)
+// stops every function in the browser Remote from being defined.
+{
+    const template = swift.slice(swift.indexOf('static let webAppTemplate = """') + 'static let webAppTemplate = """'.length);
+    const html = swiftUnescape(template.slice(0, template.indexOf('\n    """')));
+    const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match => match[1]);
+    expect(scripts.length > 0, "the page has a script");
+    for (const script of scripts) {
+        try { new vm.Script(script); passes++; }
+        catch (error) { failures++; console.log(`FAIL: the page script doesn't parse: ${error.message}`); }
+    }
+}
+
 const pure = vm.createContext({});
 vm.runInContext(templateSlice("    function slashToken(", "    const slashCache="), pure);
 const { slashToken, matchCommands, chooseCommand, commandTitle, slashCommandsStale } = pure;

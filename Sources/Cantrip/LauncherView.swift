@@ -524,6 +524,16 @@ struct LauncherView: View {
             .help("Session working directory: \(session.workdir) — click to change")
             .hoverHint("Working directory — where commands & agents run", $toolbarHint)
 
+            if let environment = EnvironmentProfiles.resolved(for: session.workdir) {
+                Text(environment.label)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .foregroundStyle(environment.problems.isEmpty ? Color.secondary : Color.orange)
+                    .help(EnvironmentCLI.describe(environment).joined(separator: "\n")
+                          + "\n\nEvery backend, child tab and ! command here uses this profile (cantrip env).")
+                    .accessibilityLabel("Environment profile \(environment.profile.name): \(environment.label)")
+            }
+
             if isGitRepo {
                 gitMenu
                     .hoverHint("Git quick actions for this repo", $toolbarHint)
