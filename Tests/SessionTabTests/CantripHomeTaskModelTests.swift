@@ -134,12 +134,13 @@ extension SessionTabTests {
             let lines = instructions.split(separator: "\n").map(String.init)
             let trackerLine = lines.first { $0.contains("Model tracker 2 — ") } ?? ""
             let briefingLine = lines.first { $0.contains("Model briefing — ") } ?? ""
-            precondition(instructions.contains(#""model":"Copilot model ID", "" for Home's model, or null to keep,"#)
-                         && instructions.contains("Models: claude-opus-5.5, claude-sonnet-5.5, claude-haiku-4.5.")
+            precondition(instructions.contains(#""model":"fast, standard, deep, or a model ID", "" for Home's model, or null to keep,"#)
+                         && instructions.contains("Models: tiers fast, standard, deep; models claude-opus-5.5, claude-sonnet-5.5, claude-haiku-4.5.")
+                         && instructions.contains("Prefer a tier: fast (quick, cheap checks), standard or deep")
                          && trackerLine.contains("; runsAfter \(plain.id.uuidString); model claude-sonnet-5.5")
                          && briefingLine.hasSuffix("; effort high") && !briefingLine.contains("; model "),
                          "Home's protocol documents task models and lists each task's model: \(trackerLine) / \(briefingLine)")
-            precondition(CantripHomeProtocol.schema(for: .task).contains(#""model":null or "model ID" or """#),
+            precondition(CantripHomeProtocol.schema(for: .task).contains(#""model":null or "fast|standard|deep" or "model ID" or """#),
                          "Block corrections show the model field")
 
             // Resolution: the task's model with Home's effort and context; Home's model otherwise.
@@ -206,6 +207,30 @@ extension SessionTabTests {
                          "The task model reaches the hidden run's Copilot backend")
             run.cantripHomeModelOverride = nil
             precondition(backend.modelOverride == nil, "Clearing the override returns to Home's model")
+
+            // A tier: stored by name, run as the backend's model for it, effort checked against that model.
+            let savedTiers = settings.modelTiers
+            settings.modelTiers = ModelTierMap()
+            defer { settings.modelTiers = savedTiers }
+            let deepTask = try store.create(.init(id: tracker.id, title: nil, prompt: nil, schedule: nil, model: " Deep "), now: now)
+            precondition(deepTask.model == "deep", "A tier is saved by its name")
+            rejects(.init(id: tracker.id, title: nil, prompt: nil, schedule: nil, effort: "turbo"), "doesn't support effort turbo")
+            let deep = CantripHomeTaskModels.resolve(task: deepTask, settings: settings)
+            precondition(deep == .init(selection: .init(model: "deep", effort: "", contextTier: ""),
+                                       model: "Deep · claude-opus-5.5 · xhigh", note: nil), "\(deep)")
+            run.cantripHomeModelOverride = deep.selection
+            precondition(backend.modelOverride == "claude-opus-5.5" && backend.effortOverride == "xhigh"
+                         && backend.contextTierOverride == "" && run.runTier == .deep,
+                         "The tier's model and effort reach the hidden run's backend")
+            // The deep mapping changes once and the next run follows it.
+            settings.modelTiers.set([ModelTierChoice(model: "claude-sonnet-5.5", effort: "high")], for: .deep, on: .copilot)
+            run.cantripHomeModelOverride = deep.selection
+            precondition(backend.modelOverride == "claude-sonnet-5.5" && backend.effortOverride == "high")
+            settings.modelTiers.set([ModelTierChoice(model: "claude-gone-9"), ModelTierChoice(model: "claude-opus-5.5")],
+                                    for: .deep, on: .copilot)
+            precondition(CantripHomeTaskModels.resolve(task: deepTask, settings: settings).note
+                         == "Deep on Copilot: claude-gone-9 isn't offered, so claude-opus-5.5.")
+            run.cantripHomeModelOverride = nil
             run.discardCantripHomeRun()
 
             for id in [tracker.id, plain.id] { try? store.delete(id: id) }

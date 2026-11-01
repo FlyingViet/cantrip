@@ -447,6 +447,12 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// Each backend's models per model tier (fast, standard, deep), first choice first. Only the
+    /// edited cells are kept; the rest follow `ModelTierMap.defaults`.
+    @Published var modelTiers = ModelTierMap() {
+        didSet { d.set(try? JSONEncoder().encode(modelTiers), forKey: "modelTiers") }
+    }
+
     /// Known backends only, in the order given, without repeating a backend and model.
     static func fallbackEntries(_ raw: [FallbackEntry]) -> [FallbackEntry] {
         var seen = Set<FallbackEntry>()
@@ -787,6 +793,7 @@ final class AppSettings: ObservableObject {
             "councilScope": councilScope, "limitFallbackBackends": limitFallbackBackends,
             "limitFallbackModels": limitFallbackModels.mapValues { ["model": $0.model, "effort": $0.effort] },
             "limitFallbackEntries": limitFallbackEntries.map { ["backend": $0.backend, "model": $0.model, "effort": $0.effort] },
+            "modelTiers": modelTiers.overrides.mapValues { $0.mapValues { $0.map { ["model": $0.model, "effort": $0.effort] } } },
             "allowActions": allowActions, "shareLocation": shareLocation,
             "shareCalendar": shareCalendar, "attachScreen": attachScreen,
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
@@ -904,6 +911,13 @@ final class AppSettings: ObservableObject {
            raw.allSatisfy({ BackendKind(rawValue: $0["backend"] ?? "") != nil }) {
             limitFallbackEntries = raw.map { FallbackEntry(backend: $0["backend"] ?? "", model: $0["model"] ?? "", effort: $0["effort"] ?? "") }
             applied.append("limitFallbackEntries")
+        }
+        // Edited tier cells; a file without the key leaves the map alone.
+        if let raw = dict["modelTiers"] as? [String: [String: [[String: String]]]] {
+            modelTiers = ModelTierMap.cleaned(raw.mapValues { $0.mapValues { $0.map {
+                ModelTierChoice(model: $0["model"] ?? "", effort: $0["effort"] ?? "")
+            } } })
+            applied.append("modelTiers")
         }
         bool("allowActions") { self.allowActions = $0 }
         bool("shareLocation") { self.shareLocation = $0 }
@@ -1089,6 +1103,8 @@ final class AppSettings: ObservableObject {
                 }
         }
         codexPath = d.string(forKey: "codexPath") ?? ""
+        modelTiers = d.data(forKey: "modelTiers").flatMap { try? JSONDecoder().decode(ModelTierMap.self, from: $0) }
+            .map { ModelTierMap.cleaned($0.overrides) } ?? ModelTierMap()
         codexModel = d.string(forKey: "codexModel") ?? ""
         codexEffort = d.string(forKey: "codexEffort") ?? ""
         codexAvailableModels = d.data(forKey: "codexAvailableModels").flatMap { try? JSONDecoder().decode([CodexModel].self, from: $0) } ?? []

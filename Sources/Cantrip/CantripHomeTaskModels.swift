@@ -1,6 +1,7 @@
 import Foundation
 
-/// A Home task's own model and effort (Copilot, Claude Code or Antigravity, whichever runs Home).
+/// A Home task's own model and effort (Copilot, Claude Code, Antigravity or Codex, whichever runs
+/// Home). `model` can be a tier (fast, standard, deep) that runs each backend's model for it.
 /// Tasks without one follow Home's selection.
 enum CantripHomeTaskModels {
     /// The model and settings a hidden run uses, and why it fell back to Home's model.
@@ -15,6 +16,13 @@ enum CantripHomeTaskModels {
     /// The backend whose models tasks pick from.
     static func backend(_ settings: AppSettings) -> BackendKind {
         settings.tabModelBackend
+    }
+
+    /// The `model` values Home's protocol lists: the tiers, then the backend's model IDs.
+    static func protocolModels(_ settings: AppSettings) -> String {
+        let tiers = ModelTier.allCases.map(\.rawValue).joined(separator: ", ")
+        let ids = offered(settings)
+        return "tiers \(tiers); models " + (ids.isEmpty ? "the IDs in the model picker" : ids.joined(separator: ", "))
     }
 
     /// IDs the model picker offers; empty until the Mac has loaded the backend's catalog.
@@ -33,25 +41,27 @@ enum CantripHomeTaskModels {
         model: String?, effort: String?, saved: (model: String?, effort: String?),
         settings: AppSettings
     ) throws -> (model: String?, effort: String?) {
-        let trimmedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let tier = trimmedModel.flatMap(ModelTier.init(model:)) { trimmedModel = tier.rawValue }
         let trimmedEffort = effort?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let nextModel = trimmedModel.map { $0.isEmpty ? nil : $0 } ?? saved.model
         let nextEffort = trimmedEffort.map { $0.isEmpty ? nil : $0 } ?? saved.effort
         let offered = offered(settings)
-        if let trimmedModel, !trimmedModel.isEmpty {
+        if let trimmedModel, !trimmedModel.isEmpty, ModelTier(model: trimmedModel) == nil {
             // Claude Code aliases may carry a context suffix, e.g. `fable[1m]`.
             let wellFormed = trimmedModel.count <= 80
                 && trimmedModel.range(of: #"^[A-Za-z0-9][A-Za-z0-9._:-]*(\[[0-9a-z]+\])?$"#,
                                       options: .regularExpression) != nil
             guard wellFormed, offered.isEmpty || offered.contains(trimmedModel) else {
                 throw CantripHomeError(
-                    400, "Unknown model \(trimmedModel). Use one the model picker offers: "
+                    400, "Unknown model \(trimmedModel). Use a tier (fast, standard, deep) or one the model picker offers: "
                         + offered.joined(separator: ", ") + "."
                 )
             }
         }
         if let trimmedEffort, !trimmedEffort.isEmpty {
-            let target = nextModel ?? homeSelection(settings: settings).model
+            // A tier's effort is checked against the model it runs now.
+            let target = settings.resolvedModel(backend(settings), chosen: nextModel ?? homeSelection(settings: settings).model)
             let catalog = settings.tabModelCatalog(for: backend(settings))
             let advertised = catalog.info(target)?.reasoningEfforts
             let supported = advertised ?? (backend(settings) == .claudeCode ? [] : settings.copilotEffortChoices)
@@ -84,14 +94,30 @@ enum CantripHomeTaskModels {
         case .codex: defaultName = "Codex's default model"
         default: defaultName = settings.copilotFileDefaultModel ?? "Copilot's default model"
         }
-        let homeModel = home.model.isEmpty ? defaultName : home.model
+        var homeModel = home.model.isEmpty ? defaultName : home.model
+        if let tier = ModelTier(model: home.model) {
+            homeModel = settings.tierLabel(settings.resolveTier(tier, on: backend(settings), effort: home.effort))
+        }
         guard let task, task.model != nil || task.effort != nil else {
             return .init(selection: nil, model: homeModel, note: nil)
+        }
+        if settings.backend == .localModel, task.model.flatMap(ModelTier.init(model:)) != nil {
+            return .init(selection: nil, model: settings.localModel, note: nil)
         }
         guard AppSettings.tabModelBackends.contains(settings.backend) else {
             return .init(
                 selection: nil, model: settings.backend.rawValue,
                 note: "Ran with Home's \(settings.backend.rawValue) backend: task models need Copilot, Claude Code or Antigravity."
+            )
+        }
+        // A tier runs the backend's model for it; the run resolves it again as it starts, so a
+        // model at its own limit moves to the tier's next one there.
+        if let tier = task.model.flatMap(ModelTier.init(model:)) {
+            let resolved = settings.resolveTier(tier, on: backend(settings), effort: task.effort ?? "")
+            return .init(
+                selection: .init(model: tier.rawValue, effort: task.effort ?? "", contextTier: ""),
+                model: settings.tierLabel(resolved),
+                note: resolved.note.map { "\(tier.label) on \(backend(settings).rawValue): \($0)." }
             )
         }
         let offered = offered(settings)

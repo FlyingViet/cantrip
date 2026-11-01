@@ -4517,7 +4517,7 @@ struct SettingsView: View {
                 HStack(spacing: 6) {
                     Text("\(index + 1).").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     Text(kind.rawValue).font(.caption).lineLimit(1)
-                    if let until = BackendLimitTracker.shared.limitedUntil(kind, model: settings.effectiveModel(kind, chosen: entry.model)) {
+                    if let until = BackendLimitTracker.shared.limitedUntil(kind, model: settings.effectiveModel(kind, chosen: settings.resolvedModel(kind, chosen: entry.model))) {
                         Text("at its limit until \(BackendFallback.untilLabel(until))").font(.caption2).foregroundStyle(.orange)
                     }
                     Spacer(minLength: 4)
@@ -4549,7 +4549,7 @@ struct SettingsView: View {
             .disabled(addable.isEmpty)
             Text(entries.isEmpty
                  ? "Off: when a backend says its plan's usage limit is reached, the run stops and shows the error."
-                 : "When a backend says its plan's usage limit is reached, Cantrip continues the task on the first backup that isn't at its limit too, moving down the list each time another one runs out, and sends new messages from every tab there until the limit resets (an hour when the backend doesn't say). Where a backend's models have their own limits (Antigravity's model groups, Claude's weekly Opus and Sonnet limits), only that model's backups are skipped, so the same backend can be listed again with another model. Council seats and Private Local tabs don't switch.")
+                 : "When a backend says its plan's usage limit is reached, Cantrip continues the task on the first backup that isn't at its limit too, moving down the list each time another one runs out, and sends new messages from every tab there until the limit resets (an hour when the backend doesn't say). Where a backend's models have their own limits (Antigravity's model groups, Claude's weekly Opus and Sonnet limits), only that model's backups are skipped, so the same backend can be listed again with another model. A backup on its default model runs the same tier as a tab set to Fast, Standard or Deep; one set to a tier runs that tier. Council seats and Private Local tabs don't switch.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -4587,15 +4587,18 @@ struct SettingsView: View {
                 .map { settings.effectiveModel(kind, chosen: $0.element.model) })
                 .union(kind == settings.backend ? [settings.effectiveModel(kind, chosen: "")] : [])
             let offered = catalog.models.filter { $0.id == entry.model || !others.contains($0.id) }
+            let tiers = settings.tierOptions(for: kind).filter { $0.id == entry.model || !others.contains($0.id) }
             let defaultFree = entry.model.isEmpty || !others.contains(settings.effectiveModel(kind, chosen: ""))
-            let efforts = catalog.info(entry.model.isEmpty ? defaults.model : entry.model)?.reasoningEfforts ?? []
+            let runs = entry.model.isEmpty ? defaults.model : settings.resolvedModel(kind, chosen: entry.model)
+            let efforts = catalog.info(runs)?.reasoningEfforts ?? []
             HStack(spacing: 8) {
                 Picker("Model", selection: Binding(get: { entry.model }, set: { setFallbackModel(at: index, model: $0, effort: "") })) {
                     if defaultFree {
                         Text(defaults.model.isEmpty ? "Default model" : "Default (\(settings.fallbackModelLabel(kind, defaults.model)))").tag("")
                     }
+                    ForEach(tiers, id: \.id) { Text("\($0.label) — \($0.modelLabel)").tag($0.id) }
                     ForEach(offered) { Text(settings.fallbackModelLabel(kind, $0.id)).tag($0.id) }
-                    if !entry.model.isEmpty, !catalog.models.contains(where: { $0.id == entry.model }) {
+                    if !entry.model.isEmpty, ModelTier(model: entry.model) == nil, !catalog.models.contains(where: { $0.id == entry.model }) {
                         Text("\(entry.model) (not offered now)").tag(entry.model)
                     }
                 }
