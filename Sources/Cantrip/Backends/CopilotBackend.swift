@@ -123,6 +123,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         var mcpApps = true
         /// Cantrip Home sessions route every tool request through the host's action policy.
         var guardrail: String?
+        /// Other tabs route every tool request through Cantrip's agent policy too.
+        var policy = false
         var disabledMcpServers: [String]?
         var excludedTools: [String]?
         var toolDeferThreshold: Int?
@@ -136,6 +138,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
              "systemGuidance": CopilotBackend.systemGuidance(allowSubagents: allowSubagents)
                 + (homeProtocol.map { "\n\n" + $0 } ?? "")]
             if let guardrail { object["guardrail"] = guardrail }
+            if policy { object["policy"] = true }
             if let disabledMcpServers, !disabledMcpServers.isEmpty {
                 object["disabledMcpServers"] = disabledMcpServers
             }
@@ -220,6 +223,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             allowSubagents: settings.copilotAllowSubagents && excludedTools?.contains("task") != true,
             mcpApps: settings.copilotMCPApps,
             guardrail: guardrail?.rawValue,
+            policy: !readOnly && guardrail == nil && AgentPolicyGate.enforcesEverywhere,
             disabledMcpServers: MCPBackendConfig.disabledForRun(disabledMcpServers, tab: tabID),
             excludedTools: excludedTools,
             toolDeferThreshold: toolDeferThreshold,
@@ -555,33 +559,28 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
 
     private func decidePolicy(_ request: CantripHomeActionRequest, id: String, owner: String,
                               reply: @escaping (Bool, String?) -> Void) {
-        let mode = guardrail ?? .unattended
         // The mode this turn started with ("Act on my behalf"), matching the bridge's own checks.
         let approval: CantripHomeApproval = configuration?.autoApprove == true ? .automatic : .ask
-        let decision = CantripHomeActionPolicy.evaluate(
-            request, mode: mode, approval: approval,
-            environment: .current(workdir: configuration?.workdir ?? "")
-        )
-        if decision.verdict == .deny {
-            Log.write("home policy: denied \(request.kind.rawValue): \(request.command.prefix(160))")
-            return reply(false, decision.reason)
-        }
-        if decision.verdict == .allow, approval.runsWithoutAsking(request) {
-            if decision.automatic {
-                Log.write("home policy: approved \(decision.action) automatically (Act on my behalf)")
-            }
+        let outcome = AgentPolicyGate.decide(request, guardrail: guardrail, approval: approval,
+                                             label: guardrailLabel, workdir: configuration?.workdir ?? "")
+        let title: String, detailText: String, scope: String, source: String, what: String
+        switch outcome {
+        case .deny(let reason, let by):
+            onEvent?(.activity(AgentPolicyGate.denialActivity(request, reason: reason, by: by)))
+            return reply(false, reason)
+        case .allow:
             return reply(true, nil)
+        case .ask(let askTitle, let askDetail, let askScope, let askSource, let action):
+            if approvedScopes.contains(askScope) { return reply(true, nil) }
+            (title, detailText, scope, source, what) = (askTitle, askDetail, askScope, askSource, action)
+        case .prompt:
+            title = "Allow \(request.kind.rawValue)?"
+            detailText = String((request.command.isEmpty ? (request.paths + [request.server, request.tool].compactMap { $0 })
+                .joined(separator: "\n") : request.command).prefix(2_000))
+            (scope, source, what) = ("", guardrail != nil ? "Cantrip Home" : "Copilot", "")
         }
-        if decision.verdict == .ask, approvedScopes.contains(decision.scope) { return reply(true, nil) }
-        let label = guardrailLabel
-        let title = decision.verdict == .ask
-            ? "\(label) wants to \(decision.action)"
-            : "Allow \(request.kind.rawValue)?"
-        let detailText = decision.verdict == .ask ? decision.detail
-            : String((request.command.isEmpty ? request.paths.joined(separator: "\n") : request.command).prefix(2_000))
-        let scope = decision.scope
         let pending = BackendInputRequest(
-            kind: .approval, source: "Cantrip Home", title: title, detail: detailText
+            kind: .approval, source: source, title: title, detail: detailText
         ) { [weak self] answer in
             self?.queue.async {
                 guard let self, self.runID == owner,
@@ -590,14 +589,11 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                     if !scope.isEmpty { self.approvedScopes.insert(scope) }
                     reply(true, nil)
                 } else {
-                    let what = decision.action.isEmpty ? "this action" : decision.action
-                    reply(false, answer.decision == .deny
-                        ? "The user declined to \(what). Don't retry it another way; say in your reply that it was skipped."
-                        : "No approval arrived to \(what), so it was skipped. Say so in your reply.")
+                    reply(false, AgentPolicyGate.declined(what, answered: answer.decision == .deny))
                 }
             }
         }
-        Log.write("home policy: asking the user before \(decision.action.isEmpty ? request.kind.rawValue : decision.action)")
+        Log.write("policy: asking the user before \(what.isEmpty ? request.kind.rawValue : what)")
         inputRequests[id] = pending
         ready = true
         onEvent?(.inputRequired(pending))

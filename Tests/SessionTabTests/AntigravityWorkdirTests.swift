@@ -37,6 +37,9 @@ extension SessionTabTests {
         settings.agyModel = "model-a"
         settings.allowActions = true
         settings.agyPermissionMode = "default"
+        // These fixtures replay tool steps without calling the hook.
+        let restorePolicy = suspendAgentPolicy()
+        defer { restorePolicy() }
 
         let backend = AntigravityBackend(persistKey: "test-agy-workdir")
         backend.reset()

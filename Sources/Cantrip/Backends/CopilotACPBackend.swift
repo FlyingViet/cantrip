@@ -464,9 +464,10 @@ final class CopilotACPBackend: Backend, CantripHomeGuardedBackend {
 
     private func handlePermission(id: Any?, params: [String: Any]) {
         let options = params["options"] as? [[String: Any]] ?? []
-        if let mode = guardrail, !readOnly, !suppressUpdates, promptInFlight, let id,
+        if guardrail != nil || AgentPolicyGate.enforcesEverywhere, !readOnly, !suppressUpdates, promptInFlight, let id,
            let action = Self.homeAction(params["toolCall"] as? [String: Any] ?? [:]) {
-            let decision = CantripHomeActionPolicy.evaluate(action, mode: mode)
+            let outcome = AgentPolicyGate.decide(action, guardrail: guardrail, approval: .ask,
+                                                 label: guardrailLabel, workdir: settings.claudeWorkdir)
             func answer(_ approved: Bool) {
                 let kinds = approved ? ["allow_once", "allow_always"] : ["reject_once", "reject_always"]
                 let choice = kinds.lazy.compactMap { kind in
@@ -480,19 +481,17 @@ final class CopilotACPBackend: Backend, CantripHomeGuardedBackend {
                     decidedBy: "Cantrip"
                 )))
             }
-            switch decision.verdict {
-            case .deny:
-                Log.write("home policy: denied ACP \(action.kind.rawValue): \(action.command.prefix(160))")
+            switch outcome {
+            case .deny(let reason, let by):
+                Log.write("policy: denied ACP \(action.kind.rawValue): \(action.command.prefix(160))")
+                currentOnEvent?(.activity(AgentPolicyGate.denialActivity(action, reason: reason, by: by)))
                 return answer(false)
-            case .ask where !approvedScopes.contains(decision.scope):
+            case .ask(let title, let detail, let scope, let source, _) where !approvedScopes.contains(scope):
                 let gen = generation
-                let request = BackendInputRequest(
-                    kind: .approval, source: "Cantrip Home",
-                    title: "\(guardrailLabel) wants to \(decision.action)", detail: decision.detail
-                ) { [weak self] response in
+                let request = BackendInputRequest(kind: .approval, source: source, title: title, detail: detail) { [weak self] response in
                     self?.queue.async {
                         guard let self, self.generation == gen, self.promptInFlight else { return }
-                        if response.decision == .approve { self.approvedScopes.insert(decision.scope) }
+                        if response.decision == .approve { self.approvedScopes.insert(scope) }
                         answer(response.decision == .approve)
                         self.inputRequests.removeAll { !$0.isPending }
                     }
@@ -500,7 +499,9 @@ final class CopilotACPBackend: Backend, CantripHomeGuardedBackend {
                 inputRequests.append(request)
                 currentOnEvent?(.inputRequired(request))
                 return
-            case .ask, .allow:
+            case .allow where outcome.explicitlyAllowed:
+                return answer(true)
+            case .ask, .allow, .prompt:
                 break
             }
         }
