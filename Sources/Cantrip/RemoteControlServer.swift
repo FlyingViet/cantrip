@@ -307,6 +307,28 @@ final class RemoteControlServer {
         }
     }
 
+    /// The secrets broker: names, field names and sync state (never a value), and a request to
+    /// unlock Bitwarden and sync, which shows the password dialog on the Mac.
+    @MainActor
+    private func handleSecrets(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
+        let hub = SecretsHub.shared
+        switch request.method {
+        case "GET":
+            sendJSON(hub.remotePayload(), on: connection)
+        case "POST":
+            guard request.body.count <= 1024,
+                  let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+                  body["action"] as? String == "sync" else {
+                sendError(400, "The only secrets action is sync.", on: connection)
+                return
+            }
+            hub.requestSync(from: "a paired device")
+            sendJSON(hub.remotePayload(), on: connection)
+        default:
+            sendError(405, "method not allowed", on: connection)
+        }
+    }
+
     /// Shared MCP servers: the list and sign-in states (never a token), and actions on them.
     /// Approving presses the consent page's own button in the agent Chrome.
     @MainActor
@@ -757,6 +779,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/model-tiers"
                 || request.path == "/api/v1/mcp"
                 || request.path == "/api/v1/skills"
+                || request.path == "/api/v1/secrets"
                 || request.path == "/api/v1/link-previews/image"
                 || request.path.hasPrefix("/api/v1/link-previews/image/")
                 || request.path == "/api/v1/map-tile" else {
@@ -777,6 +800,10 @@ final class RemoteControlServer {
         }
         if request.path == "/api/v1/skills" {
             handleSkills(request, on: connection)
+            return
+        }
+        if request.path == "/api/v1/secrets" {
+            handleSecrets(request, on: connection)
             return
         }
         if request.path == "/api/v1/maintenance" {
@@ -2511,6 +2538,8 @@ final class RemoteControlServer {
             "mentionable": TabInsight.isReadable(session),
         ]
         if let status = session.statusText { result["status"] = status }
+        // The project's environment profile (Xcode, Node, PATH): names and versions, never values.
+        if let environment = EnvironmentProfiles.resolved(for: session.workdir) { result["environment"] = environment.payload }
         if let section = manager?.sectionID(of: session) { result["sectionID"] = section.uuidString }
         if let parentID = manager?.parentID(ofChild: session.id), let record = ChildTabStore.shared.record(session.id) {
             result["parentID"] = parentID.uuidString
@@ -3094,7 +3123,7 @@ private extension RemoteControlServer {
     .session-close[hidden]{display:none}.live-subagents{position:sticky;bottom:0;z-index:3;display:grid;gap:6px;max-height:45vh;overflow-y:auto;padding:8px 16px;background:var(--chrome);border-top:1px solid var(--line);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.subagent{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-size:12px}.subagent.active{border-left:3px solid var(--accent)}.subagent-head{display:flex;align-items:flex-start;gap:7px}.subagent-head>.status-icon{flex:none;margin-top:2px}.subagent-title{display:flex;flex:1;flex-wrap:wrap;align-items:center;gap:3px 6px;min-width:0}.subagent-title strong{font-size:13px;overflow-wrap:anywhere}.subagent-badge{padding:0 5px;border-radius:4px;background:var(--surface-2);color:var(--secondary);font-size:10px}.subagent-stop{flex:none;min-height:32px;min-width:52px}.subagent-body{display:grid;gap:3px;margin:4px 0 0 21px;color:var(--secondary)}.subagent-now{color:var(--text);overflow-wrap:anywhere}.subagent-meta{font-variant-numeric:tabular-nums}.subagent-error{color:var(--red);font-weight:600;overflow-wrap:anywhere}.subagent-latest{margin:0 0 6px;color:var(--secondary);white-space:pre-wrap;overflow-wrap:anywhere}.subagent-step{display:flex;align-items:center;gap:7px;padding:2px 0;min-width:0}.subagent .disclosure{margin-top:3px}.status-icon.idle{color:var(--secondary)}
     .steps{margin-top:8px}.status-icon{display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;font-size:10px;font-weight:800;color:var(--tertiary)}.status-icon.succeeded{color:var(--green)}.status-icon.failed{color:var(--red)}.status-icon.cancelled{color:var(--secondary)}.status-icon.running{color:var(--accent);animation:pulse 1.1s ease-in-out infinite}@keyframes pulse{50%{opacity:.35}}
     .step{margin:5px 0;border:1px solid var(--line);border-radius:7px;background:var(--surface)}.step>summary,.step-static{display:flex;align-items:center;gap:7px;padding:7px 9px;font-size:12px}.step>summary:after{content:"›";margin-left:auto;color:var(--tertiary);font-size:16px;transition:transform .12s}.step[open]>summary:after{transform:rotate(90deg)}.step-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tool-name{margin-left:auto;color:var(--tertiary);font:10px ui-monospace,SFMono-Regular,Menlo,monospace}.step>summary .tool-name{margin-left:8px}.step-details{display:grid;gap:8px;padding:0 9px 9px 30px}.detail-label{margin-bottom:4px;color:var(--secondary);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}.step-details pre{max-height:180px;margin:0;padding:8px;border-radius:5px;background:var(--surface);overflow:auto;white-space:pre-wrap;word-break:break-word;color:var(--secondary);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
-    .run-status{display:flex;align-items:center;gap:7px;color:var(--secondary);font-size:13px}.home-inputs{margin:8px 12px;padding:10px 12px;border:1px solid var(--accent);border-radius:10px;background:var(--surface);max-height:45vh;overflow:auto}.home-inputs h2{margin:0;font-size:14px}.home-inputs .input-card{margin:8px 0;gap:8px}.home-inputs pre{max-height:9em;overflow:auto;white-space:pre-wrap;margin:0}.home-inputs input{min-height:36px}.home-inputs .control{min-height:36px;padding:4px 14px}.home-input-status:empty{display:none}
+    .run-status{display:flex;align-items:center;gap:7px;color:var(--secondary);font-size:13px}.environment-line{font-size:12px;padding:0 2px}.environment-line.warn{color:#f5b841}.home-inputs{margin:8px 12px;padding:10px 12px;border:1px solid var(--accent);border-radius:10px;background:var(--surface);max-height:45vh;overflow:auto}.home-inputs h2{margin:0;font-size:14px}.home-inputs .input-card{margin:8px 0;gap:8px}.home-inputs pre{max-height:9em;overflow:auto;white-space:pre-wrap;margin:0}.home-inputs input{min-height:36px}.home-inputs .control{min-height:36px;padding:4px 14px}.home-input-status:empty{display:none}
     .older-history{display:flex;align-items:center;justify-content:center;gap:8px;min-height:28px;margin:0 0 8px;color:var(--secondary);font-size:13px}.older-history .spinner{visibility:hidden}.older-history[data-state=loading] .spinner{visibility:visible}.older-history.has-retry{justify-content:space-between}.older-history.has-retry .control{min-height:36px;padding:4px 14px}.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
     .spinner{width:12px;height:12px;border:1.5px solid rgba(255,255,255,.2);border-top-color:var(--secondary);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.empty{margin:auto;color:var(--tertiary)}
     #pair{width:min(calc(100% - 32px),430px);margin:18vh auto 0;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.2)}#pair h2{margin:0 0 7px;font-size:18px}#pair p{line-height:1.45}#pairControls{display:flex;gap:7px;margin-top:15px}#pair input{min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;outline:0;background:var(--surface)}#pair input:focus{border-color:var(--accent)}
@@ -3135,7 +3164,7 @@ private extension RemoteControlServer {
     .policy-rule{display:grid;gap:4px;padding:10px 0;border-top:1px solid var(--line)}.policy-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.policy-head strong{flex:1;min-width:140px;overflow-wrap:anywhere}.policy-rule .muted{overflow-wrap:anywhere}.policy-rule.off{opacity:.55}
     .policy-effect{font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid var(--line)}.policy-effect.deny{color:#b42318}.policy-effect.ask{color:#b54708}.policy-effect.allow{color:#067647}
     #policyEditor textarea{width:100%;min-height:90px;font:12px ui-monospace,monospace}#policyJSON{min-height:260px}#policyEditor button,#policyEditor select{min-height:44px}#policyEditor details{margin-top:12px}#policyEditor form{display:grid;gap:8px}
-    #mcpEditor{width:min(calc(100% - 24px),760px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#mcpEditor::backdrop{background:rgba(0,0,0,.35)}
+    #mcpEditor{width:min(calc(100% - 24px),760px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#mcpEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor{width:min(calc(100% - 24px),640px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#secretsEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor button{min-height:44px}.secret-row{display:flex;gap:10px;align-items:baseline;padding:6px 0;border-top:1px solid var(--line)}.secret-row code{font-weight:600}
     .mcp-row{border-top:1px solid var(--line);padding:10px 0;display:flex;flex-direction:column;gap:6px}.mcp-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.mcp-head strong{flex:1}.mcp-status{font-size:13px}.mcp-status.attn{color:var(--accent,#0a84ff)}.mcp-status.warn{color:#c76a00}
     .mcp-switches{display:flex;gap:12px;flex-wrap:wrap;font-size:13px}.mcp-page img{max-width:100%;max-height:340px;border:1px solid var(--line);border-radius:8px}#mcpEditor button,#skillsEditor button{min-height:44px}.mcp-warn{color:#c76a00;font-size:13px;margin:0}
     #desktopEditor::backdrop{background:rgba(0,0,0,.35)}#desktopEditor .tab-actions{flex-wrap:wrap}#desktopEditor button,#desktopEditor select{min-height:44px}
@@ -3225,6 +3254,7 @@ private extension RemoteControlServer {
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div>
+    <div id="sessionEnvironment" class="run-status environment-line hidden"></div>
     <section id="homeInputs" class="home-inputs hidden" aria-labelledby="homeInputsTitle"><h2 id="homeInputsTitle" tabindex="-1">Cantrip Home needs your input</h2><div id="homeInputCards"></div></section><div id="homeInputsStatus" class="sr-only" role="status" aria-live="polite"></div></header>
     <div id="uiUpdateStatus" class="muted" role="status" aria-live="polite"></div><div id="actionError" role="alert"></div><button id="inputBanner" class="control hidden">Your input is needed</button><div id="historyError" role="alert"></div><div id="olderHistory" class="older-history hidden" data-state="idle"><span class="spinner" aria-hidden="true"></span><span id="olderHistoryText" role="status" aria-live="polite"></span><button id="olderMessages" class="control hidden" aria-label="Retry loading older messages">Retry</button><button id="olderHistoryReader" class="sr-only" tabindex="-1">Load older messages</button></div><section id="messages"></section><section id="liveSubagents" class="live-subagents hidden" aria-label="Running subagents"></section></main>
     <dialog id="inputEditor" aria-labelledby="inputTitle"><strong id="inputTitle">Secure Input</strong>
@@ -3236,7 +3266,7 @@ private extension RemoteControlServer {
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
     <label id="tabSectionLabel" class="hidden">Section<select id="tabSection"></select></label><input id="tabNewSection" class="hidden" maxlength="40" autocomplete="off" placeholder="New section name" aria-label="New section name">
-    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button><button id="tabPolicy" type="button" class="control">Agent Policy</button><button id="tabSkills" type="button" class="control">Skills &amp; Rules</button>
+    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button><button id="tabPolicy" type="button" class="control">Agent Policy</button><button id="tabSkills" type="button" class="control">Skills &amp; Rules</button><button id="tabSecrets" type="button" class="control">Secrets</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
@@ -3289,6 +3319,8 @@ private extension RemoteControlServer {
     <div class="tab-actions"><button id="policyJSONSave" type="button" class="control primary">Save JSON</button></div></details></dialog>
     <dialog id="skillsEditor" aria-labelledby="skillsTitle"><div class="tasks-bar"><strong id="skillsTitle" class="grow">Skills &amp; Rules</strong><button id="skillsSync" type="button" class="control">Relink</button><button id="skillsDone" type="button" class="control">Done</button></div>
     <p class="muted">Cantrip keeps one skills library and gives every backend the same skills and folder rules. Edit skills on the Mac (<code>cantrip skills edit NAME</code>).</p><div id="skillsError" role="alert"></div><div id="skillsStatus" role="status" class="muted"></div><div id="skillsList"></div></dialog>
+    <dialog id="secretsEditor" aria-labelledby="secretsTitle"><div class="tasks-bar"><strong id="secretsTitle" class="grow">Secrets</strong><button id="secretsSync" type="button" class="control primary">Unlock on the Mac &amp; Sync</button><button id="secretsDone" type="button" class="control">Done</button></div>
+    <p class="muted">Commands on the Mac get these through <code>cantrip secret run</code>. Only names are shown here; values never leave the Mac. Syncing shows a Bitwarden password dialog on the Mac.</p><p id="secretsStatus" role="status"></p><div id="secretsError" role="alert"></div><div id="secretsList"></div></dialog>
     <dialog id="desktopEditor" aria-labelledby="desktopTitle"><strong id="desktopTitle">Mac Permissions &amp; View Mac</strong>
     <p class="muted">Start viewing explicitly. The Mac must first allow paired clients in Cantrip settings. Screen frames and typed text stay out of chat, files and AI models. Protected dialogs may be unavailable. Phone Face ID does not authorize macOS dialogs.</p>
     <div id="desktopError" role="alert"></div><div class="tab-actions">
@@ -3417,7 +3449,10 @@ private extension RemoteControlServer {
     function updateProgressConnection(){if(!sidebarLayout)return;const connected=document.documentElement.dataset.cantripConnected==="true";
       for(const button of $("sessions").querySelectorAll(".session-select")){const summary=connected?button.dataset.status:`Last known: ${button.dataset.status}`;setText(button.querySelector(".session-status"),summary);button.title=`${button.dataset.title} — ${summary}${button.dataset.locked==="true"?" · Locked":""}`;button.setAttribute("aria-label",button.title)}
       const progress=$("sessionProgress");if(!progress.classList.contains("hidden")){const summary=connected?progress.dataset.status:`Reconnecting… Last known: ${progress.dataset.status}`;setText($("sessionProgressText"),summary);progress.title=summary}}
-    function renderProgress(session){if(!sidebarLayout)return;const progress=$("sessionProgress");progress.classList.toggle("hidden",!session);progress.dataset.streaming=String(Boolean(session?.isStreaming));progress.dataset.status=session?progressSummary(session):"";if(!session)setText($("sessionProgressText"),"");updateProgressConnection()}
+    function renderEnvironment(session){const line=$("sessionEnvironment"),env=session?.environment;line.classList.toggle("hidden",!env);if(!env){line.textContent="";line.title="";return}
+      const text=`${env.name} · ${env.label}`;if(line.textContent!==text)line.textContent=text;line.classList.toggle("warn",Boolean(env.problems?.length));
+      line.title=[env.developerDir?`DEVELOPER_DIR=${env.developerDir}`:"",env.path?.length?`PATH first: ${env.path.join(":")}`:"",env.variables?.length?`Variables: ${env.variables.join(" ")}`:"",...(env.problems||[])].filter(Boolean).join("\\n")}
+    function renderProgress(session){renderEnvironment(session);if(!sidebarLayout)return;const progress=$("sessionProgress");progress.classList.toggle("hidden",!session);progress.dataset.streaming=String(Boolean(session?.isStreaming));progress.dataset.status=session?progressSummary(session):"";if(!session)setText($("sessionProgressText"),"");updateProgressConnection()}
     function atBottom(){const root=document.scrollingElement||document.documentElement;return root.scrollHeight-root.clientHeight-root.scrollTop<=4}
     // historyScrollIntent: the latest input gesture points upward (cleared by each render).
     // historyReading: the reader is heading into older history, so loaded pages may chain.
@@ -4072,6 +4107,20 @@ private extension RemoteControlServer {
       const bar=el("div","mcp-head");bar.append(el("h3","grow","Drift"));const check=el("button","control",st.checking?"Checking…":"Check now");check.type="button";check.disabled=Boolean(st.checking);check.onclick=()=>skillsAction({action:"check"});bar.append(check);list.append(bar);
       if(st.driftCheckedAt)list.append(el("p","muted",`Last checked ${new Date(st.driftCheckedAt).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}`));
       const drift=st.drift||[];if(!drift.length&&st.driftCheckedAt&&!st.checking)list.append(el("p","muted","No drift found."));for(const d of drift){const row=el("div","mcp-row");row.append(el("strong","",d.path),warn(d.problem));list.append(row)}}
+    let secretsTimer=null;
+    $("tabSecrets").onclick=()=>{if(tabSaving||movingTab)return;$("tabEditor").close();editingTab=null;$("secretsError").textContent="";$("secretsEditor").showModal();loadSecrets()};
+    $("secretsDone").onclick=()=>$("secretsEditor").close();$("secretsEditor").addEventListener("close",()=>clearTimeout(secretsTimer));
+    $("secretsSync").onclick=async()=>{try{renderSecrets(await api("/api/v1/secrets",{method:"POST",body:JSON.stringify({action:"sync"})}));$("secretsError").textContent="";clearTimeout(secretsTimer);secretsTimer=setTimeout(loadSecrets,1500)}catch(e){$("secretsError").textContent=e.message||"That didn't work."}};
+    async function loadSecrets(){clearTimeout(secretsTimer);if(!$("secretsEditor").open)return;let data=null;try{data=await api("/api/v1/secrets");$("secretsError").textContent="";renderSecrets(data)}catch(e){$("secretsError").textContent=e.message||"Secrets aren't available on this Mac."}
+      secretsTimer=setTimeout(loadSecrets,data?.syncing?1500:15000)}
+    function renderSecrets(data){const when=t=>t?new Date(t).toLocaleString([], {dateStyle:"medium",timeStyle:"short"}):"never";const items=data.items||[];
+      $("secretsSync").disabled=Boolean(data.syncing)||data.available===false;$("secretsSync").textContent=data.syncing?"Waiting for the Mac…":"Unlock on the Mac & Sync";
+      const parts=[`Bitwarden folder “${data.folder}” · ${items.length} secret${items.length===1?"":"s"} · last sync ${when(data.lastSync)}`];
+      if(data.syncing)parts.push(`A password dialog is open on the Mac (asked from ${data.requestedBy||"here"}).`);else if(data.lastReport)parts.push(data.lastReport);
+      if(data.available===false)parts.push("The Bitwarden CLI isn't installed on the Mac.");$("secretsStatus").textContent=parts.join(" ");
+      if(data.lastError&&!data.syncing)$("secretsError").textContent=data.lastError;
+      const list=$("secretsList");list.replaceChildren();for(const s of items){const row=el("div","secret-row");row.append(el("code","",s.name),el("span","muted",s.kind==="fields"?(s.fields||[]).join(" "):s.kind));list.append(row)}
+      for(const skipped of data.skipped||[])list.append(el("p","muted",`Skipped ${skipped}`))}
     function openDesktop(){desktopState={token,lease:null,frame:null,sequence:0,timer:null,saving:false,starting:false,generation:0};$("desktopError").textContent="";$("desktopEditor").showModal();loadDesktopStatus()}
     async function loadDesktopStatus(){const state=desktopState;if(!state)return;
       try{const data=await api("/api/v1/mac-access");if(desktopState!==state||token!==state.token)return;

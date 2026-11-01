@@ -273,11 +273,13 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
     private func ensureServer(workdir: String) async throws -> CodexAppServer {
         let arguments = launchArguments()
         // New developer instructions (Home's protocol) need a restart: a loaded thread keeps its own.
-        let signature = "\(workdir)|\(access)|\(arguments.joined(separator: " "))|\(tabID?.uuidString ?? "")|\(developerInstructions(workdir: workdir).hashValue)"
+        let profile = EnvironmentProfiles.resolved(for: workdir)
+        let signature = "\(workdir)|\(access)|\(arguments.joined(separator: " "))|\(tabID?.uuidString ?? "")|\(developerInstructions(workdir: workdir).hashValue)|\(profile?.fingerprint ?? "")"
         if let server = lock.withLock({ self.server }), server.isRunning, launchSignature == signature { return server }
         stopServer()
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = ToolPath.value(inherited: environment["PATH"])
+        if let profile { EnvironmentProfiles.apply(profile, to: &environment) }
         environment["NO_COLOR"] = "1"
         if let tabID { environment[TabInsight.tabIDVariable] = tabID.uuidString }
         let server: CodexAppServer
