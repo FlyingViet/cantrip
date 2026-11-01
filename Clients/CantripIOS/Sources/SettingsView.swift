@@ -84,18 +84,21 @@ struct SettingsView: View {
         .navigationSplitViewStyle(.balanced)
     }
     #else
-    /// Two columns drawn directly: a sheet is compact even on an unfolded Duo, which would
-    /// collapse a `NavigationSplitView` back into a stack.
+    /// Two columns drawn directly: a presented view can stay compact even on an unfolded Duo,
+    /// which would collapse a `NavigationSplitView` back into a stack. The list widens with the
+    /// window (290–400 pt) so the status card's lines fit in landscape.
     private var split: some View {
-        HStack(spacing: 0) {
-            NavigationStack { home }
-                .frame(width: 290)
-            Divider()
-                .ignoresSafeArea()
-            NavigationStack {
-                pageView(page ?? .macs)
+        GeometryReader { proxy in
+            HStack(spacing: 0) {
+                NavigationStack { home }
+                    .frame(width: min(400, max(290, proxy.size.width * 0.42)))
+                Divider()
+                    .ignoresSafeArea()
+                NavigationStack {
+                    pageView(page ?? .macs)
+                }
+                .id(page)
             }
-            .id(page)
         }
     }
     #endif
