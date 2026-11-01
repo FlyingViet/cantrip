@@ -80,7 +80,7 @@ enum ModelTierRemote {
                 ModelTierSnapshot.Model(id: $0.id, label: settings.fallbackModelLabel(kind, $0.id),
                                         efforts: $0.reasoningEfforts, price: $0.price?.label)
             }
-            return .init(id: kind.rawValue, label: settings.backendLabel(kind), cells: cells, models: models)
+            return .init(id: kind.rawValue, label: kind.rawValue, cells: cells, models: models)
         }
         // Changes when the map or what a cell can offer changes, not when a limit comes and goes.
         let fields = backends.flatMap { backend in

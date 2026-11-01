@@ -122,8 +122,57 @@ extension SessionTabTests {
         settings.modelTiers = ModelTierMap()
         precondition(settings.applySettings(["modelTiers": file as Any]).contains("modelTiers"))
         precondition(settings.modelTiers == cleaned)
+        try testModelTierAPI()
         try await testTierFallbackRun()
-        print("Model tiers: defaults, resolution, limits, editing and runs passed")
+        print("Model tiers: defaults, resolution, limits, editing, API and runs passed")
+    }
+
+    /// `GET/POST /api/v1/model-tiers`: every backend's cells with what they run now, one cell set or
+    /// reset per POST under the loaded revision, and only models the backend offers.
+    @MainActor
+    private static func testModelTierAPI() throws {
+        let settings = AppSettings.shared
+        let saved = settings.modelTiers
+        defer { settings.modelTiers = saved }
+        settings.modelTiers = ModelTierMap()
+        let snapshot = ModelTierRemote.snapshot(settings: settings)
+        precondition(snapshot.tiers == ["fast", "standard", "deep"])
+        precondition(snapshot.backends.map(\.id) == ["Copilot", "Claude Code", "Antigravity", "Codex"]
+                     && snapshot.backends.map(\.label) == ["Copilot", "Claude Code", "Antigravity", "Codex"],
+                     "backends are named plainly: \(snapshot.backends.map(\.label))")
+        let copilot = snapshot.backends[0]
+        precondition(copilot.cells.map(\.tier) == ["fast", "standard", "deep"] && copilot.cells.allSatisfy(\.isDefault))
+        precondition(copilot.cells[2].model == "claude-opus-5.5" && copilot.cells[2].effort == "xhigh")
+        func rejects(_ body: [String: Any], _ status: Int, line: UInt = #line) {
+            do {
+                _ = try ModelTierRemote.apply(body, settings: settings)
+                preconditionFailure("accepted at line \(line)")
+            } catch let error as ModelTierError {
+                precondition(error.status == status, "line \(line): \(error.message)")
+            } catch { preconditionFailure("line \(line): \(error)") }
+        }
+        rejects(["backend": "Copilot", "tier": "deep", "choices": [["model": "gpt-6-sol"]]], 400)
+        rejects(["revision": "stale", "backend": "Copilot", "tier": "deep", "choices": [["model": "gpt-6-sol"]]], 409)
+        let revision = snapshot.revision
+        rejects(["revision": revision, "backend": "Local Model", "tier": "deep", "choices": [["model": "x"]]], 400)
+        rejects(["revision": revision, "backend": "Copilot", "tier": "huge", "choices": [["model": "gpt-6-sol"]]], 400)
+        rejects(["revision": revision, "backend": "Copilot", "tier": "deep", "choices": [["model": "deep"]]], 400)
+        rejects(["revision": revision, "backend": "Copilot", "tier": "deep", "choices": [["model": "gpt-gone-1"]]], 400)
+        rejects(["revision": revision, "backend": "Copilot", "tier": "deep",
+                 "choices": [["model": "gpt-6-sol"], ["model": "gpt-6-sol"]]], 400)
+        rejects(["revision": revision, "backend": "Copilot", "tier": "deep", "choices": [["model": "gpt-6-sol", "effort": "turbo"]]], 400)
+        rejects(["revision": revision, "backend": "Copilot", "tier": "deep", "choices": [[String: Any]]()], 400)
+        let set = try ModelTierRemote.apply(["revision": revision, "backend": "Copilot", "tier": "deep",
+                                             "choices": [["model": "gpt-6-sol", "effort": "HIGH", "label": "x", "offered": true]]],
+                                            settings: settings)
+        precondition(settings.tierChoices(.deep, on: .copilot) == [ModelTierChoice(model: "gpt-6-sol", effort: "high")])
+        let deep = set.backends[0].cells[2]
+        precondition(!deep.isDefault && deep.model == "gpt-6-sol" && set.revision != revision)
+        _ = try ModelTierRemote.apply(["revision": set.revision, "backend": "Copilot", "tier": "deep", "reset": true], settings: settings)
+        precondition(settings.modelTiers.isDefault(.deep, on: .copilot))
+        settings.modelTiers.set([ModelTierChoice(model: "gpt-6-sol")], for: .fast, on: .codex)
+        _ = try ModelTierRemote.apply(["revision": ModelTierRemote.snapshot(settings: settings).revision, "reset": true], settings: settings)
+        precondition(settings.modelTiers == ModelTierMap(), "reset clears every cell")
     }
 
     /// A tab set to deep runs the deep model, moves to the tier's next model on the same backend
