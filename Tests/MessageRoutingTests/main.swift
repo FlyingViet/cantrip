@@ -62,6 +62,11 @@ struct MessageRoutingTests {
                 with: Data(contentsOf: URL(fileURLWithPath: home).appendingPathComponent("settings.json"))
             ) as? [String: Any]
             guard config?["disableAllHooks"] as? Bool == true else { exit(5) }
+            // The fast tier's model and effort reach the CLI; without an effort none is sent.
+            let model = args.firstIndex(of: "--model").map { args[$0 + 1] }
+            let effort = args.firstIndex(of: "--reasoning-effort").map { args[$0 + 1] }
+            if args[2].contains("TIER_FIXTURE") ? (model != "claude-haiku-5.5" || effort != "low")
+                : (model != MessageRouter.copilotModel || effort != nil) { exit(8) }
             if args[2].contains("DELAY_FIXTURE") { try await Task.sleep(nanoseconds: 20_000_000_000) }
             if args[2].contains("FAIL_FIXTURE") { exit(7) }
             if args[2].contains("TOOLS_FIXTURE") {
@@ -180,6 +185,10 @@ struct MessageRoutingTests {
                "Queue grouping uses the same isolated, tool-free CLI with its own instructions")
         let decision = try await MessageRouter.classify(snapshot("The config lives in /config"), provider: provider)
         expect(decision.intent == .context, "Isolated CLI returns a parsed decision")
+        let fastProvider = MessageRouter.Provider.copilot(command: URL(fileURLWithPath: CommandLine.arguments[0]).path,
+                                                          model: "claude-haiku-5.5", effort: "low")
+        let fast = try await MessageRouter.classify(snapshot("TIER_FIXTURE The config lives in /config"), provider: fastProvider)
+        expect(fast.intent == .context, "The router runs the fast tier's model and effort")
         let agyProvider = MessageRouter.Provider.antigravity(
             command: URL(fileURLWithPath: CommandLine.arguments[0]).path,
             model: "gemini-3.8-flash-medium"

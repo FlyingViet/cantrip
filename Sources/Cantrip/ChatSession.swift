@@ -1646,7 +1646,8 @@ final class ChatSession: ObservableObject {
         routingItemID = nil
     }
 
-    /// The tool-free router for this tab's backend (Auto routing, plans, Done when checks).
+    /// The tool-free router for this tab's backend (Auto routing, plans, Done when checks), on
+    /// that backend's fast tier.
     var routerProvider: MessageRouter.Provider {
         let kind = settings.backend == .localModel ? .localModel : runningBackendKind ?? settings.backend
         if kind == .localModel {
@@ -1657,16 +1658,21 @@ final class ChatSession: ObservableObject {
         // Google only when the user opts in (agyAuxiliaryRouting).
         if kind == .antigravity || settings.agyAuxiliaryRouting,
            let agyCommand = AntigravityBackend.resolveExecutable(customPath: settings.agyPath) {
+            let fast = settings.resolveTier(.fast, on: .antigravity).model
             return .antigravity(
                 command: agyCommand,
-                model: AntigravityTaskTier.smallModel(available: settings.agyAvailableModels)
+                model: fast.isEmpty ? AntigravityTaskTier.smallModel(available: settings.agyAvailableModels) : fast
             )
         }
         switch kind {
         case .copilot:
-            return .copilot(command: ToolLocator.shared.copilotCommand(configured: settings.copilotPath))
+            let fast = settings.resolveTier(.fast, on: .copilot)
+            return .copilot(command: ToolLocator.shared.copilotCommand(configured: settings.copilotPath),
+                            model: fast.model.isEmpty ? MessageRouter.copilotModel : fast.model, effort: fast.effort)
         case .claudeCode:
-            return .claude(command: settings.claudePath.isEmpty ? "claude" : settings.claudePath)
+            let fast = settings.resolveTier(.fast, on: .claudeCode)
+            return .claude(command: settings.claudePath.isEmpty ? "claude" : settings.claudePath,
+                           model: fast.model.isEmpty ? MessageRouter.claudeModel : fast.model, effort: fast.effort)
         case .localModel:
             return .local(baseURL: settings.localBaseURL, model: settings.localModel,
                           apiKey: settings.localAPIKey)

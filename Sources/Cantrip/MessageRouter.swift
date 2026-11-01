@@ -2,18 +2,22 @@ import Foundation
 
 /// Separate, tool-free inference; never reuses or resumes the worker session.
 enum MessageRouter {
-    /// The Copilot CLI model for routing and planning (cheapest available; gpt-5.4-mini was retired).
+    /// The Copilot CLI model for routing and planning when the fast tier names none.
     static let copilotModel = "claude-haiku-4.5"
-    /// The Antigravity CLI model for lightweight routing, queue planning, and Done-when checks.
+    /// The Claude Code alias likewise.
+    static let claudeModel = "haiku"
+    /// The Antigravity CLI model for lightweight routing, queue planning, and Done-when checks
+    /// when the fast tier names none.
     static let antigravityModel = "gemini-3.8-flash-medium"
     /// Copilot CLI flag that leaves the model with no tools at all. An empty list
     /// (`--available-tools=`) is ignored, so every built-in tool was still offered (1.0.105:
     /// 20 tools, 8.5K tokens a call); naming one tool that doesn't exist leaves none.
     static let copilotNoTools = "--available-tools=cantrip_no_tools"
 
+    /// Each CLI runs the model and effort the caller picks (the fast model tier); "" sends no effort.
     enum Provider {
-        case copilot(command: String)
-        case claude(command: String)
+        case copilot(command: String, model: String = MessageRouter.copilotModel, effort: String = "")
+        case claude(command: String, model: String = MessageRouter.claudeModel, effort: String = "")
         case antigravity(command: String, model: String = MessageRouter.antigravityModel)
         case local(baseURL: String, model: String, apiKey: String)
         case unavailable(String)
@@ -203,7 +207,7 @@ private final class RouterProcess: @unchecked Sendable {
             let command: String
             let arguments: [String]
             switch provider {
-            case .copilot(let executable):
+            case .copilot(let executable, let model, let effort):
                 command = executable
                 // Isolated config excludes user/repo hooks, plugins, MCPs and
                 // history. Authentication still uses the CLI's OS credential store.
@@ -218,20 +222,19 @@ private final class RouterProcess: @unchecked Sendable {
                 arguments = [
                     "-p", instructions + "\n\n" + input,
                     "-s", "--stream", "on", "--output-format", "json",
-                    // 0.33 premium requests a call; it takes no reasoning-effort setting.
-                    "--model", MessageRouter.copilotModel,
+                    "--model", model,
                     MessageRouter.copilotNoTools, "--disable-builtin-mcps",
                     "--no-custom-instructions", "--no-ask-user",
                     "--no-auto-update", "--sync-session=off", "--log-level", "none",
-                ]
-            case .claude(let executable):
+                ] + (effort.isEmpty ? [] : ["--reasoning-effort", effort])
+            case .claude(let executable, let model, let effort):
                 command = executable
                 arguments = [
-                    "-p", input, "--model", "haiku", "--output-format", "text",
+                    "-p", input, "--model", model, "--output-format", "text",
                     "--system-prompt", instructions,
                     "--tools", "", "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}",
                     "--safe-mode", "--disable-slash-commands", "--no-session-persistence",
-                ]
+                ] + (effort.isEmpty ? [] : ["--effort", effort])
             case .antigravity(let executable, let model):
                 command = executable
                 // agy has no tool-free mode. Headless, a shell command it reaches for is refused and
