@@ -25,6 +25,10 @@ struct CantripMacMenuActions: View {
                 Label("MCP Servers", systemImage: "point.3.connected.trianglepath.dotted")
             }
             .accessibilityIdentifier("chat.mcpServers")
+            Button(action: openSkills) {
+                Label(CantripSkills.title, systemImage: "books.vertical")
+            }
+            .accessibilityIdentifier("chat.skills")
             Button(action: openMaintenance) {
                 Label("Update & Rebuild Cantrip", systemImage: "arrow.triangle.2.circlepath")
             }
@@ -42,6 +46,11 @@ struct CantripMacMenuActions: View {
         onOpen()
         remote.mcpServersTab = remote.selectedSessionID
         remote.showingMCPServers = true
+    }
+
+    func openSkills() {
+        onOpen()
+        remote.showingSkills = true
     }
 
     func openMaintenance() {

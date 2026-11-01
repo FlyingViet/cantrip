@@ -1082,6 +1082,9 @@ enum CantripRemoteError: LocalizedError {
     case copilotUsageUnsupported
     case usageFallbackUnsupported
     case mcpUnsupported
+    case skillsUnsupported
+    /// A `400` whose reason is shown as the Mac wrote it.
+    case rejected(String)
     case modelSettingsUnsupported
     case privateLocalUnsupported
 
@@ -1148,6 +1151,10 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to choose a usage limit fallback."
         case .mcpUnsupported:
             return "Update and reopen Cantrip on your Mac to manage its shared MCP servers."
+        case .skillsUnsupported:
+            return CantripSkills.unsupported
+        case .rejected(let message):
+            return message
         case .modelSettingsUnsupported:
             return "Update and reopen Cantrip on your Mac to change a tab's model, effort and context window."
         case .privateLocalUnsupported:
@@ -1754,6 +1761,24 @@ struct CantripRemoteAPI {
 
     fileprivate func mcpAction(body: Data) async throws -> CantripMCPSnapshot {
         try await request(path: "/api/v1/mcp", method: "POST", body: body)
+    }
+
+    func skills() async throws -> CantripSkillsSnapshot {
+        do {
+            return try await request(path: "/api/v1/skills")
+        } catch CantripRemoteError.http(let status, _) where status == 404 || status == 405 {
+            throw CantripRemoteError.skillsUnsupported
+        }
+    }
+
+    func skillsAction(_ action: CantripSkillsAction) async throws -> CantripSkillsSnapshot {
+        do {
+            return try await request(path: "/api/v1/skills", method: "POST", body: try JSONEncoder().encode(action))
+        } catch CantripRemoteError.http(400, let message) {
+            throw CantripRemoteError.rejected(message)
+        } catch CantripRemoteError.http(let status, _) where status == 404 || status == 405 {
+            throw CantripRemoteError.skillsUnsupported
+        }
     }
 
     func copilotUsage() async throws -> CopilotUsageSnapshot {
@@ -2782,6 +2807,8 @@ final class CantripRemoteModel: ObservableObject {
     /// The MCP Servers sheet, and the tab it was opened from.
     @Published var showingMCPServers = false
     var mcpServersTab: String?
+    /// The Skills & Rules sheet (Mac-wide, not per tab).
+    @Published var showingSkills = false
     /// Sections the Mac groups its tabs into, in order (empty: one flat list).
     @Published private(set) var tabSections: [CantripTabSection] = []
     @Published private(set) var supportsTabSections = false
@@ -4164,6 +4191,17 @@ final class CantripRemoteModel: ObservableObject {
         })
     }
 
+    /// The Mac's skills library, folder rules and rules drift.
+    func skills() async throws -> CantripSkillsSnapshot {
+        try await performHistoryRead { try await $0.skills() }
+    }
+
+    /// Turns a skill on or off, relinks, or starts the drift check; nil when it didn't go through
+    /// (`errorMessage` says why, in the Mac's words for a refusal).
+    func skillsAction(_ action: CantripSkillsAction) async -> CantripSkillsSnapshot? {
+        await mutate(prepare: { _ in }, { api, _ in try await api.skillsAction(action) })
+    }
+
     /// Saves the fallback (or clears every backend's limit); nil when it didn't save.
     func updateUsageFallback(_ change: CantripUsageFallbackChange) async -> CantripUsageFallback? {
         await mutate(prepare: { _ in try JSONEncoder().encode(change) }, { api, body in
@@ -5280,7 +5318,8 @@ final class CantripRemoteModel: ObservableObject {
         case CantripRemoteError.imagesUnsupported, CantripRemoteError.videosUnsupported, CantripRemoteError.queueRemovalUnsupported,
              CantripRemoteError.queueSendNowUnsupported, CantripRemoteError.startFreshUnsupported,
              CantripRemoteError.autoDeliveryUnsupported, CantripRemoteError.tabMetadataUnsupported,
-             CantripRemoteError.tabReorderingUnsupported,
+             CantripRemoteError.tabReorderingUnsupported, CantripRemoteError.skillsUnsupported,
+             CantripRemoteError.rejected,
              is ImageAttachmentError, is VideoAttachmentError:
             return false
         default:
@@ -5391,6 +5430,9 @@ struct CantripRemoteView: View {
             }
             .sheet(isPresented: $model.showingMCPServers) {
                 CantripMCPServersView(remote: model, tabID: model.mcpServersTab)
+            }
+            .sheet(isPresented: $model.showingSkills) {
+                CantripSkillsView(remote: model)
             }
             .sheet(isPresented: $model.showingMacAccess) {
                 NavigationStack { CantripMacAccessView(remote: model) }

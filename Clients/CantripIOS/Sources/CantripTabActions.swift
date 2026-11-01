@@ -89,6 +89,11 @@ struct CantripTabActions: View {
         } label: {
             Label("MCP Servers", systemImage: "point.3.connected.trianglepath.dotted")
         }
+        Button {
+            model.showingSkills = true
+        } label: {
+            Label(CantripSkills.title, systemImage: "books.vertical")
+        }
         if state.supportsInputRequests {
             Button {
                 Task { await model.showInputRequests(sessionID: state.id) }
