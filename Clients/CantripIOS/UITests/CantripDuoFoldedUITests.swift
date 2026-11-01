@@ -39,7 +39,7 @@ final class CantripDuoFoldedUITests: XCTestCase {
             XCTAssertFalse(section.frame.intersects(tabs.frame), "The tabs button covers \(section.label)")
         }
         XCTAssertTrue(sections[3].isHittable, "Builds is reachable")
-        XCTAssertFalse(app.otherElements["duo.sidebar"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["duo.sidebar"].exists)
 
         let field = app.textFields["chat.composer"].firstMatch
         let message = field.waitForExistence(timeout: 10) ? field : app.textViews["chat.composer"].firstMatch
@@ -48,7 +48,7 @@ final class CantripDuoFoldedUITests: XCTestCase {
         // A simulated hardware keyboard hides the software one; the layout must hold either way.
         _ = app.keyboards.firstMatch.waitForExistence(timeout: 5)
         sleep(1)
-        XCTAssertFalse(app.otherElements["duo.sidebar"].exists, "Typing on a folded Duo must not show the sidebar")
+        XCTAssertFalse(app.descendants(matching: .any)["duo.sidebar"].exists, "Typing on a folded Duo must not show the sidebar")
         XCTAssertTrue(tabs.exists, "The iPhone layout's tabs button stays")
     }
 }

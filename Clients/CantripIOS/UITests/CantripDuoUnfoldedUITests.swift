@@ -40,7 +40,8 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         XCTAssertTrue(app.buttons["chat.settings"].firstMatch.exists, "The rail has Settings")
         XCTAssertFalse(app.buttons["home.tabs"].exists, "The toggle takes the tabs button's place")
 
-        let sidebar = app.otherElements["duo.sidebar"]
+        // Any element type: iOS 27.1 reports the sidebar container as an alert.
+        let sidebar = app.descendants(matching: .any)["duo.sidebar"]
         if !sidebar.exists { toggle.tap() }
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "Show Sidebar opens it")
         // Home's sections stay in the right-side rail (the sidebar lists Builds too, on the left).
