@@ -206,8 +206,8 @@ for editing instead of being sent, and the mic stays beside Send so you can keep
 dictating. **Double-tap** the mic to open full-screen **continuous voice mode**
 and talk hands-free through the *listen → think → speak* loop. Close voice mode
 to end the loop. This works in Cantrip Home and its tabs, Copilot, and Private
-Local; **hamburger menu > Voice mode** remains available, and VoiceOver offers a
-**Continuous voice mode** action on the mic.
+Local (local chats also have an **∞** button beside the composer), and VoiceOver
+offers a **Continuous voice mode** action on the mic.
 
 With Reduce Motion enabled the drawer's spinners stay still; VoiceOver announces each tab's
 state, latest line and age. The **Auto** delivery dropdown is in the tab's **⋯** menu;
@@ -249,8 +249,8 @@ conversation remain in the shared chat's hamburger menu.
 
 The hamburger menu holds only this tab's actions, in labeled sections: **Model &
 conversation** (Model Settings, Start Fresh, Tools for This Tab, Delivery, Resume),
-**Tab** (Rename, Lock, Move to Section, Move Up/Down), **Agent** (Voice Mode)
-and Close Tab. **Pause Agent**, Memory, Usage Limits, the mascot, **Update & rebuild Cantrip**, **Mac
+**Tab** (Rename, Lock, Move to Section, Move Up/Down) and Close Tab. Voice Mode opens from
+the composer's microphone (double-tap it, or its VoiceOver action). **Pause Agent**, Memory, Usage Limits, the mascot, **Update & rebuild Cantrip**, **Mac
 permissions & View Mac** and **Skills & Rules** are in Settings; Builds and Background jobs are in Home and the
 Tabs drawer.
 
