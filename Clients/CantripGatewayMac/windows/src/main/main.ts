@@ -5,6 +5,7 @@ import {
 import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
+import { mcpBridgeRequest } from "./mcpBridge";
 import { PairingError, ServerConfig, displayName, parsePairingLink, validateServer, validateToken } from "./pairing";
 import { HostRouter, Route, describeRoute, routesFor } from "./router";
 import { Pairing, SettingsStore } from "./store";
@@ -511,6 +512,31 @@ function registerIPC(): void {
   ipcMain.handle("gateway:open-log", (event) => {
     fromSettings(event);
     shell.showItemInFolder(logFile());
+  });
+  // Settings > Tools & sign-ins: only the shared MCP list and its actions, sent with the token here.
+  ipcMain.handle("gateway:mcp", async (event, input: unknown) => {
+    fromSettings(event);
+    const request = mcpBridgeRequest(input);
+    if ("error" in request) return { status: 400, error: request.error };
+    if (!router || !pairing) return { status: 503, error: "This PC isn't paired with a Mac yet." };
+    const headers: Record<string, string> = { accept: "application/json", authorization: `Bearer ${pairing.token}` };
+    if (request.body) headers["content-type"] = "application/json";
+    try {
+      const response = await router.request({
+        method: request.method, path: "/api/v1/mcp", headers,
+        body: request.body ? Buffer.from(request.body) : undefined,
+      });
+      updateStatus({ connected: true, route: describeRoute(router.current), message: "" });
+      let body: unknown = null;
+      try { body = JSON.parse(response.body.toString("utf8")); } catch { /* not JSON */ }
+      const error = (body as { error?: unknown } | null)?.error;
+      return response.status < 300 ? { status: response.status, body }
+        : { status: response.status, error: typeof error === "string" ? error : `The Mac answered with HTTP ${response.status}.` };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      updateStatus({ connected: false, message });
+      return { status: 502, error: `Can't reach your Mac. ${message}` };
+    }
   });
 }
 

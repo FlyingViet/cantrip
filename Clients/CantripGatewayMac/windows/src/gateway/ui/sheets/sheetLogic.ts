@@ -1078,9 +1078,17 @@ export function copilotBucketTone(bucket: CopilotQuotaBucket): "normal" | "warni
 /** An MCP server's status line (CantripMCPServersView.status). */
 export function mcpStatus(server: MCPServer): { text: string; tone: "" | "attention" | "warning" } {
   if (!server.enabled) return { text: "Off", tone: "" };
-  if (!server.oauth) return { text: "Ready", tone: "" };
+  if (!server.oauth) return { text: server.credentials ? "Credentials in Mac keychain" : "Ready", tone: "" };
   switch (server.state?.phase) {
-    case "ready": return { text: "Signed in", tone: "" };
+    case "ready": {
+      const expiry = server.state.expiresAt ? new Date(server.state.expiresAt) : null;
+      return {
+        text: expiry && !Number.isNaN(expiry.getTime())
+          ? `Signed in · token until ${expiry.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+          : "Signed in",
+        tone: "",
+      };
+    }
     case "connecting": return { text: "Signing in…", tone: "" };
     case "awaitingApproval": return { text: "Waiting for your OK", tone: "attention" };
     case "needsLogin": return { text: "Log in to finish", tone: "attention" };
@@ -1182,4 +1190,14 @@ export function skillsRelinkSummary(messages: readonly string[]): string {
 /** A toggle shows its new state at once; the Mac's answer (or a reload) settles it. */
 export function skillsWithEnabled<T extends Pick<SkillsSnapshot, "skills">>(snapshot: T, name: string, enabled: boolean): T {
   return { ...snapshot, skills: snapshot.skills.map((skill) => (skill.name === name ? { ...skill, enabled } : skill)) };
+}
+
+/** Connect, or Reconnect after a sign-in failed. */
+export function mcpConnectLabel(server: MCPServer): string {
+  return server.state?.phase === "failed" ? "Reconnect" : "Connect";
+}
+
+/** "Remote · via Cantrip", the way the Mac tags a server. */
+export function mcpKind(server: MCPServer): string {
+  return [server.remote ? "Remote" : "Local", server.relayed ? "via Cantrip" : null].filter(Boolean).join(" · ");
 }

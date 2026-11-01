@@ -1,12 +1,14 @@
-// The Settings window (MacSettingsView.swift): Connection (saved Macs, add one, pairing links) and
-// Voice. Runs on the Gateway origin and storage partition, so voice settings and the downloaded
-// speech model are shared with the main window.
+// The Settings window (MacSettingsView.swift): Connection (saved Macs, add one, pairing links), Tools
+// & sign-ins (the Mac's shared MCP servers) and Voice. Runs on the Gateway origin and storage
+// partition, so voice settings and the downloaded speech model are shared with the main window.
 import { render, type JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import "./styles/app.css";
 import "./settings.css";
 import { Icon } from "./ui/icons";
+import type { MCPSnapshot } from "./api/types";
 import { ConfirmLayer, confirmDialog, FormRow, FormSection, MenuLayer, openMenu, Spinner, ToastLayer } from "./ui/kit";
+import { MCPServerList, type MCPTransport } from "./ui/sheets/MCPServerList";
 import { VoiceSettingsPanel } from "./ui/voice/VoiceControls";
 
 interface SavedMac {
@@ -45,6 +47,8 @@ interface SettingsBridge {
   select(id: string): Promise<State | { error: string }>;
   remove(id: string): Promise<State | { error: string }>;
   openLog(): Promise<void>;
+  /** GET or POST /api/v1/mcp through the main process, which checks the request and adds the token. */
+  mcp(request: { method: "GET" } | { method: "POST"; body: Record<string, unknown> }): Promise<{ status: number; body?: unknown; error?: string }>;
   openExternal(url: string): void;
   onStatus(callback: (status: Status) => void): void;
   onServers(callback: (state: State) => void): void;
@@ -58,8 +62,24 @@ declare global {
 const settings = window.gatewaySettings;
 const emptyForm: Form = { name: "", url: "", directAddress: "", tailscaleOnly: false, token: "" };
 
+async function settingsMCP(request: Parameters<SettingsBridge["mcp"]>[0]): Promise<MCPSnapshot> {
+  const reply = await settings.mcp(request);
+  if (reply.status >= 300 || reply.error !== undefined) {
+    throw Object.assign(new Error(reply.error ?? `The Mac answered with HTTP ${reply.status}.`), { status: reply.status });
+  }
+  return reply.body as MCPSnapshot;
+}
+
+const mcpTransport: MCPTransport = {
+  load: () => settingsMCP({ method: "GET" }),
+  act: (body) => settingsMCP({ method: "POST", body }),
+};
+
+type SettingsTab = "connection" | "tools" | "voice";
+const TAB_TITLES: Record<SettingsTab, string> = { connection: "Connection", tools: "Tools & sign-ins", voice: "Voice" };
+
 function SettingsApp(): JSX.Element {
-  const [tab, setTab] = useState<"connection" | "voice">("connection");
+  const [tab, setTab] = useState<SettingsTab>("connection");
   const [state, setState] = useState<State | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [link, setLink] = useState<string | null>(null);
@@ -79,10 +99,13 @@ function SettingsApp(): JSX.Element {
   return (
     <div class="settings-window">
       <header class="settings-titlebar">
-        <div class="settings-title">{tab === "connection" ? "Connection" : "Voice"}</div>
+        <div class="settings-title">{TAB_TITLES[tab]}</div>
         <nav class="settings-tabs" role="tablist" aria-label="Settings">
           <button type="button" role="tab" aria-selected={tab === "connection"} class="settings-tab" onClick={() => setTab("connection")}>
             <Icon name="antenna.radiowaves.left.and.right" size={20} /><span>Connection</span>
+          </button>
+          <button type="button" role="tab" aria-selected={tab === "tools"} class="settings-tab" onClick={() => setTab("tools")}>
+            <Icon name="point.3.connected" size={20} /><span>Tools &amp; sign-ins</span>
           </button>
           <button type="button" role="tab" aria-selected={tab === "voice"} class="settings-tab" onClick={() => setTab("voice")}>
             <Icon name="waveform" size={20} /><span>Voice</span>
@@ -92,7 +115,9 @@ function SettingsApp(): JSX.Element {
       <div class="settings-body" role="tabpanel">
         {tab === "connection"
           ? (state ? <Connection state={state} setState={setState} notice={notice} link={link} clearLink={() => setLink(null)} /> : <Spinner />)
-          : <VoiceSettingsPanel />}
+          : tab === "tools"
+            ? (state?.selectedID ? <MCPServerList transport={mcpTransport} /> : <p class="callout muted">Pair a Mac on Connection first.</p>)
+            : <VoiceSettingsPanel />}
       </div>
       <MenuLayer />
       <ConfirmLayer />

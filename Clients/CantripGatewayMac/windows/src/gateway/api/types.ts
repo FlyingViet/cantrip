@@ -2033,6 +2033,8 @@ export interface MCPServer {
   disabledBackends: string[];
   address?: string;
   tools?: string[];
+  /** A header or environment credential is in the Mac's keychain (never its name or value); absent before Cantrip 1.1.13. */
+  credentials?: boolean;
   state?: MCPServerState;
 }
 
