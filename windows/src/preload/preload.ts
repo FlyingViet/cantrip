@@ -9,7 +9,9 @@ import type {
   ScreenCapture,
   ShortcutStatus,
   UpdateState,
+  WeatherCardRequest,
 } from "../shared/types";
+import type { WeatherCard } from "../shared/weather";
 import type { PluginSummary } from "../shared/pluginTypes";
 
 const api: CantripApi = {
@@ -72,6 +74,8 @@ const api: CantripApi = {
     ipcRenderer.invoke("updates:download") as Promise<UpdateState>,
   installUpdate: () =>
     ipcRenderer.invoke("updates:install") as Promise<{ ok: boolean; error?: string }>,
+  weatherCard: (request: WeatherCardRequest) =>
+    ipcRenderer.invoke("weather:card", request) as Promise<WeatherCard>,
   setWindowOpacity: (opacity: number) =>
     ipcRenderer.send("settings:opacity", opacity),
   setExpanded: (expanded: boolean) => ipcRenderer.send("window:set-expanded", expanded),

@@ -14,6 +14,7 @@ import type {
 } from "../shared/types";
 import type { PluginMcpSnapshot } from "../shared/pluginTypes";
 import { checkLocation, locationNote } from "../shared/location";
+import { asksAboutWeather, WEATHER_GUIDANCE } from "../shared/weather";
 
 const execFileAsync = promisify(execFile);
 const ansiPattern =
@@ -64,6 +65,12 @@ async function commandSpec(command: string): Promise<CommandSpec | null> {
   const localNode = path.join(path.dirname(shim), "node.exe");
   const node = existsSync(localNode) ? localNode : (await where("node")).find((file) => file.endsWith(".exe"));
   return node ? { executable: node, prefixArgs: [script] } : null;
+}
+
+/** A prompt about the weather learns the `weather` block (read before the location note, which mentions weather). */
+export function withWeatherGuidance(request: RunRequest): RunRequest {
+  if (request.mode !== "ai" || !asksAboutWeather(request.prompt)) return request;
+  return { ...request, prompt: `${request.prompt}\n\n${WEATHER_GUIDANCE}` };
 }
 
 /** Settings › Location: an AI prompt gets a note saying where this PC is (shell commands never do). */
@@ -218,7 +225,7 @@ export class RunManager {
   ): Promise<{ ok: boolean; error?: string }> {
     const validationError = this.validate(request);
     if (validationError) return { ok: false, error: validationError };
-    request = withLocationNote(request);
+    request = withLocationNote(withWeatherGuidance(request));
     if (this.processes.has(request.runId)) {
       return { ok: false, error: "That run is already active." };
     }

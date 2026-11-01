@@ -20,6 +20,7 @@ import { RunManager } from "./backends";
 import { UpdateManager } from "./updateManager";
 import { PluginRegistry } from "./plugins";
 import type { RunRequest, ShortcutStatus, UpdateState } from "../shared/types";
+import { registerWeatherIPC } from "./weather";
 
 const appCatalog = new AppCatalog();
 const runManager = new RunManager();
@@ -315,6 +316,7 @@ function registerIpc(): void {
       : await dialog.showOpenDialog(options);
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
+  registerWeatherIPC();
   ipcMain.handle("run:start", async (_event, request: unknown) => {
     if (!request || typeof request !== "object") return { ok: false, error: "Invalid run." };
     return runManager.start(

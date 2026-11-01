@@ -861,3 +861,222 @@ select option {
   border-radius: 8px;
   background-clip: padding-box;
 }
+
+/* Weather card (weatherCard.ts): Open-Meteo forecast for a reply's weather block. */
+.weather-slot {
+  padding-top: 12px;
+}
+
+.weather-card {
+  overflow: hidden;
+  color: #f3f4f6;
+  background: linear-gradient(180deg, #21304a 0%, #1c1d20 62%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+}
+
+.weather-loading {
+  padding: 12px 14px;
+  color: #c9d0da;
+  font-size: 11.5px;
+}
+
+.weather-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.weather-info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.weather-place {
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.weather-note,
+.weather-detail,
+.weather-reason {
+  color: #c9d0da;
+  font-size: 11px;
+}
+
+.weather-cond {
+  margin-top: 2px;
+  color: #e5e7eb;
+  font-size: 12.5px;
+}
+
+.weather-unavailable {
+  margin-top: 4px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.weather-now {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.weather-glyph.weather-now-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.weather-now-temp {
+  color: #fff;
+  font-size: 34px;
+  font-weight: 300;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-hours {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.weather-hour {
+  display: grid;
+  flex: none;
+  justify-items: center;
+  gap: 3px;
+  width: 48px;
+  color: #d1d5db;
+  font-size: 11px;
+}
+
+.weather-hour-temp {
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-glyph {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+}
+
+.weather-glyph svg {
+  width: 100%;
+  height: 100%;
+}
+
+.weather-glyph.sun {
+  color: #ffcc40;
+}
+
+.weather-glyph.moon {
+  color: #e8e3c4;
+}
+
+.weather-glyph.wet {
+  color: #8ccaff;
+}
+
+.weather-glyph.cloud {
+  color: #d5dae2;
+}
+
+.weather-chance {
+  min-height: 12px;
+  color: #8ccaff;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.weather-days {
+  padding: 2px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.weather-day {
+  display: grid;
+  grid-template-columns: 44px 22px 32px 32px minmax(30px, 1fr) 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+}
+
+.weather-day:last-child {
+  border-bottom: 0;
+}
+
+.weather-day-label {
+  font-weight: 600;
+}
+
+.weather-low,
+.weather-high {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-low {
+  color: #c9d0da;
+}
+
+.weather-high {
+  color: #fff;
+  font-weight: 600;
+}
+
+.weather-bar {
+  position: relative;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+
+.weather-bar > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, #5ac8fa, #ffcc40);
+  border-radius: 999px;
+}
+
+.weather-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: #b9c0ca;
+  font-size: 10.5px;
+}
+
+.weather-attr {
+  margin-left: auto;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.weather-attr:focus-visible {
+  outline: 2px solid #8ccaff;
+  outline-offset: 2px;
+}

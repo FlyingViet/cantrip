@@ -15,6 +15,8 @@ import type {
 import type { PluginSummary } from "../shared/pluginTypes";
 import { PRECISE_KEY, SHARE_KEY } from "../shared/location";
 import { forgetFix, promptLocation, readFlag, readPosition } from "./location";
+import { extractWeatherBlock, visibleWeatherText } from "../shared/weather";
+import { renderWeatherCard, renderWeatherLoading } from "./weatherCard";
 
 function requiredElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -56,6 +58,7 @@ const settingsLaunchAtLogin = requiredElement<HTMLInputElement>("settings-launch
 const settingsLocationShare = requiredElement<HTMLInputElement>("settings-location-share");
 const settingsLocationPrecise = requiredElement<HTMLInputElement>("settings-location-precise");
 const settingsLocationStatus = requiredElement<HTMLElement>("settings-location-status");
+const weatherSlot = requiredElement<HTMLElement>("weather-card");
 const settingsOpacity = requiredElement<HTMLInputElement>("settings-opacity");
 const settingsOpacityValue = requiredElement<HTMLOutputElement>("settings-opacity-value");
 const settingsError = requiredElement<HTMLElement>("settings-error");
@@ -432,7 +435,8 @@ function setBusy(busy: boolean): void {
 function renderOutput(markdown: boolean): void {
   output.classList.toggle("plain-output", !markdown);
   if (markdown) {
-    const rendered = marked.parse(outputText, {
+    // A reply's `weather` block becomes the card under it, never text (not even while it streams).
+    const rendered = marked.parse(visibleWeatherText(outputText, currentRunId !== null), {
       async: false,
       breaks: true,
       gfm: true,
@@ -440,13 +444,39 @@ function renderOutput(markdown: boolean): void {
     output.innerHTML = DOMPurify.sanitize(rendered, {
       USE_PROFILES: { html: true },
     });
+    // The weather card scrolls with the reply it belongs to.
+    if (weatherSlot.childElementCount) output.append(weatherSlot);
   } else {
     output.textContent = outputText;
   }
   output.scrollTop = output.scrollHeight;
 }
 
+let weatherRequest = 0;
+
+function clearWeather(): void {
+  weatherRequest += 1;
+  weatherSlot.replaceChildren();
+  weatherSlot.classList.add("hidden");
+}
+
+/** The finished reply's weather block, as an Open-Meteo card for its place (or this PC, with Location on). */
+async function showWeather(): Promise<void> {
+  const block = extractWeatherBlock(outputText);
+  if (!block.found || block.place === undefined) return;
+  const ticket = ++weatherRequest;
+  renderWeatherLoading(weatherSlot);
+  output.append(weatherSlot);
+  const location = block.place ? undefined : await promptLocation();
+  const card = await window.cantrip.weatherCard({ place: block.place, location });
+  if (ticket !== weatherRequest) return;
+  renderWeatherCard(weatherSlot, card, (url) => void window.cantrip.openExternal(url));
+  output.append(weatherSlot);
+  weatherSlot.scrollIntoView({ block: "nearest" });
+}
+
 function showMessage(title: string, message: string, isError = false): void {
+  clearWeather();
   window.cantrip.setExpanded(true);
   transcript.classList.remove("hidden");
   runLabel.textContent = title;
@@ -608,6 +638,7 @@ async function submit(forceAi: boolean): Promise<void> {
   transcript.classList.remove("hidden");
   output.classList.remove("error");
   outputText = "";
+  clearWeather();
   renderOutput(mode === "ai");
   runLabel.textContent =
     mode === "shell" ? "PowerShell" : backendSelect.selectedOptions[0]?.textContent ?? "AI";
@@ -834,6 +865,10 @@ window.cantrip.onRunExit((event) => {
     }
   } else {
     runState.textContent = "Done";
+    if (currentRunMode === "ai") {
+      renderOutput(true);
+      void showWeather();
+    }
   }
 });
 window.cantrip.onShortcutStatus(applyShortcutStatus);
