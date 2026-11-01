@@ -14,6 +14,7 @@ import { deletedSet, isDeleted, withoutDeleted } from "./deleteMessage";
 import { movedSections } from "./sections";
 import { plainMentions, plainMentionsDeep, plainSession } from "./tabMentions";
 import { dropDeletedMessages, resetThreads } from "./threads";
+import { messageLocation } from "./location";
 
 export type Detail = PagedRemoteSessionDetail;
 
@@ -424,6 +425,12 @@ async function sessionAction(id: string, action: string, body?: unknown): Promis
 }
 
 export async function sendMessage(id: string, body: SendMessageRequest): Promise<Detail> {
+  // Settings › Location: this PC's location for this message only (none for replies and commands).
+  const trimmed = body.text.trim();
+  if (!body.inputRequestID && !body.location && !trimmed.startsWith("/") && !trimmed.startsWith("!")) {
+    const location = await messageLocation();
+    if (location) body = { ...body, location };
+  }
   return mutate(() => sessionAction(id, "messages", body)).finally(() => schedule());
 }
 

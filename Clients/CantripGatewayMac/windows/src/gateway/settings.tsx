@@ -11,6 +11,7 @@ import { ConfirmLayer, confirmDialog, FormRow, FormSection, MenuLayer, openMenu,
 import { BackendStatusList, type BackendsTransport } from "./ui/sheets/BackendStatusList";
 import { MCPServerList, type MCPTransport } from "./ui/sheets/MCPServerList";
 import { VoiceSettingsPanel } from "./ui/voice/VoiceControls";
+import { forgetFix, PRECISE_KEY, readFlag, readPosition, SHARE_KEY, writeFlag } from "./state/location";
 
 interface SavedMac {
   id: string;
@@ -88,8 +89,8 @@ const backendsTransport: BackendsTransport = {
   openLink: (url) => settings.openExternal(url),
 };
 
-type SettingsTab = "connection" | "tools" | "voice";
-const TAB_TITLES: Record<SettingsTab, string> = { connection: "Connection", tools: "Tools & sign-ins", voice: "Voice" };
+type SettingsTab = "connection" | "tools" | "voice" | "location";
+const TAB_TITLES: Record<SettingsTab, string> = { connection: "Connection", tools: "Tools & sign-ins", voice: "Voice", location: "Location" };
 
 function SettingsApp(): JSX.Element {
   const [tab, setTab] = useState<SettingsTab>("connection");
@@ -123,6 +124,9 @@ function SettingsApp(): JSX.Element {
           <button type="button" role="tab" aria-selected={tab === "voice"} class="settings-tab" onClick={() => setTab("voice")}>
             <Icon name="waveform" size={20} /><span>Voice</span>
           </button>
+          <button type="button" role="tab" aria-selected={tab === "location"} class="settings-tab" onClick={() => setTab("location")}>
+            <Icon name="location" size={20} /><span>Location</span>
+          </button>
         </nav>
       </header>
       <div class="settings-body" role="tabpanel">
@@ -132,7 +136,7 @@ function SettingsApp(): JSX.Element {
             ? (state?.selectedID
               ? <><BackendStatusList transport={backendsTransport} /><GitHubSignIn /><MCPServerList transport={mcpTransport} /></>
               : <p class="callout muted">Pair a Mac on Connection first.</p>)
-            : <VoiceSettingsPanel />}
+            : tab === "location" ? <LocationSettings /> : <VoiceSettingsPanel />}
       </div>
       <MenuLayer />
       <ConfirmLayer />
@@ -161,6 +165,45 @@ function PauseAgent(): JSX.Element {
         <input type="checkbox" class="switch" checked={paused} aria-label="Pause Agent"
           onChange={(event) => set((event.target as HTMLInputElement).checked)} />
       </FormRow>
+    </FormSection>
+  );
+}
+
+/** Location (off by default): the main window sends this PC's location with each message while it's on. */
+function LocationSettings(): JSX.Element {
+  const [share, setShare] = useState(() => readFlag(SHARE_KEY));
+  const [precise, setPrecise] = useState(() => readFlag(PRECISE_KEY));
+  const [status, setStatus] = useState<string | null>(null);
+  const check = (precision: boolean) => {
+    setStatus("Finding this PC's location…");
+    void readPosition(precision).then((reading) => setStatus("fix" in reading
+      ? `Found${precision ? "" : "; it's sent rounded to about 1 km"}. Your Mac names the place in each reply.`
+      : reading.error));
+  };
+  useEffect(() => { if (share) check(precise); }, []);
+  const setSharing = (value: boolean) => {
+    writeFlag(SHARE_KEY, value);
+    forgetFix();
+    setShare(value);
+    if (value) check(precise); else setStatus("Off. Cantrip uses the Mac's location and says so.");
+  };
+  const setPrecision = (value: boolean) => {
+    writeFlag(PRECISE_KEY, value);
+    forgetFix();
+    setPrecise(value);
+    if (share) check(value);
+  };
+  return (
+    <FormSection footer={`Off by default. While on, each message you send includes this PC's location, rounded to about 1 km unless Precise location is on, and its time zone, so weather and "near me" answers are for where you are. It comes from the Windows Location service only while Cantrip Gateway is open, goes only to your Mac over the paired connection, and isn't saved in Cantrip's memory. While off, Cantrip uses the Mac's location and says so.`}>
+      <FormRow label="Share location with messages">
+        <input type="checkbox" class="switch" checked={share} aria-label="Share location with messages"
+          onChange={(event) => setSharing((event.target as HTMLInputElement).checked)} />
+      </FormRow>
+      <FormRow label="Precise location">
+        <input type="checkbox" class="switch" checked={precise} disabled={!share} aria-label="Precise location"
+          onChange={(event) => setPrecision((event.target as HTMLInputElement).checked)} />
+      </FormRow>
+      {status ? <FormRow><span class="callout muted" role="status" aria-live="polite">{status}</span></FormRow> : null}
     </FormSection>
   );
 }
