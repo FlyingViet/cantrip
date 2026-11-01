@@ -168,6 +168,37 @@ final class SettingsMapTests: XCTestCase {
         XCTAssertEqual(old.catalogModels.count, 2)
     }
 
+    /// Settings › Tools & sign-ins reads the Mac's shared MCP list: the same status words as
+    /// Cantrip's own Settings, which backends use each server, and Macs from before `credentials`.
+    func testToolsPageShowsEachServersStatusAndBackends() throws {
+        let json: [String: Any] = ["revision": "r", "supportsApproval": true, "servers": [
+            ["name": "notes", "remote": false, "oauth": false, "relayed": false, "enabled": true,
+             "disabledBackends": [String](), "credentials": false],
+            ["name": "flows", "remote": true, "oauth": false, "relayed": true, "enabled": true,
+             "disabledBackends": ["Codex"], "credentials": true],
+            ["name": "design", "remote": true, "oauth": true, "relayed": true, "enabled": true,
+             "disabledBackends": ["Codex", "Antigravity"], "state": ["phase": "failed", "message": "Sign-in failed."]],
+            ["name": "errors", "remote": true, "oauth": true, "relayed": true, "enabled": true,
+             "disabledBackends": [String](), "state": ["phase": "ready", "expiresAt": "2026-11-01T18:30:00Z"]],
+            ["name": "old", "remote": false, "oauth": false, "relayed": false, "enabled": false, "disabledBackends": [String]()],
+        ]]
+        let snapshot = try JSONDecoder().decode(CantripMCPSnapshot.self, from: JSONSerialization.data(withJSONObject: json))
+        let byName = Dictionary(uniqueKeysWithValues: snapshot.servers.map { ($0.name, $0) })
+        let status = { (name: String) in CantripMCPServersView.status(try XCTUnwrap(byName[name])) }
+        XCTAssertEqual(try status("notes"), "Ready")
+        XCTAssertEqual(try status("flows"), "Credentials in Mac keychain")
+        XCTAssertEqual(try status("design"), "Sign-in failed")
+        XCTAssertTrue(try status("errors").hasPrefix("Signed in · token until "))
+        XCTAssertEqual(try status("old"), "Off")
+        XCTAssertNil(byName["old"]?.credentials, "a Mac from before 1.1.13 sends no credentials flag")
+
+        let backends = { (name: String) in CantripMCPServersView.kindAndBackends(try XCTUnwrap(byName[name])) }
+        XCTAssertEqual(try backends("notes"), "Local · All backends")
+        XCTAssertEqual(try backends("flows"), "Remote · via Cantrip · Copilot, Claude Code, Antigravity")
+        XCTAssertEqual(try backends("design"), "Remote · via Cantrip · Copilot, Claude Code")
+        XCTAssertEqual(try backends("old"), "Local")
+    }
+
     func testStatusCardNamesTheModelAndBackups() throws {
         let fallback = try JSONDecoder().decode(CantripUsageFallback.self, from: JSONSerialization.data(withJSONObject: [
             "backend": "Claude Code", "backends": ["Claude Code", "Codex"], "primary": "Copilot", "revision": "f1",
