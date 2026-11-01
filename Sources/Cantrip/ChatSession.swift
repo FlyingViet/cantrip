@@ -1672,9 +1672,14 @@ final class ChatSession: ObservableObject {
         )
     }
 
-    /// A queued paired-client message delivered into the running turn, with its location note.
+    /// A paired-client message delivered into the running turn, with a note only when the device
+    /// sent a location: the turn already has its context, so the Mac fallback would just be noise.
     private func withClientContext(_ text: String) -> String {
-        guard let note = takeClientContextNote(for: [text]) else { return text }
+        let key = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard clientMessages[key]?.message.location != nil, let note = takeClientContextNote(for: [text]) else {
+            clientMessages.removeValue(forKey: key)
+            return text
+        }
         return text + "\n\n" + note
     }
 
