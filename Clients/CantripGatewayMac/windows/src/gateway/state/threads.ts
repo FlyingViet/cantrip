@@ -7,6 +7,7 @@
 import { signal } from "@preact/signals";
 import { thread as fetchThread } from "../api/client";
 import type { RemoteMessage, RemoteSessionSummary, RemoteThread, RemoteThreadMessage, RemoteThreadTag } from "../api/types";
+import { isDeleted, withoutDeleted } from "./deleteMessage";
 import { plainMentions } from "./tabMentions";
 
 export type ThreadLoad =
@@ -162,6 +163,32 @@ export function loadThread(sessionID: string, threadID: string): Promise<void> {
   });
   loads.set(threadID, work);
   return work;
+}
+
+/**
+ * Drops messages deleted on the Mac from the fetched threads. A thread whose prompt was deleted is forgotten, and
+ * closed when it's open.
+ */
+export function dropDeletedMessages(deleted: ReadonlySet<string>): void {
+  if (!deleted.size) return;
+  const current = threadLoads.peek();
+  let next: Map<string, ThreadLoad> | null = null;
+  const forgotten = new Set<string>();
+  for (const [threadID, load] of current) {
+    if (isDeleted(threadID, deleted) || (load.state === "loaded" && isDeleted(load.thread.prompt.id, deleted))) {
+      next ??= new Map(current);
+      next.delete(threadID);
+      forgotten.add(threadID);
+    } else if (load.state === "loaded") {
+      const messages = withoutDeleted(load.thread.messages, deleted);
+      if (messages === load.thread.messages) continue;
+      next ??= new Map(current);
+      next.set(threadID, { state: "loaded", thread: { ...load.thread, messages } });
+    }
+  }
+  if (next) threadLoads.value = next;
+  const open = openThread.peek();
+  if (open && (forgotten.has(open.threadID) || isDeleted(open.threadID, deleted))) closeThread();
 }
 
 /** Forgets every thread and closes the open one (pairing with a different Mac). */
