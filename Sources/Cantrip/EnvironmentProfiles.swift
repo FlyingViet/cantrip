@@ -158,13 +158,24 @@ enum EnvironmentProfiles {
 
     static func expand(_ path: String, home: String = NSHomeDirectory()) -> String {
         let expanded = path == "~" ? home : path.hasPrefix("~/") ? home + path.dropFirst(1) : path
-        return (expanded as NSString).standardizingPath
+        return canonical(expanded)
+    }
+
+    /// One spelling per folder: standardized, without macOS's `/private` alias for /var, /tmp
+    /// and /etc (which `standardizingPath` drops only for paths that exist).
+    static func canonical(_ path: String) -> String {
+        let standard = (path as NSString).standardizingPath
+        for alias in ["/private/var", "/private/tmp", "/private/etc"]
+        where standard == alias || standard.hasPrefix(alias + "/") {
+            return String(standard.dropFirst("/private".count))
+        }
+        return standard
     }
 
     /// The main checkout of the git worktree `folder` is in (with the same subfolder), or nil when
     /// it isn't a linked worktree.
     static func mainCheckout(of folder: String) -> String? {
-        let start = (folder as NSString).standardizingPath
+        let start = canonical(folder)
         if let known = lock.withLock({ checkouts[start] }) { return known }
         var found: String?
         var current = start
@@ -179,8 +190,8 @@ enum EnvironmentProfiles {
                    let line = text.split(whereSeparator: \.isNewline).first(where: { $0.hasPrefix("gitdir:") }) {
                     var gitdir = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
                     if !gitdir.hasPrefix("/") { gitdir = (current as NSString).appendingPathComponent(gitdir) }
-                    if let range = (gitdir as NSString).standardizingPath.range(of: "/.git/worktrees/") {
-                        let main = String((gitdir as NSString).standardizingPath[..<range.lowerBound])
+                    if let range = canonical(gitdir).range(of: "/.git/worktrees/") {
+                        let main = String(canonical(gitdir)[..<range.lowerBound])
                         found = ([main] + relative.reversed()).joined(separator: "/")
                     }
                 }
@@ -198,7 +209,7 @@ enum EnvironmentProfiles {
     static func profile(for workdir: String?, in snapshot: Snapshot? = nil, home: String = NSHomeDirectory()) -> EnvironmentProfile? {
         let profiles = (snapshot ?? load()).profiles
         if let workdir, !workdir.isEmpty {
-            let places = [(workdir as NSString).standardizingPath] + [mainCheckout(of: workdir)].compactMap { $0 }
+            let places = [canonical(workdir)] + [mainCheckout(of: workdir)].compactMap { $0 }
             var best: (profile: EnvironmentProfile, depth: Int)?
             for profile in profiles {
                 for folder in profile.folders.map({ expand($0, home: home) }) {
