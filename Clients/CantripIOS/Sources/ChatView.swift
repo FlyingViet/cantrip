@@ -1818,187 +1818,112 @@ struct ChatView: View {
     private var chatMenu: some View {
         let state = chatMenuState
         return StableMenu(state: state) {
-            if state.isCantrip {
-                Button {
-                    opensDrawerAfterReturningHome = true
-                    returnHome()
-                } label: {
-                    Label("All Tabs", systemImage: "sidebar.left")
-                }
-                .disabled(!state.canReturnHome)
-            }
+            // Only this tab's actions, in labeled sections; Memory, Builds, Background, Usage Limits
+            // and the Mac's updates and permissions are in Settings and the tab drawer.
             if let tab = state.tab {
-                Section {
-                    CantripTabActions(
-                        model: remote, state: tab,
-                        onRename: {
-                            composerFocused = false
-                            renamingRemoteSession = remote.sessions.first { $0.id == tab.id }
-                        },
-                        onClose: { closeRemoteSession(tab.id) },
-                        onOpenTab: { openTab($0) }
-                    )
-                }
-            }
-            Menu {
-                ForEach(state.selectableLanes) { lane in
-                    Button {
-                        env.select(lane)
-                    } label: {
-                        Label(
-                            lane.title,
-                            systemImage: lane == state.activeLane.pickerLane
-                                ? "checkmark.circle.fill"
-                                : lane.systemImage
-                        )
-                    }
-                    .disabled(lane == .local && !state.localAvailable)
-                }
-            } label: {
-                Label(
-                    "Backend: \(state.activeLane.pickerLane.title)",
-                    systemImage: state.activeLane.pickerLane.systemImage
+                CantripTabActions(
+                    model: remote, state: tab,
+                    onRename: {
+                        composerFocused = false
+                        renamingRemoteSession = remote.sessions.first { $0.id == tab.id }
+                    },
+                    onClose: { closeRemoteSession(tab.id) },
+                    onOpenTab: { openTab($0) }
                 )
             }
-            if state.isCantrip || state.isHome {
-                if state.selectedSessionID != nil, state.tab == nil {
+            if state.isCantrip || state.isHome, state.selectedSessionID != nil {
+                Section(state.tab == nil ? "Model & conversation" : "Messages") {
+                    if state.tab == nil {
+                        Button {
+                            composerFocused = false
+                            if let session = remote.selectedSession {
+                                remote.modelSettingsSession = session
+                            }
+                        } label: {
+                            Label(state.isLocalPrivate ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
+                        }
+                        .disabled(state.isRemoteMutating)
+                        if let id = state.selectedSessionID {
+                            CantripStartFreshMenuItem(
+                                model: remote, sessionID: id, support: state.supportsStartFresh,
+                                isDisabled: state.isRemoteMutating || state.isSessionBusy
+                            )
+                        }
+                    }
+                    if !state.isLocalPrivate {
+                        Menu {
+                            ForEach(CantripDeliveryMode.allCases) { mode in
+                                Button {
+                                    vm.remoteDeliveryMode = mode
+                                } label: {
+                                    Label(
+                                        mode.title,
+                                        systemImage: mode == state.deliveryMode
+                                            ? "checkmark.circle.fill"
+                                            : "circle"
+                                    )
+                                }
+                            }
+                        } label: {
+                            Label(
+                                "Delivery: \(state.deliveryMode.title)",
+                                systemImage: "paperplane"
+                            )
+                        }
+                        .disabled(state.isRemoteMutating)
+                    }
+                    if state.canResume {
+                        Button {
+                            Task {
+                                _ = await remote.resume()
+                                vm.syncRemoteTranscript()
+                            }
+                        } label: {
+                            Label("Resume", systemImage: "play")
+                        }
+                        .disabled(state.isRemoteMutating)
+                    }
+                    // The iPhone header has no refresh button (the Duo's rail and wider headers do).
                     Button {
                         composerFocused = false
-                        if let session = remote.selectedSession {
-                            remote.modelSettingsSession = session
-                        }
+                        Task { await remote.refreshNow() }
                     } label: {
-                        Label(state.isLocalPrivate ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
+                        Label("Refresh", systemImage: "arrow.clockwise")
                     }
-                    .disabled(state.isRemoteMutating)
-                    if let id = state.selectedSessionID {
-                        CantripStartFreshMenuItem(
-                            model: remote, sessionID: id, support: state.supportsStartFresh,
-                            isDisabled: state.isRemoteMutating || state.isSessionBusy
-                        )
-                    }
-                }
-                if !state.isLocalPrivate {
-                    Button {
-                        composerFocused = false
-                        menuUsageModel.useSource(remote.usageIdentity)
-                        showCopilotUsage = true
-                        Task {
-                            await menuUsageModel.refresh {
-                                try await remote.copilotUsage()
-                            }
-                        }
-                    } label: {
-                        Label(
-                            "Usage Limits",
-                            systemImage: "gauge.with.dots.needle.33percent"
-                        )
-                    }
-                    .disabled(!state.macControlsEnabled)
-                    Menu {
-                        ForEach(CantripDeliveryMode.allCases) { mode in
-                            Button {
-                                vm.remoteDeliveryMode = mode
-                            } label: {
-                                Label(
-                                    mode.title,
-                                    systemImage: mode == state.deliveryMode
-                                        ? "checkmark.circle.fill"
-                                        : "circle"
-                                )
-                            }
-                        }
-                    } label: {
-                        Label(
-                            "Delivery: \(state.deliveryMode.title)",
-                            systemImage: "paperplane"
-                        )
-                    }
-                    .disabled(state.selectedSessionID == nil || state.isRemoteMutating)
-                }
-                Button {
-                    composerFocused = false
-                    Task { await remote.refreshNow() }
-                } label: {
-                    Label("Refresh Cantrip", systemImage: "arrow.clockwise")
-                }
-                .disabled(!state.macControlsEnabled || state.isRemoteMutating)
-                if state.macControlsEnabled {
-                    CantripLiveActivityToggle()
-                }
-                if state.canResume {
-                    Button {
-                        Task {
-                            _ = await remote.resume()
-                            vm.syncRemoteTranscript()
-                        }
-                    } label: {
-                        Label("Resume", systemImage: "play")
-                    }
-                    .disabled(state.isRemoteMutating)
+                    .disabled(!state.macControlsEnabled || state.isRemoteMutating)
                 }
             }
-            Divider()
-            Button { paused.toggle() } label: {
-                Label(state.paused ? "Resume agent" : "Pause agent",
-                      systemImage: state.paused ? "play.circle" : "pause.circle")
-            }
-            Divider()
-            Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
-                .disabled(state.paused || state.isCantrip || state.isHome)
-            Button { showVoiceMode = true } label: { Label("Voice mode", systemImage: "waveform") }
-                .disabled(state.voiceModeDisabled)
-            Button {
-                composerFocused = false
-                showGitHubBuilds = true
-            } label: {
-                Label("GitHub Builds", systemImage: "hammer")
-            }
-            Button {
-                composerFocused = false
-                showCantripMemory = true
-            } label: {
-                Label("Cantrip Memory", systemImage: "brain")
-            }
-            .accessibilityIdentifier("chat.cantripMemory")
-            if state.isHome {
-                Button {
-                    composerFocused = false
-                    showMascotCustomization = true
-                } label: {
-                    Label("Customize Mascot", systemImage: "tshirt")
+            Section("Agent") {
+                Button { paused.toggle() } label: {
+                    Label(state.paused ? "Resume Agent" : "Pause Agent",
+                          systemImage: state.paused ? "play.circle" : "pause.circle")
                 }
-                .accessibilityIdentifier("chat.customizeMascot")
+                Button { showVoiceMode = true } label: { Label("Voice Mode", systemImage: "waveform") }
+                    .disabled(state.voiceModeDisabled)
+                if !state.isCantrip && !state.isHome {
+                    Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
+                        .disabled(state.paused)
+                }
             }
-            CantripMacMenuActions(remote: remote, showingMaintenance: $showCantripMaintenance) {
-                composerFocused = false
-                vm.leaveVoiceMode()
-            }
-            Button { showSettings = true } label: {
-                Label("Settings", systemImage: "gearshape")
-            }
-            .disabled(state.settingsDisabled)
-            Divider()
             if !state.isCantrip && !state.isHome {
-                Button {
-                    tabName = vm.tabMetadata.customTitle ?? vm.tabTitle
-                    showRenameLocalTab = true
-                } label: {
-                    Label("Rename Tab", systemImage: "pencil")
+                Section("Tab") {
+                    Button {
+                        tabName = vm.tabMetadata.customTitle ?? vm.tabTitle
+                        showRenameLocalTab = true
+                    } label: {
+                        Label("Rename Tab", systemImage: "pencil")
+                    }
+                    Button {
+                        vm.setTabLocked(!vm.isTabLocked)
+                    } label: {
+                        Label(state.isTabLocked ? "Unlock Tab" : "Lock Tab",
+                              systemImage: state.isTabLocked ? "lock.open" : "lock")
+                    }
+                    Button(role: .destructive) { vm.newConversation() } label: {
+                        Label("New Conversation", systemImage: "square.and.pencil")
+                    }
+                    .disabled(state.newConversationDisabled)
                 }
-                Button {
-                    vm.setTabLocked(!vm.isTabLocked)
-                } label: {
-                    Label(state.isTabLocked ? "Unlock Tab" : "Lock Tab",
-                          systemImage: state.isTabLocked ? "lock.open" : "lock")
-                }
-                Divider()
-            }
-            if !state.isHome {
-                Button(role: .destructive) { vm.newConversation() } label: {
-                    Label("New conversation", systemImage: "square.and.pencil")
-                }
-                .disabled(state.newConversationDisabled)
             }
         } label: {
             ChatMenuIcon(isPaused: state.paused, systemName: state.isCantrip ? "ellipsis" : "line.3.horizontal")
