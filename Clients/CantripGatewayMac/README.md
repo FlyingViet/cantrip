@@ -179,6 +179,12 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   Mac's shared MCP servers, and this Mac's local model tools), Memory, Voice, Appearance (the
   mascot) and About & Updates (Update & rebuild Cantrip, Mac permissions). It reopens on the
   last page you used. Each page says who its settings change.
+- **Location (off by default):** Settings › Location › Share location with messages sends this
+  Mac's location with each message (When In Use only; rounded to about 1 km unless Precise
+  location is on; one fix reused for up to 15 minutes), so weather and "near me" answers are for
+  where this Mac is and name the place. It goes only to the paired Cantrip and isn't saved; while
+  it's off, the host uses its own location and says so. Needs a Cantrip host with
+  `supportsClientLocation`.
 
 When a tab Home handed work to finishes, fails, stops or needs an answer, a result card in
 the chat shows its outcome; **Open tab** opens that tab right in the window. Not on the Mac:
