@@ -6,8 +6,9 @@ extension FocusedValues {
     @Entry var startFreshTabID: String?
 }
 
-/// The menu bar: the standard File, View, Tab, Window and Help menus. Memory, Usage Limits and
-/// the mascot are in Settings (⌘,), like on the iPhone.
+/// The menu bar: the standard File, View, Tab, Window and Help menus, and Pause Agent beside
+/// Settings in the app menu (it's app-wide). Memory, Usage Limits and the mascot are in Settings
+/// (⌘,), like on the iPhone.
 struct MacHomeCommands: Commands {
     let remote: CantripRemoteModel
     let navigation: MacHomeNavigation
@@ -15,6 +16,12 @@ struct MacHomeCommands: Commands {
     @FocusedValue(\.startFreshTabID) private var startFreshTabID
 
     var body: some Commands {
+        // App menu: Pause Agent stops every request from this Mac, so it sits with Settings.
+        CommandGroup(after: .appSettings) {
+            Button(paused ? "Resume Agent" : "Pause Agent") { paused.toggle() }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+        }
+
         // File: Home is a single window, so New makes a tab or a message, not a window.
         CommandGroup(replacing: .newItem) {
             Button("New Tab") { navigation.createTab() }
@@ -41,7 +48,7 @@ struct MacHomeCommands: Commands {
             Divider()
         }
 
-        // Tab: the open tab's (or Home's) model and conversation, and the agent.
+        // Tab: the open tab's (or Home's) model and conversation, and Voice Mode.
         CommandMenu("Tab") {
             Button("Model Settings…") {
                 if let session = remote.selectedSession { remote.modelSettingsSession = session }
@@ -53,8 +60,6 @@ struct MacHomeCommands: Commands {
             }
             .disabled(startFreshTabID == nil)
             Divider()
-            Button(paused ? "Resume Agent" : "Pause Agent") { paused.toggle() }
-                .keyboardShortcut("p", modifiers: [.command, .shift])
             Button("Voice Mode") { navigation.sheet = .voiceMode }
                 .keyboardShortcut("v", modifiers: [.command, .shift])
                 .disabled(paused)

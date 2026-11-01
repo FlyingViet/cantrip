@@ -305,12 +305,8 @@ struct MacHomeWindow: View {
                 }
                 .disabled(remote.isMutating)
             }
-            Section("Agent") {
-                Button(paused ? "Resume Agent" : "Pause Agent",
-                       systemImage: paused ? "play.circle" : "pause.circle") { paused.toggle() }
-                Button("Voice Mode", systemImage: "waveform") { navigation.sheet = .voiceMode }
-                    .disabled(paused || !remote.isConfigured || remote.selectedSessionID == nil)
-            }
+            // Pause Agent is app-wide (Settings, the app menu and the Dock menu); Voice Mode opens
+            // from the composer's microphone and Tab › Voice Mode (⇧⌘V).
             Section {
                 if navigation.showingDirectLocal || isTabOpen {
                     Button("Back to Home", systemImage: "house") { navigation.showHome() }
