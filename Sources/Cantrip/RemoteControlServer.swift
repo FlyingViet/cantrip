@@ -267,6 +267,28 @@ final class RemoteControlServer {
         }
     }
 
+    /// The secrets broker: names, field names and sync state (never a value), and a request to
+    /// unlock Bitwarden and sync, which shows the password dialog on the Mac.
+    @MainActor
+    private func handleSecrets(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
+        let hub = SecretsHub.shared
+        switch request.method {
+        case "GET":
+            sendJSON(hub.remotePayload(), on: connection)
+        case "POST":
+            guard request.body.count <= 1024,
+                  let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+                  body["action"] as? String == "sync" else {
+                sendError(400, "The only secrets action is sync.", on: connection)
+                return
+            }
+            hub.requestSync(from: "a paired device")
+            sendJSON(hub.remotePayload(), on: connection)
+        default:
+            sendError(405, "method not allowed", on: connection)
+        }
+    }
+
     /// Shared MCP servers: the list and sign-in states (never a token), and actions on them.
     /// Approving presses the consent page's own button in the agent Chrome.
     @MainActor
@@ -714,6 +736,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/browser/frame"
                 || request.path == "/api/v1/usage-fallback"
                 || request.path == "/api/v1/mcp"
+                || request.path == "/api/v1/secrets"
                 || request.path == "/api/v1/link-previews/image"
                 || request.path.hasPrefix("/api/v1/link-previews/image/")
                 || request.path == "/api/v1/map-tile" else {
@@ -730,6 +753,10 @@ final class RemoteControlServer {
         }
         if request.path == "/api/v1/mcp" {
             handleMCP(request, on: connection)
+            return
+        }
+        if request.path == "/api/v1/secrets" {
+            handleSecrets(request, on: connection)
             return
         }
         if request.path == "/api/v1/maintenance" {
@@ -3017,7 +3044,7 @@ private extension RemoteControlServer {
     #inputEditor{width:min(calc(100% - 24px),580px);max-height:90vh;overflow:auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
     #inputEditor::backdrop{background:rgba(0,0,0,.35)}.input-card{display:grid;gap:12px;margin:16px 0;padding:12px;border:1px solid var(--line);border-radius:10px}
     #desktopEditor{width:min(calc(100% - 24px),1000px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
-    #mcpEditor{width:min(calc(100% - 24px),760px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#mcpEditor::backdrop{background:rgba(0,0,0,.35)}
+    #mcpEditor{width:min(calc(100% - 24px),760px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#mcpEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor{width:min(calc(100% - 24px),640px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#secretsEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor button{min-height:44px}.secret-row{display:flex;gap:10px;align-items:baseline;padding:6px 0;border-top:1px solid var(--line)}.secret-row code{font-weight:600}
     .mcp-row{border-top:1px solid var(--line);padding:10px 0;display:flex;flex-direction:column;gap:6px}.mcp-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.mcp-head strong{flex:1}.mcp-status{font-size:13px}.mcp-status.attn{color:var(--accent,#0a84ff)}.mcp-status.warn{color:#c76a00}
     .mcp-switches{display:flex;gap:12px;flex-wrap:wrap;font-size:13px}.mcp-page img{max-width:100%;max-height:340px;border:1px solid var(--line);border-radius:8px}#mcpEditor button{min-height:44px}
     #desktopEditor::backdrop{background:rgba(0,0,0,.35)}#desktopEditor .tab-actions{flex-wrap:wrap}#desktopEditor button,#desktopEditor select{min-height:44px}
@@ -3118,7 +3145,7 @@ private extension RemoteControlServer {
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
     <label id="tabSectionLabel" class="hidden">Section<select id="tabSection"></select></label><input id="tabNewSection" class="hidden" maxlength="40" autocomplete="off" placeholder="New section name" aria-label="New section name">
-    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button>
+    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button><button id="tabSecrets" type="button" class="control">Secrets</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
@@ -3147,6 +3174,8 @@ private extension RemoteControlServer {
     <img id="browserViewerImage" alt="Live view of the agent browser"><div id="browserViewerError" role="status"></div></dialog>
     <dialog id="mcpEditor" aria-labelledby="mcpTitle"><div class="tasks-bar"><strong id="mcpTitle" class="grow">MCP Servers</strong><button id="mcpDone" type="button" class="control">Done</button></div>
     <p class="muted">Every backend shares these. Sign-ins open in the agent Chrome; approve them here.</p><div id="mcpError" role="alert"></div><div id="mcpList"></div></dialog>
+    <dialog id="secretsEditor" aria-labelledby="secretsTitle"><div class="tasks-bar"><strong id="secretsTitle" class="grow">Secrets</strong><button id="secretsSync" type="button" class="control primary">Unlock on the Mac &amp; Sync</button><button id="secretsDone" type="button" class="control">Done</button></div>
+    <p class="muted">Commands on the Mac get these through <code>cantrip secret run</code>. Only names are shown here; values never leave the Mac. Syncing shows a Bitwarden password dialog on the Mac.</p><p id="secretsStatus" role="status"></p><div id="secretsError" role="alert"></div><div id="secretsList"></div></dialog>
     <dialog id="desktopEditor" aria-labelledby="desktopTitle"><strong id="desktopTitle">Mac Permissions &amp; View Mac</strong>
     <p class="muted">Start viewing explicitly. The Mac must first allow paired clients in Cantrip settings. Screen frames and typed text stay out of chat, files and AI models. Protected dialogs may be unavailable. Phone Face ID does not authorize macOS dialogs.</p>
     <div id="desktopError" role="alert"></div><div class="tab-actions">
@@ -3820,6 +3849,20 @@ private extension RemoteControlServer {
           if(s.state.screenshot){const img=document.createElement("img");img.alt=`The sign-in page for ${s.name}`;img.src=`data:image/jpeg;base64,${s.state.screenshot}`;page.append(img)}
           if(phase==="awaitingApproval"){const a=el("div","tab-actions");a.append(button("Decline","decline"),button("Approve","approve",true));page.append(a)}row.append(page)}
         list.append(row)}}
+    let secretsTimer=null;
+    $("tabSecrets").onclick=()=>{if(tabSaving||movingTab)return;$("tabEditor").close();editingTab=null;$("secretsError").textContent="";$("secretsEditor").showModal();loadSecrets()};
+    $("secretsDone").onclick=()=>$("secretsEditor").close();$("secretsEditor").addEventListener("close",()=>clearTimeout(secretsTimer));
+    $("secretsSync").onclick=async()=>{try{renderSecrets(await api("/api/v1/secrets",{method:"POST",body:JSON.stringify({action:"sync"})}));$("secretsError").textContent="";clearTimeout(secretsTimer);secretsTimer=setTimeout(loadSecrets,1500)}catch(e){$("secretsError").textContent=e.message||"That didn't work."}};
+    async function loadSecrets(){clearTimeout(secretsTimer);if(!$("secretsEditor").open)return;let data=null;try{data=await api("/api/v1/secrets");$("secretsError").textContent="";renderSecrets(data)}catch(e){$("secretsError").textContent=e.message||"Secrets aren't available on this Mac."}
+      secretsTimer=setTimeout(loadSecrets,data?.syncing?1500:15000)}
+    function renderSecrets(data){const when=t=>t?new Date(t).toLocaleString([], {dateStyle:"medium",timeStyle:"short"}):"never";const items=data.items||[];
+      $("secretsSync").disabled=Boolean(data.syncing)||data.available===false;$("secretsSync").textContent=data.syncing?"Waiting for the Mac…":"Unlock on the Mac & Sync";
+      const parts=[`Bitwarden folder “${data.folder}” · ${items.length} secret${items.length===1?"":"s"} · last sync ${when(data.lastSync)}`];
+      if(data.syncing)parts.push(`A password dialog is open on the Mac (asked from ${data.requestedBy||"here"}).`);else if(data.lastReport)parts.push(data.lastReport);
+      if(data.available===false)parts.push("The Bitwarden CLI isn't installed on the Mac.");$("secretsStatus").textContent=parts.join(" ");
+      if(data.lastError&&!data.syncing)$("secretsError").textContent=data.lastError;
+      const list=$("secretsList");list.replaceChildren();for(const s of items){const row=el("div","secret-row");row.append(el("code","",s.name),el("span","muted",s.kind==="fields"?(s.fields||[]).join(" "):s.kind));list.append(row)}
+      for(const skipped of data.skipped||[])list.append(el("p","muted",`Skipped ${skipped}`))}
     function openDesktop(){desktopState={token,lease:null,frame:null,sequence:0,timer:null,saving:false,starting:false,generation:0};$("desktopError").textContent="";$("desktopEditor").showModal();loadDesktopStatus()}
     async function loadDesktopStatus(){const state=desktopState;if(!state)return;
       try{const data=await api("/api/v1/mac-access");if(desktopState!==state||token!==state.token)return;

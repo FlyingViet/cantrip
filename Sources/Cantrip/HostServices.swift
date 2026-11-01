@@ -23,6 +23,7 @@ final class HostServices {
 
     func start(recoveryReport: CrashRecovery.Report?) {
         UsageTracker.shared.startAutoRefresh()
+        SecretsHub.shared.start()
         // Older replies point at agent files folders recorded before Cantrip tracked them.
         let transcripts = SessionManager.chatsDir
         DispatchQueue.global(qos: .utility).async {
