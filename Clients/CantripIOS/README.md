@@ -266,7 +266,7 @@ same pages as Gateway Mac:
 |---|---|
 | Macs | Each paired Mac with an **Active** badge and when this device last reached it. A Mac's page has **Use This Mac**, **Re-enter Pairing Token**, its addresses under **Advanced**, and **Remove Mac…**. **Pair a Mac** walks through pairing. Hermes gateways show here only while one is saved. |
 | Models | What new tabs run (read-only; change it on the Mac), **Model tiers** (each backend's models for Fast, Standard and Deep, with Copilot's prices), the **Usage-limit backups** and **Usage Limits**. |
-| Tools & sign-ins | The Mac's shared MCP servers, in the same words as Cantrip's own Settings: each row shows its state (including "Credentials in Mac keychain" and when a sign-in's token ends), which backends use it, and **Connect** (**Retry** after a failed sign-in, with the Mac's reason); a row opens its sign-in and per-backend switches. Gateway Mac shows the switches in each row, as Cantrip does. Clients see state and send actions; credentials stay on the Mac. |
+| Tools & sign-ins | **GitHub on your Mac**: **Sign In…** runs GitHub's device sign-in for the Mac's GitHub CLI in Cantrip Home, whose chat shows the code to enter at github.com (it was **Sign in to GitHub on Mac** in a tab's menu). Then the Mac's shared MCP servers, in the same words as Cantrip's own Settings: each row shows its state (including "Credentials in Mac keychain" and when a sign-in's token ends), which backends use it, and **Connect** (**Retry** after a failed sign-in, with the Mac's reason); a row opens its sign-in and per-backend switches. Gateway Mac shows the switches in each row, as Cantrip does. Clients see state and send actions; credentials stay on the Mac. |
 | Memory | The Mac's memory files, read-only. |
 | Voice | Speech recognition, dictation vocabulary, the reply voice and the pause before sending. |
 | Notifications | Completion and input alerts, the widget and the Live Activity. |
@@ -1121,9 +1121,10 @@ retried or silently turned into queued tasks. An older host can still accept
 text-only question replies, but attached replies require the updated Mac host.
 Explicit Queue/Redirect/Inject delivery remains separate from answering a question.
 
-For GitHub, use **Sign in to GitHub on Mac** in an idle tab's actions or send
-`/login github`. The Mac's `gh` CLI starts device login; the request shows the
-GitHub page and temporary code. Password/2FA stay on GitHub's website, and only
+For GitHub, use **Settings › Tools & sign-ins › GitHub on your Mac › Sign In…**
+(it runs in Cantrip Home and opens it), or send `/login github` in any tab. The
+Mac's `gh` CLI starts device login; the request shows the GitHub page and
+temporary code. GitHub Builds points to the same row when the Mac isn't signed in. Password/2FA stay on GitHub's website, and only
 the CLI's successful exit confirms login. The Mac may store the resulting
 credential through the normal GitHub CLI credential store.
 

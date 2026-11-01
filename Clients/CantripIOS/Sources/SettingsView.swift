@@ -46,6 +46,15 @@ struct SettingsView: View {
         #endif
     }
 
+    /// Cantrip Home's chat (where GitHub's sign-in code shows); Settings closes on iPhone, and on
+    /// the Mac the Home window switches to it.
+    private func openHome() {
+        env.select(.home)
+        #if os(iOS)
+        dismiss()
+        #endif
+    }
+
     /// The saved page if this device shows it, else Macs.
     static func restoredPage(_ saved: String) -> SettingsPage {
         SettingsPage(rawValue: saved).flatMap { SettingsPage.available.contains($0) ? $0 : nil } ?? .macs
@@ -154,7 +163,7 @@ struct SettingsView: View {
         case .models:
             SettingsModelsPage(env: env, remote: remote, canChangeGateway: canChangeGateway, fallback: $fallback)
         case .tools:
-            SettingsToolsPage(remote: remote, macTools: macTools)
+            SettingsToolsPage(remote: remote, macTools: macTools, onOpenHome: openHome)
         case .memory:
             SettingsMemoryPage(remote: remote)
         case .voice:

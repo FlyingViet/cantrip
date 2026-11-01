@@ -201,6 +201,25 @@ final class SettingsMapTests: XCTestCase {
         XCTAssertEqual(try backends("old"), "Local")
     }
 
+    /// Settings › Tools & sign-ins signs the Mac's GitHub CLI in through Cantrip Home, which shows
+    /// GitHub's code as a question; it needs a connected Mac whose Home can ask one.
+    func testGitHubSignInNeedsAHomeThatCanAskQuestions() throws {
+        func home(_ supportsInputRequests: Bool?) throws -> CantripRemoteSession {
+            var json: [String: Any] = [
+                "id": "7EAE0CE5-8C8B-4652-9FD0-214867A90E5D", "title": "Cantrip Home", "workdir": "/tmp",
+                "isStreaming": false, "canResume": false, "councilMode": false, "queuedCount": 0,
+                "queued": [Any](), "isCantripHome": true, "messages": [Any](),
+            ]
+            if let supportsInputRequests { json["supportsInputRequests"] = supportsInputRequests }
+            return try JSONDecoder().decode(CantripRemoteSession.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        XCTAssertEqual(SettingsGitHubSection.unavailableReason(isConfigured: false, home: nil), "Connect to your Mac to sign in.")
+        XCTAssertEqual(SettingsGitHubSection.unavailableReason(isConfigured: true, home: nil), "Connect to your Mac to sign in.")
+        XCTAssertEqual(SettingsGitHubSection.unavailableReason(isConfigured: true, home: try home(nil)),
+                       "Update and reopen Cantrip on your Mac to sign in from here.")
+        XCTAssertNil(SettingsGitHubSection.unavailableReason(isConfigured: true, home: try home(true)))
+    }
+
     func testStatusCardNamesTheModelAndBackups() throws {
         let fallback = try JSONDecoder().decode(CantripUsageFallback.self, from: JSONSerialization.data(withJSONObject: [
             "backend": "Claude Code", "backends": ["Claude Code", "Codex"], "primary": "Copilot", "revision": "f1",
