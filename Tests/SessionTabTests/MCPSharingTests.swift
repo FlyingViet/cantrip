@@ -193,8 +193,24 @@ extension SessionTabTests {
             _ = try await MCPOAuth.register(endpoints, redirectURI: "http://127.0.0.1:5555/oauth/callback", transport: refusing)
             preconditionFailure("A 400 from registration fails")
         } catch let failure as MCPOAuth.Failure {
-            precondition(failure.kind == .registration && failure.message.contains("redirect_uri doesn't match"), failure.message)
+            precondition(failure.kind == .registration && failure.message.contains("redirect_uri doesn't match")
+                         && !failure.message.contains("API key"), failure.message)
         }
+        // A sign-in server that only accepts apps it already knows (RevenueCat's) points to an API key instead.
+        let allowlisted: MCPOAuth.Transport = { request in
+            let body = #"{"error":"invalid_client","error_description":"The client is not registered. Contact support if you need to register a new client."}"#
+            return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!)
+        }
+        do {
+            _ = try await MCPOAuth.register(endpoints, redirectURI: "http://127.0.0.1:5555/oauth/callback", transport: allowlisted)
+            preconditionFailure("An unknown client's registration fails")
+        } catch let failure as MCPOAuth.Failure {
+            precondition(failure.kind == .registration
+                         && failure.message.hasPrefix("Registering Cantrip with the sign-in server failed: The client is not registered.")
+                         && failure.message.contains("(invalid_client) (HTTP 400). It only lets apps it already knows sign in.")
+                         && failure.message.contains("API key") && failure.message.contains("cantrip mcp migrate --apply"), failure.message)
+        }
+        precondition(MCPOAuth.onlyKnownClients(error: nil, status: 403) && !MCPOAuth.onlyKnownClients(error: "invalid_client_metadata", status: 400))
         let offline: MCPOAuth.Transport = { _ in throw URLError(.timedOut) }
         do {
             _ = try await MCPOAuth.discover(server: URL(string: "https://mcp.example.com/mcp")!, transport: offline)
@@ -704,6 +720,19 @@ extension SessionTabTests {
         precondition(asked.isEmpty && MCPRegistry.load()?.servers.first { $0.name == "errors" }?.oauth == false,
                      "Servers already in the list aren't asked again and keep their sign-in setting")
 
+        // The way a refused sign-in points to: an API key as the server's Authorization header, then migrate.
+        var config = try JSONSerialization.jsonObject(with: Data(contentsOf: MCPMigration.copilotConfig)) as? [String: Any] ?? [:]
+        var entries = config["mcpServers"] as? [String: Any] ?? [:]
+        entries["mobbin"] = ["type": "http", "url": "https://mcp.example.com/mcp", "headers": ["Authorization": "Bearer secret-mobbin-key"]]
+        config["mcpServers"] = entries
+        try JSONSerialization.data(withJSONObject: config).write(to: MCPMigration.copilotConfig)
+        _ = try MCPMigration.run(dryRun: false, secrets: secrets, claudePath: fakeClaude.path, access: access)
+        let keyed = MCPRegistry.load()?.servers.first { $0.name == "mobbin" }
+        let storedKey = try secrets.string(MCPSecrets.headerAccount("mobbin", "Authorization"))
+        let rewritten = String(decoding: try Data(contentsOf: MCPMigration.copilotConfig), as: UTF8.self)
+        precondition(keyed?.oauth == false && keyed?.secretHeaders == ["Authorization"] && storedKey == "Bearer secret-mobbin-key"
+                     && !rewritten.contains("secret-mobbin-key") && asked.isEmpty,
+                     "The key moves to the keychain and the server stops signing in with OAuth: \(String(describing: keyed))")
         let restored = try MCPMigration.restore(secrets: secrets, claudePath: fakeClaude.path)
         let restoredCopilot = try Data(contentsOf: MCPMigration.copilotConfig)
         precondition(restored.count == 2 && restoredCopilot == originalCopilot, "Restore puts Copilot's original back")

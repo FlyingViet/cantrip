@@ -287,11 +287,24 @@ enum MCPOAuth {
         ])
         let (data, response) = try await transport(request)
         guard (200..<300).contains(response.statusCode), let object = json(data), let id = object["client_id"] as? String else {
-            let reason = refusal(in: json(data) ?? [:]).map { ": \($0)" } ?? ""
-            throw Failure(kind: .registration,
-                          message: "Registering Cantrip with the sign-in server failed\(reason) (HTTP \(response.statusCode)).")
+            let body = json(data) ?? [:]
+            let reason = refusal(in: body).map { ": \($0)" } ?? ""
+            var message = "Registering Cantrip with the sign-in server failed\(reason) (HTTP \(response.statusCode))."
+            if onlyKnownClients(error: body["error"] as? String, status: response.statusCode) {
+                message += " It only lets apps it already knows sign in. If the service gives out API keys, use one instead: add it as the "
+                    + "server's Authorization header (usually `Bearer <key>`) in ~/.copilot/mcp-config.json, then run "
+                    + "`cantrip mcp migrate --apply`, which moves it to the keychain."
+            }
+            throw Failure(kind: .registration, message: message)
         }
         return (id, object["client_secret"] as? String)
+    }
+
+    /// A registration refused because the sign-in server accepts only clients it already knows
+    /// (RevenueCat's: "The client is not registered" (invalid_client)), not because of what was sent.
+    static func onlyKnownClients(error: String?, status: Int) -> Bool {
+        status == 401 || status == 403
+            || ["invalid_client", "unauthorized_client", "access_denied", "unapproved_software_statement"].contains(error ?? "")
     }
 
     static func randomURLSafe(_ bytes: Int = 32) -> String {
