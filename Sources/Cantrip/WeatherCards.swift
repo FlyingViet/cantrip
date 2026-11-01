@@ -683,12 +683,12 @@ actor WeatherCardResolver {
         what to wear), end your reply with a fenced `weather` JSON block naming the place, so \
         Cantrip can show a forecast card under your text:
         ```weather
-        {"place":"Santa Clara, CA"}
+        {"place":"Portland, OR"}
         ```
-        Use the place the user asked about; otherwise where they are: the device location in the \
+        (an example place). Use the place the user asked about; otherwise where they are: the device location in the \
         message's context, or the Mac's location. Cantrip fetches the forecast for the card itself \
         (Open-Meteo: now, the next 12 hours and 10 days). For any forecast numbers in your text, run \
-        `\(command) weather "Santa Clara, CA"`, which prints exactly what the card will show. Never \
+        `\(command) weather "<place>"`, which prints exactly what the card will show. Never \
         state temperatures, chances of rain or other forecast figures from anywhere else or from \
         memory; if you can't run the command, leave the numbers to the card. Keep the text short \
         and don't link to weather websites.
