@@ -60,6 +60,10 @@ make build     # Debug build in build/Debug
 team use `make install TEAM=<your team ID>`; without one, sign ad hoc with
 `make install TEAM= SIGN_IDENTITY=-`.
 
+Build output goes to `build/`. To keep it on another disk (a NAS, say), set
+`CANTRIP_BUILD_ROOT` to a folder there: each checkout builds in its own folder below it, and
+whenever that folder can't be written (the disk isn't mounted) the build falls back to `build/`.
+
 Maintainers publish a release with `Scripts/release.sh <version>`: it archives with
 Developer ID, notarizes and staples the app and a DMG, then creates the GitHub release.
 See the script's header for the one-time `notarytool` setup.

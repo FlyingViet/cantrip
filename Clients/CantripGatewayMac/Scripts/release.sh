@@ -9,6 +9,10 @@
 # Needs a "Developer ID Application" certificate in the keychain and notarytool credentials
 # saved once with:
 #   xcrun notarytool store-credentials cantrip-notary --key AuthKey_XXXX.p8 --key-id XXXX --issuer <uuid>
+#
+# Output goes to build/Distribution, or to the build disk when one is mounted (Scripts/build-dir.sh).
+# Once published, only the DMG, its checksum, the archive (for its dSYMs) and the notary logs stay;
+# KEEP_BUILD=1 keeps everything.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -21,7 +25,8 @@ NOTARIZE="${NOTARIZE:-1}"
 PUBLISH="${PUBLISH:-1}"
 APP_NAME="Cantrip Gateway Mac"
 BUILD_NUMBER="$(git rev-list --count HEAD)"
-OUT="build/Distribution/$VERSION"
+DIST="$(Scripts/build-dir.sh)/Distribution"
+OUT="$DIST/$VERSION"
 ARCHIVE="$OUT/CantripGatewayMac.xcarchive"
 DMG="$OUT/CantripGatewayMac-$VERSION.dmg"
 
@@ -48,8 +53,8 @@ make project >/dev/null
 say "Archiving $APP_NAME $VERSION ($BUILD_NUMBER)"
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
 xcodebuild -quiet -project CantripGatewayMac.xcodeproj -scheme CantripGatewayMac \
-    -destination 'generic/platform=macOS' -clonedSourcePackagesDirPath .spm \
-    -derivedDataPath build/Distribution/DerivedData -configuration Release \
+    -destination 'generic/platform=macOS' -clonedSourcePackagesDirPath "${SPM_DIR:-.spm}" \
+    -derivedDataPath "$DIST/DerivedData" -configuration Release \
     -archivePath "$ARCHIVE" archive \
     MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
     CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$SIGN_IDENTITY" DEVELOPMENT_TEAM="$TEAM" \
@@ -103,5 +108,9 @@ if [ "$PUBLISH" = 1 ]; then
     git push -q origin "v$VERSION"
     gh release create "v$VERSION" "$DMG" --verify-tag --title "Cantrip Gateway Mac $VERSION" \
         --notes "Download **CantripGatewayMac-$VERSION.dmg**, open it and drag Cantrip Gateway Mac to Applications. Signed with Developer ID and notarized by Apple. Requires macOS 26 and Cantrip on a Mac to pair with (see the README)."
+    if [ "${KEEP_BUILD:-0}" != 1 ]; then
+        say "Removing the published build's intermediates"
+        rm -rf "$OUT/export" "$OUT/dmg" "$OUT/app.zip" "$DIST/DerivedData"
+    fi
 fi
 say "Done: $DMG"
