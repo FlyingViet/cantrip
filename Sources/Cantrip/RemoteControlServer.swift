@@ -754,6 +754,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/browser/frame"
                 || request.path == "/api/v1/usage-fallback"
                 || request.path == "/api/v1/policy"
+                || request.path == "/api/v1/model-tiers"
                 || request.path == "/api/v1/mcp"
                 || request.path == "/api/v1/skills"
                 || request.path == "/api/v1/link-previews/image"
@@ -971,6 +972,7 @@ final class RemoteControlServer {
             usage.refreshQuotas()
             var snapshot = usage.copilotUsage
             snapshot.activeBackend = AppSettings.shared.backend.rawValue
+            snapshot.tiers = TierUsageSnapshot.current(usage)
             snapshot.endpoint = EndpointUsageLedger.shared.snapshot(
                 enabled: AppSettings.shared.openAIEndpointEnabled,
                 listening: AppSettings.shared.openAIEndpointListeningPort)
@@ -1018,6 +1020,26 @@ final class RemoteControlServer {
                 sendError(error.status, error.message, on: connection)
             } catch {
                 sendError(500, "Could not read the usage limit fallback on the Mac.", on: connection)
+            }
+            return
+        }
+        if request.path == "/api/v1/model-tiers" {
+            do {
+                let snapshot: ModelTierSnapshot
+                switch request.method {
+                case "GET": snapshot = ModelTierRemote.snapshot()
+                case "POST":
+                    guard request.body.count <= ModelTierRemote.maximumBody, let json else {
+                        throw ModelTierError(status: 400, message: "Send a JSON object.")
+                    }
+                    snapshot = try ModelTierRemote.apply(json)
+                default: throw ModelTierError(status: 405, message: "method not allowed")
+                }
+                sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
+            } catch let error as ModelTierError {
+                sendError(error.status, error.message, on: connection)
+            } catch {
+                sendError(500, "Could not read the model tiers on the Mac.", on: connection)
             }
             return
         }
@@ -1105,7 +1127,7 @@ final class RemoteControlServer {
             }
             let sessions = manager.sessions.filter { !$0.isPrivate }
                 .map { snapshot($0, includeMessages: false, on: connection) }
-            sendJSON(["status": "ready", "sessions": sessions, "supportsUsageFallback": true], on: connection)
+            sendJSON(["status": "ready", "sessions": sessions, "supportsUsageFallback": true, "supportsModelTiers": true], on: connection)
             return
         }
         let recentExchanges: Int?
@@ -1131,7 +1153,7 @@ final class RemoteControlServer {
                     .map { snapshot($0, includeMessages: false, on: connection) }
                 var listing: [String: Any] = ["sessions": sessions, "uiRevision": Self.webAppRevision,
                                               "sections": manager.tabSections.map(\.json), "supportsTabSections": true,
-                                              "supportsUsageFallback": true]
+                                              "supportsUsageFallback": true, "supportsModelTiers": true]
                 if AppSettings.shared.cantripHomeEnabled {
                     // Web clients pin it as their first tab; tab-list clients ignore it.
                     listing["home"] = snapshot(manager.homeSession, includeMessages: false, on: connection)
@@ -3213,7 +3235,11 @@ private extension RemoteControlServer {
     <span class="muted">When a backend hits its usage limit, the task continues on the first backup here that isn't at its limit too.</span>
     <ol id="fallbackList" class="fallback-list"></ol><label>Add a backup<select id="fallbackAdd"></select></label>
     <span id="fallbackStatus" class="muted"></span><button id="fallbackReset" type="button" class="control hidden">Try every backend again</button>
-    <div id="fallbackError" role="alert"></div></fieldset><div class="tab-actions">
+    <div id="fallbackError" role="alert"></div></fieldset>
+    <fieldset id="tierBox" class="hidden"><legend>Model tiers (all tabs)</legend>
+    <span class="muted">Fast, Standard and Deep run each backend's first model here that it offers and that isn't at its own usage limit, so a run keeps its level on a backup. Changes save right away.</span>
+    <label>Backend<select id="tierBackend"></select></label><div id="tierCells"></div>
+    <button id="tierResetAll" type="button" class="control">Reset every tier</button><div id="tierError" role="alert"></div></fieldset><div class="tab-actions">
     <button id="modelReload" type="button" class="control">Reload settings</button><button id="modelRefresh" type="button" class="control">Refresh models</button>
     <button id="modelCancel" type="button" class="control">Cancel</button><button id="modelSave" type="submit" class="control primary">Save</button>
     </div></form></dialog>
@@ -3644,7 +3670,8 @@ private extension RemoteControlServer {
         option.disabled=Boolean(value)&&!values?.includes(value);select.append(option)}select.value=current}
     function renderModelSettings(){const state=modelEditorState;if(!state)return;const info=state.data&&modelInfo(state),disabled=state.loading||state.saving,reason=state.data?.unavailableReason;
       $("modelDefaults").checked=state.usesDefaults;$("modelDefaults").disabled=disabled||!state.data||Boolean(reason);
-      if(state.data){modelOptions("modelChoice",state.data.models.map(m=>m.id),state.draft.model,`CLI default (${state.data.fileDefaultModel||"Auto"})`);
+      if(state.data){modelOptions("modelChoice",state.data.models.map(m=>m.id),state.draft.model,`CLI default (${state.data.fileDefaultModel||"Auto"})`,
+          id=>{const tier=state.data.tiers?.find(item=>item.id===id);return tier?`${tier.label} — ${tier.modelLabel}${tier.effort?" · "+tier.effort:""}`:id});
         modelOptions("modelEffort",info?.reasoningEfforts,state.draft.effort,"Model default");
         modelOptions("modelContext",info?.contextTiers,state.draft.contextTier,"CLI default",tier=>{const name=tier==="default"?"Standard":tier==="long_context"?"Long":tier;
           const budget=tier==="default"?info?.defaultContextPromptTokens:tier==="long_context"?info?.longContextPromptTokens:null;return budget?`${name} - ${modelTokens(budget)} input`:name})}
@@ -3654,7 +3681,7 @@ private extension RemoteControlServer {
       $("modelSave").disabled=disabled||!state.data||Boolean(reason)||Boolean(state.data&&modelValidation(state))||state.needsReload;
       $("modelReload").disabled=disabled;$("modelRefresh").disabled=disabled;$("modelCancel").disabled=state.saving}
     function editModelSettings(item){if(!item)return;if(item.isLocalPrivate){editPrivateSettings(item);return}modelEditorState={id:item.id,token,data:null,draft:null,usesDefaults:true,loading:false,saving:false,error:"",needsReload:false};
-      $("modelTabTitle").textContent=item.title;$("modelEditor").showModal();loadModelSettings(true);loadFallback()}
+      $("modelTabTitle").textContent=item.title;$("modelEditor").showModal();loadModelSettings(true);loadFallback();loadTiers()}
     async function loadModelSettings(replaceDraft=false,refreshModels=false){const state=modelEditorState;if(!state||state.loading||state.saving)return;state.loading=true;renderModelSettings();
       const current=()=>modelEditorState===state&&token===state.token;
       try{let data=await api(`/api/v1/sessions/${state.id}/model-settings${refreshModels?"?refresh=true":""}`);if(!current())return;
@@ -3719,6 +3746,55 @@ private extension RemoteControlServer {
       catch(error){$("fallbackError").textContent=error.message;await loadFallback()}
       finally{fallbackSaving=false;renderFallback()}}
     $("fallbackReset").onclick=()=>saveFallback({resetLimits:true});
+    // Mac-wide model tiers: each backend's models for fast, standard and deep, first choice first,
+    // saved as soon as they change, apart from this tab's Save.
+    let tierState=null,tierSaving=false,tierBackendID="";
+    async function loadTiers(){try{tierState=await api("/api/v1/model-tiers");$("tierError").textContent=""}catch{tierState=null}renderTiers()}
+    function renderTiers(){const data=tierState;$("tierBox").classList.toggle("hidden",!data);if(!data)return;
+      const backends=data.backends||[];
+      if(!backends.some(item=>item.id===tierBackendID))tierBackendID=(backends.find(item=>item.id===fallbackState?.primary)||backends[0])?.id||"";
+      const pick=$("tierBackend");pick.replaceChildren(...backends.map(item=>new Option(item.label,item.id)));pick.value=tierBackendID;pick.disabled=tierSaving;
+      $("tierResetAll").disabled=tierSaving;const backend=backends.find(item=>item.id===tierBackendID);
+      if(!backend){$("tierCells").replaceChildren();return}
+      // Copilot's token prices show next to each model.
+      const info=id=>backend.models.find(item=>item.id===id),
+        name=id=>{const model=info(id);return model?(model.price?`${model.label} — ${model.price}`:model.label):`${id} (not offered now)`};
+      $("tierCells").replaceChildren(...backend.cells.map(cell=>{const box=document.createElement("div"),head=document.createElement("strong"),list=document.createElement("ol");
+        const choices=cell.choices.map(item=>({model:item.model,effort:item.effort||""})),save=next=>saveTiers({backend:backend.id,tier:cell.tier,choices:next});
+        head.textContent=`${cell.label}: runs ${cell.model?(info(cell.model)?.label||cell.model):"the default model"}${cell.effort?" · "+cell.effort:""}`;
+        list.className="fallback-list";
+        list.append(...choices.map((choice,index)=>{const row=document.createElement("li"),model=document.createElement("select");
+          model.setAttribute("aria-label",`${cell.label} model ${index+1}`);model.disabled=tierSaving;
+          const ids=backend.models.map(item=>item.id).filter(id=>id===choice.model||!choices.some(other=>other.model===id));
+          if(!info(choice.model))ids.unshift(choice.model);
+          model.append(...ids.map(id=>new Option(name(id),id)));model.value=choice.model;
+          model.onchange=()=>save(choices.map((item,i)=>i===index?{model:model.value,effort:""}:item));row.append(model);
+          const efforts=info(choice.model)?.efforts||[];
+          if(efforts.length){const effort=document.createElement("select");effort.setAttribute("aria-label",`${cell.label} model ${index+1} effort`);effort.disabled=tierSaving;
+            effort.append(new Option("Model default",""),...efforts.map(value=>new Option(value,value)));effort.value=choice.effort;
+            effort.onchange=()=>save(choices.map((item,i)=>i===index?{model:item.model,effort:effort.value}:item));row.append(effort)}
+          const moved=offset=>{const next=[...choices];[next[index],next[index+offset]]=[next[index+offset],next[index]];return next};
+          for(const [text,aria,disabled,next] of [["↑",`Try ${name(choice.model)} earlier`,index===0,()=>moved(-1)],
+              ["↓",`Try ${name(choice.model)} later`,index===choices.length-1,()=>moved(1)],
+              ["Remove",`Remove ${name(choice.model)}`,choices.length===1,()=>choices.filter((other,i)=>i!==index)]]){
+            const button=document.createElement("button");button.type="button";button.className="control";button.textContent=text;button.setAttribute("aria-label",aria);
+            button.disabled=tierSaving||disabled;button.onclick=()=>save(next());row.append(button)}
+          return row}));
+        box.append(head,list);
+        const free=backend.models.filter(item=>!choices.some(choice=>choice.model===item.id));
+        if(choices.length<5&&free.length){const add=document.createElement("select");add.setAttribute("aria-label",`Add a model to ${cell.label}`);add.disabled=tierSaving;
+          add.append(new Option("Add a model…",""),...free.map(item=>new Option(name(item.id),item.id)));add.value="";
+          add.onchange=()=>{if(add.value)save([...choices,{model:add.value,effort:""}])};box.append(add)}
+        if(!cell.isDefault){const reset=document.createElement("button");reset.type="button";reset.className="control";reset.textContent=`Reset ${cell.label}`;
+          reset.disabled=tierSaving;reset.onclick=()=>saveTiers({backend:backend.id,tier:cell.tier,reset:true});box.append(reset)}
+        if(cell.note){const note=document.createElement("span");note.className="muted";note.textContent=`Now: ${cell.note}.`;box.append(note)}
+        return box}))}
+    async function saveTiers(body){if(!tierState||tierSaving)return;tierSaving=true;renderTiers();
+      try{tierState=await api("/api/v1/model-tiers",{method:"POST",body:JSON.stringify({...body,revision:tierState.revision})});$("tierError").textContent="";loadFallback()}
+      catch(error){$("tierError").textContent=error.message;await loadTiers()}
+      finally{tierSaving=false;renderTiers()}}
+    $("tierBackend").onchange=()=>{tierBackendID=$("tierBackend").value;renderTiers()};
+    $("tierResetAll").onclick=()=>saveTiers({reset:true});
     $("modelCancel").onclick=()=>{if(modelEditorState?.saving)return;$("modelEditor").close();modelEditorState=null};
     $("modelEditor").addEventListener("cancel",event=>{if(modelEditorState?.saving)event.preventDefault();else modelEditorState=null});
     $("modelReload").onclick=()=>loadModelSettings(true);$("modelRefresh").onclick=()=>loadModelSettings(!modelEditorState?.data,true);
@@ -3933,14 +4009,14 @@ private extension RemoteControlServer {
     async function loadMCP(){clearTimeout(mcpTimer);if(!$("mcpEditor").open)return;try{mcpState=await api("/api/v1/mcp"+(mcpTab?`?tab=${encodeURIComponent(mcpTab)}`:""));$("mcpError").textContent="";renderMCP()}catch(e){$("mcpError").textContent=e.message||"MCP servers aren't available on this Mac."}
       const busy=(mcpState?.servers||[]).some(s=>["connecting","awaitingApproval","needsLogin"].includes(s.state?.phase));mcpTimer=setTimeout(loadMCP,busy?1500:8000)}
     async function mcpAction(body){try{mcpState=await api("/api/v1/mcp",{method:"POST",body:JSON.stringify(body)});$("mcpError").textContent="";renderMCP();setTimeout(loadMCP,600)}catch(e){$("mcpError").textContent=e.message||"That didn't work."}}
-    function mcpStatus(s){if(!s.enabled)return["Off",""];const p=s.state?.phase;if(!s.oauth)return["Ready",""];
+    function mcpStatus(s){if(!s.enabled)return["Off",""];const p=s.state?.phase;if(!s.oauth)return[s.credentials?"Credentials in keychain":"Ready",""];
       return({ready:[s.state?.expiresAt?`Signed in · token until ${new Date(s.state.expiresAt).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}`:"Signed in",""],connecting:["Signing in…",""],awaitingApproval:["Waiting for your OK","attn"],needsLogin:["Log in to finish","attn"],locked:["Keychain locked","warn"],failed:["Sign-in failed","warn"]})[p]||["Not signed in","warn"]}
     function renderMCP(){const list=$("mcpList");list.replaceChildren();const backends=["Copilot","Claude Code","Codex","Antigravity"];const tabOff=new Set(mcpState?.tabDisabled||[]);
       if(!(mcpState?.servers||[]).length){list.append(el("p","muted","Cantrip isn't sharing MCP servers yet. Turn it on in Settings > MCP Servers on the Mac."));return}
       for(const s of mcpState.servers){const row=el("div","mcp-row"),head=el("div","mcp-head");head.append(el("strong","",s.name),el("span","muted",`${s.remote?"remote":"local"}${s.relayed?" · via Cantrip":""}`));
         const[st,cls]=mcpStatus(s);head.append(el("span",`mcp-status ${cls}`,st));const phase=s.state?.phase;
         const button=(label,action,primary)=>{const b=el("button",`control${primary?" primary":""}`,label);b.type="button";b.onclick=()=>mcpAction({action,name:s.name});return b};
-        if(s.oauth&&s.enabled){if(["connecting","awaitingApproval","needsLogin"].includes(phase))head.append(button("Cancel","cancel"));else if(phase==="ready")head.append(button("Sign Out","signOut"));else head.append(button("Connect","connect",true))}
+        if(s.oauth&&s.enabled){if(["connecting","awaitingApproval","needsLogin"].includes(phase))head.append(button("Cancel","cancel"));else if(phase==="ready")head.append(button("Sign Out","signOut"));else head.append(button(phase==="failed"?"Retry":"Connect","connect",true))}
         row.append(head);
         const sw=el("div","mcp-switches");const check=(label,on,body)=>{const l=el("label");const c=document.createElement("input");c.type="checkbox";c.checked=on;c.onchange=()=>mcpAction({...body,name:s.name,enabled:c.checked});l.append(c," "+label);return l};
         sw.append(check("On",s.enabled,{action:"setEnabled"}));for(const b of backends)sw.append(check(b,!(s.disabledBackends||[]).includes(b),{action:"setBackend",backend:b}));if(mcpTab)sw.append(check("This tab",!tabOff.has(s.name),{action:"setTab",tab:mcpTab}));row.append(sw);

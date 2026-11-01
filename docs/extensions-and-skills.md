@@ -230,10 +230,18 @@ cantrip mcp connect mobbin     # sign in to a remote server
   Cantrip presses the page's own button only after you approve. If the site
   wants you to log in first, finish that in the agent Chrome (Remote shows
   it). Cantrip refreshes sign-ins before they expire and alerts you when one
-  needs connecting again.
+  needs connecting again. The client Cantrip registers with each sign-in
+  server is kept in the keychain too and reused by later sign-ins and retries
+  (signing out keeps it); one the server refuses is dropped and registered
+  anew.
 - Each server can be switched off entirely, per backend or per tab (the tab
   menu's **MCP Servers**). Scheduled Home tasks still get only the servers in
   `cantripHomeTaskMCPServers`, on every backend.
+- The same list, with each server's sign-in, **Connect** (**Retry** after a
+  sign-in fails, with the server's reason in words) and its backend switches, is in **Settings > Tools &
+  sign-ins** in Cantrip Agent and Cantrip Gateway (Mac and Windows), and in the
+  browser Remote's **MCP Servers**. They show the state and send actions; the
+  credentials stay in the Mac's keychain.
 
 ### Start a large MCP server only when it's used
 

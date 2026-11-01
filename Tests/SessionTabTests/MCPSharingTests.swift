@@ -9,7 +9,144 @@ extension SessionTabTests {
         try await testMCPOAuth()
         try await testMCPRelay()
         try testMCPMigration()
-        print("MCP sharing: import, backend configs, OAuth with single-flight refresh, and the relay passed")
+        try await testMCPRemoteList()
+        try await testMCPClientReuse()
+        print("MCP sharing: import, backend configs, OAuth with single-flight refresh, the relay and the remote list passed")
+    }
+
+    /// The authorize address carries everything the sign-in server needs, and reaches agent Chrome
+    /// whole: Chrome 156 ends a raw `/json/new?` address at its first `&`, which dropped `client_id`.
+    static func testMCPSignInAddress(_ discovered: MCPOAuth.Endpoints, verifier: String) {
+        var endpoints = discovered
+        endpoints.authorizationEndpoint += "?prompt=consent"
+        endpoints.scopes = ["org:read", "project:write"]
+        let redirect = "http://127.0.0.1:5555/oauth/callback"
+        let url = MCPOAuth.authorizeURL(endpoints, clientID: "client-1", redirectURI: redirect, state: "s1", verifier: verifier)!
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!
+        let fields = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
+        precondition(fields == ["prompt": "consent", "response_type": "code", "client_id": "client-1", "redirect_uri": redirect,
+                                "state": "s1", "code_challenge": MCPOAuth.challenge(for: verifier), "code_challenge_method": "S256",
+                                "resource": "https://mcp.example.com/mcp", "scope": "org:read project:write"],
+                     "client_id, PKCE, redirect_uri, resource and scope, keeping the endpoint's own parameters: \(fields)")
+        precondition(items.count == fields.count, "No parameter twice")
+
+        let path = AgentChrome.newTabPath(for: url)
+        precondition(path.hasPrefix("/json/new?"))
+        let target = String(path.dropFirst("/json/new?".count))
+        precondition(!target.contains("&") && !target.contains("?") && !target.contains("#") && !target.contains(" "),
+                     "Nothing in the address can end it early: \(target)")
+        precondition(target.removingPercentEncoding == url.absoluteString, "Chrome's one unescape gives back the whole address")
+    }
+
+    /// A sign-in server's refusal reads as words with Retry, never as its raw JSON; an unreachable
+    /// server says so instead of claiming it has no sign-in settings.
+    static func testMCPSignInErrors(_ endpoints: MCPOAuth.Endpoints) async throws {
+        let supabase = "Pretty-print \n{\"code\":400,\"error_code\":\"validation_failed\",\"msg\":\"client_id is required\"}"
+        precondition(MCPOAuth.providerError(pageURL: "https://auth.example.com/auth/v1/oauth/authorize?response_type=code",
+                                            title: "", text: supabase) == "client_id is required (validation_failed)")
+        precondition(MCPOAuth.providerError(pageURL: "https://auth.example.com/oauth/error?error=invalid_request&error_description=Unknown%20client",
+                                            title: "Error", text: "Something went wrong") == "Unknown client (invalid_request)")
+        precondition(MCPOAuth.providerError(pageURL: "chrome-error://chromewebdata/", title: "auth.example.com", text: "")?
+            .contains("couldn't load") == true)
+        precondition(MCPOAuth.providerError(pageURL: "https://example.com/login?redirect_to=/oauth/consent", title: "Login",
+                                            text: "Welcome back Continue with Google or Continue {terms}") == nil,
+                     "An ordinary sign-in page isn't an error")
+
+        let refusing: MCPOAuth.Transport = { request in
+            let body = #"{"error":"invalid_request","error_description":"redirect_uri doesn't match"}"#
+            return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!)
+        }
+        let pending = MCPOAuth.Credential(endpoints: endpoints, clientID: "client-1", clientSecret: nil,
+                                          redirectURI: "http://127.0.0.1:5555/oauth/callback", accessToken: "",
+                                          refreshToken: nil, expiresAt: nil, signedInAt: Date())
+        do {
+            _ = try await MCPOAuth.requestTokens([("grant_type", "authorization_code"), ("code", "c")], credential: pending,
+                                                 now: Date(), transport: refusing)
+            preconditionFailure("A 400 from the token endpoint fails")
+        } catch let failure as MCPOAuth.Failure {
+            precondition(failure.message == "The sign-in server refused the token request: redirect_uri doesn't match (invalid_request).",
+                         failure.message)
+        }
+        do {
+            _ = try await MCPOAuth.register(endpoints, redirectURI: "http://127.0.0.1:5555/oauth/callback", transport: refusing)
+            preconditionFailure("A 400 from registration fails")
+        } catch let failure as MCPOAuth.Failure {
+            precondition(failure.kind == .registration && failure.message.contains("redirect_uri doesn't match"), failure.message)
+        }
+        let offline: MCPOAuth.Transport = { _ in throw URLError(.timedOut) }
+        do {
+            _ = try await MCPOAuth.discover(server: URL(string: "https://mcp.example.com/mcp")!, transport: offline)
+            preconditionFailure("An unreachable server fails")
+        } catch let failure as MCPOAuth.Failure {
+            precondition(failure.message.hasPrefix("Couldn't reach mcp.example.com"), failure.message)
+        }
+    }
+
+    /// The client Cantrip registers is saved in the keychain store at once and reused by the next
+    /// sign-in (a retry included), until the sign-in server or redirect changes or it's refused.
+    static func testMCPClientReuse() async throws {
+        final class Registrations: @unchecked Sendable { var count = 0 }
+        let registrations = Registrations()
+        let transport: MCPOAuth.Transport = { request in
+            registrations.count += 1
+            let body = #"{"client_id":"client-\#(registrations.count)","client_secret":"secret-\#(registrations.count)"}"#
+            return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!)
+        }
+        let secrets = MCPSecrets.Store.memory()
+        let signIns = MCPSignIns(secrets: secrets, transport: transport)
+        let endpoints = MCPOAuth.Endpoints(resource: "https://mcp.example.com/mcp", issuer: "https://auth.example.com",
+                                           authorizationEndpoint: "https://auth.example.com/authorize",
+                                           tokenEndpoint: "https://auth.example.com/token",
+                                           registrationEndpoint: "https://auth.example.com/register")
+        let redirect = "http://127.0.0.1:5555/oauth/callback"
+        let first = try await signIns.client(for: "design", endpoints: endpoints, redirectURI: redirect)
+        precondition(first.clientID == "client-1" && registrations.count == 1)
+        let saved = try secrets.string(MCPSecrets.clientAccount("design"))
+        precondition(saved?.contains("secret-1") == true, "Saved in the keychain store as soon as it's registered")
+        let retry = try await signIns.client(for: "design", endpoints: endpoints, redirectURI: redirect)
+        precondition(retry == first && registrations.count == 1, "A retry reuses it instead of registering again")
+        let port = try await signIns.registeredClient("design")?.port
+        precondition(port == 5555, "The next sign-in listens on its redirect port")
+
+        let moved = try await signIns.client(for: "design", endpoints: endpoints, redirectURI: "http://127.0.0.1:6666/oauth/callback")
+        precondition(moved.clientID == "client-2", "Another redirect (the port was taken) needs a new registration")
+        var other = endpoints
+        other.issuer = "https://login.example.com"
+        let otherServer = try await signIns.client(for: "design", endpoints: other, redirectURI: moved.redirectURI)
+        precondition(otherServer.clientID == "client-3", "Another sign-in server needs its own")
+        try await signIns.forgetClient("design")
+        let fresh = try await signIns.client(for: "design", endpoints: other, redirectURI: moved.redirectURI)
+        precondition(fresh.clientID == "client-4", "A refused client is forgotten, and the next try registers again")
+
+        // A sign-in saved before registrations were kept still lends its client.
+        let signedIn = MCPOAuth.Credential(endpoints: endpoints, clientID: "legacy", clientSecret: nil, redirectURI: redirect,
+                                           accessToken: "a", refreshToken: nil, expiresAt: nil, signedInAt: Date())
+        try await signIns.store(signedIn, for: "errors")
+        let legacy = try await signIns.client(for: "errors", endpoints: endpoints, redirectURI: redirect)
+        precondition(legacy.clientID == "legacy" && registrations.count == 4)
+        try await signIns.signOut("design")
+        let kept = try await signIns.registeredClient("design")
+        precondition(kept != nil, "Signing out keeps the registration")
+    }
+
+    /// What Remote clients get: whether a server has a credential in the keychain, never its name or value.
+    @MainActor
+    static func testMCPRemoteList() async throws {
+        let secrets = MCPSecrets.Store.memory()
+        try secrets.set("secret-flows-value", for: MCPSecrets.headerAccount("flows", "X-Api-Key"))
+        let hub = MCPServerHub(signIns: MCPSignIns(secrets: secrets), snapshot: MCPRegistry.Snapshot(servers: [
+            MCPServer(name: "notes", command: "/usr/bin/python3"),
+            MCPServer(name: "flows", url: "https://flows.example.com/mcp", secretHeaders: ["X-Api-Key"]),
+            MCPServer(name: "vault", command: "/usr/bin/python3", secretEnv: ["VAULT_SESSION"]),
+        ], importedAt: Date()))
+        await hub.refreshStates()
+        let payload = hub.remotePayload()
+        guard let servers = payload["servers"] as? [[String: Any]] else { preconditionFailure("The list has servers") }
+        let credentials = Dictionary(uniqueKeysWithValues: servers.map { ($0["name"] as? String ?? "", $0["credentials"] as? Bool) })
+        precondition(credentials == ["notes": false, "flows": true, "vault": true], "credentials flags: \(credentials)")
+        let text = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        precondition(!text.contains("X-Api-Key") && !text.contains("VAULT_SESSION") && !text.contains("secret-flows-value"),
+                     "A Remote client never sees a credential's name or value")
     }
 
     static let mcpCopilotFixture: [String: Any] = ["mcpServers": [
@@ -195,6 +332,8 @@ extension SessionTabTests {
                      && items["resource"] == "https://mcp.example.com/mcp" && items["state"] == "s1", "PKCE S256 and the resource")
         precondition(MCPOAuth.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk") == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
                      "S256 matches RFC 7636's example")
+        testMCPSignInAddress(endpoints, verifier: verifier)
+        try await testMCPSignInErrors(endpoints)
 
         var clock = Date()
         let secrets = MCPSecrets.Store.memory()

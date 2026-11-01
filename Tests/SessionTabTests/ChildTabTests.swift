@@ -385,6 +385,8 @@ extension SessionTabTests {
         func record(_ child: ChatSession) throws -> ChildTab { try requireChild(store.record(child.id)) }
         func isOpen(_ child: ChatSession) -> Bool { manager.sessions.contains { $0.id == child.id } }
 
+        // The parent runs a tier: its children inherit the tier, not the model it maps to today.
+        try parent.saveModelSelection(SessionModelSelection(model: "deep", effort: "", contextTier: ""))
         // 1. Fork while the parent works; the child edits and commits (and leaves one file uncommitted).
         parent.submitRemote("Refactor the tab list", mode: .queue)
         try await waitForJournalTest { parentBackend.prompts.count == 1 }
@@ -392,6 +394,7 @@ extension SessionTabTests {
         let (notes, notesBackend, notesTree) = try await fork("Add a notes file to the repo", from: parent)
         var current = try record(notes)
         precondition(parent.queued.isEmpty, "the request left the parent's queue")
+        precondition(notes.ownModelSelection?.model == "deep" && notes.runTier == .deep, "the child inherits the parent's tier")
         precondition(current.state == .working && current.parentID == parent.id && current.title == "Add a notes file to the repo"
                      && current.parentTitle == "Tab list")
         precondition(current.repoRoot == resolvedRepo && current.baseBranch == "main" && current.baseCommit == ChildTabGit.head(repo))
