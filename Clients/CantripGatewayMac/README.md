@@ -159,18 +159,19 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   `supportsTerminal`.
 - **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS),
   delivery mode and one **More** menu everywhere: the open tab's actions (or
-  Home's Model Settings and Start Fresh, or the local model's settings), Pause Agent and Voice
-  Mode, then Back to Home and Settings.
+  Home's Model Settings and Start Fresh, or the local model's settings), then Back to Home and
+  Settings. Voice Mode opens from the composer's microphone (double-click it) or ⇧⌘V.
 - **Menus:** **File** has New Tab (⌘T) and New Message (⌘N). **View** has Chat, Tasks and
   Artifacts (⌘1–⌘3), Local Model on This Mac (⌘4), Background (⌘B), GitHub Builds (⇧⌘B),
-  Toggle Terminal (⌃`). **Tab** has Model Settings… (⌘;), Start Fresh, Pause
-  Agent (⇧⌘P) and Voice Mode (⇧⌘V). **Window** and **Help** are the standard ones. The Dock
-  icon's menu has New Message, New Tab, Background, Pause Agent and Settings….
+  Toggle Terminal (⌃`). **Tab** has Model Settings… (⌘;), Start Fresh and Voice Mode (⇧⌘V).
+  The app menu has Pause Agent (⇧⌘P) next to Settings…. **Window** and **Help** are the standard
+  ones. The Dock icon's menu has New Message, New Tab, Background, Pause Agent and Settings….
 - **No refresh button:** the window polls the Mac every 1.5 seconds while the tab you're
   viewing is working, has queued messages or the connection is down, every 5 seconds
   otherwise (15 behind other apps), and at once when it comes to the front.
 - **Settings (⌘,):** the same pages as the iPhone app, beside a sidebar, in a window you can
-  resize: Macs, Models (model tiers, usage-limit backups, Usage Limits), Tools & sign-ins (the
+  resize, under a status card with the **Pause Agent** switch (chat shows **Agent paused** with
+  **Resume** while it's on): Macs, Models (model tiers, usage-limit backups, Usage Limits), Tools & sign-ins (GitHub sign-in for the Mac, the
   Mac's shared MCP servers, and this Mac's local model tools), Memory, Voice, Appearance (the
   mascot) and About & Updates (Update & rebuild Cantrip, Mac permissions). It reopens on the
   last page you used. Each page says who its settings change.
