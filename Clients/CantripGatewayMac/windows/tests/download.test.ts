@@ -7,7 +7,7 @@ import { createServer as createTLSServer, TLSSocket } from "node:tls";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { artifactSaveRequest, downloadError, downloadOverHTTPS, downloadOverPSK, safeFileName } from "../src/main/download";
 import { HostRouter, Route } from "../src/main/router";
-import { FetchLike, PSK_CIPHERS, PSK_IDENTITY, pskKey, TransportError } from "../src/main/transport";
+import { FetchLike, LocalFileError, PSK_CIPHERS, PSK_IDENTITY, pskKey, TransportError } from "../src/main/transport";
 import { artifactFolder, artifactOriginalName } from "../src/gateway/ui/home/homeLogic";
 
 const TOKEN = "d".repeat(40);
@@ -180,5 +180,33 @@ describe("artifact folders", () => {
     expect(artifactFolder({ relativePath: "report.md" })).toBeNull();
     expect(artifactFolder({ relativePath: "ddia-knowledge-graph/data/graph.json" })).toBe("ddia-knowledge-graph");
     expect(artifactOriginalName({ title: "Graph", relativePath: "ddia-knowledge-graph/graph.html" })).toBe("graph.html");
+  });
+});
+
+describe("local write failures", () => {
+  it("rejects at once with a LocalFileError instead of hanging (direct route)", async () => {
+    const started = Date.now();
+    const error = await downloadOverPSK({ host: "127.0.0.1", port }, TOKEN, {
+      method: "GET", path: `/api/v1/home/artifacts/${ID}/file`, headers: {},
+    }, join(folder, "missing-folder", "clip.mp4")).catch((caught) => caught);
+    expect(error).toBeInstanceOf(LocalFileError);
+    expect(error).toMatchObject({ code: "ENOENT" });
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("rejects at once with a LocalFileError instead of hanging (HTTPS route)", async () => {
+    const fake = (async () => new Response(new Uint8Array(BODY.subarray(0, 1000)), { status: 200, headers: { "content-length": "1000" } })) as FetchLike;
+    const error = await downloadOverHTTPS("https://mac.example/", { method: "GET", path: "/x", headers: {} }, fake,
+      join(folder, "missing-folder", "x.bin")).catch((caught) => caught);
+    expect(error).toBeInstanceOf(LocalFileError);
+  });
+
+  it("is not retried on another route", async () => {
+    const routes: Route[] = [{ kind: "direct", address: "192.0.2.10:1", host: "192.0.2.10", port: 1 }, { kind: "https", origin: "https://mac.example/" }];
+    const router = new HostRouter(routes, async () => { throw new Error("unused"); });
+    const tried: string[] = [];
+    await expect(router.perform(true, async (route) => { tried.push(route.kind); throw new LocalFileError("disk full", "ENOSPC"); }))
+      .rejects.toBeInstanceOf(LocalFileError);
+    expect(tried).toEqual(["direct"]);
   });
 });
