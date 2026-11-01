@@ -71,6 +71,7 @@ working or deliberately unsupported with a clear message.
 | Cantrip Home | `CantripHomeGuardedBackend`, `CantripHomeApproval.chosen(for:)` | `CantripHomeGuardrails.swift` | fd7faaa, d774fe6 |
 | Per-tab model and effort | Model catalog, `modelOverride`, `effortOverride` | `ClaudeModels.swift`, `SessionTabMetadata.swift`, `SessionModelSettings*.swift` | c480a60, d1549c6, a1e4a83 |
 | Home task models | Model list for task settings | `CantripHomeTaskModels.swift` | 5062f5b |
+| Model tiers | Its real models for fast, standard and deep, first choice first, each with an effort; a model scope per quota so a used-up model moves to the tier's next one | `ModelTierMap.defaults` in `ModelTiers.swift`, `BackendLimitTracker.modelScope` | `ModelTierTests.swift` |
 | Child tabs | Inherit the parent's model; shared Simulator/build turns enforced in the tool check | `ChildTabCoordinator.swift`, `ChildTabResources.swift` | d1549c6 |
 | Council seats | Own session per seat and model; safest native mode | `ChatSession` council setup, `TabDefaults.council*` | 1c1b362, 6dd4ee5 |
 | Usage limit fallback | `.usageLimit(UsageLimitReport)` from a structured code, sent just before `.failure`; `scope` when the limit covers only some models | `BackendLimits.swift`, `ChatSession` | 825fcfb, 86abf76 |
@@ -415,7 +416,7 @@ table when you do.
 | Antigravity | `ReplyVisibility`, `SimulatorPool` and `watch-`/`side-` guidance; per-tab MCP switches for local servers (agy reads MCP servers only from `~/.gemini/config/mcp_config.json`, which Cantrip writes); `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
 | Claude Code | Stopping one foreground Task subagent (the CLI can stop only background agents) |
 | Codex | `watch-`/`side-` background agents and wake-up turns (Codex's agents end with the turn); stopping one subagent (no API); Auto routing, queue plans, Done-when checks and memory upkeep (no tool-free one-shot mode wired); idle process release (each tab's app server stays up); shared servers that sign in through Cantrip's relay not yet run live (local `-c` servers were); Windows still runs `codex exec` |
-| Windows (all) | Structured events, conversation resume and usage fallback (see PARITY.md) |
+| Windows (all) | Structured events, conversation resume, usage fallback and model tiers (see PARITY.md) |
 
 Last live check of Codex: 2026-10-31, `codex-cli 0.166.0`, ChatGPT free plan, through
 `CodexBackend` (`CANTRIP_CODEX_LIVE_TEST=1`). Passed: items 1 (three turns, restart, Stop), 2,

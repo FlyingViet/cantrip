@@ -114,7 +114,14 @@ reconfigure ACP servers. Claude Code, Codex and Antigravity tabs pick a model
 and effort (no context tier).
 
 Turn off **Use Mac defaults** to save a model, reasoning effort and context tier
-for just that tab. The choices come from the paired Mac's model list for its
+for just that tab. **Fast**, **Standard** and **Deep** lead the model list: a
+tier runs the backend's model for it (see
+[Backends](backends.md#ask-for-a-model-tier-instead-of-a-model)), and keeps its
+level on a usage-limit backup. In `GET .../model-settings`, `models` starts with
+the tiers (ids `fast`, `standard`, `deep`, each with its current model's
+efforts and no context tiers), so older clients offer them too, and `tiers`
+lists what each runs now (`id`, `label`, `model`, `modelLabel`, `effort`,
+`note`). Save a tier as the `model` with `contextTier` `""`. The choices come from the paired Mac's model list for its
 backend, not the phone's account. Unsupported effort/context combinations cannot be saved.
 **Refresh models** refreshes account metadata only; **Reload settings** discards
 the form's draft and reads the current tab settings. Catalog failures retain the
@@ -179,6 +186,33 @@ from before the chain don't send `backends`; treat `backend` as a chain of one.
 Macs from before per-model backups send no `primaryChoice` or `limitedModels`,
 and refuse a backend listed twice. Session lists and `/api/v1/ready` include
 `supportsUsageFallback`; older Macs answer `404`, and clients hide the section.
+
+## Model tiers
+
+The same **Model Settings** screen has a **Model tiers (all tabs)** section in
+the browser/Mac Remote: pick a backend, then for each tier the models it tries
+in order, each with its effort, with Copilot's token prices beside each model.
+Changes save right away, Mac-wide, separately from the tab's Save; **Reset**
+returns a tier to Cantrip's defaults.
+
+`GET /api/v1/model-tiers` returns `tiers` (`["fast", "standard", "deep"]`),
+`backends` (Copilot, Claude Code, Antigravity, Codex: `id`, `label`, `models`
+the backend offers with `id`, `label`, `efforts` and Copilot's `price` text,
+and `cells` per tier with `tier`, `label`, `choices` (`model`, `effort`, and
+read-only `label`, `offered`, `price`), `isDefault`, and what it runs now:
+`model`, `effort` and `note` when it skipped a model) and `revision`. `POST`
+takes `{"revision", "backend", "tier", "choices": [{"model", "effort"}]}` (1-5
+distinct models the backend offers, each with `""` or an effort it takes;
+read-only fields may be sent back), `{"revision", "backend", "tier", "reset":
+true}` or `{"revision", "reset": true}` for every cell. A stale revision gets
+`409`; an unknown backend, tier or model, a repeated model, or a tier listed as
+a model gets `400`. Session lists and `/api/v1/ready` include
+`supportsModelTiers`; older Macs answer `404`.
+
+Usage-limit backups accept a tier as their `model` too (`choices[].models`
+lists the tiers first, labeled with what they run), and `GET
+/api/v1/copilot/usage` adds `tiers`: runs, tokens and cost per tier today and
+over 7 days.
 
 ## Start fresh
 
