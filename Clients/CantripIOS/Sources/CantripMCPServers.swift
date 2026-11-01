@@ -51,6 +51,8 @@ struct CantripMCPServersView: View {
     var embedded = false
     /// More sections at the end (Gateway Mac's local model tools).
     var extra: AnyView? = nil
+    /// Sections before the servers (Settings' GitHub sign-in).
+    var leading: AnyView? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var snapshot: CantripMCPSnapshot?
     @State private var error: String?
@@ -60,6 +62,7 @@ struct CantripMCPServersView: View {
     var body: some View {
         CantripSheetStack(embedded: embedded) {
             List {
+                if let leading { leading }
                 Section {
                     Text("Every backend on your Mac shares these servers. Sign-ins open in the Mac's agent Chrome; approve them here.")
                         .font(.footnote).foregroundStyle(.secondary)

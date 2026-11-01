@@ -224,6 +224,10 @@ struct GitHubBuildsView: View {
             if let error = model.error ?? model.snapshot?.error {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
+                if error.contains("gh auth login") {
+                    Text("Sign in from Settings › Tools & sign-ins › GitHub on your Mac.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if model.snapshot != nil {
                     Text("Showing the last snapshot; build and runner states may be out of date.")
                         .font(.caption).foregroundStyle(.secondary)

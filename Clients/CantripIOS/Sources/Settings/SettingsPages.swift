@@ -205,9 +205,12 @@ struct SettingsMemoryPage: View {
 struct SettingsToolsPage: View {
     @ObservedObject var remote: CantripRemoteModel
     var macTools: AnyView? = nil
+    /// Opens Cantrip Home's chat, where GitHub's sign-in code shows.
+    var onOpenHome: () -> Void = {}
 
     var body: some View {
-        CantripMCPServersView(remote: remote, tabID: nil, embedded: true, extra: macTools)
+        CantripMCPServersView(remote: remote, tabID: nil, embedded: true, extra: macTools,
+                              leading: AnyView(SettingsGitHubSection(remote: remote, onOpenHome: onOpenHome)))
             .safeAreaInset(edge: .top, spacing: 0) {
                 SettingsScopeLabel.allTabs(on: remote.macName)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -216,6 +219,68 @@ struct SettingsToolsPage: View {
                     .background(.bar)
             }
             .navigationTitle("Tools & sign-ins")
+    }
+}
+
+/// GitHub on the Mac (the `gh` CLI every backend uses for pushes, pull requests and GitHub Builds):
+/// Sign In runs GitHub's device sign-in in Cantrip Home, whose chat shows the code to enter at
+/// github.com. It's the Mac's sign-in, so it's here rather than in a tab's menu.
+struct SettingsGitHubSection: View {
+    @ObservedObject var remote: CantripRemoteModel
+    let onOpenHome: () -> Void
+    @State private var working = false
+    @State private var started = false
+    @State private var error: String?
+
+    /// Why Sign In can't run now; nil when it can.
+    static func unavailableReason(isConfigured: Bool, home: CantripRemoteSession?) -> String? {
+        guard isConfigured, let home else { return "Connect to your Mac to sign in." }
+        guard home.supportsInputRequests == true else { return "Update and reopen Cantrip on your Mac to sign in from here." }
+        return nil
+    }
+
+    var body: some View {
+        let unavailable = Self.unavailableReason(isConfigured: remote.isConfigured, home: remote.homeSummary)
+        Section {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("GitHub on your Mac")
+                    Text(unavailable ?? (started ? "Started in Cantrip Home: its chat shows GitHub's code."
+                                         : "GitHub CLI (gh), shared by every backend"))
+                        .font(.caption)
+                        .foregroundStyle(unavailable == nil ? Color.secondary : Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .combine)
+                Spacer(minLength: 8)
+                Button(started ? "Open Home" : "Sign In…") { started ? onOpenHome() : signIn() }
+                    .disabled(unavailable != nil || working || remote.isMutating)
+                    .fixedSize()
+                    .accessibilityIdentifier("settings.github.signIn")
+            }
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+            }
+        } header: {
+            Text("Sign-ins")
+        } footer: {
+            Text("Signs the Mac's GitHub CLI in to github.com with GitHub's device sign-in, for pushes, pull requests and GitHub Builds in every backend. It runs in Cantrip Home, whose chat shows a code to enter at github.com/login/device; no password goes through Cantrip.")
+        }
+    }
+
+    private func signIn() {
+        guard let home = remote.homeSummary else { return }
+        working = true
+        Task {
+            defer { working = false }
+            if await remote.send("/login github", mode: .queue, sessionID: home.id) {
+                started = true
+                error = nil
+                onOpenHome()
+            } else {
+                error = remote.errorMessage ?? "The sign-in didn't start."
+            }
+        }
     }
 }
 

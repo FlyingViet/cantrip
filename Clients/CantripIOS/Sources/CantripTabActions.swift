@@ -92,15 +92,8 @@ struct CantripTabActions: View {
                 } label: {
                     Label("View Questions in Chat", systemImage: "person.crop.circle.badge.questionmark")
                 }
-                if !state.isLocalPrivate {
-                    Button {
-                        Task { await model.send("/login github", mode: .queue, sessionID: state.id) }
-                    } label: {
-                        Label("Sign in to GitHub on Mac", systemImage: "person.badge.key")
-                    }
-                    .disabled(state.isMutating || state.isBusy)
-                }
             }
+            // GitHub sign-in is the Mac's, not the tab's: Settings › Tools & sign-ins.
         }
         Section("Tab") {
             if let parentID = state.parentID, let onOpenTab {
