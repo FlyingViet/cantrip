@@ -462,6 +462,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         var environment = ProcessInfo.processInfo.environment
         environment["NO_COLOR"] = "1"
         environment["TERM"] = "dumb"
+        // Cantrip checks this runtime's tool calls itself; the Terminal policy hook steps aside.
+        environment[AgentPolicyBackstop.hostVariable] = "1"
         if let tabID { environment[TabInsight.tabIDVariable] = tabID.uuidString }
         // The runtime only honours `enableMcpApps` while its MCP_APPS gate is on.
         if config.mcpApps { environment["COPILOT_MCP_APPS"] = "true" }

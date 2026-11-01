@@ -54,7 +54,7 @@ struct CantripHomeActionRequest: Equatable {
         case "Bash":
             self.init(kind: .shell, command: input["command"] as? String ?? "")
         case "Write", "Edit", "MultiEdit", "NotebookEdit":
-            let path = input["file_path"] as? String ?? input["notebook_path"] as? String ?? ""
+            let path = input["file_path"] as? String ?? input["notebook_path"] as? String ?? input["path"] as? String ?? ""
             self.init(kind: .write, paths: path.isEmpty ? [] : [path])
         case "WebFetch", "WebSearch":
             self.init(kind: .url, url: input["url"] as? String ?? input["query"] as? String, tool: name)

@@ -86,8 +86,12 @@ enum AntigravityHook {
         return """
         #!/bin/sh
         # Cantrip's Antigravity guardrail. Only agy sessions Cantrip starts set the socket; any
-        # other run gets "allow", which leaves the decision to agy's own permission policy.
+        # other run is checked against the agent policy's deny rules and otherwise gets "allow",
+        # which leaves the decision to agy's own permission policy.
         if [ -z "$\(socketVariable)" ]; then
+          if [ -x \(binary) ]; then
+            exec \(binary) \(AgentPolicyBackstop.hookArgument) antigravity
+          fi
           cat >/dev/null
           echo '{"decision":"allow"}'
           exit 0

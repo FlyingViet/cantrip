@@ -8,6 +8,12 @@ if CommandLine.arguments.dropFirst().first == AntigravityHook.helperArgument {
     exit(AntigravityHook.runHelper())
 }
 
+if CommandLine.arguments.dropFirst().first == AgentPolicyBackstop.hookArgument {
+    let client = CommandLine.arguments.dropFirst(2).first ?? "copilot"
+    print(AgentPolicyBackstop.runHelper(client: client, input: FileHandle.standardInput.readDataToEndOfFile()))
+    exit(0)
+}
+
 if let watcherFlag = CommandLine.arguments.firstIndex(of: "--cantrip-crash-watcher"),
    CommandLine.arguments.indices.contains(watcherFlag + 1) {
     CrashRecovery.runWatcher(markerPath: CommandLine.arguments[watcherFlag + 1])
