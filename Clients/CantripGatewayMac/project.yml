@@ -59,6 +59,8 @@ targets:
         NSHumanReadableCopyright: ""
         NSMicrophoneUsageDescription: "Cantrip Gateway uses the microphone for voice conversations with Cantrip Home."
         NSSpeechRecognitionUsageDescription: "Cantrip Gateway transcribes your speech so you can talk to Cantrip Home hands-free."
+        NSLocationUsageDescription: "When you turn on Share location in Settings, Cantrip Gateway sends this Mac's approximate location with each message so answers about weather and places near you are for where you are."
+        NSLocationWhenInUseUsageDescription: "When you turn on Share location in Settings, Cantrip Gateway sends this Mac's approximate location with each message so answers about weather and places near you are for where you are."
         NSLocalNetworkUsageDescription: "Cantrip Gateway discovers and connects securely to your paired Cantrip on the local network."
         NSBonjourServices:
           - _cantrip-remote._tcp
@@ -144,6 +146,7 @@ targets:
       - path: Hermes/Tests/CantripPairingLinkTests.swift
       - path: Hermes/Tests/CantripGzipTests.swift
       - path: Hermes/Tests/CantripArtifactDownloadTests.swift
+      - path: Hermes/Tests/CantripLocationSharingTests.swift
       - path: Hermes/Tests/CantripTabBackTransitionTests.swift
       - path: Hermes/Tests/CantripMCPAppTests.swift
       - path: Hermes/Tests/CantripPromptUsageTests.swift

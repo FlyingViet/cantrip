@@ -8,5 +8,8 @@
     <!-- MCP servers the local model uses may script other apps (e.g. Mail) on your behalf. -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
+    <!-- Settings › Location (off by default) sends this Mac's location with messages. -->
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
 </dict>
 </plist>

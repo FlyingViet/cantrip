@@ -52,6 +52,10 @@
 	<string></string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Cantrip Gateway discovers and connects securely to your paired Cantrip on the local network.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>When you turn on Share location in Settings, Cantrip Gateway sends this Mac's approximate location with each message so answers about weather and places near you are for where you are.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>When you turn on Share location in Settings, Cantrip Gateway sends this Mac's approximate location with each message so answers about weather and places near you are for where you are.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Cantrip Gateway uses the microphone for voice conversations with Cantrip Home.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
